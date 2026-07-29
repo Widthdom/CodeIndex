@@ -8,6 +8,7 @@ using System.Text.Json.Nodes;
 using System.Security.Cryptography;
 using CodeIndex.Cli;
 using CodeIndex.Database;
+using CodeIndex.Indexer;
 using CodeIndex.Lsp;
 using CodeIndex.Models;
 
@@ -1476,6 +1477,457 @@ public class LspServerTests
             Assert.Equal(1001, hint!["position"]!["line"]!.GetValue<int>());
             Assert.Equal(13, hint["position"]!["character"]!.GetValue<int>());
             Assert.Equal(": int", hint["label"]!.GetValue<string>());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void HandleMessage_SymbolAndCompletionKindsUseSharedMapping_Issue4870()
+    {
+        var mappings = new (string Kind, int SymbolKind, int CompletionItemKind)[]
+        {
+            ("accessor", 6, 2),
+            ("add", 12, 3),
+            ("anchor", 20, 18),
+            ("annotation", 11, 8),
+            ("assembly", 2, 9),
+            ("array", 18, 12),
+            ("async_function", 12, 3),
+            ("async_generator", 12, 3),
+            ("attribute", 7, 10),
+            ("associatedtype", 26, 25),
+            ("base_image", 5, 7),
+            ("build_arg", 13, 6),
+            ("class", 5, 7),
+            ("class_hook", 6, 2),
+            ("code", 15, 1),
+            ("constant", 14, 21),
+            ("copy", 12, 3),
+            ("delegate", 12, 3),
+            ("enum", 10, 13),
+            ("environment", 13, 6),
+            ("event", 24, 23),
+            ("expose", 7, 10),
+            ("field", 8, 5),
+            ("file_module", 2, 9),
+            ("function", 12, 3),
+            ("generator", 12, 3),
+            ("heading", 20, 1),
+            ("hook", 12, 3),
+            ("implements", 11, 8),
+            ("import", 2, 9),
+            ("interface", 11, 8),
+            ("lambda", 12, 3),
+            ("label", 20, 1),
+            ("layout", 19, 7),
+            ("method", 6, 2),
+            ("module", 2, 9),
+            ("namespace", 3, 9),
+            ("operator", 25, 24),
+            ("object", 19, 7),
+            ("package", 4, 9),
+            ("property", 7, 10),
+            ("procedure", 12, 3),
+            ("program", 2, 9),
+            ("project", 2, 9),
+            ("protocol", 11, 8),
+            ("protocol_impl", 19, 7),
+            ("reference", 13, 18),
+            ("record", 23, 22),
+            ("rule", 19, 7),
+            ("route", 12, 3),
+            ("run", 12, 3),
+            ("service", 5, 7),
+            ("shell", 12, 3),
+            ("specialization", 5, 7),
+            ("stage", 2, 9),
+            ("stopsignal", 7, 10),
+            ("struct", 23, 22),
+            ("submodule", 2, 9),
+            ("subroutine", 12, 3),
+            ("test.method", 6, 2),
+            ("trait", 11, 8),
+            ("type", 5, 7),
+            ("type_parameter", 26, 25),
+            ("typealias", 26, 25),
+            ("union", 23, 22),
+            ("user", 13, 6),
+            ("value", 13, 12),
+            ("block data", 19, 7),
+            ("variable", 13, 6),
+            ("volume", 8, 5),
+            ("workdir", 2, 19),
+        };
+
+        Assert.Equal(
+            SymbolKindCatalog.SymbolKinds.Order(StringComparer.Ordinal),
+            LspServer.MappedInternalKindsForTesting.Order(StringComparer.Ordinal));
+        Assert.Equal((13, 6), LspServer.MapLspKindsForTesting("parameter"));
+        Assert.Equal((13, 6), LspServer.MapLspKindsForTesting("plugin.custom"));
+
+        static SymbolResult ToResult(SymbolRecord symbol, string lang) => new()
+        {
+            Lang = lang,
+            Kind = symbol.Kind,
+            SubKind = symbol.SubKind,
+            Name = symbol.Name,
+            Signature = symbol.Signature,
+            ReturnType = symbol.ReturnType,
+            ContainerKind = symbol.ContainerKind,
+            ContainerName = symbol.ContainerName,
+        };
+
+        var typeScriptSymbols = SymbolExtractor.Extract(1, "typescript", """
+            class Widget {
+              constructor() {}
+              static constructor() {}
+              Widget() {}
+            }
+            """);
+        Assert.Equal(
+            (9, 4),
+            LspServer.MapLspKindsForTesting(ToResult(
+                Assert.Single(typeScriptSymbols, symbol => symbol.Signature?.StartsWith("constructor", StringComparison.Ordinal) == true),
+                "typescript")));
+        Assert.Equal(
+            (12, 3),
+            LspServer.MapLspKindsForTesting(ToResult(
+                Assert.Single(typeScriptSymbols, symbol => symbol.Signature?.StartsWith("Widget", StringComparison.Ordinal) == true),
+                "typescript")));
+        Assert.Equal(
+            (12, 3),
+            LspServer.MapLspKindsForTesting(ToResult(
+                Assert.Single(typeScriptSymbols, symbol =>
+                    symbol.Signature?.StartsWith("static constructor", StringComparison.Ordinal) == true),
+                "typescript")));
+
+        var kotlinSymbols = SymbolExtractor.Extract(2, "kotlin", """
+            class KotlinThing {
+                constructor(value: Int)
+                fun KotlinThing() {}
+            }
+            enum class KtColor {
+                RED,
+                `mixed-case`,
+            }
+            """);
+        Assert.Equal(
+            (9, 4),
+            LspServer.MapLspKindsForTesting(ToResult(
+                Assert.Single(kotlinSymbols, symbol => symbol.Signature?.StartsWith("constructor", StringComparison.Ordinal) == true),
+                "kotlin")));
+        Assert.Equal(
+            (12, 3),
+            LspServer.MapLspKindsForTesting(ToResult(
+                Assert.Single(kotlinSymbols, symbol => symbol.Signature?.StartsWith("fun KotlinThing", StringComparison.Ordinal) == true),
+                "kotlin")));
+        Assert.Equal(
+            (22, 20),
+            LspServer.MapLspKindsForTesting(ToResult(
+                Assert.Single(kotlinSymbols, symbol => symbol.Name == "RED"),
+                "kotlin")));
+        Assert.Equal(
+            (22, 20),
+            LspServer.MapLspKindsForTesting(ToResult(
+                Assert.Single(kotlinSymbols, symbol => symbol.Name == "mixed-case"),
+                "kotlin")));
+
+        var soliditySymbols = SymbolExtractor.Extract(3, "solidity", """
+            contract Vault {
+                constructor(address owner) {}
+                function Vault(uint amount) public {}
+            }
+            """);
+        Assert.Equal(
+            (9, 4),
+            LspServer.MapLspKindsForTesting(ToResult(
+                Assert.Single(soliditySymbols, symbol => symbol.SubKind == "constructor"),
+                "solidity")));
+        Assert.Equal(
+            (12, 3),
+            LspServer.MapLspKindsForTesting(ToResult(
+                Assert.Single(soliditySymbols, symbol => symbol.SubKind == "function"),
+                "solidity")));
+
+        var javaSymbols = SymbolExtractor.Extract(4, "java", """
+            enum Outer {
+                @Deprecated
+                A;
+                enum Inner {
+                    B;
+                }
+            }
+            record Point(int x) {
+                Point {
+                }
+            }
+            class JavaThing {
+                void JavaThing() {}
+            }
+            """);
+        Assert.Equal(
+            (22, 20),
+            LspServer.MapLspKindsForTesting(ToResult(
+                Assert.Single(javaSymbols, symbol => symbol.Name == "A"),
+                "java")));
+        Assert.Equal(
+            (10, 13),
+            LspServer.MapLspKindsForTesting(ToResult(
+                Assert.Single(javaSymbols, symbol => symbol.Name == "Inner"),
+                "java")));
+        Assert.Equal(
+            (9, 4),
+            LspServer.MapLspKindsForTesting(ToResult(
+                Assert.Single(javaSymbols, symbol =>
+                    symbol.Name == "Point" &&
+                    symbol.Kind == "function"),
+                "java")));
+        Assert.Equal(
+            (12, 3),
+            LspServer.MapLspKindsForTesting(ToResult(
+                Assert.Single(javaSymbols, symbol =>
+                    symbol.Name == "JavaThing" &&
+                    symbol.ReturnType == "void"),
+                "java")));
+
+        var swiftSymbols = SymbolExtractor.Extract(5, "swift", """
+            enum SwiftColor {
+                case red
+                indirect case node(Int)
+                case first, second(Int)
+            }
+            """);
+        Assert.Equal(
+            (22, 20),
+            LspServer.MapLspKindsForTesting(ToResult(
+                Assert.Single(swiftSymbols, symbol => symbol.Name == "red"),
+                "swift")));
+        Assert.Equal(
+            (22, 20),
+            LspServer.MapLspKindsForTesting(ToResult(
+                Assert.Single(swiftSymbols, symbol => symbol.Name == "node"),
+                "swift")));
+        Assert.Equal(
+            (22, 20),
+            LspServer.MapLspKindsForTesting(ToResult(
+                Assert.Single(swiftSymbols, symbol => symbol.Name == "second"),
+                "swift")));
+
+        var dartSymbols = SymbolExtractor.Extract(6, "dart", """
+            class Animal {
+                Animal.named();
+                factory Animal.empty() => Animal.named();
+            }
+            """);
+        Assert.All(
+            dartSymbols.Where(symbol => symbol.Kind == "function"),
+            symbol => Assert.Equal(
+                (9, 4),
+                LspServer.MapLspKindsForTesting(ToResult(symbol, "dart"))));
+
+        var visualBasicSymbols = SymbolExtractor.Extract(7, "vb", """
+            Public Class VisualBasicThing
+                Public Sub New()
+                End Sub
+            End Class
+            """);
+        Assert.Equal(
+            (9, 4),
+            LspServer.MapLspKindsForTesting(ToResult(
+                Assert.Single(visualBasicSymbols, symbol => symbol.Name.Equals("New", StringComparison.OrdinalIgnoreCase)),
+                "vb")));
+
+        var pascalSymbols = SymbolExtractor.Extract(8, "pascal", """
+            type
+              PascalThing = class
+                Constructor Create;
+              end;
+            """);
+        Assert.Equal(
+            (9, 4),
+            LspServer.MapLspKindsForTesting(ToResult(
+                Assert.Single(pascalSymbols, symbol => symbol.Name == "Create"),
+                "pascal")));
+
+        var csharpSymbols = SymbolExtractor.Extract(9, "csharp", """
+            class @class {
+                public @class() {}
+            }
+            enum Escaped {
+                @event = 1,
+            }
+            """);
+        Assert.Equal(
+            (9, 4),
+            LspServer.MapLspKindsForTesting(ToResult(
+                Assert.Single(csharpSymbols, symbol =>
+                    symbol.Name == "class" &&
+                    symbol.Kind == "function"),
+                "csharp")));
+        Assert.Equal(
+            (22, 20),
+            LspServer.MapLspKindsForTesting(ToResult(
+                Assert.Single(csharpSymbols, symbol => symbol.Name == "event"),
+                "csharp")));
+
+        var shellSymbols = SymbolExtractor.Extract(10, "shell", """
+            constructor() {
+              echo ordinary
+            }
+            """);
+        Assert.Equal(
+            (12, 3),
+            LspServer.MapLspKindsForTesting(ToResult(
+                Assert.Single(shellSymbols, symbol => symbol.Name == "constructor"),
+                "shell")));
+
+        var semanticMappings = new (string Kind, string Detail, string? SubKind, string ContainerKind, string ContainerName, int SymbolKind, int CompletionItemKind)[]
+        {
+            ("function", "public MapKindB()", null, "class", "MapKindB", 9, 4),
+            ("function", "static MapKindB()", null, "class", "MapKindB", 9, 4),
+            ("function", "~MapKindB()", null, "class", "MapKindB", 12, 3),
+            ("function", "constructor()", null, "class", "MapKindB", 12, 3),
+            ("function", "subkind constructor", "constructor", "class", "MapKindB", 9, 4),
+            ("enum", "MapKindB,", null, "enum", "MappingEnum", 22, 20),
+            ("enum", "enum MapKindB {", null, "enum", "MappingEnum", 10, 13),
+            ("function", "MapKindB", null, "enum", "MappingEnum", 22, 20),
+            ("property", "case MapKindB", null, "enum", "MappingEnum", 22, 20),
+            ("property", "indirect case MapKindB(Int)", null, "enum", "MappingEnum", 22, 20),
+            ("property", "case Other, MapKindB(Int)", null, "enum", "MappingEnum", 22, 20),
+            ("function", "@Deprecated MapKindB(1)", null, "enum", "MappingEnum", 22, 20),
+            ("function", "public @MapKindB()", null, "class", "MapKindB", 9, 4),
+            ("enum", "@MapKindB = 1", null, "enum", "MappingEnum", 22, 20),
+            ("enum", "[Obsolete] public enum MapKindB {", null, "enum", "MappingEnum", 10, 13),
+            ("property", "val MapKindB: Int", null, "enum", "MappingEnum", 7, 10),
+            ("function", "void MapKindB()", null, "enum", "MappingEnum", 12, 3),
+        };
+        var expectedRows = mappings
+            .Select(mapping => (mapping.Kind, mapping.SymbolKind, mapping.CompletionItemKind))
+            .ToList();
+        expectedRows.AddRange(semanticMappings.Select(mapping =>
+            (mapping.Detail, mapping.SymbolKind, mapping.CompletionItemKind)));
+        const int queryGroupSize = 40;
+        var symbolNames = expectedRows
+            .Select((_, index) => index < queryGroupSize ? "MapKindA" : "MapKindB")
+            .ToArray();
+
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_symbol_kind_mapping");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var sourcePath = Path.Combine(projectRoot, "kinds.cs");
+            var source = string.Join('\n', symbolNames) + '\n';
+            File.WriteAllText(sourcePath, source);
+            using (var fixtureDb = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                var writer = new DbWriter(fixtureDb.Connection);
+                var fileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = "kinds.cs",
+                    Lang = "csharp",
+                    Size = source.Length,
+                    Lines = expectedRows.Count,
+                    Modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                    Checksum = "issue4870-lsp-kind-mapping",
+                });
+                writer.InsertChunks([
+                    new ChunkRecord
+                    {
+                        FileId = fileId,
+                        ChunkIndex = 0,
+                        StartLine = 1,
+                        EndLine = expectedRows.Count,
+                        Content = source,
+                    },
+                ]);
+                var symbols = mappings.Select((mapping, index) => new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = mapping.Kind,
+                    Name = symbolNames[index],
+                    Line = index + 1,
+                    StartLine = index + 1,
+                    StartColumn = 0,
+                    EndLine = index + 1,
+                    Signature = mapping.Kind,
+                }).ToList();
+                symbols.AddRange(semanticMappings.Select((mapping, index) => new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = mapping.Kind,
+                    SubKind = mapping.SubKind,
+                    Name = symbolNames[mappings.Length + index],
+                    Line = mappings.Length + index + 1,
+                    StartLine = mappings.Length + index + 1,
+                    StartColumn = 0,
+                    EndLine = mappings.Length + index + 1,
+                    Signature = mapping.Detail,
+                    ContainerKind = mapping.ContainerKind,
+                    ContainerName = mapping.ContainerName,
+                }));
+                writer.InsertSymbols(symbols);
+            }
+
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            var documentResponse = HandleInitializedMessage(
+                server,
+                CreateTextDocumentRequest("textDocument/documentSymbol", sourcePath, 48700));
+            var workspaceResponses = new[] { "MapKindA", "MapKindB" }.Select((query, index) =>
+                HandleInitializedMessage(server, JsonSerializer.Serialize(new
+                {
+                    jsonrpc = "2.0",
+                    id = 48701 + index,
+                    method = "workspace/symbol",
+                    @params = new { query },
+                }))).ToArray();
+            var completionResponses = new[]
+            {
+                HandleInitializedMessage(
+                    server,
+                    CreatePositionRequest("textDocument/completion", sourcePath, 48703, 0, "MapKindA".Length)),
+                HandleInitializedMessage(
+                    server,
+                    CreatePositionRequest(
+                        "textDocument/completion",
+                        sourcePath,
+                        48704,
+                        queryGroupSize,
+                        "MapKindB".Length)),
+            };
+
+            Assert.NotNull(documentResponse);
+            Assert.All(workspaceResponses, response => Assert.NotNull(response));
+            Assert.All(completionResponses, response => Assert.NotNull(response));
+            var documentKindsByLine = FlattenDocumentSymbols(documentResponse!["result"]!.AsArray())
+                .ToDictionary(
+                    symbol => symbol!["selectionRange"]!["start"]!["line"]!.GetValue<int>(),
+                    symbol => symbol!["kind"]!.GetValue<int>());
+            var workspaceKindsByLine = workspaceResponses
+                .SelectMany(response => response!["result"]!.AsArray())
+                .ToDictionary(
+                    symbol => symbol!["location"]!["range"]!["start"]!["line"]!.GetValue<int>(),
+                    symbol => symbol!["kind"]!.GetValue<int>());
+            var completionKindsByInternalKind = completionResponses
+                .SelectMany(response => response!["result"]!["items"]!.AsArray())
+                .ToDictionary(
+                    item => item!["detail"]!.GetValue<string>(),
+                    item => item!["kind"]!.GetValue<int>(),
+                    StringComparer.Ordinal);
+
+            Assert.Equal(expectedRows.Count, documentKindsByLine.Count);
+            Assert.Equal(expectedRows.Count, workspaceKindsByLine.Count);
+            Assert.Equal(expectedRows.Count, completionKindsByInternalKind.Count);
+            for (var index = 0; index < expectedRows.Count; index++)
+            {
+                var expected = expectedRows[index];
+                Assert.Equal(expected.SymbolKind, documentKindsByLine[index]);
+                Assert.Equal(expected.SymbolKind, workspaceKindsByLine[index]);
+                Assert.Equal(expected.CompletionItemKind, completionKindsByInternalKind[expected.Kind]);
+            }
         }
         finally
         {
