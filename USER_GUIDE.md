@@ -359,8 +359,9 @@ when an indented search result is required.
 Count mode follows the same contract. Bare `--count` preserves the
 newline-terminated numeric value used by scripts, while `--count --json`,
 `--format count`, and count output wrapped by `--json-envelope` use one JSON
-count object. Explicit `--json=array` / `--json=ndjson` streams are incompatible
-with count mode, and `--count` accepts only `--format text`, `json`, or `count`;
+count object. Explicit `--results-only`, `--json=array`, and `--json=ndjson`
+streams are incompatible with count mode, and `--count` accepts only
+`--format text`, `json`, or `count`;
 formats such as `compact`, `grouped`, `csv`, `tsv`, `lsp`, `qf`, and `sarif`
 return a usage error instead of being silently replaced. When `--format` is
 repeated, its existing rightmost-value-wins rule still applies.
@@ -3635,9 +3636,10 @@ output modifier は 1 つの contract として検証されます。`--json` と
 `--json=array --pretty` を使ってください。
 count mode も同じ contract に従います。bare `--count` は script が利用する改行終端の
 数値を維持し、`--count --json`、`--format count`、`--json-envelope` で包んだ count
-出力は 1 つの JSON count object を使います。明示的な `--json=array` /
-`--json=ndjson` stream は count mode と両立せず、`--count` と組み合わせられる
-`--format` は `text`、`json`、`count` だけです。`compact`、`grouped`、`csv`、`tsv`、
+出力は 1 つの JSON count object を使います。明示的な `--results-only`、
+`--json=array`、`--json=ndjson` stream は count mode と両立せず、`--count` と
+組み合わせられる `--format` は `text`、`json`、`count` だけです。`compact`、
+`grouped`、`csv`、`tsv`、
 `lsp`、`qf`、`sarif` などは黙って count output に置き換えず usage error を返します。
 `--format` を繰り返した場合は、既存どおり右端の値を優先します。
 `search --named-query <name>=<query>` は繰り返し指定でき、同じ filter と snippet 上限で

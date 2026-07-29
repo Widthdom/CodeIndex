@@ -259,6 +259,11 @@ public static partial class QueryCommandRunner
                 AddParseError(
                     $"Error: --count cannot be combined with --format {outputFormat} because count mode supports only text, json, or count output.");
             }
+            else if (countOnly && resultsOnly)
+            {
+                AddParseError(
+                    "Error: --results-only cannot be combined with --format count because that format defines its own output schema.");
+            }
             else if (countOnly && jsonOutputFormatExplicit)
             {
                 AddParseError(

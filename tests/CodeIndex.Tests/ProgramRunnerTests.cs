@@ -787,6 +787,10 @@ public class ProgramRunnerTests
             (["search", "Needle", "--json=array", "--count"], "--json=array"),
             (["search", "Needle", "--format", "count", "--json=array"], "--json=array"),
             (["search", "Needle", "--json=ndjson", "--format=count"], "--json=ndjson"),
+            (["search", "Needle", "--count", "--results-only"], "--results-only"),
+            (["search", "Needle", "--results-only", "--count"], "--results-only"),
+            (["search", "Needle", "--format", "count", "--results-only"], "--results-only"),
+            (["search", "Needle", "--results-only", "--format=count"], "--results-only"),
         ];
 
         foreach (var (args, streamOption) in cases)
@@ -814,6 +818,10 @@ public class ProgramRunnerTests
             ["Needle", "--json=ndjson", "--count"],
             ["Needle", "--format", "count", "--json=array"],
             ["Needle", "--json=ndjson", "--format=count"],
+            ["Needle", "--count", "--results-only"],
+            ["Needle", "--results-only", "--count"],
+            ["Needle", "--format", "count", "--results-only"],
+            ["Needle", "--results-only", "--format=count"],
         ];
 
         foreach (var args in cases)
@@ -821,7 +829,9 @@ public class ProgramRunnerTests
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 args,
                 new JsonSerializerOptions(JsonSerializerDefaults.Web)));
-            var streamOption = args.Single(arg => arg.StartsWith("--json=", StringComparison.Ordinal));
+            var streamOption = args.Single(arg =>
+                arg == "--results-only"
+                || arg.StartsWith("--json=", StringComparison.Ordinal));
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
             Assert.Empty(stdout);

@@ -103,7 +103,14 @@ internal static partial class ProgramRunner
         var countModeRequested = countFlagRequested
             || string.Equals(outputFormat, "count", StringComparison.Ordinal);
         if (countModeRequested)
+        {
             usesSingleDocumentJsonMode = true;
+            if (resultsOnlyRequested)
+            {
+                jsonStreamMode = "ndjson";
+                jsonStreamOption = "--results-only";
+            }
+        }
 
         if (ShouldDeferOutputCombinationValidation(args, commandIndex, commandName, outputFormat, jsonStreamMode))
             return true;
