@@ -570,6 +570,16 @@ public static partial class IndexCommandRunner
             if (!options.DryRun)
                 db.InitializeSchema();
             var writer = new DbWriter(db);
+            if (writer.TryGetNewerCSharpSymbolNameContractVersion(out var newerCSharpContract))
+            {
+                return WriteCommandError(
+                    options.Json,
+                    jsonOptions,
+                    $"C# symbol-name contract version {newerCSharpContract} is newer than supported version {DbContext.CSharpSymbolNameContractVersion}",
+                    CommandExitCodes.DatabaseError,
+                    "Use the same or a newer CodeIndex version that wrote this database; this version will not rewrite or downgrade its C# identities.",
+                    CommandErrorCodes.DbError);
+            }
 
             var userVersionBefore = db.GetUserVersion();
             var foldReadyBefore = (userVersionBefore & DbContext.FoldReadyFlag) != 0;
@@ -579,11 +589,29 @@ public static partial class IndexCommandRunner
             var storedFoldFingerprint = db.GetMetaString("fold_key_fingerprint");
             var foldMetadataCurrentBefore = storedFoldVersion == currentFoldVersion
                 && storedFoldFingerprint == currentFoldFingerprint;
+            var csharpSymbolNameContractUpgradeRequired =
+                writer.HasAnyFilesWithLanguage("csharp")
+                && !string.Equals(
+                db.GetMetaString(DbContext.CSharpSymbolNameContractVersionMetaKey),
+                DbContext.CSharpSymbolNameContractVersion.ToString(
+                    System.Globalization.CultureInfo.InvariantCulture),
+                StringComparison.Ordinal);
+            if (csharpSymbolNameContractUpgradeRequired
+                && !writer.CanReconstructCSharpExplicitInterfaceIdentitiesFromPersistedRows())
+            {
+                return WriteCommandError(
+                    options.Json,
+                    jsonOptions,
+                    "C# explicit-interface identities cannot be reconstructed because legacy symbol signatures are missing",
+                    CommandExitCodes.DatabaseError,
+                    "Refresh the C# files with `cdidx index <projectPath>` (or rebuild the index) before retrying `cdidx backfill-fold`.",
+                    CommandErrorCodes.DbError);
+            }
             foldReadyBefore = foldReadyBefore && foldMetadataCurrentBefore;
             // Missing or mismatched fold metadata means persisted keys may have been generated
             // by a different fold algorithm/runtime, so refresh every row from source names.
             // fold metadata 未記録 / 不一致時は全行再計算して version/runtime skew を解消する。
-            var rewriteAll = !foldMetadataCurrentBefore;
+            var rewriteAll = writer.ResolveFoldBackfillRewriteAll(!foldMetadataCurrentBefore);
 
             var symbols = 0;
             var symbolReferences = 0;
@@ -617,6 +645,7 @@ public static partial class IndexCommandRunner
                         "Retry `cdidx backfill-fold`. If the DB still does not verify, rebuild it with `cdidx index <projectPath> --rebuild`.",
                         CommandErrorCodes.DbError);
                 }
+                writer.MarkCSharpSymbolNameContractReady();
 
                 transaction.Commit();
                 userVersionAfter = db.GetUserVersion();

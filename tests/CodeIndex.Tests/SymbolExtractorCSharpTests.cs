@@ -4381,6 +4381,91 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharp_PreservesExplicitInterfaceIdentity_Issue4866()
+    {
+        var content = """
+            namespace Demo;
+
+            public interface IBase
+            {
+                void Run<T>(T value);
+            }
+
+            public interface IFoo : IBase
+            {
+                int Value { get; }
+                event System.EventHandler Changed;
+                string this[int index] { get; }
+                void Verify();
+                void Escape();
+            }
+
+            public interface IBar
+            {
+                void Run<TLeft, TRight>(TLeft left, TRight right);
+            }
+
+            public sealed class Service : IFoo, IBar
+            {
+                void IBase . Run<TValue>(TValue value) { }
+                void IBar.Run<TLeft, TRight>(TLeft left, TRight right) { }
+                int IFoo . Value => 1;
+                event System.EventHandler IFoo . Changed { add { } remove { } }
+                string IFoo . this[int index] => index.ToString();
+                [Fact]
+                void IFoo.Verify() { }
+                void I\u0046oo.\u0045scape() { }
+                public void Run<T>(T value) { }
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        var serviceMembers = symbols.Where(symbol => symbol.ContainerName == "Service").ToList();
+
+        var baseRun = Assert.Single(
+                serviceMembers,
+                symbol => symbol.Kind == "function"
+                    && symbol.Name == "Run"
+                    && symbol.Signature?.Contains("IBase . Run", StringComparison.Ordinal) == true);
+        Assert.Equal("ibase.run`1", baseRun.IdentityNameFolded);
+
+        var barRun = Assert.Single(
+                serviceMembers,
+                symbol => symbol.Kind == "function"
+                    && symbol.Name == "Run"
+                    && symbol.Signature?.StartsWith("void IBar.", StringComparison.Ordinal) == true);
+        Assert.Equal("ibar.run`2", barRun.IdentityNameFolded);
+
+        var ordinaryRun = Assert.Single(
+                serviceMembers,
+                symbol => symbol.Kind == "function"
+                    && symbol.Name == "Run"
+                    && symbol.Signature?.StartsWith("public void Run", StringComparison.Ordinal) == true);
+        Assert.Null(ordinaryRun.IdentityNameFolded);
+
+        Assert.Equal(
+            "ifoo.value",
+            Assert.Single(serviceMembers, symbol => symbol.Kind == "property" && symbol.Name == "Value")
+                .IdentityNameFolded);
+        Assert.Equal(
+            "ifoo.changed",
+            Assert.Single(serviceMembers, symbol => symbol.Kind == "event" && symbol.Name == "Changed")
+                .IdentityNameFolded);
+        Assert.Equal(
+            "ifoo.item",
+            Assert.Single(serviceMembers, symbol => symbol.Kind == "function" && symbol.Name == "Item")
+                .IdentityNameFolded);
+        Assert.Equal(
+            "ifoo.verify",
+            Assert.Single(serviceMembers, symbol => symbol.Kind == "test.method" && symbol.Name == "Verify")
+                .IdentityNameFolded);
+        Assert.Equal(
+            "ifoo.escape",
+            Assert.Single(serviceMembers, symbol => symbol.Kind == "function" && symbol.Name == "Escape")
+                .IdentityNameFolded);
+    }
+
+    [Fact]
     public void Extract_CSharp_DetectsGenericOverTupleReturnTypes()
     {
         // Issue #241 / #344 / #484: the shared C# return-type matcher must allow tuple groups

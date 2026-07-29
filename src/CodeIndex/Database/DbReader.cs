@@ -187,6 +187,11 @@ public partial class DbReader : IDisposable
     // read this as false and fall back to the ASCII-only `COLLATE NOCASE` path.
     // #86: name_folded 列が全行埋まっているか（fold 経路を使えるか）。
     internal readonly bool _foldReady;
+    // Matching fold metadata remains useful for language-contract identities when a failed
+    // index run has temporarily cleared only the global FoldReady bit.
+    // fold metadata が一致していれば、失敗した index run が全体の FoldReady bit だけを一時的に
+    // clear した場合も language contract の identity を引き続き利用できる。
+    internal readonly bool _foldMetadataCurrent;
     internal readonly bool _csharpSymbolNameContractCurrent;
     // #3524: True when `symbols.is_metadata_target` has been populated from extractor facts
     // plus the writer resolver for every C# class-like row and the stamp in `codeindex_meta`
@@ -608,11 +613,12 @@ public partial class DbReader : IDisposable
         // version mismatch や fingerprint mismatch、未記録は NOCASE fallback に降格させる。
         var foldBitSet = (userVersion & DbContext.FoldReadyFlag) != 0
                          && _symbolColumns.Contains("name_folded");
-        var storedFoldVersion = foldBitSet ? ParseFoldVersion(connection) : -1;
-        var storedFoldFingerprint = foldBitSet ? ParseFoldFingerprint(connection) : null;
-        _foldReady = foldBitSet
-            && storedFoldVersion == NameFold.Version
+        var storedFoldVersion = ParseFoldVersion(connection);
+        var storedFoldFingerprint = ParseFoldFingerprint(connection);
+        _foldMetadataCurrent =
+            storedFoldVersion == NameFold.Version
             && string.Equals(storedFoldFingerprint, NameFold.Fingerprint(), StringComparison.Ordinal);
+        _foldReady = foldBitSet && _foldMetadataCurrent;
         _csharpSymbolNameContractCurrent = string.Equals(
             TryGetMetaString(_conn, DbContext.CSharpSymbolNameContractVersionMetaKey),
             DbContext.CSharpSymbolNameContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
@@ -1274,7 +1280,19 @@ public partial class DbReader : IDisposable
         DateTime? since = null)
     {
         if (_csharpSymbolNameContractCurrent)
-            return null;
+        {
+            if (!_foldReady
+                || (_symbolColumns.Contains("display_name_folded")
+                    && HasSymbolIndex("idx_symbols_display_name_folded"))
+                || !ScopeMayIncludeCSharpFiles(lang, pathPatterns, excludePathPatterns, excludeTests, since))
+            {
+                return null;
+            }
+
+            return BuildExactSymbolSignal(
+                available: false,
+                "idx_symbols_display_name_folded");
+        }
 
         if (!ScopeMayIncludeCSharpFiles(lang, pathPatterns, excludePathPatterns, excludeTests, since))
             return null;

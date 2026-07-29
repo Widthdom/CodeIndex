@@ -197,6 +197,7 @@ public partial class DbContext : IDisposable
         ("symbols", "is_metadata_target"),
         ("symbols", "metadata_target_source"),
         ("symbols", "name_folded"),
+        ("symbols", "display_name_folded"),
     ];
     private static readonly string[] ReadMigrationRequiredIndexes =
     [
@@ -217,6 +218,7 @@ public partial class DbContext : IDisposable
         "idx_symbol_refs_container_nocase_kind",
         "idx_symbols_name_nocase",
         "idx_symbols_name_folded",
+        "idx_symbols_display_name_folded",
         "idx_symbols_file_name_folded",
         "idx_symbols_file_name_nocase",
         "idx_symbols_name_folded_container_name_nocase",

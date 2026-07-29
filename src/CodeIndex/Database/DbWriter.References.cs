@@ -81,6 +81,7 @@ public partial class DbWriter
               AND r.container_name IS NOT NULL
               AND r.container_name <> ''
               AND (s.name_folded = r.container_name_folded
+                   OR s.display_name_folded = r.container_name_folded
                    OR (s.name_folded IS NULL AND s.name = r.container_name COLLATE NOCASE))
               AND r.line BETWEEN COALESCE(s.start_line, s.line) AND COALESCE(s.end_line, s.line)
             ORDER BY (COALESCE(s.end_line, s.line) - COALESCE(s.start_line, s.line)),

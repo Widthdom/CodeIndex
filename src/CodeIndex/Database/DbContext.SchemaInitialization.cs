@@ -137,7 +137,9 @@ public partial class DbContext : IDisposable
         visibility      TEXT,
         return_type     TEXT,
         is_metadata_target INTEGER,
-        metadata_target_source TEXT
+        metadata_target_source TEXT,
+        name_folded     TEXT,
+        display_name_folded TEXT
     )");
 
         // Indexed references table / 参照インデックステーブル
@@ -228,6 +230,7 @@ public partial class DbContext : IDisposable
         // COLLATE NOCASE path (correct for ASCII, misses non-ASCII casing — #86 fix).
         // #86: --exact 用の Unicode 折り畳み列。レガシー行は NULL のまま、再 index で埋まる。
         EnsureColumn("symbols", "name_folded", "TEXT");
+        EnsureColumn("symbols", "display_name_folded", "TEXT");
         EnsureColumn("symbol_references", "symbol_name_folded", "TEXT");
         EnsureColumn("symbol_references", "container_name_folded", "TEXT");
         EnsureColumn("symbol_references", "is_self_reference", "INTEGER NOT NULL DEFAULT 0");
@@ -315,6 +318,11 @@ public partial class DbContext : IDisposable
         // the NOCASE indexes above. Both sets coexist so mixed-state DBs cannot regress.
         // #86: 折り畳み列のインデックス。FoldReadyFlag が立っている DB でだけ使う。
         Execute("CREATE INDEX IF NOT EXISTS idx_symbols_name_folded                ON symbols(name_folded)");
+        // Explicit-interface identities occupy name_folded, while unqualified discovery uses
+        // the separately persisted display-name fold. Both predicates stay indexed.
+        // 明示的 interface identity は name_folded、非修飾 discovery は別途永続化した
+        // display-name fold を使い、両方の predicate を index 対応に保つ。
+        Execute("CREATE INDEX IF NOT EXISTS idx_symbols_display_name_folded ON symbols(display_name_folded) WHERE display_name_folded IS NOT NULL");
         // Reference-source and ranked-candidate resolution repeatedly combines the folded
         // symbol name with file or container scope. Keep those probes bounded for every
         // indexed language, including the NOCASE fallback used by partially migrated DBs.
@@ -432,10 +440,11 @@ public partial class DbContext : IDisposable
                     return_type     TEXT,
                     is_metadata_target INTEGER,
                     metadata_target_source TEXT,
-                    name_folded     TEXT
+                    name_folded     TEXT,
+                    display_name_folded TEXT
                 )
                 """,
-                "id, file_id, kind, sub_kind, name, line, start_line, start_column, end_line, body_start_line, body_end_line, signature, container_kind, container_name, container_qualified_name, family_key, visibility, return_type, is_metadata_target, metadata_target_source, name_folded");
+                "id, file_id, kind, sub_kind, name, line, start_line, start_column, end_line, body_start_line, body_end_line, signature, container_kind, container_name, container_qualified_name, family_key, visibility, return_type, is_metadata_target, metadata_target_source, name_folded, display_name_folded");
             RebuildReferenceLineTablesWithRequiredFileId();
             RebuildTableWithRequiredFileId(
                 "file_issues",
@@ -726,10 +735,11 @@ public partial class DbContext : IDisposable
                 return_type     TEXT,
                 is_metadata_target INTEGER,
                 metadata_target_source TEXT,
-                name_folded     TEXT
+                name_folded     TEXT,
+                display_name_folded TEXT
             )
             """;
-        const string symbolsColumns = "id, file_id, kind, sub_kind, name, line, start_line, start_column, end_line, body_start_line, body_end_line, signature, container_kind, container_name, container_qualified_name, family_key, visibility, return_type, is_metadata_target, metadata_target_source, name_folded";
+        const string symbolsColumns = "id, file_id, kind, sub_kind, name, line, start_line, start_column, end_line, body_start_line, body_end_line, signature, container_kind, container_name, container_qualified_name, family_key, visibility, return_type, is_metadata_target, metadata_target_source, name_folded, display_name_folded";
         var symbolReferencesCreateSql =
             $"""
             CREATE TABLE symbol_references (

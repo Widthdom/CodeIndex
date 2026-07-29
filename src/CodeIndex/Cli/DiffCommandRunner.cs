@@ -222,6 +222,7 @@ public static class DiffCommandRunner
             "sub_kind",
             "name",
             "name_folded",
+            "display_name_folded",
             "line",
             "start_line",
             "start_column",
@@ -1485,6 +1486,9 @@ public static class DiffCommandRunner
         var metadataTargetSourceExpr = ColumnExists(connection, "symbols", "metadata_target_source")
             ? "symbols.metadata_target_source"
             : "NULL";
+        var displayNameFoldedExpr = ColumnExists(connection, "symbols", "display_name_folded")
+            ? "symbols.display_name_folded"
+            : "NULL";
 
         return $$"""
             SELECT
@@ -1493,6 +1497,7 @@ public static class DiffCommandRunner
                 symbols.sub_kind,
                 symbols.name,
                 symbols.name_folded,
+                {{displayNameFoldedExpr}},
                 symbols.line,
                 symbols.start_line,
                 symbols.start_column,
@@ -1516,6 +1521,7 @@ public static class DiffCommandRunner
                 symbols.sub_kind,
                 symbols.name,
                 symbols.name_folded,
+                {{displayNameFoldedExpr}},
                 symbols.line,
                 symbols.start_line,
                 symbols.start_column,

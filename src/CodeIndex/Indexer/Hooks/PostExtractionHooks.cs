@@ -373,6 +373,7 @@ public sealed class PostExtractionHookRunner : IDisposable
         if (!sourceSymbolsAlreadyObserved)
             ObserveCSharpStaticInterfaceSourceSymbols(context, symbols);
 
+        var acceptedHookMutation = false;
         foreach (var hook in hooks)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -398,6 +399,7 @@ public sealed class PostExtractionHookRunner : IDisposable
                     cancellationToken))
             {
                 PostExtractionHookMutationMaterializer.ReplaceList(symbols, workingSymbols);
+                acceptedHookMutation = true;
             }
         }
 
@@ -405,7 +407,8 @@ public sealed class PostExtractionHookRunner : IDisposable
         // Re-derive it from the accepted public name after all mutations.
         // hook は record の rename/add はできるが内部の永続化 identity key は設定できないため、
         // 全 mutation 受理後の公開名から再導出する。
-        PostExtractionHookMutationMaterializer.RefreshLanguageIdentity(context.Language, symbols);
+        if (acceptedHookMutation)
+            PostExtractionHookMutationMaterializer.RefreshLanguageIdentity(context.Language, symbols);
     }
 
     public void OnReferencesExtracted(FileContext context, IList<ReferenceRecord> references, CancellationToken cancellationToken = default)
@@ -413,6 +416,7 @@ public sealed class PostExtractionHookRunner : IDisposable
         ObjectDisposedException.ThrowIf(disposed, this);
         cancellationToken.ThrowIfCancellationRequested();
 
+        var acceptedHookMutation = false;
         foreach (var hook in hooks)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -438,10 +442,12 @@ public sealed class PostExtractionHookRunner : IDisposable
                     cancellationToken))
             {
                 PostExtractionHookMutationMaterializer.ReplaceList(references, workingReferences);
+                acceptedHookMutation = true;
             }
         }
 
-        PostExtractionHookMutationMaterializer.RefreshLanguageIdentity(context.Language, references);
+        if (acceptedHookMutation)
+            PostExtractionHookMutationMaterializer.RefreshLanguageIdentity(context.Language, references);
     }
 
     private bool InvokeHookWithBudget(

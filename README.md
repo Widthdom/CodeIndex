@@ -93,6 +93,15 @@ cdidx license --json
 cdidx validate
 ```
 
+For C# explicit-interface implementations, symbol output and outlines keep the
+short display name (`Run`, `Value`, `Changed`, or `Item`). Qualified exact-name
+queries use the interface spelling, such as `IFoo.Run<T>`, `IFoo.Value`,
+`IFoo.Changed`, and `IFoo.Item` (`IFoo.this` is accepted as an indexer alias).
+Generic parameter spelling is normalized to arity, so `IFoo.Run<TValue>` has the
+same exact identity as `IFoo.Run<T>`. An unqualified exact query such as `Run`
+remains a discovery alias and may return explicit implementations alongside
+same-named public members; use the qualified spelling to select one identity.
+
 `doctor --env-inventory=full` accepts exact `--env-domain`,
 `--env-category`, and `--env-sensitivity` filters that compose with AND.
 Its JSON form accepts `--max-json-bytes` as a whole-document UTF-8 byte cap;
@@ -526,6 +535,14 @@ cdidx doctor --json --env-inventory=full --env-domain indexing_query --max-json-
 cdidx license --json
 cdidx validate
 ```
+
+C# の明示的 interface 実装では、symbol 出力と outline は短い表示名
+（`Run`、`Value`、`Changed`、`Item`）を維持します。修飾した exact-name query には
+`IFoo.Run<T>`、`IFoo.Value`、`IFoo.Changed`、`IFoo.Item` のような interface 表記を使い、
+indexer では `IFoo.this` も alias として受け付けます。generic parameter の表記は arity に
+正規化されるため、`IFoo.Run<TValue>` と `IFoo.Run<T>` は同じ完全一致 identity です。
+`Run` のような非修飾の完全一致 query は discovery alias のままで、同名の public member と
+明示的実装をともに返す場合があります。1つの identity を選ぶには修飾表記を使ってください。
 
 `doctor --env-inventory=full` は、AND で合成される完全一致の
 `--env-domain`、`--env-category`、`--env-sensitivity` filter を受け付けます。

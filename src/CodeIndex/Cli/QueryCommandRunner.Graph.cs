@@ -259,9 +259,17 @@ public static partial class QueryCommandRunner
                 foreach (var r in results)
                 {
                     if (exact)
-                        WriteGraphJsonResult(r, CliJsonSerializerContextFactory.Create(jsonOptions).CallerResult, exactSignal, jsonOptions, extraFields: payload => AddGraphContractJsonFields(payload, reader, jsonOptions, sqlGraphSignal, hdlGraphSignal));
+                        WriteGraphJsonResult(r, CliJsonSerializerContextFactory.Create(jsonOptions).CallerResult, exactSignal, jsonOptions, extraFields: payload =>
+                        {
+                            AddGraphContractJsonFields(payload, reader, jsonOptions, sqlGraphSignal, hdlGraphSignal);
+                            AddReferenceRankingQueryContextJson(payload, options, jsonOptions);
+                        });
                     else
-                        WriteJsonResult(r, CliJsonSerializerContextFactory.Create(jsonOptions).CallerResult, jsonOptions, extraFields: payload => AddGraphContractJsonFields(payload, reader, jsonOptions, sqlGraphSignal, hdlGraphSignal));
+                        WriteJsonResult(r, CliJsonSerializerContextFactory.Create(jsonOptions).CallerResult, jsonOptions, extraFields: payload =>
+                        {
+                            AddGraphContractJsonFields(payload, reader, jsonOptions, sqlGraphSignal, hdlGraphSignal);
+                            AddReferenceRankingQueryContextJson(payload, options, jsonOptions);
+                        });
                 }
             }
             else
@@ -406,9 +414,17 @@ public static partial class QueryCommandRunner
                 foreach (var r in results)
                 {
                     if (exact)
-                        WriteGraphJsonResult(r, CliJsonSerializerContextFactory.Create(jsonOptions).CalleeResult, exactSignal, jsonOptions, extraFields: payload => AddGraphContractJsonFields(payload, reader, jsonOptions, sqlGraphSignal, hdlGraphSignal));
+                        WriteGraphJsonResult(r, CliJsonSerializerContextFactory.Create(jsonOptions).CalleeResult, exactSignal, jsonOptions, extraFields: payload =>
+                        {
+                            AddGraphContractJsonFields(payload, reader, jsonOptions, sqlGraphSignal, hdlGraphSignal);
+                            AddReferenceRankingQueryContextJson(payload, options, jsonOptions);
+                        });
                     else
-                        WriteJsonResult(r, CliJsonSerializerContextFactory.Create(jsonOptions).CalleeResult, jsonOptions, extraFields: payload => AddGraphContractJsonFields(payload, reader, jsonOptions, sqlGraphSignal, hdlGraphSignal));
+                        WriteJsonResult(r, CliJsonSerializerContextFactory.Create(jsonOptions).CalleeResult, jsonOptions, extraFields: payload =>
+                        {
+                            AddGraphContractJsonFields(payload, reader, jsonOptions, sqlGraphSignal, hdlGraphSignal);
+                            AddReferenceRankingQueryContextJson(payload, options, jsonOptions);
+                        });
                 }
             }
             else
@@ -447,6 +463,7 @@ public static partial class QueryCommandRunner
         }
 
         options = ParseArgs(cmdArgs, jsonDefault: false, allowNamedQuery: true);
+        options.ReferenceRankingActive = command is "callers" or "callees";
         if (TryWriteUnsupportedOptionError(
                 command,
                 cmdArgs,
@@ -457,7 +474,60 @@ public static partial class QueryCommandRunner
             return false;
         }
 
+        if (options.ParseError == null
+            && !TryValidateGraphSnippetLinesOption(command, options))
+        {
+            exitCode = CommandExitCodes.UsageError;
+            return false;
+        }
+
         exitCode = CommandExitCodes.Success;
+        return true;
+    }
+
+    internal static bool TryValidateBoundedGraphSnippetLinesOption(
+        string command,
+        string[] args,
+        bool bodyOutputHidden)
+    {
+        if (command is not ("references" or "callers" or "callees"))
+            return true;
+
+        var options = ParseArgs(args, jsonDefault: false, allowNamedQuery: true);
+        return options.ParseError != null
+               || TryValidateGraphSnippetLinesOption(command, options, bodyOutputHidden);
+    }
+
+    private static bool TryValidateGraphSnippetLinesOption(
+        string command,
+        QueryCommandOptions options,
+        bool bodyOutputHidden = false)
+    {
+        if (!options.SnippetLinesExplicit || options.SnippetLines == 0)
+            return true;
+
+        if (!options.IncludeBody)
+        {
+            CommandErrorWriter.Write(
+                "--snippet-lines requires --body for references, callers, and callees.",
+                "Add --body to emit a bounded body excerpt, or omit --snippet-lines.",
+                GetUsageLineOrThrow(command),
+                CommandErrorCodes.UsageError);
+            return false;
+        }
+
+        if (bodyOutputHidden
+            || options.CountOnly
+            || options.OutputFormat is not (OutputFormatText or OutputFormatJson))
+        {
+            CommandErrorWriter.Write(
+                "--snippet-lines with --body requires text or JSON result output for references, callers, and callees.",
+                "Remove --count and use --format text or --format json, or omit --snippet-lines for location-only output.",
+                GetUsageLineOrThrow(command),
+                CommandErrorCodes.UsageError);
+            return false;
+        }
+
         return true;
     }
 

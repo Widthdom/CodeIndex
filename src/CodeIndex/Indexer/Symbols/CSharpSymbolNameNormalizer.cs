@@ -30,6 +30,435 @@ internal static class CSharpSymbolNameNormalizer
         return NormalizeVerbatimIdentifiers(name);
     }
 
+    /// <summary>
+    /// Build the persisted folded identity for an explicit-interface implementation. The
+    /// user-facing symbol name remains the short member name, while this key preserves the
+    /// normalized interface qualifier and method generic arity. Member kind and normalized
+    /// signature remain separate columns in the canonical symbol row.
+    ///
+    /// 明示的インターフェース実装の永続 folded identity を構築する。ユーザー向け表示名は
+    /// 短いメンバー名のままにし、この key には正規化した interface qualifier と method の
+    /// generic arity を保持する。member kind と正規化済み signature は canonical symbol row
+    /// の別列として保持される。
+    /// </summary>
+    internal static string? BuildExplicitInterfaceIdentityNameFolded(string name, Match match)
+    {
+        var qualifierGroup = match.Groups["explicitInterface"];
+        if (!qualifierGroup.Success || string.IsNullOrWhiteSpace(qualifierGroup.Value))
+            return null;
+
+        var qualifier = NormalizeTypeDisplayName(qualifierGroup.Value);
+        var typeParameters = match.Groups["explicitTypeParameters"];
+        var arity = typeParameters.Success
+            && TryCountTopLevelTypeArguments(typeParameters.Value, out var parsedArity)
+                ? parsedArity
+                : 0;
+
+        return BuildExplicitInterfaceIdentityNameFolded(qualifier, name, arity);
+    }
+
+    /// <summary>
+    /// Reconstruct an explicit-interface identity from persisted display name + signature.
+    /// Fold validation and maintenance use this so a rewrite never replaces the qualified
+    /// language identity with the short discovery alias.
+    ///
+    /// 永続化済みの表示名と signature から明示的インターフェース identity を再構築する。
+    /// fold 検証・maintenance が、修飾済み language identity を短い discovery alias で
+    /// 上書きしないために使用する。
+    /// </summary>
+    internal static string? BuildExplicitInterfaceIdentityNameFolded(
+        string name,
+        string? signature,
+        string kind)
+    {
+        if (string.IsNullOrWhiteSpace(name)
+            || string.IsNullOrWhiteSpace(signature)
+            || kind is not ("function" or "test.method" or "property" or "event"))
+        {
+            return null;
+        }
+
+        // Extraction canonicalizes source-only Unicode escapes in the persisted display name,
+        // but the signature keeps its source spelling. Decode only those escapes here while
+        // preserving `@`, whose presence distinguishes an `@this` method from an indexer.
+        // 抽出時は永続表示名の source-only Unicode escape を正規化する一方、signature は
+        // source 表記を保持する。indexer と `@this` method の区別に必要な `@` は残し、
+        // Unicode escape だけをここで復号する。
+        signature = ExactSourceSearchNormalizer.NormalizeCSharpUnicodeEscapes(
+            signature,
+            out _);
+
+        // `Item` is only the display alias for an indexer when the declaration itself uses
+        // `this[...]`. A legal method/property/event may also be named `Item`, so try the
+        // indexer source spelling first and then fall back to the literal member name.
+        // `Item` は宣言が `this[...]` の場合だけ indexer の表示 alias になる。
+        // method/property/event の実名にも使えるため、まず indexer 表記を試し、
+        // 一致しなければ通常の member 名として再構築する。
+        if (string.Equals(name, "Item", StringComparison.Ordinal))
+        {
+            var indexerIdentity = TryBuildExplicitInterfaceIdentityNameFolded(
+                name,
+                signature,
+                sourceName: "this",
+                isIndexer: true,
+                kind: kind);
+            if (indexerIdentity != null)
+                return indexerIdentity;
+        }
+
+        return TryBuildExplicitInterfaceIdentityNameFolded(
+            name,
+            signature,
+            sourceName: name,
+            isIndexer: false,
+            kind: kind);
+    }
+
+    /// <summary>
+    /// Preserve an explicit-interface qualifier when a post-extraction hook changes only the
+    /// public member name. The hook cannot edit the internal identity fields, and the persisted
+    /// signature intentionally retains the original source spelling, so rebuilding solely from
+    /// the new name would otherwise discard the qualifier.
+    ///
+    /// post-extraction hook が公開 member 名だけを変更した場合に、明示的 interface 修飾子を
+    /// 保持する。hook は内部 identity field を編集できず、永続 signature は元の source
+    /// 表記を意図的に保持するため、新しい名前だけから再構築すると修飾子が失われてしまう。
+    /// </summary>
+    internal static string? RebuildExplicitInterfaceIdentityAfterNameMutation(
+        string name,
+        string? signature,
+        string kind,
+        string? previousIdentityNameFolded,
+        string? previousDisplayNameFolded)
+    {
+        if (string.IsNullOrWhiteSpace(name)
+            || string.IsNullOrWhiteSpace(signature)
+            || string.IsNullOrWhiteSpace(previousIdentityNameFolded)
+            || string.IsNullOrWhiteSpace(previousDisplayNameFolded)
+            || kind is not ("function" or "test.method" or "property" or "event"))
+        {
+            return null;
+        }
+
+        var normalizedName = NormalizeVerbatimIdentifiers(name);
+        var newDisplayNameFolded = NameFold.Fold(normalizedName) ?? normalizedName;
+        if (string.Equals(
+                newDisplayNameFolded,
+                previousDisplayNameFolded,
+                StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var memberSeparator = previousIdentityNameFolded.LastIndexOf('.');
+        if (memberSeparator <= 0
+            || memberSeparator == previousIdentityNameFolded.Length - 1)
+        {
+            return null;
+        }
+
+        var previousLeaf = previousIdentityNameFolded[(memberSeparator + 1)..];
+        var aritySeparator = previousLeaf.LastIndexOf('`');
+        var aritySuffix = string.Empty;
+        if (aritySeparator >= 0)
+        {
+            aritySuffix = previousLeaf[aritySeparator..];
+            if (aritySeparator == 0
+                || aritySuffix.Length == 1
+                || !aritySuffix.AsSpan(1).ToString().All(char.IsDigit))
+            {
+                return null;
+            }
+            previousLeaf = previousLeaf[..aritySeparator];
+        }
+        if (!string.Equals(
+                previousLeaf,
+                previousDisplayNameFolded,
+                StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        // Only preserve the old qualifier when the unchanged declaration header still contains
+        // that old qualified member. This avoids carrying an explicit identity across a hook
+        // mutation that converted the record into an ordinary declaration.
+        // 変更後も declaration header に元の修飾 member が残る場合だけ修飾子を保持し、
+        // 通常宣言へ変換した hook mutation に古い explicit identity を持ち越さない。
+        var decodedSignature = ExactSourceSearchNormalizer.NormalizeCSharpUnicodeEscapes(
+            signature,
+            out _);
+        var declarationHeader = decodedSignature[..FindDeclarationBodyStart(decodedSignature)];
+        declarationHeader = TypeWhitespaceRegex.Replace(declarationHeader, " ");
+        declarationHeader = TypeDotWhitespaceRegex.Replace(declarationHeader, ".");
+        declarationHeader = NormalizeVerbatimIdentifiers(declarationHeader);
+        var declarationHeaderFolded =
+            NameFold.Fold(declarationHeader) ?? declarationHeader;
+        var previousQualifiedMember =
+            previousIdentityNameFolded[..(memberSeparator + 1)] + previousLeaf;
+        if (!declarationHeaderFolded.Contains(
+                previousQualifiedMember,
+                StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        return previousIdentityNameFolded[..(memberSeparator + 1)]
+               + newDisplayNameFolded
+               + aritySuffix;
+    }
+
+    private static string? TryBuildExplicitInterfaceIdentityNameFolded(
+        string name,
+        string signature,
+        string sourceName,
+        bool isIndexer,
+        string kind)
+    {
+        var declarationBodyStart = FindDeclarationBodyStart(signature);
+        var searchStart = 0;
+        while (searchStart < signature.Length)
+        {
+            var memberIndex = signature.IndexOf(
+                sourceName,
+                searchStart,
+                StringComparison.Ordinal);
+            if (memberIndex < 0)
+                return null;
+            if (memberIndex >= declarationBodyStart)
+                return null;
+
+            var memberTokenStart = memberIndex;
+            if (memberTokenStart > 0 && signature[memberTokenStart - 1] == '@')
+                memberTokenStart--;
+            var memberTokenEnd = memberIndex + sourceName.Length;
+            var hasIdentifierBoundary =
+                (memberTokenStart == 0 || !IsIdentifierChar(signature[memberTokenStart - 1]))
+                && (memberTokenEnd >= signature.Length || !IsIdentifierChar(signature[memberTokenEnd]));
+            var cursorBeforeMember = memberTokenStart - 1;
+            while (cursorBeforeMember >= 0 && char.IsWhiteSpace(signature[cursorBeforeMember]))
+                cursorBeforeMember--;
+            var hasQualifierDot = cursorBeforeMember >= 0 && signature[cursorBeforeMember] == '.';
+            var isVerbatimIndexerSpelling =
+                isIndexer && memberTokenStart < memberIndex && signature[memberTokenStart] == '@';
+            if (!hasIdentifierBoundary
+                || isVerbatimIndexerSpelling
+                || !IsDeclarationHeaderTopLevel(signature, memberTokenStart))
+            {
+                searchStart = memberTokenEnd;
+                continue;
+            }
+
+            var cursor = memberTokenEnd;
+            while (cursor < signature.Length && char.IsWhiteSpace(signature[cursor]))
+                cursor++;
+            if (!TryReadExplicitInterfaceMemberArity(
+                    signature,
+                    cursor,
+                    isIndexer,
+                    kind,
+                    out var arity))
+            {
+                searchStart = memberTokenEnd;
+                continue;
+            }
+
+            // A valid unqualified declaration token is the persisted row's real member.
+            // Do not scan into its parameter attributes/defaults or constraints for a later
+            // same-named qualified invocation or type.
+            // 有効な非修飾 declaration token は永続 row の実メンバーである。引数の
+            // attribute/default や制約内にある同名の修飾呼び出し・型まで探索しない。
+            if (!hasQualifierDot)
+                return null;
+
+            var qualifierEnd = cursorBeforeMember;
+            while (qualifierEnd > 0 && char.IsWhiteSpace(signature[qualifierEnd - 1]))
+                qualifierEnd--;
+            var qualifierStart = FindExplicitInterfaceQualifierStart(signature, qualifierEnd);
+            if (qualifierStart < qualifierEnd)
+            {
+                var qualifier = NormalizeTypeDisplayName(signature[qualifierStart..qualifierEnd]);
+                return BuildExplicitInterfaceIdentityNameFolded(qualifier, name, arity);
+            }
+
+            searchStart = memberTokenEnd;
+        }
+
+        return null;
+    }
+
+    private static bool IsDeclarationHeaderTopLevel(string signature, int tokenStart)
+    {
+        var parenthesisDepth = 0;
+        var bracketDepth = 0;
+        for (var i = 0; i < tokenStart; i++)
+        {
+            switch (signature[i])
+            {
+                case '(':
+                    parenthesisDepth++;
+                    break;
+                case ')':
+                    if (parenthesisDepth > 0)
+                        parenthesisDepth--;
+                    break;
+                case '[':
+                    bracketDepth++;
+                    break;
+                case ']':
+                    if (bracketDepth > 0)
+                        bracketDepth--;
+                    break;
+            }
+        }
+
+        return parenthesisDepth == 0 && bracketDepth == 0;
+    }
+
+    private static int FindDeclarationBodyStart(string signature)
+    {
+        var expressionBodyStart = signature.IndexOf("=>", StringComparison.Ordinal);
+        var blockBodyStart = signature.IndexOf('{');
+        var initializerStart = signature.IndexOf('=');
+        var bodyStart = signature.Length;
+        if (expressionBodyStart >= 0)
+            bodyStart = Math.Min(bodyStart, expressionBodyStart);
+        if (blockBodyStart >= 0)
+            bodyStart = Math.Min(bodyStart, blockBodyStart);
+        if (initializerStart >= 0)
+            bodyStart = Math.Min(bodyStart, initializerStart);
+
+        return bodyStart;
+    }
+
+    private static bool TryReadExplicitInterfaceMemberArity(
+        string signature,
+        int cursor,
+        bool isIndexer,
+        string kind,
+        out int arity)
+    {
+        arity = 0;
+        if (cursor >= signature.Length)
+            return false;
+
+        var isFunction = kind is "function" or "test.method";
+        if (signature[cursor] != '<')
+        {
+            // Match the suffix required by the persisted row's member kind. In particular,
+            // a function token must lead into its parameter list; accepting `{` here lets a
+            // later base/constraint type such as `class Runner : IFoo.Runner { }` masquerade
+            // as the declaration token.
+            // 永続 row の member kind に対応する suffix だけを受理する。function token は
+            // parameter list へ続く必要があり、`{` を許すと `class Runner : IFoo.Runner { }`
+            // のような後続 base/constraint 型を declaration token と誤認してしまう。
+            if (isIndexer)
+                return isFunction && signature[cursor] == '[';
+            if (isFunction)
+                return signature[cursor] == '(';
+            return signature[cursor] is '{' or '=' or ';';
+        }
+
+        var typeParameterEnd = FindBalancedTypeArgumentListEnd(signature, cursor);
+        if (typeParameterEnd <= cursor
+            || !TryCountTopLevelTypeArguments(
+                signature[cursor..(typeParameterEnd + 1)],
+                out arity))
+        {
+            arity = 0;
+            return false;
+        }
+
+        cursor = typeParameterEnd + 1;
+        while (cursor < signature.Length && char.IsWhiteSpace(signature[cursor]))
+            cursor++;
+
+        // A generic explicit-interface member is a method. Requiring its parameter list
+        // prevents a same-named qualified generic return/parameter type from being mistaken
+        // for the member declaration.
+        if (cursor < signature.Length && signature[cursor] == '(')
+            return true;
+
+        arity = 0;
+        return false;
+    }
+
+    /// <summary>
+    /// Normalize the exact-query spelling documented for C# explicit-interface members into
+    /// the same folded identity used by extraction. A terminal generic argument list is reduced
+    /// to arity so `IFoo.Run&lt;T&gt;` and an implementation declared as `IFoo.Run&lt;TValue&gt;`
+    /// share the language identity without collapsing into an unqualified `Run`.
+    ///
+    /// C# 明示的インターフェースメンバー向けに文書化した完全一致 query 表記を、抽出時と
+    /// 同じ folded identity へ正規化する。末尾の generic 引数リストは arity に変換し、
+    /// `IFoo.Run&lt;T&gt;` と `IFoo.Run&lt;TValue&gt;` を同一 identity としつつ、非修飾の
+    /// `Run` へは統合しない。
+    /// </summary>
+    internal static string NormalizeExplicitInterfaceQueryDisplayName(string query)
+    {
+        var rawLastDot = FindLastTopLevelDot(query);
+        var rawTerminalToken = rawLastDot >= 0
+            ? query[(rawLastDot + 1)..].Trim()
+            : string.Empty;
+        var decodedRawTerminalToken =
+            ExactSourceSearchNormalizer.NormalizeCSharpUnicodeEscapes(
+                rawTerminalToken,
+                out _);
+        var isIndexerSpelling = string.Equals(
+            rawTerminalToken,
+            "this",
+            StringComparison.Ordinal);
+        var isVerbatimThisSpelling = string.Equals(
+                rawTerminalToken,
+                "@this",
+                StringComparison.Ordinal)
+            || (rawTerminalToken.IndexOf('\\') >= 0
+                && (string.Equals(
+                        decodedRawTerminalToken,
+                        "this",
+                        StringComparison.Ordinal)
+                    || string.Equals(
+                        decodedRawTerminalToken,
+                        "@this",
+                        StringComparison.Ordinal)));
+        var normalized = NormalizeTypeDisplayName(query);
+        var lastDot = FindLastTopLevelDot(normalized);
+        if (lastDot < 0)
+            return normalized;
+
+        if (isIndexerSpelling
+            && string.Equals(normalized[(lastDot + 1)..], "this", StringComparison.Ordinal))
+        {
+            normalized = normalized[..(lastDot + 1)] + "Item";
+        }
+        else if (isVerbatimThisSpelling
+                 && string.Equals(normalized[(lastDot + 1)..], "this", StringComparison.Ordinal))
+        {
+            normalized = normalized[..(lastDot + 1)] + "@this";
+        }
+
+        return normalized;
+    }
+
+    internal static string NormalizeExplicitInterfaceQueryIdentityNameFolded(string query)
+    {
+        var normalized = NormalizeTypeDisplayName(
+            NormalizeExplicitInterfaceQueryDisplayName(query));
+        var lastDot = FindLastTopLevelDot(normalized);
+        if (lastDot < 0)
+            return NameFold.Fold(normalized) ?? normalized;
+
+        var leafStart = lastDot + 1;
+        var genericStart = normalized.IndexOf('<', leafStart);
+        if (genericStart >= 0
+            && normalized.EndsWith('>')
+            && TryCountTopLevelTypeArguments(normalized[genericStart..], out var arity))
+        {
+            normalized = normalized[..genericStart] + $"`{arity}";
+        }
+
+        return NameFold.Fold(normalized) ?? normalized;
+    }
+
     private static bool TryReadConversionOperatorName(Match match, string matchLine, out string name)
     {
         name = string.Empty;
@@ -152,6 +581,190 @@ internal static class CSharpSymbolNameNormalizer
         normalized = TypeDotWhitespaceRegex.Replace(normalized, ".");
         normalized = NormalizeTypeTokenSpacing(normalized);
         return NormalizeVerbatimIdentifiers(normalized);
+    }
+
+    private static int FindLastTopLevelDot(string value)
+    {
+        var angleDepth = 0;
+        var bracketDepth = 0;
+        var lastDot = -1;
+        for (var index = 0; index < value.Length; index++)
+        {
+            switch (value[index])
+            {
+                case '<':
+                    angleDepth++;
+                    break;
+                case '>':
+                    if (angleDepth > 0)
+                        angleDepth--;
+                    break;
+                case '[':
+                    bracketDepth++;
+                    break;
+                case ']':
+                    if (bracketDepth > 0)
+                        bracketDepth--;
+                    break;
+                case '.':
+                    if (angleDepth == 0 && bracketDepth == 0)
+                        lastDot = index;
+                    break;
+            }
+        }
+
+        return lastDot;
+    }
+
+    private static string BuildExplicitInterfaceIdentityNameFolded(
+        string qualifier,
+        string name,
+        int arity)
+    {
+        var identityName = $"{qualifier}.{name}";
+        if (arity > 0)
+            identityName += $"`{arity}";
+
+        return NameFold.Fold(identityName) ?? identityName;
+    }
+
+    private static int FindExplicitInterfaceQualifierStart(string signature, int qualifierEnd)
+    {
+        var angleDepth = 0;
+        var bracketDepth = 0;
+        for (var index = qualifierEnd - 1; index >= 0; index--)
+        {
+            switch (signature[index])
+            {
+                case '>':
+                    angleDepth++;
+                    break;
+                case '<':
+                    if (angleDepth > 0)
+                        angleDepth--;
+                    break;
+                case ']':
+                    bracketDepth++;
+                    break;
+                case '[':
+                    if (bracketDepth > 0)
+                        bracketDepth--;
+                    break;
+                default:
+                    if (char.IsWhiteSpace(signature[index])
+                        && angleDepth == 0
+                        && bracketDepth == 0)
+                    {
+                        var previous = index - 1;
+                        while (previous >= 0 && char.IsWhiteSpace(signature[previous]))
+                            previous--;
+                        var next = index + 1;
+                        while (next < qualifierEnd && char.IsWhiteSpace(signature[next]))
+                            next++;
+                        if ((previous >= 0 && signature[previous] is '.' or ':' or '<')
+                            || (next < qualifierEnd && signature[next] is '.' or ':' or '<'))
+                        {
+                            break;
+                        }
+
+                        return index + 1;
+                    }
+                    break;
+            }
+        }
+
+        return 0;
+    }
+
+    private static int FindBalancedTypeArgumentListEnd(string value, int startIndex)
+    {
+        var angleDepth = 0;
+        var bracketDepth = 0;
+        var parenDepth = 0;
+        for (var index = startIndex; index < value.Length; index++)
+        {
+            switch (value[index])
+            {
+                case '<':
+                    angleDepth++;
+                    break;
+                case '>':
+                    angleDepth--;
+                    if (angleDepth == 0 && bracketDepth == 0 && parenDepth == 0)
+                        return index;
+                    if (angleDepth < 0)
+                        return -1;
+                    break;
+                case '[':
+                    bracketDepth++;
+                    break;
+                case ']':
+                    if (bracketDepth > 0)
+                        bracketDepth--;
+                    break;
+                case '(':
+                    parenDepth++;
+                    break;
+                case ')':
+                    if (parenDepth > 0)
+                        parenDepth--;
+                    break;
+            }
+        }
+
+        return -1;
+    }
+
+    private static bool TryCountTopLevelTypeArguments(string value, out int arity)
+    {
+        arity = 0;
+        var trimmed = value.AsSpan().Trim();
+        if (trimmed.Length < 3 || trimmed[0] != '<' || trimmed[^1] != '>')
+            return false;
+
+        var angleDepth = 0;
+        var bracketDepth = 0;
+        var parenDepth = 0;
+        var sawToken = false;
+        arity = 1;
+        foreach (var ch in trimmed)
+        {
+            switch (ch)
+            {
+                case '<':
+                    angleDepth++;
+                    break;
+                case '>':
+                    angleDepth--;
+                    if (angleDepth < 0)
+                        return false;
+                    break;
+                case '[':
+                    bracketDepth++;
+                    break;
+                case ']':
+                    if (bracketDepth > 0)
+                        bracketDepth--;
+                    break;
+                case '(':
+                    parenDepth++;
+                    break;
+                case ')':
+                    if (parenDepth > 0)
+                        parenDepth--;
+                    break;
+                case ',':
+                    if (angleDepth == 1 && bracketDepth == 0 && parenDepth == 0)
+                        arity++;
+                    break;
+                default:
+                    if (!char.IsWhiteSpace(ch) && ch is not '<' and not '>')
+                        sawToken = true;
+                    break;
+            }
+        }
+
+        return angleDepth == 0 && sawToken;
     }
 
     private static string NormalizeVerbatimIdentifiers(string value)

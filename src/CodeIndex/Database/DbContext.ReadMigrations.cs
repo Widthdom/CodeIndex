@@ -255,10 +255,13 @@ public partial class DbContext : IDisposable
         // not fail on legacy DBs where the column did not exist yet.
         // #86: folded 列を追加してから folded index を作らないと legacy DB でクラッシュする。
         yield return ("EnsureColumn symbols.name_folded", () => EnsureColumn("symbols", "name_folded", "TEXT"));
+        yield return ("EnsureColumn symbols.display_name_folded", () => EnsureColumn("symbols", "display_name_folded", "TEXT"));
         yield return ("EnsureColumn symbol_references.symbol_name_folded", () => EnsureColumn("symbol_references", "symbol_name_folded", "TEXT"));
         yield return ("EnsureColumn symbol_references.container_name_folded", () => EnsureColumn("symbol_references", "container_name_folded", "TEXT"));
         yield return ("CREATE INDEX idx_symbols_name_folded",
             () => Execute("CREATE INDEX IF NOT EXISTS idx_symbols_name_folded                ON symbols(name_folded)"));
+        yield return ("CREATE INDEX idx_symbols_display_name_folded",
+            () => Execute("CREATE INDEX IF NOT EXISTS idx_symbols_display_name_folded ON symbols(display_name_folded) WHERE display_name_folded IS NOT NULL"));
         yield return ("CREATE INDEX idx_symbols_file_name_folded",
             () => Execute("CREATE INDEX IF NOT EXISTS idx_symbols_file_name_folded ON symbols(file_id, name_folded)"));
         yield return ("CREATE INDEX idx_symbols_file_name_nocase",

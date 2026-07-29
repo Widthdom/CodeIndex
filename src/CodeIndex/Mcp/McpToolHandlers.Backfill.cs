@@ -37,6 +37,12 @@ public partial class McpServer
             if (!dryRun)
                 db.InitializeSchema();
             var writer = new DbWriter(db);
+            if (writer.TryGetNewerCSharpSymbolNameContractVersion(out var newerCSharpContract))
+            {
+                return CreateToolErrorResponse(
+                    id,
+                    $"C# symbol-name contract version {newerCSharpContract} is newer than supported version {DbContext.CSharpSymbolNameContractVersion}. Use the same or a newer CodeIndex version that wrote this database; this version will not rewrite or downgrade its C# identities.");
+            }
             var userVersionBefore = db.GetUserVersion();
             var foldReadyBefore = (userVersionBefore & DbContext.FoldReadyFlag) != 0;
             var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -45,10 +51,24 @@ public partial class McpServer
             var storedFoldFingerprint = db.GetMetaString("fold_key_fingerprint");
             var foldMetadataCurrentBefore = storedFoldVersion == currentFoldVersion
                 && storedFoldFingerprint == currentFoldFingerprint;
+            var csharpSymbolNameContractUpgradeRequired =
+                writer.HasAnyFilesWithLanguage("csharp")
+                && !string.Equals(
+                db.GetMetaString(DbContext.CSharpSymbolNameContractVersionMetaKey),
+                DbContext.CSharpSymbolNameContractVersion.ToString(
+                    System.Globalization.CultureInfo.InvariantCulture),
+                StringComparison.Ordinal);
+            if (csharpSymbolNameContractUpgradeRequired
+                && !writer.CanReconstructCSharpExplicitInterfaceIdentitiesFromPersistedRows())
+            {
+                return CreateToolErrorResponse(
+                    id,
+                    "C# explicit-interface identities cannot be reconstructed because legacy symbol signatures are missing. Refresh the C# files with the index tool (or rebuild the index), then retry backfill_fold.");
+            }
             foldReadyBefore = foldReadyBefore && foldMetadataCurrentBefore;
             var force = args?["force"]?.GetValue<bool>() ?? false;
-            var rewriteAll = force
-                || !foldMetadataCurrentBefore;
+            var rewriteAll = writer.ResolveFoldBackfillRewriteAll(
+                force || !foldMetadataCurrentBefore);
             var symbols = 0;
             var symbolReferences = 0;
             var totalSymbols = 0;
@@ -74,6 +94,7 @@ public partial class McpServer
                 verified = writer.MarkFoldReady();
                 if (!verified)
                     return CreateToolErrorResponse(id, "Folded-name backfill verification failed: some rows still have NULL folded values. Re-run backfill_fold.");
+                writer.MarkCSharpSymbolNameContractReady();
 
                 transaction.Commit();
                 userVersionAfter = db.GetUserVersion();

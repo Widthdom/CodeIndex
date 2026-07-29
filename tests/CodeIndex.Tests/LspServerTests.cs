@@ -4691,6 +4691,89 @@ public class LspServerTests
     }
 
     [Fact]
+    public void HandleMessage_ExplicitInterfaceIdentityKeepsDefinitionAndReferencesScoped_Issue4866()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_explicit_interface_identity_4866");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var sourcePath = Path.Combine(projectRoot, "service.cs");
+            var source = """
+                interface IFoo
+                {
+                    void Run<T>(T value);
+                }
+                class Service : IFoo
+                {
+                    void IFoo.Run<TValue>(TValue value) { }
+                    public void Run<T>(T value) { }
+                    void Call() { Run(1); }
+                }
+                """;
+            File.WriteAllText(sourcePath, source);
+            TestProjectHelper.InsertIndexedFile(dbPath, "service.cs", "csharp", source);
+            using (var readinessDb = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                var writer = new DbWriter(readinessDb.Connection);
+                Assert.True(writer.MarkFoldReady());
+                writer.MarkCSharpSymbolNameContractReady();
+                writer.MarkGraphReady();
+            }
+
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            using var server = new LspServer(
+                new DbReader(db),
+                "1.2.3",
+                ProgramRunner.CreateDefaultJsonOptions(),
+                projectRoot);
+            var explicitRunCharacter = CharacterOf(source, 6, "Run<TValue>");
+
+            var definitionResponse = HandleInitializedMessage(
+                server,
+                CreateDefinitionRequest(sourcePath, 4866, 6, explicitRunCharacter));
+            Assert.NotNull(definitionResponse);
+            var definitionLocation = Assert.Single(definitionResponse!["result"]!.AsArray());
+            Assert.Equal(
+                6,
+                definitionLocation!["range"]!["start"]!["line"]!.GetValue<int>());
+
+            var referencesResponse = server.HandleMessage(
+                CreateReferencesRequest(
+                    sourcePath,
+                    4867,
+                    6,
+                    explicitRunCharacter,
+                    includeDeclaration: true));
+            Assert.NotNull(referencesResponse);
+            var referenceLocations = referencesResponse!["result"]!.AsArray();
+            var referenceLocation = Assert.Single(referenceLocations);
+            Assert.Equal(
+                6,
+                referenceLocation!["range"]!["start"]!["line"]!.GetValue<int>());
+            Assert.DoesNotContain(
+                referenceLocations,
+                location => location!["range"]!["start"]!["line"]!.GetValue<int>() == 8);
+
+            var documentSymbolsResponse = server.HandleMessage(
+                CreateTextDocumentRequest("textDocument/documentSymbol", sourcePath, 4868));
+            Assert.NotNull(documentSymbolsResponse);
+            var roots = documentSymbolsResponse!["result"]!.AsArray();
+            var service = Assert.Single(
+                roots,
+                symbol => symbol?["name"]?.GetValue<string>() == "Service");
+            var serviceChildren = service!["children"]!.AsArray();
+            Assert.Equal(
+                2,
+                serviceChildren.Count(
+                    symbol => symbol?["name"]?.GetValue<string>().StartsWith("Run", StringComparison.Ordinal) == true));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void HandleMessage_References_PrefersCurrentIndexedDocumentForCommonToken()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_references_common_token");

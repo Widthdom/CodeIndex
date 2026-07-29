@@ -1,3 +1,4 @@
+using CodeIndex.Database;
 using CodeIndex.Models;
 
 namespace CodeIndex.Indexer.Hooks;
@@ -61,11 +62,38 @@ internal static class PostExtractionHookMutationMaterializer
 
     internal static void RefreshLanguageIdentity(string? language, IEnumerable<SymbolRecord> symbols)
     {
-        if (!string.Equals(language, "nim", StringComparison.Ordinal))
+        if (string.Equals(language, "nim", StringComparison.Ordinal))
+        {
+            foreach (var symbol in symbols)
+            {
+                symbol.IdentityNameFolded = NimIdentifierIdentity.Fold(symbol.Name);
+                symbol.DisplayNameFolded = null;
+            }
             return;
+        }
 
-        foreach (var symbol in symbols)
-            symbol.IdentityNameFolded = NimIdentifierIdentity.Fold(symbol.Name);
+        if (string.Equals(language, "csharp", StringComparison.Ordinal))
+        {
+            foreach (var symbol in symbols)
+            {
+                var previousIdentityNameFolded = symbol.IdentityNameFolded;
+                var previousDisplayNameFolded = symbol.DisplayNameFolded;
+                symbol.IdentityNameFolded =
+                    CSharpSymbolNameNormalizer.BuildExplicitInterfaceIdentityNameFolded(
+                        symbol.Name,
+                        symbol.Signature,
+                        symbol.Kind)
+                    ?? CSharpSymbolNameNormalizer.RebuildExplicitInterfaceIdentityAfterNameMutation(
+                        symbol.Name,
+                        symbol.Signature,
+                        symbol.Kind,
+                        previousIdentityNameFolded,
+                        previousDisplayNameFolded);
+                symbol.DisplayNameFolded = symbol.IdentityNameFolded != null
+                    ? NameFold.Fold(symbol.Name)
+                    : null;
+            }
+        }
     }
 
     internal static void RefreshLanguageIdentity(string? language, IEnumerable<ReferenceRecord> references)
@@ -89,6 +117,7 @@ internal static class PostExtractionHookMutationMaterializer
             SubKind = symbol.SubKind,
             Name = symbol.Name,
             IdentityNameFolded = symbol.IdentityNameFolded,
+            DisplayNameFolded = symbol.DisplayNameFolded,
             Line = symbol.Line,
             StartLine = symbol.StartLine,
             StartColumn = symbol.StartColumn,

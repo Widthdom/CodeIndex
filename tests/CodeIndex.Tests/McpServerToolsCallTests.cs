@@ -470,7 +470,7 @@ public partial class McpServerTests
             """);
 
         var firstRequest = JsonNode.Parse(
-            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"callers","arguments":{"query":"Target","lang":"csharp","exactName":true,"path":"src/paged-callers.cs","limit":2}}}""")!;
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"callers","arguments":{"query":"Target","lang":"csharp","exactName":true,"path":"src/paged-callers.cs","rankBy":"count","limit":2}}}""")!;
         var firstResponse = _server.HandleMessage(firstRequest)!;
         var first = firstResponse["result"]!["structuredContent"]!;
 
@@ -478,12 +478,21 @@ public partial class McpServerTests
         Assert.True(first["truncated"]!.GetValue<bool>());
         Assert.True(first["more_available"]!.GetValue<bool>());
         Assert.Equal(2, first["next_offset"]!.GetValue<int>());
+        Assert.Equal("count", first["rankBy"]!.GetValue<string>());
+        var firstRecipe = first["rankingRecipe"]!;
+        Assert.Equal("count", firstRecipe["mode"]!.GetValue<string>());
+        Assert.Equal(
+            "reference_count_desc",
+            firstRecipe["precedence"]![0]!.GetValue<string>());
+        Assert.Contains(
+            "path_category_asc",
+            firstRecipe["precedence"]!.AsArray().Select(item => item!.GetValue<string>()));
         var firstNames = first["results"]!.AsArray()
             .Select(row => row!["callerName"]!.GetValue<string>())
             .ToArray();
 
         var secondRequest = JsonNode.Parse(
-            """{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"callers","arguments":{"query":"Target","lang":"csharp","exactName":true,"path":"src/paged-callers.cs","limit":2,"offset":2}}}""")!;
+            """{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"callers","arguments":{"query":"Target","lang":"csharp","exactName":true,"path":"src/paged-callers.cs","rankBy":"count","limit":2,"offset":2}}}""")!;
         var secondResponse = _server.HandleMessage(secondRequest)!;
         var second = secondResponse["result"]!["structuredContent"]!;
 
@@ -491,6 +500,7 @@ public partial class McpServerTests
         Assert.False(second["truncated"]!.GetValue<bool>());
         Assert.False(second["more_available"]!.GetValue<bool>());
         Assert.Null(second["next_offset"]);
+        Assert.True(JsonNode.DeepEquals(firstRecipe, second["rankingRecipe"]));
         var secondNames = second["results"]!.AsArray()
             .Select(row => row!["callerName"]!.GetValue<string>())
             .ToArray();
@@ -11855,6 +11865,119 @@ public partial class McpServerTests
         verifyDb.TryMigrateForRead();
         var reader = new DbReader(verifyDb.Connection);
         Assert.True(reader._foldReady);
+    }
+
+    [Fact]
+    public void ToolsCall_BackfillFold_RejectsNewerCSharpIdentityContract_Issue4866Review()
+    {
+        var writer = new DbWriter(_db.Connection);
+        var futureVersion = DbContext.CSharpSymbolNameContractVersion + 1;
+        var fileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/future-explicit-4866.cs",
+            Lang = "csharp",
+            Size = 32,
+            Lines = 1,
+            Modified = new DateTime(2026, 7, 29, 0, 0, 0, DateTimeKind.Utc),
+        });
+        writer.InsertSymbols([
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "FutureRun",
+                IdentityNameFolded = "future::ifuture.futurerun",
+                DisplayNameFolded = "futurerun",
+                Signature = "void IFuture.FutureRun() { }",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 1,
+            },
+        ]);
+        writer.SetMeta(
+            DbContext.CSharpSymbolNameContractVersionMetaKey,
+            futureVersion.ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":4866,"method":"tools/call","params":{"name":"backfill_fold","arguments":{}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.True(response["result"]!["isError"]?.GetValue<bool>() ?? false);
+        var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains("newer than supported version", text, StringComparison.Ordinal);
+        Assert.Equal(
+            futureVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            _db.GetMetaString(DbContext.CSharpSymbolNameContractVersionMetaKey));
+        using var identity = _db.Connection.CreateCommand();
+        identity.CommandText = """
+            SELECT name_folded
+            FROM symbols
+            WHERE name = 'FutureRun'
+            """;
+        Assert.Equal("future::ifuture.futurerun", identity.ExecuteScalar());
+    }
+
+    [Fact]
+    public void ToolsCall_BackfillFold_RefusesCSharpV3StampWhenLegacySignaturesAreMissing_Issue4866()
+    {
+        var writer = new DbWriter(_db.Connection);
+        var fileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/legacy-explicit-4866.cs",
+            Lang = "csharp",
+            Size = 32,
+            Lines = 1,
+            Modified = new DateTime(2026, 7, 29, 0, 0, 0, DateTimeKind.Utc),
+        });
+        writer.InsertSymbols([
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "Run",
+                Signature = null,
+                Line = 1,
+                StartLine = 1,
+                EndLine = 1,
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "Stable",
+                IdentityNameFolded = "sentinel::stable",
+                DisplayNameFolded = "stable",
+                Signature = "void IFoo.Stable() { }",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 1,
+            },
+        ]);
+        writer.SetMeta(DbContext.CSharpSymbolNameContractVersionMetaKey, "2");
+
+        var dryRunRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":4865,"method":"tools/call","params":{"name":"backfill_fold","arguments":{"dry_run":true}}}""")!;
+        var dryRunResponse = _server.HandleMessage(dryRunRequest)!;
+        Assert.True(dryRunResponse["result"]!["isError"]?.GetValue<bool>() ?? false);
+        Assert.Contains(
+            "C# explicit-interface identities cannot be reconstructed",
+            dryRunResponse["result"]!["content"]![0]!["text"]!.GetValue<string>(),
+            StringComparison.Ordinal);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":4866,"method":"tools/call","params":{"name":"backfill_fold","arguments":{}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.True(response["result"]!["isError"]?.GetValue<bool>() ?? false);
+        var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains(
+            "C# explicit-interface identities cannot be reconstructed",
+            text,
+            StringComparison.Ordinal);
+        Assert.Equal(
+            "2",
+            _db.GetMetaString(DbContext.CSharpSymbolNameContractVersionMetaKey));
+        using var identity = _db.Connection.CreateCommand();
+        identity.CommandText = "SELECT name_folded FROM symbols WHERE name = 'Stable'";
+        Assert.Equal("sentinel::stable", identity.ExecuteScalar());
+        Assert.Null(_db.GetMetaString(DbWriter.FoldBackfillGraphRefreshPendingMetaKey));
     }
 
     [Fact]

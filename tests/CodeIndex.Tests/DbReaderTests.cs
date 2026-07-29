@@ -1015,6 +1015,82 @@ public partial class DbReaderTests : IDisposable
         Assert.Equal(50, countRanked[0].ReferenceKindCounts["subscribe"]);
     }
 
+    [Fact]
+    public void GetCallers_CountRankingIsPrimaryAndTieBreakersKeepPagesStable_Issue4881()
+    {
+        const string target = "RankedTarget";
+        InsertManualReferences("tests/HighVolumeTests.cs", "HighVolumeTests", target, "call", 284);
+        InsertManualReferences("src/ProductionCaller.cs", "ProductionCaller", target, "call", 1);
+        InsertManualReferences("tests/TiedTests.cs", "TiedTests", target, "call", 1);
+        InsertManualReferences("docs/DocumentedSample.cs", "DocumentedSample", target, "call", 1);
+
+        var all = _reader.GetCallers(
+            target,
+            lang: "csharp",
+            exact: true,
+            rankMode: ReferenceRankMode.Count);
+
+        Assert.Equal(
+            [
+                "tests/HighVolumeTests.cs",
+                "src/ProductionCaller.cs",
+                "tests/TiedTests.cs",
+                "docs/DocumentedSample.cs",
+            ],
+            all.Select(result => result.Path));
+        Assert.Equal(284, all[0].ReferenceCount);
+
+        var firstPage = _reader.GetCallers(
+            target,
+            limit: 2,
+            lang: "csharp",
+            exact: true,
+            rankMode: ReferenceRankMode.Count);
+        var secondPage = _reader.GetCallers(
+            target,
+            limit: 2,
+            lang: "csharp",
+            exact: true,
+            rankMode: ReferenceRankMode.Count,
+            offset: 2);
+        Assert.Equal(
+            all.Select(result => (result.Path, result.CallerName)),
+            firstPage.Concat(secondPage).Select(result => (result.Path, result.CallerName)));
+
+        var multiPath = _reader.GetCallers(
+            target,
+            lang: "csharp",
+            pathPatterns: ["src/**", "tests/**"],
+            exact: true,
+            rankMode: ReferenceRankMode.Count);
+        Assert.Equal(
+            ["tests/HighVolumeTests.cs", "src/ProductionCaller.cs", "tests/TiedTests.cs"],
+            multiPath.Select(result => result.Path));
+
+        var withoutTests = _reader.GetCallers(
+            target,
+            lang: "csharp",
+            excludeTests: true,
+            exact: true,
+            rankMode: ReferenceRankMode.Count);
+        Assert.Equal(
+            ["src/ProductionCaller.cs", "docs/DocumentedSample.cs"],
+            withoutTests.Select(result => result.Path));
+
+        const string caseQuery = "CaseRankedTarget";
+        InsertManualReferences("src/ZExactCase.cs", "ExactCaseCaller", caseQuery, "call", 1);
+        InsertManualReferences("src/AFoldedCase.cs", "FoldedCaseCaller", caseQuery.ToLowerInvariant(), "call", 1);
+
+        var fuzzyCaseTie = _reader.GetCallers(
+            caseQuery,
+            lang: "csharp",
+            exact: false,
+            rankMode: ReferenceRankMode.Count);
+
+        Assert.Equal(caseQuery, fuzzyCaseTie[0].CalleeName);
+        Assert.Equal("src/ZExactCase.cs", fuzzyCaseTie[0].Path);
+    }
+
     [Theory]
     [InlineData("src/top-level.js", "javascript")]
     [InlineData("src/top-level.ts", "typescript")]

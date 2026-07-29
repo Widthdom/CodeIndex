@@ -58,6 +58,10 @@ public partial class DbContext : IDisposable
                 return leafName.Length == 0 ? null : NameFold.Fold(leafName) ?? leafName;
             });
         connection.CreateFunction(
+            "codeindex_name_fold",
+            (string? name) => NameFold.Fold(name),
+            isDeterministic: true);
+        connection.CreateFunction(
             "sql_normalize_name",
             (string? name) => string.IsNullOrWhiteSpace(name) ? null : SqlNameResolver.NormalizeQualifiedName(name));
         connection.CreateFunction(
