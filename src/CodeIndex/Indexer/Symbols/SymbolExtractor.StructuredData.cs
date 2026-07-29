@@ -59,6 +59,9 @@ public static partial class SymbolExtractor
                 && content.IndexOf('\r', StringComparison.Ordinal) < 0
                 ? null
                 : BuildJsonPropertyLineQueues(content);
+            var arrayItemLines = propertyLines == null
+                ? null
+                : BuildJsonArrayItemLineQueue(content);
             if (document.RootElement.ValueKind == JsonValueKind.Object)
             {
                 ExtractJsonObjectSymbols(
@@ -71,6 +74,7 @@ public static partial class SymbolExtractor
                     ref searchOffset,
                     symbols,
                     propertyLines,
+                    arrayItemLines,
                     depth: 0,
                     ref traversalNodes,
                     ref truncated);
@@ -88,6 +92,7 @@ public static partial class SymbolExtractor
                     ref searchOffset,
                     symbols,
                     propertyLines,
+                    arrayItemLines,
                     depth: 0,
                     ref traversalNodes,
                     ref truncated);
@@ -111,6 +116,7 @@ public static partial class SymbolExtractor
         ref int searchOffset,
         List<SymbolRecord> symbols,
         Dictionary<string, Queue<int>>? propertyLines,
+        Queue<int>? arrayItemLines,
         int depth,
         ref int traversalNodes,
         ref bool truncated)
@@ -168,7 +174,7 @@ public static partial class SymbolExtractor
 
             if (property.Value.ValueKind == JsonValueKind.Object)
             {
-                ExtractJsonObjectSymbols(fileId, content, lines, ref lineStarts, property.Value, name, ref searchOffset, symbols, propertyLines, depth + 1, ref traversalNodes, ref truncated);
+                ExtractJsonObjectSymbols(fileId, content, lines, ref lineStarts, property.Value, name, ref searchOffset, symbols, propertyLines, arrayItemLines, depth + 1, ref traversalNodes, ref truncated);
                 if (truncated)
                     return;
             }
@@ -185,6 +191,7 @@ public static partial class SymbolExtractor
                     ref searchOffset,
                     symbols,
                     propertyLines,
+                    arrayItemLines,
                     depth + 1,
                     ref traversalNodes,
                     ref truncated);
@@ -205,6 +212,7 @@ public static partial class SymbolExtractor
         ref int searchOffset,
         List<SymbolRecord> symbols,
         Dictionary<string, Queue<int>>? propertyLines,
+        Queue<int>? arrayItemLines,
         int depth,
         ref int traversalNodes,
         ref bool truncated)
@@ -225,6 +233,9 @@ public static partial class SymbolExtractor
             }
 
             traversalNodes++;
+            var itemLine = arrayItemLines is { Count: > 0 }
+                ? arrayItemLines.Dequeue()
+                : arrayLine;
             var itemPath = CombineJsonArrayIndexPath(arrayPath, index);
             if (itemPath.Length > StructuredDataMaxPathLength)
             {
@@ -239,14 +250,6 @@ public static partial class SymbolExtractor
                 JsonValueKind.Array => "array",
                 _ => "value",
             };
-            var itemLine = FindJsonElementLine(
-                content,
-                lines,
-                ref lineStarts,
-                item,
-                arrayLine,
-                ref searchOffset,
-                out var itemEndOffset);
             if (!TryAddStructuredDataSymbol(
                     fileId,
                     kind,
@@ -262,45 +265,17 @@ public static partial class SymbolExtractor
 
             if (item.ValueKind == JsonValueKind.Object)
             {
-                ExtractJsonObjectSymbols(fileId, content, lines, ref lineStarts, item, itemPath, ref searchOffset, symbols, propertyLines, depth + 1, ref traversalNodes, ref truncated);
+                ExtractJsonObjectSymbols(fileId, content, lines, ref lineStarts, item, itemPath, ref searchOffset, symbols, propertyLines, arrayItemLines, depth + 1, ref traversalNodes, ref truncated);
             }
             else if (item.ValueKind == JsonValueKind.Array)
             {
-                ExtractJsonArraySymbols(fileId, content, lines, ref lineStarts, item, itemPath, itemLine, ref searchOffset, symbols, propertyLines, depth + 1, ref traversalNodes, ref truncated);
+                ExtractJsonArraySymbols(fileId, content, lines, ref lineStarts, item, itemPath, itemLine, ref searchOffset, symbols, propertyLines, arrayItemLines, depth + 1, ref traversalNodes, ref truncated);
             }
 
             if (truncated)
                 return;
-            searchOffset = Math.Max(searchOffset, itemEndOffset);
             index++;
         }
-    }
-
-    private static int FindJsonElementLine(
-        string content,
-        string[] lines,
-        ref int[]? lineStarts,
-        JsonElement element,
-        int fallbackLine,
-        ref int searchOffset,
-        out int elementEndOffset)
-    {
-        var rawText = element.GetRawText();
-        var offset = content.IndexOf(rawText, searchOffset, StringComparison.Ordinal);
-        if (offset < 0 && searchOffset > 0)
-            offset = content.IndexOf(rawText, StringComparison.Ordinal);
-        if (offset < 0)
-        {
-            elementEndOffset = searchOffset;
-            return fallbackLine;
-        }
-
-        searchOffset = offset + 1;
-        elementEndOffset = offset + rawText.Length;
-        if (lines.Length <= 1)
-            return fallbackLine;
-
-        return FindLineNumberForOffset(lineStarts ??= BuildLineStarts(lines), offset);
     }
 
     private static void DrainJsonPropertyLines(JsonElement element, Dictionary<string, Queue<int>>? propertyLines)
@@ -708,6 +683,37 @@ public static partial class SymbolExtractor
         }
 
         return propertyLines;
+    }
+
+    private static Queue<int> BuildJsonArrayItemLineQueue(string content)
+    {
+        var itemLines = new Queue<int>();
+        var bytes = Encoding.UTF8.GetBytes(content);
+        var byteLineStarts = Utf8LineStarts.Build(bytes);
+        var reader = new Utf8JsonReader(bytes, StructuredJsonReaderOptions);
+        List<JsonTokenType> containerStack = [];
+        while (reader.Read())
+        {
+            if (reader.TokenType is JsonTokenType.EndObject or JsonTokenType.EndArray)
+            {
+                if (containerStack.Count > 0)
+                    containerStack.RemoveAt(containerStack.Count - 1);
+                continue;
+            }
+
+            if (reader.TokenType is not (JsonTokenType.PropertyName or JsonTokenType.Comment)
+                && containerStack.Count > 0
+                && containerStack[^1] == JsonTokenType.StartArray)
+            {
+                var byteOffset = (int)Math.Min(reader.TokenStartIndex, (long)bytes.Length);
+                itemLines.Enqueue(FindLineNumberForOffset(byteLineStarts, byteOffset));
+            }
+
+            if (reader.TokenType is JsonTokenType.StartObject or JsonTokenType.StartArray)
+                containerStack.Add(reader.TokenType);
+        }
+
+        return itemLines;
     }
 
     private static bool TryDequeueJsonPropertyLine(

@@ -873,6 +873,14 @@ public partial class SymbolExtractorTests
               {}
             ]
             """;
+        const string commentedArrayRoot = """
+            [
+              // option 1
+              1,
+              // "duplicate"
+              "duplicate"
+            ]
+            """;
         const string jsonLines = """
             {"items":[{"leaf":1}],"[0]":true}
             [{"name":"first"},[]]
@@ -880,6 +888,7 @@ public partial class SymbolExtractorTests
 
         var objectSymbols = SymbolExtractor.Extract(1, "json", objectRoot);
         var rootSymbols = SymbolExtractor.Extract(1, "json", arrayRoot);
+        var commentedRootSymbols = SymbolExtractor.Extract(1, "json", commentedArrayRoot);
         var jsonLineSymbols = SymbolExtractor.Extract(1, "jsonl", jsonLines);
 
         Assert.Collection(
@@ -910,6 +919,18 @@ public partial class SymbolExtractorTests
             symbol => AssertStructuredJsonSymbol(symbol, "value", "[2][0]", 4, "array", "[2]"),
             symbol => AssertStructuredJsonSymbol(symbol, "array", "[3]", 5, null, null),
             symbol => AssertStructuredJsonSymbol(symbol, "object", "[4]", 6, null, null));
+        Assert.Collection(
+            commentedRootSymbols,
+            symbol =>
+            {
+                AssertStructuredJsonSymbol(symbol, "value", "[0]", 3, null, null);
+                Assert.Equal("1,", symbol.Signature);
+            },
+            symbol =>
+            {
+                AssertStructuredJsonSymbol(symbol, "value", "[1]", 5, null, null);
+                Assert.Equal("\"duplicate\"", symbol.Signature);
+            });
         Assert.Collection(
             jsonLineSymbols,
             symbol => AssertStructuredJsonSymbol(symbol, "record", "[0]", 1, null, null),

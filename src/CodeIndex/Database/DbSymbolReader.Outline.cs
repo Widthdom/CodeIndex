@@ -30,6 +30,9 @@ public partial class DbReader
         }
 
         var startColumnOrderSql = GetSymbolColumnSql("start_column", "CAST(2147483647 AS INTEGER)");
+        var structuredHierarchyOrderSql = lang is "json" or "jsonl"
+            ? "LENGTH(s.name) ASC,"
+            : string.Empty;
         var includeReferenceCountSql = includeReferenceCounts && _hasReferencesTable;
         var referenceCountSql = includeReferenceCountSql
             ? "CASE WHEN COALESCE(symbol_defs.definition_sites, 0) = 1 THEN COALESCE(symbol_rank.reference_count, 0) ELSE 0 END"
@@ -96,6 +99,7 @@ public partial class DbReader
             WHERE s.file_id = @fileId
             ORDER BY s.line ASC,
                      {startColumnOrderSql} ASC,
+                     {structuredHierarchyOrderSql}
                      s.kind COLLATE BINARY ASC,
                      s.name COLLATE BINARY ASC,
                      s.id ASC";

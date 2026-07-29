@@ -155,6 +155,51 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunOutline_CompactJsonAndJsonLinesKeepParentFirstDepth_Issue4874()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_compact_json_depth_4874");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/compact.json", "json", """[{"arr":[1]}]""");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/compact.jsonl", "jsonl", """[{"arr":[1]}]""");
+
+            var fixtures = new[]
+            {
+                (
+                    Path: "src/compact.json",
+                    Expected: new[] { ("[0]", 0), ("[0].arr", 1), ("[0].arr[0]", 2) }),
+                (
+                    Path: "src/compact.jsonl",
+                    Expected: new[] { ("[0]", 0), ("[0][0]", 1), ("[0][0].arr", 2), ("[0][0].arr[0]", 3) }),
+            };
+
+            foreach (var fixture in fixtures)
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                    [fixture.Path, "--db", dbPath, "--json"],
+                    _jsonOptions));
+                using var document = ParseJsonOutput(stdout);
+                var actual = document.RootElement
+                    .GetProperty("symbols")
+                    .EnumerateArray()
+                    .Select(symbol => (
+                        symbol.GetProperty("path").GetString()!,
+                        symbol.GetProperty("depth").GetInt32()))
+                    .ToArray();
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                Assert.Equal(fixture.Expected, actual);
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunOutline_JavaScriptBracketedPropertyRemainsContainerQualified_Issue4874()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_js_bracket_path_4874");
