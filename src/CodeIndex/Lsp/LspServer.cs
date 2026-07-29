@@ -439,6 +439,7 @@ internal sealed partial class LspServer : IDisposable
                 try
                 {
                     BeforeSessionDispatchForTesting?.Invoke(method);
+                    ValidateCoordinateParameters(method, root);
                     RefreshOwnedQuerySnapshot();
                     using var activity = StartLspRequestActivity(method);
                     var response = method switch

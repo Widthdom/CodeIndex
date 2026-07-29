@@ -187,7 +187,7 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_CSharpQualifiedDataReaderCall_DoesNotEmitCommonMemberReference_Issue4121()
+    public void Extract_CSharpQualifiedDataReaderCall_RetainsReceiverEvidence_Issues4121And4867()
     {
         const string content = """
             class ReaderAdapter
@@ -208,9 +208,9 @@ public partial class ReferenceExtractorTests
             .Where(reference => reference.SymbolName == "GetInt32" && reference.ReferenceKind == "call")
             .ToList();
 
-        var call = Assert.Single(getInt32Calls);
-        Assert.Contains("this.GetInt32()", call.Context, StringComparison.Ordinal);
-        Assert.DoesNotContain(getInt32Calls, reference => reference.Context.Contains("reader.GetInt32", StringComparison.Ordinal));
+        Assert.Equal(2, getInt32Calls.Count);
+        Assert.Contains(getInt32Calls, reference => reference.Context.Contains("this.GetInt32()", StringComparison.Ordinal));
+        Assert.Contains(getInt32Calls, reference => reference.Context.Contains("reader.GetInt32", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -736,18 +736,30 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_CsharpCommonQualifiedMemberCalls_DoNotOvermatchLocalFunctions_Issue3894()
+    public void Extract_CsharpQualifiedCommonMemberCalls_AreRetainedWithoutLocalOvermatch_Issues3894And4867()
     {
         const string content = """
             using System;
+            using System.Collections.Generic;
             using System.IO;
+            using System.Linq;
             using System.Text.Json;
+            using IntAlias = System.Int32;
 
             public class WorkerProcessCleanupDiagnostics
             {
                 private string Combine(string left, string right) => left + right;
+                public int Parse(string value)
+                {
+                    if (value.Length <= 1)
+                        return int.Parse(value);
+                    return Parse(value[1..]);
+                }
 
-                public void TryKill(JsonElement element, string value)
+                public int Parse(ReadOnlySpan<char> value) => int.Parse(value);
+                public bool TryParseAlias(string value) => IntAlias.TryParse(value, out _);
+
+                public void TryKill(JsonElement element, string value, IEnumerable<int> items)
                 {
                     Combine("a", "b");
                     thisCombine();
@@ -756,6 +768,9 @@ public partial class ReferenceExtractorTests
                     var joined = string.Join(",", new[] { "a", "b" });
                     var text = element.GetString();
                     value.Replace("a", "b");
+                    var materialized = items.Where(item => item > 0).Select(item => item + 1).ToList();
+                    Parse(value);
+                    Parse(value.AsSpan());
                     this.Combine("c", "d");
                 }
 
@@ -769,9 +784,23 @@ public partial class ReferenceExtractorTests
             .Where(reference => reference.SymbolName == "Combine" && reference.ReferenceKind == "call")
             .ToList();
 
-        Assert.Equal(2, combineCalls.Count);
+        Assert.Equal(3, combineCalls.Count);
+        Assert.Equal(2, combineCalls.Count(reference => !reference.Context.Contains("Path.Combine", StringComparison.Ordinal)));
         Assert.All(combineCalls, reference => Assert.Equal("TryKill", reference.ContainerName));
-        Assert.DoesNotContain(references, reference => reference.SymbolName is "Max" or "Join" or "GetString" or "Replace");
+        Assert.Equal(
+            3,
+            references.Count(reference => reference is { SymbolName: "Parse", ReferenceKind: "call", ContainerName: "Parse" }));
+        Assert.Equal(
+            2,
+            references.Count(reference => reference is { SymbolName: "Parse", ReferenceKind: "call", ContainerName: "TryKill" }));
+        Assert.Contains(references, reference => reference is { SymbolName: "TryParse", ReferenceKind: "call", ContainerName: "TryParseAlias" });
+        Assert.Contains(references, reference => reference is { SymbolName: "Max", ReferenceKind: "call", ContainerName: "TryKill" });
+        Assert.Contains(references, reference => reference is { SymbolName: "Join", ReferenceKind: "call", ContainerName: "TryKill" });
+        Assert.Contains(references, reference => reference is { SymbolName: "GetString", ReferenceKind: "call", ContainerName: "TryKill" });
+        Assert.Contains(references, reference => reference is { SymbolName: "Replace", ReferenceKind: "call", ContainerName: "TryKill" });
+        Assert.Contains(references, reference => reference is { SymbolName: "Where", ReferenceKind: "call", ContainerName: "TryKill" });
+        Assert.Contains(references, reference => reference is { SymbolName: "Select", ReferenceKind: "call", ContainerName: "TryKill" });
+        Assert.Contains(references, reference => reference is { SymbolName: "ToList", ReferenceKind: "call", ContainerName: "TryKill" });
     }
 
     [Fact]
