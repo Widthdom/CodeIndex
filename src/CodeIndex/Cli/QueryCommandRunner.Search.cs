@@ -81,15 +81,25 @@ public static partial class QueryCommandRunner
             options.LanguageValidationError || invocationContext.StructuredMachineUsageErrors ? jsonOptions : null))
             return CommandExitCodes.UsageError;
         if (!TryResolveSearchExactMode(options, out var exact, out var exactError, out var exactHint))
+        {
+            var message = StripErrorPrefix(exactError!);
+            if (invocationContext.StructuredMachineUsageErrors)
+            {
+                WriteUsageError(message, options, exactHint!);
+                return CommandExitCodes.UsageError;
+            }
+
             return CommandErrorWriter.WriteJsonOrHuman(
                 options.Json,
                 jsonOptions,
-                StripErrorPrefix(exactError!),
+                message,
                 CommandExitCodes.UsageError,
                 exactHint,
-                invocationContext.UsageLine,
-                CommandErrorCodes.UsageError,
-                command: invocationContext.CommandName);
+                usage: null,
+                errorCode: CommandErrorCodes.UsageError,
+                command: invocationContext.CommandName,
+                omitNullUsage: true);
+        }
         if (options.OpenIssuesPath != null && options.OutputFormat != OutputFormatIssueDrafts)
         {
             WriteUsageError(

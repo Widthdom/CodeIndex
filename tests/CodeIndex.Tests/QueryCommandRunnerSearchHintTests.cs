@@ -80,7 +80,7 @@ public partial class QueryCommandRunnerTests
                     Assert.Equal("search", root.GetProperty("command").GetString());
                     Assert.Contains("raw FTS mode (--fts) cannot be combined with literal search modes", root.GetProperty("message").GetString());
                     Assert.Contains("Remove --fts", root.GetProperty("hint").GetString());
-                    Assert.Contains("cdidx search", root.GetProperty("usage").GetString());
+                    Assert.False(root.TryGetProperty("usage", out _));
                 }
                 else
                 {
@@ -88,7 +88,7 @@ public partial class QueryCommandRunnerTests
                     Assert.Contains($"Error [{CommandErrorCodes.UsageError}]", stderr);
                     Assert.Contains("raw FTS mode (--fts) cannot be combined with literal search modes", stderr);
                     Assert.Contains("Remove --fts", stderr);
-                    Assert.Contains("Usage: cdidx search", stderr);
+                    Assert.DoesNotContain("Usage:", stderr);
                 }
             }
         }
