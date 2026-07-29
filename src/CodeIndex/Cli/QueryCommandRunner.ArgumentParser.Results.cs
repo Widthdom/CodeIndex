@@ -45,7 +45,7 @@ public static partial class QueryCommandRunner
                         AddParseError(bodyLinesError!);
                     break;
                 case "--count":
-                    countOnly = true;
+                    countFlagRequested = true;
                     break;
                 case "--group-partials":
                     groupPartials = true;

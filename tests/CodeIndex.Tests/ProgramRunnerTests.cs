@@ -674,6 +674,207 @@ public class ProgramRunnerTests
         Assert.Contains("Usage: cdidx search", stderr, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void RunSearch_CountModeAliases_PreserveSupportedSerializationShapes_Issue4878()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_count_mode_aliases");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/App.cs",
+                "csharp",
+                "class App { void Needle() {} }\n");
+
+            string[][] humanCountCases =
+            [
+                ["--count"],
+                ["--format", "text", "--count"],
+                ["--count", "--format", "text"],
+            ];
+            foreach (var suffix in humanCountCases)
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                    ["search", "Needle", "--db", dbPath, .. suffix],
+                    appVersion: "1.10.0"));
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal("1" + Environment.NewLine, stdout);
+                Assert.Empty(stderr);
+            }
+
+            string[][] jsonCountCases =
+            [
+                ["--count", "--json"],
+                ["--json", "--count"],
+                ["--format", "count"],
+                ["--format", "count", "--json"],
+                ["--json", "--format=count"],
+                ["--count", "--format", "json"],
+                ["--format", "json", "--count"],
+            ];
+            foreach (var suffix in jsonCountCases)
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                    ["search", "Needle", "--db", dbPath, .. suffix],
+                    appVersion: "1.10.0"));
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Empty(stderr);
+                using var document = JsonDocument.Parse(stdout);
+                Assert.Equal(1, document.RootElement.GetProperty("count").GetInt32());
+            }
+
+            string[][] envelopeCases =
+            [
+                ["--count", "--json-envelope"],
+                ["--format", "count", "--json-envelope"],
+            ];
+            foreach (var suffix in envelopeCases)
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                    ["search", "Needle", "--db", dbPath, .. suffix],
+                    appVersion: "1.10.0"));
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Empty(stderr);
+                using var document = JsonDocument.Parse(stdout);
+                var result = Assert.Single(document.RootElement.GetProperty("results").EnumerateArray());
+                Assert.Equal(1, result.GetProperty("count").GetInt32());
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_CountModeRejectsExplicitIncompatibleFormatsInEitherOrder_Issue4878()
+    {
+        foreach (var format in new[] { "compact", "grouped", "csv", "tsv", "lsp", "qf", "sarif" })
+        {
+            string[][] cases =
+            [
+                ["search", "Needle", "--count", "--format", format],
+                ["search", "Needle", $"--format={format}", "--count"],
+            ];
+
+            foreach (var args in cases)
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                    args,
+                    appVersion: "1.10.0"));
+
+                Assert.Equal(CommandExitCodes.UsageError, exitCode);
+                Assert.Empty(stdout);
+                Assert.Contains(
+                    $"--count cannot be combined with --format {format}",
+                    stderr,
+                    StringComparison.Ordinal);
+                Assert.Contains("Usage: cdidx search", stderr, StringComparison.Ordinal);
+            }
+        }
+    }
+
+    [Fact]
+    public void RunSearch_CountModeRejectsExplicitJsonStreamsForBothAliases_Issue4878()
+    {
+        (string[] Args, string StreamOption)[] cases =
+        [
+            (["search", "Needle", "--count", "--json=array"], "--json=array"),
+            (["search", "Needle", "--json=array", "--count"], "--json=array"),
+            (["search", "Needle", "--format", "count", "--json=array"], "--json=array"),
+            (["search", "Needle", "--json=ndjson", "--format=count"], "--json=ndjson"),
+        ];
+
+        foreach (var (args, streamOption) in cases)
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                args,
+                appVersion: "1.10.0"));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Empty(stdout);
+            Assert.Contains(
+                $"{streamOption} cannot be combined with --format count",
+                stderr,
+                StringComparison.Ordinal);
+            Assert.Contains("Usage: cdidx search", stderr, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void RunSearchDirect_CountModeRejectsExplicitJsonStreamsForBothAliases_Issue4878()
+    {
+        string[][] cases =
+        [
+            ["Needle", "--count", "--json=array"],
+            ["Needle", "--json=ndjson", "--count"],
+            ["Needle", "--format", "count", "--json=array"],
+            ["Needle", "--json=ndjson", "--format=count"],
+        ];
+
+        foreach (var args in cases)
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                args,
+                new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+            var streamOption = args.Single(arg => arg.StartsWith("--json=", StringComparison.Ordinal));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Empty(stdout);
+            Assert.Contains(
+                $"{streamOption} cannot be combined with --format count",
+                stderr,
+                StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_RepeatedCountAndFormatFlagsUseStableAliasAndRightmostValueRules_Issue4878()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_count_mode_repeated");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/App.cs",
+                "csharp",
+                "class App { void Needle() {} }\n");
+
+            var (countExitCode, countStdout, countStderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["search", "Needle", "--db", dbPath, "--count", "--count", "--json"],
+                appVersion: "1.10.0"));
+            Assert.Equal(CommandExitCodes.Success, countExitCode);
+            Assert.Empty(countStderr);
+            using (var countDocument = JsonDocument.Parse(countStdout))
+                Assert.Equal(1, countDocument.RootElement.GetProperty("count").GetInt32());
+
+            var (csvExitCode, csvStdout, csvStderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["search", "Needle", "--db", dbPath, "--format", "count", "--format", "csv"],
+                appVersion: "1.10.0"));
+            Assert.Equal(CommandExitCodes.Success, csvExitCode);
+            Assert.StartsWith("file,line,column,label,query,recipe,query_name,lang,visibility,enclosing_symbol_name,enclosing_symbol_kind,match_lines", csvStdout, StringComparison.Ordinal);
+            Assert.Contains("rightmost CLI value 'csv' takes precedence", csvStderr, StringComparison.Ordinal);
+            Assert.DoesNotContain("\"count\"", csvStdout, StringComparison.Ordinal);
+
+            var (jsonExitCode, jsonStdout, jsonStderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["search", "Needle", "--db", dbPath, "--format", "text", "--format", "count"],
+                appVersion: "1.10.0"));
+            Assert.Equal(CommandExitCodes.Success, jsonExitCode);
+            Assert.Contains("rightmost CLI value 'count' takes precedence", jsonStderr, StringComparison.Ordinal);
+            using var jsonDocument = JsonDocument.Parse(jsonStdout);
+            Assert.Equal(1, jsonDocument.RootElement.GetProperty("count").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Theory]
     [InlineData("files", false)]
     [InlineData("files", true)]
