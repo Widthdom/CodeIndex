@@ -562,6 +562,10 @@ the release notes will announce the timeline before the alias stops working.
 MCP mirrors the same split: use `exactSubstring` or `tokenBoundary` on
 `search`, `exactName` on name-based tools, and keep `exact` only for
 backward-compatible clients.
+Raw `--fts` mode is mutually exclusive with the literal search modes
+`--exact`, `--exact-substring`, and `--token-boundary`. Choose one matching
+model per search. Conflicting combinations fail with a typed usage error before
+query execution, and generated replay commands preserve only the selected mode.
 In `search --json` and MCP `search` responses, exact substring highlights add
 `literal_terms` / `literal_term_occurrences` (camelCase in MCP) so clients can
 render only the requested literal phrase while keeping the broader diagnostic
@@ -3810,6 +3814,10 @@ name に対する NFKC + Unicode CaseFold の等価比較です。
 削除する予定はありません。削除する場合は、alias が使えなくなる前に release notes で
 timeline を告知します。MCP も同じ分割を反映します。`search` では `exactSubstring` または
 `tokenBoundary`、name-based tools では `exactName` を使い、`exact` は後方互換 client 向けに残します。
+raw `--fts` mode と literal search mode の `--exact`、`--exact-substring`、
+`--token-boundary` は相互排他です。検索ごとに一致モデルを 1 つだけ選んでください。
+競合する組み合わせは query 実行前に型付き usage error となり、生成される replay command
+には選択した mode だけが保持されます。
 `search --json` と MCP `search` の exact substring highlight には
 `literal_terms` / `literal_term_occurrences`（MCP では camelCase）も追加されるため、
 広めの診断用 `terms` / `term_occurrences` を残したまま、要求した literal phrase だけを

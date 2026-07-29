@@ -201,6 +201,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   Excerpt focus coverage reuses one indexed fixture for line-only leading-window behavior, the focus-length dependency, and focus-column range validation; zero and non-numeric focus-column values share one indexed Markdown fixture.
   Inspect path-line exact/enclosing-symbol cases reuse one indexed source fixture and iterate read-only line queries within a fact.
   Definition and symbols exact-mode conflict validation share one empty database and a cross-command flag-pair table.
+  Search raw-FTS/literal-mode conflict coverage shares one pre-dispatch case table across flag ordering, exact aliases, count/issue-draft output, and human/JSON errors; successful issue-draft replay must preserve only its selected matching mode.
   Symbols compact flag/alias and summary-only JSON envelopes share one editor-format fixture.
   Symbols JSON array, LSP, quickfix, and SARIF location formats share one editor-format fixture; definition SARIF severity coverage reuses that fixture and asserts informational `note` output separately from warning-level diagnostic output.
   Validate JSON, compact, count, and SARIF pagination/severity coverage shares one mixed informational/actionable fixture so authoritative totals, limited rows, SARIF levels, and actionability metadata cannot drift across formats; keep missing-`file_issues` degradation coverage in a separate legacy-schema fixture because availability is a distinct mutable state.
@@ -1127,6 +1128,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   excerpt の focus coverage は、line-only 時の先頭側 window、focus-length の依存関係、focus-column の範囲検証を1つの indexed fixture で共有してください。focus-column の zero / non-numeric value も1つの indexed Markdown fixture を再利用してください。
   inspect path-line の exact/enclosing-symbol case は1つの indexed source fixture を再利用し、read-only line query を fact 内で反復してください。
   definition と symbols の exact-mode conflict validation は1つの空databaseとcross-command flag-pair tableを共有してください。
+  search の raw-FTS/literal-mode conflict coverage は、flag 順序、exact alias、count/issue-draft output、human/JSON error を1つの pre-dispatch case table で共有してください。成功する issue-draft replay は選択した一致 mode だけを保持することも検証します。
   symbols compact flag/aliasとsummary-only JSON envelopeは1つのeditor-format fixtureを共有してください。
   symbols JSON array、LSP、quickfix、SARIF location format は1つの editor-format fixture を共有し、definition SARIF severity のテストも同じ fixture を再利用して、情報レベルの `note` 出力を warning レベルの診断出力とは分けて検証してください。
   validate の JSON、compact、count、SARIF における pagination / severity coverage は、informational finding と actionable finding が混在する1つの fixture を共有し、authoritative な総件数、limited row、SARIF level、actionability metadata が format 間で drift しないことを検証してください。`file_issues` 欠落時の degradation coverage は availability が独立した mutable state なので、別の legacy-schema fixture に分けてください。

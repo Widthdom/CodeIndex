@@ -1282,7 +1282,7 @@ public class ConsoleUiTests
             # Regenerate this script after upgrading cdidx.
             complete -c cdidx -n '__fish_use_subcommand' -a 'index' -d 'index command'
             complete -c cdidx -n '__fish_use_subcommand' -l license -d 'Show license summary'
-            complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols find inspect' -l exact -d 'Backward-compatible exact shorthand'
+            complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols find inspect' -l exact -d 'Backward-compatible exact shorthand; search mode is incompatible with --fts'
             complete -c cdidx -n '__fish_seen_subcommand_from search references callers callees find excerpt inspect impact' -l max-line-width -r -d 'Clamp long single-line payloads (0 disables clamping)'
             """
         },
@@ -1339,11 +1339,11 @@ public class ConsoleUiTests
         // `__fish_seen_subcommand_from <list>` strings change to the canonical
         // command-ordering used by `CliFlagSchema.AllCommands`, and descriptions use the
         // schema's single source of truth (e.g. `--exact` → "Backward-compatible exact
-        // shorthand"). These assertions intentionally check the schema-ordered groupings
+        // shorthand; search mode is incompatible with --fts"). These assertions intentionally check the schema-ordered groupings
         // (`--query` and `--before`/`--after` predicates) and key flag invariants while
         // accepting the unified wording.
         // #1570 によりスキーマ駆動。`__fish_seen_subcommand_from` の並びは `CliFlagSchema.AllCommands`
-        // 順、`--exact` の説明は統一表記 (`Backward-compatible exact shorthand`)。
+        // 順、`--exact` の説明は統一表記 (`Backward-compatible exact shorthand; search mode is incompatible with --fts`)。
         var output = ConsoleCompletionRenderer.GetCompletionScript("fish");
         Assert.Contains("__fish_seen_subcommand_from search recipes definition goto references callers callees symbols files find inspect impact", output);
         Assert.Contains("__fish_seen_subcommand_from find excerpt", output);
@@ -1353,7 +1353,7 @@ public class ConsoleUiTests
         Assert.Contains("-l query -r -d 'Literal query'", output);
         Assert.Contains("-l before -r -d 'Context lines before'", output);
         Assert.Contains("-l after -r -d 'Context lines after'", output);
-        Assert.Contains("-l exact -d 'Backward-compatible exact shorthand'", output);
+        Assert.Contains("-l exact -d 'Backward-compatible exact shorthand; search mode is incompatible with --fts'", output);
         Assert.Contains("__fish_seen_subcommand_from hotspots", output);
         Assert.Contains("-l group-by-name -d 'Collapse same-name rows across files'", output);
     }

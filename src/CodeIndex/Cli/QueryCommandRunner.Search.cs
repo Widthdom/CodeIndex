@@ -61,11 +61,16 @@ public static partial class QueryCommandRunner
             usageCommandName,
             options.LanguageValidationError ? jsonOptions : null))
             return CommandExitCodes.UsageError;
-        if (!TryResolveSearchExactMode(options, out var exact, out var exactError))
-        {
-            CommandErrorWriter.WriteStderr(exactError);
-            return CommandExitCodes.UsageError;
-        }
+        if (!TryResolveSearchExactMode(options, out var exact, out var exactError, out var exactHint))
+            return CommandErrorWriter.WriteJsonOrHuman(
+                options.Json,
+                jsonOptions,
+                StripErrorPrefix(exactError!),
+                CommandExitCodes.UsageError,
+                exactHint,
+                GetUsageLineOrThrow("search"),
+                CommandErrorCodes.UsageError,
+                command: usageCommandName);
         if (options.OpenIssuesPath != null && options.OutputFormat != OutputFormatIssueDrafts)
         {
             WriteUsageError(
@@ -231,13 +236,6 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.UsageError;
         }
         var exactSearch = exact || options.TokenBoundary;
-        if (options.TokenBoundary && options.RawFts)
-        {
-            WriteValidationError(
-                "--token-boundary cannot be combined with --fts.",
-                "Drop --fts to use exact token-boundary matching, or drop --token-boundary to keep raw FTS5 syntax.");
-            return CommandExitCodes.UsageError;
-        }
         if (exactSearch && options.Prefix)
         {
             WriteValidationError(
