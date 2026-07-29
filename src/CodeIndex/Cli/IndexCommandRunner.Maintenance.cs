@@ -596,6 +596,17 @@ public static partial class IndexCommandRunner
                 DbContext.CSharpSymbolNameContractVersion.ToString(
                     System.Globalization.CultureInfo.InvariantCulture),
                 StringComparison.Ordinal);
+            if (csharpSymbolNameContractUpgradeRequired
+                && !writer.CanReconstructCSharpExplicitInterfaceIdentitiesFromPersistedRows())
+            {
+                return WriteCommandError(
+                    options.Json,
+                    jsonOptions,
+                    "C# explicit-interface identities cannot be reconstructed because legacy symbol signatures are missing",
+                    CommandExitCodes.DatabaseError,
+                    "Refresh the C# files with `cdidx index <projectPath>` (or rebuild the index) before retrying `cdidx backfill-fold`.",
+                    CommandErrorCodes.DbError);
+            }
             foldReadyBefore = foldReadyBefore && foldMetadataCurrentBefore;
             // Missing or mismatched fold metadata means persisted keys may have been generated
             // by a different fold algorithm/runtime, so refresh every row from source names.
@@ -632,17 +643,6 @@ public static partial class IndexCommandRunner
                         "folded-name backfill verification failed: some rows still have NULL folded values",
                         CommandExitCodes.DatabaseError,
                         "Retry `cdidx backfill-fold`. If the DB still does not verify, rebuild it with `cdidx index <projectPath> --rebuild`.",
-                        CommandErrorCodes.DbError);
-                }
-                if (csharpSymbolNameContractUpgradeRequired
-                    && !writer.CanReconstructCSharpExplicitInterfaceIdentitiesFromPersistedRows())
-                {
-                    return WriteCommandError(
-                        options.Json,
-                        jsonOptions,
-                        "C# explicit-interface identities cannot be reconstructed because legacy symbol signatures are missing",
-                        CommandExitCodes.DatabaseError,
-                        "Refresh the C# files with `cdidx index <projectPath>` (or rebuild the index) before retrying `cdidx backfill-fold`.",
                         CommandErrorCodes.DbError);
                 }
                 writer.MarkCSharpSymbolNameContractReady();

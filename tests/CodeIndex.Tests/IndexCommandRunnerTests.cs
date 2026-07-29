@@ -6735,42 +6735,69 @@ public sealed class Caller
                         StartLine = 1,
                         EndLine = 1,
                     },
+                    new SymbolRecord
+                    {
+                        FileId = fileId,
+                        Kind = "function",
+                        Name = "Stable",
+                        IdentityNameFolded = "sentinel::stable",
+                        DisplayNameFolded = "stable",
+                        Signature = "void IFoo.Stable() { }",
+                        Line = 1,
+                        StartLine = 1,
+                        EndLine = 1,
+                    },
                 ]);
                 writer.SetMeta(DbContext.CSharpSymbolNameContractVersionMetaKey, "2");
                 Assert.False(
                     writer.CanReconstructCSharpExplicitInterfaceIdentitiesFromPersistedRows());
             }
 
-            string outputText;
-            int exitCode;
-            lock (TestConsoleLock.Gate)
+            (int ExitCode, string Output) RunBackfill(params string[] additionalArguments)
             {
-                var originalOut = Console.Out;
-                using var output = new StringWriter();
-                try
+                var arguments = new List<string> { "--db", dbPath };
+                arguments.AddRange(additionalArguments);
+                lock (TestConsoleLock.Gate)
                 {
-                    Console.SetOut(output);
-                    exitCode = IndexCommandRunner.RunBackfillFold(
-                        ["--db", dbPath, "--json"],
-                        _jsonOptions);
-                    outputText = output.ToString();
-                }
-                finally
-                {
-                    Console.SetOut(originalOut);
+                    var originalOut = Console.Out;
+                    using var output = new StringWriter();
+                    try
+                    {
+                        Console.SetOut(output);
+                        var exitCode = IndexCommandRunner.RunBackfillFold(
+                            arguments.ToArray(),
+                            _jsonOptions);
+                        return (exitCode, output.ToString());
+                    }
+                    finally
+                    {
+                        Console.SetOut(originalOut);
+                    }
                 }
             }
 
-            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            var dryRun = RunBackfill("--dry-run", "--json");
+            Assert.Equal(CommandExitCodes.DatabaseError, dryRun.ExitCode);
             Assert.Contains(
                 "C# explicit-interface identities cannot be reconstructed",
-                outputText,
+                dryRun.Output,
+                StringComparison.Ordinal);
+
+            var run = RunBackfill("--json");
+            Assert.Equal(CommandExitCodes.DatabaseError, run.ExitCode);
+            Assert.Contains(
+                "C# explicit-interface identities cannot be reconstructed",
+                run.Output,
                 StringComparison.Ordinal);
 
             using var verifyDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             Assert.Equal(
                 "2",
                 verifyDb.GetMetaString(DbContext.CSharpSymbolNameContractVersionMetaKey));
+            using var identity = verifyDb.Connection.CreateCommand();
+            identity.CommandText = "SELECT name_folded FROM symbols WHERE name = 'Stable'";
+            Assert.Equal("sentinel::stable", identity.ExecuteScalar());
+            Assert.Null(verifyDb.GetMetaString(DbWriter.FoldBackfillGraphRefreshPendingMetaKey));
         }
         finally
         {

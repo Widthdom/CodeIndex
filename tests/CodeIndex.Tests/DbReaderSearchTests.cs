@@ -2068,6 +2068,10 @@ public partial class DbReaderTests
             "ifoo.this",
             CSharpSymbolNameNormalizer.NormalizeExplicitInterfaceQueryIdentityNameFolded(
                 "IFoo.@this"));
+        Assert.Equal(
+            "ifoo.this",
+            CSharpSymbolNameNormalizer.NormalizeExplicitInterfaceQueryIdentityNameFolded(
+                @"IFoo.\u0074his"));
         Assert.True(SqlNameResolver.HasQualifier("IFoo.Run<T>"));
         using (var identityCommand = db.Connection.CreateCommand())
         {
@@ -2184,6 +2188,25 @@ public partial class DbReaderTests
         Assert.All(
             verbatimThisResults,
             result => Assert.DoesNotContain("IFoo.this[", result.Signature, StringComparison.Ordinal));
+        var escapedThisResults = reader.SearchSymbols(
+            @"IFoo.\u0074his",
+            lang: "csharp",
+            exact: true);
+        Assert.Equal(
+            verbatimThisResults.Select(result => result.SymbolId).Order().ToArray(),
+            escapedThisResults.Select(result => result.SymbolId).Order().ToArray());
+        Assert.All(
+            escapedThisResults,
+            result => Assert.DoesNotContain("IFoo.this[", result.Signature, StringComparison.Ordinal));
+        Assert.Equal(
+            verbatimThisResults.Count,
+            reader.CountSearchSymbols(@"IFoo.\u0074his", lang: "csharp", exact: true));
+        Assert.Equal(
+            verbatimThisResults.Select(result => result.SymbolId).Order().ToArray(),
+            reader.GetDefinitions(@"IFoo.\u0074his", lang: "csharp", exact: true)
+                .Select(result => result.SymbolId)
+                .Order()
+                .ToArray());
         Assert.Equal(
             2,
             reader.CountSearchSymbols("IFoo.@this", lang: "csharp", exact: true));
@@ -2311,6 +2334,39 @@ public partial class DbReaderTests
             outline.Symbols,
             symbol => symbol.Name == "Item"
                 && symbol.Signature?.Contains("IFoo . this", StringComparison.Ordinal) == true);
+
+        using (var clearFoldReady = db.Connection.CreateCommand())
+        {
+            clearFoldReady.CommandText =
+                $"PRAGMA user_version = {db.GetUserVersion() & ~DbContext.FoldReadyFlag}";
+            clearFoldReady.ExecuteNonQuery();
+        }
+        using var foldDegradedReader = new DbReader(db.Connection);
+        Assert.False(foldDegradedReader._foldReady);
+        Assert.True(foldDegradedReader._foldMetadataCurrent);
+        var foldDegradedQualified = Assert.Single(foldDegradedReader.SearchSymbols(
+            "IFoo.Run<T>",
+            lang: "csharp",
+            exact: true));
+        Assert.Equal(fooRun.SymbolId, foldDegradedQualified.SymbolId);
+        Assert.Equal(
+            1,
+            foldDegradedReader.CountSearchSymbols(
+                "IFoo.Run<T>",
+                lang: "csharp",
+                exact: true));
+        Assert.Equal(
+            1,
+            foldDegradedReader.CountSearchSymbolsTotal(
+                "IFoo.Run<T>",
+                lang: "csharp",
+                exact: true).Count);
+        Assert.Equal(
+            fooRun.SymbolId,
+            Assert.Single(foldDegradedReader.GetDefinitions(
+                "IFoo.Run<T>",
+                lang: "csharp",
+                exact: true)).SymbolId);
     }
 
     [Fact]

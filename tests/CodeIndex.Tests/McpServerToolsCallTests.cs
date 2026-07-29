@@ -11859,8 +11859,28 @@ public partial class McpServerTests
                 StartLine = 1,
                 EndLine = 1,
             },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "Stable",
+                IdentityNameFolded = "sentinel::stable",
+                DisplayNameFolded = "stable",
+                Signature = "void IFoo.Stable() { }",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 1,
+            },
         ]);
         writer.SetMeta(DbContext.CSharpSymbolNameContractVersionMetaKey, "2");
+
+        var dryRunRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":4865,"method":"tools/call","params":{"name":"backfill_fold","arguments":{"dry_run":true}}}""")!;
+        var dryRunResponse = _server.HandleMessage(dryRunRequest)!;
+        Assert.True(dryRunResponse["result"]!["isError"]?.GetValue<bool>() ?? false);
+        Assert.Contains(
+            "C# explicit-interface identities cannot be reconstructed",
+            dryRunResponse["result"]!["content"]![0]!["text"]!.GetValue<string>(),
+            StringComparison.Ordinal);
 
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":4866,"method":"tools/call","params":{"name":"backfill_fold","arguments":{}}}""")!;
         var response = _server.HandleMessage(request)!;
@@ -11874,6 +11894,10 @@ public partial class McpServerTests
         Assert.Equal(
             "2",
             _db.GetMetaString(DbContext.CSharpSymbolNameContractVersionMetaKey));
+        using var identity = _db.Connection.CreateCommand();
+        identity.CommandText = "SELECT name_folded FROM symbols WHERE name = 'Stable'";
+        Assert.Equal("sentinel::stable", identity.ExecuteScalar());
+        Assert.Null(_db.GetMetaString(DbWriter.FoldBackfillGraphRefreshPendingMetaKey));
     }
 
     [Fact]

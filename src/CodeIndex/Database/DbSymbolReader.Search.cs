@@ -171,7 +171,9 @@ public partial class DbReader
         string symbolAlias = "s",
         string fileAlias = "f")
     {
-        if (!_csharpSymbolNameContractCurrent || !_foldReady || !_symbolColumns.Contains("name_folded"))
+        if (!_csharpSymbolNameContractCurrent
+            || !_foldMetadataCurrent
+            || !_symbolColumns.Contains("name_folded"))
             return "0";
 
         return $"({fileAlias}.lang = 'csharp' AND {symbolAlias}.name_folded = @{parameterStem}CSharpExplicitInterfaceIdentityFolded)";
@@ -331,8 +333,8 @@ public partial class DbReader
                             ? $" AND ({BuildExactPrimarySymbolNameMatchSql("@query0", true, validQueries[0], lang)} OR {csharpExplicitInterfaceClause} OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @query0SegmentCount AND sql_normalize_name_folded(s.name) = @query0NormalizedFolded) OR sql_leaf_name_folded(s.name) = @query0LeafFolded)))"
                             : $" AND ({BuildExactPrimarySymbolNameMatchSql("@query0", true, validQueries[0], lang)} OR {csharpExplicitInterfaceClause} OR (f.lang = 'sql' AND sql_segment_count(s.name) = @query0SegmentCount AND sql_normalize_name_folded(s.name) = @query0NormalizedFolded){(qualifiedSymbolClause != null ? $" OR {qualifiedSymbolClause}" : string.Empty)})"
                         : allowLeafFallback
-                            ? $" AND ({BuildExactPrimarySymbolNameMatchSql("@query0", false, validQueries[0], lang)} OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @query0SegmentCount AND sql_normalize_name(s.name) = @query0Normalized COLLATE NOCASE) OR sql_leaf_name(s.name) = @query0Leaf COLLATE NOCASE)))"
-                            : $" AND ({BuildExactPrimarySymbolNameMatchSql("@query0", false, validQueries[0], lang)} OR (f.lang = 'sql' AND sql_segment_count(s.name) = @query0SegmentCount AND sql_normalize_name(s.name) = @query0Normalized COLLATE NOCASE){(qualifiedSymbolClause != null ? $" OR {qualifiedSymbolClause}" : string.Empty)})"
+                            ? $" AND ({BuildExactPrimarySymbolNameMatchSql("@query0", false, validQueries[0], lang)} OR {csharpExplicitInterfaceClause} OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @query0SegmentCount AND sql_normalize_name(s.name) = @query0Normalized COLLATE NOCASE) OR sql_leaf_name(s.name) = @query0Leaf COLLATE NOCASE)))"
+                            : $" AND ({BuildExactPrimarySymbolNameMatchSql("@query0", false, validQueries[0], lang)} OR {csharpExplicitInterfaceClause} OR (f.lang = 'sql' AND sql_segment_count(s.name) = @query0SegmentCount AND sql_normalize_name(s.name) = @query0Normalized COLLATE NOCASE){(qualifiedSymbolClause != null ? $" OR {qualifiedSymbolClause}" : string.Empty)})"
                 : $" AND (s.name LIKE @query0 ESCAPE '\\' OR (f.lang = 'sql' AND sql_normalize_name(s.name) LIKE @query0NormalizedLike ESCAPE '\\'){(qualifiedSymbolClause != null ? $" OR {qualifiedSymbolClause} OR {csharpExplicitInterfaceClause}" : string.Empty)})";
         }
         if (kind != null)
@@ -452,8 +454,8 @@ public partial class DbReader
                             ? $"({BuildExactPrimarySymbolNameMatchSql($"@query{idx}", true, queryValue, lang)}{swiftBacktickClause} OR {csharpExplicitInterfaceClause} OR {markdownAnchorClause} OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name_folded(s.name) = @query{idx}NormalizedFolded) OR sql_leaf_name_folded(s.name) = @query{idx}LeafFolded)))"
                             : $"({BuildExactPrimarySymbolNameMatchSql($"@query{idx}", true, queryValue, lang)}{swiftBacktickClause} OR {csharpExplicitInterfaceClause} OR {markdownAnchorClause} OR (f.lang = 'sql' AND sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name_folded(s.name) = @query{idx}NormalizedFolded){(qualifiedSymbolClause != null ? $" OR {qualifiedSymbolClause}" : string.Empty)})"
                         : allowLeafFallback
-                            ? $"({BuildExactPrimarySymbolNameMatchSql($"@query{idx}", false, queryValue, lang)}{swiftBacktickClause} OR {markdownAnchorClause} OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name(s.name) = @query{idx}Normalized COLLATE NOCASE) OR sql_leaf_name(s.name) = @query{idx}Leaf COLLATE NOCASE)))"
-                            : $"({BuildExactPrimarySymbolNameMatchSql($"@query{idx}", false, queryValue, lang)}{swiftBacktickClause} OR {markdownAnchorClause} OR (f.lang = 'sql' AND sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name(s.name) = @query{idx}Normalized COLLATE NOCASE){(qualifiedSymbolClause != null ? $" OR {qualifiedSymbolClause}" : string.Empty)})";
+                            ? $"({BuildExactPrimarySymbolNameMatchSql($"@query{idx}", false, queryValue, lang)}{swiftBacktickClause} OR {csharpExplicitInterfaceClause} OR {markdownAnchorClause} OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name(s.name) = @query{idx}Normalized COLLATE NOCASE) OR sql_leaf_name(s.name) = @query{idx}Leaf COLLATE NOCASE)))"
+                            : $"({BuildExactPrimarySymbolNameMatchSql($"@query{idx}", false, queryValue, lang)}{swiftBacktickClause} OR {csharpExplicitInterfaceClause} OR {markdownAnchorClause} OR (f.lang = 'sql' AND sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name(s.name) = @query{idx}Normalized COLLATE NOCASE){(qualifiedSymbolClause != null ? $" OR {qualifiedSymbolClause}" : string.Empty)})";
                 }))
                 : string.Join(" OR ", effectiveQueries.Select((queryValue, idx) =>
                 {
@@ -768,8 +770,8 @@ public partial class DbReader
                             ? $"({BuildExactPrimarySymbolNameMatchSql($"@query{idx}", true, queryValue, lang)}{swiftBacktickClause} OR {csharpExplicitInterfaceClause} OR {markdownAnchorClause} OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name_folded(s.name) = @query{idx}NormalizedFolded) OR sql_leaf_name_folded(s.name) = @query{idx}LeafFolded)))"
                             : $"({BuildExactPrimarySymbolNameMatchSql($"@query{idx}", true, queryValue, lang)}{swiftBacktickClause} OR {csharpExplicitInterfaceClause} OR {markdownAnchorClause} OR (f.lang = 'sql' AND sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name_folded(s.name) = @query{idx}NormalizedFolded){(qualifiedSymbolClause != null ? $" OR {qualifiedSymbolClause}" : string.Empty)})"
                         : allowLeafFallback
-                            ? $"({BuildExactPrimarySymbolNameMatchSql($"@query{idx}", false, queryValue, lang)}{swiftBacktickClause} OR {markdownAnchorClause} OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name(s.name) = @query{idx}Normalized COLLATE NOCASE) OR sql_leaf_name(s.name) = @query{idx}Leaf COLLATE NOCASE)))"
-                            : $"({BuildExactPrimarySymbolNameMatchSql($"@query{idx}", false, queryValue, lang)}{swiftBacktickClause} OR {markdownAnchorClause} OR (f.lang = 'sql' AND sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name(s.name) = @query{idx}Normalized COLLATE NOCASE){(qualifiedSymbolClause != null ? $" OR {qualifiedSymbolClause}" : string.Empty)})";
+                            ? $"({BuildExactPrimarySymbolNameMatchSql($"@query{idx}", false, queryValue, lang)}{swiftBacktickClause} OR {csharpExplicitInterfaceClause} OR {markdownAnchorClause} OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name(s.name) = @query{idx}Normalized COLLATE NOCASE) OR sql_leaf_name(s.name) = @query{idx}Leaf COLLATE NOCASE)))"
+                            : $"({BuildExactPrimarySymbolNameMatchSql($"@query{idx}", false, queryValue, lang)}{swiftBacktickClause} OR {csharpExplicitInterfaceClause} OR {markdownAnchorClause} OR (f.lang = 'sql' AND sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name(s.name) = @query{idx}Normalized COLLATE NOCASE){(qualifiedSymbolClause != null ? $" OR {qualifiedSymbolClause}" : string.Empty)})";
                 }))
                 : string.Join(" OR ", effectiveQueries.Select((queryValue, idx) =>
                 {

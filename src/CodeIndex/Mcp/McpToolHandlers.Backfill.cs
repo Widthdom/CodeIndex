@@ -58,6 +58,13 @@ public partial class McpServer
                 DbContext.CSharpSymbolNameContractVersion.ToString(
                     System.Globalization.CultureInfo.InvariantCulture),
                 StringComparison.Ordinal);
+            if (csharpSymbolNameContractUpgradeRequired
+                && !writer.CanReconstructCSharpExplicitInterfaceIdentitiesFromPersistedRows())
+            {
+                return CreateToolErrorResponse(
+                    id,
+                    "C# explicit-interface identities cannot be reconstructed because legacy symbol signatures are missing. Refresh the C# files with the index tool (or rebuild the index), then retry backfill_fold.");
+            }
             foldReadyBefore = foldReadyBefore && foldMetadataCurrentBefore;
             var force = args?["force"]?.GetValue<bool>() ?? false;
             var rewriteAll = writer.ResolveFoldBackfillRewriteAll(
@@ -87,13 +94,6 @@ public partial class McpServer
                 verified = writer.MarkFoldReady();
                 if (!verified)
                     return CreateToolErrorResponse(id, "Folded-name backfill verification failed: some rows still have NULL folded values. Re-run backfill_fold.");
-                if (csharpSymbolNameContractUpgradeRequired
-                    && !writer.CanReconstructCSharpExplicitInterfaceIdentitiesFromPersistedRows())
-                {
-                    return CreateToolErrorResponse(
-                        id,
-                        "C# explicit-interface identities cannot be reconstructed because legacy symbol signatures are missing. Refresh the C# files with the index tool (or rebuild the index), then retry backfill_fold.");
-                }
                 writer.MarkCSharpSymbolNameContractReady();
 
                 transaction.Commit();

@@ -306,14 +306,27 @@ internal static class CSharpSymbolNameNormalizer
         var rawTerminalToken = rawLastDot >= 0
             ? query[(rawLastDot + 1)..].Trim()
             : string.Empty;
+        var decodedRawTerminalToken =
+            ExactSourceSearchNormalizer.NormalizeCSharpUnicodeEscapes(
+                rawTerminalToken,
+                out _);
         var isIndexerSpelling = string.Equals(
             rawTerminalToken,
             "this",
             StringComparison.Ordinal);
         var isVerbatimThisSpelling = string.Equals(
-            rawTerminalToken,
-            "@this",
-            StringComparison.Ordinal);
+                rawTerminalToken,
+                "@this",
+                StringComparison.Ordinal)
+            || (rawTerminalToken.IndexOf('\\') >= 0
+                && (string.Equals(
+                        decodedRawTerminalToken,
+                        "this",
+                        StringComparison.Ordinal)
+                    || string.Equals(
+                        decodedRawTerminalToken,
+                        "@this",
+                        StringComparison.Ordinal)));
         var normalized = NormalizeTypeDisplayName(query);
         var lastDot = FindLastTopLevelDot(normalized);
         if (lastDot < 0)
