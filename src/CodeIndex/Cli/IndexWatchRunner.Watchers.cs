@@ -42,6 +42,12 @@ internal static partial class IndexWatchRunner
         return backend.CaptureSnapshotPaths(cancellationToken);
     }
 
+    internal static IReadOnlyCollection<string> CaptureAncestorIgnorePollingPathsForTesting(
+        string projectRoot,
+        string ignoreRuleRoot,
+        bool ignoreCase)
+        => EnumerateAncestorIgnorePaths(projectRoot, ignoreRuleRoot, ignoreCase).ToArray();
+
     private static IWatchBackend CreateWatchBackend(
         string projectRoot,
         string ignoreRuleRoot,
@@ -49,42 +55,64 @@ internal static partial class IndexWatchRunner
         bool ignoreCase,
         bool dbPathExplicit,
         int attempt)
-        => WatchBackendFactoryForTesting?.Invoke(projectRoot, ignoreRuleRoot, ignoreCase)
-            ?? (ShouldUsePollingWatchBackend(projectRoot, ignoreRuleRoot, ignoreCase, attempt)
-                ? new PollingWatchBackend(
-                    projectRoot,
-                    ignoreRuleRoot,
-                    resolvedDbPath,
-                    ignoreCase,
-                    dbPathExplicit)
-                : new FileSystemWatchBackend(projectRoot, ignoreRuleRoot, ignoreCase));
+    {
+        var backendOverride = WatchBackendFactoryForTesting?.Invoke(projectRoot, ignoreRuleRoot, ignoreCase);
+        if (backendOverride != null)
+            return backendOverride;
 
-    private static bool ShouldUsePollingWatchBackend(
+        if (ShouldUseFullPollingWatchBackendForTesting(OperatingSystem.IsMacOS(), attempt))
+        {
+            return new PollingWatchBackend(
+                projectRoot,
+                ignoreRuleRoot,
+                resolvedDbPath,
+                ignoreCase,
+                dbPathExplicit);
+        }
+
+        return new FileSystemWatchBackend(
+            projectRoot,
+            ignoreRuleRoot,
+            ignoreCase,
+            pollAncestorIgnorePaths: ShouldPollAncestorIgnorePaths(
+                projectRoot,
+                ignoreRuleRoot,
+                ignoreCase,
+                attempt));
+    }
+
+    private static bool ShouldPollAncestorIgnorePaths(
         string projectRoot,
         string ignoreRuleRoot,
         bool ignoreCase,
         int attempt)
     {
         var comparison = ignoreCase ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-        var hasAncestorIgnorePaths = !string.Equals(
+        var hasAncestorIgnorePaths = !IsSamePath(
             Path.GetFullPath(projectRoot),
             Path.GetFullPath(ignoreRuleRoot),
             comparison);
-        return ShouldUsePollingWatchBackendForTesting(
+        return ShouldPollAncestorIgnorePathsForTesting(
             OperatingSystem.IsMacOS(),
             Environment.Version.Major,
             attempt,
             hasAncestorIgnorePaths);
     }
 
-    internal static bool ShouldUsePollingWatchBackendForTesting(
+    internal static bool ShouldUseFullPollingWatchBackendForTesting(
+        bool isMacOs,
+        int attempt)
+        => isMacOs && attempt > 0;
+
+    internal static bool ShouldPollAncestorIgnorePathsForTesting(
         bool isMacOs,
         int runtimeMajorVersion,
         int attempt,
         bool hasAncestorIgnorePaths)
         => isMacOs
-            && (attempt > 0
-                || (runtimeMajorVersion <= 8 && hasAncestorIgnorePaths));
+            && runtimeMajorVersion <= 8
+            && attempt == 0
+            && hasAncestorIgnorePaths;
 
     private static string ResolveWatchBackendName()
         => OperatingSystem.IsMacOS()
@@ -103,10 +131,10 @@ internal static partial class IndexWatchRunner
         Action<Exception?> reportError)
     {
         var watchers = new List<FileSystemWatcher>();
-        var fullProjectRoot = Path.GetFullPath(projectRoot);
-        var fullIgnoreRuleRoot = Path.GetFullPath(ignoreRuleRoot);
+        var fullProjectRoot = TrimDirectorySeparators(Path.GetFullPath(projectRoot));
+        var fullIgnoreRuleRoot = TrimDirectorySeparators(Path.GetFullPath(ignoreRuleRoot));
         var comparison = ignoreCase ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-        if (string.Equals(fullProjectRoot, fullIgnoreRuleRoot, comparison))
+        if (IsSamePath(fullProjectRoot, fullIgnoreRuleRoot, comparison))
             return watchers;
 
         var relativeProjectRoot = Path.GetRelativePath(fullIgnoreRuleRoot, fullProjectRoot);
@@ -156,6 +184,39 @@ internal static partial class IndexWatchRunner
         }
 
         return watchers;
+    }
+
+    private static IEnumerable<string> EnumerateAncestorIgnorePaths(
+        string projectRoot,
+        string ignoreRuleRoot,
+        bool ignoreCase)
+    {
+        var fullProjectRoot = TrimDirectorySeparators(Path.GetFullPath(projectRoot));
+        var fullIgnoreRuleRoot = TrimDirectorySeparators(Path.GetFullPath(ignoreRuleRoot));
+        var comparison = ignoreCase
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+        if (IsSamePath(fullProjectRoot, fullIgnoreRuleRoot, comparison))
+            yield break;
+
+        var relativeProjectRoot = Path.GetRelativePath(fullIgnoreRuleRoot, fullProjectRoot);
+        if (Path.IsPathRooted(relativeProjectRoot)
+            || relativeProjectRoot == ".."
+            || relativeProjectRoot.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
+            || relativeProjectRoot.StartsWith($"..{Path.AltDirectorySeparatorChar}", StringComparison.Ordinal))
+        {
+            yield break;
+        }
+
+        var directory = Directory.GetParent(fullProjectRoot);
+        while (directory != null)
+        {
+            yield return Path.Combine(directory.FullName, ".gitignore");
+            yield return Path.Combine(directory.FullName, ".cdidxignore");
+            if (IsSamePath(directory.FullName, fullIgnoreRuleRoot, comparison))
+                yield break;
+            directory = directory.Parent;
+        }
     }
 
     private static int RunPartialUpdate(
@@ -343,17 +404,21 @@ internal static partial class IndexWatchRunner
         private readonly string _projectRoot;
         private readonly string _ignoreRuleRoot;
         private readonly bool _ignoreCase;
+        private readonly bool _pollAncestorIgnorePaths;
         private FileSystemWatcher? _watcher;
         private List<FileSystemWatcher>? _ancestorIgnoreWatchers;
+        private AncestorIgnorePollingWatcher? _ancestorIgnorePollingWatcher;
 
         internal FileSystemWatchBackend(
             string projectRoot,
             string ignoreRuleRoot,
-            bool ignoreCase)
+            bool ignoreCase,
+            bool pollAncestorIgnorePaths)
         {
             _projectRoot = projectRoot;
             _ignoreRuleRoot = ignoreRuleRoot;
             _ignoreCase = ignoreCase;
+            _pollAncestorIgnorePaths = pollAncestorIgnorePaths;
         }
 
         public string Name => ResolveWatchBackendName();
@@ -388,12 +453,23 @@ internal static partial class IndexWatchRunner
             watcher.Error += (_, e) => reportError(e.GetException());
 
             watcher.EnableRaisingEvents = true;
-            _ancestorIgnoreWatchers = CreateAncestorIgnoreWatchers(
-                _projectRoot,
-                _ignoreRuleRoot,
-                _ignoreCase,
-                enqueue,
-                reportError);
+            if (_pollAncestorIgnorePaths)
+            {
+                _ancestorIgnorePollingWatcher = new AncestorIgnorePollingWatcher(
+                    _projectRoot,
+                    _ignoreRuleRoot,
+                    _ignoreCase);
+                _ancestorIgnorePollingWatcher.Start(enqueue, reportError, cancellationToken);
+            }
+            else
+            {
+                _ancestorIgnoreWatchers = CreateAncestorIgnoreWatchers(
+                    _projectRoot,
+                    _ignoreRuleRoot,
+                    _ignoreCase,
+                    enqueue,
+                    reportError);
+            }
 
             // FileSystemWatcher can report a fatal EventStream startup error asynchronously
             // just after EnableRaisingEvents succeeds. Keep startup provisional long enough for
@@ -408,6 +484,9 @@ internal static partial class IndexWatchRunner
 
         public void Dispose()
         {
+            _ancestorIgnorePollingWatcher?.Dispose();
+            _ancestorIgnorePollingWatcher = null;
+
             if (_ancestorIgnoreWatchers != null)
             {
                 foreach (var ancestorWatcher in _ancestorIgnoreWatchers)
@@ -424,6 +503,147 @@ internal static partial class IndexWatchRunner
                 _watcher.Dispose();
                 _watcher = null;
             }
+        }
+    }
+
+    private sealed class AncestorIgnorePollingWatcher : IDisposable
+    {
+        private readonly record struct FileStamp(
+            bool Exists,
+            long Length,
+            long LastWriteUtcTicks,
+            long CreationUtcTicks);
+
+        private readonly IReadOnlyList<string> _paths;
+        private readonly StringComparer _pathComparer;
+        private CancellationTokenSource? _loopCancellation;
+        private Task? _loopTask;
+        private Dictionary<string, FileStamp>? _snapshot;
+        private Action<string>? _enqueue;
+        private Action<Exception?>? _reportError;
+        private bool _started;
+
+        internal AncestorIgnorePollingWatcher(
+            string projectRoot,
+            string ignoreRuleRoot,
+            bool ignoreCase)
+        {
+            _paths = EnumerateAncestorIgnorePaths(projectRoot, ignoreRuleRoot, ignoreCase).ToArray();
+            _pathComparer = ignoreCase ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+        }
+
+        internal void Start(
+            Action<string> enqueue,
+            Action<Exception?> reportError,
+            CancellationToken cancellationToken)
+        {
+            ObjectDisposedException.ThrowIf(_started, this);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            _snapshot = CaptureSnapshot(cancellationToken);
+            _enqueue = enqueue;
+            _reportError = reportError;
+            _loopCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            _loopTask = Task.Run(
+                () => RunLoopAsync(_loopCancellation.Token),
+                CancellationToken.None);
+            _started = true;
+        }
+
+        private async Task RunLoopAsync(CancellationToken cancellationToken)
+        {
+            try
+            {
+                while (true)
+                {
+                    await Task.Delay(PollingWatchInterval, cancellationToken).ConfigureAwait(false);
+                    PollOnce(cancellationToken);
+                }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+            }
+            catch (Exception ex) when (CodeIndex.FileSystemTraversalPolicy.IsExpectedTraversalException(ex))
+            {
+                _reportError?.Invoke(ex);
+            }
+        }
+
+        private void PollOnce(CancellationToken cancellationToken)
+        {
+            Dictionary<string, FileStamp> next;
+            try
+            {
+                next = CaptureSnapshot(cancellationToken);
+            }
+            catch (Exception ex) when (CodeIndex.FileSystemTraversalPolicy.IsExpectedTraversalException(ex))
+            {
+                _reportError?.Invoke(ex);
+                return;
+            }
+
+            var previous = _snapshot ?? new Dictionary<string, FileStamp>(_pathComparer);
+            foreach (var (path, stamp) in next)
+            {
+                if (!previous.TryGetValue(path, out var priorStamp) || priorStamp != stamp)
+                    _enqueue?.Invoke(path);
+            }
+
+            _snapshot = next;
+        }
+
+        private Dictionary<string, FileStamp> CaptureSnapshot(CancellationToken cancellationToken)
+        {
+            var snapshot = new Dictionary<string, FileStamp>(_pathComparer);
+            foreach (var path in _paths)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                snapshot[path] = CaptureFileStamp(path);
+            }
+
+            return snapshot;
+        }
+
+        private static FileStamp CaptureFileStamp(string path)
+        {
+            try
+            {
+                var info = new FileInfo(path);
+                return info.Exists
+                    ? new FileStamp(
+                        Exists: true,
+                        info.Length,
+                        info.LastWriteTimeUtc.Ticks,
+                        info.CreationTimeUtc.Ticks)
+                    : default;
+            }
+            catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+            {
+                return default;
+            }
+        }
+
+        public void Dispose()
+        {
+            var cancellation = _loopCancellation;
+            _loopCancellation = null;
+            if (cancellation != null)
+            {
+                cancellation.Cancel();
+                try
+                {
+                    _loopTask?.GetAwaiter().GetResult();
+                }
+                catch (OperationCanceledException)
+                {
+                }
+                cancellation.Dispose();
+            }
+
+            _loopTask = null;
+            _snapshot = null;
+            _enqueue = null;
+            _reportError = null;
         }
     }
 
@@ -576,7 +796,10 @@ internal static partial class IndexWatchRunner
                 }
             }
 
-            foreach (var ignorePath in EnumerateAncestorIgnorePaths())
+            foreach (var ignorePath in EnumerateAncestorIgnorePaths(
+                         _projectRoot,
+                         _ignoreRuleRoot,
+                         _ignoreCase))
                 AddFileStamp(snapshot, ignorePath);
 
             return snapshot;
@@ -597,34 +820,6 @@ internal static partial class IndexWatchRunner
                     _ignoreCase,
                     _dbPathExplicit)
                 && !_fileIndexer.ShouldSkipPath(path);
-        }
-
-        private IEnumerable<string> EnumerateAncestorIgnorePaths()
-        {
-            var comparison = _ignoreCase
-                ? StringComparison.OrdinalIgnoreCase
-                : StringComparison.Ordinal;
-            if (string.Equals(_projectRoot, _ignoreRuleRoot, comparison))
-                yield break;
-
-            var relativeProjectRoot = Path.GetRelativePath(_ignoreRuleRoot, _projectRoot);
-            if (Path.IsPathRooted(relativeProjectRoot)
-                || relativeProjectRoot == ".."
-                || relativeProjectRoot.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
-                || relativeProjectRoot.StartsWith($"..{Path.AltDirectorySeparatorChar}", StringComparison.Ordinal))
-            {
-                yield break;
-            }
-
-            var directory = Directory.GetParent(_projectRoot);
-            while (directory != null)
-            {
-                yield return Path.Combine(directory.FullName, ".gitignore");
-                yield return Path.Combine(directory.FullName, ".cdidxignore");
-                if (string.Equals(directory.FullName, _ignoreRuleRoot, comparison))
-                    yield break;
-                directory = directory.Parent;
-            }
         }
 
         private static void AddFileStamp(Dictionary<string, FileStamp> snapshot, string path)

@@ -1644,9 +1644,9 @@ public class IndexWatchRunnerTests
     [InlineData(true, 8, 0, true, true)]
     [InlineData(true, 8, 0, false, false)]
     [InlineData(true, 9, 0, true, false)]
-    [InlineData(true, 9, 1, false, true)]
+    [InlineData(true, 8, 1, true, false)]
     [InlineData(false, 8, 0, true, false)]
-    public void ShouldUsePollingWatchBackend_Net8MacSubprojectAvoidsMissedAncestorEvents_Issue4955(
+    public void ShouldPollAncestorIgnorePaths_Net8MacSubprojectAvoidsMissedEvents_Issue4955(
         bool isMacOs,
         int runtimeMajorVersion,
         int attempt,
@@ -1655,11 +1655,57 @@ public class IndexWatchRunnerTests
     {
         Assert.Equal(
             expected,
-            IndexWatchRunner.ShouldUsePollingWatchBackendForTesting(
+            IndexWatchRunner.ShouldPollAncestorIgnorePathsForTesting(
                 isMacOs,
                 runtimeMajorVersion,
                 attempt,
                 hasAncestorIgnorePaths));
+    }
+
+    [Theory]
+    [InlineData(true, 0, false)]
+    [InlineData(true, 1, true)]
+    [InlineData(false, 1, false)]
+    public void ShouldUseFullPollingWatchBackend_OnlyForMacFallbackAttempts_Issue4955(
+        bool isMacOs,
+        int attempt,
+        bool expected)
+    {
+        Assert.Equal(
+            expected,
+            IndexWatchRunner.ShouldUseFullPollingWatchBackendForTesting(isMacOs, attempt));
+    }
+
+    [Fact]
+    public void AncestorIgnorePollingPaths_AreBoundedToExactAncestorFiles_Issue4955()
+    {
+        var repoRoot = CreateTempProject();
+        var projectRoot = Path.Combine(repoRoot, "parent", "subproject");
+        try
+        {
+            Directory.CreateDirectory(projectRoot);
+
+            var relativePaths = IndexWatchRunner.CaptureAncestorIgnorePollingPathsForTesting(
+                    projectRoot,
+                    repoRoot,
+                    ignoreCase: false)
+                .Select(path => Path.GetRelativePath(repoRoot, path).Replace('\\', '/'))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToArray();
+
+            Assert.Equal(
+                [
+                    ".cdidxignore",
+                    ".gitignore",
+                    "parent/.cdidxignore",
+                    "parent/.gitignore",
+                ],
+                relativePaths);
+        }
+        finally
+        {
+            DeleteDirectory(repoRoot);
+        }
     }
 
     [Fact]
