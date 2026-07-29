@@ -362,7 +362,7 @@ public static class DiffCommandRunner
             file_issues.message
         """;
 
-    private const string MetaRowsSql = """
+    private const string ContractMetaRowsSql = """
         SELECT
             key,
             value
@@ -381,7 +381,7 @@ public static class DiffCommandRunner
             value
         """;
 
-    private const string OperationalMetaRowsSql = """
+    private const string ProvenanceMetaRowsSql = """
         SELECT
             key,
             value
@@ -393,10 +393,8 @@ public static class DiffCommandRunner
             OR key = 'indexed_head_commit_branch'
             OR key = 'indexed_head_sha'
             OR key = 'indexed_head_branch'
-            OR key = 'indexed_head_timestamp'
             OR key = 'commit_scoped_fresh_head_sha'
             OR key = 'workspace_path_case_sensitive'
-            OR key LIKE 'last_index_run_%'
             OR key = 'unknown_extension_file_count'
             OR key = 'unknown_extension_file_paths_json'
             OR key = 'unknown_extension_files_truncated'
@@ -405,6 +403,19 @@ public static class DiffCommandRunner
             OR key = 'unknown_extension_category_counts_json'
             OR key = 'unknown_extension_groups_json'
             OR key = 'cdidx_writer_version'
+        ORDER BY
+            key,
+            value
+        """;
+
+    private const string VolatileTelemetryMetaRowsSql = """
+        SELECT
+            key,
+            value
+        FROM codeindex_meta
+        WHERE
+            key = 'indexed_head_timestamp'
+            OR key LIKE 'last_index_run_%'
         ORDER BY
             key,
             value
@@ -454,29 +465,13 @@ public static class DiffCommandRunner
         CliJsonSerializerContext? materializationJsonContext,
         CancellationToken cancellationToken)
     {
-        var summary = new DiffSummaryJsonResult(
-            left.FileCount,
-            right.FileCount,
-            right.FileCount - left.FileCount,
-            left.SymbolCount,
-            right.SymbolCount,
-            right.SymbolCount - left.SymbolCount,
-            left.ReferenceCount,
-            right.ReferenceCount,
-            right.ReferenceCount - left.ReferenceCount,
-            left.SchemaVersion,
-            right.SchemaVersion,
-            left.SchemaVersion == right.SchemaVersion);
-
         var filesOnlyInLeft = new List<string>();
         var filesOnlyInRight = new List<string>();
         var diagnostics = new List<DiffDiagnosticJsonResult>();
         var hasMore = false;
-        var identical =
-            summary.SchemaVersionsEqual &&
-            summary.FileCountDelta == 0 &&
-            summary.SymbolCountDelta == 0 &&
-            summary.ReferenceCountDelta == 0;
+        var dataReasons = new List<string>();
+        var readinessProvenanceReasons = new List<string>();
+        var telemetryReasons = new List<string>();
 
         using var leftConnection = OpenReadOnlyConnection(options.LeftDb!);
         using var rightConnection = OpenReadOnlyConnection(options.RightDb!);
@@ -493,7 +488,6 @@ public static class DiffCommandRunner
             var fileDiff = DiffOrderedStrings(leftConnection, rightConnection, FilePathRowsSql, options.Limit, options.Offset, cancellationToken);
             filesOnlyInLeft = fileDiff.OnlyInLeft;
             filesOnlyInRight = fileDiff.OnlyInRight;
-            identical = identical && fileDiff.Equal;
             hasMore |= fileDiff.HasMore;
             AddPagingDiagnostic(diagnostics, fileDiff.Omitted, fileDiff.HasMore, "file differences", options);
         }
@@ -505,15 +499,27 @@ public static class DiffCommandRunner
                 options.Offset,
                 options.Limit,
                 options.IncludeContent,
+                options.DataOnly,
+                options.IncludeTelemetry,
                 options.Json
                     ? options.MaxJsonBytes ?? DefaultDiffJsonBytes
                     : null,
                 materializationJsonContext)
             : null;
+
+        bool fileRowsEqual;
+        bool symbolRowsEqual;
+        bool referenceRowsEqual;
+        bool chunkRowsEqual;
+        bool referenceLineRowsEqual;
+        bool fileIssueRowsEqual;
+        bool contractMetadataEqual;
+        bool provenanceMetadataEqual;
+        bool volatileTelemetryEqual;
         if (collector is not null)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            identical &= CollectOrderedRows(
+            fileRowsEqual = CollectOrderedRows(
                 leftConnection,
                 rightConnection,
                 FileRowsSql,
@@ -524,7 +530,7 @@ public static class DiffCommandRunner
                 cancellationToken);
 
             cancellationToken.ThrowIfCancellationRequested();
-            identical &= CollectOrderedRows(
+            symbolRowsEqual = CollectOrderedRows(
                 leftConnection,
                 rightConnection,
                 leftSymbolRowsSql,
@@ -535,7 +541,7 @@ public static class DiffCommandRunner
                 cancellationToken);
 
             cancellationToken.ThrowIfCancellationRequested();
-            identical &= CollectOrderedRows(
+            referenceRowsEqual = CollectOrderedRows(
                 leftConnection,
                 rightConnection,
                 leftReferenceRowsSql,
@@ -546,7 +552,7 @@ public static class DiffCommandRunner
                 cancellationToken);
 
             cancellationToken.ThrowIfCancellationRequested();
-            identical &= CollectOrderedRows(
+            chunkRowsEqual = CollectOrderedRows(
                 leftConnection,
                 rightConnection,
                 ChunkRowsSql,
@@ -557,7 +563,7 @@ public static class DiffCommandRunner
                 cancellationToken);
 
             cancellationToken.ThrowIfCancellationRequested();
-            identical &= CollectOrderedRows(
+            referenceLineRowsEqual = CollectOrderedRows(
                 leftConnection,
                 rightConnection,
                 ReferenceLineRowsSql,
@@ -568,7 +574,7 @@ public static class DiffCommandRunner
                 cancellationToken);
 
             cancellationToken.ThrowIfCancellationRequested();
-            identical &= CollectOrderedRows(
+            fileIssueRowsEqual = CollectOrderedRows(
                 leftConnection,
                 rightConnection,
                 FileIssueRowsSql,
@@ -579,36 +585,135 @@ public static class DiffCommandRunner
                 cancellationToken);
 
             cancellationToken.ThrowIfCancellationRequested();
-            identical &= CollectMetadataRows(
+            contractMetadataEqual = CollectMetadataRows(
                 leftConnection,
                 rightConnection,
-                MetaRowsSql,
+                ContractMetaRowsSql,
                 "contract_metadata",
                 collector,
                 cancellationToken);
 
             cancellationToken.ThrowIfCancellationRequested();
-            _ = CollectMetadataRows(
+            provenanceMetadataEqual = CollectMetadataRows(
                 leftConnection,
                 rightConnection,
-                OperationalMetaRowsSql,
-                "operational_metadata",
+                ProvenanceMetaRowsSql,
+                "readiness_provenance_metadata",
                 collector,
+                cancellationToken);
+
+            cancellationToken.ThrowIfCancellationRequested();
+            volatileTelemetryEqual = options.IncludeTelemetry
+                ? CollectMetadataRows(
+                    leftConnection,
+                    rightConnection,
+                    VolatileTelemetryMetaRowsSql,
+                    "volatile_telemetry_metadata",
+                    collector,
+                    cancellationToken)
+                : RowsEqual(
+                    leftConnection,
+                    rightConnection,
+                    VolatileTelemetryMetaRowsSql,
+                    cancellationToken);
+        }
+        else
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            fileRowsEqual = RowsEqual(leftConnection, rightConnection, FileRowsSql, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            symbolRowsEqual = RowsEqual(
+                leftConnection,
+                rightConnection,
+                leftSymbolRowsSql,
+                rightSymbolRowsSql,
+                cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            referenceRowsEqual = RowsEqual(
+                leftConnection,
+                rightConnection,
+                leftReferenceRowsSql,
+                rightReferenceRowsSql,
+                cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            chunkRowsEqual = RowsEqual(leftConnection, rightConnection, ChunkRowsSql, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            referenceLineRowsEqual = RowsEqual(
+                leftConnection,
+                rightConnection,
+                ReferenceLineRowsSql,
+                cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            fileIssueRowsEqual = RowsEqual(
+                leftConnection,
+                rightConnection,
+                FileIssueRowsSql,
+                cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            contractMetadataEqual = RowsEqual(
+                leftConnection,
+                rightConnection,
+                ContractMetaRowsSql,
+                cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            provenanceMetadataEqual = RowsEqual(
+                leftConnection,
+                rightConnection,
+                ProvenanceMetaRowsSql,
+                cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            volatileTelemetryEqual = RowsEqual(
+                leftConnection,
+                rightConnection,
+                VolatileTelemetryMetaRowsSql,
                 cancellationToken);
         }
 
-        if (identical && collector is null)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            identical =
-                RowsEqual(leftConnection, rightConnection, FileRowsSql, cancellationToken) &&
-                RowsEqual(leftConnection, rightConnection, ChunkRowsSql, cancellationToken) &&
-                RowsEqual(leftConnection, rightConnection, ReferenceLineRowsSql, cancellationToken) &&
-                RowsEqual(leftConnection, rightConnection, FileIssueRowsSql, cancellationToken) &&
-                RowsEqual(leftConnection, rightConnection, MetaRowsSql, cancellationToken) &&
-                RowsEqual(leftConnection, rightConnection, leftSymbolRowsSql, rightSymbolRowsSql, cancellationToken) &&
-                RowsEqual(leftConnection, rightConnection, leftReferenceRowsSql, rightReferenceRowsSql, cancellationToken);
-        }
+        AddDifferenceReason(dataReasons, fileRowsEqual, "file_rows_changed");
+        AddDifferenceReason(dataReasons, symbolRowsEqual, "symbol_rows_changed");
+        AddDifferenceReason(dataReasons, referenceRowsEqual, "reference_rows_changed");
+        AddDifferenceReason(dataReasons, chunkRowsEqual, "chunk_rows_changed");
+        AddDifferenceReason(dataReasons, referenceLineRowsEqual, "reference_line_rows_changed");
+        AddDifferenceReason(dataReasons, fileIssueRowsEqual, "file_issue_rows_changed");
+        AddDifferenceReason(
+            readinessProvenanceReasons,
+            contractMetadataEqual,
+            "contract_metadata_changed");
+        AddDifferenceReason(
+            readinessProvenanceReasons,
+            provenanceMetadataEqual,
+            "provenance_metadata_changed");
+        AddDifferenceReason(
+            telemetryReasons,
+            volatileTelemetryEqual,
+            "volatile_telemetry_metadata_changed");
+
+        var categories = BuildDifferenceCategories(
+            dataReasons,
+            schemaReasons: [],
+            readinessProvenanceReasons,
+            telemetryReasons,
+            options,
+            evaluated: true);
+        var differenceReasons = BuildIncludedDifferenceReasons(categories);
+        var identical = differenceReasons.Count == 0;
+        var summary = new DiffSummaryJsonResult(
+            left.FileCount,
+            right.FileCount,
+            right.FileCount - left.FileCount,
+            left.SymbolCount,
+            right.SymbolCount,
+            right.SymbolCount - left.SymbolCount,
+            left.ReferenceCount,
+            right.ReferenceCount,
+            right.ReferenceCount - left.ReferenceCount,
+            left.SchemaVersion,
+            right.SchemaVersion,
+            true,
+            GetComparisonMode(options),
+            differenceReasons.Count,
+            differenceReasons,
+            categories);
 
         List<DiffRecordJsonResult>? records = null;
         long? totalCount = null;
@@ -700,6 +805,60 @@ public static class DiffCommandRunner
             TruncationReason: truncationReason);
     }
 
+    private static void AddDifferenceReason(List<string> reasons, bool equal, string reason)
+    {
+        if (!equal)
+            reasons.Add(reason);
+    }
+
+    private static List<DiffCategorySummaryJsonResult> BuildDifferenceCategories(
+        List<string> dataReasons,
+        List<string> schemaReasons,
+        List<string> readinessProvenanceReasons,
+        List<string> telemetryReasons,
+        DiffCommandOptions options,
+        bool evaluated)
+        =>
+        [
+            BuildDifferenceCategory("data", evaluated, included: true, dataReasons),
+            BuildDifferenceCategory("schema", evaluated, included: true, schemaReasons),
+            BuildDifferenceCategory(
+                "readiness_provenance",
+                evaluated,
+                included: !options.DataOnly,
+                readinessProvenanceReasons),
+            BuildDifferenceCategory(
+                "volatile_telemetry",
+                evaluated,
+                included: options.IncludeTelemetry,
+                telemetryReasons),
+        ];
+
+    private static DiffCategorySummaryJsonResult BuildDifferenceCategory(
+        string category,
+        bool evaluated,
+        bool included,
+        List<string> reasons)
+        => new(
+            category,
+            evaluated,
+            included,
+            reasons.Count > 0,
+            reasons.Count,
+            reasons);
+
+    private static List<string> BuildIncludedDifferenceReasons(
+        List<DiffCategorySummaryJsonResult> categories)
+        => categories
+            .Where(category => category.Evaluated && category.Included && category.Different)
+            .SelectMany(category => category.Reasons.Select(reason => $"{category.Category}:{reason}"))
+            .ToList();
+
+    private static string GetComparisonMode(DiffCommandOptions options)
+        => options.IncludeTelemetry
+            ? "semantic_with_telemetry"
+            : options.DataOnly ? "data_only" : "semantic";
+
     private static void AddPagingDiagnostic(
         List<DiffDiagnosticJsonResult> diagnostics,
         bool omitted,
@@ -720,6 +879,22 @@ public static class DiffCommandRunner
 
     private static DiffJsonResult BuildSchemaMismatchDiff(DiffDbHeader left, DiffDbHeader right, DiffCommandOptions options)
     {
+        var categories = new List<DiffCategorySummaryJsonResult>
+        {
+            BuildDifferenceCategory("data", evaluated: false, included: true, []),
+            BuildDifferenceCategory("schema", evaluated: true, included: true, ["schema_version_changed"]),
+            BuildDifferenceCategory(
+                "readiness_provenance",
+                evaluated: false,
+                included: !options.DataOnly,
+                []),
+            BuildDifferenceCategory(
+                "volatile_telemetry",
+                evaluated: false,
+                included: options.IncludeTelemetry,
+                []),
+        };
+        var differenceReasons = BuildIncludedDifferenceReasons(categories);
         var summary = new DiffSummaryJsonResult(
             left.FileCount,
             right.FileCount,
@@ -732,9 +907,18 @@ public static class DiffCommandRunner
             right.ReferenceCount - left.ReferenceCount,
             left.SchemaVersion,
             right.SchemaVersion,
-            false);
+            false,
+            GetComparisonMode(options),
+            differenceReasons.Count,
+            differenceReasons,
+            categories);
         var selectionFingerprint = options.Detailed && options.EmitCursorMetadata
-            ? DiffCursorCodec.CreateSelectionFingerprint(options.LeftDb!, options.RightDb!, options.IncludeContent)
+            ? DiffCursorCodec.CreateSelectionFingerprint(
+                options.LeftDb!,
+                options.RightDb!,
+                options.IncludeContent,
+                options.DataOnly,
+                options.IncludeTelemetry)
             : null;
         var currentCursor = selectionFingerprint is null || !options.EmitCursorMetadata
             ? null
@@ -1371,6 +1555,10 @@ public static class DiffCommandRunner
             ];
             if (options.IncludeContent)
                 nextPageArguments.Add("--include-content");
+            if (options.DataOnly)
+                nextPageArguments.Add("--data-only");
+            if (options.IncludeTelemetry)
+                nextPageArguments.Add("--include-telemetry");
             var replayMaxJsonBytes = effectiveMaxJsonBytes ?? options.MaxJsonBytes;
             if (replayMaxJsonBytes.HasValue)
             {
@@ -1539,6 +1727,8 @@ public static class DiffCommandRunner
             int offset,
             int limit,
             bool includeContent,
+            bool dataOnly,
+            bool includeTelemetry,
             int? materializationByteBudget,
             CliJsonSerializerContext? materializationJsonContext)
         {
@@ -1548,7 +1738,12 @@ public static class DiffCommandRunner
             _materializationByteBudget = materializationByteBudget;
             _materializationJsonContext = materializationJsonContext
                 ?? CliJsonSerializerContext.Default;
-            _selectionHash = DiffCursorCodec.CreateSelectionHash(leftDb, rightDb, includeContent);
+            _selectionHash = DiffCursorCodec.CreateSelectionHash(
+                leftDb,
+                rightDb,
+                includeContent,
+                dataOnly,
+                includeTelemetry);
         }
 
         internal List<DiffRecordJsonResult> Records { get; } = [];
@@ -1638,6 +1833,8 @@ internal sealed class DiffCommandOptions
     public bool Detailed { get; init; }
     public bool SummaryOnly { get; init; }
     public bool IncludeContent { get; init; }
+    public bool DataOnly { get; init; }
+    public bool IncludeTelemetry { get; init; }
     public bool ShowHelp { get; init; }
     public int Limit { get; init; } = 20;
     public int Offset { get; init; }

@@ -11,6 +11,8 @@ internal static class DiffCommandOptionsParser
         var detailed = false;
         var summaryOnly = false;
         var includeContent = false;
+        var dataOnly = false;
+        var includeTelemetry = false;
         var limit = DefaultLimit;
         var offset = 0;
         var offsetExplicit = false;
@@ -37,6 +39,12 @@ internal static class DiffCommandOptionsParser
                     break;
                 case "--include-content":
                     includeContent = true;
+                    break;
+                case "--data-only":
+                    dataOnly = true;
+                    break;
+                case "--include-telemetry":
+                    includeTelemetry = true;
                     break;
                 case "--max-json-bytes" when i + 1 < args.Length:
                     if (!int.TryParse(args[++i], out var parsedMaxJsonBytes)
@@ -99,6 +107,8 @@ internal static class DiffCommandOptionsParser
             parseError = "diff requires exactly two database paths";
         if (parseError is null && includeContent && (!detailed || !json || summaryOnly))
             parseError = "--include-content requires --detailed --json and cannot be combined with --summary-only";
+        if (parseError is null && dataOnly && includeTelemetry)
+            parseError = "--data-only cannot be combined with --include-telemetry";
         if (parseError is null && maxJsonBytes.HasValue && !(json || summaryOnly))
             parseError = "--max-json-bytes is only supported with JSON diff output";
         if (parseError is null && cursor is not null && (!detailed || !json || summaryOnly))
@@ -125,6 +135,8 @@ internal static class DiffCommandOptionsParser
             Detailed = detailed,
             SummaryOnly = summaryOnly,
             IncludeContent = includeContent,
+            DataOnly = dataOnly,
+            IncludeTelemetry = includeTelemetry,
             Limit = limit,
             Offset = offset,
             OffsetExplicit = offsetExplicit,

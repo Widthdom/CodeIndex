@@ -29,8 +29,10 @@ public class DiffCommandRunnerTests
             var rightDb = SeedDb(rightRoot, includeExtraFile: true);
 
             var (exitCode, output) = RunWithCapturedOut([leftDb, rightDb, "--json", "--limit", "5"]);
+            var (textExitCode, textOutput) = RunWithCapturedOut([leftDb, rightDb, "--limit", "5"]);
 
             Assert.Equal(1, exitCode);
+            Assert.Equal(1, textExitCode);
             using var document = JsonDocument.Parse(output);
             var root = document.RootElement;
             Assert.Equal("different", root.GetProperty("status").GetString());
@@ -41,6 +43,13 @@ public class DiffCommandRunnerTests
             Assert.Contains(
                 root.GetProperty("files_only_in_right").EnumerateArray(),
                 item => item.GetString() == "src/Extra.cs");
+            var summary = root.GetProperty("summary");
+            Assert.Contains(
+                "data:file_rows_changed",
+                summary.GetProperty("difference_reasons").EnumerateArray().Select(item => item.GetString()));
+            Assert.Contains("mode   : semantic", textOutput, StringComparison.Ordinal);
+            Assert.Contains("data (included):", textOutput, StringComparison.Ordinal);
+            Assert.Contains("file_rows_changed", textOutput, StringComparison.Ordinal);
         }
         finally
         {
@@ -181,6 +190,113 @@ public class DiffCommandRunnerTests
         Assert.Equal(
             "--include-content requires --detailed --json and cannot be combined with --summary-only",
             contentWithoutDetailedJson.ParseError);
+    }
+
+    [Fact]
+    public void Run_CategorizesNoOpTelemetryAndReadinessAcrossModes_Issue4884()
+    {
+        var leftRoot = TestProjectHelper.CreateTempProject("cdidx_diff_telemetry_left");
+        var rightRoot = TestProjectHelper.CreateTempProject("cdidx_diff_telemetry_right");
+        try
+        {
+            var leftDb = SeedDb(leftRoot, includeExtraFile: false);
+            var rightDb = SeedDb(rightRoot, includeExtraFile: false);
+            var sharedProjectRoot = Path.GetFullPath(leftRoot);
+            SetMeta(leftDb, DbContext.IndexedProjectRootMetaKey, sharedProjectRoot);
+            SetMeta(rightDb, DbContext.IndexedProjectRootMetaKey, sharedProjectRoot);
+            SetMeta(rightDb, "indexed_head_timestamp", "2026-07-29T01:02:03Z");
+            SetMeta(rightDb, "last_index_run_started_at", "2026-07-29T01:02:00Z");
+            SetMeta(rightDb, "last_index_run_duration_ms", "123");
+            SetMeta(rightDb, "last_index_run_mode", "incremental");
+            SetMeta(rightDb, "last_index_run_bytes_read", "0");
+
+            var (semanticExitCode, semanticOutput) = RunWithCapturedOut(
+                [leftDb, rightDb, "--summary-only"]);
+            var (detailedExitCode, detailedOutput) = RunWithCapturedOut(
+                [leftDb, rightDb, "--json", "--detailed", "--limit", "20"]);
+            var (telemetryExitCode, telemetryOutput) = RunWithCapturedOut(
+                [leftDb, rightDb, "--summary-only", "--include-telemetry"]);
+            var (telemetryDetailedExitCode, telemetryDetailedOutput) = RunWithCapturedOut(
+                [leftDb, rightDb, "--json", "--detailed", "--include-telemetry", "--limit", "20"]);
+
+            Assert.Equal(0, semanticExitCode);
+            Assert.Equal(0, detailedExitCode);
+            using (var semanticDocument = JsonDocument.Parse(semanticOutput))
+            {
+                var semantic = semanticDocument.RootElement;
+                Assert.True(semantic.GetProperty("identical").GetBoolean());
+                Assert.Equal("semantic", semantic.GetProperty("summary").GetProperty("comparison_mode").GetString());
+                Assert.Equal(0, semantic.GetProperty("summary").GetProperty("difference_reason_count").GetInt32());
+                var telemetry = GetCategory(semantic, "volatile_telemetry");
+                Assert.True(telemetry.GetProperty("different").GetBoolean());
+                Assert.False(telemetry.GetProperty("included").GetBoolean());
+                Assert.Equal(
+                    "volatile_telemetry_metadata_changed",
+                    Assert.Single(telemetry.GetProperty("reasons").EnumerateArray()).GetString());
+            }
+            using (var detailedDocument = JsonDocument.Parse(detailedOutput))
+            {
+                Assert.Empty(GetRecords(detailedDocument.RootElement, "volatile_telemetry_metadata"));
+            }
+
+            Assert.Equal(1, telemetryExitCode);
+            Assert.Equal(1, telemetryDetailedExitCode);
+            using (var telemetryDocument = JsonDocument.Parse(telemetryOutput))
+            {
+                var telemetry = telemetryDocument.RootElement;
+                Assert.False(telemetry.GetProperty("identical").GetBoolean());
+                Assert.Equal(
+                    "semantic_with_telemetry",
+                    telemetry.GetProperty("summary").GetProperty("comparison_mode").GetString());
+                Assert.Contains(
+                    "volatile_telemetry:volatile_telemetry_metadata_changed",
+                    telemetry.GetProperty("summary").GetProperty("difference_reasons")
+                        .EnumerateArray()
+                        .Select(item => item.GetString()));
+            }
+            using (var telemetryDetailedDocument = JsonDocument.Parse(telemetryDetailedOutput))
+            {
+                Assert.Equal(
+                    5,
+                    GetRecords(telemetryDetailedDocument.RootElement, "volatile_telemetry_metadata").Count);
+            }
+
+            SetMeta(leftDb, "hotspot_family_version", "left-readiness");
+            SetMeta(rightDb, "hotspot_family_version", "right-readiness");
+            var (readinessExitCode, readinessOutput) = RunWithCapturedOut(
+                [leftDb, rightDb, "--summary-only"]);
+            var (dataOnlyExitCode, dataOnlyOutput) = RunWithCapturedOut(
+                [leftDb, rightDb, "--summary-only", "--data-only"]);
+
+            Assert.Equal(1, readinessExitCode);
+            using (var readinessDocument = JsonDocument.Parse(readinessOutput))
+            {
+                Assert.Contains(
+                    "readiness_provenance:contract_metadata_changed",
+                    readinessDocument.RootElement.GetProperty("summary").GetProperty("difference_reasons")
+                        .EnumerateArray()
+                        .Select(item => item.GetString()));
+            }
+            Assert.Equal(0, dataOnlyExitCode);
+            using (var dataOnlyDocument = JsonDocument.Parse(dataOnlyOutput))
+            {
+                var dataOnly = dataOnlyDocument.RootElement;
+                Assert.True(dataOnly.GetProperty("identical").GetBoolean());
+                Assert.Equal("data_only", dataOnly.GetProperty("summary").GetProperty("comparison_mode").GetString());
+                var readiness = GetCategory(dataOnly, "readiness_provenance");
+                Assert.True(readiness.GetProperty("different").GetBoolean());
+                Assert.False(readiness.GetProperty("included").GetBoolean());
+            }
+
+            var incompatible = DiffCommandRunner.ParseArgs(
+                [leftDb, rightDb, "--data-only", "--include-telemetry"]);
+            Assert.Equal("--data-only cannot be combined with --include-telemetry", incompatible.ParseError);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(leftRoot);
+            TestProjectHelper.DeleteDirectory(rightRoot);
+        }
     }
 
     [Fact]
@@ -727,6 +843,11 @@ public class DiffCommandRunnerTests
             var root = document.RootElement;
             Assert.Equal("different", root.GetProperty("status").GetString());
             Assert.False(root.GetProperty("identical").GetBoolean());
+            Assert.Contains(
+                "data:reference_rows_changed",
+                root.GetProperty("summary").GetProperty("difference_reasons")
+                    .EnumerateArray()
+                    .Select(item => item.GetString()));
             var referenceRecords = GetRecords(root, "reference");
             Assert.Contains(referenceRecords, record => record.GetProperty("side").GetString() == "left");
             Assert.Contains(referenceRecords, record => record.GetProperty("side").GetString() == "right");
@@ -750,14 +871,19 @@ public class DiffCommandRunnerTests
             SetMeta(leftDb, DbContext.IndexedProjectRootMetaKey, Path.GetFullPath(leftRoot));
             SetMeta(rightDb, DbContext.IndexedProjectRootMetaKey, Path.GetFullPath(rightRoot));
 
-            var (exitCode, output) = RunWithCapturedOut([leftDb, rightDb, "--json", "--detailed", "--limit", "5"]);
+            var (exitCode, output) = RunWithCapturedOut(
+                [leftDb, rightDb, "--json", "--detailed", "--data-only", "--limit", "5"]);
 
             Assert.Equal(0, exitCode);
             using var document = JsonDocument.Parse(output);
             var root = document.RootElement;
             Assert.Equal("identical", root.GetProperty("status").GetString());
             Assert.True(root.GetProperty("identical").GetBoolean());
-            var drift = Assert.Single(GetRecords(root, "operational_metadata"));
+            Assert.Equal("data_only", root.GetProperty("summary").GetProperty("comparison_mode").GetString());
+            var readinessCategory = GetCategory(root, "readiness_provenance");
+            Assert.True(readinessCategory.GetProperty("different").GetBoolean());
+            Assert.False(readinessCategory.GetProperty("included").GetBoolean());
+            var drift = Assert.Single(GetRecords(root, "readiness_provenance_metadata"));
             Assert.Equal("changed", drift.GetProperty("side").GetString());
             Assert.True(GetField(drift, "key").GetProperty("redacted").GetBoolean());
             Assert.True(GetField(drift, "left_value").GetProperty("redacted").GetBoolean());
@@ -783,13 +909,14 @@ public class DiffCommandRunnerTests
                 SetMeta(rightDb, key, $"right-{key}");
             }
 
-            const int completePageBudget = 7_500;
+            const int completePageBudget = 12_000;
             var (boundedExitCode, boundedOutput) = RunWithCapturedOut(
                 [
                     leftDb,
                     rightDb,
                     "--json",
                     "--detailed",
+                    "--data-only",
                     "--limit",
                     "100",
                     "--max-json-bytes",
@@ -800,8 +927,8 @@ public class DiffCommandRunnerTests
             Assert.InRange(Encoding.UTF8.GetByteCount(boundedOutput), 1, completePageBudget);
             using var boundedDocument = JsonDocument.Parse(boundedOutput);
             var boundedRoot = boundedDocument.RootElement;
-            Assert.Equal(10, boundedRoot.GetProperty("total_count").GetInt64());
-            Assert.Equal(10, boundedRoot.GetProperty("returned_count").GetInt32());
+            Assert.Equal(9, boundedRoot.GetProperty("total_count").GetInt64());
+            Assert.Equal(9, boundedRoot.GetProperty("returned_count").GetInt32());
             Assert.False(boundedRoot.GetProperty("truncated").GetBoolean());
         }
         finally
@@ -827,14 +954,14 @@ public class DiffCommandRunnerTests
             SetMeta(rightDb, DbContext.CdidxWriterVersionMetaKey, "writer-right");
 
             var (exitCode, output) = RunWithCapturedOut(
-                [leftDb, rightDb, "--json", "--detailed", "--include-content", "--limit", "5"]);
+                [leftDb, rightDb, "--json", "--detailed", "--data-only", "--include-content", "--limit", "5"]);
 
             Assert.Equal(0, exitCode);
             using var document = JsonDocument.Parse(output);
             var root = document.RootElement;
             Assert.Equal("identical", root.GetProperty("status").GetString());
             Assert.True(root.GetProperty("identical").GetBoolean());
-            var drift = Assert.Single(GetRecords(root, "operational_metadata"));
+            var drift = Assert.Single(GetRecords(root, "readiness_provenance_metadata"));
             Assert.Equal("cdidx_writer_version", GetField(drift, "key").GetProperty("value").GetString());
             Assert.Equal("writer-left", GetField(drift, "left_value").GetProperty("value").GetString());
             Assert.Equal("writer-right", GetField(drift, "right_value").GetProperty("value").GetString());
@@ -967,7 +1094,8 @@ public class DiffCommandRunnerTests
             var longSignature = new string('a', LargeDiffFieldLength);
             InsertSyntheticMethodSymbol(leftDb, "src/Same.cs", "Drifted", longSignature);
 
-            var (exitCode, output) = RunWithCapturedOut([leftDb, rightDb, "--json", "--detailed", "--limit", "1"]);
+            var (exitCode, output) = RunWithCapturedOut(
+                [leftDb, rightDb, "--json", "--detailed", "--data-only", "--limit", "1"]);
 
             Assert.Equal(1, exitCode);
             using var document = JsonDocument.Parse(output);
@@ -1036,7 +1164,7 @@ public class DiffCommandRunnerTests
             UpdateFirstChunkContent(leftDb, sharedPrefix + "left");
             UpdateFirstChunkContent(rightDb, sharedPrefix + "right");
 
-            var (exitCode, output) = RunWithCapturedOut([leftDb, rightDb, "--summary-only"]);
+            var (exitCode, output) = RunWithCapturedOut([leftDb, rightDb, "--summary-only", "--data-only"]);
 
             Assert.Equal(1, exitCode);
             using var document = JsonDocument.Parse(output);
@@ -1095,7 +1223,8 @@ public class DiffCommandRunnerTests
             TestProjectHelper.InsertIndexedFile(rightDb, "src/Same.cs", "csharp", "public class Same { }");
             RecreateSymbolsTableWithoutMetadataTargetSourceColumn(leftDb);
 
-            var (exitCode, output) = RunWithCapturedOut([leftDb, rightDb, "--json", "--detailed", "--limit", "1"]);
+            var (exitCode, output) = RunWithCapturedOut(
+                [leftDb, rightDb, "--json", "--detailed", "--data-only", "--limit", "1"]);
 
             Assert.Equal(0, exitCode);
             using var document = JsonDocument.Parse(output);
@@ -1119,7 +1248,8 @@ public class DiffCommandRunnerTests
             var leftDb = SeedDb(leftRoot, includeExtraFile: false);
             var rightDb = SeedDb(rightRoot, includeExtraFile: false);
 
-            var (exitCode, output) = RunWithCapturedOut([leftDb, rightDb, "--summary-only"]);
+            var (exitCode, output) = RunWithCapturedOut(
+                [leftDb, rightDb, "--summary-only", "--data-only"]);
 
             Assert.Equal(0, exitCode);
             using var document = JsonDocument.Parse(output);
@@ -1148,7 +1278,12 @@ public class DiffCommandRunnerTests
 
             Assert.Equal(2, exitCode);
             using var document = JsonDocument.Parse(output);
-            Assert.False(document.RootElement.GetProperty("summary").GetProperty("schema_versions_equal").GetBoolean());
+            var summary = document.RootElement.GetProperty("summary");
+            Assert.False(summary.GetProperty("schema_versions_equal").GetBoolean());
+            Assert.Contains(
+                "schema:schema_version_changed",
+                summary.GetProperty("difference_reasons").EnumerateArray().Select(item => item.GetString()));
+            Assert.False(GetCategory(document.RootElement, "data").GetProperty("evaluated").GetBoolean());
         }
         finally
         {
@@ -1670,6 +1805,13 @@ public class DiffCommandRunnerTests
                 record.GetProperty("area").GetString() == area
                 && (side is null || record.GetProperty("side").GetString() == side))
             .ToList();
+
+    private static JsonElement GetCategory(JsonElement root, string category)
+        => Assert.Single(
+            root.GetProperty("summary")
+                .GetProperty("categories")
+                .EnumerateArray()
+                .Where(item => item.GetProperty("category").GetString() == category));
 
     private static JsonElement GetField(JsonElement record, string name)
         => Assert.Single(
