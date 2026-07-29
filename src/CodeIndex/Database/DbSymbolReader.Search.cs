@@ -131,13 +131,39 @@ public partial class DbReader
         var containerNameSql = GetSymbolColumnSql("container_name", "''", symbolAlias);
         var containerQualifiedNameSql = GetSymbolColumnSql("container_qualified_name", containerNameSql, symbolAlias);
         var nameMatchSql = useFoldedName
-            ? $"{symbolAlias}.name_folded = @{parameterStem}LeafFolded"
-            : $"{symbolAlias}.name = @{parameterStem}Leaf COLLATE NOCASE";
+            ? $"{symbolAlias}.name_folded = @{parameterStem}CSharpLeafFolded"
+            : $"{symbolAlias}.name = @{parameterStem}CSharpLeaf COLLATE NOCASE";
+        var qualifiedNameMatchSql = useFoldedName
+            ? $"{symbolAlias}.name_folded = @{parameterStem}CSharpQualifiedFolded"
+            : $"{symbolAlias}.name = @{parameterStem}CSharpQualified COLLATE NOCASE";
         return $@"({fileAlias}.lang = 'csharp'
-                  AND {nameMatchSql}
-                  AND ({containerNameSql} = @{parameterStem}Container COLLATE NOCASE
-                       OR {containerQualifiedNameSql} = @{parameterStem}Container COLLATE NOCASE
-                       OR {containerQualifiedNameSql} COLLATE NOCASE LIKE @{parameterStem}ContainerSuffixLike ESCAPE '\'))";
+                  AND ({qualifiedNameMatchSql}
+                       OR ({nameMatchSql}
+                           AND ({containerNameSql} = @{parameterStem}Container COLLATE NOCASE
+                                OR {containerQualifiedNameSql} = @{parameterStem}Container COLLATE NOCASE
+                                OR {containerQualifiedNameSql} COLLATE NOCASE LIKE @{parameterStem}ContainerSuffixLike ESCAPE '\'))))";
+    }
+
+    private string BuildExactPrimarySymbolNameMatchSql(
+        string parameterSql,
+        bool useFoldedName,
+        string query,
+        string? lang)
+    {
+        var matchSql = useFoldedName
+            ? BuildPersistedFoldedNameMatchSql("s.name_folded", parameterSql)
+            : $"s.name = {parameterSql} COLLATE NOCASE";
+        if (!string.IsNullOrWhiteSpace(lang) || !SqlNameResolver.HasQualifier(query))
+            return matchSql;
+
+        // Preserve direct qualified matching for ordinary and legacy C# rows. Only v3
+        // explicit-interface rows have a display alias; those rows must use the C# identity
+        // clause so `IFoo.this` cannot also match a distinct `IFoo.@this` implementation.
+        // 通常および legacy C# row の修飾直接一致は維持する。表示 alias を持つ v3 の
+        // 明示的 interface row だけを C# identity 条件へ限定し、`IFoo.this` が別の
+        // `IFoo.@this` 実装にも一致しないようにする。
+        var displayNameFoldedSql = GetSymbolColumnSql("display_name_folded", "NULL");
+        return $"((f.lang <> 'csharp' OR {displayNameFoldedSql} IS NULL) AND {matchSql})";
     }
 
     private string BuildCSharpExplicitInterfaceIdentityMatchSql(
@@ -198,9 +224,25 @@ public partial class DbReader
 
     private static void AddQualifiedSymbolQueryParameters(SqliteCommand cmd, string parameterStem, string query)
     {
-        var container = GetQualifiedQueryContainer(query);
+        var csharpDisplayQuery =
+            CSharpSymbolNameNormalizer.NormalizeExplicitInterfaceQueryDisplayName(query);
+        var csharpQualifiedQuery =
+            NormalizeCSharpVerbatimQuery(csharpDisplayQuery, "csharp")
+            ?? csharpDisplayQuery;
+        var container = GetQualifiedQueryContainer(csharpQualifiedQuery);
+        var csharpLeaf = GetQualifiedQueryLeaf(csharpQualifiedQuery, "csharp");
         SqliteCommandPolicy.Add(cmd, $"@{parameterStem}Container", container);
         SqliteCommandPolicy.Add(cmd, $"@{parameterStem}ContainerSuffixLike", $"%.{EscapeLikeQuery(container)}");
+        SqliteCommandPolicy.Add(cmd, $"@{parameterStem}CSharpQualified", csharpQualifiedQuery);
+        SqliteCommandPolicy.Add(
+            cmd,
+            $"@{parameterStem}CSharpQualifiedFolded",
+            NameFold.Fold(csharpQualifiedQuery) ?? csharpQualifiedQuery);
+        SqliteCommandPolicy.Add(cmd, $"@{parameterStem}CSharpLeaf", csharpLeaf);
+        SqliteCommandPolicy.Add(
+            cmd,
+            $"@{parameterStem}CSharpLeafFolded",
+            NameFold.Fold(csharpLeaf) ?? csharpLeaf);
     }
 
     private bool HasSingleQualifiedSymbolDefinition(string query, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
@@ -286,11 +328,11 @@ public partial class DbReader
                         : " AND ((s.container_qualified_name = @query0RustContainer COLLATE NOCASE OR s.container_name = @query0RustContainer COLLATE NOCASE) AND s.name = @query0RustLeaf COLLATE NOCASE)"
                     : _foldReady
                         ? allowLeafFallback
-                            ? $" AND ({BuildPersistedFoldedNameMatchSql("s.name_folded", "@query0")} OR {csharpExplicitInterfaceClause} OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @query0SegmentCount AND sql_normalize_name_folded(s.name) = @query0NormalizedFolded) OR sql_leaf_name_folded(s.name) = @query0LeafFolded)))"
-                            : $" AND ({BuildPersistedFoldedNameMatchSql("s.name_folded", "@query0")} OR {csharpExplicitInterfaceClause} OR (f.lang = 'sql' AND sql_segment_count(s.name) = @query0SegmentCount AND sql_normalize_name_folded(s.name) = @query0NormalizedFolded){(qualifiedSymbolClause != null ? $" OR {qualifiedSymbolClause}" : string.Empty)})"
+                            ? $" AND ({BuildExactPrimarySymbolNameMatchSql("@query0", true, validQueries[0], lang)} OR {csharpExplicitInterfaceClause} OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @query0SegmentCount AND sql_normalize_name_folded(s.name) = @query0NormalizedFolded) OR sql_leaf_name_folded(s.name) = @query0LeafFolded)))"
+                            : $" AND ({BuildExactPrimarySymbolNameMatchSql("@query0", true, validQueries[0], lang)} OR {csharpExplicitInterfaceClause} OR (f.lang = 'sql' AND sql_segment_count(s.name) = @query0SegmentCount AND sql_normalize_name_folded(s.name) = @query0NormalizedFolded){(qualifiedSymbolClause != null ? $" OR {qualifiedSymbolClause}" : string.Empty)})"
                         : allowLeafFallback
-                            ? " AND (s.name = @query0 COLLATE NOCASE OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @query0SegmentCount AND sql_normalize_name(s.name) = @query0Normalized COLLATE NOCASE) OR sql_leaf_name(s.name) = @query0Leaf COLLATE NOCASE)))"
-                            : $" AND (s.name = @query0 COLLATE NOCASE OR (f.lang = 'sql' AND sql_segment_count(s.name) = @query0SegmentCount AND sql_normalize_name(s.name) = @query0Normalized COLLATE NOCASE){(qualifiedSymbolClause != null ? $" OR {qualifiedSymbolClause}" : string.Empty)})"
+                            ? $" AND ({BuildExactPrimarySymbolNameMatchSql("@query0", false, validQueries[0], lang)} OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @query0SegmentCount AND sql_normalize_name(s.name) = @query0Normalized COLLATE NOCASE) OR sql_leaf_name(s.name) = @query0Leaf COLLATE NOCASE)))"
+                            : $" AND ({BuildExactPrimarySymbolNameMatchSql("@query0", false, validQueries[0], lang)} OR (f.lang = 'sql' AND sql_segment_count(s.name) = @query0SegmentCount AND sql_normalize_name(s.name) = @query0Normalized COLLATE NOCASE){(qualifiedSymbolClause != null ? $" OR {qualifiedSymbolClause}" : string.Empty)})"
                 : $" AND (s.name LIKE @query0 ESCAPE '\\' OR (f.lang = 'sql' AND sql_normalize_name(s.name) LIKE @query0NormalizedLike ESCAPE '\\'){(qualifiedSymbolClause != null ? $" OR {qualifiedSymbolClause} OR {csharpExplicitInterfaceClause}" : string.Empty)})";
         }
         if (kind != null)
@@ -407,11 +449,11 @@ public partial class DbReader
                             : $"((s.container_qualified_name = @query{idx}RustContainer COLLATE NOCASE OR s.container_name = @query{idx}RustContainer COLLATE NOCASE) AND s.name = @query{idx}RustLeaf COLLATE NOCASE)";
                     return _foldReady
                         ? allowLeafFallback
-                            ? $"({BuildPersistedFoldedNameMatchSql("s.name_folded", $"@query{idx}")}{swiftBacktickClause} OR {csharpExplicitInterfaceClause} OR {markdownAnchorClause} OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name_folded(s.name) = @query{idx}NormalizedFolded) OR sql_leaf_name_folded(s.name) = @query{idx}LeafFolded)))"
-                            : $"({BuildPersistedFoldedNameMatchSql("s.name_folded", $"@query{idx}")}{swiftBacktickClause} OR {csharpExplicitInterfaceClause} OR {markdownAnchorClause} OR (f.lang = 'sql' AND sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name_folded(s.name) = @query{idx}NormalizedFolded){(qualifiedSymbolClause != null ? $" OR {qualifiedSymbolClause}" : string.Empty)})"
+                            ? $"({BuildExactPrimarySymbolNameMatchSql($"@query{idx}", true, queryValue, lang)}{swiftBacktickClause} OR {csharpExplicitInterfaceClause} OR {markdownAnchorClause} OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name_folded(s.name) = @query{idx}NormalizedFolded) OR sql_leaf_name_folded(s.name) = @query{idx}LeafFolded)))"
+                            : $"({BuildExactPrimarySymbolNameMatchSql($"@query{idx}", true, queryValue, lang)}{swiftBacktickClause} OR {csharpExplicitInterfaceClause} OR {markdownAnchorClause} OR (f.lang = 'sql' AND sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name_folded(s.name) = @query{idx}NormalizedFolded){(qualifiedSymbolClause != null ? $" OR {qualifiedSymbolClause}" : string.Empty)})"
                         : allowLeafFallback
-                            ? $"(s.name = @query{idx} COLLATE NOCASE{swiftBacktickClause} OR {markdownAnchorClause} OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name(s.name) = @query{idx}Normalized COLLATE NOCASE) OR sql_leaf_name(s.name) = @query{idx}Leaf COLLATE NOCASE)))"
-                            : $"(s.name = @query{idx} COLLATE NOCASE{swiftBacktickClause} OR {markdownAnchorClause} OR (f.lang = 'sql' AND sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name(s.name) = @query{idx}Normalized COLLATE NOCASE){(qualifiedSymbolClause != null ? $" OR {qualifiedSymbolClause}" : string.Empty)})";
+                            ? $"({BuildExactPrimarySymbolNameMatchSql($"@query{idx}", false, queryValue, lang)}{swiftBacktickClause} OR {markdownAnchorClause} OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name(s.name) = @query{idx}Normalized COLLATE NOCASE) OR sql_leaf_name(s.name) = @query{idx}Leaf COLLATE NOCASE)))"
+                            : $"({BuildExactPrimarySymbolNameMatchSql($"@query{idx}", false, queryValue, lang)}{swiftBacktickClause} OR {markdownAnchorClause} OR (f.lang = 'sql' AND sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name(s.name) = @query{idx}Normalized COLLATE NOCASE){(qualifiedSymbolClause != null ? $" OR {qualifiedSymbolClause}" : string.Empty)})";
                 }))
                 : string.Join(" OR ", effectiveQueries.Select((queryValue, idx) =>
                 {
@@ -723,11 +765,11 @@ public partial class DbReader
                             : $"((s.container_qualified_name = @query{idx}RustContainer COLLATE NOCASE OR s.container_name = @query{idx}RustContainer COLLATE NOCASE) AND s.name = @query{idx}RustLeaf COLLATE NOCASE)";
                     return _foldReady
                         ? allowLeafFallback
-                            ? $"({BuildPersistedFoldedNameMatchSql("s.name_folded", $"@query{idx}")}{swiftBacktickClause} OR {csharpExplicitInterfaceClause} OR {markdownAnchorClause} OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name_folded(s.name) = @query{idx}NormalizedFolded) OR sql_leaf_name_folded(s.name) = @query{idx}LeafFolded)))"
-                            : $"({BuildPersistedFoldedNameMatchSql("s.name_folded", $"@query{idx}")}{swiftBacktickClause} OR {csharpExplicitInterfaceClause} OR {markdownAnchorClause} OR (f.lang = 'sql' AND sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name_folded(s.name) = @query{idx}NormalizedFolded){(qualifiedSymbolClause != null ? $" OR {qualifiedSymbolClause}" : string.Empty)})"
+                            ? $"({BuildExactPrimarySymbolNameMatchSql($"@query{idx}", true, queryValue, lang)}{swiftBacktickClause} OR {csharpExplicitInterfaceClause} OR {markdownAnchorClause} OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name_folded(s.name) = @query{idx}NormalizedFolded) OR sql_leaf_name_folded(s.name) = @query{idx}LeafFolded)))"
+                            : $"({BuildExactPrimarySymbolNameMatchSql($"@query{idx}", true, queryValue, lang)}{swiftBacktickClause} OR {csharpExplicitInterfaceClause} OR {markdownAnchorClause} OR (f.lang = 'sql' AND sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name_folded(s.name) = @query{idx}NormalizedFolded){(qualifiedSymbolClause != null ? $" OR {qualifiedSymbolClause}" : string.Empty)})"
                         : allowLeafFallback
-                            ? $"(s.name = @query{idx} COLLATE NOCASE{swiftBacktickClause} OR {markdownAnchorClause} OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name(s.name) = @query{idx}Normalized COLLATE NOCASE) OR sql_leaf_name(s.name) = @query{idx}Leaf COLLATE NOCASE)))"
-                            : $"(s.name = @query{idx} COLLATE NOCASE{swiftBacktickClause} OR {markdownAnchorClause} OR (f.lang = 'sql' AND sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name(s.name) = @query{idx}Normalized COLLATE NOCASE){(qualifiedSymbolClause != null ? $" OR {qualifiedSymbolClause}" : string.Empty)})";
+                            ? $"({BuildExactPrimarySymbolNameMatchSql($"@query{idx}", false, queryValue, lang)}{swiftBacktickClause} OR {markdownAnchorClause} OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name(s.name) = @query{idx}Normalized COLLATE NOCASE) OR sql_leaf_name(s.name) = @query{idx}Leaf COLLATE NOCASE)))"
+                            : $"({BuildExactPrimarySymbolNameMatchSql($"@query{idx}", false, queryValue, lang)}{swiftBacktickClause} OR {markdownAnchorClause} OR (f.lang = 'sql' AND sql_segment_count(s.name) = @query{idx}SegmentCount AND sql_normalize_name(s.name) = @query{idx}Normalized COLLATE NOCASE){(qualifiedSymbolClause != null ? $" OR {qualifiedSymbolClause}" : string.Empty)})";
                 }))
                 : string.Join(" OR ", effectiveQueries.Select((queryValue, idx) =>
                 {
@@ -1194,11 +1236,28 @@ public partial class DbReader
             return query?.Trim();
         if (exact
             && !string.IsNullOrWhiteSpace(query)
-            && (string.IsNullOrWhiteSpace(lang)
-                || string.Equals(NormalizeQueryLanguage(lang), "csharp", StringComparison.Ordinal))
             && SqlNameResolver.HasQualifier(query))
         {
-            return CSharpSymbolNameNormalizer.NormalizeExplicitInterfaceQueryDisplayName(query);
+            if (string.Equals(
+                    NormalizeQueryLanguage(lang),
+                    "csharp",
+                    StringComparison.Ordinal))
+            {
+                return CSharpSymbolNameNormalizer.NormalizeExplicitInterfaceQueryDisplayName(query);
+            }
+
+            // Without a language filter the query must retain its original spelling for
+            // non-C# exact matching. C#-specific display and identity aliases are supplied
+            // through their own SQL parameters.
+            // 言語フィルターがない場合、C# 以外の完全一致を保つため query の元表記を
+            // 維持する。C# 専用の表示名・identity alias は個別の SQL parameter で渡す。
+            if (string.IsNullOrWhiteSpace(lang))
+            {
+                var terraformNormalized = NormalizeTerraformDottedQuery(query, lang);
+                if (terraformNormalized != null)
+                    return terraformNormalized;
+                return query.Trim();
+            }
         }
 
         return NormalizeSymbolSearchQuery(query, lang, exact) ?? query;

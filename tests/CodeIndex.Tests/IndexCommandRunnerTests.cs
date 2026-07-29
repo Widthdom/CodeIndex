@@ -6379,6 +6379,16 @@ public sealed class Caller
                         StartLine = 1,
                         EndLine = 1,
                     },
+                    new SymbolRecord
+                    {
+                        FileId = fileId,
+                        Kind = "function",
+                        Name = "Execute",
+                        Signature = "public void Execute([Foo.Execute()] int value) { }",
+                        Line = 1,
+                        StartLine = 1,
+                        EndLine = 1,
+                    },
                 ]);
                 writer.SetMeta(DbContext.CSharpSymbolNameContractVersionMetaKey, "2");
             }
@@ -6406,7 +6416,7 @@ public sealed class Caller
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.True(json.GetProperty("rewrite_all").GetBoolean());
-            Assert.Equal(3, json.GetProperty("symbols").GetInt32());
+            Assert.Equal(4, json.GetProperty("symbols").GetInt32());
             Assert.True(json.GetProperty("verified").GetBoolean());
 
             using var verifyDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
@@ -6441,6 +6451,16 @@ public sealed class Caller
             Assert.True(ordinaryTypeIdentityReader.Read());
             Assert.Equal("runner", ordinaryTypeIdentityReader.GetString(0));
             Assert.True(ordinaryTypeIdentityReader.IsDBNull(1));
+            using var ordinaryMethodIdentity = verifyDb.Connection.CreateCommand();
+            ordinaryMethodIdentity.CommandText = """
+                SELECT name_folded, display_name_folded
+                FROM symbols
+                WHERE name = 'Execute'
+                """;
+            using var ordinaryMethodIdentityReader = ordinaryMethodIdentity.ExecuteReader();
+            Assert.True(ordinaryMethodIdentityReader.Read());
+            Assert.Equal("execute", ordinaryMethodIdentityReader.GetString(0));
+            Assert.True(ordinaryMethodIdentityReader.IsDBNull(1));
 
             using var reader = new DbReader(verifyDb.Connection);
             Assert.Single(reader.SearchSymbols(

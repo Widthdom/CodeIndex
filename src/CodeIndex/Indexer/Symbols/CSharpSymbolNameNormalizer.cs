@@ -137,7 +137,9 @@ internal static class CSharpSymbolNameNormalizer
             var hasQualifierDot = cursorBeforeMember >= 0 && signature[cursorBeforeMember] == '.';
             var isVerbatimIndexerSpelling =
                 isIndexer && memberTokenStart < memberIndex && signature[memberTokenStart] == '@';
-            if (!hasIdentifierBoundary || !hasQualifierDot || isVerbatimIndexerSpelling)
+            if (!hasIdentifierBoundary
+                || isVerbatimIndexerSpelling
+                || !IsDeclarationHeaderTopLevel(signature, memberTokenStart))
             {
                 searchStart = memberTokenEnd;
                 continue;
@@ -146,28 +148,67 @@ internal static class CSharpSymbolNameNormalizer
             var cursor = memberTokenEnd;
             while (cursor < signature.Length && char.IsWhiteSpace(signature[cursor]))
                 cursor++;
-            if (TryReadExplicitInterfaceMemberArity(
+            if (!TryReadExplicitInterfaceMemberArity(
                     signature,
                     cursor,
                     isIndexer,
                     kind,
                     out var arity))
             {
-                var qualifierEnd = cursorBeforeMember;
-                while (qualifierEnd > 0 && char.IsWhiteSpace(signature[qualifierEnd - 1]))
-                    qualifierEnd--;
-                var qualifierStart = FindExplicitInterfaceQualifierStart(signature, qualifierEnd);
-                if (qualifierStart < qualifierEnd)
-                {
-                    var qualifier = NormalizeTypeDisplayName(signature[qualifierStart..qualifierEnd]);
-                    return BuildExplicitInterfaceIdentityNameFolded(qualifier, name, arity);
-                }
+                searchStart = memberTokenEnd;
+                continue;
+            }
+
+            // A valid unqualified declaration token is the persisted row's real member.
+            // Do not scan into its parameter attributes/defaults or constraints for a later
+            // same-named qualified invocation or type.
+            // 有効な非修飾 declaration token は永続 row の実メンバーである。引数の
+            // attribute/default や制約内にある同名の修飾呼び出し・型まで探索しない。
+            if (!hasQualifierDot)
+                return null;
+
+            var qualifierEnd = cursorBeforeMember;
+            while (qualifierEnd > 0 && char.IsWhiteSpace(signature[qualifierEnd - 1]))
+                qualifierEnd--;
+            var qualifierStart = FindExplicitInterfaceQualifierStart(signature, qualifierEnd);
+            if (qualifierStart < qualifierEnd)
+            {
+                var qualifier = NormalizeTypeDisplayName(signature[qualifierStart..qualifierEnd]);
+                return BuildExplicitInterfaceIdentityNameFolded(qualifier, name, arity);
             }
 
             searchStart = memberTokenEnd;
         }
 
         return null;
+    }
+
+    private static bool IsDeclarationHeaderTopLevel(string signature, int tokenStart)
+    {
+        var parenthesisDepth = 0;
+        var bracketDepth = 0;
+        for (var i = 0; i < tokenStart; i++)
+        {
+            switch (signature[i])
+            {
+                case '(':
+                    parenthesisDepth++;
+                    break;
+                case ')':
+                    if (parenthesisDepth > 0)
+                        parenthesisDepth--;
+                    break;
+                case '[':
+                    bracketDepth++;
+                    break;
+                case ']':
+                    if (bracketDepth > 0)
+                        bracketDepth--;
+                    break;
+            }
+        }
+
+        return parenthesisDepth == 0 && bracketDepth == 0;
     }
 
     private static int FindDeclarationBodyStart(string signature)

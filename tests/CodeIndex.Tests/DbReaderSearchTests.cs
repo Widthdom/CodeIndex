@@ -1904,7 +1904,7 @@ public partial class DbReaderTests
 
             public sealed class Service : IFoo, IBar, IItemContract
             {
-                void IFoo.Run<TValue>(TValue value) { }
+                void IFoo.Run<TValue>(TValue value) { ExplicitHelper(); }
                 void IBar.Run<TLeft, TRight>(TLeft left, TRight right) { }
                 int IFoo.Value => 1;
                 event System.EventHandler IFoo . Changed { add { } remove { } }
@@ -1913,6 +1913,7 @@ public partial class DbReaderTests
                 void IFoo.Ä() { }
                 void IFoo.@this() { }
                 public void Run<T>(T value) { }
+                public void ExplicitHelper() { }
                 public void CallPublicRun() { Run(1); }
             }
 
@@ -2014,6 +2015,16 @@ public partial class DbReaderTests
             "Run",
             "void Run<T>() where T : IFoo.Run { }",
             "function"));
+        Assert.Null(CSharpSymbolNameNormalizer.BuildExplicitInterfaceIdentityNameFolded(
+            "Run",
+            "public void Run([Foo.Run()] int value) { }",
+            "function"));
+        Assert.Equal(
+            "ifoo.run",
+            CSharpSymbolNameNormalizer.BuildExplicitInterfaceIdentityNameFolded(
+                "Run",
+                "[Run()] void IFoo.Run()",
+                "function"));
         Assert.Equal(
             "ifoo.run`1",
             CSharpSymbolNameNormalizer.BuildExplicitInterfaceIdentityNameFolded(
@@ -2075,6 +2086,15 @@ public partial class DbReaderTests
             lang: "csharp",
             exact: true));
         Assert.Equal(fooRun.SymbolId, sameArityAlias.SymbolId);
+        using (var sourceIdentity = db.Connection.CreateCommand())
+        {
+            sourceIdentity.CommandText = """
+                SELECT source_symbol_id
+                FROM symbol_references
+                WHERE symbol_name = 'ExplicitHelper'
+                """;
+            Assert.Equal(fooRun.SymbolId, sourceIdentity.ExecuteScalar());
+        }
 
         var barRun = Assert.Single(reader.SearchSymbols(
             "IBar.Run<TLeft, TRight>",
@@ -2179,6 +2199,45 @@ public partial class DbReaderTests
         Assert.Equal(
             verbatimThisResults.Select(result => result.SymbolId).Order().ToArray(),
             verbatimThisResultsWithoutLanguage.Select(result => result.SymbolId).Order().ToArray());
+
+        const string sqlPath = "src/qualified-function.sql";
+        var sqlFileId = writer.UpsertFile(new FileRecord
+        {
+            Path = sqlPath,
+            Lang = "sql",
+            Size = 32,
+            Lines = 1,
+            Modified = new DateTime(2026, 7, 29, 0, 0, 0, DateTimeKind.Utc),
+        });
+        writer.InsertChunks([
+            new ChunkRecord
+            {
+                FileId = sqlFileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 1,
+                Content = "CREATE FUNCTION foo.this();",
+            },
+        ]);
+        writer.InsertSymbols([
+            new SymbolRecord
+            {
+                FileId = sqlFileId,
+                Kind = "function",
+                Name = "foo.this",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 1,
+                Signature = "CREATE FUNCTION foo.this();",
+            },
+        ]);
+        writer.BackfillFoldedColumns(rewriteAll: true);
+
+        var sqlQualified = Assert.Single(reader.SearchSymbols("foo.this", exact: true));
+        Assert.Equal(sqlPath, sqlQualified.Path);
+        Assert.Equal(1, reader.CountSearchSymbolsTotal("foo.this", exact: true).Count);
+        Assert.Equal(sqlPath, Assert.Single(reader.GetDefinitions("foo.this", exact: true)).Path);
+
         var qualifiedService = Assert.Single(reader.SearchSymbols(
             "Demo.Service",
             lang: "csharp",
@@ -2204,6 +2263,8 @@ public partial class DbReaderTests
         Assert.Single(analysis.Definitions);
         Assert.Equal(fooRun.SymbolId, analysis.Definitions[0].SymbolId);
         Assert.Empty(analysis.References);
+        var explicitCallee = Assert.Single(analysis.Callees);
+        Assert.Equal("ExplicitHelper", explicitCallee.CalleeName);
         Assert.Empty(reader.SearchReferences(
             "IFoo.Run<T>",
             lang: "csharp",
@@ -2223,6 +2284,103 @@ public partial class DbReaderTests
             outline.Symbols,
             symbol => symbol.Name == "Item"
                 && symbol.Signature?.Contains("IFoo . this", StringComparison.Ordinal) == true);
+    }
+
+    [Fact]
+    public void SearchSymbols_QualifiedExactWithoutLanguagePreservesLegacyCSharpAndTerraform_Issue4866Review()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_explicit_interface_cross_language_4866");
+        var dbPath = Path.Combine(project.Root, "codeindex.db");
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+        db.InitializeSchema();
+        var writer = new DbWriter(db.Connection);
+        var csharpFileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/Using.cs",
+            Lang = "csharp",
+            Size = 25,
+            Lines = 1,
+            Modified = new DateTime(2026, 7, 29, 0, 0, 0, DateTimeKind.Utc),
+        });
+        writer.InsertChunks([
+            new ChunkRecord
+            {
+                FileId = csharpFileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 1,
+                Content = "using CodeIndex.Database; public sealed class Service { }",
+            },
+        ]);
+        var terraformFileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "infra/main.tf",
+            Lang = "terraform",
+            Size = 20,
+            Lines = 1,
+            Modified = new DateTime(2026, 7, 29, 0, 0, 0, DateTimeKind.Utc),
+        });
+        writer.InsertSymbols([
+            new SymbolRecord
+            {
+                FileId = csharpFileId,
+                Kind = "import",
+                Name = "CodeIndex.Database",
+                Signature = "using CodeIndex.Database;",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 1,
+            },
+            new SymbolRecord
+            {
+                FileId = csharpFileId,
+                Kind = "class",
+                Name = "Service",
+                Signature = "public sealed class Service",
+                ContainerKind = "namespace",
+                ContainerName = "Demo",
+                ContainerQualifiedName = "Demo",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 1,
+            },
+            new SymbolRecord
+            {
+                FileId = terraformFileId,
+                Kind = "function",
+                Name = "region",
+                Signature = """variable "region" {}""",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 1,
+            },
+        ]);
+        writer.BackfillFoldedColumns(rewriteAll: true);
+        Assert.True(writer.MarkFoldReady());
+        writer.SetMeta(DbContext.CSharpSymbolNameContractVersionMetaKey, "2");
+
+        using var reader = new DbReader(db.Connection);
+        Assert.Equal(
+            "src/Using.cs",
+            Assert.Single(reader.SearchSymbols("CodeIndex.Database", exact: true)).Path);
+        Assert.Equal(
+            "src/Using.cs",
+            Assert.Single(reader.SearchSymbols("global::CodeIndex.Database", exact: true)).Path);
+        Assert.Equal(
+            "src/Using.cs",
+            Assert.Single(reader.SearchSymbols("@CodeIndex.@Database", exact: true)).Path);
+        Assert.Equal(
+            "src/Using.cs",
+            Assert.Single(reader.SearchSymbols("global::Demo.Service", exact: true)).Path);
+        Assert.Equal(
+            "src/Using.cs",
+            Assert.Single(reader.SearchSymbols("@Demo.@Service", exact: true)).Path);
+        Assert.Equal(
+            "src/Using.cs",
+            Assert.Single(reader.GetDefinitions("global::Demo.Service", exact: true)).Path);
+        Assert.Equal(
+            "infra/main.tf",
+            Assert.Single(reader.SearchSymbols("var.region", exact: true)).Path);
     }
 
     [Fact]
