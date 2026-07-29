@@ -1360,8 +1360,33 @@ public partial class DbReaderTests : IDisposable
         Assert.NotNull(excerpt);
         Assert.Equal(1, excerpt!.StartLine);
         Assert.Equal(2, excerpt.EndLine);
+        Assert.Equal(1, excerpt.RequestedStartLine);
+        Assert.Equal(2, excerpt.RequestedEndLine);
+        Assert.Equal(1, excerpt.EffectiveStartLine);
+        Assert.Equal(2, excerpt.EffectiveEndLine);
+        Assert.Equal(30, excerpt.TotalLines);
         Assert.Contains("def authenticate(user, password):", excerpt.Content);
         Assert.Contains("if user == 'admin':", excerpt.Content);
+    }
+
+    [Fact]
+    public void GetExcerpt_PreservesRequestedRangeWhenContextExpandsEffectiveRange_Issue4877()
+    {
+        InsertIndexedFile(
+            "src/context.txt",
+            "text",
+            string.Join('\n', Enumerable.Range(1, 30).Select(line => $"line {line}")));
+
+        var excerpt = _reader.GetExcerpt("src/context.txt", 18, 22, before: 2, after: 2);
+
+        Assert.NotNull(excerpt);
+        Assert.Equal(18, excerpt!.RequestedStartLine);
+        Assert.Equal(22, excerpt.RequestedEndLine);
+        Assert.Equal(16, excerpt.StartLine);
+        Assert.Equal(24, excerpt.EndLine);
+        Assert.Equal(16, excerpt.EffectiveStartLine);
+        Assert.Equal(24, excerpt.EffectiveEndLine);
+        Assert.Equal(30, excerpt.TotalLines);
     }
 
     [Fact]

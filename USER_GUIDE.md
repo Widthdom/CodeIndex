@@ -562,6 +562,10 @@ the release notes will announce the timeline before the alias stops working.
 MCP mirrors the same split: use `exactSubstring` or `tokenBoundary` on
 `search`, `exactName` on name-based tools, and keep `exact` only for
 backward-compatible clients.
+Raw `--fts` mode is mutually exclusive with the literal search modes
+`--exact`, `--exact-substring`, and `--token-boundary`. Choose one matching
+model per search. Conflicting combinations fail with a typed usage error before
+query execution, and generated replay commands preserve only the selected mode.
 In `search --json` and MCP `search` responses, exact substring highlights add
 `literal_terms` / `literal_term_occurrences` (camelCase in MCP) so clients can
 render only the requested literal phrase while keeping the broader diagnostic
@@ -1749,13 +1753,14 @@ Grouped `callees` rows preserve the earliest precise call site separately from t
 cdidx outline src/CodeIndex/Cli/GitHelper.cs
 cdidx outline src/CodeIndex/Cli/GitHelper.cs --json
 cdidx outline src/CodeIndex/Cli/GitHelper.cs --json --kind function --limit 20 --outline-fields name,line,kind,signature
+cdidx outline src/CodeIndex/Cli/GitHelper.cs --json --kind function --limit 50 --max-json-bytes 16384 --outline-fields name,line,kind,signature
 cdidx outline src/CodeIndex/Cli/GitHelper.cs --json --cursor "$NEXT_CURSOR" --limit 20 --outline-fields name,line,kind,signature
 cdidx outline src/CodeIndex/Cli/QueryCommandRunner.cs --compact --kind function --sort size --limit 10
 ```
 
 Shows all symbols in a single file ordered deterministically by line, start column when available, kind, and name, with signature, visibility, and container nesting. Lets AI agents understand file structure in one call instead of reading the whole file or chaining `symbols` + `definition`.
 
-For large files, `outline --json` supports `--kind <kind[,kind]>`, `--sort <source|kind|references|size|complexity|path|name>`, `--limit` / `--top`, opaque `--cursor <next_cursor>`, and `--outline-fields <csv>` so automation can request only the symbol page and fields it needs. Use `--sort size` (alias `span`) or `--sort complexity` to jump to large bodies first, and combine it with `--compact` for bounded giant-file triage. Controlled JSON output includes `total_symbol_count`, `returned_symbol_count`, `cursor_offset`, `next_cursor`, `has_more`, and `result_stable_at`; it also reports `sort`, `kind_filter`, and `selected_fields` when those controls are used. The cursor is bound to the file path, filters, ordering, and index generation, so changing them or refreshing the index requires restarting without `--cursor`. Pass `--outline-fields all` to keep the full symbol payload while still opting into the paging metadata, or select `reference_count`, `size_lines`, `complexity_score`, and `sort_mode` for compact ranking evidence.
+For large files, `outline --json` supports `--kind <kind[,kind]>`, `--sort <source|kind|references|size|complexity|path|name>`, `--limit` / `--top`, opaque `--cursor <next_cursor>`, `--max-json-bytes <n>`, and `--outline-fields <csv>` so automation can request only the symbol page and fields it needs. Use `--sort size` (alias `span`) or `--sort complexity` to jump to large bodies first, and combine it with `--compact` for bounded giant-file triage. With `--max-json-bytes`, outline returns the shared bounded envelope, counts complete UTF-8 symbol rows plus the final newline, and uses an opaque `response:v2` continuation cursor. If even the minimum envelope cannot fit, it writes no stdout and reports typed `E010_USAGE_ERROR` diagnostics. Without a byte cap, the existing outline JSON shape and cursor contract remain unchanged. Controlled uncapped JSON output includes `total_symbol_count`, `returned_symbol_count`, `cursor_offset`, `next_cursor`, `has_more`, and `result_stable_at`; it also reports `sort`, `kind_filter`, and `selected_fields` when those controls are used. The cursor is bound to the file path, filters, ordering, and index generation, so changing them or refreshing the index requires restarting without `--cursor`. Pass `--outline-fields all` to keep the full symbol payload while still opting into the paging metadata, or select `reference_count`, `size_lines`, `complexity_score`, and `sort_mode` for compact ranking evidence.
 
 ### Reconstruct a file excerpt
 
@@ -1763,7 +1768,13 @@ For large files, `outline --json` supports `--kind <kind[,kind]>`, `--sort <sour
 cdidx excerpt src/CodeIndex/Cli/GitHelper.cs --start 19 --end 28
 cdidx excerpt src/CodeIndex/Cli/GitHelper.cs --start 19 --end 28 --before 3 --after 3 --json
 cdidx excerpt src/CodeIndex/Cli/GitHelper.cs --line 24 --context 3 --json --no-semantic-tokens
+cdidx excerpt src/CodeIndex/Cli/GitHelper.cs --start 19 --end eof
+cdidx excerpt src/CodeIndex/Cli/GitHelper.cs --start 19 --end 999999 --clamp --json
 ```
+
+Excerpt coordinates are 1-based, and zero or negative coordinates return `E020_LINE_OUT_OF_RANGE`. Numeric `--end` values remain strict: overshooting the indexed file returns a range error with `range_recovery` guidance. Use `--end eof` to explicitly read through the indexed end of file, or add `--clamp` to explicitly clamp numeric overshoot to file boundaries.
+
+JSON keeps the original request in `requested_start_line` / `requested_end_line` and the returned window in `effective_start_line` / `effective_end_line`, with `total_lines` reporting the indexed file length. Context expands only the effective window: for example, `--start 18 --end 22 --before 2 --after 2` reports requested lines 18–22 and effective lines 16–24. `requested_end_mode` distinguishes `numeric` from `eof`, and `range_clamped` reports whether explicit clamping changed the returned bounds.
 
 ### Find a substring inside a known file
 
@@ -2014,7 +2025,7 @@ same source location.
 | `--query <query>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `inspect`, `impact` | Pass a query literal explicitly, useful when the query starts with `-`. Query commands except `find` also accept `-- <query>` as a one-token query escape while continuing to parse later options. |
 | `--recipe <name>` | `search` | Run a reusable audit recipe such as `risky-code`, `json-parse-apis`, `dotnet-risk-patterns`, `unsupported-operation-boundaries`, `nullable-contracts`, `xml-parser-security`, `filesystem-traversal`, `bounded-read-evidence`, `resource-materialization-audit`, or `concurrency-state-audit`. Use `recipe/query` form, such as `risky-code/raw-diagnostic-echo`, to run one child query directly. An unknown recipe is compared with recipe names; an unknown child query is compared only with canonical names and aliases from the active recipe, and its safely quoted replay preserves that recipe and normalized filters. Recipe runs default to `--audit-scope source`, applying recipe production-code path and exclusion metadata before normal search filters and snippet controls; `--limit` / `--top` is per child query. Text, `--json` / `--format json`, `--format compact`, `--format sarif`, and `--format issue-drafts` are supported, and issue drafts include a replay command. |
 | `--include-query <name>` / `--exclude-query <name>` | `search --recipe <name>` | Include or exclude child recipe queries by name. Repeatable and comma-separated; names are listed by `cdidx search --list-recipes`. |
-| `--cursor <cursor>` | `search --recipe <name/query>`, `outline`, `unused` | Fetch the next page for one selected recipe child query, outline result, or unused-symbol page. Use the `next_cursor` returned by the previous JSON or compact output; outline cursors use `outline:<offset>`. |
+| `--cursor <cursor>` | `search --recipe <name/query>`, `outline`, `unused` | Fetch the next page for one selected recipe child query, outline result, or unused-symbol page. Use the `next_cursor` returned by the previous JSON or compact output; uncapped outline cursors use `outline:<offset>`, while `outline --max-json-bytes` returns an opaque `response:v2` cursor. |
 | `--audit-scope <source\|all>` | `search`, `unused` | Choose audit path scope. For recipe search, `source` applies recipe production-code path and exclusion metadata. For ad hoc and named-query searches, `source` adds `src/**` when no user path was supplied, and applies default doc/test/changelog exclusions, `--exclude-tests`, and default comment / CLI help-text origin exclusions. `all` intentionally searches every indexed path unless other filters exclude it. JSON output reports the effective scope, path filters, and exclusions where applicable. |
 | `--source-only` | `search` | Shorthand for `--audit-scope source` on ad hoc and named searches. Use it for implementation-code searches without selecting a recipe. It also excludes comment and CLI help-text origins by default; use `--origin comment` or `--origin help_text` when those documentation-like matches are intentional evidence. |
 | `--show-excluded` | `search --recipe <name>` | Include `scope.excluded_diagnostics` in recipe output so broad audits can see which default include patterns, default exclusions, user exclusions, and test filtering were applied. |
@@ -2032,7 +2043,7 @@ same source location.
 | `--search-fields <fields>` | `search` | Project compact JSON fields, including recipe `query_name` and `recipe` |
 | `--results-only` | `search`, `symbols`, `files` | Emit result-only NDJSON without a stream terminal record for shell pipelines |
 | `--first-per-file` / `--sample <n>` / `--total-limit <n>` | `search` | Bound broad audit output by file, deterministic sample size, or recipe total rows |
-| `--max-json-bytes <n>` | `search`, `definition`, `recipes`, `audit`, `deps`, `hotspots` | Fail before emitting JSON that exceeds this UTF-8 byte budget. A `definition --json` miss preflights its structured not-found object against the same cap and reports a usage error on stderr without oversized stdout when the object cannot fit. For large graph outputs, pair the cap with `deps --summary-only`, `deps --format json-graph --summary-only`, or `hotspots --summary-only`. |
+| `--max-json-bytes <n>` | `search`, `definition`, `recipes`, `audit`, `deps`, `hotspots`, `outline` | Fail before emitting JSON that exceeds this UTF-8 byte budget. Bounded `outline` emits only complete symbol rows in the shared envelope, exposes authoritative returned / total / omitted counts and an opaque continuation cursor, and reports a typed usage error with empty stdout when the minimum envelope cannot fit. A `definition --json` miss preflights its structured not-found object against the same cap and reports a usage error on stderr without oversized stdout when the object cannot fit. For large graph outputs, pair the cap with `deps --summary-only`, `deps --format json-graph --summary-only`, or `hotspots --summary-only`. |
 | `--next-steps` | `search` | Emit inspect/excerpt follow-up commands for top search hits |
 | `--include-generated` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `validate`, `deps`, `impact`, `unused`, `hotspots` | Include files detected as generated code; generated files are excluded from query results by default |
 | `--workspace-db <path>` | `deps` | Add another CodeIndex database to the file-dependency query. Repeat it for up to 7 distinct additional DBs (8 total including `--db`); JSON edges include `source_db` and `target_db` so same relative paths can be disambiguated. |
@@ -2566,7 +2577,7 @@ All indexed languages are searchable through FTS5. Rows with **Symbols = yes** a
 - Dynamic/declarative graph languages: Crystal, Groovy, Tcl, and Prolog expose conservative declarations, imports, and call relationships. Crystal, Groovy, and Prolog parenthesized calls use the shared extractor; command-style calls are limited to callables declared in the same file. Tcl recognizes command substitutions and common control-command script arguments without treating ordinary `name()` words as calls, while Tcl proc / Prolog predicate bodies preserve caller containers.
   An index created before this graph contract reports `reference_graph_complete=false` and `graph_data_current=false` with `dynamic_reference_graph_contract_stale`; rerun `cdidx index <projectPath>` to refresh affected rows before treating absent edges as authoritative.
 - Scientific and native-extension graphs: Julia, MATLAB, Nim, D, Cython, and Ada emit bounded language-aware import/module, base/type, and call references. Julia macro invocations and Ada procedure-style calls without parentheses are also represented.
-- Markdown, JSON/YAML, and CSS: Markdown headings and explicit HTML anchors are indexed as definitions, while local and cross-document fragment links are indexed as path-scoped references. Heading slugs use rendered inline text; explicit HTML IDs preserve exact case and punctuation after HTML entity decoding. JSON/YAML configuration keys are indexed as structural key paths; CSS variables, placeholders, and `@extend` references are indexed.
+- Markdown, JSON/YAML, and CSS: Markdown headings and explicit HTML anchors are indexed as definitions, while local and cross-document fragment links are indexed as path-scoped references. Heading slugs use rendered inline text; explicit HTML IDs preserve exact case and punctuation after HTML entity decoding. JSON/YAML configuration keys are indexed as structural key paths. YAML sequence elements remain path-only (`steps[14]`) rather than adding synthetic symbols, while their mapping descendants retain the nearest indexed mapping parent so `outline` reports stable paths and meaningful depth. CSS variables, placeholders, and `@extend` references are indexed.
 - Dockerfile, Assembly, Common Lisp, and Racket: `ARG` build args, labels/PROC/MACRO blocks, package/module forms, definitions, classes/structs, requires, and provides are surfaced as symbols where applicable.
 - Shell, PowerShell, and Batch: command-style function calls, functions/filters, classes/enums, imports, labels, `goto` / `call` targets, and inline control-flow forms are indexed where the language supports them.
 - C# and Java: modern C# partial members remain visible to `symbols`, `definition`, and `outline`; Java sealed `permits` lists are recorded as `type_reference` graph edges.
@@ -3810,6 +3821,10 @@ name に対する NFKC + Unicode CaseFold の等価比較です。
 削除する予定はありません。削除する場合は、alias が使えなくなる前に release notes で
 timeline を告知します。MCP も同じ分割を反映します。`search` では `exactSubstring` または
 `tokenBoundary`、name-based tools では `exactName` を使い、`exact` は後方互換 client 向けに残します。
+raw `--fts` mode と literal search mode の `--exact`、`--exact-substring`、
+`--token-boundary` は相互排他です。検索ごとに一致モデルを 1 つだけ選んでください。
+競合する組み合わせは query 実行前に型付き usage error となり、生成される replay command
+には選択した mode だけが保持されます。
 `search --json` と MCP `search` の exact substring highlight には
 `literal_terms` / `literal_term_occurrences`（MCP では camelCase）も追加されるため、
 広めの診断用 `terms` / `term_occurrences` を残したまま、要求した literal phrase だけを
@@ -4972,13 +4987,14 @@ C# の indexing は member 名が一般的な場合でも、`int.Parse`、LINQ �
 cdidx outline src/CodeIndex/Cli/GitHelper.cs
 cdidx outline src/CodeIndex/Cli/GitHelper.cs --json
 cdidx outline src/CodeIndex/Cli/GitHelper.cs --json --kind function --limit 20 --outline-fields name,line,kind,signature
+cdidx outline src/CodeIndex/Cli/GitHelper.cs --json --kind function --limit 50 --max-json-bytes 16384 --outline-fields name,line,kind,signature
 cdidx outline src/CodeIndex/Cli/GitHelper.cs --json --cursor "$NEXT_CURSOR" --limit 20 --outline-fields name,line,kind,signature
 cdidx outline src/CodeIndex/Cli/QueryCommandRunner.cs --compact --kind function --sort size --limit 10
 ```
 
 1ファイル内の全シンボルを行、利用可能な場合は開始列、種別、名前の決定的な順序で、シグネチャ・可視性・コンテナ深さに応じたネスト付きで表示します。ファイル全体を読んだり `symbols` + `definition` をチェーンしたりする代わりに、1回でファイル構造を把握できます。
 
-大きなファイル向けに、`outline --json` は `--kind <kind[,kind]>`、`--sort <source|kind|references|size|complexity|path|name>`、`--limit` / `--top`、opaque な `--cursor <next_cursor>`、`--outline-fields <csv>` に対応します。自動化側は必要なシンボルページとフィールドだけを取得できます。`--sort size`（`span` alias）や `--sort complexity` を使うと大きい本体を先に確認でき、`--compact` と組み合わせると巨大ファイル調査向けの上限付きペイロードになります。制御付き JSON 出力には `total_symbol_count`、`returned_symbol_count`、`cursor_offset`、`next_cursor`、`has_more`、`result_stable_at` が入り、sort、kind、field を指定した場合は `sort`、`kind_filter`、`selected_fields` も返します。cursor は file path、filter、ordering、index generation に束縛されるため、それらを変更した場合や index を更新した場合は `--cursor` なしで再開してください。`--outline-fields all` を渡すと、シンボルペイロードはフルのままページングメタデータだけを追加できます。ランキング根拠だけが必要な場合は `reference_count`、`size_lines`、`complexity_score`、`sort_mode` を選択できます。
+大きなファイル向けに、`outline --json` は `--kind <kind[,kind]>`、`--sort <source|kind|references|size|complexity|path|name>`、`--limit` / `--top`、opaque な `--cursor <next_cursor>`、`--max-json-bytes <n>`、`--outline-fields <csv>` に対応します。自動化側は必要なシンボルページとフィールドだけを取得できます。`--sort size`（`span` alias）や `--sort complexity` を使うと大きい本体を先に確認でき、`--compact` と組み合わせると巨大ファイル調査向けの上限付きペイロードになります。`--max-json-bytes` を指定すると、outline は共通 bounded envelope を返し、最後の改行を含む完全な UTF-8 symbol row 単位で計測して opaque な `response:v2` continuation cursor を使用します。最小 envelope さえ収まらない場合は stdout を空に保ち、型付きの `E010_USAGE_ERROR` diagnostic を報告します。byte cap がない場合、既存の outline JSON 形状と cursor 契約は変わりません。上限なしの制御付き JSON 出力には `total_symbol_count`、`returned_symbol_count`、`cursor_offset`、`next_cursor`、`has_more`、`result_stable_at` が入り、sort、kind、field を指定した場合は `sort`、`kind_filter`、`selected_fields` も返します。cursor は file path、filter、ordering、index generation に束縛されるため、それらを変更した場合や index を更新した場合は `--cursor` なしで再開してください。`--outline-fields all` を渡すと、シンボルペイロードはフルのままページングメタデータだけを追加できます。ランキング根拠だけが必要な場合は `reference_count`、`size_lines`、`complexity_score`、`sort_mode` を選択できます。
 
 ### ファイル抜粋を再構成する
 
@@ -4986,7 +5002,13 @@ cdidx outline src/CodeIndex/Cli/QueryCommandRunner.cs --compact --kind function 
 cdidx excerpt src/CodeIndex/Cli/GitHelper.cs --start 19 --end 28
 cdidx excerpt src/CodeIndex/Cli/GitHelper.cs --start 19 --end 28 --before 3 --after 3 --json
 cdidx excerpt src/CodeIndex/Cli/GitHelper.cs --line 24 --context 3 --json --no-semantic-tokens
+cdidx excerpt src/CodeIndex/Cli/GitHelper.cs --start 19 --end eof
+cdidx excerpt src/CodeIndex/Cli/GitHelper.cs --start 19 --end 999999 --clamp --json
 ```
+
+excerpt の座標は 1-based で、0 以下の座標は `E020_LINE_OUT_OF_RANGE` を返します。数値の `--end` は従来どおり strict で、インデックス済みファイルの終端を超えると `range_recovery` guidance 付きの range error になります。インデックス済み EOF まで明示的に読むには `--end eof`、数値の超過範囲をファイル境界へ明示的に丸めるには `--clamp` を使います。
+
+JSON は元の指定を `requested_start_line` / `requested_end_line`、実際に返した window を `effective_start_line` / `effective_end_line` に分け、`total_lines` でインデックス済みファイルの総行数を返します。context は effective window だけを拡張します。たとえば `--start 18 --end 22 --before 2 --after 2` は requested 18–22、effective 16–24 を返します。`requested_end_mode` は `numeric` と `eof` を区別し、`range_clamped` は明示的な clamp により返却境界が変わったかを示します。
 
 ### 既知ファイル内の部分文字列を探す
 
@@ -5221,7 +5243,7 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--query <query>` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `inspect`, `impact` | クエリを明示的なリテラルとして渡す。クエリが `-` で始まる場合に有用。`find` 以外のクエリ系コマンドでは `-- <query>` も1トークンのクエリエスケープとして受け付け、その後のオプション解析を続ける。 |
 | `--recipe <name>` | `search` | `risky-code`、`json-parse-apis`、`dotnet-risk-patterns`、`unsupported-operation-boundaries`、`nullable-contracts`、`xml-parser-security`、`filesystem-traversal`、`bounded-read-evidence`、`resource-materialization-audit`、`concurrency-state-audit` などの再利用可能な audit recipe を実行する。`risky-code/raw-diagnostic-echo` のような `recipe/query` 形式で child query を1つだけ直接実行できる。未知の recipe は recipe 名と比較し、未知の child query は active recipe 内の canonical 名と alias だけを比較する。安全に引用された再実行コマンドは同じ recipe と正規化済み filter を保持する。Recipe 実行は既定で `--audit-scope source` になり、recipe の本番コード向け path / exclusion metadata を適用したうえで、通常の search filter と snippet control を選択された各 query に適用する。`--limit` / `--top` は child query ごとの上限になる。text、`--json` / `--format json`、`--format compact`、`--format sarif`、`--format issue-drafts` に対応し、issue draft には再実行コマンドを含める。 |
 | `--include-query <name>` / `--exclude-query <name>` | `search --recipe <name>` | recipe 内の child query を名前で含める、または除外する。繰り返し指定とカンマ区切りに対応し、名前は `cdidx search --list-recipes` で確認できる。 |
-| `--cursor <cursor>` | `search --recipe <name/query>`、`outline`、`unused` | 選択した recipe child query、outline 結果、unused-symbol page の次ページを取得する。直前の JSON または compact output が返す `next_cursor` を指定し、outline cursor は `outline:<offset>` 形式を使う。 |
+| `--cursor <cursor>` | `search --recipe <name/query>`、`outline`、`unused` | 選択した recipe child query、outline 結果、unused-symbol page の次ページを取得する。直前の JSON または compact output が返す `next_cursor` を指定する。上限なしの outline cursor は `outline:<offset>` 形式を使い、`outline --max-json-bytes` は opaque な `response:v2` cursor を返す。 |
 | `--audit-scope <source\|all>` | `search`, `unused` | audit path scope を選ぶ。Recipe search の `source` は recipe の本番コード向け path / exclusion metadata を適用する。Ad hoc / named-query search の `source` は user path がない場合に `src/**` を追加し、既定の docs/tests/changelog exclusion、`--exclude-tests`、コメント / CLI ヘルプ文言 origin の既定除外を適用する。`all` は他の filter で除外しない限り、すべての indexed path を意図的に検索する。JSON 出力には該当する場合、有効な scope、path filter、exclusion が含まれる。 |
 | `--source-only` | `search` | ad hoc / named search で `--audit-scope source` を指定する shorthand。recipe を選ばずに実装コードだけを検索したい場合に使う。コメントと CLI ヘルプ文言の origin も既定で除外し、これらのドキュメント的な一致を意図的な根拠にしたい場合は `--origin comment` または `--origin help_text` を指定する。 |
 | `--show-excluded` | `search --recipe <name>` | recipe output に `scope.excluded_diagnostics` を含め、広い audit で default include pattern、default exclusion、user exclusion、test filter の適用状況を確認できるようにする。 |
@@ -5239,7 +5261,7 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--search-fields <fields>` | `search` | recipe の `query_name` / `recipe` を含む compact JSON field を projection する |
 | `--results-only` | `search`、`symbols`、`files` | shell pipeline 向けに stream の終端レコードを含まない result-only NDJSON を出力する |
 | `--first-per-file` / `--sample <n>` / `--total-limit <n>` | `search` | file 単位、決定的 sample 数、recipe 全体の row 数で広い audit 出力を制限する |
-| `--max-json-bytes <n>` | `search`、`definition`、`recipes`、`audit`、`deps`、`hotspots` | 指定した UTF-8 byte 上限を超える JSON を出力する前に失敗する。`definition --json` の未検出時も構造化 not-found object を同じ上限に対して事前検査し、object が収まらない場合は上限超過の stdout を出さず stderr に usage error を報告する。大きい graph 出力では `deps --summary-only`、`deps --format json-graph --summary-only`、または `hotspots --summary-only` と組み合わせる。 |
+| `--max-json-bytes <n>` | `search`、`definition`、`recipes`、`audit`、`deps`、`hotspots`、`outline` | 指定した UTF-8 byte 上限を超える JSON を出力する前に失敗する。bounded `outline` は共通 envelope 内に完全な symbol row だけを出力し、authoritative な返却 / 総 / 省略件数と opaque な continuation cursor を公開する。最小 envelope が収まらない場合は stdout を空に保ち、型付き usage error を報告する。`definition --json` の未検出時も構造化 not-found object を同じ上限に対して事前検査し、object が収まらない場合は上限超過の stdout を出さず stderr に usage error を報告する。大きい graph 出力では `deps --summary-only`、`deps --format json-graph --summary-only`、または `hotspots --summary-only` と組み合わせる。 |
 | `--next-steps` | `search` | 上位 search hit に対する inspect / excerpt follow-up command を出力する |
 | `--include-generated` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `validate`, `deps`, `impact`, `unused`, `hotspots` | 生成コードとして検出されたファイルを含める。生成ファイルは既定でクエリ結果から除外される |
 | `--snippet-lines <n>` | `search`, `references`, `callers`, `callees`, `impact` | search スニペット、または graph `--body` 抜粋の行数（デフォルト: 8、最大: 20） |
@@ -5766,7 +5788,7 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 - 動的・宣言型言語の graph 対応: Crystal、Groovy、Tcl、Prolog は保守的な宣言、import、call relationship を公開します。Crystal、Groovy、Prolog の括弧付き call は共通 extractor を使い、command-style call は同一ファイルで宣言済みの callable に限定します。Tcl は通常の `name()` word を call とみなさず、command substitution と主要な制御 command の script 引数を認識し、Tcl proc / Prolog predicate の本体では caller container を保持します。
   この graph contract より前に作成された index は `dynamic_reference_graph_contract_stale` とともに `reference_graph_complete=false`、`graph_data_current=false` を報告します。欠落 edge を authoritative とみなす前に `cdidx index <projectPath>` を再実行して対象 row を更新してください。
 - 科学技術・ネイティブ拡張言語のグラフ: Julia、MATLAB、Nim、D、Cython、Ada は、言語構文に応じた import/module、基底型/type、call 参照を上限付きで出力します。Julia の macro invocation と、括弧を伴わない Ada の procedure call も記録します。
-- Markdown、JSON/YAML、CSS: Markdown の heading と明示的な HTML anchor は定義として、同一文書・文書間の fragment link は対象 path に限定した参照として索引します。heading slug は表示される inline text から作り、明示的な HTML ID は HTML entity の decode 後も大文字小文字と句読点を正確に保持します。JSON/YAML の configuration key path、CSS の variable、placeholder、`@extend` もシンボルとして扱います。
+- Markdown、JSON/YAML、CSS: Markdown の heading と明示的な HTML anchor は定義として、同一文書・文書間の fragment link は対象 path に限定した参照として索引します。heading slug は表示される inline text から作り、明示的な HTML ID は HTML entity の decode 後も大文字小文字と句読点を正確に保持します。JSON/YAML の configuration key path を索引します。YAML の sequence element は synthetic symbol を追加せず path 専用（`steps[14]`）のまま扱い、その mapping descendant には最寄りの索引済み mapping parent を保持するため、`outline` は安定した path と意味のある depth を返します。CSS の variable、placeholder、`@extend` もシンボルとして扱います。
 - Dockerfile、Assembly、Common Lisp、Racket: `ARG` build arg、label、PROC/MACRO、package/module form、definition、class/struct、require/provide を必要に応じて表面化します。
 - Shell、PowerShell、Batch: command-style function call、function/filter、class/enum、import、label、`goto` / `call` target、inline control-flow を言語仕様に合わせて索引します。
 - C# と Java: C# の近年の partial member は `symbols`、`definition`、`outline` から見えます。Java の sealed `permits` list は `type_reference` graph edge として記録します。

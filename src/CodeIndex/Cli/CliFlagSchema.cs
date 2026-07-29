@@ -21,8 +21,10 @@ internal sealed record CliOptionValueDomain
     public IReadOnlyDictionary<string, string> Aliases { get; init; } =
         new Dictionary<string, string>(StringComparer.Ordinal);
     public bool NormalizeDashAndUnderscore { get; init; }
+    public string? DisplayPlaceholder { get; init; }
 
-    public string ValuePlaceholder => $"<{string.Join('|', CanonicalValues)}>";
+    public string ValuePlaceholder =>
+        DisplayPlaceholder ?? $"<{string.Join('|', CanonicalValues)}>";
 
     public bool TryNormalize(string rawValue, out string normalizedValue)
     {
@@ -366,6 +368,12 @@ internal static class CliFlagSchema
         ("help", "help_text"),
         ("schema", "schema_description"));
 
+    private static readonly CliOptionValueDomain ExcerptEndValueDomain = new()
+    {
+        CanonicalValues = ["eof"],
+        DisplayPlaceholder = "<line|eof>",
+    };
+
     private static readonly IReadOnlyDictionary<string, CliOptionValueDomain> OutputFormatValueDomains =
         new Dictionary<string, CliOptionValueDomain>(StringComparer.Ordinal)
         {
@@ -526,11 +534,11 @@ internal static class CliFlagSchema
             new() { Name = "--fields", ValuePlaceholder = "<csv>", Description = "Project bounded-response row fields; inspect selects top-level evidence groups; nested collections accept collection.field", PrimaryCommands = Set(InspectFieldCommands.Concat(BoundedProjectionCommands).ToArray()) },
             new() { Name = "--body-only", Description = "Inspect: body-focused JSON shorthand for --body --fields definitions", PrimaryCommands = Set(InspectFieldCommands) },
             new() { Name = "--outline-only", Description = "Inspect: outline-first JSON shorthand for --fields file,definitions,nearby_symbols", PrimaryCommands = Set(InspectFieldCommands) },
-            new() { Name = "--exact", Description = "Backward-compatible exact shorthand", PrimaryCommands = Set(ExactCommands) },
+            new() { Name = "--exact", Description = "Backward-compatible exact shorthand; search mode is incompatible with --fts", PrimaryCommands = Set(ExactCommands) },
             new() { Name = "--regex", Description = "Use regular expression matching", PrimaryCommands = Set("find") },
             new() { Name = "--exact-name", Description = "Exact symbol-name equality", PrimaryCommands = Set(ExactNameCommands), AlsoAcceptedBy = Set("search") },
-            new() { Name = "--exact-substring", Description = "Search-only exact substring match", PrimaryCommands = Set("search"), AlsoAcceptedBy = Set(ExactSubstringAccepted) },
-            new() { Name = "--token-boundary", Description = "Search-only exact substring match with identifier/token boundaries", PrimaryCommands = Set("search") },
+            new() { Name = "--exact-substring", Description = "Search-only exact substring match; incompatible with --fts", PrimaryCommands = Set("search"), AlsoAcceptedBy = Set(ExactSubstringAccepted) },
+            new() { Name = "--token-boundary", Description = "Search-only exact substring match with identifier/token boundaries; incompatible with --fts", PrimaryCommands = Set("search") },
             new() { Name = "--prefix", Description = "Trailing-asterisk prefix shorthand", PrimaryCommands = Set("search") },
             new() { Name = "--require-before", ValuePlaceholder = "<query>", Description = "Search: require a nearby guard query before each primary match", PrimaryCommands = Set("search") },
             new() { Name = "--require-after", ValuePlaceholder = "<query>", Description = "Search: require a nearby guard query after each primary match", PrimaryCommands = Set("search") },
@@ -555,7 +563,7 @@ internal static class CliFlagSchema
             new() { Name = "--env-domain", ValuePlaceholder = "<domain>", Description = "Doctor full environment inventory: filter by exact domain", PrimaryCommands = Set("doctor") },
             new() { Name = "--env-category", ValuePlaceholder = "<category>", Description = "Doctor full environment inventory: filter by exact category", PrimaryCommands = Set("doctor") },
             new() { Name = "--env-sensitivity", ValuePlaceholder = "<sensitivity>", Description = "Doctor full environment inventory: filter by exact sensitivity", PrimaryCommands = Set("doctor") },
-            new() { Name = "--max-json-bytes", ValuePlaceholder = "<n>", Description = "Bound emitted JSON bytes; bounded high-volume responses truncate projected rows with paging metadata", PrimaryCommands = Set("search", "definition", "find", "status", "references", "callers", "callees", "excerpt", "inspect", "impact", "recipes", "audit", "map", "files", "symbols", "deps", "hotspots", "languages", "doctor") },
+            new() { Name = "--max-json-bytes", ValuePlaceholder = "<n>", Description = "Bound emitted JSON bytes; bounded high-volume responses truncate projected rows with paging metadata", PrimaryCommands = Set("search", "definition", "find", "status", "references", "callers", "callees", "excerpt", "inspect", "outline", "impact", "recipes", "audit", "map", "files", "symbols", "deps", "hotspots", "languages", "doctor") },
             new() { Name = "--next-steps", Description = "Search: print inspect/excerpt follow-up commands for top hits", PrimaryCommands = Set("search") },
             new() { Name = "--exclude-comments", Description = "Search: suppress comment-only matches after origin classification", PrimaryCommands = Set("search") },
             new() { Name = "--exclude-strings", Description = "Search: suppress string, regex, and help-text matches after origin classification", PrimaryCommands = Set("search") },
@@ -565,7 +573,7 @@ internal static class CliFlagSchema
             new() { Name = "--max-line-width", ValuePlaceholder = "<n>", Description = "Clamp long single-line payloads (0 disables clamping)", PrimaryCommands = Set(MaxLineWidthCommands) },
             new() { Name = "--snippet-lines", ValuePlaceholder = "<n>", Description = "Snippet length; issue-drafts accept 0 for path/line-only evidence", PrimaryCommands = Set("search", "audit", "find", "references", "callers", "callees", "impact") },
             new() { Name = "--snippet-focus", ValuePlaceholder = "<leftmost|quality|proximity>", Description = "Search snippet long-line focus mode", PrimaryCommands = Set("search") },
-            new() { Name = "--fts", Description = "Raw FTS5 syntax", PrimaryCommands = Set("search") },
+            new() { Name = "--fts", Description = "Raw FTS5 syntax; incompatible with search exact/literal modes", PrimaryCommands = Set("search") },
             new() { Name = "--no-dedup", Description = "Show duplicate chunks", PrimaryCommands = Set("search") },
             new() { Name = "--no-visibility-rank", Description = "Keep legacy search ranking without symbol visibility weighting", PrimaryCommands = Set("search") },
             new() { Name = "--line", ValuePlaceholder = "<line>", Description = "Inspect/excerpt: include one source line as source_excerpt or excerpt window", PrimaryCommands = Set(InspectSourceExcerptCommands) },
@@ -574,8 +582,9 @@ internal static class CliFlagSchema
             new() { Name = "--after", ValuePlaceholder = "<n>", Description = "Context lines after", PrimaryCommands = Set("find", "excerpt", "inspect") },
             new() { Name = "--start", ValuePlaceholder = "<line>", Description = "Start line", PrimaryCommands = Set("excerpt") },
             new() { Name = "--start-line", ValuePlaceholder = "<line>", Description = "Alias for --start; inspect source_excerpt start line", PrimaryCommands = Set("excerpt", "inspect") },
-            new() { Name = "--end", ValuePlaceholder = "<line>", Description = "End line", PrimaryCommands = Set("excerpt") },
+            new() { Name = "--end", ValueDomain = ExcerptEndValueDomain, Description = "Excerpt end line; eof reads through the indexed end of file", PrimaryCommands = Set("excerpt") },
             new() { Name = "--end-line", ValuePlaceholder = "<line>", Description = "Alias for --end; inspect source_excerpt end line", PrimaryCommands = Set("excerpt", "inspect") },
+            new() { Name = "--clamp", Description = "Excerpt: explicitly clamp numeric range overshoot to file boundaries", PrimaryCommands = Set("excerpt") },
             new() { Name = "--focus-line", ValuePlaceholder = "<line>", Description = "Focused line to keep visible when clamping", PrimaryCommands = Set("find", "excerpt") },
             new() { Name = "--focus-column", ValuePlaceholder = "<n>", Description = "Focused column to keep visible when clamping", PrimaryCommands = Set("find", "excerpt") },
             new() { Name = "--focus-length", ValuePlaceholder = "<n>", Description = "Focused span width when clamping", PrimaryCommands = Set("excerpt") },

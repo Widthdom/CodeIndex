@@ -4,6 +4,7 @@ public static partial class SymbolExtractor
 {
     public const int DefaultContractVersion = 1;
     public const int ExpandedLanguageContractVersion = 2;
+    public const int YamlContractVersion = 3;
     public const int PythonContractVersion = 2;
     public const int CSharpContractVersion = 8;
     public const int DockerfileContractVersion = 2;
@@ -74,9 +75,10 @@ public static partial class SymbolExtractor
             "app_manifest" => ApplicationManifestContractVersion,
             "markdown" => MarkdownContractVersion,
             "dependency_lock" => DependencyLockContractVersion,
+            "yaml" => YamlContractVersion,
             "json" => JsonContractVersion,
             "jsonl" => JsonLinesContractVersion,
-            "cmake" or "dependency_manifest" or "graphql" or "html" or "justfile" or "msbuild" or "solution" or "yaml" => ExpandedLanguageContractVersion,
+            "cmake" or "dependency_manifest" or "graphql" or "html" or "justfile" or "msbuild" or "solution" => ExpandedLanguageContractVersion,
             _ => DefaultContractVersion,
         };
     }

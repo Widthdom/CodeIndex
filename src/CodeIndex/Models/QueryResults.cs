@@ -457,6 +457,7 @@ public class FileExcerptResult
     public int RequestedEndLine { get; set; }
     public int EffectiveStartLine { get; set; }
     public int EffectiveEndLine { get; set; }
+    public int TotalLines { get; set; }
     public string Content { get; set; } = string.Empty;
     public bool ContentTruncated { get; set; }
     public List<string> ContentTruncationReasons { get; set; } = [];

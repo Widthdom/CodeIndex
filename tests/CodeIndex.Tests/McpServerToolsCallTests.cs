@@ -4555,6 +4555,73 @@ public partial class McpServerTests
         Assert.Contains("Excerpt returned", text);
         Assert.Equal("src/app.cs", response["result"]!["structuredContent"]!["path"]!.GetValue<string>());
         Assert.Contains("public class App", response["result"]!["structuredContent"]!["content"]!.GetValue<string>());
+        Assert.Equal(1, response["result"]!["structuredContent"]!["requestedStartLine"]!.GetValue<int>());
+        Assert.Equal(1, response["result"]!["structuredContent"]!["requestedEndLine"]!.GetValue<int>());
+        Assert.True(response["result"]!["structuredContent"]!["totalLines"]!.GetValue<int>() >= 1);
+    }
+
+    [Fact]
+    public void ToolsCall_Excerpt_SeparatesRequestedAndEffectiveContextRanges_Issue4877()
+    {
+        InsertIndexedFile(
+            "src/context-range.txt",
+            "text",
+            string.Join('\n', Enumerable.Range(1, 30).Select(line => line == 20 ? "日本語 Ω" : $"line {line}")));
+        var request = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"excerpt","arguments":{"path":"src/context-range.txt","startLine":18,"endLine":22,"before":2,"after":2}}}""")!;
+
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.Equal(18, structured["requestedStartLine"]!.GetValue<int>());
+        Assert.Equal(22, structured["requestedEndLine"]!.GetValue<int>());
+        Assert.Equal(16, structured["effectiveStartLine"]!.GetValue<int>());
+        Assert.Equal(24, structured["effectiveEndLine"]!.GetValue<int>());
+        Assert.Equal(30, structured["totalLines"]!.GetValue<int>());
+        Assert.Contains("日本語 Ω", structured["content"]!.GetValue<string>());
+    }
+
+    [Theory]
+    [InlineData("src/empty-range.txt", "", 1, 1, 0)]
+    [InlineData("src/out-of-range.txt", "one\ntwo\nthree", 10, 12, 3)]
+    public void ToolsCall_Excerpt_EmptyResultsRetainRangeRecoveryMetadata_Issue4877(
+        string path,
+        string content,
+        int requestedStartLine,
+        int requestedEndLine,
+        int totalLines)
+    {
+        InsertIndexedFile(path, "text", content);
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "excerpt",
+                ["arguments"] = new JsonObject
+                {
+                    ["path"] = path,
+                    ["startLine"] = requestedStartLine,
+                    ["endLine"] = requestedEndLine,
+                },
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!.AsObject();
+
+        Assert.Equal(path, structured["path"]!.GetValue<string>());
+        Assert.Equal(0, structured["count"]!.GetValue<int>());
+        Assert.Equal(requestedStartLine, structured["requestedStartLine"]!.GetValue<int>());
+        Assert.Equal(requestedEndLine, structured["requestedEndLine"]!.GetValue<int>());
+        Assert.True(structured.ContainsKey("effectiveStartLine"));
+        Assert.True(structured.ContainsKey("effectiveEndLine"));
+        Assert.Null(structured["effectiveStartLine"]);
+        Assert.Null(structured["effectiveEndLine"]);
+        Assert.Equal(totalLines, structured["totalLines"]!.GetValue<int>());
+        Assert.NotNull(structured["recovery_hint"]);
     }
 
     [Fact]
@@ -4735,6 +4802,9 @@ public partial class McpServerTests
         Assert.Equal("dist/data-endline-overflow.txt", structured["path"]!.GetValue<string>());
         Assert.Equal(1, structured["startLine"]!.GetValue<int>());
         Assert.Equal(3, structured["endLine"]!.GetValue<int>());
+        Assert.Equal(1, structured["requestedStartLine"]!.GetValue<int>());
+        Assert.Equal(int.MaxValue, structured["requestedEndLine"]!.GetValue<int>());
+        Assert.Equal(3, structured["totalLines"]!.GetValue<int>());
         Assert.Contains("line three", structured["content"]!.GetValue<string>());
     }
 

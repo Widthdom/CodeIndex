@@ -409,7 +409,7 @@ public class ConsoleUiTests
         Assert.Contains("cdidx references <query>|--query <query>|-- <query> [--db <path>] [--json] [--redact-paths|--show-paths] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--fields <csv>] [--cursor <next_cursor>] [--max-json-bytes <n>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--kind <kind>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--include-qualified-common-calls] [--body] [--snippet-lines <n>] [--max-line-width <n>] [--exact|--exact-name] [--count]", output);
         Assert.Contains("cdidx inspect <query>|--query <query>|-- <query> [--db <path>] [--json] [--redact-paths|--show-paths] [--format <text|json|compact>] [--pretty] [--compact] [--fields <csv>] [--outline-only] [--body-only] [--cursor <next_cursor>] [--max-json-bytes <n>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--kind <kind>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--body-start <line>] [--body-lines <n>|--body-line-count <n>] [--context <n>|--before <n>|--after <n>] [--max-line-width <n>] [--exact|--exact-name] [--group-partials]", output);
         Assert.Contains("cdidx inspect --path <file> --line <line> [--end-line <line>] [--db <path>] [--json] [--redact-paths|--show-paths] [--format <text|json|compact>] [--pretty] [--compact] [--fields <csv>] [--outline-only] [--body-only] [--cursor <next_cursor>] [--max-json-bytes <n>] [--body] [--body-start <line>] [--body-lines <n>|--body-line-count <n>] [--context <n>|--before <n>|--after <n>] [--max-line-width <n>]", output);
-        Assert.Contains("cdidx outline <path> [--db <path>] [--json] [--pretty] [--compact] [--verbose] [--limit <n>|--top <n>] [--cursor <next_cursor>] [--sort <source|kind|references|size|complexity|path|name>] [--kind <kind[,kind]>] [--outline-fields <csv>]", output);
+        Assert.Contains("cdidx outline <path> [--db <path>] [--json] [--pretty] [--compact] [--verbose] [--limit <n>|--top <n>] [--cursor <next_cursor>] [--max-json-bytes <n>] [--sort <source|kind|references|size|complexity|path|name>] [--kind <kind[,kind]>] [--outline-fields <csv>]", output);
         Assert.Contains("--snippet-lines <n>", output);
         Assert.Contains("Snippet length; issue-drafts accept 0 for path/line-only evidence", output);
         Assert.Contains("cdidx find <query> (--path <glob>|--all)", output);
@@ -420,7 +420,7 @@ public class ConsoleUiTests
         Assert.Contains("--optimize", output);
         Assert.Contains("--duration-format <auto|seconds|hms>", output);
         Assert.Contains("--ascii", output);
-        Assert.Contains("cdidx excerpt <path[:line|:start-end]> [--line <line>|--start <line>|--start-line <line>] [--end <line>|--end-line <line>] [--context <n>|--before <n>|--after <n>] [--max-line-width <n>] [--focus-line <line>] [--focus-column <n>] [--focus-length <n>] [--db <path>] [--json] [--redact-paths|--show-paths] [--no-semantic-tokens] [--max-json-bytes <n>] [--verbose]", output);
+        Assert.Contains("cdidx excerpt <path[:line|:start-end]> [--line <line>|--start <line>|--start-line <line>] [--end <line|eof>|--end-line <line>] [--clamp] [--context <n>|--before <n>|--after <n>] [--max-line-width <n>] [--focus-line <line>] [--focus-column <n>] [--focus-length <n>] [--db <path>] [--json] [--redact-paths|--show-paths] [--no-semantic-tokens] [--max-json-bytes <n>] [--verbose]", output);
         Assert.Contains("cdidx map [--db <path>] [--json] [--format <text|json|compact|issue-drafts>] [--pretty] [--compact] [--fields <csv>] [--cursor <next_cursor>] [--summary-only] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--bytes] [--sections <summary,tree,languages,hotspots,metrics|list>] [--depth <n>] [--min-entrypoint-confidence <0.0..1.0>] [--max-json-bytes <n>]", output);
         Assert.Contains("cdidx symbols [query|--query <query>|-- <query>] [--name <name>] [--db <path>] [--json[=ndjson|array]] [--compact] [--format <text|json|count|compact|lsp|qf|sarif>] [--summary-only] [--cursor <next_cursor>] [--max-json-bytes <n>] [--allow-partial] [--verbose] [--limit <n>|--top <n>] [--sort <hotspot|references|size|complexity|path>] [--lang <lang>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--exact|--exact-name] [--count] [--group-partials] [--since <datetime>]", output);
         Assert.Contains("cdidx files [query|<glob>|--query <query>|-- <query>] [--db <path>] [--json[=ndjson|array]] [--format <text|json|count|compact>] [--summary-only] [--cursor <next_cursor>] [--max-json-bytes <n>] [--allow-partial] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--count] [--since <datetime>] [--bytes]", output);
@@ -1282,7 +1282,7 @@ public class ConsoleUiTests
             # Regenerate this script after upgrading cdidx.
             complete -c cdidx -n '__fish_use_subcommand' -a 'index' -d 'index command'
             complete -c cdidx -n '__fish_use_subcommand' -l license -d 'Show license summary'
-            complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols find inspect' -l exact -d 'Backward-compatible exact shorthand'
+            complete -c cdidx -n '__fish_seen_subcommand_from search definition references callers callees symbols find inspect' -l exact -d 'Backward-compatible exact shorthand; search mode is incompatible with --fts'
             complete -c cdidx -n '__fish_seen_subcommand_from search references callers callees find excerpt inspect impact' -l max-line-width -r -d 'Clamp long single-line payloads (0 disables clamping)'
             """
         },
@@ -1339,11 +1339,11 @@ public class ConsoleUiTests
         // `__fish_seen_subcommand_from <list>` strings change to the canonical
         // command-ordering used by `CliFlagSchema.AllCommands`, and descriptions use the
         // schema's single source of truth (e.g. `--exact` → "Backward-compatible exact
-        // shorthand"). These assertions intentionally check the schema-ordered groupings
+        // shorthand; search mode is incompatible with --fts"). These assertions intentionally check the schema-ordered groupings
         // (`--query` and `--before`/`--after` predicates) and key flag invariants while
         // accepting the unified wording.
         // #1570 によりスキーマ駆動。`__fish_seen_subcommand_from` の並びは `CliFlagSchema.AllCommands`
-        // 順、`--exact` の説明は統一表記 (`Backward-compatible exact shorthand`)。
+        // 順、`--exact` の説明は統一表記 (`Backward-compatible exact shorthand; search mode is incompatible with --fts`)。
         var output = ConsoleCompletionRenderer.GetCompletionScript("fish");
         Assert.Contains("__fish_seen_subcommand_from search recipes definition goto references callers callees symbols files find inspect impact", output);
         Assert.Contains("__fish_seen_subcommand_from find excerpt", output);
@@ -1353,7 +1353,7 @@ public class ConsoleUiTests
         Assert.Contains("-l query -r -d 'Literal query'", output);
         Assert.Contains("-l before -r -d 'Context lines before'", output);
         Assert.Contains("-l after -r -d 'Context lines after'", output);
-        Assert.Contains("-l exact -d 'Backward-compatible exact shorthand'", output);
+        Assert.Contains("-l exact -d 'Backward-compatible exact shorthand; search mode is incompatible with --fts'", output);
         Assert.Contains("__fish_seen_subcommand_from hotspots", output);
         Assert.Contains("-l group-by-name -d 'Collapse same-name rows across files'", output);
     }

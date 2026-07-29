@@ -4652,6 +4652,183 @@ public partial class QueryCommandRunnerTests
         Assert.True(excerptJson.GetProperty("content_truncated").GetBoolean());
     }
 
+    [Fact]
+    public void RunExcerpt_EofClampAndContextRangesReuseOneFixture_Issue4877()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_issue4877_excerpt_ranges");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "docs/range.txt",
+            "text",
+            string.Join('\n', Enumerable.Range(1, 30).Select(line => line == 20 ? "日本語 Ω" : $"line {line}")));
+        TestProjectHelper.InsertIndexedFile(dbPath, "docs/one-line-newline.txt", "text", "終端\n");
+        TestProjectHelper.InsertIndexedFile(dbPath, "docs/one-line-no-newline.txt", "text", "終端");
+
+        JsonElement RunSuccess(params string[] args)
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(
+                () => QueryCommandRunner.RunExcerpt(args, _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = JsonDocument.Parse(stdout);
+            return document.RootElement.Clone();
+        }
+
+        var context = RunSuccess(
+            "docs/range.txt", "--db", dbPath, "--start", "18", "--end", "22",
+            "--before", "2", "--after", "2", "--json", "--no-semantic-tokens");
+        Assert.Equal(18, context.GetProperty("requested_start_line").GetInt32());
+        Assert.Equal(22, context.GetProperty("requested_end_line").GetInt32());
+        Assert.Equal(16, context.GetProperty("effective_start_line").GetInt32());
+        Assert.Equal(24, context.GetProperty("effective_end_line").GetInt32());
+        Assert.Equal(30, context.GetProperty("total_lines").GetInt32());
+        Assert.Contains("日本語 Ω", context.GetProperty("content").GetString());
+
+        var eof = RunSuccess(
+            "docs/range.txt", "--db", dbPath, "--start", "28", "--end", "eof",
+            "--json", "--no-semantic-tokens");
+        Assert.Equal(28, eof.GetProperty("requested_start_line").GetInt32());
+        Assert.Equal(30, eof.GetProperty("requested_end_line").GetInt32());
+        Assert.Equal(30, eof.GetProperty("effective_end_line").GetInt32());
+        Assert.Equal("eof", eof.GetProperty("requested_end_mode").GetString());
+        Assert.False(eof.GetProperty("range_clamped").GetBoolean());
+
+        var (duplicateExitCode, duplicateStdout, duplicateStderr) = CaptureConsole(
+            () => QueryCommandRunner.RunExcerpt(
+                [
+                    "docs/range.txt", "--db", dbPath, "--start", "1",
+                    "--end", "eof", "--end-line", "2", "--json", "--no-semantic-tokens",
+                ],
+                _jsonOptions));
+        Assert.Equal(CommandExitCodes.Success, duplicateExitCode);
+        Assert.Contains("--end specified more than once", duplicateStderr);
+        using (var duplicateDocument = JsonDocument.Parse(duplicateStdout))
+        {
+            var duplicate = duplicateDocument.RootElement;
+            Assert.Equal(2, duplicate.GetProperty("requested_end_line").GetInt32());
+            Assert.Equal(2, duplicate.GetProperty("effective_end_line").GetInt32());
+            Assert.Equal("numeric", duplicate.GetProperty("requested_end_mode").GetString());
+        }
+
+        var clamped = RunSuccess(
+            "docs/range.txt", "--db", dbPath, "--start", "28", "--end", "999",
+            "--clamp", "--json", "--no-semantic-tokens");
+        Assert.Equal(999, clamped.GetProperty("requested_end_line").GetInt32());
+        Assert.Equal(30, clamped.GetProperty("effective_end_line").GetInt32());
+        Assert.True(clamped.GetProperty("range_clamped").GetBoolean());
+
+        foreach (var path in new[] { "docs/one-line-newline.txt", "docs/one-line-no-newline.txt" })
+        {
+            var oneLine = RunSuccess(
+                path, "--db", dbPath, "--start", "1", "--end", "eof",
+                "--json", "--no-semantic-tokens");
+            Assert.Equal(1, oneLine.GetProperty("total_lines").GetInt32());
+            Assert.Equal("終端", oneLine.GetProperty("content").GetString());
+        }
+    }
+
+    [Fact]
+    public void RunExcerpt_InvalidAndStrictRangesReturnRecoveryMetadata_Issue4877()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_issue4877_excerpt_errors");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        TestProjectHelper.InsertIndexedFile(dbPath, "docs/range.txt", "text", "one\ntwo\nthree");
+        TestProjectHelper.InsertIndexedFile(dbPath, "docs/empty.txt", "text", string.Empty);
+
+        var (strictExitCode, strictStdout, strictStderr) = CaptureConsole(
+            () => QueryCommandRunner.RunExcerpt(
+                ["docs/range.txt", "--db", dbPath, "--start", "2", "--end", "99", "--json"],
+                _jsonOptions));
+        Assert.Equal(CommandExitCodes.InvalidArgument, strictExitCode);
+        Assert.Equal(string.Empty, strictStderr);
+        using (var strictDocument = JsonDocument.Parse(strictStdout))
+        {
+            var error = strictDocument.RootElement;
+            Assert.Equal(CommandErrorCodes.LineOutOfRange, error.GetProperty("error_code").GetString());
+            Assert.Equal(2, error.GetProperty("requested_start_line").GetInt32());
+            Assert.Equal(99, error.GetProperty("requested_end_line").GetInt32());
+            Assert.Equal(3, error.GetProperty("total_lines").GetInt32());
+            var recovery = error.GetProperty("range_recovery");
+            Assert.True(recovery.GetProperty("strict_numeric_default").GetBoolean());
+            Assert.True(recovery.GetProperty("end_at_eof_supported").GetBoolean());
+            Assert.True(recovery.GetProperty("clamp_supported").GetBoolean());
+            Assert.Equal(3, recovery.GetProperty("suggested_end_line").GetInt32());
+        }
+
+        var (startOvershootExitCode, startOvershootStdout, startOvershootStderr) = CaptureConsole(
+            () => QueryCommandRunner.RunExcerpt(
+                ["docs/range.txt", "--db", dbPath, "--start", "99", "--end", "100", "--json"],
+                _jsonOptions));
+        Assert.Equal(CommandExitCodes.InvalidArgument, startOvershootExitCode);
+        Assert.Equal(string.Empty, startOvershootStderr);
+        Assert.DoesNotContain("--end eof", startOvershootStdout);
+        using (var startOvershootDocument = JsonDocument.Parse(startOvershootStdout))
+        {
+            var recovery = startOvershootDocument.RootElement.GetProperty("range_recovery");
+            Assert.False(recovery.GetProperty("end_at_eof_supported").GetBoolean());
+            Assert.True(recovery.GetProperty("clamp_supported").GetBoolean());
+            Assert.Equal(3, recovery.GetProperty("suggested_start_line").GetInt32());
+            Assert.Equal(JsonValueKind.Null, recovery.GetProperty("suggested_end_line").ValueKind);
+        }
+
+        var (inlineExitCode, inlineStdout, inlineStderr) = CaptureConsole(
+            () => QueryCommandRunner.RunExcerpt(
+                ["docs/range.txt:0", "--db", dbPath],
+                _jsonOptions));
+        Assert.Equal(CommandExitCodes.InvalidArgument, inlineExitCode);
+        Assert.Equal(string.Empty, inlineStdout);
+        Assert.Contains(CommandErrorCodes.LineOutOfRange, inlineStderr);
+        Assert.Contains("requested line 0", inlineStderr);
+        Assert.DoesNotContain("requires --start", inlineStderr);
+
+        var (lineZeroExitCode, lineZeroStdout, lineZeroStderr) = CaptureConsole(
+            () => QueryCommandRunner.RunExcerpt(
+                ["docs/range.txt", "--db", dbPath, "--line", "0"],
+                _jsonOptions));
+        Assert.Equal(CommandExitCodes.InvalidArgument, lineZeroExitCode);
+        Assert.Equal(string.Empty, lineZeroStdout);
+        Assert.Contains(CommandErrorCodes.LineOutOfRange, lineZeroStderr);
+        Assert.Contains("requested line 0", lineZeroStderr);
+
+        var (explicitNegativeExitCode, explicitNegativeStdout, explicitNegativeStderr) = CaptureConsole(
+            () => QueryCommandRunner.RunExcerpt(
+                ["docs/range.txt", "--db", dbPath, "--start", "-1"],
+                _jsonOptions));
+        Assert.Equal(CommandExitCodes.InvalidArgument, explicitNegativeExitCode);
+        Assert.Equal(string.Empty, explicitNegativeStdout);
+        Assert.Contains(CommandErrorCodes.LineOutOfRange, explicitNegativeStderr);
+        Assert.Contains("requested line -1", explicitNegativeStderr);
+
+        var (inlineNegativeExitCode, inlineNegativeStdout, inlineNegativeStderr) = CaptureConsole(
+            () => QueryCommandRunner.RunExcerpt(
+                ["docs/range.txt:-1-2", "--db", dbPath],
+                _jsonOptions));
+        Assert.Equal(CommandExitCodes.InvalidArgument, inlineNegativeExitCode);
+        Assert.Equal(string.Empty, inlineNegativeStdout);
+        Assert.Contains(CommandErrorCodes.LineOutOfRange, inlineNegativeStderr);
+        Assert.Contains("requested line -1", inlineNegativeStderr);
+
+        var (numericAliasExitCode, numericAliasStdout, numericAliasStderr) = CaptureConsole(
+            () => QueryCommandRunner.RunExcerpt(
+                ["docs/range.txt", "--db", dbPath, "--start", "1", "--end-line", "eof"],
+                _jsonOptions));
+        Assert.Equal(CommandExitCodes.UsageError, numericAliasExitCode);
+        Assert.Equal(string.Empty, numericAliasStdout);
+        Assert.Contains("eof", numericAliasStderr);
+        Assert.Contains("--end-line", numericAliasStderr);
+
+        var (emptyExitCode, emptyStdout, emptyStderr) = CaptureConsole(
+            () => QueryCommandRunner.RunExcerpt(
+                ["docs/empty.txt", "--db", dbPath, "--start", "1", "--end", "eof", "--json"],
+                _jsonOptions));
+        Assert.Equal(CommandExitCodes.InvalidArgument, emptyExitCode);
+        Assert.Equal(string.Empty, emptyStderr);
+        using var emptyDocument = JsonDocument.Parse(emptyStdout);
+        Assert.Equal(0, emptyDocument.RootElement.GetProperty("total_lines").GetInt32());
+        Assert.Equal(CommandErrorCodes.LineOutOfRange, emptyDocument.RootElement.GetProperty("error_code").GetString());
+    }
+
 
 
 
