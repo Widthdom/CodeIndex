@@ -218,7 +218,7 @@ public partial class DbReader
                    MAX(r.is_mutual_recursion) AS is_mutual_recursion
             FROM logical_references r
             GROUP BY path, lang, container_kind, container_name, symbol_name";
-        sql += $" ORDER BY CASE WHEN @preferExactCase = 1 AND r.symbol_name = @rawQuery THEN 0 ELSE 1 END, {GetPathBucketOrderSql("r.path")}, CASE WHEN lower(r.symbol_name) = lower(@rankingQuery) THEN 0 ELSE 1 END, {BuildReferenceRankOrderSql(rankMode)}, r.path, first_line, first_column, r.lang, r.container_kind, r.container_name, r.symbol_name LIMIT @limit OFFSET @offset";
+        sql += $" ORDER BY {BuildReferenceRankOrderSql(rankMode, "r.symbol_name")} LIMIT @limit OFFSET @offset";
 
         cmd.CommandText = sql;
         string callersQueryParam;
@@ -242,8 +242,7 @@ public partial class DbReader
                 : cssScssVariableAlias;
             SqliteCommandPolicy.Add(cmd, "@queryCssScssVariableAlias", aliasParam);
         }
-        SqliteCommandPolicy.Add(cmd, "@preferExactCase", exact ? 1 : 0);
-        SqliteCommandPolicy.Add(cmd, "@rawQuery", exact ? query : string.Empty);
+        SqliteCommandPolicy.Add(cmd, "@rawQuery", query);
         SqliteCommandPolicy.Add(cmd, "@rankingQuery", query.Trim());
         if (RequiresReferenceKindParameter(referenceKind))
             SqliteCommandPolicy.Add(cmd, "@referenceKind", referenceKind);
@@ -696,7 +695,7 @@ public partial class DbReader
                    SUM(r.weighted_score) AS weighted_score
             FROM ranked_call_sites r
             GROUP BY path, lang, container_kind, container_name, symbol_name, reference_kind";
-        sql += $" ORDER BY CASE WHEN @preferExactCase = 1 AND r.container_name = @rawQuery THEN 0 ELSE 1 END, {GetPathBucketOrderSql("r.path")}, CASE WHEN lower(r.container_name) = lower(@rankingQuery) THEN 0 ELSE 1 END, {BuildReferenceRankOrderSql(rankMode)}, r.path, first_line, r.lang, r.container_kind, r.container_name, r.symbol_name, r.reference_kind LIMIT @limit OFFSET @offset";
+        sql += $" ORDER BY {BuildReferenceRankOrderSql(rankMode, "r.container_name")} LIMIT @limit OFFSET @offset";
 
         cmd.CommandText = sql;
         string calleesQueryParam;
@@ -722,8 +721,7 @@ public partial class DbReader
                 : cssScssVariableAlias;
             SqliteCommandPolicy.Add(cmd, "@queryCssScssVariableAlias", aliasParam);
         }
-        SqliteCommandPolicy.Add(cmd, "@preferExactCase", exact ? 1 : 0);
-        SqliteCommandPolicy.Add(cmd, "@rawQuery", exact ? query : string.Empty);
+        SqliteCommandPolicy.Add(cmd, "@rawQuery", query);
         SqliteCommandPolicy.Add(cmd, "@rankingQuery", query.Trim());
         AddQualifiedGraphQueryParameters(cmd, query, allowQualifiedLeafFallback);
         if (RequiresReferenceKindParameter(referenceKind))
@@ -1012,12 +1010,32 @@ public partial class DbReader
             ELSE 0.0
         END)";
 
-    private static string BuildReferenceRankOrderSql(ReferenceRankMode rankMode) => rankMode switch
-    {
-        ReferenceRankMode.Count => "reference_count DESC",
-        ReferenceRankMode.Kind => "CASE reference_kind WHEN 'instantiate' THEN 0 WHEN 'call' THEN 1 WHEN 'generic_type_argument' THEN 2 WHEN 'subscribe' THEN 3 ELSE 4 END, reference_count DESC",
-        _ => "weighted_score DESC, reference_count DESC",
-    };
+    private static string BuildReferenceRankOrderSql(
+        ReferenceRankMode rankMode,
+        string queriedNameSql)
+        => string.Join(
+            ", ",
+            ReferenceRankRecipes.Get(rankMode).Select(dimension => dimension switch
+            {
+                ReferenceRankDimension.ReferenceWeightScoreDescending => "weighted_score DESC",
+                ReferenceRankDimension.ReferenceCountDescending => "reference_count DESC",
+                ReferenceRankDimension.ReferenceKindPriorityAscending =>
+                    "CASE reference_kind WHEN 'instantiate' THEN 0 WHEN 'call' THEN 1 WHEN 'generic_type_argument' THEN 2 WHEN 'subscribe' THEN 3 ELSE 4 END",
+                ReferenceRankDimension.ExactCaseMatchDescending =>
+                    $"CASE WHEN {queriedNameSql} = @rawQuery THEN 0 ELSE 1 END",
+                ReferenceRankDimension.ExactNameMatchDescending =>
+                    $"CASE WHEN lower({queriedNameSql}) = lower(@rankingQuery) THEN 0 ELSE 1 END",
+                ReferenceRankDimension.PathCategoryAscending => GetPathBucketOrderSql("r.path"),
+                ReferenceRankDimension.PathAscending => "r.path",
+                ReferenceRankDimension.FirstLineAscending => "first_line",
+                ReferenceRankDimension.FirstColumnAscending => "first_column",
+                ReferenceRankDimension.LanguageAscending => "r.lang",
+                ReferenceRankDimension.ContainerKindAscending => "r.container_kind",
+                ReferenceRankDimension.ContainerNameAscending => "r.container_name",
+                ReferenceRankDimension.SymbolNameAscending => "r.symbol_name",
+                ReferenceRankDimension.ReferenceKindAscending => "reference_kind",
+                _ => throw new ArgumentOutOfRangeException(nameof(dimension), dimension, null),
+            }));
 
     private static IReadOnlyDictionary<string, int> ParseReferenceKindCounts(string? aggregate, string primaryKind, int fallbackCount)
     {

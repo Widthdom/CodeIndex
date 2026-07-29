@@ -214,7 +214,7 @@ public static partial class QueryCommandRunner
         {
             var payload = BuildJsonZeroResultPayload(reader, jsonOptions, resultsKey: resultsKey, graphTableAvailable: false, degraded: true, exactSignal: exactSignal, queryOptions: queryOptions, extraFields: extraFields);
             payload["note"] = "symbol_references table is missing in this index (legacy or read-only DB). Zero result is degraded, not authoritative.";
-            Console.WriteLine(payload.ToJsonString(jsonOptions));
+            Console.WriteLine(payload.ToJsonString(EnsureJsonNodeSerializerOptions(jsonOptions)));
         }
         else
         {
@@ -252,7 +252,7 @@ public static partial class QueryCommandRunner
         extraFields?.Invoke(payload);
         AddCountAuthorityJsonFields(payload);
         AddActiveSqliteDiagnostics(payload);
-        Console.WriteLine(payload.ToJsonString(jsonOptions));
+        Console.WriteLine(payload.ToJsonString(EnsureJsonNodeSerializerOptions(jsonOptions)));
     }
 
     private static void WriteGraphZeroJsonResult(DbReader reader, string resultsKey, JsonSerializerOptions jsonOptions, bool graphAvailable,
@@ -271,7 +271,7 @@ public static partial class QueryCommandRunner
             payload["exact_zero_hint"] = JsonSerializer.SerializeToNode(exactZeroHint, CliJsonSerializerContextFactory.Create(jsonOptions).ExactZeroHintResult);
         extraFields?.Invoke(payload);
         AddActiveSqliteDiagnostics(payload);
-        Console.WriteLine(payload.ToJsonString(jsonOptions));
+        Console.WriteLine(payload.ToJsonString(EnsureJsonNodeSerializerOptions(jsonOptions)));
     }
 
     private static void WriteGraphJsonResult<T>(T result, JsonTypeInfo<T> jsonTypeInfo, ExactQuerySignal exactSignal, JsonSerializerOptions jsonOptions, GraphSupportOverride? graphSupportOverride = null, Action<JsonObject>? extraFields = null)
@@ -281,7 +281,7 @@ public static partial class QueryCommandRunner
         AddGraphSupportOverrideFields(payload, graphSupportOverride);
         extraFields?.Invoke(payload);
         AddActiveSqliteDiagnostics(payload);
-        Console.WriteLine(payload.ToJsonString(jsonOptions));
+        Console.WriteLine(payload.ToJsonString(EnsureJsonNodeSerializerOptions(jsonOptions)));
     }
 
     private static void WriteJsonResult<T>(T result, JsonTypeInfo<T> jsonTypeInfo, JsonSerializerOptions jsonOptions, Action<JsonObject>? extraFields = null)
@@ -289,7 +289,7 @@ public static partial class QueryCommandRunner
         var payload = JsonSerializer.SerializeToNode(result, jsonTypeInfo)!.AsObject();
         extraFields?.Invoke(payload);
         AddActiveSqliteDiagnostics(payload);
-        Console.WriteLine(payload.ToJsonString(jsonOptions));
+        Console.WriteLine(payload.ToJsonString(EnsureJsonNodeSerializerOptions(jsonOptions)));
     }
 
     private static void WriteJsonResultWithExactSignal<T>(T result, JsonTypeInfo<T> jsonTypeInfo, ExactQuerySignal exactSignal, JsonSerializerOptions jsonOptions)
@@ -297,7 +297,7 @@ public static partial class QueryCommandRunner
         var payload = JsonSerializer.SerializeToNode(result, jsonTypeInfo)!.AsObject();
         AddExactJsonFields(payload, exactSignal);
         AddActiveSqliteDiagnostics(payload);
-        Console.WriteLine(payload.ToJsonString(jsonOptions));
+        Console.WriteLine(payload.ToJsonString(EnsureJsonNodeSerializerOptions(jsonOptions)));
     }
 
     private static void AddExactGraphJsonFields(JsonObject payload, ExactQuerySignal exactSignal)

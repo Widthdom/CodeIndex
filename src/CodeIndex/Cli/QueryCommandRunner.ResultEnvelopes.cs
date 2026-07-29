@@ -157,7 +157,7 @@ public static partial class QueryCommandRunner
             yield return $"min-confidence: {options.MinUnusedConfidence}";
         if (options.UnusedActionable)
             yield return "actionable: true";
-        if (options.RankMode != ReferenceRankMode.Weighted)
+        if (options.ReferenceRankingActive || options.RankMode != ReferenceRankMode.Weighted)
             yield return $"rank-by: {FormatReferenceRankMode(options.RankMode)}";
         if (options.ExcludeTests)
             yield return "exclude-tests: true";
@@ -233,7 +233,12 @@ public static partial class QueryCommandRunner
                 ?? string.Create(System.Globalization.CultureInfo.InvariantCulture, $"unused:{options.UnusedCursorOffset.Value}");
             query["offset"] = options.UnusedCursorOffset.Value;
         }
-        if (options.RankMode != ReferenceRankMode.Weighted)
+        if (options.ReferenceRankingActive)
+        {
+            query["rank_by"] = FormatReferenceRankMode(options.RankMode);
+            query["ranking_recipe"] = BuildReferenceRankingRecipeJson(options.RankMode);
+        }
+        else if (options.RankMode != ReferenceRankMode.Weighted)
             query["rank_by"] = FormatReferenceRankMode(options.RankMode);
         if (options.SymbolSortMode != SymbolSortMode.Name)
             query["sort"] = options.SymbolSortMode.ToString().ToLowerInvariant();
@@ -311,6 +316,14 @@ public static partial class QueryCommandRunner
         if (options.ContextAfter > 0)
             query[options.ContextAfterExplicit ? "depth" : "after"] = options.ContextAfter;
         return query;
+    }
+
+    private static void AddReferenceRankingQueryContextJson(
+        JsonObject payload,
+        QueryCommandOptions options,
+        JsonSerializerOptions jsonOptions)
+    {
+        payload["query_context"] = BuildQueryContextJson(options, jsonOptions);
     }
 
     private static JsonArray BuildSearchRowSelectorContextJson(QueryCommandOptions options)

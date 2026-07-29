@@ -64,6 +64,19 @@ public static partial class QueryCommandRunner
         ReferenceRankMode.Kind => "kind",
         _ => "weighted",
     };
+
+    internal static JsonObject BuildReferenceRankingRecipeJson(ReferenceRankMode mode)
+    {
+        var precedence = new JsonArray();
+        foreach (var dimension in ReferenceRankRecipes.Get(mode))
+            precedence.Add(ReferenceRankRecipes.Format(dimension));
+
+        return new JsonObject
+        {
+            ["mode"] = FormatReferenceRankMode(mode),
+            ["precedence"] = precedence,
+        };
+    }
 }
 
 public sealed class QueryCommandOptions
@@ -180,6 +193,7 @@ public sealed class QueryCommandOptions
     public bool StatusConfig { get; init; }
     public bool? RedactPaths { get; init; }
     public ReferenceRankMode RankMode { get; init; } = ReferenceRankMode.Weighted;
+    internal bool ReferenceRankingActive { get; set; }
     public SymbolSortMode SymbolSortMode { get; init; } = SymbolSortMode.Name;
     public string? SortValue { get; init; }
     public bool SortExplicit { get; init; }

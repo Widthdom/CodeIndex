@@ -259,9 +259,17 @@ public static partial class QueryCommandRunner
                 foreach (var r in results)
                 {
                     if (exact)
-                        WriteGraphJsonResult(r, CliJsonSerializerContextFactory.Create(jsonOptions).CallerResult, exactSignal, jsonOptions, extraFields: payload => AddGraphContractJsonFields(payload, reader, jsonOptions, sqlGraphSignal, hdlGraphSignal));
+                        WriteGraphJsonResult(r, CliJsonSerializerContextFactory.Create(jsonOptions).CallerResult, exactSignal, jsonOptions, extraFields: payload =>
+                        {
+                            AddGraphContractJsonFields(payload, reader, jsonOptions, sqlGraphSignal, hdlGraphSignal);
+                            AddReferenceRankingQueryContextJson(payload, options, jsonOptions);
+                        });
                     else
-                        WriteJsonResult(r, CliJsonSerializerContextFactory.Create(jsonOptions).CallerResult, jsonOptions, extraFields: payload => AddGraphContractJsonFields(payload, reader, jsonOptions, sqlGraphSignal, hdlGraphSignal));
+                        WriteJsonResult(r, CliJsonSerializerContextFactory.Create(jsonOptions).CallerResult, jsonOptions, extraFields: payload =>
+                        {
+                            AddGraphContractJsonFields(payload, reader, jsonOptions, sqlGraphSignal, hdlGraphSignal);
+                            AddReferenceRankingQueryContextJson(payload, options, jsonOptions);
+                        });
                 }
             }
             else
@@ -406,9 +414,17 @@ public static partial class QueryCommandRunner
                 foreach (var r in results)
                 {
                     if (exact)
-                        WriteGraphJsonResult(r, CliJsonSerializerContextFactory.Create(jsonOptions).CalleeResult, exactSignal, jsonOptions, extraFields: payload => AddGraphContractJsonFields(payload, reader, jsonOptions, sqlGraphSignal, hdlGraphSignal));
+                        WriteGraphJsonResult(r, CliJsonSerializerContextFactory.Create(jsonOptions).CalleeResult, exactSignal, jsonOptions, extraFields: payload =>
+                        {
+                            AddGraphContractJsonFields(payload, reader, jsonOptions, sqlGraphSignal, hdlGraphSignal);
+                            AddReferenceRankingQueryContextJson(payload, options, jsonOptions);
+                        });
                     else
-                        WriteJsonResult(r, CliJsonSerializerContextFactory.Create(jsonOptions).CalleeResult, jsonOptions, extraFields: payload => AddGraphContractJsonFields(payload, reader, jsonOptions, sqlGraphSignal, hdlGraphSignal));
+                        WriteJsonResult(r, CliJsonSerializerContextFactory.Create(jsonOptions).CalleeResult, jsonOptions, extraFields: payload =>
+                        {
+                            AddGraphContractJsonFields(payload, reader, jsonOptions, sqlGraphSignal, hdlGraphSignal);
+                            AddReferenceRankingQueryContextJson(payload, options, jsonOptions);
+                        });
                 }
             }
             else
@@ -447,6 +463,7 @@ public static partial class QueryCommandRunner
         }
 
         options = ParseArgs(cmdArgs, jsonDefault: false, allowNamedQuery: true);
+        options.ReferenceRankingActive = command is "callers" or "callees";
         if (TryWriteUnsupportedOptionError(
                 command,
                 cmdArgs,
