@@ -5506,6 +5506,31 @@ public class DatabaseTests : IDisposable
     }
 
     [Theory]
+    [InlineData("json")]
+    [InlineData("jsonl")]
+    public void GetUnchangedFileId_InvalidatesPriorJsonHierarchyContracts_Issue4874(
+        string language)
+    {
+        const int previousContractVersion = 2;
+        var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var file = new FileRecord
+        {
+            Path = $"src/legacy-hierarchy.{language}",
+            Lang = language,
+            Size = 50,
+            Lines = 5,
+            Modified = modified,
+        };
+        _writer.UpsertFile(file);
+        _writer.SetMeta(
+            DbContext.GetSymbolExtractorVersionMetaKey(language),
+            previousContractVersion.ToString(CultureInfo.InvariantCulture));
+
+        Assert.True(SymbolExtractor.GetContractVersion(language) > previousContractVersion);
+        Assert.Null(_writer.GetUnchangedFileId(file.Path, modified, language: language));
+    }
+
+    [Theory]
     [InlineData("crystal", 2)]
     [InlineData("groovy", 2)]
     [InlineData("tcl", 2)]

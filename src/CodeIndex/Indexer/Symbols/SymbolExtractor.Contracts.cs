@@ -20,6 +20,8 @@ public static partial class SymbolExtractor
     public const int ApplicationManifestContractVersion = 3;
     public const int MarkdownContractVersion = 3;
     public const int DependencyLockContractVersion = 3;
+    public const int JsonContractVersion = 3;
+    public const int JsonLinesContractVersion = 3;
 
     private static readonly string[] ExplicitReferenceGraphContractLanguages =
         ["crystal", "groovy", "tcl", "prolog", "ambiguous_pl"];
@@ -68,11 +70,13 @@ public static partial class SymbolExtractor
             "crystal" or "groovy" or "tcl" => DynamicReferenceGraphContractVersion,
             "prolog" or "ambiguous_pl" => PrologReferenceGraphContractVersion,
             "ada" or "ambiguous_m" or "cython" or "d" or "julia" or "matlab" or "nim" or "objc" => ScientificNativeGraphContractVersion,
-            "config" or "dockerignore" or "editorconfig" or "gitattributes" or "gitignore" or "jsonl" or "toml" => RepositoryMetadataContractVersion,
+            "config" or "dockerignore" or "editorconfig" or "gitattributes" or "gitignore" or "toml" => RepositoryMetadataContractVersion,
             "app_manifest" => ApplicationManifestContractVersion,
             "markdown" => MarkdownContractVersion,
             "dependency_lock" => DependencyLockContractVersion,
-            "cmake" or "dependency_manifest" or "graphql" or "html" or "json" or "justfile" or "msbuild" or "solution" or "yaml" => ExpandedLanguageContractVersion,
+            "json" => JsonContractVersion,
+            "jsonl" => JsonLinesContractVersion,
+            "cmake" or "dependency_manifest" or "graphql" or "html" or "justfile" or "msbuild" or "solution" or "yaml" => ExpandedLanguageContractVersion,
             _ => DefaultContractVersion,
         };
     }
