@@ -1640,6 +1640,28 @@ public class IndexWatchRunnerTests
         }
     }
 
+    [Theory]
+    [InlineData(true, 8, 0, true, true)]
+    [InlineData(true, 8, 0, false, false)]
+    [InlineData(true, 9, 0, true, false)]
+    [InlineData(true, 9, 1, false, true)]
+    [InlineData(false, 8, 0, true, false)]
+    public void ShouldUsePollingWatchBackend_Net8MacSubprojectAvoidsMissedAncestorEvents_Issue4955(
+        bool isMacOs,
+        int runtimeMajorVersion,
+        int attempt,
+        bool hasAncestorIgnorePaths,
+        bool expected)
+    {
+        Assert.Equal(
+            expected,
+            IndexWatchRunner.ShouldUsePollingWatchBackendForTesting(
+                isMacOs,
+                runtimeMajorVersion,
+                attempt,
+                hasAncestorIgnorePaths));
+    }
+
     [Fact]
     public void RunCore_BackendStartFailureAfterFallback_StopsBeforeBaseline_Issue4858()
     {
@@ -2016,6 +2038,7 @@ public class IndexWatchRunnerTests
         var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
         using var cts = new CancellationTokenSource();
         using var ready = new ManualResetEventSlim();
+        Action<string>? enqueue = null;
         Task<int>? loopTask = null;
         try
         {
@@ -2036,11 +2059,21 @@ public class IndexWatchRunnerTests
                 Watch = true,
                 WatchDebounceMs = 50,
             };
-            IndexWatchRunner.WatchReadyForTesting = _ => ready.Set();
+            IndexWatchRunner.WatchReadyForTesting = callback =>
+            {
+                enqueue = callback;
+                ready.Set();
+            };
             loopTask = IndexWatchRunner.RunCoreAsync(options, _jsonOptions, projectRoot, dbPath, cts.Token);
 
             Assert.True(ready.Wait(TimeSpan.FromSeconds(15)), "The subproject watcher did not become ready.");
-            File.WriteAllText(Path.Combine(repoRoot, ".gitignore"), "subproj/ignored.py\n");
+            var ignorePath = Path.Combine(repoRoot, ".gitignore");
+            File.WriteAllText(ignorePath, "subproj/ignored.py\n");
+            if (OperatingSystem.IsMacOS() && Environment.Version.Major >= 9)
+            {
+                Assert.NotNull(enqueue);
+                enqueue(ignorePath);
+            }
             Assert.True(
                 SpinWait.SpinUntil(
                     () =>

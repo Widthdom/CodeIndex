@@ -50,7 +50,7 @@ internal static partial class IndexWatchRunner
         bool dbPathExplicit,
         int attempt)
         => WatchBackendFactoryForTesting?.Invoke(projectRoot, ignoreRuleRoot, ignoreCase)
-            ?? (attempt > 0 && OperatingSystem.IsMacOS()
+            ?? (ShouldUsePollingWatchBackend(projectRoot, ignoreRuleRoot, ignoreCase, attempt)
                 ? new PollingWatchBackend(
                     projectRoot,
                     ignoreRuleRoot,
@@ -58,6 +58,33 @@ internal static partial class IndexWatchRunner
                     ignoreCase,
                     dbPathExplicit)
                 : new FileSystemWatchBackend(projectRoot, ignoreRuleRoot, ignoreCase));
+
+    private static bool ShouldUsePollingWatchBackend(
+        string projectRoot,
+        string ignoreRuleRoot,
+        bool ignoreCase,
+        int attempt)
+    {
+        var comparison = ignoreCase ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        var hasAncestorIgnorePaths = !string.Equals(
+            Path.GetFullPath(projectRoot),
+            Path.GetFullPath(ignoreRuleRoot),
+            comparison);
+        return ShouldUsePollingWatchBackendForTesting(
+            OperatingSystem.IsMacOS(),
+            Environment.Version.Major,
+            attempt,
+            hasAncestorIgnorePaths);
+    }
+
+    internal static bool ShouldUsePollingWatchBackendForTesting(
+        bool isMacOs,
+        int runtimeMajorVersion,
+        int attempt,
+        bool hasAncestorIgnorePaths)
+        => isMacOs
+            && (attempt > 0
+                || (runtimeMajorVersion <= 8 && hasAncestorIgnorePaths));
 
     private static string ResolveWatchBackendName()
         => OperatingSystem.IsMacOS()
