@@ -108,12 +108,6 @@ public partial class DbWriter
             @"
             SELECT
                 (SELECT COUNT(*) FROM symbols WHERE name_folded IS NULL)
-              + (SELECT COUNT(*)
-                 FROM symbols s
-                 JOIN files f ON f.id = s.file_id
-                 WHERE f.lang = 'csharp'
-                   AND s.name_folded <> codeindex_name_fold(s.name)
-                   AND s.display_name_folded IS NULL)
               + (SELECT COUNT(*) FROM symbol_references WHERE symbol_name IS NOT NULL AND symbol_name_folded IS NULL)
               + (SELECT COUNT(*) FROM symbol_references WHERE container_name IS NOT NULL AND container_name_folded IS NULL)",
             static _ => { });
