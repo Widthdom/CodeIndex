@@ -58,7 +58,7 @@ internal static partial class JsonEnvelopeWrapper
     internal static bool ShouldAutoWrapBoundedResponse(string command, string[] args)
     {
         if (!BoundedResponseCommands.Contains(command)
-            && !IsValidOutlineByteBudgetRequest(command, args))
+            && !IsOutlineByteBudgetRequest(command, args))
             return false;
         if (command == "search" && IsSearchAggregateResponseRequest(args))
             return false;
@@ -80,7 +80,7 @@ internal static partial class JsonEnvelopeWrapper
     private static bool IsBoundedResponseRequest(string command, string[] args)
     {
         if (!BoundedResponseCommands.Contains(command)
-            && !IsValidOutlineByteBudgetRequest(command, args))
+            && !IsOutlineByteBudgetRequest(command, args))
             return false;
         if (command == "search" && IsSearchAggregateResponseRequest(args))
             return false;
@@ -92,11 +92,15 @@ internal static partial class JsonEnvelopeWrapper
                || ShouldAutoWrapBoundedResponse(command, args);
     }
 
-    private static bool IsValidOutlineByteBudgetRequest(string command, string[] args)
+    private static bool IsOutlineByteBudgetRequest(string command, string[] args)
         => command == "outline"
-           && HasArgument(args, "--max-json-bytes")
-           && !HasArgument(args, "--format")
-           && !args.Any(arg => arg.StartsWith("--json=", StringComparison.Ordinal));
+           && HasArgument(args, "--max-json-bytes");
+
+    private static bool HasUnsupportedOutlineBoundedControl(string command, string[] args)
+        => command == "outline"
+           && (HasArgument(args, "--fields")
+               || HasArgument(args, "--format")
+               || args.Any(arg => arg.StartsWith("--json=", StringComparison.Ordinal)));
 
     private static bool IsStandaloneFindCountContinuationRequest(string[] args)
         => IsFindCountResponseRequest(args)
@@ -175,6 +179,8 @@ internal static partial class JsonEnvelopeWrapper
     {
         if (!TryParseBoundedResponseControls(command, args, out var controls, out var controlError))
             return WriteBoundedResponseUsageError(controlError!, "Use the command help to pass positive --limit/--max-json-bytes values and a next_cursor returned by the same query.");
+        if (HasUnsupportedOutlineBoundedControl(command, args))
+            return RunOutlineValidationWithinBudget(args, controls.MaxJsonBytes!.Value, runInner);
         if (ProjectionFieldRegistry.IsDiscoveryRequest(controls.Fields))
         {
             var discoveryJson = ProjectionFieldRegistry.CreateDiscoveryDocument(command).ToJsonString(jsonOptions);
@@ -349,13 +355,51 @@ internal static partial class JsonEnvelopeWrapper
 
         if (envelope is null)
         {
+            var fieldsOption = command == "outline" ? "--outline-fields" : "--fields";
             return WriteBoundedResponseUsageError(
                 $"--max-json-bytes {controls.MaxJsonBytes} is too small for the bounded response metadata and one projected row.",
-                "Increase --max-json-bytes or choose fewer --fields.");
+                $"Increase --max-json-bytes or choose fewer {fieldsOption}.");
         }
 
         Console.WriteLine(emittedJson);
         return exitCode;
+    }
+
+    private static int RunOutlineValidationWithinBudget(
+        string[] args,
+        int maxJsonBytes,
+        Func<string[], int> runInner)
+    {
+        using var captured = new BoundedStringWriter(MaxCapturedOutputChars);
+        int exitCode;
+        using (ScopedConsoleOutput.Redirect(captured))
+            exitCode = runInner(args);
+
+        var output = captured.ToString();
+        if (output.Length == 0)
+            return exitCode;
+        if (Encoding.UTF8.GetByteCount(output) <= maxJsonBytes)
+        {
+            Console.Write(output);
+            return exitCode;
+        }
+
+        string? message = null;
+        string? hint = null;
+        try
+        {
+            var error = JsonNode.Parse(output) as JsonObject;
+            message = ReadString(error, "message");
+            hint = ReadString(error, "hint");
+        }
+        catch (JsonException)
+        {
+            // Fall back to a bounded generic diagnostic if validation emitted malformed JSON.
+        }
+
+        return WriteBoundedResponseUsageError(
+            message ?? "outline output-selector validation failed.",
+            $"{hint ?? "Use only options shown in `outline --help`."} Increase --max-json-bytes to receive the structured validation error.");
     }
 
     private static JsonObject? BuildBoundedEnvelopeWithinBudget(

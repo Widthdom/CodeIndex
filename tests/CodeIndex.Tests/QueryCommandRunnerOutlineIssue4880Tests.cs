@@ -126,6 +126,7 @@ public sealed class QueryCommandRunnerOutlineIssue4880Tests
             Assert.Equal(string.Empty, smallStdout);
             Assert.Contains($"Error [{CommandErrorCodes.UsageError}]", smallStderr, StringComparison.Ordinal);
             Assert.Contains("bounded response metadata and one projected row", smallStderr, StringComparison.Ordinal);
+            Assert.Contains("--outline-fields", smallStderr, StringComparison.Ordinal);
         }
         finally
         {
@@ -204,6 +205,46 @@ public sealed class QueryCommandRunnerOutlineIssue4880Tests
                 "--json=<format> is not supported by outline",
                 document.RootElement.GetProperty("message").GetString(),
                 StringComparison.Ordinal);
+
+            foreach (var field in new[] { "nonexistent", "list" })
+            {
+                var (fieldsExitCode, fieldsStdout, fieldsStderr) = ConsoleCapture.Capture(() =>
+                    ProgramRunner.Run(
+                        [
+                            "outline", "src/Sample.cs", "--db", dbPath, "--json",
+                            "--max-json-bytes", PageByteBudget.ToString(),
+                            "--fields", field,
+                        ],
+                        _jsonOptions,
+                        "1.0.0-test"));
+
+                Assert.Equal(CommandExitCodes.UsageError, fieldsExitCode);
+                Assert.Equal(string.Empty, fieldsStderr);
+                using var fieldsDocument = JsonDocument.Parse(fieldsStdout);
+                Assert.Equal("error", fieldsDocument.RootElement.GetProperty("status").GetString());
+                Assert.Contains(
+                    "--fields is not supported for outline",
+                    fieldsDocument.RootElement.GetProperty("message").GetString(),
+                    StringComparison.Ordinal);
+            }
+
+            foreach (var invalidSelector in new[] { "--json=nonsense", "--format=nonsense", "--fields=list" })
+            {
+                var (cappedExitCode, cappedStdout, cappedStderr) = ConsoleCapture.Capture(() =>
+                    ProgramRunner.Run(
+                        [
+                            "outline", "src/Sample.cs", "--db", dbPath, "--json",
+                            "--max-json-bytes", "1",
+                            invalidSelector,
+                        ],
+                        _jsonOptions,
+                        "1.0.0-test"));
+
+                Assert.Equal(CommandExitCodes.UsageError, cappedExitCode);
+                Assert.Equal(string.Empty, cappedStdout);
+                Assert.Contains($"Error [{CommandErrorCodes.UsageError}]", cappedStderr, StringComparison.Ordinal);
+                Assert.Contains("is not supported", cappedStderr, StringComparison.Ordinal);
+            }
         }
         finally
         {
