@@ -126,6 +126,7 @@ public sealed class QueryCommandOptions
     public int? FocusColumn { get; init; }
     public int FocusLength { get; init; } = 1;
     public int SnippetLines { get; init; } = SearchSnippetFormatter.DefaultSnippetLines;
+    internal bool SnippetLinesExplicit { get; init; }
     public SearchSnippetFocusMode SnippetFocus { get; init; } = SearchSnippetFocusMode.Quality;
     public int MaxLineWidth { get; init; } = LineWidthFormatter.DefaultMaxLineWidth;
     public List<string> PathPatterns { get; init; } = [];
