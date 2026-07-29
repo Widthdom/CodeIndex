@@ -48,34 +48,49 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunSearch_ExactSubstringWithRawFtsReportsEffectiveLiteralHighlightMode_Issue3558()
+    public void RunSearch_RejectsRawFtsWithLiteralModesBeforeDatabaseDispatch_Issue4879()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_exact_raw_fts_metadata_3558");
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_search_fts_literal_conflicts_4879");
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
-                "src/sql.cs",
-                "csharp",
-                "var CommandText = $\"SELECT 1\";\nvar CommandText = other;");
+            var cases = new[]
+            {
+                new { Args = new[] { "needle", "--db", dbPath, "--fts", "--exact-substring" }, Json = false },
+                new { Args = new[] { "--exact-substring", "--fts", "--query", "needle", "--db", dbPath, "--count" }, Json = false },
+                new { Args = new[] { "needle", "--db", dbPath, "--exact", "--format", "count", "--fts" }, Json = true },
+                new { Args = new[] { "needle", "--db", dbPath, "--format", "issue-drafts", "--exact-substring", "--fts" }, Json = true },
+                new { Args = new[] { "needle", "--db", dbPath, "--fts", "--token-boundary", "--json" }, Json = true },
+            };
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                ["CommandText = $", "--db", dbPath, "--json", "--fts", "--exact-substring"],
-                _jsonOptions));
+            foreach (var testCase in cases)
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                    testCase.Args,
+                    _jsonOptions));
 
-            using var document = ParseJsonOutput(stdout);
-            var root = document.RootElement;
-            var highlight = root.GetProperty("highlights")[0];
-
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.True(root.GetProperty("exact").GetBoolean());
-            Assert.False(root.GetProperty("raw_fts").GetBoolean());
-            Assert.True(root.GetProperty("literal_highlights_available").GetBoolean());
-            Assert.False(root.TryGetProperty("literal_highlight_warning", out _));
-            Assert.Equal("CommandText = $", highlight.GetProperty("literal_terms")[0].GetString());
-            Assert.Equal("CommandText = $", highlight.GetProperty("literal_term_occurrences")[0].GetProperty("term").GetString());
+                Assert.Equal(CommandExitCodes.UsageError, exitCode);
+                if (testCase.Json)
+                {
+                    Assert.Equal(string.Empty, stderr);
+                    using var document = ParseJsonOutput(stdout);
+                    var root = document.RootElement;
+                    Assert.Equal("error", root.GetProperty("status").GetString());
+                    Assert.Equal(CommandErrorCodes.UsageError, root.GetProperty("error_code").GetString());
+                    Assert.Equal("search", root.GetProperty("command").GetString());
+                    Assert.Contains("raw FTS mode (--fts) cannot be combined with literal search modes", root.GetProperty("message").GetString());
+                    Assert.Contains("Remove --fts", root.GetProperty("hint").GetString());
+                    Assert.False(root.TryGetProperty("usage", out _));
+                }
+                else
+                {
+                    Assert.Equal(string.Empty, stdout);
+                    Assert.Contains($"Error [{CommandErrorCodes.UsageError}]", stderr);
+                    Assert.Contains("raw FTS mode (--fts) cannot be combined with literal search modes", stderr);
+                    Assert.Contains("Remove --fts", stderr);
+                    Assert.DoesNotContain("Usage:", stderr);
+                }
+            }
         }
         finally
         {
