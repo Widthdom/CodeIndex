@@ -25,7 +25,9 @@ internal static partial class ProgramRunner
         string? jsonStreamOption = null;
         var jsonRequested = false;
         var prettyRequested = false;
+        var compactRequested = false;
         var resultsOnlyRequested = false;
+        var countFlagRequested = false;
         var usesSingleDocumentJsonMode = false;
         var hasExplicitPrettyJsonOutput = HasExplicitPrettyJsonOutputSelection(args);
 
@@ -35,6 +37,9 @@ internal static partial class ProgramRunner
             if (arg == "--")
                 break;
             var tokenRole = GetQueryCommandTokenRole(args, i);
+
+            if (tokenRole != QueryCommandTokenRole.CommandOptionValue && arg == "--count")
+                countFlagRequested = true;
 
             if (tokenRole != QueryCommandTokenRole.CommandOptionValue
                 && (arg == "--count"
@@ -80,6 +85,11 @@ internal static partial class ProgramRunner
                 }
                 continue;
             }
+            if (tokenRole != QueryCommandTokenRole.CommandOptionValue && arg == "--compact")
+            {
+                compactRequested = true;
+                continue;
+            }
             if (arg.StartsWith("--format=", StringComparison.Ordinal))
             {
                 if (tokenRole == QueryCommandTokenRole.CommandOptionValue)
@@ -96,8 +106,43 @@ internal static partial class ProgramRunner
             }
         }
 
+        var countModeRequested = countFlagRequested
+            || string.Equals(outputFormat, "count", StringComparison.Ordinal);
+        if (countModeRequested)
+        {
+            usesSingleDocumentJsonMode = true;
+            if (resultsOnlyRequested)
+            {
+                jsonStreamMode = "ndjson";
+                jsonStreamOption = "--results-only";
+            }
+        }
+
         if (ShouldDeferOutputCombinationValidation(args, commandIndex, commandName, outputFormat, jsonStreamMode))
             return true;
+
+        // Audit owns a structured JSON usage-error contract. Once count aliases are
+        // normalized, let its command runner report count-mode conflicts so --json
+        // callers keep receiving a machine-readable error on stdout.
+        if (countModeRequested && string.Equals(commandName, "audit", StringComparison.Ordinal))
+            return true;
+
+        if (countFlagRequested
+            && outputFormat is not null and not "text" and not "json" and not "count")
+        {
+            error = $"--count cannot be combined with --format {outputFormat} because count mode supports only text, json, or count output.";
+            hint = $"remove --count to keep --format {outputFormat}, or use --format text, json, or count for count output.";
+            usage = ConsoleUi.GetUsageLine(commandName) ?? $"cdidx {commandName} --help";
+            return false;
+        }
+
+        if (countModeRequested && compactRequested)
+        {
+            error = "Bounded response controls cannot be combined with --count.";
+            hint = "remove --compact to keep count output, or remove --count/--format count to keep compact output.";
+            usage = ConsoleUi.GetUsageLine(commandName) ?? $"cdidx {commandName} --help";
+            return false;
+        }
 
         var commandUsesImplicitNdjson = string.Equals(commandName, "search", StringComparison.Ordinal)
             || string.Equals(commandName, "files", StringComparison.Ordinal)
@@ -126,14 +171,15 @@ internal static partial class ProgramRunner
             return false;
         }
 
+        var schemaOutputFormat = countModeRequested ? "count" : outputFormat;
         if (jsonStreamMode != null
-            && outputFormat != null
-            && CliOutputFormatCapabilities.TryGet(outputFormat, out var streamCapability)
+            && schemaOutputFormat != null
+            && CliOutputFormatCapabilities.TryGet(schemaOutputFormat, out var streamCapability)
             && !streamCapability.SupportsJsonStreamMode)
         {
             var streamOption = jsonStreamOption ?? $"--json={jsonStreamMode}";
-            error = $"{streamOption} cannot be combined with --format {outputFormat} because that format defines its own output schema.";
-            hint = $"remove {streamOption} to keep --format {outputFormat}, or use --format json.";
+            error = $"{streamOption} cannot be combined with --format {schemaOutputFormat} because that format defines its own output schema.";
+            hint = $"remove {streamOption} to keep --format {schemaOutputFormat}, or use --format json.";
             usage = ConsoleUi.GetUsageLine(commandName) ?? $"cdidx {commandName} --help";
             return false;
         }

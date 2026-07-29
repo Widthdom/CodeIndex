@@ -40,6 +40,7 @@ public static partial class QueryCommandRunner
         private int? bodyStartLine;
         private int? bodyLines;
         private bool countOnly;
+        private bool countFlagRequested;
         private bool groupPartials;
         private bool all;
         private bool strictNotFound;
@@ -125,7 +126,9 @@ public static partial class QueryCommandRunner
         private string? statusExplainField;
         private bool statusLogPath;
         private string outputFormat = OutputFormatText;
+        private bool countOutputFormatExplicit;
         private bool outputFormatExplicit;
+        private bool outputFormatImpliesStructuredOutput;
         private bool statusConfig;
         private bool? redactPaths;
         private bool limitExplicit;
@@ -210,6 +213,7 @@ public static partial class QueryCommandRunner
         internal QueryCommandOptions Parse(string[] args)
         {
             ParseRawArguments(args);
+            NormalizeOutputMode();
 
             if (unusedActionable)
             {
@@ -241,6 +245,33 @@ public static partial class QueryCommandRunner
             }
 
             return BuildOptions(dbResolution, resolvedDbPath);
+        }
+
+        private void NormalizeOutputMode()
+        {
+            if (countOutputFormatExplicit)
+                outputFormat = OutputFormatCount;
+            countOnly = countFlagRequested || outputFormat == OutputFormatCount;
+            if (outputFormatImpliesStructuredOutput)
+                json = true;
+
+            if (countFlagRequested
+                && outputFormatExplicit
+                && outputFormat is not OutputFormatText and not OutputFormatJson and not OutputFormatCount)
+            {
+                AddParseError(
+                    $"Error: --count cannot be combined with --format {outputFormat} because count mode supports only text, json, or count output.");
+            }
+            else if (countOnly && resultsOnly)
+            {
+                AddParseError(
+                    "Error: --results-only cannot be combined with --format count because that format defines its own output schema.");
+            }
+            else if (countOnly && jsonOutputFormatExplicit)
+            {
+                AddParseError(
+                    $"Error: --json={jsonOutputFormat} cannot be combined with --format count because that format defines its own output schema.");
+            }
         }
 
         private void ResolveProjectFilters(string resolvedDbPath)

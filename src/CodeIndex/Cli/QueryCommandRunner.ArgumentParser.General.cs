@@ -152,21 +152,21 @@ public static partial class QueryCommandRunner
                         if (TryParseOutputFormat(formatValue!, out var parsedOutputFormat))
                         {
                             outputFormat = parsedOutputFormat;
+                            countOutputFormatExplicit = parsedOutputFormat == OutputFormatCount;
                             outputFormatExplicit = true;
                             if (parsedOutputFormat == OutputFormatCompact)
                                 compact = true;
-                            if (parsedOutputFormat == OutputFormatCount)
-                                countOnly = true;
-                            if (parsedOutputFormat != OutputFormatText &&
+                            outputFormatImpliesStructuredOutput =
+                                parsedOutputFormat != OutputFormatText &&
                                 parsedOutputFormat != OutputFormatDot &&
-                                parsedOutputFormat != OutputFormatGraphMl)
-                                json = true;
+                                parsedOutputFormat != OutputFormatGraphMl;
                         }
                         else if (allowIssueDraftsFormat && string.Equals(formatValue, OutputFormatIssueDrafts, StringComparison.OrdinalIgnoreCase))
                         {
                             outputFormat = OutputFormatIssueDrafts;
+                            countOutputFormatExplicit = false;
                             outputFormatExplicit = true;
-                            json = true;
+                            outputFormatImpliesStructuredOutput = true;
                         }
                         else
                         {
