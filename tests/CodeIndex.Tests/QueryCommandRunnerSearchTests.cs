@@ -229,7 +229,8 @@ public partial class QueryCommandRunnerTests
             }
 
             Assert.Equal(CommandExitCodes.UsageError, ftsExitCode);
-            Assert.Contains("--token-boundary cannot be combined with --fts", ftsStderr);
+            Assert.Contains($"Error [{CommandErrorCodes.UsageError}]", ftsStderr);
+            Assert.Contains("raw FTS mode (--fts) cannot be combined with literal search modes", ftsStderr);
             Assert.Equal(CommandExitCodes.UsageError, recipeExitCode);
             Assert.Contains("--token-boundary is only supported for ad hoc search", recipeStderr);
         }
@@ -9368,6 +9369,10 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("cdidx", replayWords[0]);
             Assert.Equal("search", replayWords[1]);
             Assert.Contains("--query", replayWords);
+            Assert.Contains("--exact-substring", replayWords);
+            Assert.DoesNotContain("--fts", replayWords);
+            Assert.DoesNotContain("--exact", replayWords);
+            Assert.DoesNotContain("--token-boundary", replayWords);
             Assert.Contains("--total-limit", replayWords);
             Assert.Contains("--include-generated", replayWords);
             Assert.Contains("--first-per-file", replayWords);

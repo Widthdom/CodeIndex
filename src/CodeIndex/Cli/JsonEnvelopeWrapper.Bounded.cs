@@ -29,7 +29,7 @@ internal static partial class JsonEnvelopeWrapper
 
     private static readonly HashSet<string> AutoWrapByteBudgetCommands = new(StringComparer.Ordinal)
     {
-        "find", "status", "references", "callers", "callees", "languages",
+        "find", "status", "references", "callers", "callees", "languages", "outline",
     };
 
     private static readonly HashSet<string> AutoWrapCompactCommands = new(StringComparer.Ordinal)
@@ -46,7 +46,7 @@ internal static partial class JsonEnvelopeWrapper
     private static readonly HashSet<string> PageableResponseCommands = new(StringComparer.Ordinal)
     {
         "search", "definition", "find", "hotspots", "references", "callers", "callees",
-        "symbols", "files", "languages", "impact", "map",
+        "symbols", "files", "languages", "impact", "map", "outline",
     };
 
     private static readonly HashSet<string> CountableResponseCommands = new(StringComparer.Ordinal)
@@ -57,7 +57,8 @@ internal static partial class JsonEnvelopeWrapper
 
     internal static bool ShouldAutoWrapBoundedResponse(string command, string[] args)
     {
-        if (!BoundedResponseCommands.Contains(command))
+        if (!BoundedResponseCommands.Contains(command)
+            && !IsOutlineByteBudgetRequest(command, args))
             return false;
         if (command == "search" && IsSearchAggregateResponseRequest(args))
             return false;
@@ -78,7 +79,8 @@ internal static partial class JsonEnvelopeWrapper
 
     private static bool IsBoundedResponseRequest(string command, string[] args)
     {
-        if (!BoundedResponseCommands.Contains(command))
+        if (!BoundedResponseCommands.Contains(command)
+            && !IsOutlineByteBudgetRequest(command, args))
             return false;
         if (command == "search" && IsSearchAggregateResponseRequest(args))
             return false;
@@ -89,6 +91,16 @@ internal static partial class JsonEnvelopeWrapper
                || (command != "search" && HasEnvelopeFlag(args) && HasArgument(args, "--max-json-bytes"))
                || ShouldAutoWrapBoundedResponse(command, args);
     }
+
+    private static bool IsOutlineByteBudgetRequest(string command, string[] args)
+        => command == "outline"
+           && HasArgument(args, "--max-json-bytes");
+
+    private static bool HasUnsupportedOutlineBoundedControl(string command, string[] args)
+        => command == "outline"
+           && (HasArgument(args, "--fields")
+               || HasArgument(args, "--format")
+               || args.Any(arg => arg.StartsWith("--json=", StringComparison.Ordinal)));
 
     private static bool IsStandaloneFindCountContinuationRequest(string[] args)
         => IsFindCountResponseRequest(args)
@@ -167,6 +179,8 @@ internal static partial class JsonEnvelopeWrapper
     {
         if (!TryParseBoundedResponseControls(command, args, out var controls, out var controlError))
             return WriteBoundedResponseUsageError(controlError!, "Use the command help to pass positive --limit/--max-json-bytes values and a next_cursor returned by the same query.");
+        if (HasUnsupportedOutlineBoundedControl(command, args))
+            return RunOutlineValidationWithinBudget(args, controls.MaxJsonBytes!.Value, runInner);
         if (ProjectionFieldRegistry.IsDiscoveryRequest(controls.Fields))
         {
             var discoveryJson = ProjectionFieldRegistry.CreateDiscoveryDocument(command).ToJsonString(jsonOptions);
@@ -341,13 +355,51 @@ internal static partial class JsonEnvelopeWrapper
 
         if (envelope is null)
         {
+            var fieldsOption = command == "outline" ? "--outline-fields" : "--fields";
             return WriteBoundedResponseUsageError(
                 $"--max-json-bytes {controls.MaxJsonBytes} is too small for the bounded response metadata and one projected row.",
-                "Increase --max-json-bytes or choose fewer --fields.");
+                $"Increase --max-json-bytes or choose fewer {fieldsOption}.");
         }
 
         Console.WriteLine(emittedJson);
         return exitCode;
+    }
+
+    private static int RunOutlineValidationWithinBudget(
+        string[] args,
+        int maxJsonBytes,
+        Func<string[], int> runInner)
+    {
+        using var captured = new BoundedStringWriter(MaxCapturedOutputChars);
+        int exitCode;
+        using (ScopedConsoleOutput.Redirect(captured))
+            exitCode = runInner(args);
+
+        var output = captured.ToString();
+        if (output.Length == 0)
+            return exitCode;
+        if (Encoding.UTF8.GetByteCount(output) <= maxJsonBytes)
+        {
+            Console.Write(output);
+            return exitCode;
+        }
+
+        string? message = null;
+        string? hint = null;
+        try
+        {
+            var error = JsonNode.Parse(output) as JsonObject;
+            message = ReadString(error, "message");
+            hint = ReadString(error, "hint");
+        }
+        catch (JsonException)
+        {
+            // Fall back to a bounded generic diagnostic if validation emitted malformed JSON.
+        }
+
+        return WriteBoundedResponseUsageError(
+            message ?? "outline output-selector validation failed.",
+            $"{hint ?? "Use only options shown in `outline --help`."} Increase --max-json-bytes to receive the structured validation error.");
     }
 
     private static JsonObject? BuildBoundedEnvelopeWithinBudget(
@@ -556,7 +608,7 @@ internal static partial class JsonEnvelopeWrapper
         return Encoding.UTF8.GetString(stream.ToArray());
     }
 
-    private static bool JsonFitsResponseBudget(string json, int maxJsonBytes)
+    internal static bool JsonFitsResponseBudget(string json, int maxJsonBytes)
         => Encoding.UTF8.GetByteCount(json) + Encoding.UTF8.GetByteCount(Environment.NewLine) <= maxJsonBytes;
 
     private static int WriteProjectionRegistryResponse(
@@ -723,6 +775,8 @@ internal static partial class JsonEnvelopeWrapper
             return ExtractNestedCollection(filesPayload, "files");
         if (command == "languages" && rawResults.FirstOrDefault() is JsonObject languagesPayload)
             return ExtractNestedCollection(languagesPayload, "languages");
+        if (command == "outline" && rawResults.FirstOrDefault() is JsonObject outlinePayload)
+            return ExtractOutlineSymbols(outlinePayload);
         if (command == "impact" && rawResults.FirstOrDefault() is JsonObject impactPayload)
         {
             var requestedCollection = SelectRequestedCollection(controls.Fields, "callers", "file_impacts", "definitions");
@@ -772,6 +826,23 @@ internal static partial class JsonEnvelopeWrapper
             rows.Add(result?.DeepClone());
         }
         return new ResponseExtraction(rows, null, null, null);
+    }
+
+    private static ResponseExtraction ExtractOutlineSymbols(JsonObject payload)
+    {
+        var extraction = ExtractNestedCollection(payload, "symbols");
+        foreach (var pagingField in new[]
+                 {
+                     "returned_symbol_count",
+                     "cursor_offset",
+                     "next_cursor",
+                     "has_more",
+                     "result_stable_at",
+                 })
+        {
+            extraction.Context?.Remove(pagingField);
+        }
+        return extraction;
     }
 
     private static ResponseExtraction ExtractDiscoveryRows(string command, JsonArray rawResults)
@@ -1000,8 +1071,12 @@ internal static partial class JsonEnvelopeWrapper
     {
         var stripped = StripResponseOptions(args, stripLimit: PageableResponseCommands.Contains(command));
         var bodyRequested = HasExplicitBodyProjection(controls.Fields);
-        if (!bodyRequested && (controls.Compact || controls.Fields is { Count: > 0 }))
+        if (command != "outline"
+            && !bodyRequested
+            && (controls.Compact || controls.Fields is { Count: > 0 }))
+        {
             stripped.RemoveAll(arg => string.Equals(arg, "--body", StringComparison.Ordinal));
+        }
         if (PageableResponseCommands.Contains(command))
         {
             stripped.Add("--limit");
