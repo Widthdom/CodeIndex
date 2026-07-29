@@ -316,6 +316,37 @@ internal static class DbConnectionFactory
             && currentState == snapshotSourceState;
     }
 
+    internal static bool TryCaptureQuerySourceState(
+        string dbPath,
+        CancellationToken cancellationToken,
+        out QueryOnlySnapshotSourceState state)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var localDbPath = dbPath;
+        if (SqliteFileUri.StartsWithFileScheme(dbPath))
+        {
+            if (!TryGetLocalPath(dbPath, out var parsedPath, out _) || parsedPath == null)
+            {
+                state = default;
+                return false;
+            }
+            localDbPath = parsedPath;
+        }
+
+        return TryCaptureQueryOnlySnapshotState(
+            localDbPath,
+            cancellationToken,
+            out state,
+            requireWalMode: false);
+    }
+
+    internal static bool IsQuerySourceStateCurrent(
+        string dbPath,
+        QueryOnlySnapshotSourceState sourceState,
+        CancellationToken cancellationToken = default)
+        => TryCaptureQuerySourceState(dbPath, cancellationToken, out var currentState)
+           && currentState == sourceState;
+
     private static SqliteConnection CreateStableWalSnapshotConnection(
         string localDbPath,
         out bool copiedHotWal,
@@ -365,7 +396,7 @@ internal static class DbConnectionFactory
 
                 if (TryCaptureQueryOnlySnapshotState(snapshotDbPath, cancellationToken, out var copied)
                     && TryCaptureQueryOnlySnapshotState(normalizedDbPath, cancellationToken, out var after)
-                    && before == copied
+                    && before.ContentEquals(copied)
                     && before == after)
                 {
                     copiedHotWal = before.WalLength > 0;
@@ -444,7 +475,8 @@ internal static class DbConnectionFactory
     private static bool TryCaptureQueryOnlySnapshotState(
         string localDbPath,
         CancellationToken cancellationToken,
-        out QueryOnlySnapshotSourceState state)
+        out QueryOnlySnapshotSourceState state,
+        bool requireWalMode = true)
     {
         try
         {
@@ -465,8 +497,7 @@ internal static class DbConnectionFactory
 
             if (dbHeaderLength < 20
                 || !dbHeader[..16].SequenceEqual("SQLite format 3\0"u8)
-                || dbHeader[18] != 2
-                || dbHeader[19] != 2)
+                || (requireWalMode && (dbHeader[18] != 2 || dbHeader[19] != 2)))
             {
                 state = default;
                 return false;
@@ -513,18 +544,49 @@ internal static class DbConnectionFactory
                 walLength = 0;
             }
 
+            var dbFile = TryReadSourceFileIdentity(normalizedDbPath);
+            var walFile = TryReadSourceFileIdentity(walPath);
+            if (dbFile is null
+                || dbFile.Value.Length != dbLength
+                || (walFile?.Length ?? 0) != walLength)
+            {
+                state = default;
+                return false;
+            }
+
             state = new QueryOnlySnapshotSourceState(
                 dbLength,
                 Fingerprint(dbHeader[..dbHeaderLength]),
                 walLength,
                 walHeaderFingerprint,
-                walLastFrameFingerprint);
+                walLastFrameFingerprint,
+                dbFile.Value,
+                walFile);
             return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
         {
             state = default;
             return false;
+        }
+    }
+
+    private static QuerySourceFileIdentity? TryReadSourceFileIdentity(string path)
+    {
+        try
+        {
+            var file = new FileInfo(path);
+            file.Refresh();
+            return file.Exists
+                ? new QuerySourceFileIdentity(
+                    file.Length,
+                    file.CreationTimeUtc.Ticks,
+                    file.LastWriteTimeUtc.Ticks)
+                : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            return null;
         }
     }
 
@@ -621,7 +683,22 @@ internal static class DbConnectionFactory
         string DbHeaderFingerprint,
         long WalLength,
         string? WalHeaderFingerprint,
-        string? WalLastFrameFingerprint);
+        string? WalLastFrameFingerprint,
+        QuerySourceFileIdentity DatabaseFile,
+        QuerySourceFileIdentity? WalFile)
+    {
+        internal bool ContentEquals(QueryOnlySnapshotSourceState other)
+            => DbLength == other.DbLength
+               && DbHeaderFingerprint == other.DbHeaderFingerprint
+               && WalLength == other.WalLength
+               && WalHeaderFingerprint == other.WalHeaderFingerprint
+               && WalLastFrameFingerprint == other.WalLastFrameFingerprint;
+    }
+
+    internal readonly record struct QuerySourceFileIdentity(
+        long Length,
+        long CreationTimeUtcTicks,
+        long LastWriteTimeUtcTicks);
 
     private sealed class QueryOnlySnapshotSourceChangedException(Exception innerException)
         : IOException("The query-only snapshot source disappeared while it was being copied.", innerException);

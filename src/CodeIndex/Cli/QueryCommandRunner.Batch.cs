@@ -17,6 +17,9 @@ public static partial class QueryCommandRunner
     internal static Action<int>? BatchParallelCommandCompletedForTesting { get; set; }
     internal static Action<int>? BatchInputLineReadForTesting { get; set; }
     internal static Action<int>? BatchParallelItemPreparedForTesting { get; set; }
+    internal static Action? BatchParallelSessionOpenedForTesting { get; set; }
+    internal static Func<DbContext, DbReader>? BatchParallelReaderFactoryForTesting { get; set; }
+    internal static Action? BatchParallelDatabaseValidatingForTesting { get; set; }
 
     public static int RunBatch(
         string[] cmdArgs,
@@ -156,31 +159,59 @@ public static partial class QueryCommandRunner
 
         if (parallelism > 1)
         {
+            BatchParallelSession? firstSession = null;
+            DbContext? validationDb = null;
             try
             {
-                using var validationDb = new DbContext(DbOpenIntent.QueryOnly, dbPath, cancellationToken);
+                validationDb = new DbContext(DbOpenIntent.QueryOnly, dbPath, cancellationToken);
+                BatchParallelDatabaseValidatingForTesting?.Invoke();
                 if (!validationDb.TryValidateIsCodeIndexDb(out var validationReason))
                     return WriteInvalidCodeIndexDbError(dbPath, validationReason, json: false, jsonOptions);
+                var transferredDb = validationDb;
+                validationDb = null;
+                firstSession = BatchParallelSession.FromValidated(
+                    dbPath,
+                    transferredDb,
+                    cancellationToken);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
+                firstSession?.Dispose();
                 return WriteBatchSetupCancellationSummary(
                     maxInputLines,
                     maxOutputChars,
                     parallelism,
                     jsonOptions);
             }
+            catch
+            {
+                firstSession?.Dispose();
+                throw;
+            }
+            finally
+            {
+                validationDb?.Dispose();
+            }
 
-            return RunBatchParallel(
-                dbPath,
-                dbPathExplicit,
-                maxInputLines,
-                maxOutputChars,
-                parallelism,
-                includeRawStreams,
-                jsonOptions,
-                appVersion,
-                cancellationToken);
+            try
+            {
+                return RunBatchParallel(
+                    dbPath,
+                    dbPathExplicit,
+                    maxInputLines,
+                    maxOutputChars,
+                    parallelism,
+                    includeRawStreams,
+                    jsonOptions,
+                    appVersion,
+                    firstSession!,
+                    cancellationToken);
+            }
+            catch
+            {
+                firstSession?.Dispose();
+                throw;
+            }
         }
 
         try
@@ -454,8 +485,14 @@ public static partial class QueryCommandRunner
         bool includeRawStreams,
         JsonSerializerOptions jsonOptions,
         string appVersion,
+        BatchParallelSession firstSession,
         CancellationToken cancellationToken)
     {
+        var sessions = new BatchParallelSession[parallelism];
+        sessions[0] = firstSession;
+        for (var index = 1; index < sessions.Length; index++)
+            sessions[index] = new BatchParallelSession(dbPath);
+        var availableSessions = new Queue<BatchParallelSession>(sessions);
         using var consoleOwnership = ConsoleStreamOwnership.Enter();
         var originalOut = Console.Out;
         var originalError = Console.Error;
@@ -618,7 +655,8 @@ public static partial class QueryCommandRunner
             });
             var active = new Queue<(
                 BatchPendingItem Item,
-                Task<BatchParallelCommandResult?> Result)>();
+                Task<BatchParallelCommandResult?> Result,
+                BatchParallelSession? Session)>();
 
             try
             {
@@ -626,21 +664,31 @@ public static partial class QueryCommandRunner
                 {
                     while (active.Count < parallelism && input.Reader.TryRead(out var item))
                     {
-                        var result = item.Error is not null
-                            ? Task.FromResult<BatchParallelCommandResult?>(null)
-                            : Task.Run<BatchParallelCommandResult?>(
+                        BatchParallelSession? session = null;
+                        Task<BatchParallelCommandResult?> result;
+                        if (item.Error is not null)
+                        {
+                            result = Task.FromResult<BatchParallelCommandResult?>(null);
+                        }
+                        else
+                        {
+                            session = availableSessions.Dequeue();
+                            var assignedSession = session;
+                            result = Task.Run<BatchParallelCommandResult?>(
                                 () => RunBatchParallelCommand(
                                     item.LineNumber,
                                     item.CommandName!,
                                     item.Arguments,
                                     dbPath,
                                     dbPathExplicit,
+                                    assignedSession,
                                     stdoutRouter,
                                     stderrRouter,
                                     jsonOptions,
                                     appVersion,
                                     cancellationToken));
-                        active.Enqueue((item, result));
+                        }
+                        active.Enqueue((item, result, session));
                     }
 
                     if (active.Count > 0
@@ -648,8 +696,10 @@ public static partial class QueryCommandRunner
                             || active.Count == parallelism
                             || input.Reader.Completion.IsCompleted))
                     {
-                        var (item, resultTask) = active.Dequeue();
+                        var (item, resultTask, session) = active.Dequeue();
                         var result = resultTask.GetAwaiter().GetResult();
+                        if (session is not null)
+                            availableSessions.Enqueue(session);
                         if (item.Error is not null)
                         {
                             if (item.Error.ExitCode is CommandExitCodes.CancelledBySignal
@@ -818,7 +868,15 @@ public static partial class QueryCommandRunner
         }
         finally
         {
-            ConsoleStreamOwnership.Restore(originalOut, originalError);
+            try
+            {
+                foreach (var session in sessions)
+                    session.Dispose();
+            }
+            finally
+            {
+                ConsoleStreamOwnership.Restore(originalOut, originalError);
+            }
         }
     }
 
@@ -828,6 +886,7 @@ public static partial class QueryCommandRunner
         string[] subArgs,
         string dbPath,
         bool dbPathExplicit,
+        BatchParallelSession session,
         BatchConsoleRouter stdoutRouter,
         BatchConsoleRouter stderrRouter,
         JsonSerializerOptions jsonOptions,
@@ -844,14 +903,13 @@ public static partial class QueryCommandRunner
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
-            using var db = new DbContext(DbOpenIntent.QueryOnly, dbPath, cancellationToken);
-            if (!db.TryValidateIsCodeIndexDb(out var validationReason))
+            if (!session.TryGetReader(cancellationToken, out var reader, out var validationReason))
             {
                 exitCode = WriteInvalidCodeIndexDbError(dbPath, validationReason, json: false, jsonOptions);
             }
             else
             {
-                s_batchReader = new DbReader(db);
+                s_batchReader = reader;
                 s_batchDbPath = dbPath;
                 s_batchDbPathExplicit = dbPathExplicit;
                 BatchParallelCommandStartedForTesting?.Invoke(lineNumber);
@@ -1940,6 +1998,159 @@ public static partial class QueryCommandRunner
                 owner._target.Value = previous;
             }
         }
+    }
+
+    private sealed class BatchParallelSession : IDisposable
+    {
+        private readonly string _dbPath;
+        private DbContext? _db;
+        private DbReader? _reader;
+        private DbConnectionFactory.QueryOnlySnapshotSourceState? _sourceState;
+        private bool _readerUsed;
+        private bool _disposed;
+
+        public BatchParallelSession(string dbPath)
+        {
+            _dbPath = dbPath;
+        }
+
+        private BatchParallelSession(
+            string dbPath,
+            DbContext validatedDb,
+            DbReader reader,
+            DbConnectionFactory.QueryOnlySnapshotSourceState? sourceState)
+        {
+            _dbPath = dbPath;
+            _db = validatedDb;
+            _reader = reader;
+            _sourceState = sourceState;
+        }
+
+        public static BatchParallelSession FromValidated(
+            string dbPath,
+            DbContext validatedDb,
+            CancellationToken cancellationToken)
+        {
+            DbReader? reader = null;
+            try
+            {
+                reader = CreateReader(validatedDb);
+                var sourceState = CaptureSourceState(dbPath, validatedDb, cancellationToken);
+                BatchParallelSessionOpenedForTesting?.Invoke();
+                return new BatchParallelSession(dbPath, validatedDb, reader, sourceState);
+            }
+            catch
+            {
+                reader?.Dispose();
+                validatedDb.Dispose();
+                throw;
+            }
+        }
+
+        public bool TryGetReader(
+            CancellationToken cancellationToken,
+            out DbReader reader,
+            out string? validationReason)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (_reader is not null
+                && _db is not null
+                && (!_readerUsed
+                    || (_sourceState is { } sourceState
+                        && DbConnectionFactory.IsQuerySourceStateCurrent(
+                            _dbPath,
+                            sourceState,
+                            cancellationToken))))
+            {
+                _readerUsed = true;
+                reader = _reader;
+                validationReason = null;
+                return true;
+            }
+
+            DbContext? replacementDb = null;
+            DbReader? replacementReader = null;
+            try
+            {
+                replacementDb = new DbContext(
+                    DbOpenIntent.QueryOnly,
+                    _dbPath,
+                    cancellationToken);
+                if (!replacementDb.TryValidateIsCodeIndexDb(out validationReason))
+                {
+                    replacementDb.Dispose();
+                    replacementDb = null;
+                    reader = null!;
+                    return false;
+                }
+
+                replacementReader = CreateReader(replacementDb);
+                var replacementSourceState = CaptureSourceState(
+                    _dbPath,
+                    replacementDb,
+                    cancellationToken);
+                BatchParallelSessionOpenedForTesting?.Invoke();
+
+                var previousReader = _reader;
+                var previousDb = _db;
+                _reader = replacementReader;
+                _db = replacementDb;
+                _sourceState = replacementSourceState;
+                _readerUsed = true;
+                replacementReader = null;
+                replacementDb = null;
+                try
+                {
+                    previousReader?.Dispose();
+                }
+                finally
+                {
+                    previousDb?.Dispose();
+                }
+
+                reader = _reader;
+                return true;
+            }
+            catch
+            {
+                replacementReader?.Dispose();
+                replacementDb?.Dispose();
+                throw;
+            }
+        }
+
+        public void Dispose()
+        {
+            if (_disposed)
+                return;
+            _disposed = true;
+            try
+            {
+                _reader?.Dispose();
+                _reader = null;
+            }
+            finally
+            {
+                _db?.Dispose();
+                _db = null;
+            }
+        }
+
+        private static DbConnectionFactory.QueryOnlySnapshotSourceState? CaptureSourceState(
+            string dbPath,
+            DbContext db,
+            CancellationToken cancellationToken)
+            => db.QueryOnlySnapshotSourceState
+               ?? (DbConnectionFactory.TryCaptureQuerySourceState(
+                       dbPath,
+                       cancellationToken,
+                       out var sourceState)
+                   ? sourceState
+                   : null);
+
+        private static DbReader CreateReader(DbContext db)
+            => BatchParallelReaderFactoryForTesting?.Invoke(db) ?? new DbReader(db);
     }
 
     private sealed class BatchJsonOutputWriter(
