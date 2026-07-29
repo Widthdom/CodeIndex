@@ -58,7 +58,7 @@ internal static partial class JsonEnvelopeWrapper
     internal static bool ShouldAutoWrapBoundedResponse(string command, string[] args)
     {
         if (!BoundedResponseCommands.Contains(command)
-            && !(command == "outline" && HasArgument(args, "--max-json-bytes")))
+            && !IsValidOutlineByteBudgetRequest(command, args))
             return false;
         if (command == "search" && IsSearchAggregateResponseRequest(args))
             return false;
@@ -80,7 +80,7 @@ internal static partial class JsonEnvelopeWrapper
     private static bool IsBoundedResponseRequest(string command, string[] args)
     {
         if (!BoundedResponseCommands.Contains(command)
-            && !(command == "outline" && HasArgument(args, "--max-json-bytes")))
+            && !IsValidOutlineByteBudgetRequest(command, args))
             return false;
         if (command == "search" && IsSearchAggregateResponseRequest(args))
             return false;
@@ -91,6 +91,12 @@ internal static partial class JsonEnvelopeWrapper
                || (command != "search" && HasEnvelopeFlag(args) && HasArgument(args, "--max-json-bytes"))
                || ShouldAutoWrapBoundedResponse(command, args);
     }
+
+    private static bool IsValidOutlineByteBudgetRequest(string command, string[] args)
+        => command == "outline"
+           && HasArgument(args, "--max-json-bytes")
+           && !HasArgument(args, "--format")
+           && !args.Any(arg => arg.StartsWith("--json=", StringComparison.Ordinal));
 
     private static bool IsStandaloneFindCountContinuationRequest(string[] args)
         => IsFindCountResponseRequest(args)

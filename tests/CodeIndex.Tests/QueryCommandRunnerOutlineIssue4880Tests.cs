@@ -159,6 +159,58 @@ public sealed class QueryCommandRunnerOutlineIssue4880Tests
         Assert.Contains("--max-json-bytes <n>", stdout, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Outline_MaxJsonBytesPreservesUnsupportedOutputSelectorValidation_Issue4880()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("outline_byte_budget_validation_4880");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Sample.cs",
+                "csharp",
+                "public sealed class Sample { }");
+
+            var (formatExitCode, formatStdout, formatStderr) = ConsoleCapture.Capture(() =>
+                ProgramRunner.Run(
+                    [
+                        "outline", "src/Sample.cs", "--db", dbPath,
+                        "--max-json-bytes", PageByteBudget.ToString(),
+                        "--format", "nonsense",
+                    ],
+                    _jsonOptions,
+                    "1.0.0-test"));
+
+            Assert.Equal(CommandExitCodes.UsageError, formatExitCode);
+            Assert.Equal(string.Empty, formatStdout);
+            Assert.Contains("--format is not supported for outline", formatStderr, StringComparison.Ordinal);
+
+            var (jsonExitCode, jsonStdout, jsonStderr) = ConsoleCapture.Capture(() =>
+                ProgramRunner.Run(
+                    [
+                        "outline", "src/Sample.cs", "--db", dbPath,
+                        "--max-json-bytes", PageByteBudget.ToString(),
+                        "--json=nonsense",
+                    ],
+                    _jsonOptions,
+                    "1.0.0-test"));
+
+            Assert.Equal(CommandExitCodes.UsageError, jsonExitCode);
+            Assert.Equal(string.Empty, jsonStderr);
+            using var document = JsonDocument.Parse(jsonStdout);
+            Assert.Equal("error", document.RootElement.GetProperty("status").GetString());
+            Assert.Contains(
+                "--json=<format> is not supported by outline",
+                document.RootElement.GetProperty("message").GetString(),
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     private static (string Name, int Depth) ReadOutlineIdentity(JsonElement row)
         => (row.GetProperty("name").GetString()!, row.GetProperty("depth").GetInt32());
 }
