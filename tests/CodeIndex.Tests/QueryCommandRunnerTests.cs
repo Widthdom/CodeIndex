@@ -5685,6 +5685,8 @@ public partial class QueryCommandRunnerTests
         Assert.True(json.GetProperty("edges")[0].TryGetProperty("reference_count", out _));
         Assert.True(json.GetProperty("edges")[0].TryGetProperty("ranking_score", out _));
         Assert.True(json.GetProperty("edges")[0].TryGetProperty("symbols", out _));
+        Assert.True(json.GetProperty("edges")[0].TryGetProperty("evidence", out var evidence));
+        Assert.NotEmpty(evidence.EnumerateArray());
     }
 
     [Fact]
@@ -5735,6 +5737,280 @@ public partial class QueryCommandRunnerTests
         Assert.Equal(1, symbolFilter.GetProperty("symbols_before").GetInt32());
         Assert.Equal(1, symbolFilter.GetProperty("symbols_after").GetInt32());
         Assert.Equal(0, symbolFilter.GetProperty("symbols_removed").GetInt32());
+    }
+
+    [Fact]
+    public void RunDeps_SuppressNoiseRemovesLegacyMarkdownHeadingEvidenceButKeepsExplicitLinks_Issue4868()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_deps_markdown_heading_noise");
+        var projectRoot = project.Root;
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "docs/issue4868/target.md",
+            "markdown",
+            "# Error\n\n# Shared heading\n");
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "docs/issue4868/noise.md",
+            "markdown",
+            "# Shared heading\n");
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "docs/issue4868/unrelated.md",
+            "markdown",
+            "# Shared heading\n");
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "docs/issue4868/source.md",
+            "markdown",
+            "# Source\n\n[target](target.md#error)\n");
+        InsertLegacyMarkdownHeadingReferences(
+            dbPath,
+            "docs/issue4868/source.md",
+            "Shared heading",
+            count: 2_000);
+        MarkDependencyGraphReady(dbPath);
+
+        var (defaultExitCode, defaultStdout, defaultStderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            ["--db", dbPath, "--json", "--limit", "10", "--lang", "markdown"],
+            _jsonOptions));
+
+        using var defaultDocument = ParseJsonOutput(defaultStdout);
+        var defaultJson = defaultDocument.RootElement;
+        var noisyEdge = Assert.Single(defaultJson.GetProperty("edges").EnumerateArray(), edge =>
+            edge.GetProperty("target_path").GetString() == "docs/issue4868/unrelated.md");
+        var noisyEvidence = Assert.Single(noisyEdge.GetProperty("evidence").EnumerateArray());
+
+        Assert.Equal(CommandExitCodes.Success, defaultExitCode);
+        Assert.Equal(string.Empty, defaultStderr);
+        Assert.Equal("markdown_heading_name_match", noisyEvidence.GetProperty("origin").GetString());
+        Assert.Equal("use", noisyEvidence.GetProperty("reference_kind").GetString());
+        Assert.Equal("heading", noisyEvidence.GetProperty("target_kind").GetString());
+        Assert.Equal(2_000, noisyEvidence.GetProperty("reference_count").GetInt32());
+
+        var (filteredExitCode, filteredStdout, filteredStderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            ["--db", dbPath, "--json", "--limit", "10", "--lang", "markdown", "--suppress-noise"],
+            _jsonOptions));
+
+        using var filteredDocument = ParseJsonOutput(filteredStdout);
+        var filteredJson = filteredDocument.RootElement;
+        var retainedEdge = Assert.Single(filteredJson.GetProperty("edges").EnumerateArray());
+        var retainedEvidence = Assert.Single(retainedEdge.GetProperty("evidence").EnumerateArray());
+        var symbolFilter = filteredJson.GetProperty("symbol_filter");
+        var suppressionReason = Assert.Single(symbolFilter.GetProperty("suppression_reasons").EnumerateArray());
+
+        Assert.Equal(CommandExitCodes.Success, filteredExitCode);
+        Assert.Equal(string.Empty, filteredStderr);
+        Assert.Equal("docs/issue4868/target.md", retainedEdge.GetProperty("target_path").GetString());
+        Assert.Equal(1, retainedEdge.GetProperty("reference_count").GetInt32());
+        Assert.Equal("target.md#error", retainedEdge.GetProperty("symbols").GetString());
+        Assert.Equal("markdown_explicit_link", retainedEvidence.GetProperty("origin").GetString());
+        Assert.Equal("import", retainedEvidence.GetProperty("reference_kind").GetString());
+        Assert.Equal("file", retainedEvidence.GetProperty("target_kind").GetString());
+        Assert.Equal(6_001, symbolFilter.GetProperty("references_before").GetInt32());
+        Assert.Equal(1, symbolFilter.GetProperty("references_after").GetInt32());
+        Assert.Equal(6_000, symbolFilter.GetProperty("references_removed").GetInt32());
+        Assert.Equal("markdown_heading_name_match", suppressionReason.GetProperty("reason").GetString());
+        Assert.Equal(3, suppressionReason.GetProperty("edges_affected").GetInt32());
+        Assert.Equal(2, suppressionReason.GetProperty("edges_removed").GetInt32());
+        Assert.Equal(6_000, suppressionReason.GetProperty("references_removed").GetInt32());
+    }
+
+    [Fact]
+    public void RunDeps_SymbolFilterAndJsonGraphKeepCommaInExplicitMarkdownLink_Issue4868()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_deps_markdown_comma_link");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "docs/source.md",
+            "markdown",
+            "# Source\n\n[comma](Path,target.md#error)\n[plain](z-target.md#error)\n");
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "docs/Path,target.md",
+            "markdown",
+            "# error\n");
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "docs/z-target.md",
+            "markdown",
+            "# error\n");
+        MarkDependencyGraphReady(dbPath);
+
+        var (rankingExitCode, rankingStdout, rankingStderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            ["--db", dbPath, "--json", "--lang", "markdown", "--suppress-noise", "--limit", "1"],
+            _jsonOptions));
+
+        using var rankingDocument = ParseJsonOutput(rankingStdout);
+        var rankingEdge = Assert.Single(rankingDocument.RootElement.GetProperty("edges").EnumerateArray());
+
+        Assert.Equal(CommandExitCodes.Success, rankingExitCode);
+        Assert.Equal(string.Empty, rankingStderr);
+        Assert.Equal("docs/Path,target.md", rankingEdge.GetProperty("target_path").GetString());
+        Assert.Equal(1.0, rankingEdge.GetProperty("ranking_score").GetDouble());
+
+        var symbol = "Path,target.md#error";
+        var (jsonExitCode, jsonStdout, jsonStderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            ["--db", dbPath, "--json", "--lang", "markdown", "--suppress-noise", "--symbol", symbol],
+            _jsonOptions));
+
+        using var jsonDocument = ParseJsonOutput(jsonStdout);
+        var jsonEdge = Assert.Single(jsonDocument.RootElement.GetProperty("edges").EnumerateArray());
+
+        Assert.Equal(CommandExitCodes.Success, jsonExitCode);
+        Assert.Equal(string.Empty, jsonStderr);
+        Assert.Equal(symbol, jsonEdge.GetProperty("symbols").GetString());
+
+        var (graphExitCode, graphStdout, graphStderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            ["--db", dbPath, "--format", "json-graph", "--lang", "markdown", "--suppress-noise", "--symbol", symbol],
+            _jsonOptions));
+
+        using var graphDocument = ParseJsonOutput(graphStdout);
+        var graphEdge = Assert.Single(graphDocument.RootElement.GetProperty("edges").EnumerateArray());
+        var graphSymbol = Assert.Single(graphEdge.GetProperty("symbols").EnumerateArray());
+
+        Assert.Equal(CommandExitCodes.Success, graphExitCode);
+        Assert.Equal(string.Empty, graphStderr);
+        Assert.Equal(symbol, graphSymbol.GetString());
+    }
+
+    [Fact]
+    public void RunDeps_WorkspaceSuppressNoiseKeepsPathQualifiedMarkdownLink_Issue4868()
+    {
+        using var workspace = TestProjectHelper.CreateTempProjectScope("cdidx_deps_markdown_cross_db_link");
+        var sourceRoot = Path.Combine(workspace.Root, "a");
+        var targetRoot = Path.Combine(workspace.Root, "b");
+        Directory.CreateDirectory(sourceRoot);
+        Directory.CreateDirectory(targetRoot);
+        var sourceDb = TestProjectHelper.CreateProjectDb(sourceRoot);
+        var targetDb = TestProjectHelper.CreateProjectDb(targetRoot);
+        TestProjectHelper.InsertIndexedFile(
+            sourceDb,
+            "source.md",
+            "markdown",
+            "# Source\n\n[target](../b/target.md#error)\n");
+        TestProjectHelper.InsertIndexedFile(
+            targetDb,
+            "target.md",
+            "markdown",
+            "# error\n");
+        SetIndexedProjectRoot(sourceDb, sourceRoot);
+        SetIndexedProjectRoot(targetDb, targetRoot);
+        MarkDependencyGraphReady(sourceDb);
+        MarkDependencyGraphReady(targetDb);
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            [
+                "--db", sourceDb,
+                "--workspace-db", targetDb,
+                "--json",
+                "--lang", "markdown",
+                "--suppress-noise",
+            ],
+            _jsonOptions));
+
+        using var document = ParseJsonOutput(stdout);
+        var edge = Assert.Single(document.RootElement.GetProperty("edges").EnumerateArray());
+        var evidence = Assert.Single(edge.GetProperty("evidence").EnumerateArray());
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Equal("source.md", edge.GetProperty("source_path").GetString());
+        Assert.Equal("target.md", edge.GetProperty("target_path").GetString());
+        Assert.Equal("markdown_explicit_link", evidence.GetProperty("origin").GetString());
+        Assert.Equal("reference", evidence.GetProperty("reference_kind").GetString());
+    }
+
+    [Fact]
+    public void RunDeps_WorkspaceCyclesApplyBudgetAfterMarkdownNoiseSuppression_Issue4868()
+    {
+        using var primaryProject = TestProjectHelper.CreateTempProjectScope("cdidx_deps_markdown_cycle_noise_primary");
+        using var memberProject = TestProjectHelper.CreateTempProjectScope("cdidx_deps_markdown_cycle_member");
+        var primaryDb = TestProjectHelper.CreateProjectDb(primaryProject.Root);
+        var memberDb = TestProjectHelper.CreateProjectDb(memberProject.Root);
+        TestProjectHelper.InsertIndexedFile(primaryDb, "source.md", "markdown", "# source\n");
+        foreach (var heading in new[] { "noise one", "noise two", "noise three" })
+        {
+            var targetPath = heading.Replace(' ', '-') + ".md";
+            TestProjectHelper.InsertIndexedFile(primaryDb, targetPath, "markdown", $"# {heading}\n");
+            InsertLegacyMarkdownHeadingReferences(primaryDb, "source.md", heading, count: 1);
+        }
+        TestProjectHelper.InsertIndexedFile(
+            memberDb,
+            "one.md",
+            "markdown",
+            "# one\n\n[two](two.md#two)\n");
+        TestProjectHelper.InsertIndexedFile(
+            memberDb,
+            "two.md",
+            "markdown",
+            "# two\n\n[one](one.md#one)\n");
+        MarkDependencyGraphReady(primaryDb);
+        MarkDependencyGraphReady(memberDb);
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
+            [
+                "--db", primaryDb,
+                "--workspace-db", memberDb,
+                "--json",
+                "--cycles",
+                "--graph-budget", "2",
+                "--limit", "10",
+                "--lang", "markdown",
+                "--suppress-noise",
+            ],
+            _jsonOptions));
+
+        using var document = ParseJsonOutput(stdout);
+        var json = document.RootElement;
+        var cycle = Assert.Single(json.GetProperty("cycles").EnumerateArray());
+        var nodes = cycle.GetProperty("nodes").EnumerateArray().Select(node => node.GetString()).ToArray();
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Equal(["one.md", "two.md"], nodes);
+        Assert.True(json.GetProperty("analysis_complete").GetBoolean());
+        Assert.False(json.GetProperty("truncated").GetBoolean());
+        Assert.Equal(2, json.GetProperty("graph_edge_count").GetInt32());
+    }
+
+    [Fact]
+    public void AddBoundedWorkspaceCycleCandidates_CapsRetainedAndSuppressedBuckets_Issue4868()
+    {
+        static FileDependencyResult CreateCandidate(string targetPath, string origin)
+            => new()
+            {
+                TargetPath = targetPath,
+                Evidence =
+                [
+                    new FileDependencyEvidence
+                    {
+                        Origin = origin,
+                        ReferenceCount = 1,
+                    },
+                ],
+            };
+
+        var candidates = Enumerable.Range(0, 1_000)
+            .Select(index => CreateCandidate($"noise-{index}", "markdown_heading_name_match"))
+            .Concat(Enumerable.Range(0, 10)
+                .Select(index => CreateCandidate($"retained-{index}", "markdown_explicit_link")));
+        var retainedResults = new List<FileDependencyResult>();
+        var suppressedResults = new List<FileDependencyResult>();
+
+        var limitReached = QueryCommandRunner.AddBoundedWorkspaceCycleCandidates(
+            candidates,
+            retainedResults,
+            suppressedResults,
+            limit: 3);
+
+        Assert.True(limitReached);
+        Assert.Equal(3, retainedResults.Count);
+        Assert.Equal(3, suppressedResults.Count);
+        Assert.All(retainedResults, result => Assert.StartsWith("retained-", result.TargetPath));
+        Assert.All(suppressedResults, result => Assert.StartsWith("noise-", result.TargetPath));
     }
 
     [Fact]
@@ -6192,12 +6468,42 @@ public partial class QueryCommandRunnerTests
     private static void InsertFileWithReferences(string dbPath, string path, IReadOnlyList<string> symbolNames)
         => InsertFileWithSymbolsAndReferences(dbPath, path, [], symbolNames);
 
+    private static void InsertLegacyMarkdownHeadingReferences(
+        string dbPath,
+        string sourcePath,
+        string headingName,
+        int count)
+    {
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+        using var sourceFile = db.Connection.CreateCommand();
+        sourceFile.CommandText = "SELECT id FROM files WHERE path = $path";
+        sourceFile.Parameters.AddWithValue("$path", sourcePath);
+        var sourceFileId = Convert.ToInt64(sourceFile.ExecuteScalar());
+        var writer = new DbWriter(db.Connection);
+        writer.InsertReferences(Enumerable.Range(0, count).Select(index => new ReferenceRecord
+        {
+            FileId = sourceFileId,
+            SymbolName = headingName,
+            ReferenceKind = "use",
+            Line = index + 10,
+            Column = 1,
+            Context = $"legacy heading reference {index}",
+        }).ToArray());
+    }
+
     private static void MarkDependencyGraphReady(string dbPath)
     {
         using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         var writer = new DbWriter(db.Connection);
         writer.MarkGraphReady();
         writer.MarkCSharpSymbolNameContractReady();
+    }
+
+    private static void SetIndexedProjectRoot(string dbPath, string projectRoot)
+    {
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+        var writer = new DbWriter(db.Connection);
+        writer.SetMeta(DbContext.IndexedProjectRootMetaKey, Path.GetFullPath(projectRoot));
     }
 
     private static void CreatePlainSqliteDatabase(string dbPath)
