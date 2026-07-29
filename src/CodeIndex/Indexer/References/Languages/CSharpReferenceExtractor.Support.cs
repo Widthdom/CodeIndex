@@ -497,7 +497,7 @@ public static partial class ReferenceExtractor
         ref Dictionary<string, CSharpContainingTypeValueReceiverNames>? lookup,
         SymbolRecord symbol)
     {
-        if (symbol.Kind != "property" || string.IsNullOrWhiteSpace(symbol.Name))
+        if (symbol.Kind is not ("field" or "property") || string.IsNullOrWhiteSpace(symbol.Name))
             return;
 
         var containingType = GetContainingTypeQualifiedName(symbol);

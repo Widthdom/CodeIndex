@@ -8615,11 +8615,11 @@ public partial class SymbolExtractorTests
             "}");
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
-        Assert.Contains(symbols, s => s.Kind == "property"
+        Assert.Contains(symbols, s => s.Kind == "field"
             && s.Name == "_open"
             && s.Visibility == "private"
             && s.ReturnType == "string");
-        Assert.Contains(symbols, s => s.Kind == "property"
+        Assert.Contains(symbols, s => s.Kind == "field"
             && s.Name == "_pair"
             && s.Visibility == "private"
             && s.ReturnType == "string");
@@ -8628,13 +8628,13 @@ public partial class SymbolExtractorTests
     [Fact]
     public void Extract_CSharp_DetectsDeclaratorListFields()
     {
-        // `private int _x, _y;` must emit one `property` symbol per declarator. The
+        // `private int _x, _y;` must emit one `field` symbol per declarator. The
         // field regex greedily swallows earlier declarators into `returnType`, so the
         // post-match expander walks the top-level commas in `returnType` and the tail
         // after the match to recover every declarator name. Closes #298 follow-up
         // (codex adversarial review).
         // `private int _x, _y;` のような declarator list は declarator ごとに 1 件の
-        // `property` シンボルを発行する。field regex は前段の declarator を
+        // `field` シンボルを発行する。field regex は前段の declarator を
         // returnType に飲み込むため、post-match 展開で returnType のトップレベル `,`
         // とマッチ後テールを走査し、すべての declarator 名を復元する。
         var content = string.Join(
@@ -8648,18 +8648,118 @@ public partial class SymbolExtractorTests
             "}");
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "_x" && s.ReturnType == "int" && s.Visibility == "private");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "_y" && s.ReturnType == "int" && s.Visibility == "private");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "First" && s.ReturnType == "string" && s.Visibility == "public");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Second" && s.ReturnType == "string" && s.Visibility == "public");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "Third" && s.ReturnType == "string" && s.Visibility == "public");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "_a" && s.ReturnType == "int" && s.Visibility == "private");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "_b" && s.ReturnType == "int" && s.Visibility == "private");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "_c" && s.ReturnType == "int" && s.Visibility == "private");
+        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "_x" && s.ReturnType == "int" && s.Visibility == "private");
+        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "_y" && s.ReturnType == "int" && s.Visibility == "private");
+        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "First" && s.ReturnType == "string" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "Second" && s.ReturnType == "string" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "Third" && s.ReturnType == "string" && s.Visibility == "public");
+        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "_a" && s.ReturnType == "int" && s.Visibility == "private");
+        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "_b" && s.ReturnType == "int" && s.Visibility == "private");
+        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "_c" && s.ReturnType == "int" && s.Visibility == "private");
         // The bogus `int _x,` or `int _a = 1,` returnType from a single-symbol emit must
         // not leak into the index. 単一シンボル発行で紛れ込む `int _x,` 等の returnType は
         // インデックスに漏らさない。
         Assert.DoesNotContain(symbols, s => s.ReturnType != null && s.ReturnType.Contains(','));
+    }
+
+    [Fact]
+    public void Extract_CSharp_NormalizesFieldKindsAndLargeInitializerSignatures()
+    {
+        var largeInitializer = string.Join(
+            ",\n",
+            Enumerable.Range(0, 160).Select(index => $"        new Person({index})"));
+        var content = $$"""
+            namespace Demo;
+
+            public sealed record Person(int Id);
+
+            public class FieldCases
+            {
+                private readonly List<Person> _people = [];
+                private const string Label = "small";
+                private int _first = 1, _second;
+                private Person _targetTyped = new(1);
+                private int[] _array = new[] { 1, 2, 3 };
+                private static readonly List<Person> BuiltInRecipes =
+                [
+            {{largeInitializer}}
+                ];
+
+                public int Count { get; init; }
+                public int Computed => _people.Count;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var people = Assert.Single(symbols.Where(symbol => symbol.Name == "_people"));
+        Assert.Equal("field", people.Kind);
+        Assert.Equal("List<Person>", people.ReturnType);
+        Assert.Equal("private", people.Visibility);
+        Assert.Equal(7, people.StartLine);
+        Assert.Equal(7, people.EndLine);
+        Assert.Equal("private readonly List<Person> _people = [];", people.Signature);
+
+        var label = Assert.Single(symbols.Where(symbol => symbol.Name == "Label"));
+        Assert.Equal("field", label.Kind);
+        Assert.Equal("private const string Label = \"small\";", label.Signature);
+
+        var first = Assert.Single(symbols.Where(symbol => symbol.Name == "_first"));
+        var second = Assert.Single(symbols.Where(symbol => symbol.Name == "_second"));
+        Assert.Equal("field", first.Kind);
+        Assert.Equal("field", second.Kind);
+        Assert.Equal("int", first.ReturnType);
+        Assert.Equal("int", second.ReturnType);
+        Assert.Equal("private int _first = 1, _second;", first.Signature);
+        Assert.Equal(first.Signature, second.Signature);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "field"
+            && symbol.Name == "_targetTyped"
+            && symbol.ReturnType == "Person"
+            && symbol.Signature == "private Person _targetTyped = new(1);");
+        Assert.Contains(symbols, symbol => symbol.Kind == "field"
+            && symbol.Name == "_array"
+            && symbol.ReturnType == "int[]"
+            && symbol.Signature == "private int[] _array = new[] { 1, 2, 3 };");
+
+        var builtInRecipes = Assert.Single(symbols.Where(symbol => symbol.Name == "BuiltInRecipes"));
+        Assert.Equal("field", builtInRecipes.Kind);
+        Assert.Equal("List<Person>", builtInRecipes.ReturnType);
+        Assert.Equal("private static readonly List<Person> BuiltInRecipes = …;", builtInRecipes.Signature);
+        Assert.NotNull(builtInRecipes.Signature);
+        Assert.True(builtInRecipes.Signature.Length < 100);
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "property" && symbol.Name == "Count");
+        Assert.Contains(symbols, symbol => symbol.Kind == "property" && symbol.Name == "Computed");
+        Assert.DoesNotContain(symbols, symbol => symbol.Kind == "property" && symbol.Name == "_people");
+    }
+
+    [Theory]
+    [InlineData("private string")]
+    [InlineData("private static readonly string")]
+    [InlineData("private const string")]
+    public void Extract_CSharp_LargeMultilineFieldSignatures_StripLineCommentsBeforeSummarizing_Issue4865(
+        string declarationPrefix)
+    {
+        var largeInitializer = string.Join(
+            " +\n",
+            Enumerable.Range(0, 160).Select(index => $"                \"value-{index:D3}\""));
+        var content = $$"""
+            public sealed class CommentedFields
+            {
+                {{declarationPrefix}} A = "a", // keep the following declarator visible
+                    B =
+            {{largeInitializer}};
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+
+        var field = Assert.Single(symbols.Where(symbol => symbol.Name == "A"));
+        Assert.Equal("field", field.Kind);
+        Assert.Equal($"{declarationPrefix} A = …, B = …;", field.Signature);
+        Assert.DoesNotContain("keep the following", field.Signature, StringComparison.Ordinal);
+        Assert.DoesNotContain("value-000", field.Signature, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -8707,12 +8807,12 @@ public partial class SymbolExtractorTests
             Assert.Contains(symbols, s => s.Kind == @case.SiblingKind && s.Name == @case.SiblingName
                 && s.ContainerKind == "class" && s.ContainerName == "C");
 
-            var a = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "A"));
+            var a = Assert.Single(symbols.Where(s => s.Kind == "field" && s.Name == "A"));
             Assert.Equal("class", a.ContainerKind);
             Assert.Equal("C", a.ContainerName);
             Assert.Equal(@case.Signature, a.Signature);
 
-            var b = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "B"));
+            var b = Assert.Single(symbols.Where(s => s.Kind == "field" && s.Name == "B"));
             Assert.Equal("class", b.ContainerKind);
             Assert.Equal("C", b.ContainerName);
             Assert.Equal(@case.Signature, b.Signature);
@@ -8795,7 +8895,7 @@ public partial class SymbolExtractorTests
         // 見ていたため、同一行の class body は「型本体の中ではない」と誤判定され X が
         // 取りこぼされた。逆に class 内の `public void M() { int local = 1; }` では、
         // `int local` の列が method body の中（class body ではない）であることを列意識
-        // ゲートが認識するため、擬似的な `property local` を生成してはならない。
+        // ゲートが認識するため、擬似的な `field local` を生成してはならない。
         // Closes #400.
         var content = string.Join(
             "\n",
@@ -8810,13 +8910,13 @@ public partial class SymbolExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "C");
-        Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "X"
+        Assert.Contains(symbols, s => s.Kind == "field" && s.Name == "X"
             && s.ContainerKind == "class" && s.ContainerName == "C"
             && s.Signature == "public int X;");
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "D");
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "M"
             && s.ContainerKind == "class" && s.ContainerName == "D");
-        Assert.DoesNotContain(symbols, s => s.Kind == "property" && s.Name == "local");
+        Assert.DoesNotContain(symbols, s => s.Kind == "field" && s.Name == "local");
     }
 
     [Fact]
@@ -9045,7 +9145,7 @@ public partial class SymbolExtractorTests
         Assert.Equal(11, match.BodyEndLine);
         Assert.Equal("public bool Match(object value) => value is Red;", match.Signature);
 
-        var x = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "X"));
+        var x = Assert.Single(symbols.Where(s => s.Kind == "field" && s.Name == "X"));
         Assert.Equal(11, x.StartLine);
         Assert.Equal(11, x.EndLine);
         Assert.Equal("Uses", x.ContainerName);
@@ -10522,11 +10622,11 @@ public partial class SymbolExtractorTests
     public void Extract_CSharp_SameLineMultipleFieldsAreAllCaptured()
     {
         // `public class Multi { public int A; public int B; public int C; }` must
-        // produce three `property` symbols (A, B, C) plus the outer `Multi` class, with
+        // produce three `field` symbols (A, B, C) plus the outer `Multi` class, with
         // clean signatures that stop at the field terminator rather than trailing into
         // the enclosing `} }`. Closes #400.
         // `public class Multi { public int A; public int B; public int C; }` は外側 class
-        // Multi と A / B / C の 3 つの property を生成し、signature は末尾の `} }` を
+        // Multi と A / B / C の 3 つの field を生成し、signature は末尾の `} }` を
         // 含まずにフィールド終端（`;`）で切り詰められていなければならない。Closes #400.
         var content = string.Join(
             "\n",
@@ -10538,7 +10638,7 @@ public partial class SymbolExtractorTests
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Multi");
         foreach (var name in new[] { "A", "B", "C" })
         {
-            var field = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == name));
+            var field = Assert.Single(symbols.Where(s => s.Kind == "field" && s.Name == name));
             Assert.Equal("class", field.ContainerKind);
             Assert.Equal("Multi", field.ContainerName);
             Assert.Equal($"public int {name};", field.Signature);

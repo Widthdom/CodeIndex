@@ -394,7 +394,7 @@ public static partial class ReferenceExtractor
                 reference.Line);
             var containingType = GetContainingTypeQualifiedName(owner);
             if (containingType == null
-                || !lookups.HasCSharpProperty(
+                || !lookups.HasCSharpFieldOrPropertyMember(
                     containingType,
                     reference.SymbolName))
             {
