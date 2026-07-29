@@ -210,6 +210,10 @@ public class DiffCommandRunnerTests
             SetMeta(rightDb, "last_index_run_mode", "incremental");
             SetMeta(rightDb, "last_index_run_bytes_read", "0");
             SetMeta(rightDb, DbContext.LastFullScanElapsedMsMetaKey, "456");
+            SetMeta(rightDb, DbWriter.FtsLastOptimizedAtMetaKey, "2026-07-29T01:02:04Z");
+            SetMeta(rightDb, DbWriter.FtsLastOptimizeDurationMsMetaKey, "789");
+            SetMeta(rightDb, DbWriter.FtsIncrementalWritesSinceOptimizeMetaKey, "3");
+            SetMeta(rightDb, DbWriter.FtsIncrementalWritesSinceMergeMetaKey, "4");
 
             var (semanticExitCode, semanticOutput) = RunWithCapturedOut(
                 [leftDb, rightDb, "--summary-only"]);
@@ -258,7 +262,7 @@ public class DiffCommandRunnerTests
             using (var telemetryDetailedDocument = JsonDocument.Parse(telemetryDetailedOutput))
             {
                 Assert.Equal(
-                    6,
+                    10,
                     GetRecords(telemetryDetailedDocument.RootElement, "volatile_telemetry_metadata").Count);
             }
 
@@ -1067,20 +1071,44 @@ public class DiffCommandRunnerTests
                 INSERT INTO files (path, lang, size, lines, checksum, modified)
                 VALUES ('src/C.cs', 'csharp', 1, 1, 'c', '2026-01-01T00:00:00Z');
                 """);
-            DiffCommandRunner.MaxDiffComparedRowsPerSideForTesting = 10;
+            ExecuteNonQuery(
+                rightDb,
+                """
+                UPDATE symbols
+                SET name = 'Drifted', name_folded = 'drifted'
+                WHERE id = (SELECT MIN(id) FROM symbols);
+                """);
 
             var (differentExitCode, differentOutput) = RunWithCapturedOut(
                 [leftDb, rightDb, "--summary-only"]);
+            var (detailedExitCode, detailedOutput) = RunWithCapturedOut(
+                [leftDb, rightDb, "--json", "--detailed", "--limit", "100"]);
 
             Assert.Equal(1, differentExitCode);
+            Assert.Equal(1, detailedExitCode);
             using (var differentDocument = JsonDocument.Parse(differentOutput))
+            using (var detailedDocument = JsonDocument.Parse(detailedOutput))
             {
-                Assert.Contains(
-                    "data:file_rows_changed",
-                    differentDocument.RootElement.GetProperty("summary").GetProperty("difference_reasons")
-                        .EnumerateArray()
-                        .Select(item => item.GetString()));
+                var summaryReasons = GetCategory(differentDocument.RootElement, "data")
+                    .GetProperty("reasons")
+                    .EnumerateArray()
+                    .Select(item => item.GetString())
+                    .ToArray();
+                var detailedReasons = GetCategory(detailedDocument.RootElement, "data")
+                    .GetProperty("reasons")
+                    .EnumerateArray()
+                    .Select(item => item.GetString())
+                    .ToArray();
+                Assert.Equal(["file_rows_changed"], summaryReasons);
+                Assert.Equal(summaryReasons, detailedReasons);
+                Assert.NotEmpty(GetRecords(detailedDocument.RootElement, "symbol"));
             }
+
+            DiffCommandRunner.MaxDiffComparedRowsPerSideForTesting = 10;
+            var (boundedExitCode, boundedOutput) = RunWithCapturedOut(
+                [leftDb, rightDb, "--summary-only"]);
+            Assert.Equal(1, boundedExitCode);
+            Assert.Contains("data:file_rows_changed", boundedOutput, StringComparison.Ordinal);
 
             ExecuteNonQuery(rightDb, "DELETE FROM files WHERE path = 'src/C.cs';");
             var (exitCode, stdout, stderr) = RunWithCapturedStreams([leftDb, rightDb]);

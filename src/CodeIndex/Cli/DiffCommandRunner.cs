@@ -371,6 +371,10 @@ public static class DiffCommandRunner
         WHERE
             key <> 'indexed_head_timestamp'
             AND key <> 'last_full_scan_elapsed_ms'
+            AND key <> 'fts_last_optimized_at'
+            AND key <> 'fts_last_optimize_duration_ms'
+            AND key <> 'fts_incremental_writes_since_optimize'
+            AND key <> 'fts_incremental_writes_since_merge'
             AND key NOT LIKE 'last_index_run_%'
             AND key NOT LIKE 'last_failed_index_run_%'
         ORDER BY
@@ -386,6 +390,10 @@ public static class DiffCommandRunner
         WHERE
             key = 'indexed_head_timestamp'
             OR key = 'last_full_scan_elapsed_ms'
+            OR key = 'fts_last_optimized_at'
+            OR key = 'fts_last_optimize_duration_ms'
+            OR key = 'fts_incremental_writes_since_optimize'
+            OR key = 'fts_incremental_writes_since_merge'
             OR key LIKE 'last_index_run_%'
             OR key LIKE 'last_failed_index_run_%'
         ORDER BY
@@ -487,6 +495,10 @@ public static class DiffCommandRunner
         bool fileIssueRowsEqual;
         bool readinessProvenanceMetadataEqual;
         bool volatileTelemetryEqual;
+        var countBasedDataDifference =
+            left.FileCount != right.FileCount
+            || left.SymbolCount != right.SymbolCount
+            || left.ReferenceCount != right.ReferenceCount;
         if (collector is not null)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -581,10 +593,6 @@ public static class DiffCommandRunner
         }
         else
         {
-            var countBasedDataDifference =
-                left.FileCount != right.FileCount
-                || left.SymbolCount != right.SymbolCount
-                || left.ReferenceCount != right.ReferenceCount;
             if (countBasedDataDifference)
             {
                 fileRowsEqual = left.FileCount == right.FileCount;
@@ -642,12 +650,24 @@ public static class DiffCommandRunner
                 cancellationToken);
         }
 
-        AddDifferenceReason(dataReasons, fileRowsEqual, "file_rows_changed");
-        AddDifferenceReason(dataReasons, symbolRowsEqual, "symbol_rows_changed");
-        AddDifferenceReason(dataReasons, referenceRowsEqual, "reference_rows_changed");
-        AddDifferenceReason(dataReasons, chunkRowsEqual, "chunk_rows_changed");
-        AddDifferenceReason(dataReasons, referenceLineRowsEqual, "reference_line_rows_changed");
-        AddDifferenceReason(dataReasons, fileIssueRowsEqual, "file_issue_rows_changed");
+        if (countBasedDataDifference)
+        {
+            // Header count differences already prove the data category differs. Use the
+            // same bounded reason set in summary and detailed modes; detailed mode may
+            // still collect additional records, but it must not change summary identity.
+            AddDifferenceReason(dataReasons, left.FileCount == right.FileCount, "file_rows_changed");
+            AddDifferenceReason(dataReasons, left.SymbolCount == right.SymbolCount, "symbol_rows_changed");
+            AddDifferenceReason(dataReasons, left.ReferenceCount == right.ReferenceCount, "reference_rows_changed");
+        }
+        else
+        {
+            AddDifferenceReason(dataReasons, fileRowsEqual, "file_rows_changed");
+            AddDifferenceReason(dataReasons, symbolRowsEqual, "symbol_rows_changed");
+            AddDifferenceReason(dataReasons, referenceRowsEqual, "reference_rows_changed");
+            AddDifferenceReason(dataReasons, chunkRowsEqual, "chunk_rows_changed");
+            AddDifferenceReason(dataReasons, referenceLineRowsEqual, "reference_line_rows_changed");
+            AddDifferenceReason(dataReasons, fileIssueRowsEqual, "file_issue_rows_changed");
+        }
         AddDifferenceReason(
             readinessProvenanceReasons,
             readinessProvenanceMetadataEqual,

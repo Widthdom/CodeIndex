@@ -491,6 +491,8 @@ internal static class CliFlagSchema
             new() { Name = "--min-entrypoint-confidence", ValuePlaceholder = "<0.0..1.0>", Description = "Map: omit entrypoint candidates below this confidence", PrimaryCommands = Set(EntrypointConfidenceCommands) },
             new() { Name = "--sections", ValuePlaceholder = "<summary,tree,languages,hotspots,metrics|list>", Description = "Map: comma-separated response sections to include, or list to discover sections", PrimaryCommands = Set(MapSectionCommands) },
             new() { Name = "--summary-only", Description = "Map/Diff/Recipes/Audit/Files/Symbols/Deps/Hotspots/Languages: return only aggregate summary fields where supported", PrimaryCommands = Set(SummaryOnlyCommands) },
+            new() { Name = "--data-only", Description = "Diff: include indexed data and schema in identity while excluding readiness/provenance and volatile telemetry", PrimaryCommands = Set("diff") },
+            new() { Name = "--include-telemetry", Description = "Diff: include volatile index-run and FTS maintenance telemetry in identity", PrimaryCommands = Set("diff") },
             new() { Name = "--cycles", Description = "Deps: return deterministically ranked dependency SCCs with stable pagination", PrimaryCommands = Set(DependencyCycleCommands) },
             new() { Name = "--graph-budget", ValuePlaceholder = "<n>", Description = $"Deps cycles: maximum graph edges analyzed for SCC completeness (default: {QueryCommandRunner.DefaultDependencyCycleGraphBudget})", PrimaryCommands = Set(DependencyCycleCommands) },
             new() { Name = "--suppress-noise", Description = "Deps: suppress generic framework symbols and legacy Markdown heading-name fanout while preserving explicit links", PrimaryCommands = Set("deps") },
