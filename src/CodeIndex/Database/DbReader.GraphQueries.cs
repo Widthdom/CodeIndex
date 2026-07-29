@@ -242,8 +242,7 @@ public partial class DbReader
                 : cssScssVariableAlias;
             SqliteCommandPolicy.Add(cmd, "@queryCssScssVariableAlias", aliasParam);
         }
-        SqliteCommandPolicy.Add(cmd, "@preferExactCase", exact ? 1 : 0);
-        SqliteCommandPolicy.Add(cmd, "@rawQuery", exact ? query : string.Empty);
+        SqliteCommandPolicy.Add(cmd, "@rawQuery", query);
         SqliteCommandPolicy.Add(cmd, "@rankingQuery", query.Trim());
         if (RequiresReferenceKindParameter(referenceKind))
             SqliteCommandPolicy.Add(cmd, "@referenceKind", referenceKind);
@@ -722,8 +721,7 @@ public partial class DbReader
                 : cssScssVariableAlias;
             SqliteCommandPolicy.Add(cmd, "@queryCssScssVariableAlias", aliasParam);
         }
-        SqliteCommandPolicy.Add(cmd, "@preferExactCase", exact ? 1 : 0);
-        SqliteCommandPolicy.Add(cmd, "@rawQuery", exact ? query : string.Empty);
+        SqliteCommandPolicy.Add(cmd, "@rawQuery", query);
         SqliteCommandPolicy.Add(cmd, "@rankingQuery", query.Trim());
         AddQualifiedGraphQueryParameters(cmd, query, allowQualifiedLeafFallback);
         if (RequiresReferenceKindParameter(referenceKind))
@@ -1024,7 +1022,7 @@ public partial class DbReader
                 ReferenceRankDimension.ReferenceKindPriorityAscending =>
                     "CASE reference_kind WHEN 'instantiate' THEN 0 WHEN 'call' THEN 1 WHEN 'generic_type_argument' THEN 2 WHEN 'subscribe' THEN 3 ELSE 4 END",
                 ReferenceRankDimension.ExactCaseMatchDescending =>
-                    $"CASE WHEN @preferExactCase = 1 AND {queriedNameSql} = @rawQuery THEN 0 ELSE 1 END",
+                    $"CASE WHEN {queriedNameSql} = @rawQuery THEN 0 ELSE 1 END",
                 ReferenceRankDimension.ExactNameMatchDescending =>
                     $"CASE WHEN lower({queriedNameSql}) = lower(@rankingQuery) THEN 0 ELSE 1 END",
                 ReferenceRankDimension.PathCategoryAscending => GetPathBucketOrderSql("r.path"),

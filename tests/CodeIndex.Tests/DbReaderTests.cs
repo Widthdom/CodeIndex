@@ -1076,6 +1076,19 @@ public partial class DbReaderTests : IDisposable
         Assert.Equal(
             ["src/ProductionCaller.cs", "docs/DocumentedSample.cs"],
             withoutTests.Select(result => result.Path));
+
+        const string caseQuery = "CaseRankedTarget";
+        InsertManualReferences("src/ZExactCase.cs", "ExactCaseCaller", caseQuery, "call", 1);
+        InsertManualReferences("src/AFoldedCase.cs", "FoldedCaseCaller", caseQuery.ToLowerInvariant(), "call", 1);
+
+        var fuzzyCaseTie = _reader.GetCallers(
+            caseQuery,
+            lang: "csharp",
+            exact: false,
+            rankMode: ReferenceRankMode.Count);
+
+        Assert.Equal(caseQuery, fuzzyCaseTie[0].CalleeName);
+        Assert.Equal("src/ZExactCase.cs", fuzzyCaseTie[0].Path);
     }
 
     [Theory]
