@@ -8478,6 +8478,8 @@ public partial class QueryCommandRunnerTests
             (Args: new[] { "not-a-recipe" }, Expected: "unknown audit recipe 'not-a-recipe'"),
             (Args: new[] { "xml-parser-security/xml-readr-settings" }, Expected: "unknown recipe query 'xml-readr-settings'"),
             (Args: new[] { "risky-code", "--count-by", "path", "--unique", "file" }, Expected: "--count-by cannot be combined with --unique"),
+            (Args: new[] { "risky-code", "--group-by", "bogus", "--count" }, Expected: "--group-by for recipe search"),
+            (Args: new[] { "risky-code", "--group-by", "file" }, Expected: "audit --group-by requires --count"),
         };
 
         foreach (var testCase in humanCases)
@@ -8509,6 +8511,13 @@ public partial class QueryCommandRunnerTests
             unknownQueryStderr,
             StringComparison.Ordinal);
         Assert.DoesNotContain("cdidx search --recipe", unknownQueryStderr, StringComparison.Ordinal);
+
+        var (_, _, groupByStderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["audit", "risky-code", "--group-by", "bogus", "--count"],
+            _jsonOptions,
+            "test"));
+        Assert.Contains("cdidx audit <name> --group-by file --count", groupByStderr, StringComparison.Ordinal);
+        Assert.DoesNotContain("cdidx search --recipe", groupByStderr, StringComparison.Ordinal);
 
         foreach (var jsonArgs in new[]
         {
@@ -8630,6 +8639,12 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, compactExitCode);
             Assert.Equal(string.Empty, compactStderr);
             using var compactDocument = ParseJsonOutput(compactStdout);
+            var cursoringHint = compactDocument.RootElement
+                .GetProperty("summary")
+                .GetProperty("cursoring_hint")
+                .GetString();
+            Assert.Contains("cdidx audit <recipe>/<query> --cursor", cursoringHint, StringComparison.Ordinal);
+            Assert.DoesNotContain("--recipe", cursoringHint, StringComparison.Ordinal);
             var nextCommands = compactDocument.RootElement
                 .GetProperty("next_commands")
                 .EnumerateArray()

@@ -512,13 +512,13 @@ public static partial class QueryCommandRunner
                     WriteUsageError(
                         "--group-by for recipe search must be one of file, symbol, origin, return-type, or subsystem.",
                         options,
-                        "Use `cdidx search --recipe <name> --group-by file --count`, `--group-by symbol --count`, `--group-by return-type --count`, `--group-by subsystem --count`, or `--count-by origin`.");
+                        $"Use `{invocationContext.RecipeCommandPrefix} <name> --group-by file --count`, `--group-by symbol --count`, `--group-by return-type --count`, `--group-by subsystem --count`, or `--count-by origin`.");
                     return CommandExitCodes.UsageError;
                 }
                 if (!options.CountOnly)
                 {
                     WriteUsageError(
-                        "search --recipe --group-by requires --count.",
+                        $"{invocationContext.RecipeExecutionName} --group-by requires --count.",
                         options,
                         "Add --count to request grouped recipe result counts, or remove --group-by to print matching snippets.");
                     return CommandExitCodes.UsageError;

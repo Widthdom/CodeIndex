@@ -256,6 +256,15 @@ internal sealed record QueryCommandInvocationContext(
             ? "cdidx audit <recipe>/<query>"
             : "cdidx search --recipe <recipe>/<query>";
 
+    internal string RecipeCommandPrefix =>
+        RecipeNameIsPositional ? "cdidx audit" : "cdidx search --recipe";
+
+    internal string RecipeExecutionName =>
+        RecipeNameIsPositional ? "audit" : "search --recipe";
+
+    internal string RecipeCursorSelectorSyntax =>
+        RecipeNameIsPositional ? "cdidx audit <recipe>/<query>" : "--recipe <recipe>/<query>";
+
     internal void AddRecipeCommandPrefix(List<string> args, string recipeSelector)
     {
         args.Add("cdidx");

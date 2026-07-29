@@ -700,7 +700,7 @@ public static partial class QueryCommandRunner
                     compactJson,
                     options,
                     "recipe compact",
-                    "Reduce --limit or --total-limit, select one child query with --recipe <recipe>/<query>, stream rows with --json=ndjson, or increase --max-json-bytes.");
+                    $"Reduce --limit or --total-limit, select one child query with {options.InvocationContext.RecipeCursorSelectorSyntax}, stream rows with --json=ndjson, or increase --max-json-bytes.");
             }
 
             var queryResults = CollectSearchRecipeQueryResults(reader, selection.Queries, scope, options, userExact, out var total, out _);
@@ -720,7 +720,12 @@ public static partial class QueryCommandRunner
                             scope,
                             selection.Queries.Count,
                             total,
-                            BuildSearchRecipeRunSummary(queryResults, options.Limit, options.TotalLimit, total),
+                            BuildSearchRecipeRunSummary(
+                                queryResults,
+                                options.Limit,
+                                options.TotalLimit,
+                                total,
+                                options.InvocationContext),
                             queryResults),
                         CliJsonSerializerContextFactory.Create(jsonOptions).SearchRecipeRunJsonResult);
                 return WriteJsonObjectWithOptionalByteLimit(
@@ -791,7 +796,12 @@ public static partial class QueryCommandRunner
         QueryCommandOptions options,
         JsonSerializerOptions jsonOptions)
     {
-        var summary = BuildSearchRecipeRunSummary(queryResults, options.Limit, options.TotalLimit, total);
+        var summary = BuildSearchRecipeRunSummary(
+            queryResults,
+            options.Limit,
+            options.TotalLimit,
+            total,
+            options.InvocationContext);
         var querySummaries = new JsonArray();
         foreach (var queryResult in queryResults)
         {
@@ -959,7 +969,12 @@ public static partial class QueryCommandRunner
             scope,
             selectedQueries.Count,
             compactTotal,
-            BuildSearchRecipeRunSummary(compactQueryResults, options.Limit, options.TotalLimit, compactTotal),
+            BuildSearchRecipeRunSummary(
+                compactQueryResults,
+                options.Limit,
+                options.TotalLimit,
+                compactTotal,
+                options.InvocationContext),
             compactQueryResults);
         var payload = JsonSerializer.SerializeToNode(
             run,
@@ -2209,7 +2224,8 @@ public static partial class QueryCommandRunner
         IReadOnlyList<SearchRecipeQueryResultJsonResult> queryResults,
         int limitPerQuery,
         int? totalLimit,
-        int emittedResultCount)
+        int emittedResultCount,
+        QueryCommandInvocationContext invocationContext)
         => new(
             limitPerQuery,
             totalLimit,
@@ -2220,7 +2236,8 @@ public static partial class QueryCommandRunner
             queryResults.Any(query => query.Truncated && !string.IsNullOrWhiteSpace(query.NextCursor)),
             BuildSearchRecipeCursoringHint(
                 queryResults.Any(query => query.Truncated),
-                queryResults.Any(query => query.Truncated && !string.IsNullOrWhiteSpace(query.NextCursor))),
+                queryResults.Any(query => query.Truncated && !string.IsNullOrWhiteSpace(query.NextCursor)),
+                invocationContext),
             queryResults.Sum(query => query.SourceTotal),
             queryResults.All(query => query.SourceTotalAuthoritative),
             queryResults.All(query => query.SourceTotalAuthoritative)
@@ -2235,7 +2252,8 @@ public static partial class QueryCommandRunner
         IReadOnlyList<SearchRecipeCompactQueryResultJsonResult> queryResults,
         int limitPerQuery,
         int? totalLimit,
-        int emittedResultCount)
+        int emittedResultCount,
+        QueryCommandInvocationContext invocationContext)
         => new(
             limitPerQuery,
             totalLimit,
@@ -2246,7 +2264,8 @@ public static partial class QueryCommandRunner
             queryResults.Any(query => query.Truncated && !string.IsNullOrWhiteSpace(query.NextCursor)),
             BuildSearchRecipeCursoringHint(
                 queryResults.Any(query => query.Truncated),
-                queryResults.Any(query => query.Truncated && !string.IsNullOrWhiteSpace(query.NextCursor))),
+                queryResults.Any(query => query.Truncated && !string.IsNullOrWhiteSpace(query.NextCursor)),
+                invocationContext),
             queryResults.Sum(query => query.SourceTotal),
             queryResults.All(query => query.SourceTotalAuthoritative),
             queryResults.All(query => query.SourceTotalAuthoritative)
@@ -2257,9 +2276,12 @@ public static partial class QueryCommandRunner
             queryResults.Sum(query => query.SelectorOmittedCount),
             queryResults.Sum(query => query.LimitOmittedCount));
 
-    private static string BuildSearchRecipeCursoringHint(bool hasTruncatedQuery, bool cursoringAvailable)
+    private static string BuildSearchRecipeCursoringHint(
+        bool hasTruncatedQuery,
+        bool cursoringAvailable,
+        QueryCommandInvocationContext invocationContext)
         => cursoringAvailable
-            ? "When a query is truncated, rerun a single child query with --recipe <recipe>/<query> --cursor <next_cursor> to page the next result set."
+            ? $"When a query is truncated, rerun a single child query with {invocationContext.RecipeCursorSelectorSyntax} --cursor <next_cursor> to page the next result set."
             : hasTruncatedQuery
                 ? "Continuation cursors are unavailable for the selected rows; increase --limit or --total-limit and rerun."
                 : "No query is truncated, so no continuation cursor is needed.";
