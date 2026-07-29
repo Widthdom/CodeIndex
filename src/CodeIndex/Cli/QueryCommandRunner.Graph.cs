@@ -457,7 +457,46 @@ public static partial class QueryCommandRunner
             return false;
         }
 
+        if (options.ParseError == null
+            && !TryValidateGraphSnippetLinesOption(command, cmdArgs, options))
+        {
+            exitCode = CommandExitCodes.UsageError;
+            return false;
+        }
+
         exitCode = CommandExitCodes.Success;
+        return true;
+    }
+
+    private static bool TryValidateGraphSnippetLinesOption(
+        string command,
+        string[] cmdArgs,
+        QueryCommandOptions options)
+    {
+        if (!HasOption(cmdArgs, "--snippet-lines") || options.SnippetLines == 0)
+            return true;
+
+        if (!options.IncludeBody)
+        {
+            CommandErrorWriter.Write(
+                "--snippet-lines requires --body for references, callers, and callees.",
+                "Add --body to emit a bounded body excerpt, or omit --snippet-lines.",
+                GetUsageLineOrThrow(command),
+                CommandErrorCodes.UsageError);
+            return false;
+        }
+
+        if (options.CountOnly
+            || options.OutputFormat is not (OutputFormatText or OutputFormatJson))
+        {
+            CommandErrorWriter.Write(
+                "--snippet-lines with --body requires text or JSON result output for references, callers, and callees.",
+                "Remove --count and use --format text or --format json, or omit --snippet-lines for location-only output.",
+                GetUsageLineOrThrow(command),
+                CommandErrorCodes.UsageError);
+            return false;
+        }
+
         return true;
     }
 

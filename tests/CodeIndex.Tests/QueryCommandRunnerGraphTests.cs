@@ -622,14 +622,22 @@ public partial class QueryCommandRunnerTests
                 expectedContentTruncated: true);
             AssertBodyExcerpt(
                 QueryCommandRunner.RunCallers,
-                ["Run", "--db", dbPath, "--json", "--body", "--snippet-lines", "2"],
+                ["Run", "--db", dbPath, "--json", "--body", "--snippet-lines", "20"],
                 "int Login(int user)",
-                expectedContentTruncated: true);
+                expectedContentTruncated: false);
             AssertBodyExcerpt(
                 QueryCommandRunner.RunCallees,
                 ["Login", "--db", dbPath, "--json", "--body", "--snippet-lines", "1"],
                 "int Run(int user)",
                 expectedContentTruncated: true);
+
+            var (textExitCode, textStdout, textStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Run", "--db", dbPath, "--body", "--snippet-lines", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, textExitCode);
+            Assert.Contains("int Login(int user)", textStdout);
+            Assert.Contains("references in", textStderr);
 
             var (impactExitCode, impactStdout, impactStderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
                 ["Run", "--db", dbPath, "--json", "--body", "--snippet-lines", "2"],
@@ -646,6 +654,57 @@ public partial class QueryCommandRunnerTests
         finally
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void GraphCommands_ExplicitSnippetLinesRequireVisibleBodyOutput_Issue4882()
+    {
+        var scenarios = new (string[] Args, string ExpectedMessage)[]
+        {
+            (["--snippet-lines", "3"], "--snippet-lines requires --body"),
+            (["--snippet-lines=3", "--json"], "--snippet-lines requires --body"),
+            (["--snippet-lines", "3", "--format", "qf"], "--snippet-lines requires --body"),
+            (["--snippet-lines", "3", "--format", "lsp"], "--snippet-lines requires --body"),
+            (["--snippet-lines", "3", "--format", "compact"], "--snippet-lines requires --body"),
+            (["--body", "--snippet-lines", "3", "--format", "qf"], "--snippet-lines with --body requires text or JSON result output"),
+            (["--body", "--snippet-lines", "3", "--format", "lsp"], "--snippet-lines with --body requires text or JSON result output"),
+            (["--body", "--snippet-lines", "3", "--format", "compact"], "--snippet-lines with --body requires text or JSON result output"),
+            (["--body", "--snippet-lines", "3", "--count"], "--snippet-lines with --body requires text or JSON result output"),
+        };
+
+        foreach (var command in new[] { "references", "callers", "callees" })
+        {
+            foreach (var scenario in scenarios)
+            {
+                var args = new[] { "QueryCommandRunner" }.Concat(scenario.Args).ToArray();
+                var (exitCode, stdout, stderr) = CaptureConsole(() => RunGraphCommand(command, args, _jsonOptions));
+
+                Assert.Equal(CommandExitCodes.UsageError, exitCode);
+                Assert.Equal(string.Empty, stdout);
+                Assert.Contains($"Error [{CommandErrorCodes.UsageError}]:", stderr);
+                Assert.Contains(scenario.ExpectedMessage, stderr);
+                Assert.Contains($"Usage: {ConsoleUi.GetUsageLine(command)}", stderr);
+                Assert.DoesNotContain("database not found", stderr, StringComparison.OrdinalIgnoreCase);
+            }
+        }
+    }
+
+    [Fact]
+    public void GraphCommands_SnippetLinesAboveMaximumKeepRangeError_Issue4882()
+    {
+        foreach (var command in new[] { "references", "callers", "callees" })
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => RunGraphCommand(
+                command,
+                ["QueryCommandRunner", "--snippet-lines", "21"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains("--snippet-lines must be less than or equal to 20, got '21'", stderr);
+            Assert.DoesNotContain("--snippet-lines requires --body", stderr);
+            Assert.DoesNotContain("database not found", stderr, StringComparison.OrdinalIgnoreCase);
         }
     }
 

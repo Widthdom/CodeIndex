@@ -571,7 +571,7 @@ internal static class CliFlagSchema
             new() { Name = "--no-progress", Description = "Disable animated progress and spinner output", PrimaryCommands = Set(AllCommands.ToArray()), TopLevel = true },
             new() { Name = "--name", ValuePlaceholder = "<name>", Description = "Exact symbol name", PrimaryCommands = Set("symbols") },
             new() { Name = "--max-line-width", ValuePlaceholder = "<n>", Description = "Clamp long single-line payloads (0 disables clamping)", PrimaryCommands = Set(MaxLineWidthCommands) },
-            new() { Name = "--snippet-lines", ValuePlaceholder = "<n>", Description = "Snippet length; issue-drafts accept 0 for path/line-only evidence", PrimaryCommands = Set("search", "audit", "find", "references", "callers", "callees", "impact") },
+            new() { Name = "--snippet-lines", ValuePlaceholder = "<n>", Description = "Snippet length; graph queries require --body with text/JSON output; issue-drafts accept 0 for path/line-only evidence", PrimaryCommands = Set("search", "audit", "find", "references", "callers", "callees", "impact") },
             new() { Name = "--snippet-focus", ValuePlaceholder = "<leftmost|quality|proximity>", Description = "Search snippet long-line focus mode", PrimaryCommands = Set("search") },
             new() { Name = "--fts", Description = "Raw FTS5 syntax; incompatible with search exact/literal modes", PrimaryCommands = Set("search") },
             new() { Name = "--no-dedup", Description = "Show duplicate chunks", PrimaryCommands = Set("search") },
