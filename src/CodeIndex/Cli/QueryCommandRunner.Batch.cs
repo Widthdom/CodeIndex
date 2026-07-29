@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -11,8 +12,11 @@ namespace CodeIndex.Cli;
 public static partial class QueryCommandRunner
 {
     private const int BatchMaxCapturedOutputChars = JsonEnvelopeWrapper.MaxCapturedOutputChars;
+    private static readonly ConditionalWeakTable<TextReader, BatchInputPump> s_batchInputPumps = new();
     internal static Action<int>? BatchParallelCommandStartedForTesting { get; set; }
     internal static Action<int>? BatchParallelCommandCompletedForTesting { get; set; }
+    internal static Action<int>? BatchInputLineReadForTesting { get; set; }
+    internal static Action<int>? BatchParallelItemPreparedForTesting { get; set; }
 
     public static int RunBatch(
         string[] cmdArgs,
@@ -28,12 +32,19 @@ public static partial class QueryCommandRunner
         var maxOutputCharsSpecified = false;
         var parallelism = 1;
         var parallelismSpecified = false;
+        var includeRawStreams = false;
         for (var i = 0; i < cmdArgs.Length; i++)
         {
             var arg = cmdArgs[i];
             if (arg == "--json-summary")
             {
                 jsonSummary = true;
+                continue;
+            }
+
+            if (arg == "--include-raw-streams")
+            {
+                includeRawStreams = true;
                 continue;
             }
 
@@ -128,6 +139,12 @@ public static partial class QueryCommandRunner
             CommandErrorWriter.WriteStderr($"Usage: {ConsoleUi.GetUsageLine("batch")}");
             return CommandExitCodes.UsageError;
         }
+        if (includeRawStreams && !jsonSummary)
+        {
+            CommandErrorWriter.WriteStderr("Error: --include-raw-streams requires --json-summary.");
+            CommandErrorWriter.WriteStderr($"Usage: {ConsoleUi.GetUsageLine("batch")}");
+            return CommandExitCodes.UsageError;
+        }
 
         var isUri = dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase);
         if (!isUri && !File.Exists(dbPath))
@@ -139,10 +156,19 @@ public static partial class QueryCommandRunner
 
         if (parallelism > 1)
         {
-            using (var validationDb = new DbContext(DbOpenIntent.QueryOnly, dbPath, cancellationToken))
+            try
             {
+                using var validationDb = new DbContext(DbOpenIntent.QueryOnly, dbPath, cancellationToken);
                 if (!validationDb.TryValidateIsCodeIndexDb(out var validationReason))
                     return WriteInvalidCodeIndexDbError(dbPath, validationReason, json: false, jsonOptions);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return WriteBatchSetupCancellationSummary(
+                    maxInputLines,
+                    maxOutputChars,
+                    parallelism,
+                    jsonOptions);
             }
 
             return RunBatchParallel(
@@ -151,6 +177,7 @@ public static partial class QueryCommandRunner
                 maxInputLines,
                 maxOutputChars,
                 parallelism,
+                includeRawStreams,
                 jsonOptions,
                 appVersion,
                 cancellationToken);
@@ -179,10 +206,55 @@ public static partial class QueryCommandRunner
             var commandFailures = 0;
             var outputLimitReached = false;
             var inputLimitReached = false;
-            while (TryReadBatchLine(Console.In, out var line, out var lineExceededLimit))
+            var batchInput = GetBatchInputPump(Console.In);
+            while (true)
             {
-                cancellationToken.ThrowIfCancellationRequested();
+                BatchPumpedLine? pumpedLine;
+                try
+                {
+                    pumpedLine = batchInput.ReadAsync(cancellationToken)
+                        .AsTask()
+                        .GetAwaiter()
+                        .GetResult();
+                }
+                catch (OperationCanceledException) when (
+                    jsonSummary
+                    && cancellationToken.IsCancellationRequested)
+                {
+                    firstFailure = CommandExitCodes.CancelledBySignal;
+                    break;
+                }
+                if (pumpedLine is null)
+                    break;
+
+                var line = pumpedLine.Value.Line;
+                var lineExceededLimit = pumpedLine.Value.ExceededLimit;
                 lineNumber++;
+                BatchInputLineReadForTesting?.Invoke(lineNumber);
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    if (!jsonSummary)
+                        cancellationToken.ThrowIfCancellationRequested();
+
+                    firstFailure = CommandExitCodes.CancelledBySignal;
+                    if (lineExceededLimit || !string.IsNullOrWhiteSpace(line))
+                    {
+                        var lineError = BuildBatchCancellationLineError(lineNumber);
+                        if (!WriteBatchLineErrorJson(lineNumber, lineError, jsonOutput!))
+                        {
+                            WriteBatchOutputLimitErrorJson(
+                                lineNumber,
+                                commandName: null,
+                                CommandExitCodes.CancelledBySignal,
+                                maxOutputChars,
+                                jsonOutput!);
+                            outputLimitReached = true;
+                        }
+                        lineErrors++;
+                    }
+                    break;
+                }
+
                 if (lineNumber > maxInputLines)
                 {
                     var lineError = new BatchLineError(
@@ -207,7 +279,9 @@ public static partial class QueryCommandRunner
                     var lineError = new BatchLineError(
                         $"batch line {lineNumber} exceeds the {BatchMaxLineChars} character limit.",
                         CommandExitCodes.UsageError,
-                        ErrorCode: CommandErrorCodes.UsageError);
+                        Hint: "Split the command across smaller arguments or reduce the input record.",
+                        ErrorCode: CommandErrorCodes.UsageError,
+                        Category: "batch_input_line_length_limit");
                     if (jsonSummary)
                     {
                         if (!WriteBatchLineErrorJson(lineNumber, lineError, jsonOutput!))
@@ -267,13 +341,15 @@ public static partial class QueryCommandRunner
                         commandName,
                         subArgs,
                         maxOutputChars,
+                        includeRawStreams,
                         jsonOutput!,
                         jsonOptions,
                         appVersion,
                         cancellationToken)
                     : new BatchCommandRunResult(
                         RunBatchQueryCommand(commandName, subArgs, jsonOptions, appVersion, cancellationToken),
-                        OutputLimitReached: false);
+                        OutputLimitReached: false,
+                        CancellationObserved: false);
                 var exitCode = batchResult.ExitCode;
                 if (exitCode != CommandExitCodes.Success)
                 {
@@ -284,6 +360,11 @@ public static partial class QueryCommandRunner
                 if (batchResult.OutputLimitReached)
                 {
                     outputLimitReached = true;
+                    break;
+                }
+                if (batchResult.CancellationObserved)
+                {
+                    firstFailure = CommandExitCodes.CancelledBySignal;
                     break;
                 }
             }
@@ -303,6 +384,16 @@ public static partial class QueryCommandRunner
                     jsonOutput!);
 
             return firstFailure;
+        }
+        catch (OperationCanceledException) when (
+            jsonSummary
+            && cancellationToken.IsCancellationRequested)
+        {
+            return WriteBatchSetupCancellationSummary(
+                maxInputLines,
+                maxOutputChars,
+                parallelism,
+                jsonOptions);
         }
         finally
         {
@@ -360,6 +451,7 @@ public static partial class QueryCommandRunner
         int maxInputLines,
         int maxOutputChars,
         int parallelism,
+        bool includeRawStreams,
         JsonSerializerOptions jsonOptions,
         string appVersion,
         CancellationToken cancellationToken)
@@ -381,10 +473,12 @@ public static partial class QueryCommandRunner
         var commandFailures = 0;
         var outputLimitReached = false;
         var inputLimitReached = false;
+        var cancellationObserved = false;
         using var stopProducing = new CancellationTokenSource();
         using var producerCancellation = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken,
             stopProducing.Token);
+        var batchInput = GetBatchInputPump(Console.In);
         var input = Channel.CreateBounded<BatchPendingItem>(
             new BoundedChannelOptions(1)
             {
@@ -397,18 +491,45 @@ public static partial class QueryCommandRunner
         Console.SetError(stderrRouter);
         try
         {
-            var producer = Task.Run(() =>
+            var producer = Task.Run(async () =>
             {
                 try
                 {
                     while (!stopProducing.IsCancellationRequested)
                     {
-                        cancellationToken.ThrowIfCancellationRequested();
-                        if (!TryReadBatchLine(Console.In, out var line, out var lineExceededLimit))
+                        if (cancellationToken.IsCancellationRequested)
+                        {
+                            cancellationObserved = true;
+                            break;
+                        }
+
+                        var pumpedLine = await batchInput.ReadAsync(producerCancellation.Token)
+                            .ConfigureAwait(false);
+                        if (pumpedLine is null)
                             break;
 
-                        cancellationToken.ThrowIfCancellationRequested();
                         lineNumber++;
+                        BatchInputLineReadForTesting?.Invoke(lineNumber);
+                        if (cancellationToken.IsCancellationRequested)
+                        {
+                            cancellationObserved = true;
+                            if (pumpedLine.Value.ExceededLimit
+                                || !string.IsNullOrWhiteSpace(pumpedLine.Value.Line))
+                            {
+                                await input.Writer.WriteAsync(
+                                        new BatchPendingItem(
+                                            lineNumber,
+                                            null,
+                                            [],
+                                            BuildBatchCancellationLineError(lineNumber),
+                                            Terminal: true),
+                                        stopProducing.Token)
+                                    .ConfigureAwait(false);
+                                lineErrors++;
+                            }
+                            break;
+                        }
+
                         if (lineNumber > maxInputLines)
                         {
                             var lineError = new BatchLineError(
@@ -417,33 +538,32 @@ public static partial class QueryCommandRunner
                                 Hint: "Split the request into smaller batch invocations.",
                                 ErrorCode: CommandErrorCodes.UsageError,
                                 Category: "batch_input_line_limit");
-                            input.Writer.WriteAsync(
+                            await input.Writer.WriteAsync(
                                     new BatchPendingItem(lineNumber, null, [], lineError, Terminal: true),
-                                    producerCancellation.Token)
-                                .AsTask()
-                                .GetAwaiter()
-                                .GetResult();
+                                    stopProducing.Token)
+                                .ConfigureAwait(false);
                             lineErrors++;
                             inputLimitReached = true;
                             break;
                         }
 
-                        if (lineExceededLimit)
+                        if (pumpedLine.Value.ExceededLimit)
                         {
                             var lineError = new BatchLineError(
                                 $"batch line {lineNumber} exceeds the {BatchMaxLineChars} character limit.",
                                 CommandExitCodes.UsageError,
-                                ErrorCode: CommandErrorCodes.UsageError);
-                            input.Writer.WriteAsync(
+                                Hint: "Split the command across smaller arguments or reduce the input record.",
+                                ErrorCode: CommandErrorCodes.UsageError,
+                                Category: "batch_input_line_length_limit");
+                            await input.Writer.WriteAsync(
                                     new BatchPendingItem(lineNumber, null, [], lineError, Terminal: false),
-                                    producerCancellation.Token)
-                                .AsTask()
-                                .GetAwaiter()
-                                .GetResult();
+                                    stopProducing.Token)
+                                .ConfigureAwait(false);
                             lineErrors++;
                             continue;
                         }
 
+                        var line = pumpedLine.Value.Line;
                         if (string.IsNullOrWhiteSpace(line))
                             continue;
 
@@ -477,12 +597,17 @@ public static partial class QueryCommandRunner
                             commandsProcessed++;
                         }
 
-                        input.Writer.WriteAsync(item, producerCancellation.Token)
-                            .AsTask()
-                            .GetAwaiter()
-                            .GetResult();
+                        BatchParallelItemPreparedForTesting?.Invoke(lineNumber);
+                        await input.Writer.WriteAsync(item, stopProducing.Token)
+                            .ConfigureAwait(false);
                     }
 
+                    input.Writer.TryComplete();
+                }
+                catch (OperationCanceledException) when (producerCancellation.IsCancellationRequested)
+                {
+                    if (cancellationToken.IsCancellationRequested)
+                        cancellationObserved = true;
                     input.Writer.TryComplete();
                 }
                 catch (Exception ex)
@@ -514,8 +639,7 @@ public static partial class QueryCommandRunner
                                     stderrRouter,
                                     jsonOptions,
                                     appVersion,
-                                    cancellationToken),
-                                cancellationToken);
+                                    cancellationToken));
                         active.Enqueue((item, result));
                     }
 
@@ -528,6 +652,11 @@ public static partial class QueryCommandRunner
                         var result = resultTask.GetAwaiter().GetResult();
                         if (item.Error is not null)
                         {
+                            if (item.Error.ExitCode is CommandExitCodes.CancelledBySignal
+                                or CommandExitCodes.LegacyInterrupted)
+                            {
+                                cancellationObserved = true;
+                            }
                             if (firstFailure == CommandExitCodes.Success)
                                 firstFailure = item.Error.ExitCode;
 
@@ -565,10 +694,16 @@ public static partial class QueryCommandRunner
                                 result.Stderr,
                                 result.Error,
                                 ClassifyBatchOutput(item.CommandName!, item.Arguments),
+                                includeRawStreams,
                                 jsonOutput))
                         {
                             if (result.ExitCode != CommandExitCodes.Success)
                             {
+                                if (result.ExitCode is CommandExitCodes.CancelledBySignal
+                                    or CommandExitCodes.LegacyInterrupted)
+                                {
+                                    cancellationObserved = true;
+                                }
                                 commandFailures++;
                                 if (firstFailure == CommandExitCodes.Success)
                                     firstFailure = result.ExitCode;
@@ -596,8 +731,7 @@ public static partial class QueryCommandRunner
                     if (active.Count > 0 && active.Peek().Result.IsCompleted)
                         continue;
 
-                    using var waitCancellation = CancellationTokenSource.CreateLinkedTokenSource(
-                        cancellationToken);
+                    using var waitCancellation = new CancellationTokenSource();
                     var waitForInput = input.Reader.WaitToReadAsync(waitCancellation.Token).AsTask();
                     if (active.Count == 0)
                     {
@@ -637,24 +771,13 @@ public static partial class QueryCommandRunner
                     }
                 }
 
-                if (producer.IsCompleted)
+                try
                 {
-                    try
-                    {
-                        producer.GetAwaiter().GetResult();
-                    }
-                    catch
-                    {
-                        // Preserve the first failure from the consumer or ordered worker.
-                    }
+                    producer.GetAwaiter().GetResult();
                 }
-                else
+                catch
                 {
-                    _ = producer.ContinueWith(
-                        static completedProducer => _ = completedProducer.Exception,
-                        CancellationToken.None,
-                        TaskContinuationOptions.ExecuteSynchronously | TaskContinuationOptions.OnlyOnFaulted,
-                        TaskScheduler.Default);
+                    // Preserve the first failure from the consumer or ordered worker.
                 }
                 throw;
             }
@@ -675,6 +798,9 @@ public static partial class QueryCommandRunner
                 && !cancellationToken.IsCancellationRequested)
             {
             }
+
+            if (cancellationObserved)
+                firstFailure = CommandExitCodes.CancelledBySignal;
 
             WriteBatchSummaryJson(
                 lineNumber,
@@ -741,20 +867,26 @@ public static partial class QueryCommandRunner
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            throw;
+            exitCode = CommandExitCodes.CancelledBySignal;
+            error = BuildBatchCancellationError();
+        }
+        catch (TimeoutException)
+        {
+            exitCode = CommandExitCodes.RuntimeError;
+            error = BuildBatchTimeoutError();
         }
         catch (Exception ex)
         {
-            exitCode = CommandExitCodes.DatabaseError;
-            error = new JsonObject
-            {
-                ["message"] = "batch command failed without affecting other batch items.",
-                ["error_code"] = CommandErrorCodes.DbError,
-                ["category"] = SafeDiagnosticFormatter.FormatCategoryType(
+            exitCode = CommandExitCodes.RuntimeError;
+            error = BuildBatchTypedError(
+                "batch command failed without affecting other batch items.",
+                exitCode,
+                "Retry the item directly if command-specific diagnostics are required.",
+                CommandErrorCodes.CommandFailed,
+                SafeDiagnosticFormatter.FormatCategoryType(
                     "batch_command_failure",
                     ex.GetType().Name),
-                ["scope"] = "command",
-            };
+                "command");
         }
         finally
         {
@@ -797,8 +929,44 @@ public static partial class QueryCommandRunner
             ["input_limit_reached"] = inputLimitReached,
             ["parallelism"] = parallelism,
         };
+        if (exitCode is CommandExitCodes.CancelledBySignal or CommandExitCodes.LegacyInterrupted)
+        {
+            payload["error"] = BuildBatchTypedError(
+                "batch processing was cancelled by the caller.",
+                exitCode,
+                "Retry the batch when the caller cancellation token is not cancelled.",
+                CommandErrorCodes.Interrupted,
+                "batch_cancelled",
+                "batch");
+        }
 
         output.WriteSummary(payload);
+    }
+
+    private static int WriteBatchSetupCancellationSummary(
+        int maxInputLines,
+        int maxOutputChars,
+        int parallelism,
+        JsonSerializerOptions jsonOptions)
+    {
+        var output = new BatchJsonOutputWriter(
+            Console.Out,
+            maxOutputChars,
+            BatchTerminalOutputReserveChars,
+            jsonOptions);
+        WriteBatchSummaryJson(
+            inputLinesRead: 0,
+            commandsProcessed: 0,
+            lineErrors: 0,
+            commandFailures: 0,
+            CommandExitCodes.CancelledBySignal,
+            outputLimitReached: false,
+            inputLimitReached: false,
+            maxInputLines,
+            maxOutputChars,
+            parallelism,
+            output);
+        return CommandExitCodes.CancelledBySignal;
     }
 
     private static BatchCommandRunResult RunBatchQueryCommandWithJsonRecord(
@@ -806,6 +974,7 @@ public static partial class QueryCommandRunner
         string commandName,
         string[] subArgs,
         int outputCharLimit,
+        bool includeRawStreams,
         BatchJsonOutputWriter output,
         JsonSerializerOptions jsonOptions,
         string appVersion,
@@ -814,6 +983,8 @@ public static partial class QueryCommandRunner
         using var capture = new BatchCommandOutputCapture();
         int exitCode;
         BatchOutputCaptureLimitExceededException? captureLimitExceeded = null;
+        JsonObject? commandError = null;
+        var cancellationObserved = false;
         try
         {
             capture.Start();
@@ -824,14 +995,37 @@ public static partial class QueryCommandRunner
             captureLimitExceeded = ex;
             exitCode = CommandExitCodes.InvalidArgument;
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            exitCode = CommandExitCodes.CancelledBySignal;
+            commandError = BuildBatchCancellationError();
+            cancellationObserved = true;
+        }
+        catch (TimeoutException)
+        {
+            exitCode = CommandExitCodes.RuntimeError;
+            commandError = BuildBatchTimeoutError();
+        }
+        catch (Exception ex)
+        {
+            exitCode = CommandExitCodes.RuntimeError;
+            commandError = BuildBatchTypedError(
+                "batch command failed without affecting other batch items.",
+                exitCode,
+                "Retry the item directly if command-specific diagnostics are required.",
+                CommandErrorCodes.CommandFailed,
+                SafeDiagnosticFormatter.FormatCategoryType(
+                    "batch_command_failure",
+                    ex.GetType().Name),
+                "command");
+        }
         finally
         {
             capture.Stop();
         }
 
-        JsonObject? error = null;
         if (captureLimitExceeded is not null)
-            error = BuildBatchCaptureLimitError(captureLimitExceeded);
+            commandError = BuildBatchCaptureLimitError(captureLimitExceeded);
 
         var recordWritten = WriteBatchCommandRecordJson(
             lineNumber,
@@ -840,27 +1034,97 @@ public static partial class QueryCommandRunner
             exitCode,
             capture.Stdout,
             capture.Stderr,
-            error,
+            commandError,
             ClassifyBatchOutput(commandName, subArgs),
+            includeRawStreams,
             output);
         if (recordWritten)
-            return new BatchCommandRunResult(exitCode, OutputLimitReached: false);
+            return new BatchCommandRunResult(
+                exitCode,
+                OutputLimitReached: false,
+                CancellationObserved: cancellationObserved);
 
         WriteBatchOutputLimitErrorJson(lineNumber, commandName, exitCode, outputCharLimit, output);
-        return new BatchCommandRunResult(CommandExitCodes.InvalidArgument, OutputLimitReached: true);
+        return new BatchCommandRunResult(
+            CommandExitCodes.InvalidArgument,
+            OutputLimitReached: true,
+            CancellationObserved: cancellationObserved);
     }
 
     private static JsonObject BuildBatchCaptureLimitError(BatchOutputCaptureLimitExceededException exception)
     {
-        return new JsonObject
+        return BuildBatchTypedError(
+            $"batch command {exception.StreamName} exceeded {exception.MaxChars} captured characters.",
+            CommandExitCodes.InvalidArgument,
+            "Reduce the result set or run cdidx batch without --json-summary for streaming output.",
+            CommandErrorCodes.UsageError,
+            "batch_child_output_limit",
+            "command",
+            new JsonObject
+            {
+                ["max_chars"] = exception.MaxChars,
+                ["stream"] = exception.StreamName,
+            });
+    }
+
+    private static JsonObject BuildBatchCancellationError()
+        => BuildBatchTypedError(
+            "batch command was cancelled by the caller.",
+            CommandExitCodes.CancelledBySignal,
+            "Retry the batch when the caller cancellation token is not cancelled.",
+            CommandErrorCodes.Interrupted,
+            "batch_cancelled",
+            "command");
+
+    private static BatchLineError BuildBatchCancellationLineError(int lineNumber)
+        => new(
+            $"batch line {lineNumber} was not dispatched because the caller cancelled the batch.",
+            CommandExitCodes.CancelledBySignal,
+            Hint: "Retry the batch when the caller cancellation token is not cancelled.",
+            ErrorCode: CommandErrorCodes.Interrupted,
+            Category: "batch_cancelled");
+
+    private static JsonObject BuildBatchTimeoutError()
+        => BuildBatchTypedError(
+            "batch command exceeded its execution deadline.",
+            CommandExitCodes.RuntimeError,
+            "Reduce the query scope or retry the command directly.",
+            CommandErrorCodes.CommandFailed,
+            "batch_command_timeout",
+            "command");
+
+    private static JsonObject BuildBatchTypedError(
+        string message,
+        int exitCode,
+        string? hint,
+        string? errorCode,
+        string? category,
+        string scope,
+        JsonObject? additionalProperties = null)
+    {
+        var (resolvedErrorCode, resolvedCategory) = CommandErrorWriter.ResolveMachineContract(
+            exitCode,
+            errorCode,
+            category);
+        var payload = new JsonObject
         {
-            ["message"] = $"batch command {exception.StreamName} exceeded {exception.MaxChars} captured characters.",
-            ["hint"] = "Reduce the result set or run cdidx batch without --json-summary for streaming output.",
-            ["error_code"] = CommandErrorCodes.UsageError,
-            ["max_chars"] = exception.MaxChars,
-            ["stream"] = exception.StreamName,
-            ["scope"] = "command",
+            ["message"] = message,
+            ["hint"] = hint ?? BatchFailureHint(exitCode),
+            ["error_code"] = resolvedErrorCode,
+            ["category"] = resolvedCategory,
+            ["scope"] = scope,
         };
+
+        if (additionalProperties is not null)
+        {
+            foreach (var property in additionalProperties)
+            {
+                if (!payload.ContainsKey(property.Key))
+                    payload[property.Key] = property.Value?.DeepClone();
+            }
+        }
+
+        return payload;
     }
 
     private static bool WriteBatchCommandRecordJson(
@@ -872,6 +1136,7 @@ public static partial class QueryCommandRunner
         string stderr,
         JsonObject? error,
         BatchOutputKind outputKind,
+        bool includeRawStreams,
         BatchJsonOutputWriter output)
     {
         var payload = new JsonObject
@@ -883,24 +1148,105 @@ public static partial class QueryCommandRunner
             ["command"] = commandName,
             ["arguments"] = ToJsonStringArray(subArgs),
             ["exit_code"] = exitCode,
-            ["stderr"] = stderr,
         };
 
-        if (exitCode == CommandExitCodes.Success
-            && TryParseBatchStructuredOutput(stdout, outputKind, out var resultField, out var structuredOutput))
+        if (exitCode == CommandExitCodes.Success)
         {
-            payload[resultField] = structuredOutput;
+            payload["stderr"] = stderr;
+            if (TryParseBatchStructuredOutput(stdout, outputKind, out var resultField, out var structuredOutput))
+                payload[resultField] = structuredOutput;
+            else
+                payload["stdout"] = stdout;
         }
         else
         {
-            payload["stdout"] = stdout;
+            payload["error"] = BuildBatchCommandFailureError(commandName, exitCode, error);
+            if (includeRawStreams)
+            {
+                payload["raw_streams"] = new JsonObject
+                {
+                    ["stdout"] = stdout,
+                    ["stderr"] = stderr,
+                };
+            }
         }
-
-        if (error is not null)
-            payload["error"] = error;
 
         return output.TryWrite(payload);
     }
+
+    private static JsonObject BuildBatchCommandFailureError(
+        string commandName,
+        int exitCode,
+        JsonObject? error)
+    {
+        if (error is null && !CliCommandCatalog.IsBatchReadOnlyCommand(commandName))
+        {
+            return BuildBatchTypedError(
+                "batch command was rejected by the read-only dispatch policy.",
+                exitCode,
+                $"Use one of {string.Join(", ", CliCommandCatalog.BatchReadOnlyCommands)}.",
+                CommandErrorCodes.UsageError,
+                "batch_command_not_allowed",
+                "command");
+        }
+
+        if (error is null)
+        {
+            var (_, category) = CommandErrorWriter.ResolveMachineContract(exitCode);
+            return BuildBatchTypedError(
+                "batch child command returned a non-zero exit code.",
+                exitCode,
+                BatchFailureHint(exitCode),
+                errorCode: null,
+                category: $"batch_child_{category}",
+                scope: "command",
+                new JsonObject
+                {
+                    ["child_exit_code"] = exitCode,
+                });
+        }
+
+        var message = GetBatchErrorString(error, "message")
+            ?? "batch child command returned a non-zero exit code.";
+        var hint = GetBatchErrorString(error, "hint") ?? BatchFailureHint(exitCode);
+        var errorCode = GetBatchErrorString(error, "error_code");
+        var categoryValue = GetBatchErrorString(error, "category");
+        var scope = GetBatchErrorString(error, "scope") ?? "command";
+        return BuildBatchTypedError(
+            message,
+            exitCode,
+            hint,
+            errorCode,
+            categoryValue,
+            scope,
+            error);
+    }
+
+    private static string? GetBatchErrorString(JsonObject error, string propertyName)
+        => error[propertyName] is JsonValue value
+            && value.TryGetValue<string>(out var text)
+                ? text
+                : null;
+
+    private static string BatchFailureHint(int exitCode)
+        => exitCode switch
+        {
+            CommandExitCodes.UsageError or CommandExitCodes.InvalidArgument or CommandExitCodes.ExUsage
+                => "Check the child command arguments with `cdidx <command> --help`.",
+            CommandExitCodes.NotFound
+                => "Broaden the query or remove strict not-found handling before retrying.",
+            CommandExitCodes.DatabaseError or CommandExitCodes.TransientDatabaseError
+                => "Run `cdidx status --check --json` and follow its repair guidance.",
+            CommandExitCodes.FeatureUnavailable
+                => "Use a build that includes the requested feature or choose a supported output mode.",
+            CommandExitCodes.StaleIndex
+                => "Refresh the index and retry the child command.",
+            CommandExitCodes.CancelledBySignal or CommandExitCodes.LegacyInterrupted
+                => "Retry the batch when the caller cancellation token is not cancelled.",
+            CommandExitCodes.PartialResult
+                => "Inspect the child command directly before relying on the partial result.",
+            _ => "Retry the child command directly for command-specific diagnostics.",
+        };
 
     private static bool TryParseBatchStructuredOutput(
         string stdout,
@@ -1057,8 +1403,6 @@ public static partial class QueryCommandRunner
             ["status"] = "error",
             ["line"] = lineNumber,
             ["exit_code"] = error.ExitCode,
-            ["stdout"] = string.Empty,
-            ["stderr"] = string.Empty,
             ["error"] = ToBatchErrorJson(error),
         };
     }
@@ -1070,16 +1414,18 @@ public static partial class QueryCommandRunner
         int outputCharLimit,
         BatchJsonOutputWriter output)
     {
-        var error = new JsonObject
-        {
-            ["message"] = $"batch serialized output reached the {outputCharLimit} character limit.",
-            ["hint"] = "Split the request into smaller batches or reduce child output with --limit/--top.",
-            ["error_code"] = CommandErrorCodes.UsageError,
-            ["category"] = "batch_output_limit",
-            ["scope"] = "batch",
-            ["max_chars"] = outputCharLimit,
-            ["attempted_exit_code"] = attemptedExitCode,
-        };
+        var error = BuildBatchTypedError(
+            $"batch serialized output reached the {outputCharLimit} character limit.",
+            CommandExitCodes.InvalidArgument,
+            "Split the request into smaller batches or reduce child output with --limit/--top.",
+            CommandErrorCodes.UsageError,
+            "batch_output_limit",
+            "batch",
+            new JsonObject
+            {
+                ["max_chars"] = outputCharLimit,
+                ["attempted_exit_code"] = attemptedExitCode,
+            });
         var payload = new JsonObject
         {
             ["api_version"] = JsonOutputContract.ApiVersion,
@@ -1087,8 +1433,6 @@ public static partial class QueryCommandRunner
             ["status"] = "error",
             ["line"] = lineNumber,
             ["exit_code"] = CommandExitCodes.InvalidArgument,
-            ["stdout"] = string.Empty,
-            ["stderr"] = string.Empty,
             ["error"] = error,
         };
         if (commandName is not null)
@@ -1101,21 +1445,13 @@ public static partial class QueryCommandRunner
     }
 
     private static JsonObject ToBatchErrorJson(BatchLineError error)
-    {
-        var payload = new JsonObject
-        {
-            ["message"] = error.Message,
-        };
-
-        if (!string.IsNullOrWhiteSpace(error.Hint))
-            payload["hint"] = error.Hint;
-        if (!string.IsNullOrWhiteSpace(error.ErrorCode))
-            payload["error_code"] = error.ErrorCode;
-        if (!string.IsNullOrWhiteSpace(error.Category))
-            payload["category"] = error.Category;
-
-        return payload;
-    }
+        => BuildBatchTypedError(
+            error.Message,
+            error.ExitCode,
+            error.Hint,
+            error.ErrorCode,
+            error.Category,
+            "input");
 
     private static JsonArray ToJsonStringArray(IEnumerable<string> values)
     {
@@ -1196,7 +1532,9 @@ public static partial class QueryCommandRunner
                 error = new BatchLineError(
                     $"batch line {lineNumber} must be a non-empty JSON string array or a command object.",
                     CommandExitCodes.UsageError,
-                    ErrorCode: CommandErrorCodes.UsageError);
+                    Hint: "Use a non-empty JSON string array or a {\"command\",\"args\"} object.",
+                    ErrorCode: CommandErrorCodes.UsageError,
+                    Category: "invalid_batch_input_shape");
                 if (writeDiagnostics)
                     WriteBatchLineErrorDiagnostic(error, jsonOptions);
                 return false;
@@ -1206,7 +1544,9 @@ public static partial class QueryCommandRunner
                 error = new BatchLineError(
                     $"batch line {lineNumber} must contain at most {BatchMaxArgumentCount} command arguments.",
                     CommandExitCodes.UsageError,
-                    ErrorCode: CommandErrorCodes.UsageError);
+                    Hint: "Reduce the number of child command arguments.",
+                    ErrorCode: CommandErrorCodes.UsageError,
+                    Category: "batch_argument_count_limit");
                 if (writeDiagnostics)
                     WriteBatchLineErrorDiagnostic(error, jsonOptions);
                 return false;
@@ -1220,7 +1560,9 @@ public static partial class QueryCommandRunner
                     error = new BatchLineError(
                         $"batch line {lineNumber} must contain only strings.",
                         CommandExitCodes.UsageError,
-                        ErrorCode: CommandErrorCodes.UsageError);
+                        Hint: "Encode the command and every argument as JSON strings.",
+                        ErrorCode: CommandErrorCodes.UsageError,
+                        Category: "invalid_batch_argument_type");
                     if (writeDiagnostics)
                         WriteBatchLineErrorDiagnostic(error, jsonOptions);
                     return false;
@@ -1231,7 +1573,9 @@ public static partial class QueryCommandRunner
                     error = new BatchLineError(
                         $"batch line {lineNumber} argument {values.Count + 1} exceeds the {BatchMaxArgumentChars} character limit.",
                         CommandExitCodes.UsageError,
-                        ErrorCode: CommandErrorCodes.UsageError);
+                        Hint: "Reduce the child command argument length.",
+                        ErrorCode: CommandErrorCodes.UsageError,
+                        Category: "batch_argument_length_limit");
                     if (writeDiagnostics)
                         WriteBatchLineErrorDiagnostic(error, jsonOptions);
                     return false;
@@ -1404,7 +1748,9 @@ public static partial class QueryCommandRunner
         => new(
             $"batch line {lineNumber} could not be parsed.",
             CommandExitCodes.UsageError,
-            ErrorCode: CommandErrorCodes.UsageError);
+            Hint: "Use a JSON string array or a {\"command\",\"args\"} object.",
+            ErrorCode: CommandErrorCodes.UsageError,
+            Category: "invalid_batch_input");
 
     private static int RunBatchQueryCommand(
         string commandName,
@@ -1463,7 +1809,10 @@ public static partial class QueryCommandRunner
         string? Category = null,
         bool WriteAsJson = false);
 
-    private sealed record BatchCommandRunResult(int ExitCode, bool OutputLimitReached);
+    private sealed record BatchCommandRunResult(
+        int ExitCode,
+        bool OutputLimitReached,
+        bool CancellationObserved);
 
     private sealed record BatchPendingItem(
         int LineNumber,
@@ -1471,6 +1820,64 @@ public static partial class QueryCommandRunner
         string[] Arguments,
         BatchLineError? Error,
         bool Terminal);
+
+    private static BatchInputPump GetBatchInputPump(TextReader reader)
+        => s_batchInputPumps.GetValue(reader, static value => new BatchInputPump(value));
+
+    private sealed class BatchInputPump
+    {
+        private readonly Channel<BatchPumpedLine> _lines;
+
+        public BatchInputPump(TextReader reader)
+        {
+            _lines = Channel.CreateBounded<BatchPumpedLine>(
+                new BoundedChannelOptions(1)
+                {
+                    FullMode = BoundedChannelFullMode.Wait,
+                    SingleReader = false,
+                    SingleWriter = true,
+                });
+
+            // The pump is the sole owner of this reader. A cancelled batch only
+            // cancels its channel read, so an in-flight line remains available
+            // to the next batch invocation instead of being consumed by an
+            // orphaned per-invocation producer.
+            _ = Task.Run(() => Pump(reader));
+        }
+
+        public async ValueTask<BatchPumpedLine?> ReadAsync(CancellationToken cancellationToken)
+        {
+            try
+            {
+                return await _lines.Reader.ReadAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (ChannelClosedException) when (_lines.Reader.Completion.IsCompletedSuccessfully)
+            {
+                return null;
+            }
+        }
+
+        private void Pump(TextReader reader)
+        {
+            try
+            {
+                while (TryReadBatchLine(reader, out var line, out var exceededLimit))
+                {
+                    _lines.Writer.WriteAsync(new BatchPumpedLine(line, exceededLimit))
+                        .AsTask()
+                        .GetAwaiter()
+                        .GetResult();
+                }
+                _lines.Writer.TryComplete();
+            }
+            catch (Exception ex)
+            {
+                _lines.Writer.TryComplete(ex);
+            }
+        }
+    }
+
+    private readonly record struct BatchPumpedLine(string? Line, bool ExceededLimit);
 
     private sealed record BatchParallelCommandResult(
         int ExitCode,

@@ -1,3 +1,5 @@
+using CodeIndex.Indexer;
+
 namespace CodeIndex.Database;
 
 /// <summary>
@@ -10,6 +12,11 @@ internal static class HotspotReferenceAggregateSql
     internal const string DeferredDirtyFilesTableName = "temp_hotspot_reference_dirty_files";
 
     internal const string ReferenceKindsSql = DbReader.CallGraphReferenceKindsSql;
+    private static readonly string CSharpCommonQualifiedMemberCallNamesSql = string.Join(
+        ", ",
+        CSharpReferenceExtractor.CommonQualifiedMemberCallNames
+            .OrderBy(static name => name, StringComparer.Ordinal)
+            .Select(static name => $"'{name}'"));
 
     internal const string CreateTableSql = """
         CREATE TABLE IF NOT EXISTS hotspot_reference_counts (
@@ -99,6 +106,13 @@ internal static class HotspotReferenceAggregateSql
                 WHERE sr.reference_kind IN {ReferenceKindsSql}
                   AND sr.symbol_name IS NOT NULL
                   AND sr.symbol_name <> ''
+                  AND NOT (
+                      f.lang = 'csharp'
+                      AND sr.reference_kind = 'call'
+                      AND sr.symbol_name IN ({CSharpCommonQualifiedMemberCallNamesSql})
+                      AND sr.target_qualifier IS NOT NULL
+                      AND COALESCE(sr.resolution_state, 'unresolved') NOT IN ('resolved', 'resolved_group')
+                  )
                   AND f.lang != 'sql'{referencePredicate}{testCheckpointPredicate}
             ),
             non_sql_logical_sites AS (

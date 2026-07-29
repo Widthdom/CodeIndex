@@ -76,15 +76,21 @@ internal static class DependencyNoiseProfile
     }
 
     internal static double ComputeRankingScore(int referenceCount, string symbols)
+        => ComputeRankingScore(
+            referenceCount,
+            symbols.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+
+    internal static double ComputeRankingScore(
+        int referenceCount,
+        IReadOnlyList<string> symbolNames)
     {
-        var symbolNames = symbols.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        if (symbolNames.Length == 0)
+        if (symbolNames.Count == 0)
             return referenceCount;
 
         var penaltySum = 0.0;
         foreach (var symbolName in symbolNames)
             penaltySum += IsNoiseSymbol(symbolName) ? SymbolRankPenalty : 1.0;
 
-        return referenceCount * penaltySum / symbolNames.Length;
+        return referenceCount * penaltySum / symbolNames.Count;
     }
 }

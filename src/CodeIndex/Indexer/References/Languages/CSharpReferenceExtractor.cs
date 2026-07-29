@@ -28,7 +28,7 @@ internal static partial class CSharpReferenceExtractor
     private static readonly Regex StaticMemberQualifierRegex = new(
         @"(?<![\p{L}\p{Nd}_@.])(?<qualifier>(?:global::)?@?[A-Z_][\p{L}\p{Nd}_]*(?:\.@?[A-Z_][\p{L}\p{Nd}_]*)*)\s*\.\s*@?[\p{L}_][\p{L}\p{Nd}_]*",
         RegexOptions.Compiled);
-    private static readonly HashSet<string> CommonQualifiedMemberCallNames = new(StringComparer.Ordinal)
+    internal static IReadOnlySet<string> CommonQualifiedMemberCallNames { get; } = new HashSet<string>(StringComparer.Ordinal)
     {
         "Add",
         "All",
@@ -315,18 +315,6 @@ internal static partial class CSharpReferenceExtractor
     public static bool IsPatternHeadCallSite(string[] preparedLines, int lineIndex, string preparedLine, int nameIndex)
         => ReferenceExtractor.IsCSharpPatternHeadCallSite(preparedLines, lineIndex, preparedLine, nameIndex);
 
-    public static bool ShouldSuppressQualifiedCommonMemberCall(string preparedLine, string normalizedName, int nameIndex)
-    {
-        if (!CommonQualifiedMemberCallNames.Contains(normalizedName))
-            return false;
-
-        if (!TryGetImmediateMemberAccessQualifier(preparedLine, nameIndex, out var qualifier))
-            return false;
-
-        return !string.Equals(qualifier, "this", StringComparison.Ordinal)
-            && !string.Equals(qualifier, "base", StringComparison.Ordinal);
-    }
-
     public static void EmitStaticMemberQualifierReferences(
         string preparedLine,
         IReadOnlyList<(int start, int end)>? csharpAttrRangesOnLine,
@@ -578,40 +566,6 @@ internal static partial class CSharpReferenceExtractor
         !string.IsNullOrEmpty(identifier) && identifier[0] == '@'
             ? identifier[1..]
             : identifier;
-
-    private static bool TryGetImmediateMemberAccessQualifier(string preparedLine, int nameIndex, out string qualifier)
-    {
-        qualifier = string.Empty;
-        var cursor = nameIndex - 1;
-        while (cursor >= 0 && char.IsWhiteSpace(preparedLine[cursor]))
-            cursor--;
-
-        if (cursor < 0 || preparedLine[cursor] != '.')
-            return false;
-
-        cursor--;
-        while (cursor >= 0 && char.IsWhiteSpace(preparedLine[cursor]))
-            cursor--;
-
-        if (cursor < 0)
-            return true;
-
-        var end = cursor + 1;
-        while (cursor >= 0)
-        {
-            var ch = preparedLine[cursor];
-            if (char.IsLetterOrDigit(ch) || ch == '_' || ch == '@')
-            {
-                cursor--;
-                continue;
-            }
-
-            break;
-        }
-
-        qualifier = NormalizeCSharpIdentifier(preparedLine[(cursor + 1)..end]);
-        return true;
-    }
 
     public static void EmitQualifiedEnumMemberReferences(
         string preparedLine,

@@ -289,10 +289,11 @@ public partial class McpServerTests
         Assert.Equal("private", Assert.Single(symbolsStructured["excludeVisibility"]!.AsArray())!.GetValue<string>());
 
         var callersRequest = JsonNode.Parse(
-            """{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"callers","arguments":{"query":"RunVisible","rawKinds":true,"format":"count"}}}""")!;
+            """{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"callers","arguments":{"query":"RunVisible","rawKinds":true,"includeQualifiedCommonCalls":true,"format":"count"}}}""")!;
         var callersResponse = _server.HandleMessage(callersRequest)!;
         var callersStructured = callersResponse["result"]!["structuredContent"]!;
         Assert.True(callersStructured["rawKinds"]!.GetValue<bool>());
+        Assert.True(callersStructured["includeQualifiedCommonCalls"]!.GetValue<bool>());
         Assert.True(callersStructured["count_only"]!.GetValue<bool>());
 
         var analyzeRequest = JsonNode.Parse(

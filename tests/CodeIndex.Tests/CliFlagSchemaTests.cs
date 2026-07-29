@@ -137,6 +137,19 @@ public class CliFlagSchemaTests
     }
 
     [Fact]
+    public void QualifiedCommonCallCompletenessFlag_IsScopedToGraphCommands_Issue4867()
+    {
+        const string flag = "--include-qualified-common-calls";
+        foreach (var command in new[] { "references", "callers", "callees" })
+        {
+            Assert.Contains(flag, CliFlagSchema.GetAcceptedFlagNamesForCommand(command));
+            Assert.Contains(CliFlagSchema.GetCompletionFlagsForCommand(command), option => option.Name == flag);
+        }
+
+        Assert.DoesNotContain(flag, CliFlagSchema.GetAcceptedFlagNamesForCommand("search"));
+    }
+
+    [Fact]
     public void AuditAggregationFlags_SurfaceDocumentedRecipeGrouping_Issues4301_4339()
     {
         var accepted = CliFlagSchema.GetAcceptedFlagNamesForCommand("audit");

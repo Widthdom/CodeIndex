@@ -419,13 +419,17 @@ By default, child query commands stream their normal stdout/stderr directly. In
 `--json-summary` mode, every non-blank stdin line must instead emit one
 machine-readable batch envelope before the final summary: parsed commands use
 `record: "batch_result"` and include `line`, `command`, `arguments`,
-`exit_code`, and captured child `stderr`. The requested command/output format,
-rather than output-text sniffing, selects the projection: successful
+and `exit_code`. The requested command/output format, rather than output-text
+sniffing, selects the projection: successful
 single-document JSON is embedded as typed `result`, while successful NDJSON is
-embedded as a stable typed `results` array even when it has one row. Text and failed
-commands remain raw `stdout` text so diagnostics are not lost. Malformed or
-over-limit input lines use `record: "batch_error"` and an `error` object. Child
-output must not be written directly beside batch metadata in this mode. The entire
+embedded as a stable typed `results` array even when it has one row. Successful
+text remains `stdout`, while every failure uses one typed `error` object with a
+stable `error_code`, `category`, safe `message` / `hint`, and `scope`.
+Malformed or over-limit input lines use `record: "batch_error"` and the same
+typed error serializer. Failed records omit captured child stdout/stderr by
+default; `--include-raw-streams` explicitly adds them under a bounded
+`raw_streams` object. Child output must not be written directly beside batch
+metadata in this mode. The entire
 serialized stream—including envelopes, arguments, escaping expansion, terminal
 errors, and the final summary—uses the configured `--max-output-chars` budget
 (default 10,485,760; maximum 67,108,864). An item that exhausts it retains its
@@ -439,8 +443,13 @@ SQLite connection and thread-local batch reader, and buffer only the active
 worker window. `ScopedConsoleOutput` keeps nested JSON-envelope capture on the
 current worker's routed stdout instead of replacing another worker's process-wide
 writer. Completed records are committed to the shared output writer in input
-order; an ordinary item failure remains isolated, while caller cancellation
-stops scheduling and propagates.
+order; an ordinary item failure remains isolated. Caller cancellation is
+serialized as `batch_cancelled` for a consumed input item and in the final
+summary before batch processing stops. Serial and parallel input waits share a
+bounded pump for each input reader, so cancellation remains prompt while stdin
+is blocked and any line completed in flight stays buffered for a subsequent
+batch invocation. Cancellation during database setup still emits the typed
+final summary.
 
 Editor integrations can request standard location shapes directly. `definition`, `references`, `search`, `find`, and `validate` accept `--format <text|json|lsp|qf|sarif>`; `lsp` emits LSP `Location` arrays, `qf` emits Vim quickfix lines, and `sarif` emits SARIF 2.1.0. `goto <symbol>` returns the single unambiguous definition as one LSP `Location`, while `goto --all <symbol>` returns all matching locations without applying the default or environment-provided query limit. An explicit `--limit` or `--top` still bounds the returned location array.
 
@@ -458,6 +467,20 @@ across live-text eviction and are cleared by `didClose`, so an evicted newer
 version cannot be replaced by a stale change. Other providers return empty
 arrays or null when the database cannot answer safely instead of inventing
 language-server analysis.
+Before URI/path resolution, live-document access, or query-snapshot refresh,
+one shared coordinate validator checks every supported position/range-bearing
+method. `definition`, `declaration`, `references`, `hover`, `completion`, and
+`documentHighlight` require one position; `inlayHint` requires an ordered range;
+and each optional range supplied by `didChange` is validated before live text
+can change. Lines and characters must be JSON integers in the LSP `uinteger`
+domain (0 through 2,147,483,647), and range starts must not follow range ends.
+Malformed, missing, negative, or overflowing request coordinates return
+`-32602` (`Invalid params`); invalid notification coordinates are ignored
+without mutating document state. Structural validation does not turn a valid
+document no-match into a protocol error: provider lookup retains UTF-16
+coordinates and its existing end-of-line/EOF policy, while missing, unreadable,
+or out-of-range documents still produce the provider's conservative empty/null
+result.
 `LspServer` uses one lock-protected lifecycle state machine across ordinary
 dispatch, the cancellation fast path, and queue-overload responses. Its phases
 are before-initialize, initializing, running, shutdown, and exited. Only the
@@ -1166,6 +1189,15 @@ run refreshes reference resolution and stamps the marker atomically. C# referenc
 unqualified name receive a global candidate only when that name is unique in the applicable
 symbol set. Otherwise they remain `ambiguous` or `unresolved`, and dependency queries do not
 fall back to a same-name edge.
+
+C# common member names are never discarded during extraction. The writer persists their
+receiver/type evidence in `target_qualifier`, and reference finalization records
+`resolution_state`. Default bare-name `references` / `callers` / `callees` queries and hotspot
+aggregation suppress only rows that are both qualified and unresolved; `resolved` and
+`resolved_group` rows remain authoritative by default. The CLI
+`--include-qualified-common-calls` flag and MCP `includeQualifiedCommonCalls` argument bypass
+that query-time noise filter. Keep dependency edges identity-scoped: the completeness option
+must expose unresolved evidence without converting it into a same-name file dependency.
 
 C# `type_reference` candidates are filtered before qualifier and namespace ranking. A candidate
 must be a type-like symbol (`class`, `struct`, `record`, `interface`, `enum`, or `delegate`), and
@@ -2029,7 +2061,21 @@ Different graph entry points walk different `reference_kind` subsets by design. 
 | `deps` (default = forward) | source file → target file | all kinds; metadata rows require class-like + metadata-eligible targets (`has_metadata_target_kind`) and a unique resolution (`target_ambiguity`); MSBuild imports/project references resolve paths relative to the declaring project instead of matching shared package names | `DbReader.GetFileDependencies` |
 | `deps --reverse` | target file → source file | same as forward `deps` (same SQL) | `DbReader.GetFileDependencies` |
 
-`deps --symbol`, `--symbol-family`, and `--suppress-noise` are pushed into the logical-reference and target-candidate SQL scopes before candidate ranking and `--limit`; cycle and cross-workspace reads apply the same filters before their candidate limits. Consequently, `reference_count`, ranking, and the `symbol_filter` before/after counters describe the SQL-filtered scope rather than the whole pre-filter workspace. Long SQLite dependency reads also register command cancellation with the query token.
+`deps --symbol`, `--symbol-family`, and the generic-symbol part of
+`--suppress-noise` are pushed into the logical-reference and target-candidate
+SQL scopes before candidate ranking and `--limit`; cycle and cross-workspace
+reads apply the same name filters before their candidate limits. Markdown
+heading-name matches are classified separately as
+`markdown_heading_name_match` evidence. Suppressed queries prioritize retained
+evidence before candidate limits, then remove only that evidence in the CLI
+layer, so explicit Markdown path links remain visible even when an edge also
+contains legacy heading fanout. Machine-readable edges expose
+`source_language`, `origin`, `reference_kind`, `target_kind`, and
+`reference_count` distributions in `evidence`; `symbol_filter` adds reference
+before/after totals and per-reason affected/removed counts. Generic-symbol
+counters still describe the SQL-filtered scope rather than the whole pre-filter
+workspace. Long SQLite dependency reads also register command cancellation with
+the query token.
 
 Practical consequence: `impact <ClassName>` on a class-like symbol returns the heuristic file-dependency-hint fallback (with metadata edges) when no member-level callers exist, whereas default `callers <ClassName>` returns only executable edges. Both are correct under their own contracts; counts will not match. To reconcile, run `references <ClassName> --kind attribute` (or `annotation`), or pass an explicitly supported non-default kind to `callers` / `callees`, to surface edges that the default call graph intentionally drops.
 
@@ -3736,11 +3782,14 @@ path filter を受け付ける query コマンド（`search`, `definition`, `ref
 既定では child query command の通常の stdout / stderr を直接 stream する。`--json-summary`
 mode では、空白でない stdin 行ごとに final summary より前へ 1 つの machine-readable batch
 envelope を出力しなければならない。parse 済み command は `record: "batch_result"` として
-`line`、`command`、`arguments`、`exit_code`、捕捉した child `stderr` を含める。output text の
-推測ではなく requested command / output format で projection を選び、成功した単一 document JSON
+`line`、`command`、`arguments`、`exit_code` を含める。output text の推測ではなく requested
+command / output format で projection を選び、成功した単一 document JSON
 は型付き `result`、NDJSON は 1 row の場合も安定した型付き `results` array として埋め込む。
-text と失敗 command の出力は診断を失わないよう raw `stdout` text のまま
-保持する。malformed line や入力上限超過 line は `record: "batch_error"` と `error` object を使う。
+成功した text command は `stdout` のまま保持する一方、すべての失敗は安定した `error_code`、
+`category`、安全な `message` / `hint`、`scope` を持つ共通の型付き `error` object を使う。
+malformed line や入力上限超過 line は `record: "batch_error"` と同じ typed error serializer を
+使う。失敗 record は既定で捕捉した child stdout / stderr を省略し、
+`--include-raw-streams` を明示した場合だけ上限付きの `raw_streams` object に追加する。
 この mode では child output を batch metadata と並べて直接出力してはならない。envelope、
 arguments、escape 展開、terminal error、final summary を含む serialized stream 全体には
 設定された `--max-output-chars` budget（既定 10,485,760、最大 67,108,864）を適用し、
@@ -3753,7 +3802,11 @@ command ごとの bounded writer へ route し、分離した read-only SQLite c
 batch reader を使い、active worker window だけを buffer する。`ScopedConsoleOutput` は nested
 JSON-envelope capture を現在の worker の routed stdout に保ち、他 worker の process-wide writer を
 置き換えない。完了 record は入力順で共有 output writer へ commit する。通常の item failure は
-他 item から隔離し、caller cancellation は scheduling を停止して伝播する。
+他 item から隔離する。caller cancellation は、消費済み input item と final summary に
+`batch_cancelled` を記録してから後続処理を停止する。serial / parallel の input wait は input
+reader ごとの bounded pump を共有するため、stdin が block 中でも cancellation を迅速に検知し、
+同時に完成した line は後続の batch invocation 用に buffer したまま保持する。database setup
+中の cancellation でも型付き final summary を出力する。
 
 editor integration は標準的な location 形状を直接要求できる。`definition`、`references`、`search`、`find`、`validate` は `--format <text|json|lsp|qf|sarif>` を受け付け、`lsp` は LSP `Location` 配列、`qf` は Vim quickfix 行、`sarif` は SARIF 2.1.0 を出力する。`goto <symbol>` は曖昧でない単一定義を 1 つの LSP `Location` として返し、`goto --all <symbol>` は既定または環境変数由来の query limit を適用せず、一致する全 location を返す。明示的な `--limit` または `--top` を指定した場合は location 配列をその件数に制限する。
 
@@ -3768,6 +3821,18 @@ indexed symbol に fallback する。numeric document-version tombstone は live
 後も上限付きで保持し、`didClose` で消去するため、evict 済みの新しい version を stale change が
 置き換えることはない。それ以外の provider は database が安全に答えられない場合、
 language-server analysis を作り上げず、空配列または null を返す。
+URI / path 解決、live document へのアクセス、query snapshot の refresh より前に、1つの共通
+coordinate validator ですべての対応済み position / range method を検証する。
+`definition`、`declaration`、`references`、`hover`、`completion`、
+`documentHighlight` は1つの position を必須とし、`inlayHint` は順序どおりの range を必須とする。
+また、`didChange` に任意の range が指定された場合は、live text を変更する前に各 range を検証する。
+line と character は LSP の `uinteger` 範囲（0〜2,147,483,647）の JSON integer でなければならず、
+range の start が end より後であってはならない。request の coordinate が malformed、欠落、負数、
+overflow の場合は `-32602`（`Invalid params`）を返す。notification の coordinate が不正な場合は
+document state を変更せず無視する。構造検証によって、正当な document の no-match を protocol
+error に変えてはならない。provider lookup は UTF-16 coordinate と既存の行末 / EOF policy を維持し、
+document が欠落、読み取り不能、または範囲外の場合は、引き続き各 provider の保守的な空 / null
+result を返す。
 `LspServer` は通常 dispatch、cancellation fast path、queue-overload response の全経路で、
 1 つの lock 保護された lifecycle state machine を使う。phase は before-initialize、
 initializing、running、shutdown、exited である。最初の `initialize` request だけが初期化へ
@@ -4487,6 +4552,14 @@ identity-aware read は、`codeindex_meta` の `reference_identity_contract_vers
 resolution を再構築し、同じ transaction で marker を設定します。C# の無修飾名 reference は、
 対象となる symbol 集合で名前が一意の場合だけ global candidate を持ちます。それ以外は
 `ambiguous` または `unresolved` のままとし、dependency query は同名 edge へ fallback しません。
+
+C# の一般的な member 名は extraction 時に破棄しません。writer は receiver / 型の evidence を
+`target_qualifier` に永続化し、reference finalization は `resolution_state` を記録します。無修飾名の
+`references` / `callers` / `callees` query と hotspot 集計の既定動作では、修飾され、かつ未解決の
+row だけを除外し、`resolved` / `resolved_group` row は authoritative な既定結果として維持します。
+CLI の `--include-qualified-common-calls` と MCP の `includeQualifiedCommonCalls` は、この query-time
+noise filter を無効化します。dependency edge は identity scope のままにし、completeness option で
+未解決 evidence を公開しても、同名の file dependency へ変換してはいけません。
 
 C# の `type_reference` candidate は qualifier / namespace の順位付け前に絞り込みます。candidate は
 型相当の symbol（`class`、`struct`、`record`、`interface`、`enum`、`delegate`）でなければならず、
@@ -5356,7 +5429,18 @@ USER_GUIDEの[終了コード](USER_GUIDE.md#終了コード)セクションを�
 | `deps` (デフォルト = forward) | source file → target file | 全 kind。metadata 行は class-like かつ metadata-eligible な target (`has_metadata_target_kind`) と一意解決 (`target_ambiguity`) を要求。MSBuild の import / project reference は共有 package 名との一致ではなく、宣言元 project 相対の path として解決 | `DbReader.GetFileDependencies` |
 | `deps --reverse` | target file → source file | forward `deps` と同じ SQL を共有 | `DbReader.GetFileDependencies` |
 
-`deps --symbol`、`--symbol-family`、`--suppress-noise` は、候補の ranking と `--limit` より前に logical-reference と target-candidate の SQL scope へ push down される。cycle と cross-workspace の read も、各候補上限より前に同じ filter を適用する。そのため `reference_count`、ranking、`symbol_filter` の before/after counter は、絞り込み前の workspace 全体ではなく SQL で絞り込まれた scope を表す。長時間の SQLite dependency read では query token による command cancellation も登録する。
+`deps --symbol`、`--symbol-family`、`--suppress-noise` の汎用 symbol 部分は、候補の
+ranking と `--limit` より前に logical-reference と target-candidate の SQL scope へ
+push down される。cycle と cross-workspace の read も、各候補上限より前に同じ名前
+filter を適用する。Markdown の見出し名一致は
+`markdown_heading_name_match` evidence として別に分類する。抑制時は候補上限より前に
+保持対象 evidence を優先し、CLI 層でこの evidence だけを除くため、旧 index 由来の
+見出し fanout と同じ edge に含まれる明示的な Markdown path link も残る。
+machine-readable edge の `evidence` は `source_language`、`origin`、`reference_kind`、
+`target_kind`、`reference_count` の分布を公開し、`symbol_filter` は reference の
+before/after 合計と理由別の affected / removed 件数を加える。汎用 symbol の counter は
+引き続き、絞り込み前の workspace 全体ではなく SQL で絞り込まれた scope を表す。
+長時間の SQLite dependency read では query token による command cancellation も登録する。
 
 実運用上の帰結: クラスのようなシンボルに対する `impact <ClassName>` は、member-level の caller が存在しない場合 heuristic file-dependency-hint fallback (metadata エッジを含む) を返し、一方の既定 `callers <ClassName>` は実行可能 edge だけを返す。両方とも個々の契約上は正しいが、件数は一致しない。差分を埋めるには `references <ClassName> --kind attribute`（または `annotation`）を使うか、`callers` / `callees` に明示的に対応する非既定 kind を渡し、既定 call graph が意図的に落としている edge を確認する。
 

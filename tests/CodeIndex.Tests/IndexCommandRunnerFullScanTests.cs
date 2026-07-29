@@ -4520,6 +4520,151 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FullScan_ReextractsQualifiedCommonCallsFromVersion7CSharpIndex_Issue4867()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "Caller.cs"),
+                """
+                using System.Text.Json;
+
+                public class Caller
+                {
+                    public void Run(JsonElement json) => json.GetString();
+                }
+                """);
+
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions));
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var conn = OpenNonPoolingConnection(dbPath))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = $"""
+                    DELETE FROM symbol_references
+                    WHERE symbol_name = 'GetString';
+                    UPDATE codeindex_meta
+                    SET value = '7'
+                    WHERE key = '{DbContext.GetSymbolExtractorVersionMetaKey("csharp")}';
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("files_skipped").GetInt32());
+
+            using var verify = OpenNonPoolingConnection(dbPath);
+            verify.Open();
+            using var referenceCmd = verify.CreateCommand();
+            referenceCmd.CommandText = """
+                SELECT COUNT(*)
+                FROM symbol_references
+                WHERE symbol_name = 'GetString'
+                """;
+            Assert.Equal(1L, referenceCmd.ExecuteScalar());
+
+            using var versionCmd = verify.CreateCommand();
+            versionCmd.CommandText =
+                $"SELECT value FROM codeindex_meta WHERE key = '{DbContext.GetSymbolExtractorVersionMetaKey("csharp")}'";
+            Assert.Equal(
+                SymbolExtractor.CSharpContractVersion.ToString(
+                    System.Globalization.CultureInfo.InvariantCulture),
+                versionCmd.ExecuteScalar() as string);
+            Assert.Equal(8, SymbolExtractor.CSharpContractVersion);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_RefreshesHotspotWhenAddedTargetResolvesSkippedCommonCall_Issue4867()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "Caller.cs"),
+                """
+                public class Caller
+                {
+                    public void Run(LocalApi api) => api.GetString();
+                }
+                """);
+
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions));
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var initial = OpenNonPoolingConnection(dbPath))
+            {
+                initial.Open();
+                using var command = initial.CreateCommand();
+                command.CommandText = """
+                    SELECT resolution_state
+                    FROM symbol_references
+                    WHERE symbol_name = 'GetString'
+                    """;
+                Assert.Equal("unresolved", command.ExecuteScalar() as string);
+                command.CommandText = """
+                    SELECT COALESCE(SUM(reference_count), 0)
+                    FROM hotspot_reference_counts
+                    WHERE lang = 'csharp'
+                      AND raw_symbol_name = 'GetString'
+                    """;
+                Assert.Equal(0L, command.ExecuteScalar());
+            }
+
+            File.WriteAllText(
+                Path.Combine(projectRoot, "Target.cs"),
+                """
+                public class LocalApi
+                {
+                    public string GetString() => "";
+                }
+                """);
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("files_skipped").GetInt32());
+
+            using var verify = OpenNonPoolingConnection(dbPath);
+            verify.Open();
+            using var verifyCommand = verify.CreateCommand();
+            verifyCommand.CommandText = """
+                SELECT resolution_state
+                FROM symbol_references
+                WHERE symbol_name = 'GetString'
+                """;
+            Assert.Equal("resolved", verifyCommand.ExecuteScalar() as string);
+            verifyCommand.CommandText = """
+                SELECT COALESCE(SUM(reference_count), 0)
+                FROM hotspot_reference_counts
+                WHERE lang = 'csharp'
+                  AND raw_symbol_name = 'GetString'
+                """;
+            Assert.Equal(1L, verifyCommand.ExecuteScalar());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_FullScan_StampsRefreshedDynamicGraphContractWhenFoldContractRemainsStale_Issue4746()
     {
         var projectRoot = CreateTempProject();

@@ -961,10 +961,238 @@ public class LspServerTests
             Assert.NotNull(semanticTokens);
             Assert.NotEmpty(semanticTokens!["result"]!["data"]!.AsArray());
 
-            var inlayHints = HandleInitializedMessage(server, CreateTextDocumentRequest("textDocument/inlayHint", sourcePath, 35367));
+            var inlayHints = HandleInitializedMessage(
+                server,
+                CreateInlayHintRequest(sourcePath, 35367, 0, 0, 4, 0));
             Assert.NotNull(inlayHints);
             Assert.True(inlayHints!["error"] is null, inlayHints["error"]?.ToJsonString());
             Assert.Empty(inlayHints!["result"]!.AsArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void HandleMessage_PositionAndRangeCoordinatesRejectInvalidParams_Issue4869()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_coordinate_validation_4869");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            const string source = "class App\n{\n    void Run() { }\n}\n";
+            File.WriteAllText(sourcePath, source);
+            TestProjectHelper.InsertIndexedFile(dbPath, "app.cs", "csharp", source);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            using var server = new LspServer(
+                new DbReader(db),
+                "1.2.3",
+                ProgramRunner.CreateDefaultJsonOptions(),
+                projectRoot);
+
+            var requestId = 48690;
+            foreach (var method in new[]
+            {
+                "textDocument/definition",
+                "textDocument/declaration",
+                "textDocument/references",
+                "textDocument/hover",
+                "textDocument/completion",
+                "textDocument/documentHighlight",
+            })
+            {
+                AssertInvalidParams(HandleInitializedMessage(
+                    server,
+                    CreatePositionRequest(method, sourcePath, requestId++, -1, 0)));
+                AssertInvalidParams(HandleInitializedMessage(
+                    server,
+                    CreatePositionRequest(method, sourcePath, requestId++, 0, -1)));
+            }
+
+            var missingPath = Path.Combine(projectRoot, "missing.cs");
+            AssertInvalidParams(HandleInitializedMessage(
+                server,
+                CreatePositionRequest("textDocument/definition", missingPath, requestId++, -1, 0)));
+            var missingDocument = HandleInitializedMessage(
+                server,
+                CreatePositionRequest("textDocument/definition", missingPath, requestId++, 0, 0));
+            Assert.NotNull(missingDocument);
+            Assert.Null(missingDocument!["error"]);
+            Assert.Empty(missingDocument["result"]!.AsArray());
+
+            foreach (var malformedPosition in new[]
+            {
+                new JsonObject { ["line"] = 2147483648L, ["character"] = 0 },
+                new JsonObject { ["line"] = 0, ["character"] = 2147483648L },
+                new JsonObject { ["line"] = "0", ["character"] = 0 },
+                new JsonObject { ["line"] = 0, ["character"] = 0.5 },
+                new JsonObject { ["line"] = 0 },
+            })
+            {
+                AssertInvalidParams(HandleInitializedMessage(
+                    server,
+                    CreatePositionRequest(
+                        "textDocument/definition",
+                        sourcePath,
+                        requestId++,
+                        malformedPosition)));
+            }
+
+            AssertInvalidParams(HandleInitializedMessage(
+                server,
+                CreateTextDocumentRequest("textDocument/inlayHint", sourcePath, requestId++)));
+            AssertInvalidParams(HandleInitializedMessage(
+                server,
+                CreateInlayHintRequest(sourcePath, requestId++, -1, 0, 0, 0)));
+            AssertInvalidParams(HandleInitializedMessage(
+                server,
+                CreateInlayHintRequest(sourcePath, requestId++, 2, 0, 1, 0)));
+            AssertInvalidParams(HandleInitializedMessage(
+                server,
+                CreateInlayHintRequest(
+                    sourcePath,
+                    requestId++,
+                    new JsonObject
+                    {
+                        ["start"] = new JsonObject { ["line"] = 0, ["character"] = 0 },
+                        ["end"] = new JsonObject { ["line"] = 2147483648L, ["character"] = 0 },
+                    })));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void HandleMessage_PositionValidationPreservesUtf16AndEofPolicies_Issue4869()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_coordinate_boundaries_4869");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            var source = string.Join('\n',
+            [
+                "class App",
+                "{",
+                "    void Target() { }",
+                "    void Call() { var emoji = \"😀\"; Target(); }",
+                "}",
+                string.Empty,
+            ]);
+            File.WriteAllText(sourcePath, source);
+            TestProjectHelper.InsertIndexedFile(dbPath, "app.cs", "csharp", source);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            using var server = new LspServer(
+                new DbReader(db),
+                "1.2.3",
+                ProgramRunner.CreateDefaultJsonOptions(),
+                projectRoot);
+
+            var eofDefinition = HandleInitializedMessage(
+                server,
+                CreateDefinitionRequest(sourcePath, 486920, 0, "class App".Length));
+            Assert.NotNull(eofDefinition);
+            Assert.NotEmpty(eofDefinition!["result"]!.AsArray());
+
+            var unicodeLine = source.Split('\n')[3];
+            var unicodeDefinition = HandleInitializedMessage(
+                server,
+                CreateDefinitionRequest(
+                    sourcePath,
+                    486921,
+                    3,
+                    unicodeLine.IndexOf("Target", StringComparison.Ordinal)));
+            Assert.NotNull(unicodeDefinition);
+            Assert.NotEmpty(unicodeDefinition!["result"]!.AsArray());
+
+            var eofRange = HandleInitializedMessage(
+                server,
+                CreateInlayHintRequest(sourcePath, 486922, 5, 0, 5, 0));
+            Assert.NotNull(eofRange);
+            Assert.Null(eofRange!["error"]);
+            Assert.Empty(eofRange["result"]!.AsArray());
+
+            var maximumPosition = HandleInitializedMessage(
+                server,
+                CreateDefinitionRequest(sourcePath, 486923, int.MaxValue, int.MaxValue));
+            Assert.NotNull(maximumPosition);
+            Assert.Null(maximumPosition!["error"]);
+            Assert.Empty(maximumPosition["result"]!.AsArray());
+
+            var maximumRange = HandleInitializedMessage(
+                server,
+                CreateInlayHintRequest(
+                    sourcePath,
+                    486924,
+                    int.MaxValue,
+                    int.MaxValue,
+                    int.MaxValue,
+                    int.MaxValue));
+            Assert.NotNull(maximumRange);
+            Assert.Null(maximumRange!["error"]);
+            Assert.Empty(maximumRange["result"]!.AsArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void HandleMessage_DidChangeRejectsInvalidRangeBeforeMutatingLiveText_Issue4869()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_change_range_4869");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            const string source = "class Original\n";
+            File.WriteAllText(sourcePath, source);
+            TestProjectHelper.InsertIndexedFile(dbPath, "app.cs", "csharp", source);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            using var server = new LspServer(
+                new DbReader(db),
+                "1.2.3",
+                ProgramRunner.CreateDefaultJsonOptions(),
+                projectRoot);
+            InitializeSession(server);
+            Assert.Null(server.HandleMessage(CreateDidOpenRequest(sourcePath, source, version: 1)));
+
+            var invalidChange = JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0",
+                method = "textDocument/didChange",
+                @params = new
+                {
+                    textDocument = new
+                    {
+                        uri = new Uri(sourcePath).AbsoluteUri,
+                        version = 2,
+                    },
+                    contentChanges = new[]
+                    {
+                        new
+                        {
+                            range = new
+                            {
+                                start = new { line = -1, character = 0 },
+                                end = new { line = 0, character = 0 },
+                            },
+                            text = "class Replaced\n",
+                        },
+                    },
+                },
+            });
+
+            Assert.Null(server.HandleMessage(invalidChange));
+            var originalDefinition = server.HandleMessage(
+                CreateDefinitionRequest(sourcePath, 486930, 0, "class ".Length));
+            Assert.NotNull(originalDefinition);
+            Assert.NotEmpty(originalDefinition!["result"]!.AsArray());
         }
         finally
         {
@@ -5095,17 +5323,32 @@ public class LspServerTests
         });
 
     private static string CreatePositionRequest(string method, string sourcePath, int id, int line, int character) =>
-        JsonSerializer.Serialize(new
-        {
-            jsonrpc = "2.0",
-            id,
+        CreatePositionRequest(
             method,
-            @params = new
+            sourcePath,
+            id,
+            new JsonObject
             {
-                textDocument = new { uri = new Uri(sourcePath).AbsoluteUri },
-                position = new { line, character },
+                ["line"] = line,
+                ["character"] = character,
+            });
+
+    private static string CreatePositionRequest(
+        string method,
+        string sourcePath,
+        int id,
+        JsonObject position) =>
+        new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = id,
+            ["method"] = method,
+            ["params"] = new JsonObject
+            {
+                ["textDocument"] = new JsonObject { ["uri"] = new Uri(sourcePath).AbsoluteUri },
+                ["position"] = position,
             },
-        });
+        }.ToJsonString();
 
     private static string CreateTextDocumentRequest(string method, string sourcePath, int id) =>
         JsonSerializer.Serialize(new
@@ -5126,21 +5369,30 @@ public class LspServerTests
         int startCharacter,
         int endLine,
         int endCharacter) =>
-        JsonSerializer.Serialize(new
-        {
-            jsonrpc = "2.0",
+        CreateInlayHintRequest(
+            sourcePath,
             id,
-            method = "textDocument/inlayHint",
-            @params = new
+            new JsonObject
             {
-                textDocument = new { uri = new Uri(sourcePath).AbsoluteUri },
-                range = new
-                {
-                    start = new { line = startLine, character = startCharacter },
-                    end = new { line = endLine, character = endCharacter },
-                },
+                ["start"] = new JsonObject { ["line"] = startLine, ["character"] = startCharacter },
+                ["end"] = new JsonObject { ["line"] = endLine, ["character"] = endCharacter },
+            });
+
+    private static string CreateInlayHintRequest(
+        string sourcePath,
+        int id,
+        JsonObject range) =>
+        new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = id,
+            ["method"] = "textDocument/inlayHint",
+            ["params"] = new JsonObject
+            {
+                ["textDocument"] = new JsonObject { ["uri"] = new Uri(sourcePath).AbsoluteUri },
+                ["range"] = range,
             },
-        });
+        }.ToJsonString();
 
     private static string CreateDidOpenRequest(string sourcePath, string text, int version) =>
         JsonSerializer.Serialize(new
@@ -5236,6 +5488,15 @@ public class LspServerTests
     {
         var lines = source.Split('\n');
         return lines[line].IndexOf(value, StringComparison.Ordinal);
+    }
+
+    private static void AssertInvalidParams(JsonObject? response)
+    {
+        Assert.NotNull(response);
+        Assert.True(
+            response!["error"]!["code"]!.GetValue<int>() == -32602,
+            response.ToJsonString());
+        Assert.Equal("Invalid params", response["error"]!["message"]!.GetValue<string>());
     }
 
     private static JsonObject? HandleInitializedMessage(LspServer server, string payload)

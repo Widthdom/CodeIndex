@@ -182,19 +182,19 @@ internal sealed partial class LspServer : IDisposable
 
     private JsonArray InlayHint(JsonElement root)
     {
+        var requestedRange = ReadRequiredLspRange(root, "params", "range");
         if (!TryResolveIndexedDocument(root, out var document))
             return [];
 
         var array = new JsonArray();
         var lineCache = new Dictionary<int, string?>();
-        var hasRange = TryReadInlayHintRange(root, out var startLine, out _, out var endLine, out _);
         foreach (var symbol in GetDocumentSymbols(
                 document.IndexedPath,
                 MaxDocumentSymbols,
-                hasRange ? startLine + 1 : null,
-                hasRange ? endLine + 1 : null)
+                ToOneBasedLspLine(requestedRange.Start.Line),
+                ToOneBasedLspLine(requestedRange.End.Line))
             .Where(symbol => !string.IsNullOrWhiteSpace(symbol.ReturnType))
-            .Where(symbol => IsInlayHintInRequestedRange(root, document, symbol, lineCache))
+            .Where(symbol => IsInlayHintInRequestedRange(requestedRange, document, symbol, lineCache))
             .Where(symbol => !HasExplicitTypeBeforeSymbol(document, symbol, lineCache))
             .Take(MaxInlayHintItems))
         {
@@ -204,17 +204,20 @@ internal sealed partial class LspServer : IDisposable
     }
 
     private bool IsInlayHintInRequestedRange(
-        JsonElement root,
+        LspRange requestedRange,
         IndexedDocumentContext document,
         SymbolResult symbol,
         Dictionary<int, string?> lineCache)
     {
-        if (!TryReadInlayHintRange(root, out var startLine, out var startCharacter, out var endLine, out var endCharacter))
-            return true;
-
         var line = Math.Max(symbol.Line, 1) - 1;
         var character = FindSymbolStartCharacter(document.ResolvedPath, symbol, lineCache) + symbol.Name.Length;
-        return IsPositionInRange(line, character, startLine, startCharacter, endLine, endCharacter);
+        return IsPositionInRange(
+            line,
+            character,
+            requestedRange.Start.Line,
+            requestedRange.Start.Character,
+            requestedRange.End.Line,
+            requestedRange.End.Character);
     }
 
     private bool HasExplicitTypeBeforeSymbol(
@@ -242,38 +245,6 @@ internal sealed partial class LspServer : IDisposable
         return typeEnd <= symbolStart && sourceLine.AsSpan(typeEnd, symbolStart - typeEnd).Trim().IsEmpty;
     }
 
-    private static bool TryReadLspPosition(JsonElement range, string propertyName, out int line, out int character)
-    {
-        line = 0;
-        character = 0;
-        return range.ValueKind == JsonValueKind.Object &&
-               range.TryGetProperty(propertyName, out var position) &&
-               position.ValueKind == JsonValueKind.Object &&
-               position.TryGetProperty("line", out var lineElement) &&
-               lineElement.TryGetInt32(out line) &&
-               line >= 0 &&
-               position.TryGetProperty("character", out var characterElement) &&
-               characterElement.TryGetInt32(out character) &&
-               character >= 0;
-    }
-
-    private static bool TryReadInlayHintRange(
-        JsonElement root,
-        out int startLine,
-        out int startCharacter,
-        out int endLine,
-        out int endCharacter)
-    {
-        startLine = 0;
-        startCharacter = 0;
-        endLine = 0;
-        endCharacter = 0;
-        return root.TryGetProperty("params", out var paramsElement) &&
-               paramsElement.TryGetProperty("range", out var range) &&
-               TryReadLspPosition(range, "start", out startLine, out startCharacter) &&
-               TryReadLspPosition(range, "end", out endLine, out endCharacter);
-    }
-
     private static bool IsPositionInRange(
         int line,
         int character,
@@ -283,9 +254,6 @@ internal sealed partial class LspServer : IDisposable
         int endCharacter)
         => ComparePosition(line, character, startLine, startCharacter) >= 0 &&
            ComparePosition(line, character, endLine, endCharacter) < 0;
-
-    private static int ComparePosition(int leftLine, int leftCharacter, int rightLine, int rightCharacter)
-        => leftLine != rightLine ? leftLine.CompareTo(rightLine) : leftCharacter.CompareTo(rightCharacter);
 
     private static JsonObject CompletionList(JsonArray items) => new()
     {

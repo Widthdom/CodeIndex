@@ -177,13 +177,6 @@ internal sealed partial class LspServer : IDisposable
         return Math.Clamp(limit, 0, maxLimit);
     }
 
-    private static int GetInt32(JsonElement root, params string[] path)
-    {
-        if (!TryGet(root, out var value, path) || value.ValueKind != JsonValueKind.Number || !value.TryGetInt32(out var result))
-            return -1;
-        return result;
-    }
-
     private static bool TryGet(JsonElement root, out JsonElement value, params string[] path)
     {
         value = root;

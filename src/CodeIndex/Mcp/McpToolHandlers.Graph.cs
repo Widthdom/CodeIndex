@@ -41,6 +41,7 @@ public partial class McpServer
         if (ValidateResponseFormat(format) is string formatError)
             return CreateToolErrorResponse(id, formatError);
         var countOnly = ReadCountOnly(args) || format == "count";
+        var includeQualifiedCommonCalls = args?["includeQualifiedCommonCalls"]?.GetValue<bool>() ?? false;
         if (!TryResolveNameExactArgument(args, "references", out var exact, out var exactError))
             return CreateToolErrorResponse(id, exactError!);
 
@@ -48,9 +49,9 @@ public partial class McpServer
         {
             if (countOnly)
             {
-                var countOnlyTotal = reader.CountSearchReferencesTotal(query, lang, kind, pathPatterns, excludePaths, excludeTests, exact).Count;
+                var countOnlyTotal = reader.CountSearchReferencesTotal(query, lang, kind, pathPatterns, excludePaths, excludeTests, exact, includeQualifiedCommonCalls).Count;
                 var histogramResults = countOnlyTotal > 0
-                    ? reader.SearchReferences(query, Math.Min(countOnlyTotal, MaxLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact, maxLineWidth)
+                    ? reader.SearchReferences(query, Math.Min(countOnlyTotal, MaxLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact, maxLineWidth, includeQualifiedCommonCalls: includeQualifiedCommonCalls)
                     : [];
                 var countOnlyPayload = BuildCountOnlyPayload(countOnlyTotal, countOnlyTotal, truncated: false, histogramResults, result => result.Path);
                 countOnlyPayload["query"] = query;
@@ -58,6 +59,7 @@ public partial class McpServer
                 countOnlyPayload["lang"] = lang;
                 countOnlyPayload["path"] = PathEcho(pathPatterns);
                 countOnlyPayload["excludeTests"] = excludeTests;
+                countOnlyPayload["includeQualifiedCommonCalls"] = includeQualifiedCommonCalls;
                 AddHdlGraphContractSignal(
                     countOnlyPayload,
                     reader.GetHdlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests));
@@ -65,10 +67,10 @@ public partial class McpServer
                 return CreateToolResult(id, $"Counted {ConsoleUi.Counted(countOnlyTotal, "reference")}.", countOnlyPayload);
             }
 
-            var results = reader.SearchReferences(query, FetchLimitForEnvelope(limit), lang, kind, pathPatterns, excludePaths, excludeTests, exact, maxLineWidth, offset: offset);
+            var results = reader.SearchReferences(query, FetchLimitForEnvelope(limit), lang, kind, pathPatterns, excludePaths, excludeTests, exact, maxLineWidth, offset: offset, includeQualifiedCommonCalls: includeQualifiedCommonCalls);
             var truncated = TrimToRequestedLimit(results, limit);
             var total = truncated || offset > 0
-                ? reader.CountSearchReferencesTotal(query, lang, kind, pathPatterns, excludePaths, excludeTests, exact).Count
+                ? reader.CountSearchReferencesTotal(query, lang, kind, pathPatterns, excludePaths, excludeTests, exact, includeQualifiedCommonCalls).Count
                 : results.Count;
             if (lspCompatible)
                 QueryCommandRunner.AttachLspLocations(results);
@@ -81,9 +83,9 @@ public partial class McpServer
             var exactSignal = reader.GetReferencesExactQuerySignal(lang, pathPatterns, excludePaths, excludeTests, includeSqlGraphContractSignal: sqlGraphSignal.Relevant);
             var exactZeroHint = QueryCommandRunner.BuildExactZeroHint(
                 exact && reader._hasReferencesTable,
-                () => reader.CountSearchReferences(query, QueryCommandRunner.ExactZeroHintProbeLimit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false) > 0,
-                () => reader.CountSearchReferences(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
-                () => reader.SearchReferences(query, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact: false),
+                () => reader.CountSearchReferences(query, QueryCommandRunner.ExactZeroHintProbeLimit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false, includeQualifiedCommonCalls: includeQualifiedCommonCalls) > 0,
+                () => reader.CountSearchReferences(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false, includeQualifiedCommonCalls: includeQualifiedCommonCalls),
+                () => reader.SearchReferences(query, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact: false, includeQualifiedCommonCalls: includeQualifiedCommonCalls),
                 r => r.SymbolName);
             var payload = new JsonObject
             {
@@ -94,6 +96,7 @@ public partial class McpServer
                 ["maxLineWidth"] = maxLineWidth,
                 ["path"] = PathEcho(pathPatterns),
                 ["excludeTests"] = excludeTests,
+                ["includeQualifiedCommonCalls"] = includeQualifiedCommonCalls,
                 ["graph_language"] = graphSupport.GraphLanguage,
                 ["graph_supported"] = graphSupport.GraphSupported,
                 ["graph_support_reason"] = graphSupport.GraphSupportReason,
@@ -158,19 +161,21 @@ public partial class McpServer
             return CreateToolErrorResponse(id, formatError);
         var countOnly = ReadCountOnly(args) || format == "count";
         var rawKinds = args?["rawKinds"]?.GetValue<bool>() ?? false;
+        var includeQualifiedCommonCalls = args?["includeQualifiedCommonCalls"]?.GetValue<bool>() ?? false;
 
         return WithDbReader(id, args, reader =>
         {
             if (countOnly)
             {
-                var countOnlyTotal = reader.CountCallersTotal(query, lang, kind, pathPatterns, excludePaths, excludeTests, exact, rawKinds).Count;
+                var countOnlyTotal = reader.CountCallersTotal(query, lang, kind, pathPatterns, excludePaths, excludeTests, exact, rawKinds, includeQualifiedCommonCalls).Count;
                 var histogramResults = countOnlyTotal > 0
-                    ? reader.GetCallers(query, Math.Min(countOnlyTotal, MaxLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact, rawKinds, rankMode: rankMode)
+                    ? reader.GetCallers(query, Math.Min(countOnlyTotal, MaxLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact, rawKinds, rankMode: rankMode, includeQualifiedCommonCalls: includeQualifiedCommonCalls)
                     : [];
                 var countOnlyPayload = BuildCountOnlyPayload(countOnlyTotal, countOnlyTotal, truncated: false, histogramResults, result => result.Path);
                 countOnlyPayload["query"] = query;
                 countOnlyPayload["kind"] = kind;
                 countOnlyPayload["rawKinds"] = rawKinds;
+                countOnlyPayload["includeQualifiedCommonCalls"] = includeQualifiedCommonCalls;
                 countOnlyPayload["lang"] = lang;
                 countOnlyPayload["path"] = PathEcho(pathPatterns);
                 countOnlyPayload["excludeTests"] = excludeTests;
@@ -185,10 +190,10 @@ public partial class McpServer
                 return CreateToolResult(id, $"Counted {ConsoleUi.Counted(countOnlyTotal, "caller")}.", countOnlyPayload);
             }
 
-            var results = reader.GetCallers(query, FetchLimitForEnvelope(limit), lang, kind, pathPatterns, excludePaths, excludeTests, exact, rawKinds, rankMode: rankMode, offset: offset);
+            var results = reader.GetCallers(query, FetchLimitForEnvelope(limit), lang, kind, pathPatterns, excludePaths, excludeTests, exact, rawKinds, rankMode: rankMode, offset: offset, includeQualifiedCommonCalls: includeQualifiedCommonCalls);
             var truncated = TrimToRequestedLimit(results, limit);
             var total = truncated || offset > 0
-                ? reader.CountCallersTotal(query, lang, kind, pathPatterns, excludePaths, excludeTests, exact, rawKinds).Count
+                ? reader.CountCallersTotal(query, lang, kind, pathPatterns, excludePaths, excludeTests, exact, rawKinds, includeQualifiedCommonCalls).Count
                 : results.Count;
             var graphSupport = ResolveGraphSupport(reader, exact, query, lang, pathPatterns, excludePaths, excludeTests);
             var sqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignalByLanguages(
@@ -199,15 +204,16 @@ public partial class McpServer
             var exactSignal = reader.GetCallersExactQuerySignal(lang, pathPatterns, excludePaths, excludeTests, includeSqlGraphContractSignal: sqlGraphSignal.Relevant);
             var exactZeroHint = QueryCommandRunner.BuildExactZeroHint(
                 exact && reader._hasReferencesTable,
-                () => reader.CountCallers(query, QueryCommandRunner.ExactZeroHintProbeLimit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false, rawKinds: rawKinds) > 0,
-                () => reader.CountCallers(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false, rawKinds: rawKinds),
-                () => reader.GetCallers(query, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact: false, rawKinds: rawKinds, rankMode: rankMode),
+                () => reader.CountCallers(query, QueryCommandRunner.ExactZeroHintProbeLimit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false, rawKinds: rawKinds, includeQualifiedCommonCalls: includeQualifiedCommonCalls) > 0,
+                () => reader.CountCallers(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false, rawKinds: rawKinds, includeQualifiedCommonCalls: includeQualifiedCommonCalls),
+                () => reader.GetCallers(query, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact: false, rawKinds: rawKinds, rankMode: rankMode, includeQualifiedCommonCalls: includeQualifiedCommonCalls),
                 r => r.CalleeName);
             var payload = new JsonObject
             {
                 ["query"] = query,
                 ["kind"] = kind,
                 ["rawKinds"] = rawKinds,
+                ["includeQualifiedCommonCalls"] = includeQualifiedCommonCalls,
                 ["lang"] = lang,
                 ["path"] = PathEcho(pathPatterns),
                 ["excludeTests"] = excludeTests,
@@ -281,19 +287,21 @@ public partial class McpServer
             return CreateToolErrorResponse(id, formatError);
         var countOnly = ReadCountOnly(args) || format == "count";
         var rawKinds = args?["rawKinds"]?.GetValue<bool>() ?? false;
+        var includeQualifiedCommonCalls = args?["includeQualifiedCommonCalls"]?.GetValue<bool>() ?? false;
 
         return WithDbReader(id, args, reader =>
         {
             if (countOnly)
             {
-                var countOnlyTotal = reader.CountCalleesTotal(query, lang, kind, pathPatterns, excludePaths, excludeTests, exact, rawKinds).Count;
+                var countOnlyTotal = reader.CountCalleesTotal(query, lang, kind, pathPatterns, excludePaths, excludeTests, exact, rawKinds, includeQualifiedCommonCalls).Count;
                 var histogramResults = countOnlyTotal > 0
-                    ? reader.GetCallees(query, Math.Min(countOnlyTotal, MaxLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact, rawKinds, rankMode: rankMode)
+                    ? reader.GetCallees(query, Math.Min(countOnlyTotal, MaxLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact, rawKinds, rankMode: rankMode, includeQualifiedCommonCalls: includeQualifiedCommonCalls)
                     : [];
                 var countOnlyPayload = BuildCountOnlyPayload(countOnlyTotal, countOnlyTotal, truncated: false, histogramResults, result => result.Path);
                 countOnlyPayload["query"] = query;
                 countOnlyPayload["kind"] = kind;
                 countOnlyPayload["rawKinds"] = rawKinds;
+                countOnlyPayload["includeQualifiedCommonCalls"] = includeQualifiedCommonCalls;
                 countOnlyPayload["lang"] = lang;
                 countOnlyPayload["path"] = PathEcho(pathPatterns);
                 countOnlyPayload["excludeTests"] = excludeTests;
@@ -308,10 +316,10 @@ public partial class McpServer
                 return CreateToolResult(id, $"Counted {ConsoleUi.Counted(countOnlyTotal, "callee")}.", countOnlyPayload);
             }
 
-            var results = reader.GetCallees(query, FetchLimitForEnvelope(limit), lang, kind, pathPatterns, excludePaths, excludeTests, exact, rawKinds, rankMode: rankMode, offset: offset);
+            var results = reader.GetCallees(query, FetchLimitForEnvelope(limit), lang, kind, pathPatterns, excludePaths, excludeTests, exact, rawKinds, rankMode: rankMode, offset: offset, includeQualifiedCommonCalls: includeQualifiedCommonCalls);
             var truncated = TrimToRequestedLimit(results, limit);
             var total = truncated || offset > 0
-                ? reader.CountCalleesTotal(query, lang, kind, pathPatterns, excludePaths, excludeTests, exact, rawKinds).Count
+                ? reader.CountCalleesTotal(query, lang, kind, pathPatterns, excludePaths, excludeTests, exact, rawKinds, includeQualifiedCommonCalls).Count
                 : results.Count;
             var graphSupport = ResolveGraphSupport(reader, exact, query, lang, pathPatterns, excludePaths, excludeTests);
             var sqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignalByLanguages(
@@ -322,15 +330,16 @@ public partial class McpServer
             var exactSignal = reader.GetCalleesExactQuerySignal(lang, pathPatterns, excludePaths, excludeTests, includeSqlGraphContractSignal: sqlGraphSignal.Relevant);
             var exactZeroHint = QueryCommandRunner.BuildExactZeroHint(
                 exact && reader._hasReferencesTable,
-                () => reader.CountCallees(query, QueryCommandRunner.ExactZeroHintProbeLimit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false, rawKinds: rawKinds) > 0,
-                () => reader.CountCallees(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false, rawKinds: rawKinds),
-                () => reader.GetCallees(query, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact: false, rawKinds: rawKinds, rankMode: rankMode),
+                () => reader.CountCallees(query, QueryCommandRunner.ExactZeroHintProbeLimit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false, rawKinds: rawKinds, includeQualifiedCommonCalls: includeQualifiedCommonCalls) > 0,
+                () => reader.CountCallees(query, limit, lang, kind, pathPatterns, excludePaths, excludeTests, exact: false, rawKinds: rawKinds, includeQualifiedCommonCalls: includeQualifiedCommonCalls),
+                () => reader.GetCallees(query, Math.Min(limit, QueryCommandRunner.ExactZeroHintSampleLimit), lang, kind, pathPatterns, excludePaths, excludeTests, exact: false, rawKinds: rawKinds, rankMode: rankMode, includeQualifiedCommonCalls: includeQualifiedCommonCalls),
                 r => r.CallerName);
             var payload = new JsonObject
             {
                 ["query"] = query,
                 ["kind"] = kind,
                 ["rawKinds"] = rawKinds,
+                ["includeQualifiedCommonCalls"] = includeQualifiedCommonCalls,
                 ["lang"] = lang,
                 ["path"] = PathEcho(pathPatterns),
                 ["excludeTests"] = excludeTests,

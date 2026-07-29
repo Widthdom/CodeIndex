@@ -216,14 +216,6 @@ public static partial class ReferenceExtractor
                 sourceLength: name.Length);
             return true;
         }
-        if (line.Language == "csharp"
-            && CSharpReferenceExtractor.ShouldSuppressQualifiedCommonMemberCall(
-                line.PreparedLine,
-                normalizedName,
-                callIndex))
-        {
-            return false;
-        }
         if (IsIgnoredCallName(line.Language, name)
             && !(line.Language == "scala"
                 && string.Equals(name, "foreach", StringComparison.Ordinal)))

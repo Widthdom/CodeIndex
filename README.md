@@ -159,6 +159,12 @@ For generated or dense source that emits excessive reference rows, use
 `cdidx . --max-references-per-file <n>` to keep text search and symbols indexed
 while skipping references for only the over-limit file.
 
+For file-dependency audits, `cdidx deps --suppress-noise` removes generic
+framework symbols and legacy Markdown heading-name fanout without hiding
+explicit Markdown links. JSON edges expose the origin, reference kind, target
+kind, and count in `evidence`; `symbol_filter` reports before/after counts and
+the `markdown_heading_name_match` suppression reason.
+
 If one file throws during indexing, cdidx commits successful files and their graph
 edges, reports structured `file_errors`, and exits with partial-result code `11`.
 Use `--allow-partial` only when automation deliberately accepts exit `0` for that
@@ -582,6 +588,11 @@ structured identity key を保持します。
 生成コードや高密度なソースが過剰な reference 行を生成する場合は
 `cdidx . --max-references-per-file <n>` を使うと、text search と symbols は保持しつつ
 上限を超えたファイルだけ references をスキップできます。
+
+ファイル依存関係の監査では、`cdidx deps --suppress-noise` が明示的な Markdown link を
+隠さずに、汎用 framework symbol と旧 index 由来の Markdown 見出し名 fanout を除外します。
+JSON edge の `evidence` は origin、reference kind、target kind、件数を公開し、
+`symbol_filter` は before/after 件数と `markdown_heading_name_match` の抑制理由を返します。
 
 index 中に 1 ファイルで例外が発生した場合、cdidx は成功ファイルとその graph edge を
 commit し、構造化 `file_errors` を返して partial-result 終了コード `11` で終了します。
