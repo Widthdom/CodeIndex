@@ -2048,12 +2048,15 @@ public class IndexWatchRunnerTests
             var ignorePath = Path.Combine(repoRoot, ".gitignore");
             File.WriteAllText(ignorePath, "subproj/ignored.py\n");
 
-            // macOS FileSystemWatcher delivery can be silently delayed or dropped under net9.
-            // Exercise the production enqueue/reconcile path without making runtime delivery a test oracle.
-            // macOS の FileSystemWatcher 配信は net9 で無通知の遅延・欠落が起こり得るため、
-            // runtime 配信を test oracle にせず、本番 enqueue / reconcile 経路を検証する。
-            var enqueueCallback = Assert.IsType<Action<string>>(enqueue);
-            enqueueCallback(ignorePath);
+            if (OperatingSystem.IsMacOS())
+            {
+                // macOS FileSystemWatcher delivery can be silently delayed or dropped.
+                // Exercise the production enqueue/reconcile path without making runtime delivery a test oracle.
+                // macOS の FileSystemWatcher 配信は無通知の遅延・欠落が起こり得るため、
+                // runtime 配信を test oracle にせず、本番 enqueue / reconcile 経路を検証する。
+                var enqueueCallback = Assert.IsType<Action<string>>(enqueue);
+                enqueueCallback(ignorePath);
+            }
             Assert.True(
                 SpinWait.SpinUntil(
                     () =>
