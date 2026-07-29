@@ -152,10 +152,19 @@ public static partial class QueryCommandRunner
 
         if (parallelism > 1)
         {
-            using (var validationDb = new DbContext(DbOpenIntent.QueryOnly, dbPath, cancellationToken))
+            try
             {
+                using var validationDb = new DbContext(DbOpenIntent.QueryOnly, dbPath, cancellationToken);
                 if (!validationDb.TryValidateIsCodeIndexDb(out var validationReason))
                     return WriteInvalidCodeIndexDbError(dbPath, validationReason, json: false, jsonOptions);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return WriteBatchSetupCancellationSummary(
+                    maxInputLines,
+                    maxOutputChars,
+                    parallelism,
+                    jsonOptions);
             }
 
             return RunBatchParallel(
@@ -345,6 +354,16 @@ public static partial class QueryCommandRunner
 
             return firstFailure;
         }
+        catch (OperationCanceledException) when (
+            jsonSummary
+            && cancellationToken.IsCancellationRequested)
+        {
+            return WriteBatchSetupCancellationSummary(
+                maxInputLines,
+                maxOutputChars,
+                parallelism,
+                jsonOptions);
+        }
         finally
         {
             s_batchReader = null;
@@ -424,6 +443,7 @@ public static partial class QueryCommandRunner
         var outputLimitReached = false;
         var inputLimitReached = false;
         var cancellationObserved = false;
+        var producerReadInProgress = 0;
         using var stopProducing = new CancellationTokenSource();
         var input = Channel.CreateBounded<BatchPendingItem>(
             new BoundedChannelOptions(1)
@@ -448,8 +468,23 @@ public static partial class QueryCommandRunner
                             cancellationObserved = true;
                             break;
                         }
-                        if (!TryReadBatchLine(Console.In, out var line, out var lineExceededLimit))
+                        string? line;
+                        bool lineExceededLimit;
+                        Volatile.Write(ref producerReadInProgress, 1);
+                        try
+                        {
+                            if (!TryReadBatchLine(Console.In, out line, out lineExceededLimit))
+                                break;
+                        }
+                        finally
+                        {
+                            Volatile.Write(ref producerReadInProgress, 0);
+                        }
+                        if (cancellationToken.IsCancellationRequested)
+                        {
+                            cancellationObserved = true;
                             break;
+                        }
 
                         lineNumber++;
                         if (lineNumber > maxInputLines)
@@ -659,12 +694,21 @@ public static partial class QueryCommandRunner
                     if (active.Count > 0 && active.Peek().Result.IsCompleted)
                         continue;
 
-                    using var waitCancellation = new CancellationTokenSource();
+                    using var waitCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+                        cancellationToken);
                     var waitForInput = input.Reader.WaitToReadAsync(waitCancellation.Token).AsTask();
                     if (active.Count == 0)
                     {
-                        if (!waitForInput.GetAwaiter().GetResult())
+                        try
+                        {
+                            if (!waitForInput.GetAwaiter().GetResult())
+                                break;
+                        }
+                        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                        {
+                            cancellationObserved = true;
                             break;
+                        }
                         continue;
                     }
 
@@ -680,6 +724,18 @@ public static partial class QueryCommandRunner
                         }
                         catch (OperationCanceledException) when (waitCancellation.IsCancellationRequested)
                         {
+                        }
+                    }
+                    else
+                    {
+                        try
+                        {
+                            _ = waitForInput.GetAwaiter().GetResult();
+                        }
+                        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                        {
+                            cancellationObserved = true;
+                            active.Peek().Result.GetAwaiter().GetResult();
                         }
                     }
                 }
@@ -728,14 +784,28 @@ public static partial class QueryCommandRunner
                     active.Dequeue().Result.GetAwaiter().GetResult();
             }
 
-            try
+            var producerBlockedOnInput = cancellationObserved
+                && Volatile.Read(ref producerReadInProgress) != 0
+                && !producer.IsCompleted;
+            if (producerBlockedOnInput)
             {
-                producer.GetAwaiter().GetResult();
+                _ = producer.ContinueWith(
+                    static completedProducer => _ = completedProducer.Exception,
+                    CancellationToken.None,
+                    TaskContinuationOptions.ExecuteSynchronously | TaskContinuationOptions.OnlyOnFaulted,
+                    TaskScheduler.Default);
             }
-            catch (OperationCanceledException) when (
-                outputLimitReached
-                && !cancellationToken.IsCancellationRequested)
+            else
             {
+                try
+                {
+                    producer.GetAwaiter().GetResult();
+                }
+                catch (OperationCanceledException) when (
+                    outputLimitReached
+                    && !cancellationToken.IsCancellationRequested)
+                {
+                }
             }
 
             if (cancellationObserved && firstFailure == CommandExitCodes.Success)
@@ -868,8 +938,44 @@ public static partial class QueryCommandRunner
             ["input_limit_reached"] = inputLimitReached,
             ["parallelism"] = parallelism,
         };
+        if (exitCode is CommandExitCodes.CancelledBySignal or CommandExitCodes.LegacyInterrupted)
+        {
+            payload["error"] = BuildBatchTypedError(
+                "batch processing was cancelled by the caller.",
+                exitCode,
+                "Retry the batch when the caller cancellation token is not cancelled.",
+                CommandErrorCodes.Interrupted,
+                "batch_cancelled",
+                "batch");
+        }
 
         output.WriteSummary(payload);
+    }
+
+    private static int WriteBatchSetupCancellationSummary(
+        int maxInputLines,
+        int maxOutputChars,
+        int parallelism,
+        JsonSerializerOptions jsonOptions)
+    {
+        var output = new BatchJsonOutputWriter(
+            Console.Out,
+            maxOutputChars,
+            BatchTerminalOutputReserveChars,
+            jsonOptions);
+        WriteBatchSummaryJson(
+            inputLinesRead: 0,
+            commandsProcessed: 0,
+            lineErrors: 0,
+            commandFailures: 0,
+            CommandExitCodes.CancelledBySignal,
+            outputLimitReached: false,
+            inputLimitReached: false,
+            maxInputLines,
+            maxOutputChars,
+            parallelism,
+            output);
+        return CommandExitCodes.CancelledBySignal;
     }
 
     private static BatchCommandRunResult RunBatchQueryCommandWithJsonRecord(
