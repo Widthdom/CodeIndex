@@ -973,8 +973,11 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("src/Target.cs", sourceExcerpt.GetProperty("path").GetString());
             Assert.Equal(4, sourceExcerpt.GetProperty("start_line").GetInt32());
             Assert.Equal(6, sourceExcerpt.GetProperty("end_line").GetInt32());
-            Assert.Equal(4, sourceExcerpt.GetProperty("requested_start_line").GetInt32());
-            Assert.Equal(6, sourceExcerpt.GetProperty("requested_end_line").GetInt32());
+            Assert.Equal(5, sourceExcerpt.GetProperty("requested_start_line").GetInt32());
+            Assert.Equal(5, sourceExcerpt.GetProperty("requested_end_line").GetInt32());
+            Assert.Equal(4, sourceExcerpt.GetProperty("effective_start_line").GetInt32());
+            Assert.Equal(6, sourceExcerpt.GetProperty("effective_end_line").GetInt32());
+            Assert.Equal(7, sourceExcerpt.GetProperty("total_lines").GetInt32());
             Assert.Contains("return 42;", sourceExcerpt.GetProperty("content").GetString(), StringComparison.Ordinal);
             Assert.False(sourceExcerpt.GetProperty("content_truncated").GetBoolean());
         }

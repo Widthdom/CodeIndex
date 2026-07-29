@@ -67,12 +67,13 @@ public static partial class QueryCommandRunner
         return "Error: inspect graph pagination cursors can only be used with the inspect command.";
     }
 
-    private static bool TryWriteNonPositiveCoordinateJsonError(
+    private static bool TryWriteNonPositiveCoordinateRangeError(
         QueryCommandOptions options,
         JsonSerializerOptions jsonOptions,
+        bool includeHumanOutput,
         params string[] coordinateOptionNames)
     {
-        if (!options.Json || options.ParseError == null)
+        if ((!options.Json && !includeHumanOutput) || options.ParseError == null)
             return false;
 
         foreach (var optionName in coordinateOptionNames)
@@ -95,13 +96,15 @@ public static partial class QueryCommandRunner
                 continue;
 
             CommandErrorWriter.WriteJsonOrHuman(
-                true,
+                options.Json,
                 jsonOptions,
                 $"requested line {rawValue} is outside the valid range beginning at 1.",
                 CommandExitCodes.InvalidArgument,
                 "Use a line number of 1 or greater.",
+                includeHumanOutput ? GetUsageLineOrThrow("excerpt") : null,
                 errorCode: CommandErrorCodes.LineOutOfRange,
-                category: "range");
+                category: "range",
+                command: includeHumanOutput ? "excerpt" : null);
             return true;
         }
 

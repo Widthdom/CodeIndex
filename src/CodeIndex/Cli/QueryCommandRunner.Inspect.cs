@@ -23,7 +23,15 @@ public static partial class QueryCommandRunner
             options.Lang);
         if (TryWriteUnsupportedOptionError("inspect", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("inspect"), options.Query))
             return CommandExitCodes.UsageError;
-        if (TryWriteNonPositiveCoordinateJsonError(options, jsonOptions, "--line", "--start", "--start-line", "--end", "--end-line"))
+        if (TryWriteNonPositiveCoordinateRangeError(
+                options,
+                jsonOptions,
+                includeHumanOutput: false,
+                "--line",
+                "--start",
+                "--start-line",
+                "--end",
+                "--end-line"))
             return CommandExitCodes.InvalidArgument;
         if (TryWriteParseError(options, "inspect", options.LanguageValidationError ? jsonOptions : null))
             return CommandExitCodes.UsageError;
