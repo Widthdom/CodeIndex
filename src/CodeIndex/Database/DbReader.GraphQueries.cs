@@ -1800,10 +1800,13 @@ public partial class DbReader
         string callerName,
         string resolvedName,
         HashSet<string> rootDefinitionPaths,
-        IReadOnlySet<long> identityRootSymbolIds)
+        IReadOnlySet<long>? identityRootSymbolIds)
     {
-        if (identityRootSymbolIds.Count > 0 && caller.CallerSymbolId is long callerSymbolId)
+        if (identityRootSymbolIds is { Count: > 0 }
+            && caller.CallerSymbolId is long callerSymbolId)
+        {
             return identityRootSymbolIds.Contains(callerSymbolId);
+        }
         return string.Equals(callerName, resolvedName, StringComparison.OrdinalIgnoreCase)
                && (rootDefinitionPaths.Count == 0 || rootDefinitionPaths.Contains(caller.Path));
     }
@@ -1813,7 +1816,7 @@ public partial class DbReader
         long? symbolId,
         string resolvedName,
         HashSet<string> rootDefinitionPaths,
-        IReadOnlySet<long> identityRootSymbolIds,
+        IReadOnlySet<long>? identityRootSymbolIds,
         HashSet<string> visited,
         Dictionary<string, HashSet<string>> cycleParentsByKey,
         Dictionary<string, ImpactCycleMemberResult> cycleNodesByKey,
