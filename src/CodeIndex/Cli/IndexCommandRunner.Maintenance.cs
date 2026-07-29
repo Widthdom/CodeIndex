@@ -570,6 +570,16 @@ public static partial class IndexCommandRunner
             if (!options.DryRun)
                 db.InitializeSchema();
             var writer = new DbWriter(db);
+            if (writer.TryGetNewerCSharpSymbolNameContractVersion(out var newerCSharpContract))
+            {
+                return WriteCommandError(
+                    options.Json,
+                    jsonOptions,
+                    $"C# symbol-name contract version {newerCSharpContract} is newer than supported version {DbContext.CSharpSymbolNameContractVersion}",
+                    CommandExitCodes.DatabaseError,
+                    "Use the same or a newer CodeIndex version that wrote this database; this version will not rewrite or downgrade its C# identities.",
+                    CommandErrorCodes.DbError);
+            }
 
             var userVersionBefore = db.GetUserVersion();
             var foldReadyBefore = (userVersionBefore & DbContext.FoldReadyFlag) != 0;
@@ -579,7 +589,9 @@ public static partial class IndexCommandRunner
             var storedFoldFingerprint = db.GetMetaString("fold_key_fingerprint");
             var foldMetadataCurrentBefore = storedFoldVersion == currentFoldVersion
                 && storedFoldFingerprint == currentFoldFingerprint;
-            var csharpSymbolNameContractUpgradeRequired = !string.Equals(
+            var csharpSymbolNameContractUpgradeRequired =
+                writer.HasAnyFilesWithLanguage("csharp")
+                && !string.Equals(
                 db.GetMetaString(DbContext.CSharpSymbolNameContractVersionMetaKey),
                 DbContext.CSharpSymbolNameContractVersion.ToString(
                     System.Globalization.CultureInfo.InvariantCulture),

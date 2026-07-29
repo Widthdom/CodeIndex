@@ -73,7 +73,7 @@ internal static class CSharpSymbolNameNormalizer
     {
         if (string.IsNullOrWhiteSpace(name)
             || string.IsNullOrWhiteSpace(signature)
-            || kind is not ("function" or "property" or "event"))
+            || kind is not ("function" or "test.method" or "property" or "event"))
         {
             return null;
         }
@@ -238,6 +238,7 @@ internal static class CSharpSymbolNameNormalizer
         if (cursor >= signature.Length)
             return false;
 
+        var isFunction = kind is "function" or "test.method";
         if (signature[cursor] != '<')
         {
             // Match the suffix required by the persisted row's member kind. In particular,
@@ -248,8 +249,8 @@ internal static class CSharpSymbolNameNormalizer
             // parameter list へ続く必要があり、`{` を許すと `class Runner : IFoo.Runner { }`
             // のような後続 base/constraint 型を declaration token と誤認してしまう。
             if (isIndexer)
-                return kind == "function" && signature[cursor] == '[';
-            if (kind == "function")
+                return isFunction && signature[cursor] == '[';
+            if (isFunction)
                 return signature[cursor] == '(';
             return signature[cursor] is '{' or '=' or ';';
         }

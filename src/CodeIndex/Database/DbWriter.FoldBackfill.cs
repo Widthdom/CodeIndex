@@ -43,7 +43,7 @@ public partial class DbWriter
             FROM symbols s
             JOIN files f ON f.id = s.file_id
             WHERE f.lang = 'csharp'
-              AND s.kind IN ('function', 'property', 'event')
+              AND s.kind IN ('function', 'test.method', 'property', 'event')
               AND (s.signature IS NULL OR trim(s.signature) = '')
             """,
             static _ => { });
@@ -440,8 +440,18 @@ public partial class DbWriter
 
     internal bool ResolveFoldBackfillRewriteAll(bool rewriteAll)
     {
+        if (TryGetNewerCSharpSymbolNameContractVersion(out var storedVersion))
+        {
+            throw new InvalidOperationException(
+                $"C# symbol-name contract version {storedVersion} is newer than supported version "
+                + $"{DbContext.CSharpSymbolNameContractVersion}.");
+        }
+
         if (rewriteAll)
             return true;
+
+        if (!HasAnyFilesWithLanguage("csharp"))
+            return false;
 
         var currentCSharpContract = DbContext.CSharpSymbolNameContractVersion.ToString(
             System.Globalization.CultureInfo.InvariantCulture);
@@ -449,6 +459,21 @@ public partial class DbWriter
             GetMetaString(DbContext.CSharpSymbolNameContractVersionMetaKey),
             currentCSharpContract,
             StringComparison.Ordinal);
+    }
+
+    public bool TryGetNewerCSharpSymbolNameContractVersion(out int storedVersion)
+    {
+        storedVersion = 0;
+        if (!HasAnyFilesWithLanguage("csharp"))
+            return false;
+
+        var stored = GetMetaString(DbContext.CSharpSymbolNameContractVersionMetaKey);
+        return int.TryParse(
+                stored,
+                System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out storedVersion)
+            && storedVersion > DbContext.CSharpSymbolNameContractVersion;
     }
 
     private int BackfillSymbolFoldedRows(bool rewriteAll, CancellationToken cancellationToken)

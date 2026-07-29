@@ -4396,6 +4396,7 @@ public partial class SymbolExtractorTests
                 int Value { get; }
                 event System.EventHandler Changed;
                 string this[int index] { get; }
+                void Verify();
             }
 
             public interface IBar
@@ -4410,6 +4411,8 @@ public partial class SymbolExtractorTests
                 int IFoo . Value => 1;
                 event System.EventHandler IFoo . Changed { add { } remove { } }
                 string IFoo . this[int index] => index.ToString();
+                [Fact]
+                void IFoo.Verify() { }
                 public void Run<T>(T value) { }
             }
             """;
@@ -4449,6 +4452,10 @@ public partial class SymbolExtractorTests
         Assert.Equal(
             "ifoo.item",
             Assert.Single(serviceMembers, symbol => symbol.Kind == "function" && symbol.Name == "Item")
+                .IdentityNameFolded);
+        Assert.Equal(
+            "ifoo.verify",
+            Assert.Single(serviceMembers, symbol => symbol.Kind == "test.method" && symbol.Name == "Verify")
                 .IdentityNameFolded);
     }
 

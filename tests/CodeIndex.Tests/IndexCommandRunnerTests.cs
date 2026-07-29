@@ -6480,6 +6480,157 @@ public sealed class Caller
     }
 
     [Fact]
+    public void RunBackfillFold_RejectsNewerCSharpIdentityContractWithoutRewriting_Issue4866Review()
+    {
+        var dbPath = CreateTempDbPath("cdidx_backfill_fold_csharp_future");
+        var futureVersion = DbContext.CSharpSymbolNameContractVersion + 1;
+        try
+        {
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                db.InitializeSchema();
+                var writer = new DbWriter(db.Connection);
+                var fileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = "src/Future.cs",
+                    Lang = "csharp",
+                    Size = 32,
+                    Lines = 1,
+                    Modified = new DateTime(2026, 7, 29, 0, 0, 0, DateTimeKind.Utc),
+                });
+                writer.InsertSymbols([
+                    new SymbolRecord
+                    {
+                        FileId = fileId,
+                        Kind = "function",
+                        Name = "Run",
+                        IdentityNameFolded = "future::ifoo.run",
+                        DisplayNameFolded = "run",
+                        Signature = "void IFoo.Run() { }",
+                        Line = 1,
+                        StartLine = 1,
+                        EndLine = 1,
+                    },
+                ]);
+                writer.SetMeta(
+                    DbContext.CSharpSymbolNameContractVersionMetaKey,
+                    futureVersion.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            }
+
+            string outputText;
+            int exitCode;
+            lock (TestConsoleLock.Gate)
+            {
+                var originalOut = Console.Out;
+                using var output = new StringWriter();
+                try
+                {
+                    Console.SetOut(output);
+                    exitCode = IndexCommandRunner.RunBackfillFold(
+                        ["--db", dbPath, "--json"],
+                        _jsonOptions);
+                    outputText = output.ToString();
+                }
+                finally
+                {
+                    Console.SetOut(originalOut);
+                }
+            }
+
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            Assert.Contains("newer than supported version", outputText, StringComparison.Ordinal);
+
+            using var verifyDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            Assert.Equal(
+                futureVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                verifyDb.GetMetaString(DbContext.CSharpSymbolNameContractVersionMetaKey));
+            using var identity = verifyDb.Connection.CreateCommand();
+            identity.CommandText = """
+                SELECT name_folded, display_name_folded
+                FROM symbols
+                WHERE name = 'Run'
+                """;
+            using var identityReader = identity.ExecuteReader();
+            Assert.True(identityReader.Read());
+            Assert.Equal("future::ifoo.run", identityReader.GetString(0));
+            Assert.Equal("run", identityReader.GetString(1));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteFile(dbPath);
+        }
+    }
+
+    [Fact]
+    public void RunBackfillFold_DoesNotRewriteCurrentFoldRowsWhenCSharpIsAbsent_Issue4866Review()
+    {
+        var dbPath = CreateTempDbPath("cdidx_backfill_fold_without_csharp");
+        try
+        {
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                db.InitializeSchema();
+                var writer = new DbWriter(db.Connection);
+                var fileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = "src/app.py",
+                    Lang = "python",
+                    Size = 32,
+                    Lines = 1,
+                    Modified = new DateTime(2026, 7, 29, 0, 0, 0, DateTimeKind.Utc),
+                });
+                writer.InsertSymbols([
+                    new SymbolRecord
+                    {
+                        FileId = fileId,
+                        Kind = "function",
+                        Name = "run",
+                        Line = 1,
+                        StartLine = 1,
+                        EndLine = 1,
+                    },
+                ]);
+                writer.BackfillFoldedColumns(rewriteAll: true);
+                Assert.True(writer.MarkFoldReady());
+                writer.SetMeta(DbContext.CSharpSymbolNameContractVersionMetaKey, null);
+            }
+
+            JsonElement json;
+            int exitCode;
+            lock (TestConsoleLock.Gate)
+            {
+                var originalOut = Console.Out;
+                using var output = new StringWriter();
+                try
+                {
+                    Console.SetOut(output);
+                    exitCode = IndexCommandRunner.RunBackfillFold(
+                        ["--db", dbPath, "--json"],
+                        _jsonOptions);
+                    using var document = JsonDocument.Parse(output.ToString());
+                    json = document.RootElement.Clone();
+                }
+                finally
+                {
+                    Console.SetOut(originalOut);
+                }
+            }
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.False(json.GetProperty("rewrite_all").GetBoolean());
+            Assert.Equal(0, json.GetProperty("symbols").GetInt32());
+            Assert.Equal(0, json.GetProperty("symbol_references").GetInt32());
+            Assert.True(json.GetProperty("was_already_complete").GetBoolean());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteFile(dbPath);
+        }
+    }
+
+    [Fact]
     public void RunBackfillFold_RefusesCSharpV3StampWhenLegacySignaturesAreMissing_Issue4866()
     {
         var dbPath = CreateTempDbPath("cdidx_backfill_fold_csharp_v2_missing_signature");

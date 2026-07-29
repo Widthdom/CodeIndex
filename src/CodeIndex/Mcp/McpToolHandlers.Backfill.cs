@@ -37,6 +37,12 @@ public partial class McpServer
             if (!dryRun)
                 db.InitializeSchema();
             var writer = new DbWriter(db);
+            if (writer.TryGetNewerCSharpSymbolNameContractVersion(out var newerCSharpContract))
+            {
+                return CreateToolErrorResponse(
+                    id,
+                    $"C# symbol-name contract version {newerCSharpContract} is newer than supported version {DbContext.CSharpSymbolNameContractVersion}. Use the same or a newer CodeIndex version that wrote this database; this version will not rewrite or downgrade its C# identities.");
+            }
             var userVersionBefore = db.GetUserVersion();
             var foldReadyBefore = (userVersionBefore & DbContext.FoldReadyFlag) != 0;
             var currentFoldVersion = NameFold.Version.ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -45,7 +51,9 @@ public partial class McpServer
             var storedFoldFingerprint = db.GetMetaString("fold_key_fingerprint");
             var foldMetadataCurrentBefore = storedFoldVersion == currentFoldVersion
                 && storedFoldFingerprint == currentFoldFingerprint;
-            var csharpSymbolNameContractUpgradeRequired = !string.Equals(
+            var csharpSymbolNameContractUpgradeRequired =
+                writer.HasAnyFilesWithLanguage("csharp")
+                && !string.Equals(
                 db.GetMetaString(DbContext.CSharpSymbolNameContractVersionMetaKey),
                 DbContext.CSharpSymbolNameContractVersion.ToString(
                     System.Globalization.CultureInfo.InvariantCulture),

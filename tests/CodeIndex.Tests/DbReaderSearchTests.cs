@@ -1890,6 +1890,7 @@ public partial class DbReaderTests
                 string this[int index] { get; }
                 void Ä();
                 void @this();
+                void Verify();
             }
 
             public interface IBar
@@ -1912,6 +1913,8 @@ public partial class DbReaderTests
                 int IItemContract . Item => 2;
                 void IFoo.Ä() { }
                 void IFoo.@this() { }
+                [Fact]
+                void IFoo.Verify() { }
                 public void Run<T>(T value) { }
                 public void ExplicitHelper() { }
                 public void CallPublicRun() { Run(1); }
@@ -2199,6 +2202,10 @@ public partial class DbReaderTests
         Assert.Equal(
             verbatimThisResults.Select(result => result.SymbolId).Order().ToArray(),
             verbatimThisResultsWithoutLanguage.Select(result => result.SymbolId).Order().ToArray());
+        var attributedExplicitMethod = Assert.Single(
+            reader.SearchSymbols("IFoo.Verify", lang: "csharp", exact: true),
+            result => result.Kind == "test.method");
+        Assert.Contains("IFoo.Verify", attributedExplicitMethod.Signature, StringComparison.Ordinal);
 
         const string sqlPath = "src/qualified-function.sql";
         var sqlFileId = writer.UpsertFile(new FileRecord
