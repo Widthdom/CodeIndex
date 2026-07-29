@@ -80,20 +80,25 @@ public static partial class QueryCommandRunner
             invocationContext,
             options.LanguageValidationError || invocationContext.StructuredMachineUsageErrors ? jsonOptions : null))
             return CommandExitCodes.UsageError;
-        if (!TryResolveSearchExactMode(options, out var exact, out var exactError))
+        if (!TryResolveSearchExactMode(options, out var exact, out var exactError, out var exactHint))
         {
+            var message = StripErrorPrefix(exactError!);
             if (invocationContext.StructuredMachineUsageErrors)
             {
-                WriteUsageError(
-                    StripErrorPrefix(exactError!),
-                    options,
-                    "Use one compatible exact-search mode, or remove the exact-mode flags.");
+                WriteUsageError(message, options, exactHint!);
+                return CommandExitCodes.UsageError;
             }
-            else
-            {
-                CommandErrorWriter.WriteStderr(exactError);
-            }
-            return CommandExitCodes.UsageError;
+
+            return CommandErrorWriter.WriteJsonOrHuman(
+                options.Json,
+                jsonOptions,
+                message,
+                CommandExitCodes.UsageError,
+                exactHint,
+                usage: null,
+                errorCode: CommandErrorCodes.UsageError,
+                command: invocationContext.CommandName,
+                omitNullUsage: true);
         }
         if (options.OpenIssuesPath != null && options.OutputFormat != OutputFormatIssueDrafts)
         {
@@ -260,14 +265,6 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.UsageError;
         }
         var exactSearch = exact || options.TokenBoundary;
-        if (options.TokenBoundary && options.RawFts)
-        {
-            WriteSearchValidationError(
-                "--token-boundary cannot be combined with --fts.",
-                options,
-                "Drop --fts to use exact token-boundary matching, or drop --token-boundary to keep raw FTS5 syntax.");
-            return CommandExitCodes.UsageError;
-        }
         if (exactSearch && options.Prefix)
         {
             WriteSearchValidationError(
