@@ -4103,6 +4103,7 @@ public class DatabaseTests : IDisposable
 
         Assert.Contains("idx_symbols_file_name_folded", symbolIndexes);
         Assert.Contains("idx_symbols_file_name_nocase", symbolIndexes);
+        Assert.Contains("idx_symbols_display_name_folded", symbolIndexes);
         Assert.Contains("idx_symbols_name_folded_container_name_nocase", symbolIndexes);
         Assert.Contains("idx_symbols_name_folded_container_qualified_name_nocase", symbolIndexes);
         Assert.Contains("idx_symbol_refs_name_kind", indexes);
@@ -4117,6 +4118,11 @@ public class DatabaseTests : IDisposable
 
         AssertIndexColumns(_db.Connection, "idx_symbols_file_name_folded", [("file_id", "BINARY"), ("name_folded", "BINARY")]);
         AssertIndexColumns(_db.Connection, "idx_symbols_file_name_nocase", [("file_id", "BINARY"), ("name", "NOCASE")]);
+        AssertIndexColumns(_db.Connection, "idx_symbols_display_name_folded", [("display_name_folded", "BINARY")]);
+        AssertIndexSqlContains(
+            _db.Connection,
+            "idx_symbols_display_name_folded",
+            "WHERE display_name_folded IS NOT NULL");
         AssertIndexColumns(_db.Connection, "idx_symbols_name_folded_container_name_nocase", [("name_folded", "BINARY"), ("container_name", "NOCASE")]);
         AssertIndexColumns(_db.Connection, "idx_symbols_name_folded_container_qualified_name_nocase", [("name_folded", "BINARY"), ("container_qualified_name", "NOCASE")]);
         AssertIndexColumns(_db.Connection, "idx_symbol_refs_name_nocase_kind", [("symbol_name", "NOCASE"), ("reference_kind", "BINARY")]);
@@ -4150,6 +4156,13 @@ public class DatabaseTests : IDisposable
                 ("@file_id", 1L),
                 ("@name", "Worker")),
             "idx_symbols_file_name_nocase");
+
+        AssertSearchesWithIndex(
+            ReadQueryPlanDetails(
+                _db.Connection,
+                "SELECT id FROM symbols WHERE display_name_folded = @display_name_folded",
+                ("@display_name_folded", "run")),
+            "idx_symbols_display_name_folded");
 
         AssertSearchesWithIndex(
             ReadQueryPlanDetails(
@@ -4503,6 +4516,7 @@ public class DatabaseTests : IDisposable
             Assert.DoesNotContain("idx_files_path_nocase", fileIndexes);
             Assert.Contains("idx_symbols_file_name_folded", symbolIndexes);
             Assert.Contains("idx_symbols_file_name_nocase", symbolIndexes);
+            Assert.Contains("idx_symbols_display_name_folded", symbolIndexes);
             Assert.Contains("idx_symbols_name_folded_container_name_nocase", symbolIndexes);
             Assert.Contains("idx_symbols_name_folded_container_qualified_name_nocase", symbolIndexes);
             Assert.Contains("idx_symbol_refs_name_kind", indexes);
@@ -4517,6 +4531,11 @@ public class DatabaseTests : IDisposable
 
             AssertIndexColumns(db.Connection, "idx_symbols_file_name_folded", [("file_id", "BINARY"), ("name_folded", "BINARY")]);
             AssertIndexColumns(db.Connection, "idx_symbols_file_name_nocase", [("file_id", "BINARY"), ("name", "NOCASE")]);
+            AssertIndexColumns(db.Connection, "idx_symbols_display_name_folded", [("display_name_folded", "BINARY")]);
+            AssertIndexSqlContains(
+                db.Connection,
+                "idx_symbols_display_name_folded",
+                "WHERE display_name_folded IS NOT NULL");
             AssertIndexColumns(db.Connection, "idx_symbols_name_folded_container_name_nocase", [("name_folded", "BINARY"), ("container_name", "NOCASE")]);
             AssertIndexColumns(db.Connection, "idx_symbols_name_folded_container_qualified_name_nocase", [("name_folded", "BINARY"), ("container_qualified_name", "NOCASE")]);
             AssertIndexColumns(db.Connection, "idx_symbol_refs_container_nocase_kind", [("container_name", "NOCASE"), ("reference_kind", "BINARY")]);

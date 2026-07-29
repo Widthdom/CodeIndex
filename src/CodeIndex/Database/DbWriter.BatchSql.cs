@@ -38,6 +38,10 @@ public partial class DbWriter
             ? identityNameFolded
             : FoldedNameDbValue(name, cache);
 
+    private static object DisplayFoldedNameDbValue(
+        string? displayNameFolded) =>
+        (object?)displayNameFolded ?? DBNull.Value;
+
     private static Dictionary<string, string?> CreateFoldedNameCache(int rowCount, int namesPerRow)
     {
         if (rowCount <= 0 || namesPerRow <= 0)

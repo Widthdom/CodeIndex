@@ -136,6 +136,7 @@ public class PostExtractionHookContractTests
                 Kind = "function",
                 Name = "renamed_proc",
                 IdentityNameFolded = "stale",
+                DisplayNameFolded = "stale",
                 Line = 1,
                 StartLine = 1,
                 EndLine = 1,
@@ -173,10 +174,62 @@ public class PostExtractionHookContractTests
         PostExtractionHookMutationMaterializer.RefreshLanguageIdentity("nim", clonedReferences);
 
         Assert.Equal("renamedproc", Assert.Single(symbols).IdentityNameFolded);
+        Assert.Null(Assert.Single(symbols).DisplayNameFolded);
         var reference = Assert.Single(clonedReferences);
         Assert.Equal("renamedproc", reference.IdentitySymbolNameFolded);
         Assert.Equal("Rungraph", reference.IdentityContainerNameFolded);
         Assert.Equal("pkg", reference.TargetQualifier);
         Assert.True(reference.SuppressInferredTargetQualifier);
+    }
+
+    [Fact]
+    public void MutationMaterializer_RecomputesCSharpExplicitInterfaceIdentityAfterHookMutation_Issue4866()
+    {
+        var symbols = new List<SymbolRecord>
+        {
+            new()
+            {
+                FileId = 7,
+                Kind = "function",
+                Name = "Run",
+                Signature = "void IFoo.@Run()",
+                IdentityNameFolded = "stale",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 1,
+            },
+            new()
+            {
+                FileId = 7,
+                Kind = "function",
+                Name = "Plain",
+                Signature = "void Plain()",
+                IdentityNameFolded = "stale",
+                Line = 2,
+                StartLine = 2,
+                EndLine = 2,
+            },
+            new()
+            {
+                FileId = 7,
+                Kind = "function",
+                Name = "Execute",
+                Signature = "void IFoo.Run()",
+                IdentityNameFolded = "ifoo.run",
+                DisplayNameFolded = "run",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 3,
+            },
+        };
+
+        PostExtractionHookMutationMaterializer.RefreshLanguageIdentity("csharp", symbols);
+
+        Assert.Equal("ifoo.run", symbols[0].IdentityNameFolded);
+        Assert.Equal("run", symbols[0].DisplayNameFolded);
+        Assert.Null(symbols[1].IdentityNameFolded);
+        Assert.Null(symbols[1].DisplayNameFolded);
+        Assert.Equal("ifoo.execute", symbols[2].IdentityNameFolded);
+        Assert.Equal("execute", symbols[2].DisplayNameFolded);
     }
 }

@@ -26,6 +26,40 @@ public partial class DbWriter
     }
 
     /// <summary>
+    /// A pre-v3 C# naming contract can be upgraded without reparsing only when every symbol kind
+    /// that may represent an explicit-interface member still has its declaration signature.
+    /// Without that source evidence, a short legacy name cannot be distinguished from a qualified
+    /// explicit implementation, so stamping v3 would make the readiness signal untrustworthy.
+    ///
+    /// v3 より前の C# naming contract を再解析なしで更新できるのは、明示的 interface member
+    /// になり得る全 symbol kind に宣言 signature が残っている場合だけである。source evidence
+    /// がなければ短い legacy 名と修飾済み実装を区別できず、v3 stamp が不正確になる。
+    /// </summary>
+    public bool CanReconstructCSharpExplicitInterfaceIdentitiesFromPersistedRows()
+    {
+        var command = RentCommand(
+            """
+            SELECT COUNT(*)
+            FROM symbols s
+            JOIN files f ON f.id = s.file_id
+            WHERE f.lang = 'csharp'
+              AND s.kind IN ('function', 'test.method', 'property', 'event')
+              AND (s.signature IS NULL OR trim(s.signature) = '')
+            """,
+            static _ => { });
+        try
+        {
+            var raw = command.ExecuteScalar();
+            var missing = raw is long value ? value : Convert.ToInt64(raw ?? 0);
+            return missing == 0;
+        }
+        finally
+        {
+            ReleaseCommand(command);
+        }
+    }
+
+    /// <summary>
     /// True only when every existing row in symbols / symbol_references has a populated folded
     /// value for each source name that is itself non-NULL. Callers use this before stamping
     /// `FoldReadyFlag` on a full scan because the default incremental path skips unchanged files
@@ -97,7 +131,8 @@ public partial class DbWriter
         var markdownSymbolIdentityFolds = BuildMarkdownSymbolIdentityFoldMap();
         var symbols = RentCommand(
             """
-            SELECT s.id, s.name, s.name_folded, f.lang, s.kind
+            SELECT s.id, s.name, s.name_folded, s.display_name_folded,
+                   f.lang, s.kind, s.signature
             FROM symbols s
             JOIN files f ON f.id = s.file_id
             WHERE s.name IS NOT NULL
@@ -111,11 +146,26 @@ public partial class DbWriter
                 var expected = FoldPersistedSymbolName(
                     reader.GetInt64(0),
                     reader.GetString(1),
-                    reader.IsDBNull(3) ? null : reader.GetString(3),
-                    reader.GetString(4),
+                    reader.IsDBNull(4) ? null : reader.GetString(4),
+                    reader.GetString(5),
+                    reader.IsDBNull(6) ? null : reader.GetString(6),
                     markdownSymbolIdentityFolds);
                 var actual = reader.IsDBNull(2) ? null : reader.GetString(2);
                 if (!string.Equals(actual, expected, StringComparison.Ordinal))
+                    return false;
+                var foldedDisplay = DbReader.FoldNameForLanguage(
+                    reader.GetString(1),
+                    reader.IsDBNull(4) ? null : reader.GetString(4));
+                var expectedDisplay =
+                    string.Equals(
+                        reader.IsDBNull(4) ? null : reader.GetString(4),
+                        "csharp",
+                        StringComparison.Ordinal)
+                    && !string.Equals(expected, foldedDisplay, StringComparison.Ordinal)
+                        ? foldedDisplay
+                        : null;
+                var actualDisplay = reader.IsDBNull(3) ? null : reader.GetString(3);
+                if (!string.Equals(actualDisplay, expectedDisplay, StringComparison.Ordinal))
                     return false;
             }
         }
@@ -275,6 +325,7 @@ public partial class DbWriter
         bool rewriteAll = false,
         CancellationToken cancellationToken = default)
     {
+        rewriteAll = ResolveFoldBackfillRewriteAll(rewriteAll);
         cancellationToken.ThrowIfCancellationRequested();
         var graphRefreshPending = string.Equals(
             GetMetaString(FoldBackfillGraphRefreshPendingMetaKey),
@@ -318,14 +369,28 @@ public partial class DbWriter
 
     public (int Symbols, int SymbolReferences) CountBackfillFoldedColumns(bool rewriteAll = false)
     {
+        rewriteAll = ResolveFoldBackfillRewriteAll(rewriteAll);
         var phase = rewriteAll ? GetMetaString(FoldBackfillPhaseMetaKey) : null;
         var lastSymbolId = rewriteAll ? GetFoldBackfillCheckpoint(FoldBackfillLastSymbolIdMetaKey) : 0;
         var lastReferenceId = rewriteAll ? GetFoldBackfillCheckpoint(FoldBackfillLastReferenceIdMetaKey) : 0;
 
+        var hasDisplayNameFolded =
+            DbSchemaCache.LoadColumns(_conn, "symbols").Contains("display_name_folded");
         var symbolsSql = rewriteAll && phase != "references"
             ? "SELECT COUNT(*) FROM symbols WHERE name IS NOT NULL AND id > @lastSymbolId"
             : rewriteAll
             ? "SELECT 0"
+            : hasDisplayNameFolded
+            ? """
+              SELECT COUNT(*)
+              FROM symbols s
+              JOIN files f ON f.id = s.file_id
+              WHERE s.name IS NOT NULL
+                AND (s.name_folded IS NULL
+                     OR (f.lang = 'csharp'
+                         AND s.name_folded <> codeindex_name_fold(s.name)
+                         AND s.display_name_folded IS NULL))
+              """
             : "SELECT COUNT(*) FROM symbols WHERE name IS NOT NULL AND name_folded IS NULL";
         var symbolsUsesCheckpoint = rewriteAll && phase != "references";
         var symbols = RentCommand(
@@ -371,6 +436,41 @@ public partial class DbWriter
         return count > int.MaxValue ? int.MaxValue : (int)count;
     }
 
+    internal bool ResolveFoldBackfillRewriteAll(bool rewriteAll)
+    {
+        if (TryGetNewerCSharpSymbolNameContractVersion(out var storedVersion))
+        {
+            throw new InvalidOperationException(
+                $"C# symbol-name contract version {storedVersion} is newer than supported version "
+                + $"{DbContext.CSharpSymbolNameContractVersion}.");
+        }
+
+        if (rewriteAll)
+            return true;
+
+        if (!HasAnyFilesWithLanguage("csharp"))
+            return false;
+
+        var currentCSharpContract = DbContext.CSharpSymbolNameContractVersion.ToString(
+            System.Globalization.CultureInfo.InvariantCulture);
+        return !string.Equals(
+            GetMetaString(DbContext.CSharpSymbolNameContractVersionMetaKey),
+            currentCSharpContract,
+            StringComparison.Ordinal);
+    }
+
+    public bool TryGetNewerCSharpSymbolNameContractVersion(out int storedVersion)
+    {
+        storedVersion = 0;
+        var stored = GetMetaString(DbContext.CSharpSymbolNameContractVersionMetaKey);
+        return int.TryParse(
+                stored,
+                System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out storedVersion)
+            && storedVersion > DbContext.CSharpSymbolNameContractVersion;
+    }
+
     private int BackfillSymbolFoldedRows(bool rewriteAll, CancellationToken cancellationToken)
     {
         var phase = rewriteAll ? GetMetaString(FoldBackfillPhaseMetaKey) : null;
@@ -379,20 +479,24 @@ public partial class DbWriter
 
         var markdownSymbolIdentityFolds = BuildMarkdownSymbolIdentityFoldMap();
         var lastSymbolId = rewriteAll ? GetFoldBackfillCheckpoint(FoldBackfillLastSymbolIdMetaKey) : 0;
-        var rows = new List<(long Id, string Name, string? Lang, string Kind)>();
+        var rows = new List<(long Id, string Name, string? Lang, string Kind, string? Signature)>();
         var selectSql = rewriteAll
             ? """
-              SELECT s.id, s.name, f.lang, s.kind
+              SELECT s.id, s.name, f.lang, s.kind, s.signature
               FROM symbols s
               JOIN files f ON f.id = s.file_id
               WHERE s.name IS NOT NULL AND s.id > @lastSymbolId
               ORDER BY s.id
               """
             : """
-              SELECT s.id, s.name, f.lang, s.kind
+              SELECT s.id, s.name, f.lang, s.kind, s.signature
               FROM symbols s
               JOIN files f ON f.id = s.file_id
-              WHERE s.name IS NOT NULL AND s.name_folded IS NULL
+              WHERE s.name IS NOT NULL
+                AND (s.name_folded IS NULL
+                     OR (f.lang = 'csharp'
+                         AND s.name_folded <> codeindex_name_fold(s.name)
+                         AND s.display_name_folded IS NULL))
               """;
         var select = RentCommand(
             selectSql,
@@ -411,7 +515,8 @@ public partial class DbWriter
                     reader.GetInt64(0),
                     reader.GetString(1),
                     reader.IsDBNull(2) ? null : reader.GetString(2),
-                    reader.GetString(3)));
+                    reader.GetString(3),
+                    reader.IsDBNull(4) ? null : reader.GetString(4)));
             }
         }
         finally
@@ -423,25 +528,43 @@ public partial class DbWriter
             return 0;
 
         var update = RentCommand(
-            "UPDATE symbols SET name_folded = @folded WHERE id = @id",
+            """
+            UPDATE symbols
+            SET name_folded = @folded,
+                display_name_folded = @displayFolded
+            WHERE id = @id
+            """,
             static c =>
             {
                 c.Parameters.Add("@folded", SqliteType.Text);
+                c.Parameters.Add("@displayFolded", SqliteType.Text);
                 c.Parameters.Add("@id", SqliteType.Integer);
             });
         try
         {
             var pFolded = update.Parameters["@folded"];
+            var pDisplayFolded = update.Parameters["@displayFolded"];
             var pId = update.Parameters["@id"];
             foreach (var row in rows)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                pFolded.Value = FoldPersistedSymbolName(
+                var foldedIdentity = FoldPersistedSymbolName(
                     row.Id,
                     row.Name,
                     row.Lang,
                     row.Kind,
+                    row.Signature,
                     markdownSymbolIdentityFolds);
+                var foldedDisplay = DbReader.FoldNameForLanguage(row.Name, row.Lang);
+                pFolded.Value = foldedIdentity;
+                pDisplayFolded.Value =
+                    string.Equals(row.Lang, "csharp", StringComparison.Ordinal)
+                    && !string.Equals(
+                        foldedIdentity,
+                        foldedDisplay,
+                        StringComparison.Ordinal)
+                        ? foldedDisplay
+                        : DBNull.Value;
                 pId.Value = row.Id;
                 update.ExecuteNonQuery();
                 if (rewriteAll)
@@ -512,6 +635,7 @@ public partial class DbWriter
         string name,
         string? lang,
         string kind,
+        string? signature,
         IReadOnlyDictionary<long, string> markdownSymbolIdentityFolds)
     {
         if (lang == "markdown"
@@ -519,6 +643,17 @@ public partial class DbWriter
             && markdownSymbolIdentityFolds.TryGetValue(symbolId, out var identity))
         {
             return identity;
+        }
+
+        if (lang == "csharp")
+        {
+            var explicitInterfaceIdentity =
+                CSharpSymbolNameNormalizer.BuildExplicitInterfaceIdentityNameFolded(
+                    name,
+                    signature,
+                    kind);
+            if (explicitInterfaceIdentity != null)
+                return explicitInterfaceIdentity;
         }
 
         return DbReader.FoldNameForLanguage(name, lang);

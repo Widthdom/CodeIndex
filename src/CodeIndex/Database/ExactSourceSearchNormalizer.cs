@@ -67,7 +67,7 @@ internal static class ExactSourceSearchNormalizer
         return normalized;
     }
 
-    private static string NormalizeCSharpUnicodeEscapes(string text, out int[] rawIndexMap)
+    internal static string NormalizeCSharpUnicodeEscapes(string text, out int[] rawIndexMap)
     {
         if (text.Length == 0 || text.IndexOf('\\') < 0)
             return Identity(text, out rawIndexMap);

@@ -27,6 +27,10 @@ public class SymbolRecord
     [JsonInclude]
     internal string? IdentityNameFolded { get; set; }
 
+    /// <summary>Folded display alias when persisted identity differs / 永続 identity と異なる場合の表示名 fold alias</summary>
+    [JsonInclude]
+    internal string? DisplayNameFolded { get; set; }
+
     /// <summary>Line number (1-based) / 行番号（1始まり）</summary>
     public int Line { get; set; }
 

@@ -263,7 +263,9 @@ public partial class DbReader
         }
 
         lang = DbReader.NormalizeQueryLanguage(lang);
-        var normalizedQuery = NormalizeSymbolSearchQuery(query, lang) ?? query;
+        var normalizedQuery =
+            NormalizeSymbolSearchQueryForSymbolSearch(query, lang, exact)
+            ?? query;
         // Propagate `exact` to every bundled sub-query so the one-round-trip AI workflow
         // (`inspect` / MCP `analyze_symbol`) keeps the same precision contract as the leaf
         // commands. Without this, `inspect Run --exact` would still pull RunAsync/RunImpact

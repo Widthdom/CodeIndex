@@ -11868,6 +11868,119 @@ public partial class McpServerTests
     }
 
     [Fact]
+    public void ToolsCall_BackfillFold_RejectsNewerCSharpIdentityContract_Issue4866Review()
+    {
+        var writer = new DbWriter(_db.Connection);
+        var futureVersion = DbContext.CSharpSymbolNameContractVersion + 1;
+        var fileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/future-explicit-4866.cs",
+            Lang = "csharp",
+            Size = 32,
+            Lines = 1,
+            Modified = new DateTime(2026, 7, 29, 0, 0, 0, DateTimeKind.Utc),
+        });
+        writer.InsertSymbols([
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "FutureRun",
+                IdentityNameFolded = "future::ifuture.futurerun",
+                DisplayNameFolded = "futurerun",
+                Signature = "void IFuture.FutureRun() { }",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 1,
+            },
+        ]);
+        writer.SetMeta(
+            DbContext.CSharpSymbolNameContractVersionMetaKey,
+            futureVersion.ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":4866,"method":"tools/call","params":{"name":"backfill_fold","arguments":{}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.True(response["result"]!["isError"]?.GetValue<bool>() ?? false);
+        var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains("newer than supported version", text, StringComparison.Ordinal);
+        Assert.Equal(
+            futureVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            _db.GetMetaString(DbContext.CSharpSymbolNameContractVersionMetaKey));
+        using var identity = _db.Connection.CreateCommand();
+        identity.CommandText = """
+            SELECT name_folded
+            FROM symbols
+            WHERE name = 'FutureRun'
+            """;
+        Assert.Equal("future::ifuture.futurerun", identity.ExecuteScalar());
+    }
+
+    [Fact]
+    public void ToolsCall_BackfillFold_RefusesCSharpV3StampWhenLegacySignaturesAreMissing_Issue4866()
+    {
+        var writer = new DbWriter(_db.Connection);
+        var fileId = writer.UpsertFile(new FileRecord
+        {
+            Path = "src/legacy-explicit-4866.cs",
+            Lang = "csharp",
+            Size = 32,
+            Lines = 1,
+            Modified = new DateTime(2026, 7, 29, 0, 0, 0, DateTimeKind.Utc),
+        });
+        writer.InsertSymbols([
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "Run",
+                Signature = null,
+                Line = 1,
+                StartLine = 1,
+                EndLine = 1,
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "Stable",
+                IdentityNameFolded = "sentinel::stable",
+                DisplayNameFolded = "stable",
+                Signature = "void IFoo.Stable() { }",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 1,
+            },
+        ]);
+        writer.SetMeta(DbContext.CSharpSymbolNameContractVersionMetaKey, "2");
+
+        var dryRunRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":4865,"method":"tools/call","params":{"name":"backfill_fold","arguments":{"dry_run":true}}}""")!;
+        var dryRunResponse = _server.HandleMessage(dryRunRequest)!;
+        Assert.True(dryRunResponse["result"]!["isError"]?.GetValue<bool>() ?? false);
+        Assert.Contains(
+            "C# explicit-interface identities cannot be reconstructed",
+            dryRunResponse["result"]!["content"]![0]!["text"]!.GetValue<string>(),
+            StringComparison.Ordinal);
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":4866,"method":"tools/call","params":{"name":"backfill_fold","arguments":{}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.True(response["result"]!["isError"]?.GetValue<bool>() ?? false);
+        var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
+        Assert.Contains(
+            "C# explicit-interface identities cannot be reconstructed",
+            text,
+            StringComparison.Ordinal);
+        Assert.Equal(
+            "2",
+            _db.GetMetaString(DbContext.CSharpSymbolNameContractVersionMetaKey));
+        using var identity = _db.Connection.CreateCommand();
+        identity.CommandText = "SELECT name_folded FROM symbols WHERE name = 'Stable'";
+        Assert.Equal("sentinel::stable", identity.ExecuteScalar());
+        Assert.Null(_db.GetMetaString(DbWriter.FoldBackfillGraphRefreshPendingMetaKey));
+    }
+
+    [Fact]
     public void ToolsCall_BackfillFold_ExceptionUsesSanitizedToolError_Issue3201()
     {
         var previousDebug = Environment.GetEnvironmentVariable(McpServer.DebugEnvironmentVariable);
