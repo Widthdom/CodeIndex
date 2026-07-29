@@ -6563,6 +6563,88 @@ public sealed class Caller
     }
 
     [Fact]
+    public void RunBackfillFold_PreservesNewerCSharpIdentityContractWithoutCSharpFiles_Issue4866Review()
+    {
+        var dbPath = CreateTempDbPath("cdidx_backfill_fold_csharp_future_without_csharp");
+        var futureVersion = DbContext.CSharpSymbolNameContractVersion + 1;
+        try
+        {
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                db.InitializeSchema();
+                var writer = new DbWriter(db.Connection);
+                var fileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = "src/app.py",
+                    Lang = "python",
+                    Size = 32,
+                    Lines = 1,
+                    Modified = new DateTime(2026, 7, 29, 0, 0, 0, DateTimeKind.Utc),
+                });
+                writer.InsertSymbols([
+                    new SymbolRecord
+                    {
+                        FileId = fileId,
+                        Kind = "function",
+                        Name = "run",
+                        Line = 1,
+                        StartLine = 1,
+                        EndLine = 1,
+                    },
+                ]);
+                Assert.True(writer.MarkFoldReady());
+                writer.SetMeta(
+                    DbContext.CSharpSymbolNameContractVersionMetaKey,
+                    futureVersion.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            }
+
+            (int ExitCode, string Output) RunBackfill(params string[] additionalArguments)
+            {
+                var arguments = new List<string> { "--db", dbPath, "--json" };
+                arguments.AddRange(additionalArguments);
+                lock (TestConsoleLock.Gate)
+                {
+                    var originalOut = Console.Out;
+                    using var output = new StringWriter();
+                    try
+                    {
+                        Console.SetOut(output);
+                        var exitCode = IndexCommandRunner.RunBackfillFold(
+                            arguments.ToArray(),
+                            _jsonOptions);
+                        return (exitCode, output.ToString());
+                    }
+                    finally
+                    {
+                        Console.SetOut(originalOut);
+                    }
+                }
+            }
+
+            var dryRun = RunBackfill("--dry-run");
+            Assert.Equal(CommandExitCodes.DatabaseError, dryRun.ExitCode);
+            Assert.Contains("newer than supported version", dryRun.Output, StringComparison.Ordinal);
+
+            var run = RunBackfill();
+            Assert.Equal(CommandExitCodes.DatabaseError, run.ExitCode);
+            Assert.Contains("newer than supported version", run.Output, StringComparison.Ordinal);
+
+            using var verifyDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            Assert.Equal(
+                futureVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                verifyDb.GetMetaString(DbContext.CSharpSymbolNameContractVersionMetaKey));
+            using var identity = verifyDb.Connection.CreateCommand();
+            identity.CommandText = "SELECT name_folded FROM symbols WHERE name = 'run'";
+            Assert.Equal("run", identity.ExecuteScalar());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteFile(dbPath);
+        }
+    }
+
+    [Fact]
     public void RunBackfillFold_DoesNotRewriteCurrentFoldRowsWhenCSharpIsAbsent_Issue4866Review()
     {
         var dbPath = CreateTempDbPath("cdidx_backfill_fold_without_csharp");

@@ -468,9 +468,6 @@ public partial class DbWriter
     public bool TryGetNewerCSharpSymbolNameContractVersion(out int storedVersion)
     {
         storedVersion = 0;
-        if (!HasAnyFilesWithLanguage("csharp"))
-            return false;
-
         var stored = GetMetaString(DbContext.CSharpSymbolNameContractVersionMetaKey);
         return int.TryParse(
                 stored,
