@@ -71,8 +71,36 @@ internal static class CSharpSymbolNameNormalizer
         if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(signature))
             return null;
 
-        var isIndexer = string.Equals(name, "Item", StringComparison.Ordinal);
-        var sourceName = isIndexer ? "this" : name;
+        // `Item` is only the display alias for an indexer when the declaration itself uses
+        // `this[...]`. A legal method/property/event may also be named `Item`, so try the
+        // indexer source spelling first and then fall back to the literal member name.
+        // `Item` は宣言が `this[...]` の場合だけ indexer の表示 alias になる。
+        // method/property/event の実名にも使えるため、まず indexer 表記を試し、
+        // 一致しなければ通常の member 名として再構築する。
+        if (string.Equals(name, "Item", StringComparison.Ordinal))
+        {
+            var indexerIdentity = TryBuildExplicitInterfaceIdentityNameFolded(
+                name,
+                signature,
+                sourceName: "this",
+                isIndexer: true);
+            if (indexerIdentity != null)
+                return indexerIdentity;
+        }
+
+        return TryBuildExplicitInterfaceIdentityNameFolded(
+            name,
+            signature,
+            sourceName: name,
+            isIndexer: false);
+    }
+
+    private static string? TryBuildExplicitInterfaceIdentityNameFolded(
+        string name,
+        string signature,
+        string sourceName,
+        bool isIndexer)
+    {
         var declarationBodyStart = FindDeclarationBodyStart(signature);
         var searchStart = 0;
         while (searchStart < signature.Length)

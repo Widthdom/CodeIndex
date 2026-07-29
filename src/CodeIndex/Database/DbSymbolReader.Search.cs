@@ -451,8 +451,9 @@ public partial class DbReader
                     SqliteCommandPolicy.Add(cmd, $"@query{i}", paramValue);
                 SqliteCommandPolicy.Add(cmd, $"@query{i}Normalized", SqlNameResolver.NormalizeQualifiedName(value));
                 SqliteCommandPolicy.Add(cmd, $"@query{i}NormalizedFolded", NameFold.Fold(SqlNameResolver.NormalizeQualifiedName(value)) ?? SqlNameResolver.NormalizeQualifiedName(value));
-                SqliteCommandPolicy.Add(cmd, $"@query{i}Leaf", SqlNameResolver.GetLeafName(value));
-                SqliteCommandPolicy.Add(cmd, $"@query{i}LeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(value)) ?? SqlNameResolver.GetLeafName(value));
+                var queryLeaf = GetQualifiedQueryLeaf(value, lang);
+                SqliteCommandPolicy.Add(cmd, $"@query{i}Leaf", queryLeaf);
+                SqliteCommandPolicy.Add(cmd, $"@query{i}LeafFolded", NameFold.Fold(queryLeaf) ?? queryLeaf);
                 SqliteCommandPolicy.Add(cmd, $"@query{i}SegmentCount", SqlNameResolver.GetSegmentCount(value));
                 SqliteCommandPolicy.Add(cmd, $"@query{i}NormalizedLike", $"%{EscapeLikeQuery(SqlNameResolver.NormalizeQualifiedName(value))}%");
                 AddCSharpExplicitInterfaceIdentityQueryParameter(cmd, $"query{i}", value);

@@ -1897,13 +1897,19 @@ public partial class DbReaderTests
                 void Run<TLeft, TRight>(TLeft left, TRight right);
             }
 
-            public sealed class Service : IFoo, IBar
+            public interface IItemContract
+            {
+                int Item { get; }
+            }
+
+            public sealed class Service : IFoo, IBar, IItemContract
             {
                 void IFoo.Run<TValue>(TValue value) { }
                 void IBar.Run<TLeft, TRight>(TLeft left, TRight right) { }
                 int IFoo.Value => 1;
                 event System.EventHandler IFoo . Changed { add { } remove { } }
-                string IFoo.this[int index] => index.ToString();
+                string IFoo . this[int index] => index.ToString();
+                int IItemContract . Item => 2;
                 void IFoo.Ä() { }
                 void IFoo.@this() { }
                 public void Run<T>(T value) { }
@@ -1997,6 +2003,11 @@ public partial class DbReaderTests
             CSharpSymbolNameNormalizer.NormalizeExplicitInterfaceQueryIdentityNameFolded(
                 "IFoo.this"));
         Assert.Equal(
+            "iitemcontract.item",
+            CSharpSymbolNameNormalizer.BuildExplicitInterfaceIdentityNameFolded(
+                "Item",
+                "int IItemContract . Item => 2;"));
+        Assert.Equal(
             "ifoo.this",
             CSharpSymbolNameNormalizer.NormalizeExplicitInterfaceQueryIdentityNameFolded(
                 "IFoo.@this"));
@@ -2062,6 +2073,13 @@ public partial class DbReaderTests
             itemResults.Select(result => result.SymbolId).Order().ToArray(),
             sourceSpelledItemResults.Select(result => result.SymbolId).Order().ToArray());
 
+        var namedItemPropertyResults = reader.SearchSymbols(
+            "IItemContract.Item",
+            lang: "csharp",
+            exact: true);
+        Assert.Equal(2, namedItemPropertyResults.Count);
+        Assert.All(namedItemPropertyResults, result => Assert.Equal("property", result.Kind));
+
         var unicodeShortAliasResults = reader.SearchSymbols(
             "ä",
             lang: "csharp",
@@ -2085,6 +2103,9 @@ public partial class DbReaderTests
         Assert.Equal(
             2,
             reader.CountSearchSymbols("IFoo.@this", lang: "csharp", exact: true));
+        Assert.Equal(
+            2,
+            reader.CountSearchSymbolsTotal("IFoo.@this", lang: "csharp", exact: true).Count);
         var verbatimThisDefinitions = reader.GetDefinitions(
             "IFoo.@this",
             lang: "csharp",
@@ -2136,7 +2157,7 @@ public partial class DbReaderTests
         Assert.Contains(
             outline.Symbols,
             symbol => symbol.Name == "Item"
-                && symbol.Signature?.Contains("IFoo.this", StringComparison.Ordinal) == true);
+                && symbol.Signature?.Contains("IFoo . this", StringComparison.Ordinal) == true);
     }
 
     [Fact]

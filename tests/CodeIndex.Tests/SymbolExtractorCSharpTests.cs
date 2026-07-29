@@ -4400,11 +4400,11 @@ public partial class SymbolExtractorTests
 
             public sealed class Service : IFoo, IBar
             {
-                void IBase.Run<TValue>(TValue value) { }
+                void IBase . Run<TValue>(TValue value) { }
                 void IBar.Run<TLeft, TRight>(TLeft left, TRight right) { }
-                int IFoo.Value => 1;
-                event System.EventHandler IFoo.Changed { add { } remove { } }
-                string IFoo.this[int index] => index.ToString();
+                int IFoo . Value => 1;
+                event System.EventHandler IFoo . Changed { add { } remove { } }
+                string IFoo . this[int index] => index.ToString();
                 public void Run<T>(T value) { }
             }
             """;
@@ -4416,7 +4416,7 @@ public partial class SymbolExtractorTests
                 serviceMembers,
                 symbol => symbol.Kind == "function"
                     && symbol.Name == "Run"
-                    && symbol.Signature?.StartsWith("void IBase.", StringComparison.Ordinal) == true);
+                    && symbol.Signature?.Contains("IBase . Run", StringComparison.Ordinal) == true);
         Assert.Equal("ibase.run`1", baseRun.IdentityNameFolded);
 
         var barRun = Assert.Single(
