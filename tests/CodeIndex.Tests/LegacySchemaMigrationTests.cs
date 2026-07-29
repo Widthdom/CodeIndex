@@ -755,6 +755,110 @@ public class LegacySchemaMigrationTests : IDisposable
     }
 
     [Fact]
+    public void GraphQueries_ReadOnlyLegacyIdentityColumnsMissing_PreserveFallback_Issue4867()
+    {
+        var dir = TestProjectHelper.CreateTempProject("codeindex_legacy_graph_identity");
+        var dbPath = Path.Combine(dir, "codeindex.db");
+        try
+        {
+            using (var seed = new SqliteConnection(
+                       new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
+            {
+                seed.Open();
+                Exec(seed, $"PRAGMA application_id = {DbContext.ApplicationId}");
+                Exec(seed, $"PRAGMA user_version = {DbContext.GraphReadyFlag}");
+                Exec(seed, """
+                    CREATE TABLE files (
+                        id INTEGER PRIMARY KEY,
+                        path TEXT NOT NULL,
+                        lang TEXT,
+                        lines INTEGER
+                    )
+                    """);
+                Exec(seed, """
+                    CREATE TABLE chunks (
+                        id INTEGER PRIMARY KEY,
+                        file_id INTEGER,
+                        content TEXT
+                    )
+                    """);
+                Exec(seed, """
+                    CREATE TABLE symbols (
+                        id INTEGER PRIMARY KEY,
+                        file_id INTEGER,
+                        name TEXT,
+                        kind TEXT,
+                        line INTEGER,
+                        body_start_line INTEGER,
+                        body_end_line INTEGER,
+                        end_line INTEGER,
+                        signature TEXT
+                    )
+                    """);
+                Exec(seed, """
+                    CREATE TABLE symbol_references (
+                        id INTEGER PRIMARY KEY,
+                        file_id INTEGER,
+                        symbol_name TEXT,
+                        reference_kind TEXT,
+                        line INTEGER,
+                        column_number INTEGER,
+                        context TEXT,
+                        container_kind TEXT,
+                        container_name TEXT
+                    )
+                    """);
+                Exec(seed, "INSERT INTO files (id, path, lang) VALUES (1, 'src/LegacyGraph.cs', 'csharp')");
+                Exec(seed, """
+                    INSERT INTO symbol_references (
+                        id,
+                        file_id,
+                        symbol_name,
+                        reference_kind,
+                        line,
+                        column_number,
+                        context,
+                        container_kind,
+                        container_name
+                    )
+                    VALUES (
+                        1,
+                        1,
+                        'GetString',
+                        'call',
+                        1,
+                        28,
+                        'void Run() { json.GetString(); }',
+                        'function',
+                        'Run'
+                    )
+                    """);
+            }
+
+            SqliteConnection.ClearAllPools();
+            var fileUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
+            using var db = new DbContext(DbOpenIntent.QueryOnly, fileUri);
+            Assert.True(db.IsReadOnly);
+            db.TryMigrateForRead();
+
+            var reader = new DbReader(db);
+            var reference = Assert.Single(
+                reader.SearchReferences("GetString", lang: "csharp", exact: true));
+            Assert.Equal("Run", reference.ContainerName);
+            var caller = Assert.Single(
+                reader.GetCallers("GetString", lang: "csharp", exact: true));
+            Assert.Equal("Run", caller.CallerName);
+            var callee = Assert.Single(
+                reader.GetCallees("Run", lang: "csharp", exact: true));
+            Assert.Equal("GetString", callee.CalleeName);
+        }
+        finally
+        {
+            DeleteDirectoryAfterClearingPools(dir);
+        }
+    }
+
+    [Fact]
     public void ReadOnlyFallbackDiagnostics_AddsStaleWalRiskToQueryPayload()
     {
         using var db = new DbContext(DbOpenIntent.WriteIndex, _dbPath);

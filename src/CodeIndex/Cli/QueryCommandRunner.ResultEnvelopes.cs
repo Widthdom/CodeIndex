@@ -284,6 +284,8 @@ public static partial class QueryCommandRunner
         }
         if (options.RawKinds)
             query["raw_kinds"] = true;
+        if (options.IncludeQualifiedCommonCalls)
+            query["include_qualified_common_calls"] = true;
         if (options.DependencyCycles)
         {
             query["cycles"] = true;

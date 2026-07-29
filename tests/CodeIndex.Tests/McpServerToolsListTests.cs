@@ -38,6 +38,22 @@ public partial class McpServerTests
     }
 
     [Fact]
+    public void ToolsList_QualifiedCommonCallCompletenessOption_IsScopedToGraphTools_Issue4867()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
+        var response = _server.HandleMessage(request)!;
+        var tools = response["result"]!["tools"]!.AsArray();
+
+        foreach (var toolName in new[] { "references", "callers", "callees" })
+        {
+            var tool = tools.First(candidate => candidate!["name"]!.GetValue<string>() == toolName)!;
+            var option = tool["inputSchema"]!["properties"]!["includeQualifiedCommonCalls"]!;
+            Assert.Equal("boolean", option["type"]!.GetValue<string>());
+            Assert.False(option["default"]!.GetValue<bool>());
+        }
+    }
+
+    [Fact]
     public void ToolsList_EachToolPublishesSchemaAndExampleContract()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;

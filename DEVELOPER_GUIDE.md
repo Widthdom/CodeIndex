@@ -1119,6 +1119,15 @@ unqualified name receive a global candidate only when that name is unique in the
 symbol set. Otherwise they remain `ambiguous` or `unresolved`, and dependency queries do not
 fall back to a same-name edge.
 
+C# common member names are never discarded during extraction. The writer persists their
+receiver/type evidence in `target_qualifier`, and reference finalization records
+`resolution_state`. Default bare-name `references` / `callers` / `callees` queries and hotspot
+aggregation suppress only rows that are both qualified and unresolved; `resolved` and
+`resolved_group` rows remain authoritative by default. The CLI
+`--include-qualified-common-calls` flag and MCP `includeQualifiedCommonCalls` argument bypass
+that query-time noise filter. Keep dependency edges identity-scoped: the completeness option
+must expose unresolved evidence without converting it into a same-name file dependency.
+
 C# `type_reference` candidates are filtered before qualifier and namespace ranking. A candidate
 must be a type-like symbol (`class`, `struct`, `record`, `interface`, `enum`, or `delegate`), and
 when the reference's generic arity can be recovered from its normalized line context, that arity
@@ -4407,6 +4416,14 @@ identity-aware read は、`codeindex_meta` の `reference_identity_contract_vers
 resolution を再構築し、同じ transaction で marker を設定します。C# の無修飾名 reference は、
 対象となる symbol 集合で名前が一意の場合だけ global candidate を持ちます。それ以外は
 `ambiguous` または `unresolved` のままとし、dependency query は同名 edge へ fallback しません。
+
+C# の一般的な member 名は extraction 時に破棄しません。writer は receiver / 型の evidence を
+`target_qualifier` に永続化し、reference finalization は `resolution_state` を記録します。無修飾名の
+`references` / `callers` / `callees` query と hotspot 集計の既定動作では、修飾され、かつ未解決の
+row だけを除外し、`resolved` / `resolved_group` row は authoritative な既定結果として維持します。
+CLI の `--include-qualified-common-calls` と MCP の `includeQualifiedCommonCalls` は、この query-time
+noise filter を無効化します。dependency edge は identity scope のままにし、completeness option で
+未解決 evidence を公開しても、同名の file dependency へ変換してはいけません。
 
 C# の `type_reference` candidate は qualifier / namespace の順位付け前に絞り込みます。candidate は
 型相当の symbol（`class`、`struct`、`record`、`interface`、`enum`、`delegate`）でなければならず、

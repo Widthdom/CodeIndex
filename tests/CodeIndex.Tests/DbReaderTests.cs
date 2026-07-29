@@ -880,6 +880,7 @@ public partial class DbReaderTests : IDisposable
                 0,
                 true,
                 false,
+                false,
             ]));
     }
 
@@ -3127,10 +3128,18 @@ public partial class DbReaderTests : IDisposable
     }
 
     [Fact]
-    public void GraphQueries_CsharpBareMemberCallersSkipReceiverQualifiedCalls()
+    public void GraphQueries_CsharpQualifiedCommonCalls_UseResolutionAwareDefaultsAndCompletenessOptIn_Issue4867()
     {
+        InsertIndexedFile("src/common_member_graph_target.cs", "csharp",
+            """
+            public class LocalApi
+            {
+                public string GetString() => "";
+            }
+            """);
         InsertIndexedFile("src/common_member_graph_fixture.cs", "csharp",
             """
+            using System;
             using System.Text.Json;
 
             public class Caller
@@ -3141,25 +3150,224 @@ public partial class DbReaderTests : IDisposable
                 {
                     api.GetString();
                     json.GetString();
-                    GetString();
+                    this.GetString();
                 }
-            }
 
-            public class LocalApi
-            {
-                public string GetString() => "";
+                public void Noise(JsonElement? json) => json?.GetString();
+                public void Complex(JsonElement json) => (json).GetString();
+
+                public int Parse(string value)
+                {
+                    if (value.Length <= 1)
+                        return int.Parse(value);
+                    return Parse(value[1..]);
+                }
+
+                public int Parse(ReadOnlySpan<char> value) => int.Parse(value);
             }
             """);
 
-        var callers = _reader.GetCallers("GetString", lang: "csharp", exact: true, pathPatterns: ["src/*common_member_graph_fixture*"]);
+        var defaultReferences = _reader.SearchReferences(
+            "GetString",
+            lang: "csharp",
+            pathPatterns: ["src/*common_member_graph_fixture*"]);
+        var completeReferences = _reader.SearchReferences(
+            "GetString",
+            lang: "csharp",
+            pathPatterns: ["src/*common_member_graph_fixture*"],
+            includeQualifiedCommonCalls: true);
+
+        Assert.Equal(2, defaultReferences.Count);
+        Assert.Equal(5, completeReferences.Count);
+        Assert.Equal(
+            2,
+            _reader.SearchReferences(
+                "GetStr",
+                lang: "csharp",
+                pathPatterns: ["src/*common_member_graph_fixture*"]).Count);
+        Assert.Equal(
+            5,
+            _reader.SearchReferences(
+                "GetStr",
+                lang: "csharp",
+                pathPatterns: ["src/*common_member_graph_fixture*"],
+                includeQualifiedCommonCalls: true).Count);
+        Assert.Equal(
+            2,
+            _reader.CountSearchReferences(
+                "GetString",
+                lang: "csharp",
+                exact: true,
+                pathPatterns: ["src/*common_member_graph_fixture*"]));
+        Assert.Equal(
+            5,
+            _reader.CountSearchReferences(
+                "GetString",
+                lang: "csharp",
+                exact: true,
+                pathPatterns: ["src/*common_member_graph_fixture*"],
+                includeQualifiedCommonCalls: true));
+        var caseInsensitiveReferences = _reader.SearchReferences(
+            "getstring",
+            lang: "csharp",
+            exact: true,
+            pathPatterns: ["src/*common_member_graph_fixture*"]);
+        Assert.Equal(2, caseInsensitiveReferences.Count);
+        Assert.DoesNotContain(
+            caseInsensitiveReferences,
+            reference => reference.Context.Contains("json", StringComparison.Ordinal)
+                && reference.Context.Contains("GetString", StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            defaultReferences,
+            reference => reference.Context.Contains("json", StringComparison.Ordinal)
+                && reference.Context.Contains("GetString", StringComparison.Ordinal));
+        var unresolvedReceiverCalls = completeReferences
+            .Where(reference => reference.Context.Contains("json", StringComparison.Ordinal)
+                && reference.Context.Contains("GetString", StringComparison.Ordinal))
+            .ToList();
+        Assert.Equal(3, unresolvedReceiverCalls.Count);
+        Assert.All(
+            unresolvedReceiverCalls,
+            reference => Assert.Equal("unresolved", reference.ResolutionState));
+        Assert.Contains(
+            defaultReferences,
+            reference => reference.Context.Contains("api.GetString", StringComparison.Ordinal)
+                && reference.ResolutionState is "resolved" or "resolved_group");
+
+        var qualifiedParse = _reader.SearchReferences(
+            "int.Parse",
+            lang: "csharp",
+            exact: true,
+            pathPatterns: ["src/*common_member_graph_fixture*"]);
+        Assert.Single(qualifiedParse);
+        Assert.All(qualifiedParse, reference =>
+        {
+            Assert.Equal("Parse", reference.SymbolName);
+            Assert.Equal("Parse", reference.ContainerName);
+        });
+        var defaultParse = Assert.Single(_reader.SearchReferences(
+            "Parse",
+            lang: "csharp",
+            exact: true,
+            pathPatterns: ["src/*common_member_graph_fixture*"]));
+        Assert.Contains("return Parse(", defaultParse.Context, StringComparison.Ordinal);
+        Assert.Equal(3, _reader.SearchReferences(
+            "Parse",
+            lang: "csharp",
+            exact: true,
+            pathPatterns: ["src/*common_member_graph_fixture*"],
+            includeQualifiedCommonCalls: true).Count);
+
+        var callers = _reader.GetCallers(
+            "GetString",
+            lang: "csharp",
+            exact: true,
+            pathPatterns: ["src/*common_member_graph_fixture*"]);
+        var completeCallers = _reader.GetCallers(
+            "GetString",
+            lang: "csharp",
+            exact: true,
+            pathPatterns: ["src/*common_member_graph_fixture*"],
+            includeQualifiedCommonCalls: true);
+        var partialCallers = _reader.GetCallers(
+            "GetStr",
+            lang: "csharp",
+            pathPatterns: ["src/*common_member_graph_fixture*"]);
+        var completePartialCallers = _reader.GetCallers(
+            "GetStr",
+            lang: "csharp",
+            pathPatterns: ["src/*common_member_graph_fixture*"],
+            includeQualifiedCommonCalls: true);
 
         var caller = Assert.Single(callers);
         Assert.Equal("Run", caller.CallerName);
-        Assert.Equal(1, caller.ReferenceCount);
+        Assert.Equal(2, caller.ReferenceCount);
+        Assert.Equal(2, Assert.Single(partialCallers).ReferenceCount);
+        Assert.Equal(3, Assert.Single(completePartialCallers, result => result.CallerName == "Run").ReferenceCount);
+        Assert.Equal(1, Assert.Single(completePartialCallers, result => result.CallerName == "Noise").ReferenceCount);
+        Assert.Equal(1, Assert.Single(completePartialCallers, result => result.CallerName == "Complex").ReferenceCount);
+        Assert.Equal(3, Assert.Single(completeCallers, result => result.CallerName == "Run").ReferenceCount);
+        Assert.Equal(1, Assert.Single(completeCallers, result => result.CallerName == "Noise").ReferenceCount);
+        Assert.Equal(1, Assert.Single(completeCallers, result => result.CallerName == "Complex").ReferenceCount);
         Assert.Equal(1, _reader.CountCallers("GetString", lang: "csharp", exact: true, pathPatterns: ["src/*common_member_graph_fixture*"]));
+        Assert.Equal(
+            3,
+            _reader.CountCallers(
+                "GetString",
+                lang: "csharp",
+                exact: true,
+                pathPatterns: ["src/*common_member_graph_fixture*"],
+                includeQualifiedCommonCalls: true));
         var total = _reader.CountCallersTotal("GetString", lang: "csharp", exact: true, pathPatterns: ["src/*common_member_graph_fixture*"]);
         Assert.Equal(1, total.Count);
         Assert.Equal(1, total.FileCount);
+
+        var defaultCallee = Assert.Single(
+            _reader.GetCallees("Run", lang: "csharp", exact: true, pathPatterns: ["src/*common_member_graph_fixture*"]),
+            callee => callee.CalleeName == "GetString");
+        var completeCallee = Assert.Single(
+            _reader.GetCallees(
+                "Run",
+                lang: "csharp",
+                exact: true,
+                pathPatterns: ["src/*common_member_graph_fixture*"],
+                includeQualifiedCommonCalls: true),
+            callee => callee.CalleeName == "GetString");
+        Assert.Equal(2, defaultCallee.ReferenceCount);
+        Assert.Equal(3, completeCallee.ReferenceCount);
+        Assert.Empty(_reader.GetCallees(
+            "Noise",
+            lang: "csharp",
+            exact: true,
+            pathPatterns: ["src/*common_member_graph_fixture*"]));
+        Assert.Single(_reader.GetCallees(
+            "Noise",
+            lang: "csharp",
+            exact: true,
+            pathPatterns: ["src/*common_member_graph_fixture*"],
+            includeQualifiedCommonCalls: true));
+        Assert.Empty(_reader.GetCallees(
+            "Complex",
+            lang: "csharp",
+            exact: true,
+            pathPatterns: ["src/*common_member_graph_fixture*"]));
+        Assert.Single(_reader.GetCallees(
+            "Complex",
+            lang: "csharp",
+            exact: true,
+            pathPatterns: ["src/*common_member_graph_fixture*"],
+            includeQualifiedCommonCalls: true));
+        var defaultParseCallee = Assert.Single(
+            _reader.GetCallees("Parse", lang: "csharp", exact: true, pathPatterns: ["src/*common_member_graph_fixture*"]));
+        var completeParseCallee = Assert.Single(_reader.GetCallees(
+            "Parse",
+            lang: "csharp",
+            exact: true,
+            pathPatterns: ["src/*common_member_graph_fixture*"],
+            includeQualifiedCommonCalls: true));
+        Assert.Equal(1, defaultParseCallee.ReferenceCount);
+        Assert.Equal(3, completeParseCallee.ReferenceCount);
+
+        var dependency = Assert.Single(_reader.GetFileDependencies(
+            limit: 10,
+            lang: "csharp",
+            pathPatterns: ["src/*common_member_graph_fixture*"],
+            excludePathPatterns: null,
+            excludeTests: false));
+        Assert.Equal("src/common_member_graph_fixture.cs", dependency.SourcePath);
+        Assert.Equal("src/common_member_graph_target.cs", dependency.TargetPath);
+        Assert.Equal(2, dependency.ReferenceCount);
+
+        var hotspot = Assert.Single(
+            _reader.GetSymbolHotspots(
+                10,
+                "function",
+                "csharp",
+                ["src/*common_member_graph_fixture*"],
+                null,
+                false),
+            result => result.Symbol.Name == "GetString");
+        Assert.Equal(2, hotspot.ReferenceCount);
     }
 
 

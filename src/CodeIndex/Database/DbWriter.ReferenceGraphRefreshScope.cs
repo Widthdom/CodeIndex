@@ -671,6 +671,31 @@ public partial class DbWriter
             System.Globalization.CultureInfo.InvariantCulture));
     }
 
+    private HashSet<long> GetReferenceGraphRefreshFileIds(
+        bool useFullRefresh,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        using var command = _conn.CreateCommand();
+        command.Transaction = _activeTransaction;
+        command.CommandText = useFullRefresh
+            ? "SELECT DISTINCT file_id FROM symbol_references"
+            : $"""
+               SELECT DISTINCT reference.file_id
+               FROM temp.{ReferenceGraphDirtyReferencesTable} AS dirty
+               JOIN symbol_references AS reference ON reference.id = dirty.reference_id
+               """;
+        using var cancellationRegistration = RegisterSqliteInterrupt(cancellationToken);
+        var fileIds = new HashSet<long>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            fileIds.Add(reader.GetInt64(0));
+        }
+        return fileIds;
+    }
+
     private void ExecuteReferenceGraphScopeSql(string sql, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
