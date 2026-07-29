@@ -145,6 +145,19 @@ public class HookCommandRunnerTests
             }
             Assert.Equal([0xff, 0xfe], File.ReadAllBytes(hookPath)[..2]);
 
+            var encodedHookBytes = File.ReadAllBytes(hookPath);
+            var encodingUninstallPreview = RunHooksAndCaptureStreams(
+                ["uninstall", "--project", projectRoot, "--dry-run", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, encodingUninstallPreview.ExitCode);
+            using (var document = JsonDocument.Parse(encodingUninstallPreview.StdOut))
+            {
+                Assert.Equal("dry_run", document.RootElement.GetProperty("status").GetString());
+                Assert.Equal("managed", document.RootElement.GetProperty("hook_state").GetString());
+                Assert.Equal("delete_managed", document.RootElement.GetProperty("planned_action").GetString());
+            }
+            Assert.Equal(encodedHookBytes, File.ReadAllBytes(hookPath));
+
             var encodingRepair = RunHooksAndCaptureStreams(
                 ["install", "--project", projectRoot, "--json"]);
 
@@ -374,11 +387,32 @@ public class HookCommandRunnerTests
                 CommandExitCodes.Success,
                 RunHooksAndCaptureStreams(["install", "--project", projectRoot]).ExitCode);
             var managedHook = File.ReadAllText(hookPath);
-            var managedBlockWithSurroundingContent = managedHook
-                .Replace("#!/bin/sh\n", "#!/bin/sh\necho before\n", StringComparison.Ordinal)
-                + "\necho after\n";
-            File.WriteAllText(hookPath, managedBlockWithSurroundingContent);
-            var expectedRemainingContent = "#!/bin/sh\necho before\necho after\n";
+            var managedBody = managedHook["#!/bin/sh\n".Length..];
+            byte[] customPrefix =
+            [
+                .. Encoding.ASCII.GetBytes("#!/bin/sh\necho caf"),
+                0xe9,
+                (byte)'\n',
+            ];
+            byte[] managedBlockWithSurroundingContent =
+            [
+                .. customPrefix,
+                .. Encoding.UTF8.GetBytes(managedBody),
+                (byte)'\n',
+                .. Encoding.ASCII.GetBytes("echo after\n"),
+            ];
+            byte[] expectedRemainingContent =
+            [
+                .. customPrefix,
+                .. Encoding.ASCII.GetBytes("echo after\n"),
+            ];
+            File.WriteAllBytes(hookPath, managedBlockWithSurroundingContent);
+            if (!OperatingSystem.IsWindows())
+            {
+                File.SetUnixFileMode(
+                    hookPath,
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            }
             var managedWriteTime = File.GetLastWriteTimeUtc(hookPath);
             UnixFileMode? managedMode = null;
             if (!OperatingSystem.IsWindows())
@@ -402,7 +436,7 @@ public class HookCommandRunnerTests
                     change.GetProperty("before_sha256").GetString(),
                     change.GetProperty("after_sha256").GetString());
             }
-            Assert.Equal(managedBlockWithSurroundingContent, File.ReadAllText(hookPath));
+            Assert.Equal(managedBlockWithSurroundingContent, File.ReadAllBytes(hookPath));
             Assert.Equal(managedWriteTime, File.GetLastWriteTimeUtc(hookPath));
             if (!OperatingSystem.IsWindows())
                 Assert.Equal(managedMode!.Value, File.GetUnixFileMode(hookPath));
@@ -410,7 +444,42 @@ public class HookCommandRunnerTests
             Assert.Equal(
                 CommandExitCodes.Success,
                 RunHooksAndCaptureStreams(["uninstall", "--project", projectRoot, "--json"]).ExitCode);
-            Assert.Equal(expectedRemainingContent, File.ReadAllText(hookPath));
+            Assert.Equal(expectedRemainingContent, File.ReadAllBytes(hookPath));
+            if (!OperatingSystem.IsWindows())
+                Assert.Equal(managedMode!.Value, File.GetUnixFileMode(hookPath));
+
+            var carriageReturnManagedHook = Encoding.UTF8.GetBytes(
+                managedHook.Replace("\n", "\r", StringComparison.Ordinal));
+            File.WriteAllBytes(hookPath, carriageReturnManagedHook);
+            if (!OperatingSystem.IsWindows())
+            {
+                File.SetUnixFileMode(
+                    hookPath,
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            }
+
+            var carriageReturnInstallPreview = RunHooksAndCaptureStreams(
+                ["install", "--project", projectRoot, "--dry-run", "--json"]);
+            var carriageReturnUninstallPreview = RunHooksAndCaptureStreams(
+                ["uninstall", "--project", projectRoot, "--dry-run", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, carriageReturnInstallPreview.ExitCode);
+            using (var document = JsonDocument.Parse(carriageReturnInstallPreview.StdOut))
+            {
+                Assert.Equal("managed", document.RootElement.GetProperty("hook_state").GetString());
+                Assert.Equal("replace_managed", document.RootElement.GetProperty("planned_action").GetString());
+            }
+            Assert.Equal(CommandExitCodes.Success, carriageReturnUninstallPreview.ExitCode);
+            using (var document = JsonDocument.Parse(carriageReturnUninstallPreview.StdOut))
+            {
+                Assert.Equal("managed", document.RootElement.GetProperty("hook_state").GetString());
+                Assert.Equal("delete_managed", document.RootElement.GetProperty("planned_action").GetString());
+            }
+            Assert.Equal(carriageReturnManagedHook, File.ReadAllBytes(hookPath));
+            Assert.Equal(
+                CommandExitCodes.Success,
+                RunHooksAndCaptureStreams(["uninstall", "--project", projectRoot]).ExitCode);
+            Assert.False(File.Exists(hookPath));
 
             const string unmanagedHook = "#!/bin/sh\necho unmanaged\n";
             File.WriteAllText(hookPath, unmanagedHook);

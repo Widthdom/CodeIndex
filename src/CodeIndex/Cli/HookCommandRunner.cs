@@ -15,6 +15,9 @@ public static class HookCommandRunner
     private const string ChainedHookName = "pre-commit.cdidx-chain";
     private const string BeginMarker = "# BEGIN CDIDX MANAGED PRE-COMMIT";
     private const string EndMarker = "# END CDIDX MANAGED PRE-COMMIT";
+    private static readonly byte[] BeginMarkerBytes = Encoding.ASCII.GetBytes(BeginMarker);
+    private static readonly byte[] EndMarkerBytes = Encoding.ASCII.GetBytes(EndMarker);
+    private static readonly byte[] HookPreambleBytes = Encoding.ASCII.GetBytes("#!/bin/sh");
     internal const int MaxHookMarkerBytes = 64 * 1024;
     internal static Action<string>? DeleteFileForTesting { get; set; }
     internal static Action<string, string, string?>? ReplaceFileForTesting { get; set; }
@@ -284,7 +287,7 @@ public static class HookCommandRunner
                 ]);
         }
 
-        var existingHook = ReadHookFileWithinLimit(ioHookPath);
+        var existingHook = ReadHookBytesWithinLimit(ioHookPath);
         var analysis = AnalyzeManagedHook(existingHook);
         var existingHash = ComputeFileSha256(ioHookPath);
         var executable = IsExecutableHook(ioHookPath);
@@ -438,11 +441,13 @@ public static class HookCommandRunner
         }
         else if (plan.PlannedAction == "remove_managed_block")
         {
-            AtomicFileWriter.WriteText(
+            Action<string>? applyFileMode = null;
+            if (plan.ResultingHookMode is { } resultingHookMode)
+                applyFileMode = path => ApplyUnixFileMode(path, resultingHookMode);
+            AtomicFileWriter.Write(
                 hookPath,
-                plan.ResultingHookContent!,
-                new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
-                MakeExecutable);
+                stream => stream.Write(plan.ResultingHookBytes!),
+                applyFileMode);
         }
         else
         {
@@ -466,10 +471,13 @@ public static class HookCommandRunner
         if (!File.Exists(ioHookPath))
             return HookOperationPlan.Absent with { ChainedHookState = chainedHookState };
 
-        var hookContent = ReadHookFileWithinLimit(ioHookPath);
+        var hookContent = ReadHookBytesWithinLimit(ioHookPath);
         var analysis = AnalyzeManagedHook(hookContent);
         var hookHash = ComputeFileSha256(ioHookPath);
         var hookExecutable = IsExecutableHook(ioHookPath);
+        UnixFileMode? hookMode = null;
+        if (!OperatingSystem.IsWindows())
+            hookMode = File.GetUnixFileMode(ioHookPath);
         if (analysis.State != "managed" && !options.Force)
         {
             var message = analysis.State == "conflicted"
@@ -516,8 +524,8 @@ public static class HookCommandRunner
         }
 
         if (analysis.State == "managed"
-            && analysis.ContentWithoutManagedBlock is { } remainingContent
-            && !IsOnlyManagedHookPreamble(remainingContent))
+            && analysis.BytesWithoutManagedBlock is { } remainingBytes
+            && !analysis.BytesWithoutManagedBlockArePreamble)
         {
             return new HookOperationPlan(
                 "remove_managed_block",
@@ -531,11 +539,12 @@ public static class HookCommandRunner
                         "existing_hook_without_cdidx_managed_block",
                         hookPath,
                         hookHash,
-                        ComputeContentSha256(remainingContent),
+                        ComputeBytesSha256(remainingBytes),
                         hookExecutable,
-                        true),
+                        hookExecutable),
                 ],
-                ResultingHookContent: remainingContent);
+                ResultingHookBytes: remainingBytes,
+                ResultingHookMode: hookMode);
         }
 
         var plannedAction = options.Force && analysis.State != "managed"
@@ -576,76 +585,319 @@ public static class HookCommandRunner
         return WriteResult(options.Json, jsonOptions, "error", $"unknown hooks command: {ConsoleUi.FormatBoundedValue(options.Command)}", projectPath, null, null, CommandExitCodes.UsageError);
     }
 
-    private static bool IsManagedHook(string content)
-        => AnalyzeManagedHook(content).State == "managed";
-
     private static bool IsManagedHookFile(string ioHookPath)
     {
-        var content = ReadHookFileWithinLimit(ioHookPath);
-        return content is not null && IsManagedHook(content);
+        var content = ReadHookBytesWithinLimit(ioHookPath);
+        return AnalyzeManagedHook(content).State == "managed";
     }
 
-    private static string? ReadHookFileWithinLimit(string ioHookPath)
-        => DataDirectorySecurity.ReadTextWithinLimit(ioHookPath, MaxHookMarkerBytes, FileShare.ReadWrite);
+    private static byte[]? ReadHookBytesWithinLimit(string ioHookPath)
+        => DataDirectorySecurity.ReadBytesWithinLimit(ioHookPath, MaxHookMarkerBytes, FileShare.ReadWrite);
 
-    private static ManagedHookAnalysis AnalyzeManagedHook(string? content)
+    private static ManagedHookAnalysis AnalyzeManagedHook(byte[]? content)
     {
         if (content is null)
-            return new ManagedHookAnalysis("unmanaged", null);
+            return new ManagedHookAnalysis("unmanaged", null, false);
 
-        var beginCount = CountOccurrences(content, BeginMarker);
-        var endCount = CountOccurrences(content, EndMarker);
-        if (beginCount == 0 && endCount == 0)
-            return new ManagedHookAnalysis("unmanaged", null);
-        if (beginCount != 1 || endCount != 1)
-            return new ManagedHookAnalysis("conflicted", null);
-
-        var beginIndex = content.IndexOf(BeginMarker, StringComparison.Ordinal);
-        var endIndex = content.IndexOf(EndMarker, StringComparison.Ordinal);
-        if (endIndex < beginIndex
-            || !IsMarkerOnlyLine(content, beginIndex, BeginMarker)
-            || !IsMarkerOnlyLine(content, endIndex, EndMarker))
+        var rawAnalysis = AnalyzeRawManagedHook(content);
+        if (rawAnalysis.State != "unmanaged"
+            || !TryGetBomEncoding(content, out var encoding, out var bomLength))
         {
-            return new ManagedHookAnalysis("conflicted", null);
+            return rawAnalysis;
         }
 
-        var blockStart = content.LastIndexOf('\n', beginIndex);
-        blockStart = blockStart < 0 ? 0 : blockStart + 1;
-        var blockEnd = content.IndexOf('\n', endIndex + EndMarker.Length);
-        blockEnd = blockEnd < 0 ? content.Length : blockEnd + 1;
+        return AnalyzeBomEncodedManagedHook(content, encoding, bomLength);
+    }
+
+    private static ManagedHookAnalysis AnalyzeRawManagedHook(byte[] content)
+    {
+        var contentSpan = content.AsSpan();
+        var beginCount = CountOccurrences(contentSpan, BeginMarkerBytes);
+        var endCount = CountOccurrences(contentSpan, EndMarkerBytes);
+        if (beginCount == 0 && endCount == 0)
+            return new ManagedHookAnalysis("unmanaged", null, false);
+        if (beginCount != 1 || endCount != 1)
+            return new ManagedHookAnalysis("conflicted", null, false);
+
+        var beginIndex = contentSpan.IndexOf(BeginMarkerBytes);
+        var endIndex = contentSpan.IndexOf(EndMarkerBytes);
+        if (endIndex < beginIndex
+            || !IsMarkerOnlyLine(contentSpan, beginIndex, BeginMarkerBytes)
+            || !IsMarkerOnlyLine(contentSpan, endIndex, EndMarkerBytes))
+        {
+            return new ManagedHookAnalysis("conflicted", null, false);
+        }
+
+        var blockStart = FindLineStart(contentSpan, beginIndex);
+        var blockEnd = FindLineEndIncludingTerminator(
+            contentSpan,
+            endIndex + EndMarkerBytes.Length);
+        var remainingBytes = new byte[content.Length - (blockEnd - blockStart)];
+        contentSpan[..blockStart].CopyTo(remainingBytes);
+        contentSpan[blockEnd..].CopyTo(remainingBytes.AsSpan(blockStart));
         return new ManagedHookAnalysis(
             "managed",
-            content.Remove(blockStart, blockEnd - blockStart));
+            remainingBytes,
+            IsOnlyManagedHookPreamble(remainingBytes));
+    }
+
+    private static ManagedHookAnalysis AnalyzeBomEncodedManagedHook(
+        byte[] content,
+        Encoding encoding,
+        int bomLength)
+    {
+        string text;
+        try
+        {
+            text = encoding.GetString(content, bomLength, content.Length - bomLength);
+        }
+        catch (DecoderFallbackException)
+        {
+            return new ManagedHookAnalysis("unmanaged", null, false);
+        }
+
+        var beginCount = CountOccurrences(text, BeginMarker);
+        var endCount = CountOccurrences(text, EndMarker);
+        if (beginCount == 0 && endCount == 0)
+            return new ManagedHookAnalysis("unmanaged", null, false);
+        if (beginCount != 1 || endCount != 1)
+            return new ManagedHookAnalysis("conflicted", null, false);
+
+        var beginIndex = text.IndexOf(BeginMarker, StringComparison.Ordinal);
+        var endIndex = text.IndexOf(EndMarker, StringComparison.Ordinal);
+        if (endIndex < beginIndex
+            || !IsMarkerOnlyLine(text, beginIndex, BeginMarker)
+            || !IsMarkerOnlyLine(text, endIndex, EndMarker))
+        {
+            return new ManagedHookAnalysis("conflicted", null, false);
+        }
+
+        var blockStart = FindLineStart(text, beginIndex);
+        var blockEnd = FindLineEndIncludingTerminator(
+            text,
+            endIndex + EndMarker.Length);
+        var byteBlockStart = bomLength + encoding.GetByteCount(text.AsSpan(0, blockStart));
+        var byteBlockEnd = bomLength + encoding.GetByteCount(text.AsSpan(0, blockEnd));
+        var remainingBytes = new byte[content.Length - (byteBlockEnd - byteBlockStart)];
+        content.AsSpan(0, byteBlockStart).CopyTo(remainingBytes);
+        content.AsSpan(byteBlockEnd).CopyTo(remainingBytes.AsSpan(byteBlockStart));
+        var remainingText = text.Remove(blockStart, blockEnd - blockStart);
+        return new ManagedHookAnalysis(
+            "managed",
+            remainingBytes,
+            IsOnlyManagedHookPreamble(remainingText));
+    }
+
+    private static bool TryGetBomEncoding(
+        ReadOnlySpan<byte> content,
+        out Encoding encoding,
+        out int bomLength)
+    {
+        if (content.Length >= 4
+            && content[0] == 0xFF
+            && content[1] == 0xFE
+            && content[2] == 0x00
+            && content[3] == 0x00)
+        {
+            encoding = new UTF32Encoding(
+                bigEndian: false,
+                byteOrderMark: false,
+                throwOnInvalidCharacters: true);
+            bomLength = 4;
+            return true;
+        }
+
+        if (content.Length >= 4
+            && content[0] == 0x00
+            && content[1] == 0x00
+            && content[2] == 0xFE
+            && content[3] == 0xFF)
+        {
+            encoding = new UTF32Encoding(
+                bigEndian: true,
+                byteOrderMark: false,
+                throwOnInvalidCharacters: true);
+            bomLength = 4;
+            return true;
+        }
+
+        if (content.Length >= 2
+            && content[0] == 0xFF
+            && content[1] == 0xFE)
+        {
+            encoding = new UnicodeEncoding(
+                bigEndian: false,
+                byteOrderMark: false,
+                throwOnInvalidBytes: true);
+            bomLength = 2;
+            return true;
+        }
+
+        if (content.Length >= 2
+            && content[0] == 0xFE
+            && content[1] == 0xFF)
+        {
+            encoding = new UnicodeEncoding(
+                bigEndian: true,
+                byteOrderMark: false,
+                throwOnInvalidBytes: true);
+            bomLength = 2;
+            return true;
+        }
+
+        encoding = Encoding.UTF8;
+        bomLength = 0;
+        return false;
     }
 
     private static int CountOccurrences(string value, string marker)
     {
         var count = 0;
         var offset = 0;
-        while ((offset = value.IndexOf(marker, offset, StringComparison.Ordinal)) >= 0)
+        while (offset <= value.Length - marker.Length)
         {
+            var index = value.IndexOf(marker, offset, StringComparison.Ordinal);
+            if (index < 0)
+                break;
             count++;
-            offset += marker.Length;
+            offset = index + marker.Length;
         }
 
         return count;
     }
 
-    private static bool IsMarkerOnlyLine(string content, int markerIndex, string marker)
+    private static bool IsMarkerOnlyLine(
+        string content,
+        int markerIndex,
+        string marker)
     {
-        var lineStart = content.LastIndexOf('\n', markerIndex);
-        lineStart = lineStart < 0 ? 0 : lineStart + 1;
-        var lineEnd = content.IndexOf('\n', markerIndex + marker.Length);
-        lineEnd = lineEnd < 0 ? content.Length : lineEnd;
-        return content[lineStart..lineEnd].Trim().Equals(marker, StringComparison.Ordinal);
+        var lineStart = FindLineStart(content, markerIndex);
+        var lineEnd = FindLineEnd(content, markerIndex + marker.Length);
+        return content[lineStart..lineEnd].Trim().Equals(
+            marker,
+            StringComparison.Ordinal);
+    }
+
+    private static int FindLineStart(string content, int offset)
+    {
+        while (offset > 0 && !IsLineTerminator(content[offset - 1]))
+            offset--;
+        return offset;
+    }
+
+    private static int FindLineEnd(string content, int offset)
+    {
+        while (offset < content.Length && !IsLineTerminator(content[offset]))
+            offset++;
+        return offset;
+    }
+
+    private static int FindLineEndIncludingTerminator(string content, int offset)
+    {
+        var lineEnd = FindLineEnd(content, offset);
+        if (lineEnd == content.Length)
+            return lineEnd;
+        if (content[lineEnd] == '\r'
+            && lineEnd + 1 < content.Length
+            && content[lineEnd + 1] == '\n')
+        {
+            return lineEnd + 2;
+        }
+
+        return lineEnd + 1;
+    }
+
+    private static bool IsLineTerminator(char value)
+        => value is '\r' or '\n';
+
+    private static int CountOccurrences(ReadOnlySpan<byte> value, ReadOnlySpan<byte> marker)
+    {
+        var count = 0;
+        var offset = 0;
+        while (offset <= value.Length - marker.Length)
+        {
+            var relativeIndex = value[offset..].IndexOf(marker);
+            if (relativeIndex < 0)
+                break;
+            count++;
+            offset += relativeIndex + marker.Length;
+        }
+
+        return count;
+    }
+
+    private static bool IsMarkerOnlyLine(
+        ReadOnlySpan<byte> content,
+        int markerIndex,
+        ReadOnlySpan<byte> marker)
+    {
+        var lineStart = FindLineStart(content, markerIndex);
+        var lineEnd = FindLineEnd(content, markerIndex + marker.Length);
+        var line = TrimAsciiWhitespace(content[lineStart..lineEnd]);
+        return line.SequenceEqual(marker);
+    }
+
+    private static int FindLineStart(ReadOnlySpan<byte> content, int offset)
+    {
+        while (offset > 0 && !IsLineTerminator(content[offset - 1]))
+            offset--;
+        return offset;
+    }
+
+    private static int FindLineEnd(ReadOnlySpan<byte> content, int offset)
+    {
+        while (offset < content.Length && !IsLineTerminator(content[offset]))
+            offset++;
+        return offset;
+    }
+
+    private static int FindLineEndIncludingTerminator(ReadOnlySpan<byte> content, int offset)
+    {
+        var lineEnd = FindLineEnd(content, offset);
+        if (lineEnd == content.Length)
+            return lineEnd;
+        if (content[lineEnd] == (byte)'\r'
+            && lineEnd + 1 < content.Length
+            && content[lineEnd + 1] == (byte)'\n')
+        {
+            return lineEnd + 2;
+        }
+
+        return lineEnd + 1;
+    }
+
+    private static bool IsLineTerminator(byte value)
+        => value is (byte)'\r' or (byte)'\n';
+
+    private static ReadOnlySpan<byte> TrimAsciiWhitespace(ReadOnlySpan<byte> value)
+    {
+        var start = 0;
+        while (start < value.Length && value[start] <= 0x20)
+            start++;
+        var end = value.Length;
+        while (end > start && value[end - 1] <= 0x20)
+            end--;
+        return value[start..end];
+    }
+
+    private static bool IsOnlyManagedHookPreamble(ReadOnlySpan<byte> content)
+    {
+        var trimmed = TrimAsciiWhitespace(content);
+        return trimmed.IsEmpty || trimmed.SequenceEqual(HookPreambleBytes);
     }
 
     private static bool IsOnlyManagedHookPreamble(string content)
-        => string.IsNullOrWhiteSpace(content)
-            || content.Trim().Equals("#!/bin/sh", StringComparison.Ordinal);
+    {
+        var trimmed = content.Trim();
+        return trimmed.Length == 0
+            || trimmed.Equals("#!/bin/sh", StringComparison.Ordinal);
+    }
 
     private static string ComputeContentSha256(string content)
-        => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(content))).ToLowerInvariant();
+        => ComputeBytesSha256(Encoding.UTF8.GetBytes(content));
+
+    private static string ComputeBytesSha256(ReadOnlySpan<byte> content)
+        => Convert.ToHexString(SHA256.HashData(content)).ToLowerInvariant();
 
     private static string ComputeFileSha256(string ioPath)
     {
@@ -802,6 +1054,12 @@ fi
             UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
             UnixFileMode.GroupRead | UnixFileMode.GroupExecute |
             UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
+    }
+
+    private static void ApplyUnixFileMode(string path, UnixFileMode mode)
+    {
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(path, mode);
     }
 
     private static bool IsExecutableHook(string path)
@@ -1059,7 +1317,8 @@ fi
 
     private sealed record ManagedHookAnalysis(
         string State,
-        string? ContentWithoutManagedBlock);
+        byte[]? BytesWithoutManagedBlock,
+        bool BytesWithoutManagedBlockArePreamble);
 
     private sealed record HookOperationPlan(
         string PlannedAction,
@@ -1069,7 +1328,8 @@ fi
         IReadOnlyList<HookCommandFileChangeJsonResult> PlannedChanges,
         bool Blocked = false,
         int BlockExitCode = CommandExitCodes.Success,
-        string? ResultingHookContent = null)
+        byte[]? ResultingHookBytes = null,
+        UnixFileMode? ResultingHookMode = null)
     {
         public static HookOperationPlan Absent { get; } = new(
             "none",
