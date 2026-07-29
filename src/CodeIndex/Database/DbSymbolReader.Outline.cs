@@ -104,6 +104,7 @@ public partial class DbReader
             SqliteCommandPolicy.AddNullableText(symCmd, "@lang", lang);
 
         var symbols = new List<OutlineSymbol>();
+        var isJsonStructuredData = lang is "json" or "jsonl";
         using (var reader = symCmd.ExecuteTrackedReader())
         {
             while (reader.TrackedRead())
@@ -123,7 +124,10 @@ public partial class DbReader
                     Signature = GetNullableString(reader, 7),
                     ContainerKind = GetNullableString(reader, 8),
                     ContainerName = containerName,
-                    Path = BuildOutlineSymbolPath(containerQualifiedName ?? containerName, name),
+                    Path = BuildOutlineSymbolPath(
+                        containerQualifiedName ?? containerName,
+                        name,
+                        isJsonStructuredData),
                     Visibility = GetNullableString(reader, 11),
                     ReturnType = GetNullableString(reader, 12),
                     ReferenceCount = GetNullableInt32(reader, 13),
@@ -131,7 +135,7 @@ public partial class DbReader
             }
         }
 
-        PopulateOutlineDepths(symbols);
+        PopulateOutlineDepths(symbols, isJsonStructuredData);
         ApplyQueryOutputSignatureLimits(symbols);
         PopulateOutlineDisplayNames(symbols, lang);
 
@@ -172,17 +176,23 @@ public partial class DbReader
             : symbol.Name;
     }
 
-    private static string BuildOutlineSymbolPath(string? containerQualifiedName, string name)
+    private static string BuildOutlineSymbolPath(
+        string? containerQualifiedName,
+        string name,
+        bool allowArrayIndexBoundary)
     {
         if (string.IsNullOrWhiteSpace(containerQualifiedName))
             return name;
 
-        return IsQualifiedOutlineChildPath(containerQualifiedName, name)
+        return IsQualifiedOutlineChildPath(containerQualifiedName, name, allowArrayIndexBoundary)
             ? name
             : $"{containerQualifiedName}.{name}";
     }
 
-    private static bool IsQualifiedOutlineChildPath(string containerPath, string childPath)
+    private static bool IsQualifiedOutlineChildPath(
+        string containerPath,
+        string childPath,
+        bool allowArrayIndexBoundary)
     {
         if (!childPath.StartsWith(containerPath, StringComparison.Ordinal)
             || childPath.Length <= containerPath.Length)
@@ -190,7 +200,8 @@ public partial class DbReader
             return false;
         }
 
-        return childPath[containerPath.Length] is '.' or '[';
+        var boundary = childPath[containerPath.Length];
+        return boundary == '.' || (allowArrayIndexBoundary && boundary == '[');
     }
 
     private static bool IsCallableOutlineSymbol(string kind)
@@ -338,15 +349,27 @@ public partial class DbReader
         return string.Join(" ", parts.Take(parts.Length - 1));
     }
 
-    private static void PopulateOutlineDepths(List<OutlineSymbol> symbols)
+    private static void PopulateOutlineDepths(
+        List<OutlineSymbol> symbols,
+        bool isJsonStructuredData)
     {
         var depthCache = new Dictionary<int, int>();
         var activeStack = new HashSet<int>();
         for (var i = 0; i < symbols.Count; i++)
-            symbols[i].Depth = GetOutlineDepth(symbols, i, depthCache, activeStack);
+            symbols[i].Depth = GetOutlineDepth(
+                symbols,
+                i,
+                depthCache,
+                activeStack,
+                isJsonStructuredData);
     }
 
-    private static int GetOutlineDepth(List<OutlineSymbol> symbols, int index, Dictionary<int, int> depthCache, HashSet<int> activeStack)
+    private static int GetOutlineDepth(
+        List<OutlineSymbol> symbols,
+        int index,
+        Dictionary<int, int> depthCache,
+        HashSet<int> activeStack,
+        bool isJsonStructuredData)
     {
         if (depthCache.TryGetValue(index, out var cachedDepth))
             return cachedDepth;
@@ -358,9 +381,19 @@ public partial class DbReader
         var depth = 0;
         if (!string.IsNullOrEmpty(symbol.ContainerName))
         {
-            var parentIndex = FindOutlineContainerIndex(symbols, index, symbol.ContainerName, symbol.ContainerKind);
+            var parentIndex = FindOutlineContainerIndex(
+                symbols,
+                index,
+                symbol.ContainerName,
+                symbol.ContainerKind,
+                isJsonStructuredData);
             if (parentIndex >= 0)
-                depth = GetOutlineDepth(symbols, parentIndex, depthCache, activeStack) + 1;
+                depth = GetOutlineDepth(
+                    symbols,
+                    parentIndex,
+                    depthCache,
+                    activeStack,
+                    isJsonStructuredData) + 1;
         }
 
         activeStack.Remove(index);
@@ -368,10 +401,15 @@ public partial class DbReader
         return depth;
     }
 
-    private static int FindOutlineContainerIndex(List<OutlineSymbol> symbols, int childIndex, string containerName, string? containerKind)
+    private static int FindOutlineContainerIndex(
+        List<OutlineSymbol> symbols,
+        int childIndex,
+        string containerName,
+        string? containerKind,
+        bool isJsonStructuredData)
     {
         var child = symbols[childIndex];
-        var expectedContainerPath = GetOutlineContainerPath(child);
+        var expectedContainerPath = GetOutlineContainerPath(child, isJsonStructuredData);
         for (var i = childIndex - 1; i >= 0; i--)
         {
             var candidate = symbols[i];
@@ -386,14 +424,16 @@ public partial class DbReader
             }
             if (candidate.Line > child.Line)
                 continue;
-            if (IsOutlineContainerMatch(candidate, child.Line))
+            if (IsOutlineContainerMatch(candidate, child.Line, isJsonStructuredData))
                 return i;
         }
 
         return -1;
     }
 
-    private static string? GetOutlineContainerPath(OutlineSymbol symbol)
+    private static string? GetOutlineContainerPath(
+        OutlineSymbol symbol,
+        bool allowArrayIndexBoundary)
     {
         if (string.IsNullOrWhiteSpace(symbol.Path) || string.IsNullOrWhiteSpace(symbol.Name))
             return null;
@@ -404,19 +444,26 @@ public partial class DbReader
 
         return !string.IsNullOrWhiteSpace(symbol.ContainerName)
             && string.Equals(symbol.Path, symbol.Name, StringComparison.Ordinal)
-            && IsQualifiedOutlineChildPath(symbol.ContainerName, symbol.Name)
+            && IsQualifiedOutlineChildPath(
+                symbol.ContainerName,
+                symbol.Name,
+                allowArrayIndexBoundary)
                 ? symbol.ContainerName
                 : null;
     }
 
-    private static bool IsOutlineContainerMatch(OutlineSymbol candidate, int childLine)
+    private static bool IsOutlineContainerMatch(
+        OutlineSymbol candidate,
+        int childLine,
+        bool isJsonStructuredData)
     {
         if (candidate.StartLine <= childLine && candidate.EndLine >= childLine)
             return true;
 
         // File-scoped namespaces and structured-data containers have no body range, so they
         // do not enclose children by lines even though their exact paths identify the parent.
-        return candidate.Kind is "namespace" or "object" or "array" or "record"
+        return (candidate.Kind == "namespace"
+                || (isJsonStructuredData && candidate.Kind is "object" or "array" or "record"))
             && candidate.BodyStartLine == null
             && candidate.BodyEndLine == null
             && candidate.Line <= childLine;

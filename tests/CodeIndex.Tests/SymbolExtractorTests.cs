@@ -859,21 +859,22 @@ public partial class SymbolExtractorTests
                 [],
                 {}
               ],
+              "literal_keys": { "[0]": true },
               "empty_object": {},
               "empty_array": []
             }
             """;
         const string arrayRoot = """
             [
-              { "name": "first" },
-              1,
+              { "name": "duplicate" },
+              "duplicate",
               [2],
               [],
               {}
             ]
             """;
         const string jsonLines = """
-            {"items":[{"leaf":1}]}
+            {"items":[{"leaf":1}],"[0]":true}
             [{"name":"first"},[]]
             """;
 
@@ -896,8 +897,10 @@ public partial class SymbolExtractorTests
             symbol => AssertStructuredJsonSymbol(symbol, "value", "command_cases[1]", 11, "array", "command_cases"),
             symbol => AssertStructuredJsonSymbol(symbol, "array", "command_cases[2]", 12, "array", "command_cases"),
             symbol => AssertStructuredJsonSymbol(symbol, "object", "command_cases[3]", 13, "array", "command_cases"),
-            symbol => AssertStructuredJsonSymbol(symbol, "object", "empty_object", 15, null, null),
-            symbol => AssertStructuredJsonSymbol(symbol, "array", "empty_array", 16, null, null));
+            symbol => AssertStructuredJsonSymbol(symbol, "object", "literal_keys", 15, null, null),
+            symbol => AssertStructuredJsonSymbol(symbol, "property", "literal_keys.[0]", 15, "object", "literal_keys"),
+            symbol => AssertStructuredJsonSymbol(symbol, "object", "empty_object", 16, null, null),
+            symbol => AssertStructuredJsonSymbol(symbol, "array", "empty_array", 17, null, null));
         Assert.Collection(
             rootSymbols,
             symbol => AssertStructuredJsonSymbol(symbol, "object", "[0]", 2, null, null),
@@ -913,6 +916,7 @@ public partial class SymbolExtractorTests
             symbol => AssertStructuredJsonSymbol(symbol, "array", "[0].items", 1, "record", "[0]"),
             symbol => AssertStructuredJsonSymbol(symbol, "object", "[0].items[0]", 1, "array", "[0].items"),
             symbol => AssertStructuredJsonSymbol(symbol, "property", "[0].items[0].leaf", 1, "object", "[0].items[0]"),
+            symbol => AssertStructuredJsonSymbol(symbol, "property", "[0].[0]", 1, "record", "[0]"),
             symbol => AssertStructuredJsonSymbol(symbol, "record", "[1]", 2, null, null),
             symbol => AssertStructuredJsonSymbol(symbol, "object", "[1][0]", 2, "record", "[1]"),
             symbol => AssertStructuredJsonSymbol(symbol, "property", "[1][0].name", 2, "object", "[1][0]"),
@@ -12884,6 +12888,10 @@ public partial class SymbolExtractorTests
         Assert.True(SymbolExtractor.MakefileContractVersion > SymbolExtractor.DefaultContractVersion);
         Assert.Equal(SymbolExtractor.DependencyLockContractVersion, SymbolExtractor.GetContractVersion("dependency_lock"));
         Assert.True(SymbolExtractor.DependencyLockContractVersion > SymbolExtractor.ExpandedLanguageContractVersion);
+        Assert.Equal(SymbolExtractor.JsonContractVersion, SymbolExtractor.GetContractVersion("json"));
+        Assert.True(SymbolExtractor.JsonContractVersion > SymbolExtractor.ExpandedLanguageContractVersion);
+        Assert.Equal(SymbolExtractor.JsonLinesContractVersion, SymbolExtractor.GetContractVersion("jsonl"));
+        Assert.True(SymbolExtractor.JsonLinesContractVersion > SymbolExtractor.RepositoryMetadataContractVersion);
         Assert.Equal(SymbolExtractor.StyleAndXamlContractVersion, SymbolExtractor.GetContractVersion("sass"));
         Assert.Equal(SymbolExtractor.StyleAndXamlContractVersion, SymbolExtractor.GetContractVersion("stylus"));
         Assert.True(SymbolExtractor.StyleAndXamlContractVersion > SymbolExtractor.DefaultContractVersion);

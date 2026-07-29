@@ -131,7 +131,7 @@ public static partial class SymbolExtractor
 
             traversalNodes++;
             var propertyName = property.Name;
-            var name = CombineStructuredDataPath(parentPath, propertyName);
+            var name = CombineJsonObjectPath(parentPath, propertyName);
             if (name.Length > StructuredDataMaxPathLength)
             {
                 if (propertyLines != null)
@@ -225,7 +225,7 @@ public static partial class SymbolExtractor
             }
 
             traversalNodes++;
-            var itemPath = CombineStructuredDataPath(arrayPath, $"[{index}]");
+            var itemPath = CombineJsonArrayIndexPath(arrayPath, index);
             if (itemPath.Length > StructuredDataMaxPathLength)
             {
                 DrainJsonPropertyLines(item, propertyLines);
@@ -239,7 +239,14 @@ public static partial class SymbolExtractor
                 JsonValueKind.Array => "array",
                 _ => "value",
             };
-            var itemLine = FindJsonElementLine(content, lines, ref lineStarts, item, arrayLine, ref searchOffset);
+            var itemLine = FindJsonElementLine(
+                content,
+                lines,
+                ref lineStarts,
+                item,
+                arrayLine,
+                ref searchOffset,
+                out var itemEndOffset);
             if (!TryAddStructuredDataSymbol(
                     fileId,
                     kind,
@@ -264,6 +271,7 @@ public static partial class SymbolExtractor
 
             if (truncated)
                 return;
+            searchOffset = Math.Max(searchOffset, itemEndOffset);
             index++;
         }
     }
@@ -274,19 +282,24 @@ public static partial class SymbolExtractor
         ref int[]? lineStarts,
         JsonElement element,
         int fallbackLine,
-        ref int searchOffset)
+        ref int searchOffset,
+        out int elementEndOffset)
     {
-        if (lines.Length <= 1)
-            return fallbackLine;
-
         var rawText = element.GetRawText();
         var offset = content.IndexOf(rawText, searchOffset, StringComparison.Ordinal);
         if (offset < 0 && searchOffset > 0)
             offset = content.IndexOf(rawText, StringComparison.Ordinal);
         if (offset < 0)
+        {
+            elementEndOffset = searchOffset;
             return fallbackLine;
+        }
 
         searchOffset = offset + 1;
+        elementEndOffset = offset + rawText.Length;
+        if (lines.Length <= 1)
+            return fallbackLine;
+
         return FindLineNumberForOffset(lineStarts ??= BuildLineStarts(lines), offset);
     }
 
@@ -371,6 +384,7 @@ public static partial class SymbolExtractor
                     recordIndex++;
                     continue;
                 }
+                var rootIsArray = document.RootElement.ValueKind == JsonValueKind.Array;
 
                 if (symbols.Count >= StructuredDataMaxSymbols)
                     return symbols;
@@ -385,7 +399,7 @@ public static partial class SymbolExtractor
                     if (symbols.Count >= StructuredDataMaxSymbols)
                         return symbols;
 
-                    symbol.Name = CombineStructuredDataPath(recordPath, symbol.Name);
+                    symbol.Name = CombineJsonLinesPath(recordPath, symbol.Name, rootIsArray);
                     symbol.Line = lineIndex + 1;
                     symbol.StartLine = lineIndex + 1;
                     symbol.EndLine = lineIndex + 1;
@@ -397,7 +411,7 @@ public static partial class SymbolExtractor
                     }
                     else
                     {
-                        symbol.ContainerName = CombineStructuredDataPath(recordPath, symbol.ContainerName);
+                        symbol.ContainerName = CombineJsonLinesPath(recordPath, symbol.ContainerName, rootIsArray);
                     }
                     symbol.ContainerQualifiedName = symbol.ContainerName;
                     symbols.Add(symbol);
@@ -642,15 +656,18 @@ public static partial class SymbolExtractor
         };
     }
 
-    private static string CombineStructuredDataPath(string? parentPath, string childPath)
-    {
-        if (string.IsNullOrEmpty(parentPath))
-            return childPath;
+    private static string CombineJsonObjectPath(string? parentPath, string propertyName)
+        => string.IsNullOrEmpty(parentPath)
+            ? propertyName
+            : parentPath + "." + propertyName;
 
-        return childPath.Length > 0 && childPath[0] == '['
-            ? parentPath + childPath
-            : parentPath + "." + childPath;
-    }
+    private static string CombineJsonArrayIndexPath(string arrayPath, int index)
+        => $"{arrayPath}[{index}]";
+
+    private static string CombineJsonLinesPath(string recordPath, string symbolPath, bool rootIsArray)
+        => rootIsArray
+            ? recordPath + symbolPath
+            : recordPath + "." + symbolPath;
 
     private static string LimitStructuredDataSignature(string signature) =>
         signature.Length <= StructuredDataMaxSignatureLength

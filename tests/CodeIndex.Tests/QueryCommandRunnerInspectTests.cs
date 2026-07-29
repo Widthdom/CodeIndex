@@ -155,6 +155,39 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunOutline_JavaScriptBracketedPropertyRemainsContainerQualified_Issue4874()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_js_bracket_path_4874");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "web/fixture.js",
+                "javascript",
+                """export const foo = { "foo[bar]": 1, "other": 2 };""");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["web/fixture.js", "--db", dbPath, "--json"],
+                _jsonOptions));
+            using var document = ParseJsonOutput(stdout);
+            var symbols = document.RootElement.GetProperty("symbols").EnumerateArray().ToArray();
+            var bracketedProperty = Assert.Single(
+                symbols,
+                symbol => symbol.GetProperty("name").GetString() == "foo[bar]");
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("foo.foo[bar]", bracketedProperty.GetProperty("path").GetString());
+            Assert.Equal("foo", bracketedProperty.GetProperty("container_name").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunInspect_CompactCandidateBundlesOmitBodiesAndKeepIndependentTruncationCounts()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_inspect_compact_candidate_policy");
