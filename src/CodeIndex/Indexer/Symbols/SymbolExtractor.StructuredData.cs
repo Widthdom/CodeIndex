@@ -33,7 +33,7 @@ public static partial class SymbolExtractor
         @"^(?<indent>[ ]*)(?:-\s*)?(?:""(?<double>(?:[^""]|"""")+)""|'(?<single>(?:[^']|'')+)'|(?<plain>[A-Za-z0-9_.-][A-Za-z0-9_. -]*))\s*:\s*(?<value>.*)$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
-    private readonly record struct YamlPathFrame(int Indent, string Path);
+    private readonly record struct YamlPathFrame(int Indent, string Path, string? SymbolPath);
 
     private static List<SymbolRecord> ExtractJsonSymbols(long fileId, string content, string[] lines)
     {
@@ -417,17 +417,30 @@ public static partial class SymbolExtractor
                 continue;
             }
 
-            if (trimmed.SequenceEqual("-"))
+            var isSequenceItem = trimmed[0] == '-'
+                && (trimmed.Length == 1 || char.IsWhiteSpace(trimmed[1]));
+            if (isSequenceItem)
             {
                 while (stack != null && stack.Count > 0 && indent <= stack[^1].Indent)
                     stack.RemoveAt(stack.Count - 1);
                 var sequenceParent = stack == null || stack.Count == 0 ? null : stack[^1].Path;
+                var sequenceSymbolParent = stack == null || stack.Count == 0 ? null : stack[^1].SymbolPath;
                 var sequenceKey = $"{indent}:{sequenceParent}";
                 sequenceIndexes ??= new Dictionary<string, int>(StringComparer.Ordinal);
                 sequenceIndexes.TryGetValue(sequenceKey, out var sequenceIndex);
                 sequenceIndexes[sequenceKey] = sequenceIndex + 1;
-                (stack ??= []).Add(new YamlPathFrame(indent, $"{sequenceParent}[{sequenceIndex}]"));
-                continue;
+                (stack ??= []).Add(new YamlPathFrame(
+                    indent,
+                    $"{sequenceParent}[{sequenceIndex}]",
+                    sequenceSymbolParent));
+
+                var sequenceValue = trimmed[1..].TrimStart();
+                if (sequenceValue.IsEmpty
+                    || sequenceValue[0] == '#'
+                    || line.IndexOf(':') < 0)
+                {
+                    continue;
+                }
             }
 
             if (line.IndexOf(':') < 0)
@@ -441,20 +454,14 @@ public static partial class SymbolExtractor
             if (key.Length == 0)
                 continue;
 
-            while (stack != null && stack.Count > 0 && indent <= stack[^1].Indent)
-                stack.RemoveAt(stack.Count - 1);
+            if (!isSequenceItem)
+            {
+                while (stack != null && stack.Count > 0 && indent <= stack[^1].Indent)
+                    stack.RemoveAt(stack.Count - 1);
+            }
 
             var parentPath = stack == null || stack.Count == 0 ? null : stack[^1].Path;
-            if (trimmed.StartsWith("- ", StringComparison.Ordinal))
-            {
-                var sequenceKey = $"{indent}:{parentPath}";
-                sequenceIndexes ??= new Dictionary<string, int>(StringComparer.Ordinal);
-                sequenceIndexes.TryGetValue(sequenceKey, out var sequenceIndex);
-                sequenceIndexes[sequenceKey] = sequenceIndex + 1;
-                var itemPath = $"{parentPath}[{sequenceIndex}]";
-                (stack ??= []).Add(new YamlPathFrame(indent, itemPath));
-                parentPath = itemPath;
-            }
+            var symbolParentPath = stack == null || stack.Count == 0 ? null : stack[^1].SymbolPath;
             var pathLength = string.IsNullOrEmpty(parentPath)
                 ? key.Length
                 : parentPath.Length + 1 + key.Length;
@@ -474,10 +481,11 @@ public static partial class SymbolExtractor
                 path,
                 i + 1,
                 lines,
-                parentPath,
+                symbolParentPath,
                 symbols ??= CreateSymbolListForLines(lines.Length),
                 "structured_data_symbol_budget_exceeded",
-                ref truncated))
+                ref truncated,
+                parentPath))
                 break;
 
             if (isBlockScalar)
@@ -486,7 +494,7 @@ public static partial class SymbolExtractor
             }
             else if (isContainer)
             {
-                (stack ??= []).Add(new YamlPathFrame(indent, path));
+                (stack ??= []).Add(new YamlPathFrame(indent, path, path));
             }
         }
 
@@ -502,11 +510,19 @@ public static partial class SymbolExtractor
         string? parentPath,
         List<SymbolRecord> symbols,
         string category,
-        ref bool truncated)
+        ref bool truncated,
+        string? qualifiedParentPath = null)
     {
         if (symbols.Count < StructuredDataMaxSymbols)
         {
-            symbols.Add(CreateStructuredDataSymbol(fileId, kind, name, line, lines, parentPath));
+            symbols.Add(CreateStructuredDataSymbol(
+                fileId,
+                kind,
+                name,
+                line,
+                lines,
+                parentPath,
+                qualifiedParentPath));
             return true;
         }
 
@@ -587,7 +603,8 @@ public static partial class SymbolExtractor
         string name,
         int line,
         string[] lines,
-        string? parentPath)
+        string? parentPath,
+        string? qualifiedParentPath)
     {
         var signatureIndex = Math.Clamp(line - 1, 0, Math.Max(0, lines.Length - 1));
         return new SymbolRecord
@@ -601,7 +618,7 @@ public static partial class SymbolExtractor
             Signature = lines.Length == 0 ? null : LimitStructuredDataLineSignature(lines[signatureIndex]),
             ContainerKind = parentPath == null ? null : "namespace",
             ContainerName = parentPath,
-            ContainerQualifiedName = parentPath,
+            ContainerQualifiedName = qualifiedParentPath ?? parentPath,
         };
     }
 
@@ -766,12 +783,27 @@ public static partial class SymbolExtractor
 
     private static bool IsYamlContainerValue(ReadOnlySpan<char> value)
         => value.IsEmpty
+           || IsYamlAnchorDeclaration(value)
            || value.SequenceEqual("|")
            || value.SequenceEqual(">")
            || value.SequenceEqual("|-")
            || value.SequenceEqual(">-")
            || value.SequenceEqual("|+")
            || value.SequenceEqual(">+");
+
+    private static bool IsYamlAnchorDeclaration(ReadOnlySpan<char> value)
+    {
+        if (value.Length < 2 || value[0] != '&')
+            return false;
+
+        for (var i = 1; i < value.Length; i++)
+        {
+            if (char.IsWhiteSpace(value[i]))
+                return false;
+        }
+
+        return true;
+    }
 
     private static ReadOnlySpan<char> StripYamlInlineComment(ReadOnlySpan<char> value)
     {

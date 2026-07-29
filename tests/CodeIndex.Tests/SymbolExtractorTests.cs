@@ -1056,6 +1056,64 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Yaml_SequenceItemsUsePathOnlyIdentityAndNearestSymbolParent_Issue4873()
+    {
+        const string content = """
+            - &first
+              name: Build
+              with:
+                path: |
+                  ignored: value
+            - *first
+            -
+            - null
+            - name: Final
+              nested:
+                value: yes
+            defaults: &defaults
+              retries: 3
+            copy: *defaults
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "yaml", content);
+
+        Assert.Equal(9, symbols.Count);
+        Assert.DoesNotContain(symbols, symbol => symbol.Name is "[0]" or "[1]" or "[2]" or "[3]" or "[4]");
+
+        var firstName = Assert.Single(symbols, symbol => symbol.Name == "[0].name");
+        Assert.Null(firstName.ContainerName);
+        Assert.Equal("[0]", firstName.ContainerQualifiedName);
+
+        var firstWith = Assert.Single(symbols, symbol => symbol.Name == "[0].with");
+        Assert.Equal("namespace", firstWith.Kind);
+        Assert.Null(firstWith.ContainerName);
+        Assert.Equal("[0]", firstWith.ContainerQualifiedName);
+
+        var firstPath = Assert.Single(symbols, symbol => symbol.Name == "[0].with.path");
+        Assert.Equal("[0].with", firstPath.ContainerName);
+        Assert.Equal("[0].with", firstPath.ContainerQualifiedName);
+        Assert.Equal(4, firstPath.Line);
+        Assert.Equal(4, firstPath.StartLine);
+        Assert.Equal(4, firstPath.EndLine);
+
+        var finalName = Assert.Single(symbols, symbol => symbol.Name == "[4].name");
+        Assert.Null(finalName.ContainerName);
+        Assert.Equal("[4]", finalName.ContainerQualifiedName);
+        Assert.Contains(symbols, symbol =>
+            symbol.Name == "[4].nested.value"
+            && symbol.ContainerName == "[4].nested"
+            && symbol.ContainerQualifiedName == "[4].nested");
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "namespace" && symbol.Name == "defaults");
+        Assert.Contains(symbols, symbol =>
+            symbol.Name == "defaults.retries"
+            && symbol.ContainerName == "defaults"
+            && symbol.ContainerQualifiedName == "defaults");
+        Assert.Contains(symbols, symbol => symbol.Kind == "property" && symbol.Name == "copy");
+        Assert.DoesNotContain(symbols, symbol => symbol.Name.Contains("ignored", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Extract_Yaml_CapsBroadMappings_Issue3808()
     {
         var content = string.Join('\n', Enumerable.Range(0, SymbolExtractor.StructuredDataMaxSymbols + 1)
