@@ -33,8 +33,8 @@ public static partial class ReferenceExtractor
         private HashSet<string>? pythonClassNames;
         private bool pythonClassNamesResolved;
         private PythonImportBindingResolver.ImportedTypeCallLookup? pythonImportedTypeCallLookup;
-        private HashSet<(string Container, string Name)>? csharpProperties;
-        private bool csharpPropertiesResolved;
+        private HashSet<(string Container, string Name)>? csharpFieldOrPropertyMembers;
+        private bool csharpFieldOrPropertyMembersResolved;
         private Dictionary<string, List<SymbolRecord>>? csharpContainerCandidatesByName;
         private List<(int StartLine, int StartColumn, int EndLine, int EndColumn, SymbolRecord Container, SymbolRecord Owner)>? recordPrimaryCtorRanges;
         private bool recordPrimaryCtorRangesResolved;
@@ -90,22 +90,22 @@ public static partial class ReferenceExtractor
         internal PythonImportBindingResolver.ImportedTypeCallLookup GetPythonImportedTypeCallLookup()
             => pythonImportedTypeCallLookup ??= PythonImportBindingResolver.BuildImportedTypeCallLookup(symbols);
 
-        internal bool HasCSharpProperty(string containingType, string propertyName)
+        internal bool HasCSharpFieldOrPropertyMember(string containingType, string memberName)
         {
-            if (!csharpPropertiesResolved)
+            if (!csharpFieldOrPropertyMembersResolved)
             {
                 foreach (var symbol in symbols)
                 {
-                    if (symbol.Kind == "property"
+                    if (symbol.Kind is "field" or "property"
                         && symbol.ContainerQualifiedName != null)
                     {
-                        (csharpProperties ??= []).Add((symbol.ContainerQualifiedName, symbol.Name));
+                        (csharpFieldOrPropertyMembers ??= []).Add((symbol.ContainerQualifiedName, symbol.Name));
                     }
                 }
-                csharpPropertiesResolved = true;
+                csharpFieldOrPropertyMembersResolved = true;
             }
 
-            return csharpProperties?.Contains((containingType, propertyName)) == true;
+            return csharpFieldOrPropertyMembers?.Contains((containingType, memberName)) == true;
         }
 
         internal SymbolRecord? FindCSharpContainerCandidate(string? containerName, int lineNumber)

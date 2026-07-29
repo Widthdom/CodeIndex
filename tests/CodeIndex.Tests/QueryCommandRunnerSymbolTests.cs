@@ -3767,28 +3767,28 @@ public partial class QueryCommandRunnerTests
                 """);
 
             var (mapExitCode, mapStdout, _) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
-                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "property", "--name", "_map", "--exact-name"],
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "field", "--name", "_map", "--exact-name"],
                 _jsonOptions));
             using var mapDocument = ParseJsonOutput(mapStdout);
             Assert.Equal(CommandExitCodes.Success, mapExitCode);
             Assert.Equal("_map", mapDocument.RootElement.GetProperty("name").GetString());
 
             var (xExitCode, xStdout, _) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
-                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "property", "--name", "_x", "--exact-name"],
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "field", "--name", "_x", "--exact-name"],
                 _jsonOptions));
             using var xDocument = ParseJsonOutput(xStdout);
             Assert.Equal(CommandExitCodes.Success, xExitCode);
             Assert.Equal("_x", xDocument.RootElement.GetProperty("name").GetString());
 
             var (yExitCode, yStdout, _) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
-                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "property", "--name", "_y", "--exact-name"],
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "field", "--name", "_y", "--exact-name"],
                 _jsonOptions));
             using var yDocument = ParseJsonOutput(yStdout);
             Assert.Equal(CommandExitCodes.Success, yExitCode);
             Assert.Equal("_y", yDocument.RootElement.GetProperty("name").GetString());
 
             var (callbackExitCode, callbackStdout, _) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
-                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "property", "--name", "Callback", "--exact-name"],
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "field", "--name", "Callback", "--exact-name"],
                 _jsonOptions));
             using var callbackDocument = ParseJsonOutput(callbackStdout);
             Assert.Equal(CommandExitCodes.Success, callbackExitCode);
@@ -5752,7 +5752,7 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal("property", x.GetProperty("kind").GetString());
+            Assert.Equal("field", x.GetProperty("kind").GetString());
             Assert.Equal("X", x.GetProperty("name").GetString());
             Assert.Equal("Uses", x.GetProperty("container_name").GetString());
             Assert.Equal("public int X;", x.GetProperty("signature").GetString());

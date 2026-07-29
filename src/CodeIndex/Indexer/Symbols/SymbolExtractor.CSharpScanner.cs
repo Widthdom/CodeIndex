@@ -820,8 +820,9 @@ public static partial class SymbolExtractor
         return -1;
     }
 
-    // For C# plain fields (kind `property`, BodyStyle.None), find the end of the
-    // field's declaration statement on the same (merged) match line so the
+    // For C# plain fields (internally tagged as `property`, BodyStyle.None, and
+    // normalized to public `field`), find the end of the field's declaration
+    // statement on the same (merged) match line so the
     // signature can be clamped to the full declaration text and the same-line
     // pattern scanner can resume after the terminating `;`. Walks with paren /
     // bracket / brace depth tracking so `{` / `}` inside an initializer
@@ -831,8 +832,9 @@ public static partial class SymbolExtractor
     // so signature and advance both stop before the wrapper terminator. Input
     // is expected to be the structurally-masked match line so string-literal
     // `{` / `;` cannot poison the depth tracker.
-    // C# 通常フィールド（kind `property`、BodyStyle.None）向けに、結合済みマッチ行での
-    // 宣言文の終端位置を返す。signature を `;` まで含む完全な宣言文字列に揃え、かつ
+    // C# 通常フィールド（内部タグは `property`、BodyStyle.None、公開時に `field` へ
+    // 正規化）向けに、結合済みマッチ行での宣言文の終端位置を返す。signature を `;`
+    // まで含む完全な宣言文字列に揃え、かつ
     // 同一行のパターンスキャンを `;` の次から再開できるようにするために使う。paren /
     // bracket / brace の深さを追うので、初期化子（コレクション / オブジェクト初期化子や
     // ラムダ本体）内の `{` / `}` で判定が途切れない。深さ 0 で出現する `}`（囲む型本体の
@@ -2853,6 +2855,22 @@ public static partial class SymbolExtractor
         int lastLineIndex,
         int? lastLineExclusiveEndColumn)
     {
+        var sanitized = BuildSanitizedCSharpMultilineSignature(
+            lines,
+            startLineIndex,
+            startColumn,
+            lastLineIndex,
+            lastLineExclusiveEndColumn);
+        return NormalizeCSharpConstraintGenericWhitespace(sanitized);
+    }
+
+    private static string BuildSanitizedCSharpMultilineSignature(
+        string[] lines,
+        int startLineIndex,
+        int startColumn,
+        int lastLineIndex,
+        int? lastLineExclusiveEndColumn)
+    {
         // Assemble the raw slice preserving '\n' between physical lines so multi-line raw
         // and verbatim string literals keep their newlines and leading indentation. The
         // dedicated sanitizer handles lex mode (Code / String / Verbatim / Raw / Char /
@@ -2888,8 +2906,7 @@ public static partial class SymbolExtractor
                 rawSlice.Append(line, from, to - from);
         }
 
-        var sanitized = SanitizeCSharpTypeHeaderSlice(rawSlice.ToString()).Trim();
-        return NormalizeCSharpConstraintGenericWhitespace(sanitized);
+        return SanitizeCSharpMultilineSignatureSlice(rawSlice.ToString()).Trim();
     }
 
     private static string NormalizeCSharpConstraintGenericWhitespace(string signature)
@@ -3000,7 +3017,7 @@ public static partial class SymbolExtractor
         public bool EscapeNext;     // String / Char: true if a preceding backslash awaits its escaped char.
     }
 
-    // Sanitize a C# type header slice: strip `//` line comments and `/* ... */` block
+    // Sanitize a multiline C# declaration slice: strip `//` line comments and `/* ... */` block
     // comments, collapse runs of Code-mode whitespace (including '\n' between lines) to a
     // single space, preserve all String / Verbatim / Raw / Char literal contents verbatim
     // (including literal whitespace runs, line breaks inside raw / verbatim strings, and
@@ -3009,13 +3026,13 @@ public static partial class SymbolExtractor
     // whitespace inside holes is collapsed while literal content outside holes is not.
     // Closes #382.
     //
-    // C# 型ヘッダスライスのサニタイザ: `//` 行コメントと `/* ... */` ブロックコメントを
+    // C# 複数行宣言スライスのサニタイザ: `//` 行コメントと `/* ... */` ブロックコメントを
     // 除去し、Code モードの空白列（行間の `\n` も含む）を 1 つのスペースに畳み、String /
     // Verbatim / Raw / Char リテラルの中身（リテラル内の空白、raw / verbatim の行末改行、
     // エスケープ列）は verbatim に残し、補間ホール（`$"{expr}"`、`$@"{expr}"`、raw
     // `$"""{expr}"""` / `$$"""{{expr}}"""`）内部は Code モードとして分類してホール内の
     // 空白だけを畳み、ホール外のリテラル内容は畳まないようにする。Closes #382.
-    private static string SanitizeCSharpTypeHeaderSlice(string input)
+    private static string SanitizeCSharpMultilineSignatureSlice(string input)
     {
         if (string.IsNullOrEmpty(input))
             return string.Empty;

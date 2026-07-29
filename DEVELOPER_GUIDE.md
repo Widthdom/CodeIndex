@@ -722,7 +722,7 @@ Do not add mutable static caches, shared `StringBuilder` instances, reused `Matc
 | `environment` | Dockerfile `ENV` variable names | Variable/search symbol; participates in Dockerfile variable references |
 | `event` | Event declarations | Search/filter symbol |
 | `expose` | Dockerfile `EXPOSE` ports | Container runtime search symbol |
-| `field` | Field declarations where distinct from properties; C# const and static readonly fields share the tuple-aware type grammar used by ordinary fields | Search/filter symbol |
+| `field` | Field declarations where distinct from properties; C# plain, const, and static readonly fields share the tuple-aware type grammar, and oversized initializer signatures retain declaration metadata while replacing top-level initializer bodies with deterministic markers | Search/filter symbol |
 | `file_module` | File-scoped module/package declarations | Namespace-like context symbol |
 | `function` | Functions, methods, constructors, delegates, tasks, and callable bindings that do not have a narrower kind | Primary callable definition; participates in callers/callees through reference rows |
 | `generator` | JavaScript/TypeScript generator declarations | Callable definition; participates in callers/callees through reference rows |
@@ -4013,7 +4013,7 @@ filter、downstream JSON consumer が同じ値を理解できるようにして�
 | `environment` | Dockerfile `ENV` variable name | variable/search symbol。Dockerfile variable reference に参加 |
 | `event` | event declaration | Search/filter symbol |
 | `expose` | Dockerfile `EXPOSE` port | container runtime search symbol |
-| `field` | property と区別される field declaration。C# の const / static readonly field は通常 field と tuple-aware な型文法を共有する | Search/filter symbol |
+| `field` | property と区別される field declaration。C# の通常 / const / static readonly field は tuple-aware な型文法を共有し、巨大 initializer の signature は declaration metadata を維持しつつ top-level initializer 本体を決定的 marker に置換する | Search/filter symbol |
 | `file_module` | file-scoped module / package declaration | Namespace-like context symbol |
 | `function` | 関数、method、constructor、delegate、task、およびより狭い kind がない callable binding | Primary callable definition。reference row 経由で callers/callees に参加 |
 | `generator` | JavaScript / TypeScript generator declaration | Callable definition。reference row 経由で callers/callees に参加 |

@@ -802,6 +802,7 @@ public partial class DbReader
                                         CASE s.kind
                                             WHEN 'function' THEN 0
                                             WHEN 'test.method' THEN 0
+                                            WHEN 'field' THEN 1
                                             WHEN 'property' THEN 1
                                             WHEN 'class' THEN 2
                                             WHEN 'interface' THEN 2

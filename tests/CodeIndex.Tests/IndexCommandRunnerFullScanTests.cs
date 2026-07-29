@@ -4219,6 +4219,148 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FullScan_ReindexesNormalizedCSharpFieldsWhenExtractorContractChanges_Issue4865()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var entries = string.Join(
+                ",\n",
+                Enumerable.Range(0, 160).Select(index => $"        new Person({index})"));
+            File.WriteAllText(
+                Path.Combine(projectRoot, "app.cs"),
+                $$"""
+                public sealed record Person(int Id);
+
+                public sealed class App
+                {
+                    private static readonly List<Person> BuiltInRecipes =
+                    [
+                {{entries}}
+                    ];
+                }
+                """);
+            File.WriteAllText(Path.Combine(projectRoot, "lib.py"), "def untouched():\n    return 1\n");
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var conn = OpenNonPoolingConnection(dbPath))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = """
+                    UPDATE symbols
+                    SET kind = 'property',
+                        signature = 'private static readonly List<Person> BuiltInRecipes = stale;'
+                    WHERE name = 'BuiltInRecipes';
+                    UPDATE codeindex_meta
+                    SET value = '7'
+                    WHERE key = 'symbol_extractor_version_csharp';
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.True(json.GetProperty("summary").GetProperty("files_skipped").GetInt32() > 0);
+
+            using var verify = OpenNonPoolingConnection(dbPath);
+            verify.Open();
+
+            using var fieldCmd = verify.CreateCommand();
+            fieldCmd.CommandText = "SELECT kind, signature FROM symbols WHERE name = 'BuiltInRecipes'";
+            using (var fieldReader = fieldCmd.ExecuteReader())
+            {
+                Assert.True(fieldReader.Read());
+                Assert.Equal("field", fieldReader.GetString(0));
+                Assert.Equal(
+                    "private static readonly List<Person> BuiltInRecipes = …;",
+                    fieldReader.GetString(1));
+            }
+
+            using var versionCmd = verify.CreateCommand();
+            versionCmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = 'symbol_extractor_version_csharp'";
+            Assert.Equal(
+                SymbolExtractor.CSharpContractVersion.ToString(CultureInfo.InvariantCulture),
+                versionCmd.ExecuteScalar() as string);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_ResolvesInheritedCSharpFieldReceiversAsFields_Issue4865()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "base.cs"),
+                """
+                namespace Demo;
+
+                public enum Status { Ready }
+                public sealed class Holder { public int Ready; }
+
+                public abstract class Base
+                {
+                    protected Holder Status = new();
+                }
+                """);
+            File.WriteAllText(
+                Path.Combine(projectRoot, "derived.cs"),
+                """
+                namespace Demo;
+
+                public sealed class Derived : Base
+                {
+                    public int Read() => Status.Ready;
+                }
+                """);
+
+            var exitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using var verify = OpenNonPoolingConnection(dbPath);
+            verify.Open();
+
+            using var referenceCmd = verify.CreateCommand();
+            referenceCmd.CommandText = """
+                SELECT r.reference_kind,
+                       r.resolution_state,
+                       target.kind,
+                       target.name,
+                       target.container_qualified_name
+                FROM symbol_references AS r
+                JOIN files AS source_file ON source_file.id = r.file_id
+                LEFT JOIN symbols AS target ON target.id = r.target_symbol_id
+                WHERE source_file.path = 'derived.cs'
+                  AND r.symbol_name = 'Status'
+                """;
+            using var referenceReader = referenceCmd.ExecuteReader();
+            Assert.True(referenceReader.Read());
+            Assert.Equal("reference", referenceReader.GetString(0));
+            Assert.Equal("resolved", referenceReader.GetString(1));
+            Assert.Equal("field", referenceReader.GetString(2));
+            Assert.Equal("Status", referenceReader.GetString(3));
+            Assert.Equal("Demo.Base", referenceReader.GetString(4));
+            Assert.False(referenceReader.Read());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_FullScan_RebuildRestampsExtractorVersionForZeroSymbolLanguage()
     {
         var projectRoot = CreateTempProject();
