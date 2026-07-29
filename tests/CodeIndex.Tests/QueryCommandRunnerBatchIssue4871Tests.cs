@@ -284,7 +284,109 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunBatch_ParallelCancellationInterruptsBlockedInputWait_Issue4871()
+    public void RunBatch_CancellationAfterPriorFailureUsesLineEnvelopeAndCancelledSummary_Issue4871()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_batch_cancel_after_failure_4871");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+
+        foreach (var batchArgs in new[]
+                 {
+                     new[] { "--db", dbPath, "--json-summary" },
+                     new[] { "--db", dbPath, "--json-summary", "--parallel", "2" },
+                 })
+        {
+            using var cancellation = new CancellationTokenSource();
+            QueryCommandRunner.BatchInputLineReadForTesting = lineNumber =>
+            {
+                if (lineNumber == 2)
+                    cancellation.Cancel();
+            };
+
+            try
+            {
+                var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
+                    "42\n[1]\n",
+                    () => QueryCommandRunner.RunBatch(
+                        batchArgs,
+                        _jsonOptions,
+                        cancellationToken: cancellation.Token));
+                var lines = ParseJsonLines(stdout);
+                try
+                {
+                    Assert.Equal(CommandExitCodes.CancelledBySignal, exitCode);
+                    Assert.Equal(string.Empty, stderr);
+                    Assert.Equal(3, lines.Count);
+                    Assert.Equal(
+                        "invalid_batch_input_shape",
+                        lines[0].RootElement.GetProperty("error").GetProperty("category").GetString());
+                    Assert.Equal(
+                        "batch_cancelled",
+                        lines[1].RootElement.GetProperty("error").GetProperty("category").GetString());
+                    Assert.Equal(
+                        CommandExitCodes.CancelledBySignal,
+                        lines[2].RootElement.GetProperty("exit_code").GetInt32());
+                    Assert.Equal(
+                        "batch_cancelled",
+                        lines[2].RootElement.GetProperty("error").GetProperty("category").GetString());
+                }
+                finally
+                {
+                    foreach (var document in lines)
+                        document.Dispose();
+                }
+            }
+            finally
+            {
+                QueryCommandRunner.BatchInputLineReadForTesting = null;
+            }
+        }
+    }
+
+    [Fact]
+    public void RunBatch_ParallelCancellationDrainsItemPreparedDuringCancellation_Issue4871()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_batch_cancel_prepared_item_4871");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        using var cancellation = new CancellationTokenSource();
+        QueryCommandRunner.BatchParallelItemPreparedForTesting = _ => cancellation.Cancel();
+
+        try
+        {
+            var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
+                "[\"status\",\"--json\"]\n",
+                () => QueryCommandRunner.RunBatch(
+                    ["--db", dbPath, "--json-summary", "--parallel", "2"],
+                    _jsonOptions,
+                    cancellationToken: cancellation.Token));
+            var lines = ParseJsonLines(stdout);
+            try
+            {
+                Assert.Equal(CommandExitCodes.CancelledBySignal, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                Assert.Equal(2, lines.Count);
+                Assert.Equal(1, lines[0].RootElement.GetProperty("line").GetInt32());
+                Assert.Equal(
+                    "batch_cancelled",
+                    lines[0].RootElement.GetProperty("error").GetProperty("category").GetString());
+                Assert.Equal(
+                    CommandExitCodes.CancelledBySignal,
+                    lines[1].RootElement.GetProperty("exit_code").GetInt32());
+                Assert.Equal(1, lines[1].RootElement.GetProperty("commands_processed").GetInt32());
+            }
+            finally
+            {
+                foreach (var document in lines)
+                    document.Dispose();
+            }
+        }
+        finally
+        {
+            QueryCommandRunner.BatchParallelItemPreparedForTesting = null;
+        }
+    }
+
+    [Fact]
+    public void RunBatch_ParallelCancellationInterruptsBlockedInputAndPreservesNextLine_Issue4871()
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_batch_blocked_input_cancel_4871");
         var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
@@ -322,6 +424,7 @@ public partial class QueryCommandRunnerTests
         });
 
         int exitCode;
+        int nextExitCode;
         try
         {
             exitCode = QueryCommandRunner.RunBatch(
@@ -330,6 +433,10 @@ public partial class QueryCommandRunnerTests
                 cancellationToken: cancellation.Token);
             batchCompleted.Set();
             Assert.True(cancellationTaskCompleted.Wait(TimeSpan.FromSeconds(5)));
+            reader.Release();
+            nextExitCode = QueryCommandRunner.RunBatch(
+                ["--db", dbPath, "--json-summary"],
+                _jsonOptions);
         }
         finally
         {
@@ -341,16 +448,25 @@ public partial class QueryCommandRunnerTests
         Assert.Null(cancellationFailure);
         Assert.Equal(0, Volatile.Read(ref forcedReaderRelease));
         Assert.Equal(CommandExitCodes.CancelledBySignal, exitCode);
+        Assert.Equal(CommandExitCodes.UsageError, nextExitCode);
         Assert.Equal(string.Empty, capture.Error!.ToString());
         var lines = ParseJsonLines(capture.Out!.ToString() ?? string.Empty);
         try
         {
-            var summary = Assert.Single(lines).RootElement;
-            Assert.Equal("batch_summary", summary.GetProperty("record").GetString());
-            Assert.Equal(CommandExitCodes.CancelledBySignal, summary.GetProperty("exit_code").GetInt32());
+            Assert.Equal(3, lines.Count);
+            var cancelledSummary = lines[0].RootElement;
+            Assert.Equal("batch_summary", cancelledSummary.GetProperty("record").GetString());
+            Assert.Equal(
+                CommandExitCodes.CancelledBySignal,
+                cancelledSummary.GetProperty("exit_code").GetInt32());
             Assert.Equal(
                 "batch_cancelled",
-                summary.GetProperty("error").GetProperty("category").GetString());
+                cancelledSummary.GetProperty("error").GetProperty("category").GetString());
+            Assert.Equal("batch_error", lines[1].RootElement.GetProperty("record").GetString());
+            Assert.Equal(
+                "invalid_batch_input_shape",
+                lines[1].RootElement.GetProperty("error").GetProperty("category").GetString());
+            Assert.Equal("batch_summary", lines[2].RootElement.GetProperty("record").GetString());
         }
         finally
         {
@@ -361,14 +477,21 @@ public partial class QueryCommandRunnerTests
 
     private sealed class BlockingBatchReader : TextReader
     {
+        private const string DeferredLine = "42\n";
         private readonly ManualResetEventSlim _entered = new();
         private readonly ManualResetEventSlim _released = new();
+        private int _position;
 
         public override int Read()
         {
-            _entered.Set();
-            _released.Wait();
-            return -1;
+            if (_position == 0)
+            {
+                _entered.Set();
+                _released.Wait();
+            }
+            if (_position >= DeferredLine.Length)
+                return -1;
+            return DeferredLine[_position++];
         }
 
         public bool WaitUntilRead(TimeSpan timeout)
