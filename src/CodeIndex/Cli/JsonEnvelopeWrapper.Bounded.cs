@@ -1071,8 +1071,12 @@ internal static partial class JsonEnvelopeWrapper
     {
         var stripped = StripResponseOptions(args, stripLimit: PageableResponseCommands.Contains(command));
         var bodyRequested = HasExplicitBodyProjection(controls.Fields);
-        if (!bodyRequested && (controls.Compact || controls.Fields is { Count: > 0 }))
+        if (command != "outline"
+            && !bodyRequested
+            && (controls.Compact || controls.Fields is { Count: > 0 }))
+        {
             stripped.RemoveAll(arg => string.Equals(arg, "--body", StringComparison.Ordinal));
+        }
         if (PageableResponseCommands.Contains(command))
         {
             stripped.Add("--limit");

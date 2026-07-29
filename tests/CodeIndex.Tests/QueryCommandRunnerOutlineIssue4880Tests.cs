@@ -228,6 +228,29 @@ public sealed class QueryCommandRunnerOutlineIssue4880Tests
                     StringComparison.Ordinal);
             }
 
+            var (bodyExitCode, bodyStdout, bodyStderr) = ConsoleCapture.Capture(() =>
+                ProgramRunner.Run(
+                    [
+                        "outline", "src/Sample.cs", "--db", dbPath, "--compact",
+                        "--max-json-bytes", PageByteBudget.ToString(),
+                        "--body",
+                    ],
+                    _jsonOptions,
+                    "1.0.0-test"));
+
+            Assert.Equal(CommandExitCodes.UsageError, bodyExitCode);
+            Assert.Equal(string.Empty, bodyStderr);
+            using (var bodyDocument = JsonDocument.Parse(bodyStdout))
+            {
+                Assert.Equal(
+                    "--body is not supported for outline.",
+                    bodyDocument.RootElement
+                        .GetProperty("metadata")
+                        .GetProperty("error")
+                        .GetProperty("message")
+                        .GetString());
+            }
+
             foreach (var invalidSelector in new[] { "--json=nonsense", "--format=nonsense", "--fields=list" })
             {
                 var (cappedExitCode, cappedStdout, cappedStderr) = ConsoleCapture.Capture(() =>
