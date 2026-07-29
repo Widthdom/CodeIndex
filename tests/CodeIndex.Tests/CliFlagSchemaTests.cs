@@ -402,6 +402,8 @@ public class CliFlagSchemaTests
         Assert.Equal(
             ["call_site", "declaration", "identifier", "code", "comment", "string_literal", "regex_literal", "help_text", "schema_description", "unknown"],
             resultKinds);
+        Assert.Equal(["eof"], CliFlagSchema.GetCanonicalValuesForCommand("excerpt", "--end"));
+        Assert.Equal("<line|eof>", CliFlagSchema.GetValuePlaceholderForCommand("excerpt", "--end"));
         Assert.True(CliFlagSchema.TryNormalizeOptionValue("search", "--origin", "schema", out var normalizedOrigin));
         Assert.Equal("schema_description", normalizedOrigin);
         Assert.True(CliFlagSchema.TryNormalizeOptionValue("search", "--origin", "schema-description", out normalizedOrigin));
@@ -429,10 +431,19 @@ public class CliFlagSchemaTests
         var bash = ConsoleCompletionRenderer.GetCompletionScript("bash");
         Assert.Contains("audit) COMPREPLY=($(compgen -W \"text json count compact sarif issue-drafts\"", bash);
         Assert.Contains("--origin) COMPREPLY=($(compgen -W \"code comment string_literal regex_literal help_text schema_description unknown\"", bash);
+        Assert.Contains("--end) COMPREPLY=($(compgen -W \"eof\"", bash);
+        Assert.DoesNotContain("--end) COMPREPLY=($(compgen -W \"line eof\"", bash);
 
         var fish = ConsoleCompletionRenderer.GetCompletionScript("fish");
         Assert.Contains("__fish_seen_subcommand_from audit' -l format -r -a 'text json count compact sarif issue-drafts'", fish);
         Assert.Contains("__fish_seen_subcommand_from search' -l result-kind -r -a 'call_site declaration identifier code comment string_literal regex_literal help_text schema_description unknown'", fish);
+        Assert.Contains("__fish_seen_subcommand_from excerpt' -l end -r -a 'eof'", fish);
+
+        var zsh = ConsoleCompletionRenderer.GetCompletionScript("zsh");
+        Assert.Contains("--end[Excerpt end line; eof reads through the indexed end of file]:value:(eof)", zsh);
+
+        var powershell = ConsoleCompletionRenderer.GetCompletionScript("powershell");
+        Assert.Contains("'--end' = @('eof')", powershell);
     }
 
     [Fact]

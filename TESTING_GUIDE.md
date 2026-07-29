@@ -199,6 +199,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   Argument-validation variants that only differ by invalid scalar input share one database fixture and iterate within a fact when no per-case state or discovery identity is required.
   Positional `files` glob coverage shares one indexed-file fixture and iterates `*`, `?`, and recursive `**` patterns in a fact, matching the exact tokens that a quoted shell argument passes to the CLI.
   Excerpt focus coverage reuses one indexed fixture for line-only leading-window behavior, the focus-length dependency, and focus-column range validation; zero and non-numeric focus-column values share one indexed Markdown fixture.
+  Excerpt range coverage reuses one indexed fixture for requested/effective context bounds, explicit EOF and clamp modes, Unicode content, and terminal-newline variants; strict numeric recovery, empty files, and inline zero/negative coordinates share one invalid-range fixture.
   Inspect path-line exact/enclosing-symbol cases reuse one indexed source fixture and iterate read-only line queries within a fact.
   Definition and symbols exact-mode conflict validation share one empty database and a cross-command flag-pair table.
   Symbols compact flag/alias and summary-only JSON envelopes share one editor-format fixture.
@@ -1127,6 +1128,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   invalid scalar input だけが異なる argument-validation variant は、case ごとの state や discovery identity が不要なら1つの database fixture を共有し、fact 内で反復してください。
   `files` の positional glob coverage は1つの indexed-file fixture を共有し、quote された shell 引数が CLI に渡す token と同じ `*`、`?`、recursive `**` pattern を fact 内で反復してください。
   excerpt の focus coverage は、line-only 時の先頭側 window、focus-length の依存関係、focus-column の範囲検証を1つの indexed fixture で共有してください。focus-column の zero / non-numeric value も1つの indexed Markdown fixture を再利用してください。
+  excerpt の range coverage は、requested / effective context 境界、明示的な EOF / clamp mode、Unicode content、末尾改行の有無を1つの indexed fixture で共有してください。strict numeric recovery、空ファイル、inline の zero / negative 座標は1つの invalid-range fixture を共有してください。
   inspect path-line の exact/enclosing-symbol case は1つの indexed source fixture を再利用し、read-only line query を fact 内で反復してください。
   definition と symbols の exact-mode conflict validation は1つの空databaseとcross-command flag-pair tableを共有してください。
   symbols compact flag/aliasとsummary-only JSON envelopeは1つのeditor-format fixtureを共有してください。

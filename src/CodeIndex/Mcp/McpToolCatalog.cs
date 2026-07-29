@@ -223,7 +223,7 @@ public partial class McpServer
                 ReadOnlyAnnotations()),
             CreateToolDefinition(
                 "excerpt",
-                "Use this after `search`, `definition`, `references`, `outline`, or `map` identifies a file and line range. Prefer focused excerpts over whole-file reads; common next step is `outline` for neighboring structure. Reconstruct a file excerpt from indexed chunks for a given line range. Successful responses include `next_step_suggestion`; empty responses include `recovery_hint`. / `search` / `definition` / `references` / `outline` / `map` でファイルと行範囲を絞った後に使う。ファイル全体ではなく必要範囲の抜粋を優先し、次は周辺構造確認の `outline` を使う。指定行範囲について、インデックス済みチャンクからファイル抜粋を再構成。",
+                "Use this after `search`, `definition`, `references`, `outline`, or `map` identifies a file and line range. Prefer focused excerpts over whole-file reads; common next step is `outline` for neighboring structure. Reconstruct a file excerpt from indexed chunks for a given line range. Responses preserve requested and context-expanded effective ranges separately and report the indexed total line count. Successful responses include `next_step_suggestion`; empty responses include `recovery_hint`. / `search` / `definition` / `references` / `outline` / `map` でファイルと行範囲を絞った後に使う。ファイル全体ではなく必要範囲の抜粋を優先し、次は周辺構造確認の `outline` を使う。指定行範囲について、インデックス済みチャンクからファイル抜粋を再構成する。response は requested range と context 展開後の effective range を分けて保持し、インデックス済みの総行数も返す。",
                 new JsonObject
                 {
                     ["type"] = "object",

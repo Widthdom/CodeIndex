@@ -16,14 +16,23 @@ public static partial class QueryCommandRunner
             CommandErrorWriter.WriteStderr(previewOptionError);
             return CommandExitCodes.UsageError;
         }
+        var preparedArguments = PrepareExcerptArguments(cmdArgs);
         var options = ParseArgs(
-            cmdArgs,
+            preparedArguments.Args,
             jsonDefault: false,
             validateDefaultLimit: false,
             validateDefaultSnippetLines: false);
         if (TryWriteUnsupportedOptionError("excerpt", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("excerpt")))
             return CommandExitCodes.UsageError;
-        if (TryWriteNonPositiveCoordinateJsonError(options, jsonOptions, "--line", "--start", "--start-line", "--end", "--end-line"))
+        if (TryWriteNonPositiveCoordinateRangeError(
+                options,
+                jsonOptions,
+                includeHumanOutput: true,
+                "--line",
+                "--start",
+                "--start-line",
+                "--end",
+                "--end-line"))
             return CommandExitCodes.InvalidArgument;
         if (TryWriteParseError(options, "excerpt"))
             return CommandExitCodes.UsageError;
@@ -49,12 +58,27 @@ public static partial class QueryCommandRunner
         var filePathArgument = options.Query;
         var startLine = options.StartLine;
         var endLine = options.EndLine;
-        if (startLine == null
-            && TryParseExcerptLocationArgument(options.Query, out var parsedPath, out var parsedStartLine, out var parsedEndLine))
+        if (startLine == null)
         {
-            filePathArgument = parsedPath;
-            startLine = parsedStartLine;
-            endLine ??= parsedEndLine;
+            var locationParsed = TryParseExcerptLocationArgument(
+                options.Query,
+                out var parsedPath,
+                out var parsedStartLine,
+                out var parsedEndLine,
+                out var invalidLineValue);
+            if (invalidLineValue != null)
+            {
+                return WriteExcerptOneBasedRangeError(
+                    options,
+                    jsonOptions,
+                    invalidLineValue);
+            }
+            if (locationParsed)
+            {
+                filePathArgument = parsedPath;
+                startLine = parsedStartLine;
+                endLine ??= parsedEndLine;
+            }
         }
 
         if (startLine == null)
@@ -67,7 +91,7 @@ public static partial class QueryCommandRunner
 
         var startLineValue = startLine.Value;
         var endLineValue = endLine ?? startLineValue;
-        if (endLineValue < startLineValue)
+        if (!preparedArguments.EndAtEof && endLineValue < startLineValue)
         {
             WriteValidationError(
                 $"--start ({startLineValue}) must be less than or equal to --end ({endLineValue}).",
@@ -91,22 +115,42 @@ public static partial class QueryCommandRunner
                     category: "not_found");
             }
 
-            if (startLineValue > indexedFile.Lines || endLineValue > indexedFile.Lines)
+            var requestedEndLine = preparedArguments.EndAtEof
+                ? indexedFile.Lines
+                : endLineValue;
+            if (indexedFile.Lines <= 0)
             {
-                return CommandErrorWriter.WriteJsonOrHuman(
-                    options.Json,
+                return WriteExcerptRangeOutsideFileError(
+                    options,
                     jsonOptions,
-                    $"requested excerpt range {startLineValue}-{endLineValue} is outside {filePath} (1-{indexedFile.Lines}).",
-                    CommandExitCodes.InvalidArgument,
-                    $"Use a line range between 1 and {indexedFile.Lines}.",
-                    errorCode: CommandErrorCodes.LineOutOfRange,
-                    category: "range");
+                    startLineValue,
+                    requestedEndLine,
+                    indexedFile.Lines,
+                    "the indexed file is empty");
+            }
+
+            var effectiveStartLine = startLineValue;
+            var effectiveEndLine = requestedEndLine;
+            if (preparedArguments.ClampRange)
+            {
+                effectiveStartLine = Math.Min(effectiveStartLine, indexedFile.Lines);
+                effectiveEndLine = Math.Min(effectiveEndLine, indexedFile.Lines);
+            }
+            else if (startLineValue > indexedFile.Lines || requestedEndLine > indexedFile.Lines)
+            {
+                return WriteExcerptRangeOutsideFileError(
+                    options,
+                    jsonOptions,
+                    startLineValue,
+                    requestedEndLine,
+                    indexedFile.Lines,
+                    $"requested excerpt range {startLineValue}-{requestedEndLine} is outside {filePath} (1-{indexedFile.Lines})");
             }
 
             if (options.FocusLine.HasValue)
             {
-                var requestedStart = Math.Max(1, startLineValue - options.ContextBefore);
-                var requestedEnd = Math.Min(indexedFile.Lines, endLineValue + options.ContextAfter);
+                var requestedStart = Math.Max(1, effectiveStartLine - options.ContextBefore);
+                var requestedEnd = Math.Min(indexedFile.Lines, effectiveEndLine + options.ContextAfter);
                 if (options.FocusLine.Value < requestedStart || options.FocusLine.Value > requestedEnd)
                 {
                     CommandErrorWriter.WriteStderr($"Error: --focus-line ({options.FocusLine.Value}) must be within the returned excerpt range ({requestedStart}-{requestedEnd}).");
@@ -117,11 +161,11 @@ public static partial class QueryCommandRunner
             {
                 var focusLineLength = reader.GetExcerptFocusLineLength(
                     filePath,
-                    startLineValue,
-                    endLineValue,
+                    effectiveStartLine,
+                    effectiveEndLine,
                     options.ContextBefore,
                     options.ContextAfter,
-                    options.FocusLine ?? startLineValue);
+                    options.FocusLine ?? effectiveStartLine);
                 if (focusLineLength.HasValue && options.FocusColumn.Value > focusLineLength.Value)
                 {
                     CommandErrorWriter.WriteStderr($"Error: --focus-column ({options.FocusColumn.Value}) must be within the focused line length ({focusLineLength.Value}).");
@@ -131,12 +175,12 @@ public static partial class QueryCommandRunner
 
             var excerpt = reader.GetExcerpt(
                 filePath,
-                startLineValue,
-                endLineValue,
+                effectiveStartLine,
+                effectiveEndLine,
                 options.ContextBefore,
                 options.ContextAfter,
                 options.MaxLineWidth,
-                options.FocusLine ?? startLineValue,
+                options.FocusLine ?? effectiveStartLine,
                 options.FocusColumn,
                 options.FocusLength);
             if (excerpt == null)
@@ -145,6 +189,8 @@ public static partial class QueryCommandRunner
                     CommandErrorWriter.WriteStderr("No excerpt found.");
                 return ZeroResultExitCode(options);
             }
+            excerpt.RequestedStartLine = startLineValue;
+            excerpt.RequestedEndLine = requestedEndLine;
             if (options.Json)
             {
                 ExcerptRecoveryCommandFormatter.ApplyDbPath(excerpt, options.DbPath, options.RedactPaths ?? true);
@@ -155,6 +201,10 @@ public static partial class QueryCommandRunner
             if (options.Json)
             {
                 var payload = JsonSerializer.SerializeToNode(excerpt, CliJsonSerializerContextFactory.Create(jsonOptions).FileExcerptResult)!.AsObject();
+                payload["requested_end_mode"] = preparedArguments.EndAtEof ? "eof" : "numeric";
+                payload["range_clamped"] =
+                    effectiveStartLine != startLineValue ||
+                    effectiveEndLine != requestedEndLine;
                 if (!options.NoSemanticTokens && excerpt.SemanticTokens is { Count: > 0 })
                     payload["semantic_tokens_hint"] = "Use --no-semantic-tokens to omit semantic_tokens for compact JSON.";
                 var writeExitCode = WriteJsonPayloadWithOptionalByteLimit(
@@ -180,18 +230,28 @@ public static partial class QueryCommandRunner
         string value,
         out string path,
         out int startLine,
-        out int? endLine)
+        out int? endLine,
+        out string? invalidLineValue)
     {
         path = string.Empty;
         startLine = 0;
         endLine = null;
+        invalidLineValue = null;
 
         var separator = value.LastIndexOf(':');
         if (separator <= 0 || separator == value.Length - 1)
             return false;
 
         var range = value[(separator + 1)..];
-        var dash = range.IndexOf('-');
+        if (long.TryParse(range, NumberStyles.Integer, CultureInfo.InvariantCulture, out var singleLine)
+            && singleLine <= 0)
+        {
+            invalidLineValue = range;
+            return false;
+        }
+        var dash = range.StartsWith("-", StringComparison.Ordinal)
+            ? range.IndexOf('-', 1)
+            : range.IndexOf('-');
         if (dash < 0)
         {
             if (!TryParsePositiveLine(range, out startLine))
@@ -201,11 +261,25 @@ public static partial class QueryCommandRunner
             return true;
         }
 
-        if (dash == 0 || dash == range.Length - 1 || range.IndexOf('-', dash + 1) >= 0)
+        if (dash == range.Length - 1)
             return false;
 
-        if (!TryParsePositiveLine(range[..dash], out startLine)
-            || !TryParsePositiveLine(range[(dash + 1)..], out var parsedEndLine))
+        var startText = range[..dash];
+        var endText = range[(dash + 1)..];
+        if (long.TryParse(startText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var invalidStart)
+            && invalidStart <= 0)
+        {
+            invalidLineValue = startText;
+            return false;
+        }
+        if (long.TryParse(endText, NumberStyles.Integer, CultureInfo.InvariantCulture, out var invalidEnd)
+            && invalidEnd <= 0)
+        {
+            invalidLineValue = endText;
+            return false;
+        }
+        if (!TryParsePositiveLine(startText, out startLine)
+            || !TryParsePositiveLine(endText, out var parsedEndLine))
         {
             return false;
         }
@@ -217,6 +291,121 @@ public static partial class QueryCommandRunner
 
     private static bool TryParsePositiveLine(string value, out int line)
         => int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out line) && line > 0;
+
+    private static (string[] Args, bool EndAtEof, bool ClampRange) PrepareExcerptArguments(string[] args)
+    {
+        const string eofSentinel = "10000000";
+        var prepared = new List<string>(args.Length);
+        var endAtEof = false;
+        var clampRange = false;
+        var positionalOnly = false;
+        for (var i = 0; i < args.Length; i++)
+        {
+            var argument = args[i];
+            if (positionalOnly)
+            {
+                prepared.Add(argument);
+                continue;
+            }
+            if (argument == "--")
+            {
+                positionalOnly = true;
+                prepared.Add(argument);
+                continue;
+            }
+            if (argument == "--clamp")
+            {
+                clampRange = true;
+                continue;
+            }
+            if (argument is "--end" or "--end-line")
+            {
+                var acceptsEof = argument == "--end";
+                prepared.Add(argument);
+                endAtEof = false;
+                if (i + 1 < args.Length)
+                {
+                    var value = args[++i];
+                    endAtEof = acceptsEof
+                        && string.Equals(value, "eof", StringComparison.OrdinalIgnoreCase);
+                    prepared.Add(endAtEof ? eofSentinel : value);
+                }
+                continue;
+            }
+
+            var equalsIndex = argument.IndexOf('=');
+            if (equalsIndex > 0
+                && argument[..equalsIndex] is "--end" or "--end-line")
+            {
+                var option = argument[..equalsIndex];
+                var value = argument[(equalsIndex + 1)..];
+                endAtEof = option == "--end"
+                    && string.Equals(value, "eof", StringComparison.OrdinalIgnoreCase);
+                prepared.Add(endAtEof
+                    ? argument[..(equalsIndex + 1)] + eofSentinel
+                    : argument);
+                continue;
+            }
+
+            prepared.Add(argument);
+        }
+
+        return (prepared.ToArray(), endAtEof, clampRange);
+    }
+
+    private static int WriteExcerptOneBasedRangeError(
+        QueryCommandOptions options,
+        JsonSerializerOptions jsonOptions,
+        string rawValue)
+        => CommandErrorWriter.WriteJsonOrHuman(
+            options.Json,
+            jsonOptions,
+            $"requested line {rawValue} is outside the valid range beginning at 1.",
+            CommandExitCodes.InvalidArgument,
+            "Use a line number of 1 or greater.",
+            GetUsageLineOrThrow("excerpt"),
+            CommandErrorCodes.LineOutOfRange,
+            category: "range",
+            command: "excerpt");
+
+    private static int WriteExcerptRangeOutsideFileError(
+        QueryCommandOptions options,
+        JsonSerializerOptions jsonOptions,
+        int requestedStartLine,
+        int requestedEndLine,
+        int totalLines,
+        string message)
+    {
+        var startBeyondEof = totalLines > 0 && requestedStartLine > totalLines;
+        return CommandErrorWriter.WriteJsonOrHuman(
+            options.Json,
+            jsonOptions,
+            message,
+            CommandExitCodes.InvalidArgument,
+            totalLines == 0
+                ? "The indexed file has no one-based line range to read."
+                : startBeyondEof
+                    ? $"Use `--start {totalLines}` or earlier, or add `--clamp` to explicitly clamp the range to the indexed file."
+                    : $"Use `--end eof` to read through line {totalLines}, or add `--clamp` to explicitly clamp numeric overshoot.",
+            GetUsageLineOrThrow("excerpt"),
+            CommandErrorCodes.LineOutOfRange,
+            category: "range",
+            command: "excerpt",
+            additionalJsonProperties: new JsonObject
+            {
+                ["requested_start_line"] = requestedStartLine,
+                ["requested_end_line"] = requestedEndLine,
+                ["total_lines"] = totalLines,
+                ["range_recovery"] = new JsonObject
+                {
+                    ["strict_numeric_default"] = true,
+                    ["end_at_eof_supported"] = totalLines > 0 && !startBeyondEof,
+                    ["clamp_supported"] = true,
+                    ["suggested_start_line"] = startBeyondEof ? totalLines : null,
+                    ["suggested_end_line"] = totalLines > 0 && !startBeyondEof ? totalLines : null,
+                },
+            });
+    }
 
     private static List<ExcerptSemanticToken> BuildExcerptSemanticTokens(
         FileExcerptResult excerpt,
