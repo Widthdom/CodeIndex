@@ -613,11 +613,11 @@ internal static class CliFlagSchema
             new()
             {
                 Name = "--dry-run",
-                Description = "Preview without writing; hooks supports it only for install",
+                Description = "Preview without writing; hooks supports install and uninstall",
                 PrimaryCommands = Set("index", "hooks", "backfill-fold", "optimize", "vacuum"),
                 CompletionSubcommands = new Dictionary<string, IReadOnlySet<string>>(StringComparer.Ordinal)
                 {
-                    ["hooks"] = Set("install"),
+                    ["hooks"] = Set("install", "uninstall"),
                 },
                 Safety = CliOptionSafety.Preview,
             },

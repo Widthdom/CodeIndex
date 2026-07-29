@@ -113,7 +113,7 @@ public class HookCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, preview.ExitCode);
             using (var document = JsonDocument.Parse(preview.StdOut))
             {
-                Assert.Equal("updated", document.RootElement.GetProperty("status").GetString());
+                Assert.Equal("dry_run", document.RootElement.GetProperty("status").GetString());
                 Assert.Equal("replace_managed", document.RootElement.GetProperty("planned_action").GetString());
             }
             Assert.Equal(
@@ -140,7 +140,7 @@ public class HookCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, encodingPreview.ExitCode);
             using (var document = JsonDocument.Parse(encodingPreview.StdOut))
             {
-                Assert.Equal("updated", document.RootElement.GetProperty("status").GetString());
+                Assert.Equal("dry_run", document.RootElement.GetProperty("status").GetString());
                 Assert.Equal("replace_managed", document.RootElement.GetProperty("planned_action").GetString());
             }
             Assert.Equal([0xff, 0xfe], File.ReadAllBytes(hookPath)[..2]);
@@ -160,7 +160,7 @@ public class HookCommandRunnerTests
     }
 
     [Fact]
-    public void Hooks_InstallDryRun_PreviewsCreateChainReplaceAndNoOpWithoutWriting_Issue4716()
+    public void Hooks_InstallDryRun_PreviewsCreateChainReplaceAndNoOpWithoutWriting_Issues4716And4883()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("hook_install_dry_run");
         try
@@ -189,9 +189,16 @@ public class HookCommandRunnerTests
             string managedHookPreview;
             using (var document = JsonDocument.Parse(createPreview.StdOut))
             {
-                Assert.Equal("installed", document.RootElement.GetProperty("status").GetString());
+                Assert.Equal("dry_run", document.RootElement.GetProperty("status").GetString());
                 Assert.True(document.RootElement.GetProperty("dry_run").GetBoolean());
+                Assert.False(document.RootElement.GetProperty("filesystem_mutation").GetBoolean());
+                Assert.Equal("absent", document.RootElement.GetProperty("hook_state").GetString());
                 Assert.Equal("create", document.RootElement.GetProperty("planned_action").GetString());
+                var change = Assert.Single(document.RootElement.GetProperty("planned_changes").EnumerateArray());
+                Assert.Equal("create", change.GetProperty("action").GetString());
+                Assert.Equal("generated_managed_hook", change.GetProperty("provenance").GetString());
+                Assert.Equal(JsonValueKind.Null, change.GetProperty("before_sha256").ValueKind);
+                Assert.Equal(64, change.GetProperty("after_sha256").GetString()!.Length);
                 managedHookPreview = document.RootElement.GetProperty("managed_hook_preview").GetString()!;
                 Assert.Contains("BEGIN CDIDX MANAGED PRE-COMMIT", managedHookPreview, StringComparison.Ordinal);
             }
@@ -207,7 +214,8 @@ public class HookCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, orphanChainPreview.ExitCode);
             using (var document = JsonDocument.Parse(orphanChainPreview.StdOut))
             {
-                Assert.Equal("installed", document.RootElement.GetProperty("status").GetString());
+                Assert.Equal("dry_run", document.RootElement.GetProperty("status").GetString());
+                Assert.False(document.RootElement.GetProperty("filesystem_mutation").GetBoolean());
                 Assert.Equal("create", document.RootElement.GetProperty("planned_action").GetString());
                 Assert.Equal(chainedHookPath, document.RootElement.GetProperty("chained_hook_path").GetString());
             }
@@ -224,9 +232,13 @@ public class HookCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, chainPreview.ExitCode);
             using (var document = JsonDocument.Parse(chainPreview.StdOut))
             {
-                Assert.Equal("updated", document.RootElement.GetProperty("status").GetString());
+                Assert.Equal("dry_run", document.RootElement.GetProperty("status").GetString());
                 Assert.Equal("chain_existing", document.RootElement.GetProperty("planned_action").GetString());
                 Assert.Equal(chainedHookPath, document.RootElement.GetProperty("chained_hook_path").GetString());
+                var changes = document.RootElement.GetProperty("planned_changes").EnumerateArray().ToArray();
+                Assert.Equal(2, changes.Length);
+                Assert.Equal("existing_pre_commit_hook", changes[0].GetProperty("provenance").GetString());
+                Assert.Equal(hookPath, changes[0].GetProperty("source_path").GetString());
             }
             Assert.Equal(customHook, File.ReadAllText(hookPath));
             Assert.False(File.Exists(chainedHookPath));
@@ -243,6 +255,7 @@ public class HookCommandRunnerTests
             {
                 Assert.Equal("error", document.RootElement.GetProperty("status").GetString());
                 Assert.True(document.RootElement.GetProperty("dry_run").GetBoolean());
+                Assert.False(document.RootElement.GetProperty("filesystem_mutation").GetBoolean());
                 Assert.Equal("blocked", document.RootElement.GetProperty("planned_action").GetString());
                 Assert.Contains(
                     "BEGIN CDIDX MANAGED PRE-COMMIT",
@@ -256,7 +269,9 @@ public class HookCommandRunnerTests
                 ["install", "--project", projectRoot, "--dry-run"]);
 
             Assert.Equal(CommandExitCodes.UsageError, blockedHumanPreview.ExitCode);
-            Assert.Equal(string.Empty, blockedHumanPreview.StdOut);
+            Assert.Contains("Planned action: blocked", blockedHumanPreview.StdOut, StringComparison.Ordinal);
+            Assert.Contains("Filesystem mutation: false", blockedHumanPreview.StdOut, StringComparison.Ordinal);
+            Assert.Contains("Managed hook preview:", blockedHumanPreview.StdOut, StringComparison.Ordinal);
             Assert.Contains("chained hook already exists", blockedHumanPreview.StdErr, StringComparison.Ordinal);
             Assert.Contains("Hint:", blockedHumanPreview.StdErr, StringComparison.Ordinal);
             Assert.Contains("Usage:", blockedHumanPreview.StdErr, StringComparison.Ordinal);
@@ -273,8 +288,12 @@ public class HookCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, replacePreview.ExitCode);
             using (var document = JsonDocument.Parse(replacePreview.StdOut))
             {
-                Assert.Equal("updated", document.RootElement.GetProperty("status").GetString());
+                Assert.Equal("dry_run", document.RootElement.GetProperty("status").GetString());
                 Assert.Equal("replace_managed", document.RootElement.GetProperty("planned_action").GetString());
+                var change = Assert.Single(document.RootElement.GetProperty("planned_changes").EnumerateArray());
+                Assert.NotEqual(
+                    change.GetProperty("before_sha256").GetString(),
+                    change.GetProperty("after_sha256").GetString());
             }
             Assert.Equal(staleManagedHook, File.ReadAllText(hookPath));
 
@@ -294,8 +313,9 @@ public class HookCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, noOpPreview.ExitCode);
             using (var document = JsonDocument.Parse(noOpPreview.StdOut))
             {
-                Assert.Equal("already_installed", document.RootElement.GetProperty("status").GetString());
+                Assert.Equal("dry_run", document.RootElement.GetProperty("status").GetString());
                 Assert.Equal("none", document.RootElement.GetProperty("planned_action").GetString());
+                Assert.Empty(document.RootElement.GetProperty("planned_changes").EnumerateArray());
             }
             Assert.Equal(managedHookPreview, File.ReadAllText(hookPath));
             Assert.False(File.Exists(chainedHookPath));
@@ -307,7 +327,7 @@ public class HookCommandRunnerTests
     }
 
     [Fact]
-    public void Hooks_DryRun_RejectsNonInstallSubcommand_Issue4716()
+    public void Hooks_DryRun_RejectsStatusSubcommand_Issues4716And4883()
     {
         var (exitCode, stdout, stderr) = RunHooksAndCaptureStreams(["status", "--dry-run", "--json"]);
 
@@ -316,8 +336,203 @@ public class HookCommandRunnerTests
         using var document = JsonDocument.Parse(stdout);
         Assert.Equal("error", document.RootElement.GetProperty("status").GetString());
         Assert.Equal(
-            "--dry-run is supported only for hooks install",
+            "--dry-run is supported only for hooks install or uninstall",
             document.RootElement.GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public void Hooks_UninstallDryRun_PreviewsBlockRemovalRestoreForceAndIdempotenceWithoutWriting_Issue4883()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("hook_uninstall_dry_run");
+        try
+        {
+            TestProjectHelper.InitializeGitRepo(projectRoot);
+            var hooksDir = Path.Combine(projectRoot, ".git", "hooks");
+            var hookPath = Path.Combine(hooksDir, "pre-commit");
+            var chainedHookPath = Path.Combine(hooksDir, "pre-commit.cdidx-chain");
+            TestProjectHelper.DeleteDirectory(hooksDir);
+
+            var absentPreview = RunHooksAndCaptureStreams(
+                ["uninstall", "--project", projectRoot, "--dry-run", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, absentPreview.ExitCode);
+            using (var document = JsonDocument.Parse(absentPreview.StdOut))
+            {
+                Assert.Equal("dry_run", document.RootElement.GetProperty("status").GetString());
+                Assert.True(document.RootElement.GetProperty("dry_run").GetBoolean());
+                Assert.False(document.RootElement.GetProperty("filesystem_mutation").GetBoolean());
+                Assert.Equal("none", document.RootElement.GetProperty("planned_action").GetString());
+                Assert.Equal("absent", document.RootElement.GetProperty("hook_state").GetString());
+                Assert.Empty(document.RootElement.GetProperty("planned_changes").EnumerateArray());
+            }
+            var repeatedAbsentPreview = RunHooksAndCaptureStreams(
+                ["uninstall", "--project", projectRoot, "--dry-run", "--json"]);
+            Assert.Equal(absentPreview.StdOut, repeatedAbsentPreview.StdOut);
+            Assert.False(Directory.Exists(hooksDir));
+
+            Assert.Equal(
+                CommandExitCodes.Success,
+                RunHooksAndCaptureStreams(["install", "--project", projectRoot]).ExitCode);
+            var managedHook = File.ReadAllText(hookPath);
+            var managedBlockWithSurroundingContent = managedHook
+                .Replace("#!/bin/sh\n", "#!/bin/sh\necho before\n", StringComparison.Ordinal)
+                + "\necho after\n";
+            File.WriteAllText(hookPath, managedBlockWithSurroundingContent);
+            var expectedRemainingContent = "#!/bin/sh\necho before\necho after\n";
+            var managedWriteTime = File.GetLastWriteTimeUtc(hookPath);
+            UnixFileMode? managedMode = null;
+            if (!OperatingSystem.IsWindows())
+                managedMode = File.GetUnixFileMode(hookPath);
+
+            var blockPreview = RunHooksAndCaptureStreams(
+                ["uninstall", "--project", projectRoot, "--dry-run", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, blockPreview.ExitCode);
+            using (var document = JsonDocument.Parse(blockPreview.StdOut))
+            {
+                Assert.Equal("dry_run", document.RootElement.GetProperty("status").GetString());
+                Assert.Equal("remove_managed_block", document.RootElement.GetProperty("planned_action").GetString());
+                Assert.Equal("managed", document.RootElement.GetProperty("hook_state").GetString());
+                var change = Assert.Single(document.RootElement.GetProperty("planned_changes").EnumerateArray());
+                Assert.Equal("replace", change.GetProperty("action").GetString());
+                Assert.Equal(
+                    "existing_hook_without_cdidx_managed_block",
+                    change.GetProperty("provenance").GetString());
+                Assert.NotEqual(
+                    change.GetProperty("before_sha256").GetString(),
+                    change.GetProperty("after_sha256").GetString());
+            }
+            Assert.Equal(managedBlockWithSurroundingContent, File.ReadAllText(hookPath));
+            Assert.Equal(managedWriteTime, File.GetLastWriteTimeUtc(hookPath));
+            if (!OperatingSystem.IsWindows())
+                Assert.Equal(managedMode!.Value, File.GetUnixFileMode(hookPath));
+
+            Assert.Equal(
+                CommandExitCodes.Success,
+                RunHooksAndCaptureStreams(["uninstall", "--project", projectRoot, "--json"]).ExitCode);
+            Assert.Equal(expectedRemainingContent, File.ReadAllText(hookPath));
+
+            const string unmanagedHook = "#!/bin/sh\necho unmanaged\n";
+            File.WriteAllText(hookPath, unmanagedHook);
+            var unmanagedWriteTime = File.GetLastWriteTimeUtc(hookPath);
+
+            var blockedPreview = RunHooksAndCaptureStreams(
+                ["uninstall", "--project", projectRoot, "--dry-run", "--json"]);
+
+            Assert.Equal(CommandExitCodes.UsageError, blockedPreview.ExitCode);
+            using (var document = JsonDocument.Parse(blockedPreview.StdOut))
+            {
+                Assert.Equal("error", document.RootElement.GetProperty("status").GetString());
+                Assert.False(document.RootElement.GetProperty("filesystem_mutation").GetBoolean());
+                Assert.Equal("blocked", document.RootElement.GetProperty("planned_action").GetString());
+                Assert.Equal("unmanaged", document.RootElement.GetProperty("hook_state").GetString());
+            }
+            Assert.Equal(unmanagedHook, File.ReadAllText(hookPath));
+            Assert.Equal(unmanagedWriteTime, File.GetLastWriteTimeUtc(hookPath));
+
+            HookCommandRunner.DeleteFileForTesting = _ => throw new UnauthorizedAccessException("delete denied");
+            var forcePreview = RunHooksAndCaptureStreams(
+                ["uninstall", "--project", projectRoot, "--force", "--dry-run", "--json"]);
+            HookCommandRunner.DeleteFileForTesting = null;
+
+            Assert.Equal(CommandExitCodes.Success, forcePreview.ExitCode);
+            using (var document = JsonDocument.Parse(forcePreview.StdOut))
+            {
+                Assert.Equal("dry_run", document.RootElement.GetProperty("status").GetString());
+                Assert.Equal("force_delete_unmanaged", document.RootElement.GetProperty("planned_action").GetString());
+                var change = Assert.Single(document.RootElement.GetProperty("planned_changes").EnumerateArray());
+                Assert.Equal("delete", change.GetProperty("action").GetString());
+                Assert.Equal("force_selected_hook", change.GetProperty("provenance").GetString());
+            }
+            Assert.Equal(unmanagedHook, File.ReadAllText(hookPath));
+            Assert.Equal(unmanagedWriteTime, File.GetLastWriteTimeUtc(hookPath));
+
+            const string conflictedHook = "#!/bin/sh\n# BEGIN CDIDX MANAGED PRE-COMMIT\necho conflicted\n";
+            File.WriteAllText(hookPath, conflictedHook);
+            var conflictedPreview = RunHooksAndCaptureStreams(
+                ["uninstall", "--project", projectRoot, "--dry-run", "--json"]);
+
+            Assert.Equal(CommandExitCodes.UsageError, conflictedPreview.ExitCode);
+            using (var document = JsonDocument.Parse(conflictedPreview.StdOut))
+            {
+                Assert.Equal("conflicted", document.RootElement.GetProperty("hook_state").GetString());
+                Assert.Equal("blocked", document.RootElement.GetProperty("planned_action").GetString());
+            }
+            Assert.Equal(conflictedHook, File.ReadAllText(hookPath));
+
+            const string originalHook = "#!/bin/sh\necho restore me\n";
+            File.WriteAllText(hookPath, originalHook);
+            Assert.Equal(
+                CommandExitCodes.Success,
+                RunHooksAndCaptureStreams(["install", "--project", projectRoot]).ExitCode);
+            var installedContent = File.ReadAllText(hookPath);
+            var chainedContent = File.ReadAllText(chainedHookPath);
+            var installedWriteTime = File.GetLastWriteTimeUtc(hookPath);
+            var chainedWriteTime = File.GetLastWriteTimeUtc(chainedHookPath);
+            UnixFileMode? installedMode = null;
+            UnixFileMode? chainedMode = null;
+            if (!OperatingSystem.IsWindows())
+            {
+                installedMode = File.GetUnixFileMode(hookPath);
+                chainedMode = File.GetUnixFileMode(chainedHookPath);
+            }
+
+            var humanRestorePreview = RunHooksAndCaptureStreams(
+                ["uninstall", "--project", projectRoot, "--dry-run"]);
+            var restorePreview = RunHooksAndCaptureStreams(
+                ["uninstall", "--project", projectRoot, "--dry-run", "--json"]);
+            var repeatedRestorePreview = RunHooksAndCaptureStreams(
+                ["uninstall", "--project", projectRoot, "--dry-run", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, humanRestorePreview.ExitCode);
+            Assert.Contains("Planned action: restore_chained", humanRestorePreview.StdOut, StringComparison.Ordinal);
+            Assert.Contains("Filesystem mutation: false", humanRestorePreview.StdOut, StringComparison.Ordinal);
+            Assert.DoesNotContain("Managed hook preview:", humanRestorePreview.StdOut, StringComparison.Ordinal);
+            Assert.Equal(CommandExitCodes.Success, restorePreview.ExitCode);
+            using (var document = JsonDocument.Parse(restorePreview.StdOut))
+            {
+                Assert.Equal("dry_run", document.RootElement.GetProperty("status").GetString());
+                Assert.Equal("restore_chained", document.RootElement.GetProperty("planned_action").GetString());
+                Assert.Equal("present", document.RootElement.GetProperty("chained_hook_state").GetString());
+                var changes = document.RootElement.GetProperty("planned_changes").EnumerateArray().ToArray();
+                Assert.Equal(2, changes.Length);
+                Assert.Equal("restore", changes[0].GetProperty("action").GetString());
+                Assert.Equal("chained_hook_backup", changes[0].GetProperty("provenance").GetString());
+                Assert.Equal(chainedHookPath, changes[0].GetProperty("source_path").GetString());
+            }
+            Assert.Equal(installedContent, File.ReadAllText(hookPath));
+            Assert.Equal(chainedContent, File.ReadAllText(chainedHookPath));
+            Assert.Equal(installedWriteTime, File.GetLastWriteTimeUtc(hookPath));
+            Assert.Equal(chainedWriteTime, File.GetLastWriteTimeUtc(chainedHookPath));
+            Assert.Equal(restorePreview.StdOut, repeatedRestorePreview.StdOut);
+            if (!OperatingSystem.IsWindows())
+            {
+                Assert.Equal(installedMode!.Value, File.GetUnixFileMode(hookPath));
+                Assert.Equal(chainedMode!.Value, File.GetUnixFileMode(chainedHookPath));
+            }
+
+            Assert.Equal(
+                CommandExitCodes.Success,
+                RunHooksAndCaptureStreams(["uninstall", "--project", projectRoot]).ExitCode);
+            Assert.Equal(originalHook, File.ReadAllText(hookPath));
+            Assert.False(File.Exists(chainedHookPath));
+
+            var idempotentPreview = RunHooksAndCaptureStreams(
+                ["uninstall", "--project", projectRoot, "--dry-run", "--json"]);
+            Assert.Equal(CommandExitCodes.UsageError, idempotentPreview.ExitCode);
+            using (var document = JsonDocument.Parse(idempotentPreview.StdOut))
+            {
+                Assert.Equal("blocked", document.RootElement.GetProperty("planned_action").GetString());
+                Assert.Equal("unmanaged", document.RootElement.GetProperty("hook_state").GetString());
+            }
+            Assert.Equal(originalHook, File.ReadAllText(hookPath));
+        }
+        finally
+        {
+            HookCommandRunner.DeleteFileForTesting = null;
+            HookCommandRunner.ReplaceFileForTesting = null;
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
     }
 
     [Fact]
@@ -401,7 +616,7 @@ public class HookCommandRunnerTests
     }
 
     [Fact]
-    public void Hooks_Install_RejectsSymlinkedHookFileBeforeExternalWrite_Issue4599()
+    public void Hooks_InstallAndUninstallDryRun_RejectSymlinkedHookFileBeforeExternalAccess_Issues4599And4883()
     {
         if (OperatingSystem.IsWindows())
             return;
@@ -418,10 +633,14 @@ public class HookCommandRunnerTests
             File.CreateSymbolicLink(hookLink, externalHook);
 
             var result = RunHooksAndCaptureStreams(["install", "--project", projectRoot]);
+            var uninstallPreview = RunHooksAndCaptureStreams(
+                ["uninstall", "--project", projectRoot, "--dry-run"]);
 
             Assert.Equal(CommandExitCodes.InstallError, result.ExitCode);
+            Assert.Equal(CommandExitCodes.InstallError, uninstallPreview.ExitCode);
             Assert.Equal("external sentinel\n", File.ReadAllText(externalHook));
             Assert.Contains("unsafe Git hook file path", result.StdErr, StringComparison.Ordinal);
+            Assert.Contains("unsafe Git hook file path", uninstallPreview.StdErr, StringComparison.Ordinal);
         }
         finally
         {
