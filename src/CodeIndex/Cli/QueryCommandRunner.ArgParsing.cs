@@ -347,6 +347,7 @@ public static partial class QueryCommandRunner
     {
         var fields = new List<string>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
+        var invalidFields = new List<string>();
         var all = false;
         if (!ValidateCsvBounds("--outline-fields", rawValue, MaxOutlineProjectionFieldsCsvLength, MaxOutlineProjectionFieldsCsvEntries, addParseError))
             return fields;
@@ -414,9 +415,17 @@ public static partial class QueryCommandRunner
                     AddField("container_name");
                     break;
                 default:
-                    addParseError($"Error: unsupported --outline-fields value '{ConsoleUi.FormatBoundedValue(rawField)}'. Use one or more of all, kind, name, display_name, path, line, start_line, end_line, depth, body_start_line, body_end_line, signature, signature_truncated, signature_original_length, container_kind, container_name, visibility, return_type, sort_mode, reference_count, size_lines, complexity_score, or aliases range, lines, body, body_range, container, refs, size, span, complexity.");
+                    invalidFields.Add(rawField);
                     continue;
             }
+        }
+
+        if (invalidFields.Count > 0)
+        {
+            var invalidValues = string.Join(", ", invalidFields.Select(field => $"'{ConsoleUi.FormatBoundedValue(field)}'"));
+            var valueLabel = invalidFields.Count == 1 ? "value" : "values";
+            addParseError($"Error: unsupported --outline-fields {valueLabel} {invalidValues}. Use one or more of all, kind, name, display_name, path, line, start_line, end_line, depth, body_start_line, body_end_line, signature, signature_truncated, signature_original_length, container_kind, container_name, visibility, return_type, sort_mode, reference_count, size_lines, complexity_score, or aliases range, lines, body, body_range, container, refs, size, span, complexity.");
+            return all ? null : fields;
         }
 
         if (all && fields.Count > 0)

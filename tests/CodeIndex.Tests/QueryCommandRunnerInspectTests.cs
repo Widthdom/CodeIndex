@@ -2357,6 +2357,68 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunOutline_ProjectionValidationEmitsOneTerminalErrorAndPreservesValidForms_Issue4876()
+    {
+        var valid = QueryCommandRunner.ParseArgs(
+            ["--outline-fields", "name,refs,size,span,body-range,container,name"],
+            jsonDefault: false,
+            validateDefaultSnippetLines: false,
+            validateDefaultMaxLineWidth: false);
+
+        Assert.True(valid.Json);
+        Assert.Equal(
+            ["name", "reference_count", "size_lines", "body_start_line", "body_end_line", "container_kind", "container_name"],
+            valid.OutlineFields);
+        Assert.Null(valid.ParseError);
+
+        foreach (var testCase in new[]
+        {
+            new { Fields = "bogus", InvalidValues = new[] { "bogus" } },
+            new { Fields = "bogus,nope", InvalidValues = new[] { "bogus", "nope" } },
+            new { Fields = "name,bogus", InvalidValues = new[] { "bogus" } },
+        })
+        {
+            var invalid = QueryCommandRunner.ParseArgs(
+                ["--outline-fields", testCase.Fields],
+                jsonDefault: false,
+                validateDefaultSnippetLines: false,
+                validateDefaultMaxLineWidth: false);
+
+            Assert.NotNull(invalid.ParseError);
+            Assert.Single(invalid.ParseError.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries));
+            foreach (var invalidValue in testCase.InvalidValues)
+                Assert.Contains($"'{invalidValue}'", invalid.ParseError, StringComparison.Ordinal);
+            Assert.Contains("Use one or more of all, kind, name", invalid.ParseError, StringComparison.Ordinal);
+            Assert.Contains("aliases range, lines, body", invalid.ParseError, StringComparison.Ordinal);
+            Assert.DoesNotContain("--outline-fields requires at least one field name", invalid.ParseError, StringComparison.Ordinal);
+        }
+
+        var empty = QueryCommandRunner.ParseArgs(
+            ["--outline-fields", ","],
+            jsonDefault: false,
+            validateDefaultSnippetLines: false,
+            validateDefaultMaxLineWidth: false);
+        Assert.Equal("Error: --outline-fields requires at least one field name.", empty.ParseError);
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+            ["src/app.cs", "--outline-fields", "bogus"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Empty(stderr);
+        using var document = ParseJsonOutput(stdout);
+        var error = document.RootElement;
+        Assert.Equal("error", error.GetProperty("status").GetString());
+        Assert.Equal(CommandErrorCodes.UsageError, error.GetProperty("error_code").GetString());
+        Assert.Equal("usage", error.GetProperty("category").GetString());
+        Assert.Equal("outline", error.GetProperty("command").GetString());
+        Assert.Contains("'bogus'", error.GetProperty("message").GetString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("requires at least one field name", error.GetProperty("message").GetString(), StringComparison.Ordinal);
+        Assert.Contains("fix the invalid or missing option value", error.GetProperty("hint").GetString(), StringComparison.Ordinal);
+        Assert.Contains("--outline-fields <csv>", error.GetProperty("usage").GetString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RunOutline_UsesNestedSymbolDepthInHumanOutput()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_outline_depth");
