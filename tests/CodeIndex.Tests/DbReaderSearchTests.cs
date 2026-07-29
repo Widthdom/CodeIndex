@@ -2198,6 +2198,14 @@ public partial class DbReaderTests
         Assert.All(
             verbatimThisDefinitions,
             result => Assert.DoesNotContain("IFoo.this[", result.Signature, StringComparison.Ordinal));
+        var verbatimThisAnalysis = reader.AnalyzeSymbol(
+            "IFoo.@this",
+            lang: "csharp",
+            exact: true);
+        Assert.Equal(2, verbatimThisAnalysis.Definitions.Count);
+        Assert.All(
+            verbatimThisAnalysis.Definitions,
+            result => Assert.DoesNotContain("IFoo.this[", result.Signature, StringComparison.Ordinal));
         var verbatimThisResultsWithoutLanguage = reader.SearchSymbols(
             "IFoo.@this",
             exact: true);

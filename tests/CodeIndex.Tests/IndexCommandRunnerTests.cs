@@ -6631,6 +6631,82 @@ public sealed class Caller
     }
 
     [Fact]
+    public void RunBackfillFold_DryRunSupportsPreDisplayAliasSchemaWithoutCSharp_Issue4866Review()
+    {
+        var dbPath = CreateTempDbPath("cdidx_backfill_fold_without_csharp_legacy_schema");
+        try
+        {
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                db.InitializeSchema();
+                var writer = new DbWriter(db.Connection);
+                var fileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = "src/app.py",
+                    Lang = "python",
+                    Size = 32,
+                    Lines = 1,
+                    Modified = new DateTime(2026, 7, 29, 0, 0, 0, DateTimeKind.Utc),
+                });
+                writer.InsertSymbols([
+                    new SymbolRecord
+                    {
+                        FileId = fileId,
+                        Kind = "function",
+                        Name = "run",
+                        Line = 1,
+                        StartLine = 1,
+                        EndLine = 1,
+                    },
+                ]);
+                writer.BackfillFoldedColumns(rewriteAll: true);
+                Assert.True(writer.MarkFoldReady());
+                writer.SetMeta(DbContext.CSharpSymbolNameContractVersionMetaKey, null);
+
+                using var legacySchema = db.Connection.CreateCommand();
+                legacySchema.CommandText = """
+                    DROP INDEX IF EXISTS idx_symbols_display_name_folded;
+                    ALTER TABLE symbols DROP COLUMN display_name_folded;
+                    """;
+                legacySchema.ExecuteNonQuery();
+            }
+
+            JsonElement json;
+            int exitCode;
+            lock (TestConsoleLock.Gate)
+            {
+                var originalOut = Console.Out;
+                using var output = new StringWriter();
+                try
+                {
+                    Console.SetOut(output);
+                    exitCode = IndexCommandRunner.RunBackfillFold(
+                        ["--db", dbPath, "--dry-run", "--json"],
+                        _jsonOptions);
+                    using var document = JsonDocument.Parse(output.ToString());
+                    json = document.RootElement.Clone();
+                }
+                finally
+                {
+                    Console.SetOut(originalOut);
+                }
+            }
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.False(json.GetProperty("rewrite_all").GetBoolean());
+            Assert.True(json.GetProperty("dry_run").GetBoolean());
+            Assert.Equal(0, json.GetProperty("symbols").GetInt32());
+            Assert.Equal(0, json.GetProperty("symbol_references").GetInt32());
+            Assert.True(json.GetProperty("was_already_complete").GetBoolean());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteFile(dbPath);
+        }
+    }
+
+    [Fact]
     public void RunBackfillFold_RefusesCSharpV3StampWhenLegacySignaturesAreMissing_Issue4866()
     {
         var dbPath = CreateTempDbPath("cdidx_backfill_fold_csharp_v2_missing_signature");

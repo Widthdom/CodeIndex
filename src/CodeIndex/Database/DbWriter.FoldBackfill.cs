@@ -380,11 +380,14 @@ public partial class DbWriter
         var lastSymbolId = rewriteAll ? GetFoldBackfillCheckpoint(FoldBackfillLastSymbolIdMetaKey) : 0;
         var lastReferenceId = rewriteAll ? GetFoldBackfillCheckpoint(FoldBackfillLastReferenceIdMetaKey) : 0;
 
+        var hasDisplayNameFolded =
+            DbSchemaCache.LoadColumns(_conn, "symbols").Contains("display_name_folded");
         var symbolsSql = rewriteAll && phase != "references"
             ? "SELECT COUNT(*) FROM symbols WHERE name IS NOT NULL AND id > @lastSymbolId"
             : rewriteAll
             ? "SELECT 0"
-            : """
+            : hasDisplayNameFolded
+            ? """
               SELECT COUNT(*)
               FROM symbols s
               JOIN files f ON f.id = s.file_id
@@ -393,7 +396,8 @@ public partial class DbWriter
                      OR (f.lang = 'csharp'
                          AND s.name_folded <> codeindex_name_fold(s.name)
                          AND s.display_name_folded IS NULL))
-              """;
+              """
+            : "SELECT COUNT(*) FROM symbols WHERE name IS NOT NULL AND name_folded IS NULL";
         var symbolsUsesCheckpoint = rewriteAll && phase != "references";
         var symbols = RentCommand(
             symbolsSql,
