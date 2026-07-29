@@ -23,7 +23,7 @@ internal sealed partial class LspServer : IDisposable
         return new JsonObject
         {
             ["name"] = symbol.Name,
-            ["kind"] = SymbolKind(symbol.Kind),
+            ["kind"] = SymbolKind(symbol),
             ["location"] = ToLocation(symbol.Path, identifier.Line, identifier.StartColumn, identifier.Line, identifier.EndColumn),
             ["containerName"] = symbol.ContainerName,
         };
@@ -41,7 +41,7 @@ internal sealed partial class LspServer : IDisposable
         return new JsonObject
         {
             ["name"] = symbol.Name,
-            ["kind"] = SymbolKind(symbol.Kind),
+            ["kind"] = SymbolKind(symbol),
             ["range"] = ToRange(rangeStartLine, 1, rangeEndLine, rangeEndColumn),
             ["selectionRange"] = ToRange(identifier.Line, identifier.StartColumn, identifier.Line, identifier.EndColumn),
             ["detail"] = TruncateDocumentSymbolDetail(symbol.Signature),
@@ -57,7 +57,7 @@ internal sealed partial class LspServer : IDisposable
         return new JsonObject
         {
             ["name"] = symbol.Name,
-            ["kind"] = SymbolKind(symbol.Kind),
+            ["kind"] = SymbolKind(symbol),
             ["location"] = ToLocation(
                 symbol.Path,
                 identifier.Line,
@@ -127,19 +127,6 @@ internal sealed partial class LspServer : IDisposable
     {
         ["line"] = Math.Max(line - 1, 0),
         ["character"] = Math.Max(column - 1, 0),
-    };
-
-    private static int SymbolKind(string kind) => kind switch
-    {
-        "class" => 5,
-        "function" or "test.method" => 12,
-        "property" => 7,
-        "field" => 8,
-        "enum" => 10,
-        "interface" => 11,
-        "namespace" => 3,
-        "struct" => 23,
-        _ => 13,
     };
 
     private static string GetDocumentPath(JsonElement root)
