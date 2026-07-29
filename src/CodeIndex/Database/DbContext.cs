@@ -363,6 +363,8 @@ public partial class DbContext : IDisposable
     internal bool ImmutableReadOnlyWalRisk => _immutableReadOnlyWalRisk;
     internal bool ConnectionPooling => _connectionPooling;
     internal bool QueryOnlySnapshotRequiresRefresh => _queryOnlySnapshotRequiresRefresh;
+    internal DbConnectionFactory.QueryOnlySnapshotSourceState? QueryOnlySnapshotSourceState
+        => _queryOnlySnapshotSourceState;
     internal bool IsQueryOnlySnapshotCurrent(CancellationToken cancellationToken = default)
         => !_queryOnlySnapshotRequiresRefresh
            || (_queryOnlySnapshotSourcePath != null
