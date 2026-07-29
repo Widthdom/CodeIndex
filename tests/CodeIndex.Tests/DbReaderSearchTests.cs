@@ -1891,6 +1891,7 @@ public partial class DbReaderTests
                 void Ä();
                 void @this();
                 void Verify();
+                void Escape();
             }
 
             public interface IBar
@@ -1915,6 +1916,7 @@ public partial class DbReaderTests
                 void IFoo.@this() { }
                 [Fact]
                 void IFoo.Verify() { }
+                void I\u0046oo.\u0045scape() { }
                 public void Run<T>(T value) { }
                 public void ExplicitHelper() { }
                 public void CallPublicRun() { Run(1); }
@@ -2206,6 +2208,16 @@ public partial class DbReaderTests
             reader.SearchSymbols("IFoo.Verify", lang: "csharp", exact: true),
             result => result.Kind == "test.method");
         Assert.Contains("IFoo.Verify", attributedExplicitMethod.Signature, StringComparison.Ordinal);
+        var escapedExplicitMethodResults = reader.SearchSymbols(
+            "IFoo.Escape",
+            lang: "csharp",
+            exact: true);
+        Assert.Equal(2, escapedExplicitMethodResults.Count);
+        Assert.Contains(
+            escapedExplicitMethodResults,
+            result => result.Signature?.Contains(
+                @"I\u0046oo.\u0045scape",
+                StringComparison.Ordinal) == true);
 
         const string sqlPath = "src/qualified-function.sql";
         var sqlFileId = writer.UpsertFile(new FileRecord

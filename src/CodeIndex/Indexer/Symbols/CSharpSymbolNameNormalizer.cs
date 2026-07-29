@@ -78,6 +78,16 @@ internal static class CSharpSymbolNameNormalizer
             return null;
         }
 
+        // Extraction canonicalizes source-only Unicode escapes in the persisted display name,
+        // but the signature keeps its source spelling. Decode only those escapes here while
+        // preserving `@`, whose presence distinguishes an `@this` method from an indexer.
+        // 抽出時は永続表示名の source-only Unicode escape を正規化する一方、signature は
+        // source 表記を保持する。indexer と `@this` method の区別に必要な `@` は残し、
+        // Unicode escape だけをここで復号する。
+        signature = ExactSourceSearchNormalizer.NormalizeCSharpUnicodeEscapes(
+            signature,
+            out _);
+
         // `Item` is only the display alias for an indexer when the declaration itself uses
         // `this[...]`. A legal method/property/event may also be named `Item`, so try the
         // indexer source spelling first and then fall back to the literal member name.

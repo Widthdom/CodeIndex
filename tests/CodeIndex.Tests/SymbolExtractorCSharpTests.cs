@@ -4397,6 +4397,7 @@ public partial class SymbolExtractorTests
                 event System.EventHandler Changed;
                 string this[int index] { get; }
                 void Verify();
+                void Escape();
             }
 
             public interface IBar
@@ -4413,6 +4414,7 @@ public partial class SymbolExtractorTests
                 string IFoo . this[int index] => index.ToString();
                 [Fact]
                 void IFoo.Verify() { }
+                void I\u0046oo.\u0045scape() { }
                 public void Run<T>(T value) { }
             }
             """;
@@ -4456,6 +4458,10 @@ public partial class SymbolExtractorTests
         Assert.Equal(
             "ifoo.verify",
             Assert.Single(serviceMembers, symbol => symbol.Kind == "test.method" && symbol.Name == "Verify")
+                .IdentityNameFolded);
+        Assert.Equal(
+            "ifoo.escape",
+            Assert.Single(serviceMembers, symbol => symbol.Kind == "function" && symbol.Name == "Escape")
                 .IdentityNameFolded);
     }
 
