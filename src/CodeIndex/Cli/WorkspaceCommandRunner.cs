@@ -17,7 +17,18 @@ internal static class WorkspaceCommandRunner
         CancellationToken cancellationToken = default)
     {
         var json = args.Contains("--json", StringComparer.Ordinal);
-        args = args.Where(a => a != "--json").ToArray();
+        var check = args.Contains("--check", StringComparer.Ordinal);
+        args = args.Where(a => a is not "--json" and not "--check").ToArray();
+        if (check && (args.Length == 0 || args[0] != "status"))
+        {
+            return CommandErrorWriter.WriteJsonOrHuman(
+                json,
+                jsonOptions,
+                "workspace --check is only valid with workspace status.",
+                CommandExitCodes.UsageError,
+                "run `cdidx workspace status --check`.");
+        }
+
         if (args.Length == 0)
             return List(json, jsonOptions);
 
@@ -28,6 +39,7 @@ internal static class WorkspaceCommandRunner
                 json,
                 jsonOptions,
                 includeActiveWorkspaceStatus: true,
+                check: check,
                 cancellationToken: cancellationToken),
             "current" => Current(json, jsonOptions),
             "use" => Use(args[1..], json, jsonOptions),
@@ -40,11 +52,15 @@ internal static class WorkspaceCommandRunner
         bool json,
         JsonSerializerOptions jsonOptions,
         bool includeActiveWorkspaceStatus = false,
+        bool check = false,
         CancellationToken cancellationToken = default)
     {
         var discovery = WorkspaceManifestLoader.Discover(Environment.CurrentDirectory);
         if (discovery.Path == null)
         {
+            var memberHealthSummary = includeActiveWorkspaceStatus
+                ? BuildMissingManifestHealthSummary()
+                : null;
             if (json)
             {
                 var manifestStatus = new WorkspaceManifestStatusJsonResult(
@@ -59,12 +75,20 @@ internal static class WorkspaceCommandRunner
                         Array.Empty<WorkspaceMember>(),
                         manifestStatus,
                         BuildActiveWorkspaceStatus(includeActiveWorkspaceStatus, manifest: null),
-                        MemberHealthSummary: null),
+                        memberHealthSummary,
+                        CheckMode: includeActiveWorkspaceStatus ? check : null),
                     jsonOptions));
             }
             else
+            {
                 Console.WriteLine("No cdidx.workspace.json or .cdidx-workspace.json found.");
-            return CommandExitCodes.Success;
+                if (memberHealthSummary is not null)
+                    Console.WriteLine(FormatMemberHealthSummary(memberHealthSummary));
+            }
+
+            return check
+                ? memberHealthSummary!.CheckExitCode
+                : CommandExitCodes.Success;
         }
 
         WorkspaceManifest manifest;
@@ -94,25 +118,34 @@ internal static class WorkspaceCommandRunner
                     memberHealth?.Members ?? manifest.Members,
                     manifestStatus,
                     BuildActiveWorkspaceStatus(includeActiveWorkspaceStatus, manifest),
-                    memberHealth?.Summary),
+                    memberHealth?.Summary,
+                    CheckMode: includeActiveWorkspaceStatus ? check : null),
                 jsonOptions));
-            return CommandExitCodes.Success;
+            return check
+                ? memberHealth!.Summary.CheckExitCode
+                : CommandExitCodes.Success;
         }
 
         Console.WriteLine($"Manifest : {manifest.Path}");
         Console.WriteLine($"Strategy : {manifest.IndexStrategy}");
-        var humanMembers = includeActiveWorkspaceStatus
-            ? BuildMemberHealth(manifest, cancellationToken).Members
-            : manifest.Members;
+        var humanMemberHealth = includeActiveWorkspaceStatus
+            ? BuildMemberHealth(manifest, cancellationToken)
+            : null;
+        var humanMembers = humanMemberHealth?.Members ?? manifest.Members;
         foreach (var member in humanMembers)
         {
             var label = member.IndexHealth?.Status ?? (member.Exists ? "ok" : "missing");
             var healthSuffix = member.IndexHealth is null
                 ? string.Empty
-                : $"  ({FormatMemberHealth(member.IndexHealth)})";
+                : $"  (project {(member.ProjectExists ? "present" : "missing")}; database {(member.DatabaseExists == true ? "present" : "missing")}; {FormatMemberHealth(member.IndexHealth)})";
             Console.WriteLine($"  {label,-11}  {member.Path}  ->  {member.DbPath}{healthSuffix}");
         }
-        return CommandExitCodes.Success;
+        if (humanMemberHealth is not null)
+            Console.WriteLine(FormatMemberHealthSummary(humanMemberHealth.Summary));
+
+        return check
+            ? humanMemberHealth!.Summary.CheckExitCode
+            : CommandExitCodes.Success;
     }
 
     private static ActiveWorkspaceJsonResult? BuildActiveWorkspaceStatus(bool include, WorkspaceManifest? manifest)
@@ -282,13 +315,15 @@ internal static class WorkspaceCommandRunner
             cancellationToken.ThrowIfCancellationRequested();
             WorkspaceMemberIndexHealth health;
             var dbExists = File.Exists(LongPath.EnsureWindowsPrefix(member.DbPath));
+            var projectRoot = singleStrategy ? manifest.Root : member.Path;
             if (!member.Exists)
             {
                 health = new WorkspaceMemberIndexHealth(
                     DbExists: dbExists,
                     Probed: false,
                     Status: "missing",
-                    Reason: "member_missing");
+                    Reason: "member_missing",
+                    RepairAction: new WorkspaceMemberRepairAction("create_project_directory"));
             }
             else if (!dbExists)
             {
@@ -296,7 +331,11 @@ internal static class WorkspaceCommandRunner
                     DbExists: false,
                     Probed: false,
                     Status: "missing",
-                    Reason: "database_not_found");
+                    Reason: "database_not_found",
+                    RepairAction: BuildIndexRepairAction(
+                        "index_member",
+                        projectRoot,
+                        member.DbPath));
             }
             else if (cache.TryGetValue(member.DbPath, out var cachedHealth))
             {
@@ -308,13 +347,13 @@ internal static class WorkspaceCommandRunner
                     DbExists: true,
                     Probed: false,
                     Status: "not_checked",
-                    Reason: "database_probe_limit_reached");
+                    Reason: "database_probe_limit_reached",
+                    RepairAction: new WorkspaceMemberRepairAction("reduce_workspace_probe_scope"));
                 unprobedMemberCount++;
             }
             else
             {
                 databaseProbeCount++;
-                var projectRoot = singleStrategy ? manifest.Root : member.Path;
                 health = ProbeMemberHealth(
                     member.DbPath,
                     projectRoot,
@@ -327,12 +366,10 @@ internal static class WorkspaceCommandRunner
 
         return new MemberHealthBuildResult(
             members,
-            new WorkspaceMemberHealthSummary(
-                manifest.Members.Count,
+            BuildMemberHealthSummary(
+                members,
                 databaseProbeCount,
-                MaxMemberHealthDatabaseProbes,
-                unprobedMemberCount,
-                unprobedMemberCount > 0));
+                unprobedMemberCount));
     }
 
     private static WorkspaceMemberIndexHealth ProbeMemberHealth(
@@ -353,6 +390,11 @@ internal static class WorkspaceCommandRunner
                     Probed: true,
                     Status: "invalid",
                     Reason: "invalid_codeindex_database",
+                    RepairAction: BuildIndexRepairAction(
+                        "rebuild_member_index",
+                        projectRoot,
+                        dbPath,
+                        rebuild: true),
                     SchemaCompatible: false);
             }
 
@@ -370,6 +412,7 @@ internal static class WorkspaceCommandRunner
                     Probed: true,
                     Status: "incompatible",
                     Reason: "index_newer_than_reader",
+                    RepairAction: new WorkspaceMemberRepairAction("upgrade_cdidx"),
                     SchemaCompatible: false,
                     FreshnessReason: "schema_incompatible",
                     IndexedAt: snapshot.IndexedAt,
@@ -425,6 +468,11 @@ internal static class WorkspaceCommandRunner
                 Probed: true,
                 Status: status,
                 Reason: reason,
+                RepairAction: BuildProbedMemberRepairAction(
+                    status,
+                    reason,
+                    projectRoot,
+                    dbPath),
                 SchemaCompatible: true,
                 IndexMatchesWorkspace: freshness.Checked ? freshness.MatchesWorkspace : null,
                 FreshnessReason: freshness.Reason,
@@ -443,9 +491,118 @@ internal static class WorkspaceCommandRunner
                 DbExists: true,
                 Probed: true,
                 Status: "unavailable",
-                Reason: "database_probe_failed");
+                Reason: "database_probe_failed",
+                RepairAction: new WorkspaceMemberRepairAction("inspect_database_and_retry"));
         }
     }
+
+    private static WorkspaceMemberRepairAction BuildProbedMemberRepairAction(
+        string status,
+        string reason,
+        string projectRoot,
+        string dbPath)
+    {
+        if (status == "ready")
+            return new WorkspaceMemberRepairAction("none");
+        if (status == "stale")
+            return BuildIndexRepairAction("refresh_member_index", projectRoot, dbPath);
+        if (reason == "freshness_check_unavailable")
+            return new WorkspaceMemberRepairAction("inspect_workspace_and_retry");
+        return BuildIndexRepairAction("rebuild_member_index", projectRoot, dbPath, rebuild: true);
+    }
+
+    private static WorkspaceMemberRepairAction BuildIndexRepairAction(
+        string action,
+        string projectRoot,
+        string dbPath,
+        bool rebuild = false)
+    {
+        var args = new List<string> { "index", projectRoot, "--db", dbPath };
+        if (rebuild)
+        {
+            args.Add("--rebuild");
+            args.Add("--yes");
+        }
+
+        return new WorkspaceMemberRepairAction(
+            action,
+            new WorkspaceRepairCommand("cdidx", args));
+    }
+
+    private static WorkspaceMemberHealthSummary BuildMemberHealthSummary(
+        IReadOnlyList<WorkspaceMember> members,
+        int databaseProbeCount,
+        int unprobedMemberCount)
+    {
+        var healthyMemberCount = members.Count(member => member.IndexHealth?.Status == "ready");
+        var missingMemberCount = members.Count(member => member.IndexHealth?.Status == "missing");
+        var degradedMemberCount = members.Count - healthyMemberCount - missingMemberCount;
+        string status;
+        string reason;
+        int checkExitCode;
+        if (members.Count == 0)
+        {
+            status = "empty";
+            reason = "workspace_has_no_members";
+            checkExitCode = CommandExitCodes.NotFound;
+        }
+        else if (missingMemberCount > 0)
+        {
+            status = "missing";
+            reason = "required_member_missing";
+            checkExitCode = CommandExitCodes.NotFound;
+        }
+        else if (degradedMemberCount > 0)
+        {
+            status = "degraded";
+            reason = "member_health_degraded";
+            checkExitCode = CommandExitCodes.StaleIndex;
+        }
+        else
+        {
+            status = "healthy";
+            reason = "all_members_ready";
+            checkExitCode = CommandExitCodes.Success;
+        }
+
+        var recommendedActions = members
+            .Select(member => member.IndexHealth?.RepairAction.Action)
+            .Where(action => action is not null and not "none")
+            .Distinct(StringComparer.Ordinal)
+            .Cast<string>()
+            .ToArray();
+        if (members.Count == 0)
+            recommendedActions = ["add_workspace_members"];
+
+        return new WorkspaceMemberHealthSummary(
+            members.Count,
+            databaseProbeCount,
+            MaxMemberHealthDatabaseProbes,
+            unprobedMemberCount,
+            unprobedMemberCount > 0,
+            healthyMemberCount,
+            degradedMemberCount,
+            missingMemberCount,
+            status,
+            reason,
+            checkExitCode,
+            recommendedActions);
+    }
+
+    private static WorkspaceMemberHealthSummary BuildMissingManifestHealthSummary()
+        => new(
+            MemberCount: 0,
+            DatabaseProbeCount: 0,
+            DatabaseProbeLimit: MaxMemberHealthDatabaseProbes,
+            ProbeLimitSkippedMemberCount: 0,
+            Truncated: false,
+            HealthyMemberCount: 0,
+            DegradedMemberCount: 0,
+            MissingMemberCount: 0,
+            Status: "missing",
+            Reason: "workspace_manifest_not_found",
+            CheckExitCode: CommandExitCodes.NotFound,
+            RecommendedActions: ["create_workspace_manifest"]);
 
     private static bool IsMemberHealthProbeFailure(Exception ex)
         => ex is SqliteException
@@ -477,8 +634,11 @@ internal static class WorkspaceCommandRunner
             false => "graph degraded",
             _ => "graph unknown",
         };
-        return $"{schema}; {freshness}; {graph}; reason={health.Reason}";
+        return $"{schema}; {freshness}; {graph}; reason={health.Reason}; action={health.RepairAction.Action}";
     }
+
+    private static string FormatMemberHealthSummary(WorkspaceMemberHealthSummary summary)
+        => $"Workspace health: {summary.Status}; reason={summary.Reason}; healthy={summary.HealthyMemberCount}; degraded={summary.DegradedMemberCount}; missing={summary.MissingMemberCount}; check_exit_code={summary.CheckExitCode}";
 
     private sealed record MemberHealthBuildResult(
         IReadOnlyList<WorkspaceMember> Members,

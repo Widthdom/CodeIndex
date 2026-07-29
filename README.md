@@ -255,6 +255,17 @@ Check-mode JSON includes `query_context.check_mode` (`explicit` or
 `implied_by_stale_after`) and the effective `query_context.stale_after_seconds`;
 ordinary status JSON omits `query_context`.
 
+`cdidx workspace status --json` reports sibling `project_exists` and `db_exists`
+fields for each member; the older `exists` field remains as a compatibility
+alias for `project_exists`. Each `index_health` includes a stable reason and a
+structured `repair_action` (`action` plus optional `command.name` /
+`command.args`), while `member_health_summary` aggregates healthy, degraded,
+and missing counts. `workspace status --check` returns `0` only when every
+required member is ready, `2` for a missing manifest, an empty workspace, or
+any missing required member/database, and `5` for other degraded health.
+Malformed manifests retain usage exit `1`. Ordinary `workspace status` remains
+informational and returns `0` after a successful status report.
+
 Index-generation readiness is derived from persisted evidence and is shared by
 the index command result, immediate `status` / workspace status, and MCP
 responses. `index_complete=false` identifies omitted input or extraction work,
@@ -693,6 +704,17 @@ immutable URI の選択、timeout、cancellation、WAL snapshot risk の diagnos
 check mode の JSON は `query_context.check_mode`（`explicit` または
 `implied_by_stale_after`）と有効な `query_context.stale_after_seconds` を含み、
 通常の status JSON では `query_context` を省略します。
+
+`cdidx workspace status --json` は member ごとに sibling field の
+`project_exists` と `db_exists` を返します。従来の `exists` は
+`project_exists` の互換 alias として維持します。各 `index_health` は安定した reason と、
+`action` および任意の `command.name` / `command.args` からなる構造化
+`repair_action` を含み、`member_health_summary` は healthy / degraded / missing
+件数を集約します。`workspace status --check` はすべての required member が ready の
+場合だけ `0`、manifest 不在、空 workspace、required member / database が1件でも
+missing の場合は `2`、その他の degraded health では `5` を返します。
+不正な manifest は従来どおり usage exit `1` です。通常の `workspace status` は
+informational なままで、status report が成功すれば `0` を返します。
 
 index generation の readiness は永続化済みの証拠から導出し、index command の結果、
 直後の `status` / workspace status、MCP response で同じ snapshot を共有します。
