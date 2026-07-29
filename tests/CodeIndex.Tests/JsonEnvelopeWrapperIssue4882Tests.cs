@@ -16,70 +16,7 @@ public sealed class JsonEnvelopeWrapperIssue4882Tests
         var projectRoot = TestProjectHelper.CreateTempProject("bounded_graph_body_snippet_4882");
         try
         {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
-                "src/Session.cs",
-                "csharp",
-                """
-                class Session
-                {
-                    int TargetA() => 1;
-                    int TargetB() => 2;
-                    int Caller()
-                    {
-                        return TargetA() + TargetB();
-                    }
-                    int Other()
-                    {
-                        return TargetA();
-                    }
-                }
-                """);
-            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
-            {
-                using var select = db.Connection.CreateCommand();
-                select.CommandText = "SELECT id FROM files WHERE path = 'src/Session.cs'";
-                var fileId = Convert.ToInt32(select.ExecuteScalar());
-                var writer = new DbWriter(db.Connection);
-                writer.InsertReferences([
-                    new ReferenceRecord
-                    {
-                        FileId = fileId,
-                        SymbolName = "TargetA",
-                        ReferenceKind = "call",
-                        Line = 7,
-                        Column = 16,
-                        Context = "        return TargetA() + TargetB();",
-                        ContainerKind = "function",
-                        ContainerName = "Caller",
-                    },
-                    new ReferenceRecord
-                    {
-                        FileId = fileId,
-                        SymbolName = "TargetB",
-                        ReferenceKind = "call",
-                        Line = 7,
-                        Column = 28,
-                        Context = "        return TargetA() + TargetB();",
-                        ContainerKind = "function",
-                        ContainerName = "Caller",
-                    },
-                    new ReferenceRecord
-                    {
-                        FileId = fileId,
-                        SymbolName = "TargetA",
-                        ReferenceKind = "call",
-                        Line = 11,
-                        Column = 16,
-                        Context = "        return TargetA();",
-                        ContainerKind = "function",
-                        ContainerName = "Other",
-                    },
-                ]);
-                writer.MarkGraphReady();
-                writer.MarkFoldReady();
-            }
+            var dbPath = CreateGraphFixture(projectRoot);
 
             foreach (var (command, query) in new[]
             {
@@ -127,6 +64,145 @@ public sealed class JsonEnvelopeWrapperIssue4882Tests
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }
+
+    [Fact]
+    public void BoundedGraphCountReplay_PreservesVerbatimSnippetLikeQueries_Issue4882()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("bounded_graph_verbatim_snippet_query_4882");
+        try
+        {
+            var dbPath = CreateGraphFixture(projectRoot);
+            foreach (var command in new[] { "references", "callers", "callees" })
+            {
+                var queryForms = new[]
+                {
+                    new[] { "--query", "--snippet-lines" },
+                    new[] { "--", "--snippet-lines" },
+                    new[] { "--query=--snippet-lines" },
+                };
+                foreach (var queryForm in queryForms)
+                {
+                    var args = new[] { command, "--db", dbPath, "--json", "--fields", "path,line", "--limit", "1", "--max-json-bytes", "8192" }
+                        .Concat(queryForm)
+                        .ToArray();
+                    var (exitCode, stdout, stderr) = CaptureConsole(
+                        () => ProgramRunner.Run(args, _jsonOptions, "1.0.0-test"));
+
+                    Assert.Equal(CommandExitCodes.Success, exitCode);
+                    Assert.Equal(string.Empty, stderr);
+                    using var document = JsonDocument.Parse(stdout);
+                    var metadata = document.RootElement.GetProperty("metadata");
+                    Assert.Equal("--snippet-lines", metadata.GetProperty("query_normalized").GetString());
+                    Assert.Equal(2, metadata.GetProperty("total_count").GetInt32());
+                    Assert.True(metadata.GetProperty("has_more").GetBoolean());
+                    Assert.False(string.IsNullOrWhiteSpace(metadata.GetProperty("next_cursor").GetString()));
+                }
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void CompactGraphSnippetValidation_UsesOriginalArgsBeforeDatabase_Issue4882()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("bounded_graph_compact_preflight_4882");
+        try
+        {
+            var missingDbPath = Path.Combine(projectRoot, "missing.db");
+            foreach (var command in new[] { "references", "callers", "callees" })
+            {
+                foreach (var compactArgs in new[]
+                {
+                    new[] { "--compact" },
+                    new[] { "--format", "compact" },
+                })
+                {
+                    var args = new[]
+                        {
+                            command, "Target", "--db", missingDbPath, "--body", "--snippet-lines", "3",
+                        }
+                        .Concat(compactArgs)
+                        .ToArray();
+                    var (exitCode, stdout, stderr) = CaptureConsole(
+                        () => ProgramRunner.Run(args, _jsonOptions, "1.0.0-test"));
+
+                    Assert.Equal(CommandExitCodes.UsageError, exitCode);
+                    Assert.Equal(string.Empty, stdout);
+                    Assert.Contains("--snippet-lines with --body requires text or JSON result output", stderr);
+                    Assert.DoesNotContain("DB_NOT_FOUND", stderr, StringComparison.OrdinalIgnoreCase);
+                    Assert.DoesNotContain("database", stderr, StringComparison.OrdinalIgnoreCase);
+                }
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    private static string CreateGraphFixture(string projectRoot)
+    {
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/Session.cs",
+            "csharp",
+            """
+            class Session
+            {
+                int TargetA() => 1;
+                int TargetB() => 2;
+                int Caller()
+                {
+                    return TargetA() + TargetB();
+                }
+                int Other()
+                {
+                    return TargetA();
+                }
+                int LiteralCallerOne() => 1;
+                int LiteralCallerTwo() => 2;
+            }
+            """);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+        using var select = db.Connection.CreateCommand();
+        select.CommandText = "SELECT id FROM files WHERE path = 'src/Session.cs'";
+        var fileId = Convert.ToInt32(select.ExecuteScalar());
+        var writer = new DbWriter(db.Connection);
+        writer.InsertReferences([
+            CreateReference(fileId, "TargetA", 7, 16, "Caller"),
+            CreateReference(fileId, "TargetB", 7, 28, "Caller"),
+            CreateReference(fileId, "TargetA", 11, 16, "Other"),
+            CreateReference(fileId, "--snippet-lines", 13, 35, "LiteralCallerOne"),
+            CreateReference(fileId, "--snippet-lines", 14, 35, "LiteralCallerTwo"),
+            CreateReference(fileId, "LiteralTargetOne", 7, 16, "--snippet-lines"),
+            CreateReference(fileId, "LiteralTargetTwo", 7, 28, "--snippet-lines"),
+        ]);
+        writer.MarkGraphReady();
+        writer.MarkFoldReady();
+        return dbPath;
+    }
+
+    private static ReferenceRecord CreateReference(
+        int fileId,
+        string symbolName,
+        int line,
+        int column,
+        string containerName)
+        => new()
+        {
+            FileId = fileId,
+            SymbolName = symbolName,
+            ReferenceKind = "call",
+            Line = line,
+            Column = column,
+            Context = $"        return {symbolName}();",
+            ContainerKind = "function",
+            ContainerName = containerName,
+        };
 
     private static (int ExitCode, string Stdout, string Stderr) CaptureConsole(Func<int> action)
     {

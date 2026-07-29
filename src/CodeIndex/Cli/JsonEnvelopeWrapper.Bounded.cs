@@ -204,6 +204,11 @@ internal static partial class JsonEnvelopeWrapper
                 CommandExitCodes.UsageError,
                 controls.MaxJsonBytes);
         }
+        var bodyProjected = HasExplicitBodyProjection(controls.Fields);
+        var bodyOutputHidden = !bodyProjected
+                               && (controls.Compact || controls.Fields is { Count: > 0 });
+        if (!QueryCommandRunner.TryValidateBoundedGraphSnippetLinesOption(command, args, bodyOutputHidden))
+            return CommandExitCodes.UsageError;
         if (HasArgument(args, "--count")
             || command == "find" && IsFindCountResponseRequest(args))
             return WriteBoundedResponseUsageError("Bounded response controls cannot be combined with --count.", "Run --count --json separately for a count-only response, or remove --count to page projected rows.");
@@ -314,7 +319,9 @@ internal static partial class JsonEnvelopeWrapper
                 extraction.PrimaryCollection))
             .ToList();
 
-        var count = executionContext?.ReportedTotalCount is { } reportedTotalCount
+        var count = exitCode == CommandExitCodes.UsageError
+            ? new ResponseCount(controls.Offset + pageItems.Count, false)
+            : executionContext?.ReportedTotalCount is { } reportedTotalCount
             ? new ResponseCount(
                 reportedTotalCount,
                 executionContext.ReportedTotalCountAuthoritative)
@@ -1167,7 +1174,7 @@ internal static partial class JsonEnvelopeWrapper
         stripped.RemoveAll(arg => string.Equals(arg, "--body", StringComparison.Ordinal)
                                   || string.Equals(arg, "--summary-only", StringComparison.Ordinal)
                                   || string.Equals(arg, "--strict-not-found", StringComparison.Ordinal));
-        RemoveOptionWithValue(stripped, "--snippet-lines");
+        RemoveParsedGraphSnippetLinesOption(stripped);
         if (command == "impact")
         {
             stripped.Add("--limit");
@@ -1176,6 +1183,37 @@ internal static partial class JsonEnvelopeWrapper
         stripped.Add("--count");
         stripped.Add("--json");
         return [.. stripped];
+    }
+
+    private static void RemoveParsedGraphSnippetLinesOption(List<string> args)
+    {
+        for (var i = 0; i < args.Count;)
+        {
+            var arg = args[i];
+            if (string.Equals(arg, "--", StringComparison.Ordinal))
+            {
+                i += i + 1 < args.Count ? 2 : 1;
+                continue;
+            }
+            if (arg is "--query" or "--db" or "--path")
+            {
+                i += i + 1 < args.Count ? 2 : 1;
+                continue;
+            }
+            if (arg.StartsWith("--snippet-lines=", StringComparison.Ordinal))
+            {
+                args.RemoveAt(i);
+                continue;
+            }
+            if (string.Equals(arg, "--snippet-lines", StringComparison.Ordinal))
+            {
+                args.RemoveAt(i);
+                if (i < args.Count)
+                    args.RemoveAt(i);
+                continue;
+            }
+            i++;
+        }
     }
 
     private static List<string> StripResponseOptions(string[] args, bool stripLimit)

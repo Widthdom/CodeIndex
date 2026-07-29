@@ -468,9 +468,23 @@ public static partial class QueryCommandRunner
         return true;
     }
 
+    internal static bool TryValidateBoundedGraphSnippetLinesOption(
+        string command,
+        string[] args,
+        bool bodyOutputHidden)
+    {
+        if (command is not ("references" or "callers" or "callees"))
+            return true;
+
+        var options = ParseArgs(args, jsonDefault: false, allowNamedQuery: true);
+        return options.ParseError != null
+               || TryValidateGraphSnippetLinesOption(command, options, bodyOutputHidden);
+    }
+
     private static bool TryValidateGraphSnippetLinesOption(
         string command,
-        QueryCommandOptions options)
+        QueryCommandOptions options,
+        bool bodyOutputHidden = false)
     {
         if (!options.SnippetLinesExplicit || options.SnippetLines == 0)
             return true;
@@ -485,7 +499,8 @@ public static partial class QueryCommandRunner
             return false;
         }
 
-        if (options.CountOnly
+        if (bodyOutputHidden
+            || options.CountOnly
             || options.OutputFormat is not (OutputFormatText or OutputFormatJson))
         {
             CommandErrorWriter.Write(
