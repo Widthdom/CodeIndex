@@ -842,6 +842,128 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Json_ArraysPreservePathsParentsAndEmptyContainers_Issue4874()
+    {
+        const string objectRoot = """
+            {
+              "command_cases": [
+                {
+                  "command_cases": "nested",
+                  "nested": [
+                    ["scalar", { "leaf": true }],
+                    [],
+                    {}
+                  ]
+                },
+                7,
+                [],
+                {}
+              ],
+              "literal_keys": { "[0]": true },
+              "empty_object": {},
+              "empty_array": []
+            }
+            """;
+        const string arrayRoot = """
+            [
+              { "name": "duplicate" },
+              "duplicate",
+              [2],
+              [],
+              {}
+            ]
+            """;
+        const string commentedArrayRoot = """
+            [
+              // option 1
+              1,
+              // "duplicate"
+              "duplicate"
+            ]
+            """;
+        const string jsonLines = """
+            {"items":[{"leaf":1}],"[0]":true}
+            [{"name":"first"},[]]
+            """;
+
+        var objectSymbols = SymbolExtractor.Extract(1, "json", objectRoot);
+        var rootSymbols = SymbolExtractor.Extract(1, "json", arrayRoot);
+        var commentedRootSymbols = SymbolExtractor.Extract(1, "json", commentedArrayRoot);
+        var jsonLineSymbols = SymbolExtractor.Extract(1, "jsonl", jsonLines);
+
+        Assert.Collection(
+            objectSymbols,
+            symbol => AssertStructuredJsonSymbol(symbol, "array", "command_cases", 2, null, null),
+            symbol => AssertStructuredJsonSymbol(symbol, "object", "command_cases[0]", 3, "array", "command_cases"),
+            symbol => AssertStructuredJsonSymbol(symbol, "property", "command_cases[0].command_cases", 4, "object", "command_cases[0]"),
+            symbol => AssertStructuredJsonSymbol(symbol, "array", "command_cases[0].nested", 5, "object", "command_cases[0]"),
+            symbol => AssertStructuredJsonSymbol(symbol, "array", "command_cases[0].nested[0]", 6, "array", "command_cases[0].nested"),
+            symbol => AssertStructuredJsonSymbol(symbol, "value", "command_cases[0].nested[0][0]", 6, "array", "command_cases[0].nested[0]"),
+            symbol => AssertStructuredJsonSymbol(symbol, "object", "command_cases[0].nested[0][1]", 6, "array", "command_cases[0].nested[0]"),
+            symbol => AssertStructuredJsonSymbol(symbol, "property", "command_cases[0].nested[0][1].leaf", 6, "object", "command_cases[0].nested[0][1]"),
+            symbol => AssertStructuredJsonSymbol(symbol, "array", "command_cases[0].nested[1]", 7, "array", "command_cases[0].nested"),
+            symbol => AssertStructuredJsonSymbol(symbol, "object", "command_cases[0].nested[2]", 8, "array", "command_cases[0].nested"),
+            symbol => AssertStructuredJsonSymbol(symbol, "value", "command_cases[1]", 11, "array", "command_cases"),
+            symbol => AssertStructuredJsonSymbol(symbol, "array", "command_cases[2]", 12, "array", "command_cases"),
+            symbol => AssertStructuredJsonSymbol(symbol, "object", "command_cases[3]", 13, "array", "command_cases"),
+            symbol => AssertStructuredJsonSymbol(symbol, "object", "literal_keys", 15, null, null),
+            symbol => AssertStructuredJsonSymbol(symbol, "property", "literal_keys.[0]", 15, "object", "literal_keys"),
+            symbol => AssertStructuredJsonSymbol(symbol, "object", "empty_object", 16, null, null),
+            symbol => AssertStructuredJsonSymbol(symbol, "array", "empty_array", 17, null, null));
+        Assert.Collection(
+            rootSymbols,
+            symbol => AssertStructuredJsonSymbol(symbol, "object", "[0]", 2, null, null),
+            symbol => AssertStructuredJsonSymbol(symbol, "property", "[0].name", 2, "object", "[0]"),
+            symbol => AssertStructuredJsonSymbol(symbol, "value", "[1]", 3, null, null),
+            symbol => AssertStructuredJsonSymbol(symbol, "array", "[2]", 4, null, null),
+            symbol => AssertStructuredJsonSymbol(symbol, "value", "[2][0]", 4, "array", "[2]"),
+            symbol => AssertStructuredJsonSymbol(symbol, "array", "[3]", 5, null, null),
+            symbol => AssertStructuredJsonSymbol(symbol, "object", "[4]", 6, null, null));
+        Assert.Collection(
+            commentedRootSymbols,
+            symbol =>
+            {
+                AssertStructuredJsonSymbol(symbol, "value", "[0]", 3, null, null);
+                Assert.Equal("1,", symbol.Signature);
+            },
+            symbol =>
+            {
+                AssertStructuredJsonSymbol(symbol, "value", "[1]", 5, null, null);
+                Assert.Equal("\"duplicate\"", symbol.Signature);
+            });
+        Assert.Collection(
+            jsonLineSymbols,
+            symbol => AssertStructuredJsonSymbol(symbol, "record", "[0]", 1, null, null),
+            symbol => AssertStructuredJsonSymbol(symbol, "array", "[0].items", 1, "record", "[0]"),
+            symbol => AssertStructuredJsonSymbol(symbol, "object", "[0].items[0]", 1, "array", "[0].items"),
+            symbol => AssertStructuredJsonSymbol(symbol, "property", "[0].items[0].leaf", 1, "object", "[0].items[0]"),
+            symbol => AssertStructuredJsonSymbol(symbol, "property", "[0].[0]", 1, "record", "[0]"),
+            symbol => AssertStructuredJsonSymbol(symbol, "record", "[1]", 2, null, null),
+            symbol => AssertStructuredJsonSymbol(symbol, "object", "[1][0]", 2, "record", "[1]"),
+            symbol => AssertStructuredJsonSymbol(symbol, "property", "[1][0].name", 2, "object", "[1][0]"),
+            symbol => AssertStructuredJsonSymbol(symbol, "array", "[1][1]", 2, "record", "[1]"));
+        Assert.Empty(SymbolExtractor.Extract(1, "json", "[]"));
+    }
+
+    private static void AssertStructuredJsonSymbol(
+        SymbolRecord symbol,
+        string kind,
+        string name,
+        int line,
+        string? containerKind,
+        string? containerName)
+    {
+        Assert.Equal(kind, symbol.Kind);
+        Assert.Equal(name, symbol.Name);
+        Assert.Equal(line, symbol.Line);
+        Assert.Equal(line, symbol.StartLine);
+        Assert.Equal(line, symbol.EndLine);
+        Assert.Equal(containerKind, symbol.ContainerKind);
+        Assert.Equal(containerName, symbol.ContainerName);
+        Assert.Equal(containerName, symbol.ContainerQualifiedName);
+    }
+
+    [Fact]
     public void Extract_Json_IndexesReflectionSensitivePropertyNames_Issue4709()
     {
         const string content = """
@@ -935,6 +1057,78 @@ public partial class SymbolExtractorTests
             candidate => candidate.Name == "dup");
 
         Assert.Equal(5, symbol.Line);
+    }
+
+    [Fact]
+    public void Extract_Json_SkippedOverlongPropertySubtreesDoNotStealArrayItemLines_Issue4874()
+    {
+        var longName = new string('a', SymbolExtractor.StructuredDataMaxPathLength + 1);
+        var content = $$"""
+            [
+              {
+                "{{longName}}": [
+                  [
+                    1
+                  ]
+                ]
+              },
+              2
+            ]
+            """;
+
+        var symbol = Assert.Single(
+            SymbolExtractor.Extract(1, "json", content),
+            candidate => candidate.Name == "[1]");
+
+        Assert.Equal(9, symbol.Line);
+        Assert.Equal("2", symbol.Signature);
+    }
+
+    [Fact]
+    public void Extract_Json_SkippedOverlongArraySubtreesDoNotStealArrayItemLines_Issue4874()
+    {
+        var longName = new string('a', SymbolExtractor.StructuredDataMaxPathLength - 6);
+        var content = $$"""
+            [
+              {
+                "{{longName}}": [
+                  [
+                    1
+                  ]
+                ]
+              },
+              2
+            ]
+            """;
+
+        var symbol = Assert.Single(
+            SymbolExtractor.Extract(1, "json", content),
+            candidate => candidate.Name == "[1]");
+
+        Assert.Equal(9, symbol.Line);
+        Assert.Equal("2", symbol.Signature);
+    }
+
+    [Fact]
+    public void Extract_Json_EmptyPropertyAfterEmptyArrayValueKeepsItsLine_Issue4874()
+    {
+        const string content = """
+            {
+              "items": [
+                "",
+                {
+                  "": 1
+                }
+              ]
+            }
+            """;
+
+        var symbol = Assert.Single(
+            SymbolExtractor.Extract(1, "json", content),
+            candidate => candidate.Name == "items[1].");
+
+        Assert.Equal(5, symbol.Line);
+        Assert.Equal("\"\": 1", symbol.Signature);
     }
 
     [Fact]
@@ -1053,6 +1247,74 @@ public partial class SymbolExtractorTests
         Assert.Contains(symbols, symbol => symbol.Name == "steps[0].name");
         Assert.Contains(symbols, symbol => symbol.Name == "steps[1].name");
         Assert.DoesNotContain(symbols, symbol => symbol.Name == "steps.name");
+    }
+
+    [Fact]
+    public void Extract_Yaml_SequenceItemsUsePathOnlyIdentityAndNearestSymbolParent_Issue4873()
+    {
+        const string content = """
+            - &first
+              env:
+                FOO: bar
+              name: Build
+              with:
+                path: |
+                  ignored: value
+            - *first
+            -
+            - null
+            - |
+              phantom: text
+            - name: Final
+              nested:
+                value: yes
+            defaults: &defaults
+              retries: 3
+            copy: *defaults
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "yaml", content);
+
+        Assert.Equal(11, symbols.Count);
+        Assert.DoesNotContain(symbols, symbol => symbol.Name is "[0]" or "[1]" or "[2]" or "[3]" or "[4]" or "[5]");
+
+        var firstName = Assert.Single(symbols, symbol => symbol.Name == "[0].name");
+        Assert.Null(firstName.ContainerName);
+        Assert.Equal("[0]", firstName.ContainerQualifiedName);
+
+        Assert.Contains(symbols, symbol =>
+            symbol.Name == "[0].env.FOO"
+            && symbol.ContainerName == "[0].env"
+            && symbol.ContainerQualifiedName == "[0].env");
+
+        var firstWith = Assert.Single(symbols, symbol => symbol.Name == "[0].with");
+        Assert.Equal("namespace", firstWith.Kind);
+        Assert.Null(firstWith.ContainerName);
+        Assert.Equal("[0]", firstWith.ContainerQualifiedName);
+
+        var firstPath = Assert.Single(symbols, symbol => symbol.Name == "[0].with.path");
+        Assert.Equal("[0].with", firstPath.ContainerName);
+        Assert.Equal("[0].with", firstPath.ContainerQualifiedName);
+        Assert.Equal(6, firstPath.Line);
+        Assert.Equal(6, firstPath.StartLine);
+        Assert.Equal(6, firstPath.EndLine);
+
+        var finalName = Assert.Single(symbols, symbol => symbol.Name == "[5].name");
+        Assert.Null(finalName.ContainerName);
+        Assert.Equal("[5]", finalName.ContainerQualifiedName);
+        Assert.Contains(symbols, symbol =>
+            symbol.Name == "[5].nested.value"
+            && symbol.ContainerName == "[5].nested"
+            && symbol.ContainerQualifiedName == "[5].nested");
+
+        Assert.Contains(symbols, symbol => symbol.Kind == "namespace" && symbol.Name == "defaults");
+        Assert.Contains(symbols, symbol =>
+            symbol.Name == "defaults.retries"
+            && symbol.ContainerName == "defaults"
+            && symbol.ContainerQualifiedName == "defaults");
+        Assert.Contains(symbols, symbol => symbol.Kind == "property" && symbol.Name == "copy");
+        Assert.DoesNotContain(symbols, symbol => symbol.Name.Contains("ignored", StringComparison.Ordinal));
+        Assert.DoesNotContain(symbols, symbol => symbol.Name.Contains("phantom", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -12787,6 +13049,12 @@ public partial class SymbolExtractorTests
         Assert.True(SymbolExtractor.MakefileContractVersion > SymbolExtractor.DefaultContractVersion);
         Assert.Equal(SymbolExtractor.DependencyLockContractVersion, SymbolExtractor.GetContractVersion("dependency_lock"));
         Assert.True(SymbolExtractor.DependencyLockContractVersion > SymbolExtractor.ExpandedLanguageContractVersion);
+        Assert.Equal(SymbolExtractor.YamlContractVersion, SymbolExtractor.GetContractVersion("yaml"));
+        Assert.True(SymbolExtractor.YamlContractVersion > SymbolExtractor.ExpandedLanguageContractVersion);
+        Assert.Equal(SymbolExtractor.JsonContractVersion, SymbolExtractor.GetContractVersion("json"));
+        Assert.True(SymbolExtractor.JsonContractVersion > SymbolExtractor.ExpandedLanguageContractVersion);
+        Assert.Equal(SymbolExtractor.JsonLinesContractVersion, SymbolExtractor.GetContractVersion("jsonl"));
+        Assert.True(SymbolExtractor.JsonLinesContractVersion > SymbolExtractor.RepositoryMetadataContractVersion);
         Assert.Equal(SymbolExtractor.StyleAndXamlContractVersion, SymbolExtractor.GetContractVersion("sass"));
         Assert.Equal(SymbolExtractor.StyleAndXamlContractVersion, SymbolExtractor.GetContractVersion("stylus"));
         Assert.True(SymbolExtractor.StyleAndXamlContractVersion > SymbolExtractor.DefaultContractVersion);

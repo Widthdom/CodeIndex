@@ -124,10 +124,16 @@ public partial class McpServer
             var excerpt = reader.GetExcerpt(path, startLine.Value, endLine, before, after, maxLineWidth, focusLine ?? startLine.Value, focusColumn, focusLength);
             if (excerpt == null)
             {
+                var indexedFile = reader.GetFileByPath(path);
                 var emptyPayload = new JsonObject
                 {
                     ["path"] = path,
-                    ["count"] = 0
+                    ["count"] = 0,
+                    ["requestedStartLine"] = startLine.Value,
+                    ["requestedEndLine"] = endLine,
+                    ["effectiveStartLine"] = null,
+                    ["effectiveEndLine"] = null,
+                    ["totalLines"] = indexedFile?.Lines,
                 };
                 AddRecoveryHint(
                     emptyPayload,

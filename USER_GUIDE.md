@@ -1767,7 +1767,13 @@ For large files, `outline --json` supports `--kind <kind[,kind]>`, `--sort <sour
 cdidx excerpt src/CodeIndex/Cli/GitHelper.cs --start 19 --end 28
 cdidx excerpt src/CodeIndex/Cli/GitHelper.cs --start 19 --end 28 --before 3 --after 3 --json
 cdidx excerpt src/CodeIndex/Cli/GitHelper.cs --line 24 --context 3 --json --no-semantic-tokens
+cdidx excerpt src/CodeIndex/Cli/GitHelper.cs --start 19 --end eof
+cdidx excerpt src/CodeIndex/Cli/GitHelper.cs --start 19 --end 999999 --clamp --json
 ```
+
+Excerpt coordinates are 1-based, and zero or negative coordinates return `E020_LINE_OUT_OF_RANGE`. Numeric `--end` values remain strict: overshooting the indexed file returns a range error with `range_recovery` guidance. Use `--end eof` to explicitly read through the indexed end of file, or add `--clamp` to explicitly clamp numeric overshoot to file boundaries.
+
+JSON keeps the original request in `requested_start_line` / `requested_end_line` and the returned window in `effective_start_line` / `effective_end_line`, with `total_lines` reporting the indexed file length. Context expands only the effective window: for example, `--start 18 --end 22 --before 2 --after 2` reports requested lines 18–22 and effective lines 16–24. `requested_end_mode` distinguishes `numeric` from `eof`, and `range_clamped` reports whether explicit clamping changed the returned bounds.
 
 ### Find a substring inside a known file
 
@@ -2570,7 +2576,7 @@ All indexed languages are searchable through FTS5. Rows with **Symbols = yes** a
 - Dynamic/declarative graph languages: Crystal, Groovy, Tcl, and Prolog expose conservative declarations, imports, and call relationships. Crystal, Groovy, and Prolog parenthesized calls use the shared extractor; command-style calls are limited to callables declared in the same file. Tcl recognizes command substitutions and common control-command script arguments without treating ordinary `name()` words as calls, while Tcl proc / Prolog predicate bodies preserve caller containers.
   An index created before this graph contract reports `reference_graph_complete=false` and `graph_data_current=false` with `dynamic_reference_graph_contract_stale`; rerun `cdidx index <projectPath>` to refresh affected rows before treating absent edges as authoritative.
 - Scientific and native-extension graphs: Julia, MATLAB, Nim, D, Cython, and Ada emit bounded language-aware import/module, base/type, and call references. Julia macro invocations and Ada procedure-style calls without parentheses are also represented.
-- Markdown, JSON/YAML, and CSS: Markdown headings and explicit HTML anchors are indexed as definitions, while local and cross-document fragment links are indexed as path-scoped references. Heading slugs use rendered inline text; explicit HTML IDs preserve exact case and punctuation after HTML entity decoding. JSON/YAML configuration keys are indexed as structural key paths; CSS variables, placeholders, and `@extend` references are indexed.
+- Markdown, JSON/YAML, and CSS: Markdown headings and explicit HTML anchors are indexed as definitions, while local and cross-document fragment links are indexed as path-scoped references. Heading slugs use rendered inline text; explicit HTML IDs preserve exact case and punctuation after HTML entity decoding. JSON/YAML configuration keys are indexed as structural key paths. YAML sequence elements remain path-only (`steps[14]`) rather than adding synthetic symbols, while their mapping descendants retain the nearest indexed mapping parent so `outline` reports stable paths and meaningful depth. CSS variables, placeholders, and `@extend` references are indexed.
 - Dockerfile, Assembly, Common Lisp, and Racket: `ARG` build args, labels/PROC/MACRO blocks, package/module forms, definitions, classes/structs, requires, and provides are surfaced as symbols where applicable.
 - Shell, PowerShell, and Batch: command-style function calls, functions/filters, classes/enums, imports, labels, `goto` / `call` targets, and inline control-flow forms are indexed where the language supports them.
 - C# and Java: modern C# partial members remain visible to `symbols`, `definition`, and `outline`; Java sealed `permits` lists are recorded as `type_reference` graph edges.
@@ -4994,7 +5000,13 @@ cdidx outline src/CodeIndex/Cli/QueryCommandRunner.cs --compact --kind function 
 cdidx excerpt src/CodeIndex/Cli/GitHelper.cs --start 19 --end 28
 cdidx excerpt src/CodeIndex/Cli/GitHelper.cs --start 19 --end 28 --before 3 --after 3 --json
 cdidx excerpt src/CodeIndex/Cli/GitHelper.cs --line 24 --context 3 --json --no-semantic-tokens
+cdidx excerpt src/CodeIndex/Cli/GitHelper.cs --start 19 --end eof
+cdidx excerpt src/CodeIndex/Cli/GitHelper.cs --start 19 --end 999999 --clamp --json
 ```
+
+excerpt の座標は 1-based で、0 以下の座標は `E020_LINE_OUT_OF_RANGE` を返します。数値の `--end` は従来どおり strict で、インデックス済みファイルの終端を超えると `range_recovery` guidance 付きの range error になります。インデックス済み EOF まで明示的に読むには `--end eof`、数値の超過範囲をファイル境界へ明示的に丸めるには `--clamp` を使います。
+
+JSON は元の指定を `requested_start_line` / `requested_end_line`、実際に返した window を `effective_start_line` / `effective_end_line` に分け、`total_lines` でインデックス済みファイルの総行数を返します。context は effective window だけを拡張します。たとえば `--start 18 --end 22 --before 2 --after 2` は requested 18–22、effective 16–24 を返します。`requested_end_mode` は `numeric` と `eof` を区別し、`range_clamped` は明示的な clamp により返却境界が変わったかを示します。
 
 ### 既知ファイル内の部分文字列を探す
 
@@ -5774,7 +5786,7 @@ indexing はファイル単位の SQLite transaction を commit します。長�
 - 動的・宣言型言語の graph 対応: Crystal、Groovy、Tcl、Prolog は保守的な宣言、import、call relationship を公開します。Crystal、Groovy、Prolog の括弧付き call は共通 extractor を使い、command-style call は同一ファイルで宣言済みの callable に限定します。Tcl は通常の `name()` word を call とみなさず、command substitution と主要な制御 command の script 引数を認識し、Tcl proc / Prolog predicate の本体では caller container を保持します。
   この graph contract より前に作成された index は `dynamic_reference_graph_contract_stale` とともに `reference_graph_complete=false`、`graph_data_current=false` を報告します。欠落 edge を authoritative とみなす前に `cdidx index <projectPath>` を再実行して対象 row を更新してください。
 - 科学技術・ネイティブ拡張言語のグラフ: Julia、MATLAB、Nim、D、Cython、Ada は、言語構文に応じた import/module、基底型/type、call 参照を上限付きで出力します。Julia の macro invocation と、括弧を伴わない Ada の procedure call も記録します。
-- Markdown、JSON/YAML、CSS: Markdown の heading と明示的な HTML anchor は定義として、同一文書・文書間の fragment link は対象 path に限定した参照として索引します。heading slug は表示される inline text から作り、明示的な HTML ID は HTML entity の decode 後も大文字小文字と句読点を正確に保持します。JSON/YAML の configuration key path、CSS の variable、placeholder、`@extend` もシンボルとして扱います。
+- Markdown、JSON/YAML、CSS: Markdown の heading と明示的な HTML anchor は定義として、同一文書・文書間の fragment link は対象 path に限定した参照として索引します。heading slug は表示される inline text から作り、明示的な HTML ID は HTML entity の decode 後も大文字小文字と句読点を正確に保持します。JSON/YAML の configuration key path を索引します。YAML の sequence element は synthetic symbol を追加せず path 専用（`steps[14]`）のまま扱い、その mapping descendant には最寄りの索引済み mapping parent を保持するため、`outline` は安定した path と意味のある depth を返します。CSS の variable、placeholder、`@extend` もシンボルとして扱います。
 - Dockerfile、Assembly、Common Lisp、Racket: `ARG` build arg、label、PROC/MACRO、package/module form、definition、class/struct、require/provide を必要に応じて表面化します。
 - Shell、PowerShell、Batch: command-style function call、function/filter、class/enum、import、label、`goto` / `call` target、inline control-flow を言語仕様に合わせて索引します。
 - C# と Java: C# の近年の partial member は `symbols`、`definition`、`outline` から見えます。Java の sealed `permits` list は `type_reference` graph edge として記録します。
