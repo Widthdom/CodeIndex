@@ -341,16 +341,18 @@ public static partial class SymbolExtractor
                             continue;
                         }
 
-                        // Gate the C# plain-field pattern (kind `property`, BodyStyle.None) to
-                        // lines that sit directly inside a type body. Without this gate, local
+                        // Gate the C# plain-field pattern (internally tagged as `property`,
+                        // BodyStyle.None, then normalized to the public `field` kind) to lines
+                        // that sit directly inside a type body. Without this gate, local
                         // variable declarations inside method / property / accessor / lambda
                         // bodies match the same shape and leak into `symbols`, `definition`,
-                        // `outline`, `inspect`, and `unused` as phantom property symbols.
+                        // `outline`, `inspect`, and `unused` as phantom field symbols.
                         // Closes #298 follow-up (codex review blocker).
-                        // C# の通常フィールド用パターン（kind `property` かつ BodyStyle.None）は
-                        // 型本体（class / struct / interface / record / enum の直下）でしか
-                        // 許可しない。このゲートを入れないと、メソッド・プロパティ・アクセサ・
-                        // ラムダの内部にあるローカル変数宣言が同じ形でマッチしてしまい、
+                        // C# の通常フィールド用パターン（内部タグは `property`、BodyStyle.None、
+                        // 公開時に `field` へ正規化）は型本体（class / struct / interface /
+                        // record / enum の直下）でしか許可しない。このゲートを入れないと、
+                        // メソッド・プロパティ・アクセサ・ラムダの内部にあるローカル変数宣言が
+                        // 同じ形でマッチしてしまい、
                         // `symbols` / `definition` / `outline` / `inspect` / `unused` に
                         // 擬似シンボルが混入する。Closes #298 の codex レビュー blocker 対応。
                         if (ShouldSkipCssNestedSelectorCandidate(lang, pattern, patternMatchLine, getCssQualifiedRuleAncestors, i))
@@ -894,8 +896,9 @@ public static partial class SymbolExtractor
                             ref recordPrimaryComponentParentIndex,
                             symbols);
 
-                        // C# plain-field (kind `property`, BodyStyle.None) matches need their own
-                        // advance path. The generic `sameLineEndColumn`-based advance below resolves
+                        // C# plain-field matches (internally tagged as `property`, BodyStyle.None,
+                        // then normalized to public `field`) need their own advance path. The
+                        // generic `sameLineEndColumn`-based advance below resolves
                         // to -1 for BodyStyle.None and would set `stopAfterFirstPatternMatch`, which
                         // prevents structural siblings on the same line (e.g. the enclosing
                         // `public class C` in `public class C { public int X; }`) from being
@@ -903,7 +906,8 @@ public static partial class SymbolExtractor
                         // and continue the same-pattern scan so multiple same-line fields are
                         // still collected, and skip the stop flag so later patterns can still run.
                         // Closes #400.
-                        // C# 通常フィールド（kind `property`、BodyStyle.None）は専用の前進経路を使う。
+                        // C# 通常フィールド（内部タグは `property`、BodyStyle.None、公開時に
+                        // `field` へ正規化）は専用の前進経路を使う。
                         // 既定の `sameLineEndColumn` ベースの前進は BodyStyle.None では -1 に落ち、
                         // `stopAfterFirstPatternMatch` を立ててしまうため、同一行に存在する構造宣言
                         // （例: `public class C { public int X; }` の外側 class）を後続パターンで
@@ -1621,12 +1625,148 @@ public static partial class SymbolExtractor
 
         // Field signatures are metadata, not bodies. Large object/collection initializers can
         // otherwise consume an entire CLI, JSON, MCP, or LSP response budget after multiline
-        // signatures are collapsed to one line. Keep a deterministic declaration prefix and an
-        // explicit terminator while bounding the value persisted in the symbol database. #4445
+        // signatures are collapsed to one line. Replace each top-level initializer with a
+        // deterministic marker so modifiers, type, and every declarator remain readable without
+        // persisting an arbitrary initializer prefix. Keep the legacy hard limit as a final guard
+        // for pathologically large declarator lists. #4445, #4865
         // field signature は body ではなくメタデータである。複数行を1行へ畳み込んだ巨大な
         // object/collection initializer が CLI / JSON / MCP / LSP の応答予算を使い切らないよう、
-        // DB に保存する値を制限しつつ宣言prefixと明示的な終端を維持する。#4445
-        return string.Concat(signature.AsSpan(0, CSharpFieldInitializerSignatureLimit - 2), "…;");
+        // top-level initializer を決定的 marker に置換し、任意の initializer prefix を保存せずに
+        // modifier / type / 全 declarator を読める形で維持する。異常に長い declarator list には
+        // 従来の hard limit を最終ガードとして残す。#4445, #4865
+        var sanitized = LexCSharpLine(signature, new CSharpLexState()).SanitizedLine;
+        var summarized = new StringBuilder(Math.Min(signature.Length, CSharpFieldInitializerSignatureLimit));
+        var copyStart = 0;
+        var searchStart = 0;
+
+        while (TryFindCSharpTopLevelInitializerAssignment(sanitized, searchStart, out var assignmentColumn))
+        {
+            summarized.Append(signature.AsSpan(copyStart, assignmentColumn - copyStart).TrimEnd());
+            summarized.Append(" = …");
+
+            var delimiterColumn = FindCSharpTopLevelInitializerDelimiter(sanitized, assignmentColumn + 1);
+            if (delimiterColumn >= signature.Length)
+            {
+                summarized.Append(';');
+                copyStart = signature.Length;
+                break;
+            }
+
+            summarized.Append(signature[delimiterColumn]);
+            copyStart = delimiterColumn + 1;
+            searchStart = copyStart;
+        }
+
+        if (copyStart < signature.Length)
+            summarized.Append(signature.AsSpan(copyStart));
+
+        var result = summarized.ToString().Trim();
+        return result.Length <= CSharpFieldInitializerSignatureLimit
+            ? result
+            : string.Concat(result.AsSpan(0, CSharpFieldInitializerSignatureLimit - 2), "…;");
+    }
+
+    private static bool TryFindCSharpTopLevelInitializerAssignment(
+        string sanitized,
+        int startColumn,
+        out int assignmentColumn)
+    {
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+
+        for (var column = startColumn; column < sanitized.Length; column++)
+        {
+            var ch = sanitized[column];
+            switch (ch)
+            {
+                case '(':
+                    parenDepth++;
+                    continue;
+                case ')' when parenDepth > 0:
+                    parenDepth--;
+                    continue;
+                case '[':
+                    bracketDepth++;
+                    continue;
+                case ']' when bracketDepth > 0:
+                    bracketDepth--;
+                    continue;
+                case '{':
+                    braceDepth++;
+                    continue;
+                case '}' when braceDepth > 0:
+                    braceDepth--;
+                    continue;
+                case '<' when TryMatchCSharpGenericBracket(sanitized, column, out var genericEnd):
+                    column = genericEnd;
+                    continue;
+            }
+
+            if (ch != '=' || parenDepth != 0 || bracketDepth != 0 || braceDepth != 0)
+                continue;
+
+            var previous = column > 0 ? sanitized[column - 1] : '\0';
+            var next = column + 1 < sanitized.Length ? sanitized[column + 1] : '\0';
+            if (next is '=' or '>'
+                || previous is '=' or '!' or '<' or '>' or '+' or '-' or '*' or '/' or '%'
+                    or '&' or '|' or '^' or '?')
+            {
+                continue;
+            }
+
+            assignmentColumn = column;
+            return true;
+        }
+
+        assignmentColumn = -1;
+        return false;
+    }
+
+    private static int FindCSharpTopLevelInitializerDelimiter(string sanitized, int startColumn)
+    {
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+
+        for (var column = startColumn; column < sanitized.Length; column++)
+        {
+            var ch = sanitized[column];
+            switch (ch)
+            {
+                case '(':
+                    parenDepth++;
+                    continue;
+                case ')' when parenDepth > 0:
+                    parenDepth--;
+                    continue;
+                case '[':
+                    bracketDepth++;
+                    continue;
+                case ']' when bracketDepth > 0:
+                    bracketDepth--;
+                    continue;
+                case '{':
+                    braceDepth++;
+                    continue;
+                case '}' when braceDepth > 0:
+                    braceDepth--;
+                    continue;
+                case '<' when TryMatchCSharpGenericBracket(sanitized, column, out var genericEnd):
+                    column = genericEnd;
+                    continue;
+            }
+
+            if (parenDepth == 0
+                && bracketDepth == 0
+                && braceDepth == 0
+                && ch is ',' or ';')
+            {
+                return column;
+            }
+        }
+
+        return sanitized.Length;
     }
 
     private static void AddScriptScopeSymbol(long fileId, string[] lines, List<SymbolRecord> symbols)

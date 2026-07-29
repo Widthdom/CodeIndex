@@ -170,7 +170,7 @@ public static partial class SymbolExtractor
     // Mark every line that sits directly inside a C# type body (class / struct /
     // interface / record / enum). Used to gate the plain-field pattern so that
     // local variable declarations inside a method, property accessor, lambda, or
-    // other non-type body are not misclassified as kind `property`. The scan uses
+    // other non-type body are not misclassified as the public `field` kind. The scan uses
     // `structuralLines` (strings / chars / comments already masked), so it is not
     // fooled by braces or type-declaration-looking text inside literals. Only
     // brace-delimited types push a type-body frame — `new { ... }`, collection
@@ -180,7 +180,7 @@ public static partial class SymbolExtractor
     // C# の「現在この行は型本体（class / struct / interface / record / enum）の
     // 直下にあるか」を行単位で事前計算する。新しい通常フィールド抽出パターンが
     // メソッド本体・プロパティアクセサ・ラムダなど「非型本体」に含まれる
-    // ローカル変数宣言を kind `property` として誤抽出しないよう、このフラグで
+    // ローカル変数宣言を公開 kind `field` として誤抽出しないよう、このフラグで
     // ゲートする。走査は既に文字列・文字・コメントを空白化した
     // `structuralLines` を使うため、リテラル内の `{` や `class` 相当の文字列に
     // 騙されない。`new { ... }` や collection initializer、ラムダ本体の `{` は
@@ -189,7 +189,7 @@ public static partial class SymbolExtractor
     // Marks `{` that opens a class-like body where C# plain fields are legal.
     // `enum` is intentionally excluded: enum bodies contain enum members (not
     // fields), and the field regex would otherwise match enum member shapes like
-    // `[Obsolete] A = (int)B,` as phantom `property` symbols. The column-aware
+    // `[Obsolete] A = (int)B,` as phantom `field` symbols. The column-aware
     // scope gate relies on this distinction to reject field candidates inside
     // enum bodies while still accepting legitimate fields inside class / struct
     // / interface / record bodies. Closes #400.
