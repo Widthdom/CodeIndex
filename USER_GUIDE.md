@@ -216,13 +216,15 @@ local index automatically:
 |---|---|
 | `cdidx hooks install [--dry-run]` | Install the optional git pre-commit hook, or preview it without writing. |
 | `cdidx hooks status` | Show whether the hook is installed. |
-| `cdidx hooks uninstall` | Remove the hook. |
+| `cdidx hooks uninstall [--dry-run]` | Remove the cdidx hook, or preview managed-block removal/chained-hook restoration without writing. |
 
 | Hook behavior | Detail |
 |---|---|
 | Refresh command | The installed hook runs `cdidx index <selected-project-path> --quiet` before the commit completes. When `--project` is omitted, the selected path is the current directory at install time. |
 | Quiet mode | `--quiet` suppresses normal progress and success output for hook contexts while still printing indexing errors to stderr and returning a non-zero exit code. |
-| Install preview | `cdidx hooks install --dry-run` does not create or change hook files. Human output prints the planned managed hook, while JSON adds `dry_run: true`, `planned_action` (`create`, `replace_managed`, `chain_existing`, `none`, or `blocked`), and `managed_hook_preview`. |
+| Preview contract | `cdidx hooks install --dry-run` and `cdidx hooks uninstall --dry-run` return `status: dry_run` for a successful preview, `dry_run: true`, `filesystem_mutation: false`, `planned_action`, `hook_state`, `chained_hook_state`, and `planned_changes`. Each planned change carries its action/path/source, content hashes, executable-mode transition, and provenance. A blocked preview keeps `status: error` while retaining the same non-mutating plan fields. |
+| Install preview | Install plans use `create`, `replace_managed`, `chain_existing`, `none`, or `blocked`; `managed_hook_preview` contains the generated managed hook. Preview never creates the missing hooks directory or rewrites an existing file. |
+| Uninstall preview | Uninstall plans use `delete_managed`, `remove_managed_block`, `restore_chained`, `force_delete_unmanaged`, `force_restore_chained`, `none`, or `blocked`. A well-formed managed block is removed while preserving surrounding custom hook content; a chained backup is reported as the restoration source. Unmanaged or conflicted marker content is blocked unless `--force` is explicit. |
 | Install result | A real install returns `status: installed` when it creates the hook, `status: updated` when it replaces managed content, repairs a non-executable or non-UTF-8/no-BOM managed hook, or chains an existing custom hook, and `status: already_installed` without rewriting when the exact executable UTF-8/no-BOM managed hook is already present. |
 | Status JSON diagnostics | `cdidx hooks status --json` keeps `project_path`, `hook_path`, and `chained_hook_path` for compatibility, and also emits `diagnostic_project_path`, `diagnostic_hook_path`, and `diagnostic_chained_hook_path` with path-sanitized values for logs and support bundles. |
 | Existing hooks | If `.git/hooks/pre-commit` already exists, `cdidx hooks install` moves it to `.git/hooks/pre-commit.cdidx-chain` and calls it after the cdidx refresh, preserving tools such as Husky, pre-commit, and lefthook. |
@@ -3486,13 +3488,15 @@ pre-commit hook をインストールします:
 |---|---|
 | `cdidx hooks install [--dry-run]` | 任意の git pre-commit hook をインストール、または書き込まずにプレビュー。 |
 | `cdidx hooks status` | hook のインストール状態を表示。 |
-| `cdidx hooks uninstall` | hook を削除。 |
+| `cdidx hooks uninstall [--dry-run]` | cdidx hook を削除、または managed block の除去／chained hook の復元を書き込まずにプレビュー。 |
 
 | hook の動作 | 詳細 |
 |---|---|
 | 更新コマンド | インストールされた hook はコミット完了前に `cdidx index <selected-project-path> --quiet` を実行します。`--project` を省略した場合、選択パスはインストール時のカレントディレクトリです。 |
 | quiet mode | `--quiet` は hook 環境向けに通常の進捗・成功出力を抑制しつつ、indexing エラーは引き続き stderr に出力し、非ゼロの終了コードを返します。 |
-| インストールのプレビュー | `cdidx hooks install --dry-run` は hook ファイルを作成・変更しません。human 出力では予定される managed hook を表示し、JSON には `dry_run: true`、`planned_action`（`create`、`replace_managed`、`chain_existing`、`none`、`blocked` のいずれか）、`managed_hook_preview` を追加します。 |
+| プレビュー契約 | `cdidx hooks install --dry-run` と `cdidx hooks uninstall --dry-run` は、成功時に `status: dry_run`、`dry_run: true`、`filesystem_mutation: false`、`planned_action`、`hook_state`、`chained_hook_state`、`planned_changes` を返します。各変更予定には、操作、対象／変更元のパス、内容のハッシュ、実行モードの遷移、由来が含まれます。実行できないプレビューは `status: error` を維持しつつ、同じ非変更の計画フィールドを返します。 |
+| インストールのプレビュー | インストール計画は `create`、`replace_managed`、`chain_existing`、`none`、`blocked` のいずれかで、`managed_hook_preview` に生成予定の管理対象 hook を含めます。プレビューは存在しない hooks ディレクトリを作成せず、既存ファイルも再書き込みしません。 |
+| アンインストールのプレビュー | アンインストール計画は `delete_managed`、`remove_managed_block`、`restore_chained`、`force_delete_unmanaged`、`force_restore_chained`、`none`、`blocked` のいずれかです。正しい管理対象 block は周囲の独自 hook 内容を保持して除去し、連結されたバックアップがある場合は復元元として報告します。管理対象外の内容や marker が競合した内容は、明示的な `--force` がない限り実行できません。 |
 | インストール結果 | 実際のインストールでは、hook を新規作成した場合は `status: installed`、managed content の置換、実行不可または UTF-8/no-BOM 以外になった managed hook の修復、あるいは既存 custom hook の chain 化を行った場合は `status: updated`、同一かつ実行可能な UTF-8/no-BOM の managed hook がすでに存在して再書き込みを行わなかった場合は `status: already_installed` を返します。 |
 | status JSON 診断 | `cdidx hooks status --json` は互換性のため `project_path`、`hook_path`、`chained_hook_path` を維持しつつ、ログやサポートバンドル向けに path をサニタイズした `diagnostic_project_path`、`diagnostic_hook_path`、`diagnostic_chained_hook_path` も出力します。 |
 | 既存 hook の扱い | リポジトリに `.git/hooks/pre-commit` がある場合、`cdidx hooks install` はそれを `.git/hooks/pre-commit.cdidx-chain` に移動し、cdidx の更新後に呼び出すため、Husky、pre-commit、lefthook などのツールも維持されます。 |
