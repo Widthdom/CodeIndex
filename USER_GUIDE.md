@@ -1771,7 +1771,13 @@ For large files, `outline --json` supports `--kind <kind[,kind]>`, `--sort <sour
 cdidx excerpt src/CodeIndex/Cli/GitHelper.cs --start 19 --end 28
 cdidx excerpt src/CodeIndex/Cli/GitHelper.cs --start 19 --end 28 --before 3 --after 3 --json
 cdidx excerpt src/CodeIndex/Cli/GitHelper.cs --line 24 --context 3 --json --no-semantic-tokens
+cdidx excerpt src/CodeIndex/Cli/GitHelper.cs --start 19 --end eof
+cdidx excerpt src/CodeIndex/Cli/GitHelper.cs --start 19 --end 999999 --clamp --json
 ```
+
+Excerpt coordinates are 1-based, and zero or negative coordinates return `E020_LINE_OUT_OF_RANGE`. Numeric `--end` values remain strict: overshooting the indexed file returns a range error with `range_recovery` guidance. Use `--end eof` to explicitly read through the indexed end of file, or add `--clamp` to explicitly clamp numeric overshoot to file boundaries.
+
+JSON keeps the original request in `requested_start_line` / `requested_end_line` and the returned window in `effective_start_line` / `effective_end_line`, with `total_lines` reporting the indexed file length. Context expands only the effective window: for example, `--start 18 --end 22 --before 2 --after 2` reports requested lines 18–22 and effective lines 16–24. `requested_end_mode` distinguishes `numeric` from `eof`, and `range_clamped` reports whether explicit clamping changed the returned bounds.
 
 ### Find a substring inside a known file
 
@@ -5001,7 +5007,13 @@ cdidx outline src/CodeIndex/Cli/QueryCommandRunner.cs --compact --kind function 
 cdidx excerpt src/CodeIndex/Cli/GitHelper.cs --start 19 --end 28
 cdidx excerpt src/CodeIndex/Cli/GitHelper.cs --start 19 --end 28 --before 3 --after 3 --json
 cdidx excerpt src/CodeIndex/Cli/GitHelper.cs --line 24 --context 3 --json --no-semantic-tokens
+cdidx excerpt src/CodeIndex/Cli/GitHelper.cs --start 19 --end eof
+cdidx excerpt src/CodeIndex/Cli/GitHelper.cs --start 19 --end 999999 --clamp --json
 ```
+
+excerpt の座標は 1-based で、0 以下の座標は `E020_LINE_OUT_OF_RANGE` を返します。数値の `--end` は従来どおり strict で、インデックス済みファイルの終端を超えると `range_recovery` guidance 付きの range error になります。インデックス済み EOF まで明示的に読むには `--end eof`、数値の超過範囲をファイル境界へ明示的に丸めるには `--clamp` を使います。
+
+JSON は元の指定を `requested_start_line` / `requested_end_line`、実際に返した window を `effective_start_line` / `effective_end_line` に分け、`total_lines` でインデックス済みファイルの総行数を返します。context は effective window だけを拡張します。たとえば `--start 18 --end 22 --before 2 --after 2` は requested 18–22、effective 16–24 を返します。`requested_end_mode` は `numeric` と `eof` を区別し、`range_clamped` は明示的な clamp により返却境界が変わったかを示します。
 
 ### 既知ファイル内の部分文字列を探す
 

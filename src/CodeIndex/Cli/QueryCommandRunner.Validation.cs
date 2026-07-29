@@ -1,3 +1,5 @@
+using System.Text;
+
 namespace CodeIndex.Cli;
 
 public static partial class QueryCommandRunner
@@ -137,6 +139,71 @@ public static partial class QueryCommandRunner
 
     private static void WriteUsageError(string message, string usage, string hint)
         => CommandErrorWriter.Write(message, hint, usage);
+
+    private static void WriteUsageError(string message, QueryCommandOptions options, string hint)
+        => WriteInvocationUsageError(message, options, hint);
+
+    private static void WriteInvocationUsageError(
+        string message,
+        QueryCommandOptions options,
+        string hint,
+        string? errorCode = null)
+    {
+        var invocationContext = options.InvocationContext;
+        if (options.InvocationMachineErrorOutputRequested
+            && invocationContext.StructuredMachineUsageErrors
+            && options.InvocationJsonOptions != null)
+        {
+            var payload = CommandErrorWriter.BuildJsonPayload(
+                options.InvocationJsonOptions,
+                message,
+                CommandExitCodes.UsageError,
+                hint,
+                usage: null,
+                errorCode: errorCode ?? CommandErrorCodes.UsageError,
+                category: "usage",
+                command: invocationContext.CommandName,
+                omitNullUsage: true);
+            var json = payload.ToJsonString(options.InvocationJsonOptions);
+            if (options.MaxJsonBytes.HasValue
+                && Encoding.UTF8.GetByteCount(json) + Encoding.UTF8.GetByteCount(Environment.NewLine) > options.MaxJsonBytes.Value)
+                return;
+
+            CommandErrorWriter.WriteStdout(json);
+            return;
+        }
+
+        CommandErrorWriter.Write(
+            message,
+            hint,
+            invocationContext.UsageLine);
+    }
+
+    private static void WriteUsageError(
+        string message,
+        QueryCommandOptions options,
+        string fallbackCommandName,
+        string hint)
+    {
+        if (options.InvocationContext.StructuredMachineUsageErrors)
+        {
+            WriteUsageError(message, options, hint);
+            return;
+        }
+
+        WriteUsageError(message, GetUsageLineOrThrow(fallbackCommandName), hint);
+    }
+
+    private static void WriteSearchValidationError(string message, QueryCommandOptions options, string hint)
+    {
+        if (options.InvocationContext.StructuredMachineUsageErrors)
+        {
+            WriteUsageError(message, options, hint);
+            return;
+        }
+
+        WriteValidationError(message, hint);
+    }
 
     private static bool TryWriteUnsupportedOutputFormat(string commandName, QueryCommandOptions options, IReadOnlySet<string> supportedFormats, string hint)
     {

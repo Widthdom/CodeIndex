@@ -68,6 +68,9 @@ public static partial class QueryCommandRunner
 
 public sealed class QueryCommandOptions
 {
+    internal QueryCommandInvocationContext InvocationContext { get; set; } = QueryCommandInvocationContext.Search;
+    internal JsonSerializerOptions? InvocationJsonOptions { get; set; }
+    internal bool InvocationMachineErrorOutputRequested { get; set; }
     public string DbPath { get; init; } = Path.Combine(".cdidx", "codeindex.db");
     public bool DbPathExplicit { get; init; }
     public bool ReadOnly { get; init; }
@@ -224,3 +227,50 @@ public sealed class QueryCommandOptions
 public sealed record SearchNamedQuery(string Name, string Query);
 
 public readonly record struct DependencyCycleCursor(int Offset, string Fingerprint);
+
+internal sealed record QueryCommandInvocationContext(
+    string CommandName,
+    string UsageCommandName,
+    string ValidationCommandName,
+    bool RecipeNameIsPositional,
+    bool StructuredMachineUsageErrors)
+{
+    internal static QueryCommandInvocationContext Search { get; } =
+        new("search", "search", "search", RecipeNameIsPositional: false, StructuredMachineUsageErrors: false);
+
+    internal static QueryCommandInvocationContext Recipes { get; } =
+        new("recipes", "recipes", "recipes", RecipeNameIsPositional: false, StructuredMachineUsageErrors: false);
+
+    internal static QueryCommandInvocationContext Audit { get; } =
+        new("audit", "audit", "search", RecipeNameIsPositional: true, StructuredMachineUsageErrors: true);
+
+    internal string UsageLine =>
+        ConsoleUi.GetUsageLine(UsageCommandName)
+        ?? throw new InvalidOperationException($"Missing usage line for command '{UsageCommandName}'.");
+
+    internal string RecipeDiscoveryCommand =>
+        RecipeNameIsPositional ? "cdidx recipes" : "cdidx search --list-recipes";
+
+    internal string RecipeSelectorSyntax =>
+        RecipeNameIsPositional
+            ? "cdidx audit <recipe>/<query>"
+            : "cdidx search --recipe <recipe>/<query>";
+
+    internal string RecipeCommandPrefix =>
+        RecipeNameIsPositional ? "cdidx audit" : "cdidx search --recipe";
+
+    internal string RecipeExecutionName =>
+        RecipeNameIsPositional ? "audit" : "search --recipe";
+
+    internal string RecipeCursorSelectorSyntax =>
+        RecipeNameIsPositional ? "cdidx audit <recipe>/<query>" : "--recipe <recipe>/<query>";
+
+    internal void AddRecipeCommandPrefix(List<string> args, string recipeSelector)
+    {
+        args.Add("cdidx");
+        args.Add(CommandName);
+        if (!RecipeNameIsPositional)
+            args.Add("--recipe");
+        args.Add(recipeSelector);
+    }
+}

@@ -21,8 +21,10 @@ internal sealed record CliOptionValueDomain
     public IReadOnlyDictionary<string, string> Aliases { get; init; } =
         new Dictionary<string, string>(StringComparer.Ordinal);
     public bool NormalizeDashAndUnderscore { get; init; }
+    public string? DisplayPlaceholder { get; init; }
 
-    public string ValuePlaceholder => $"<{string.Join('|', CanonicalValues)}>";
+    public string ValuePlaceholder =>
+        DisplayPlaceholder ?? $"<{string.Join('|', CanonicalValues)}>";
 
     public bool TryNormalize(string rawValue, out string normalizedValue)
     {
@@ -366,6 +368,12 @@ internal static class CliFlagSchema
         ("help", "help_text"),
         ("schema", "schema_description"));
 
+    private static readonly CliOptionValueDomain ExcerptEndValueDomain = new()
+    {
+        CanonicalValues = ["eof"],
+        DisplayPlaceholder = "<line|eof>",
+    };
+
     private static readonly IReadOnlyDictionary<string, CliOptionValueDomain> OutputFormatValueDomains =
         new Dictionary<string, CliOptionValueDomain>(StringComparer.Ordinal)
         {
@@ -574,8 +582,9 @@ internal static class CliFlagSchema
             new() { Name = "--after", ValuePlaceholder = "<n>", Description = "Context lines after", PrimaryCommands = Set("find", "excerpt", "inspect") },
             new() { Name = "--start", ValuePlaceholder = "<line>", Description = "Start line", PrimaryCommands = Set("excerpt") },
             new() { Name = "--start-line", ValuePlaceholder = "<line>", Description = "Alias for --start; inspect source_excerpt start line", PrimaryCommands = Set("excerpt", "inspect") },
-            new() { Name = "--end", ValuePlaceholder = "<line>", Description = "End line", PrimaryCommands = Set("excerpt") },
+            new() { Name = "--end", ValueDomain = ExcerptEndValueDomain, Description = "Excerpt end line; eof reads through the indexed end of file", PrimaryCommands = Set("excerpt") },
             new() { Name = "--end-line", ValuePlaceholder = "<line>", Description = "Alias for --end; inspect source_excerpt end line", PrimaryCommands = Set("excerpt", "inspect") },
+            new() { Name = "--clamp", Description = "Excerpt: explicitly clamp numeric range overshoot to file boundaries", PrimaryCommands = Set("excerpt") },
             new() { Name = "--focus-line", ValuePlaceholder = "<line>", Description = "Focused line to keep visible when clamping", PrimaryCommands = Set("find", "excerpt") },
             new() { Name = "--focus-column", ValuePlaceholder = "<n>", Description = "Focused column to keep visible when clamping", PrimaryCommands = Set("find", "excerpt") },
             new() { Name = "--focus-length", ValuePlaceholder = "<n>", Description = "Focused span width when clamping", PrimaryCommands = Set("excerpt") },
