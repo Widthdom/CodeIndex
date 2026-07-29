@@ -220,6 +220,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   Outline `size` sorting and its `span` alias share one ranking fixture.
   Outline reference and complexity metric sorting share one derived-ranking fixture.
   Outline kind sorting and default source-order field projection share one ranking fixture.
+  Outline projection validation reuses one parser/JSON-error fixture across single and multiple unknown fields, deliberately empty lists, aliases, duplicates, and mixed valid/invalid input; assert that unknown fields form one terminal usage error and do not trigger the empty-selection diagnostic.
   Deps JSON and json-graph byte-limit failures share one SQL graph fixture.
   Deps JSON summary output and json-graph summary rejection share one SQL graph fixture.
   Dependency-cycle coverage must prove that the graph budget is independent of the display limit, SCC ranking remains stable when the page size grows, opaque cursors return the next ranked component, mismatched cursor filters fail closed, and graph-budget exhaustion marks totals as non-authoritative.
@@ -1144,6 +1145,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   outlineの`size` sortとその`span` aliasは1つのranking fixtureを共有してください。
   outlineのreference metric sortとcomplexity metric sortは1つのderived-ranking fixtureを共有してください。
   outlineのkind sortとdefault source-order field projectionは1つのranking fixtureを共有してください。
+  outline projection validationは、単一・複数の未知field、意図的な空list、alias、重複、valid/invalid混在を1つのparser/JSON-error fixtureで共有してください。未知fieldが1つの終端usage errorを形成し、empty-selection diagnosticを追加で発生させないことを検証してください。
   depsのJSONとjson-graphのbyte-limit failureは1つのSQL graph fixtureを共有してください。
   depsのJSON summary outputとjson-graph summary rejectionは1つのSQL graph fixtureを共有してください。
   dependency-cycle coverage では、graph budget が表示 limit から独立していること、page size を増やしても SCC 順位が安定すること、不透明 cursor が次の順位の component を返すこと、cursor と filter の不一致が fail-closed になること、graph-budget 枯渇時に総件数が non-authoritative と示されることを検証してください。
