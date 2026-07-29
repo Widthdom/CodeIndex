@@ -8,6 +8,7 @@
   "requested_end_line": 6,
   "effective_start_line": 1,
   "effective_end_line": 6,
+  "total_lines": 6,
   "content": "namespace Demo;\n\npublic static class Lib\n{\n    public static int Add(int a, int b) =\u003E a \u002B b;\n}",
   "content_truncated": false,
   "content_truncation_reasons": [],
@@ -200,5 +201,7 @@
       "modifiers": []
     }
   ],
+  "requested_end_mode": "numeric",
+  "range_clamped": false,
   "semantic_tokens_hint": "Use --no-semantic-tokens to omit semantic_tokens for compact JSON."
 }

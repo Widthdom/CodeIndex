@@ -8468,6 +8468,203 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunAudit_UsageErrorsRetainPublicCommandContext_Issue4875()
+    {
+        var humanCases = new[]
+        {
+            (Args: Array.Empty<string>(), Expected: "audit requires a recipe name"),
+            (Args: new[] { "risky-code", "--limit", "not-a-number" }, Expected: "--limit requires an integer"),
+            (Args: new[] { "risky-code", "--format", "grouped" }, Expected: "--format grouped is only supported for plain search output"),
+            (Args: new[] { "not-a-recipe" }, Expected: "unknown audit recipe 'not-a-recipe'"),
+            (Args: new[] { "xml-parser-security/xml-readr-settings" }, Expected: "unknown recipe query 'xml-readr-settings'"),
+            (Args: new[] { "risky-code", "--count-by", "path", "--unique", "file" }, Expected: "--count-by cannot be combined with --unique"),
+            (Args: new[] { "risky-code", "--group-by", "bogus", "--count" }, Expected: "--group-by for recipe search"),
+            (Args: new[] { "risky-code", "--group-by", "file" }, Expected: "audit --group-by requires --count"),
+        };
+
+        foreach (var testCase in humanCases)
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["audit", .. testCase.Args],
+                _jsonOptions,
+                "test"));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains(testCase.Expected, stderr, StringComparison.Ordinal);
+            Assert.Contains("Usage: cdidx audit ", stderr, StringComparison.Ordinal);
+            Assert.DoesNotContain("Usage: cdidx search ", stderr, StringComparison.Ordinal);
+        }
+
+        var (_, _, unknownRecipeStderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["audit", "not-a-recipe"],
+            _jsonOptions,
+            "test"));
+        Assert.Contains("Run `cdidx recipes`", unknownRecipeStderr, StringComparison.Ordinal);
+
+        var (_, _, unknownQueryStderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["audit", "xml-parser-security/xml-readr-settings"],
+            _jsonOptions,
+            "test"));
+        Assert.Contains(
+            "Retry with `cdidx audit xml-parser-security/xml-reader-settings",
+            unknownQueryStderr,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("cdidx search --recipe", unknownQueryStderr, StringComparison.Ordinal);
+
+        var (_, _, groupByStderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["audit", "risky-code", "--group-by", "bogus", "--count"],
+            _jsonOptions,
+            "test"));
+        Assert.Contains("cdidx audit <name> --group-by file --count", groupByStderr, StringComparison.Ordinal);
+        Assert.DoesNotContain("cdidx search --recipe", groupByStderr, StringComparison.Ordinal);
+
+        foreach (var jsonArgs in new[]
+        {
+            new[] { "--json" },
+            new[] { "risky-code", "--limit", "not-a-number", "--json" },
+            new[] { "not-a-recipe", "--json" },
+            new[] { "xml-parser-security/xml-readr-settings", "--json" },
+            new[] { "risky-code", "--format", "grouped", "--json" },
+        })
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["audit", .. jsonArgs],
+                _jsonOptions,
+                "test"));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            Assert.Equal("error", document.RootElement.GetProperty("status").GetString());
+            Assert.Equal("audit", document.RootElement.GetProperty("command").GetString());
+            Assert.Equal(CommandErrorCodes.UsageError, document.RootElement.GetProperty("error_code").GetString());
+            Assert.False(document.RootElement.TryGetProperty("usage", out _));
+        }
+
+        foreach (var cappedArgs in new[]
+        {
+            new[] { "--json", "--max-json-bytes", "1" },
+            new[] { "risky-code", "--json", "--max-json-bytes", "1", "--profile" },
+        })
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["audit", .. cappedArgs],
+                _jsonOptions,
+                "test"));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Equal(string.Empty, stderr);
+        }
+
+        var (searchExitCode, searchStdout, searchStderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["search", "--recipe", "risky-code", "--limit", "not-a-number"],
+            _jsonOptions,
+            "test"));
+        Assert.Equal(CommandExitCodes.UsageError, searchExitCode);
+        Assert.Equal(string.Empty, searchStdout);
+        Assert.Contains("Usage: cdidx search ", searchStderr, StringComparison.Ordinal);
+        Assert.DoesNotContain("Usage: cdidx audit ", searchStderr, StringComparison.Ordinal);
+
+        foreach (var directSearchArgs in new[]
+        {
+            new[] { "x", "--token-boundary", "--fts" },
+            new[] { "x", "--exact", "--prefix" },
+        })
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["search", .. directSearchArgs],
+                _jsonOptions,
+                "test"));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.DoesNotContain("Usage:", stderr, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void RunAudit_RecipeReplayCommandsRetainPublicCommandContext_Issue4875()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_audit_command_context");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/first.cs",
+                "csharp",
+                "Console.WriteLine(ex.Message);\n");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/second.cs",
+                "csharp",
+                "Console.Error.WriteLine(ex.Message);\n");
+
+            var (draftExitCode, draftStdout, draftStderr) = CaptureConsole(() => ProgramRunner.Run(
+                [
+                    "audit",
+                    "risky-code/raw-diagnostic-echo",
+                    "--db", dbPath,
+                    "--format", "issue-drafts",
+                    "--limit", "1",
+                    "--snippet-lines", "1",
+                ],
+                _jsonOptions,
+                "test"));
+
+            Assert.Equal(CommandExitCodes.Success, draftExitCode);
+            Assert.Equal(string.Empty, draftStderr);
+            using var draftDocument = ParseJsonOutput(draftStdout);
+            var draft = Assert.Single(draftDocument.RootElement.GetProperty("drafts").EnumerateArray());
+            var draftBody = draft.GetProperty("body").GetString();
+            Assert.Contains(
+                "cdidx audit risky-code/raw-diagnostic-echo --format issue-drafts",
+                draftBody,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain("cdidx search --recipe", draftBody, StringComparison.Ordinal);
+
+            var (compactExitCode, compactStdout, compactStderr) = CaptureConsole(() => ProgramRunner.Run(
+                [
+                    "audit",
+                    "risky-code/raw-diagnostic-echo",
+                    "--db", dbPath,
+                    "--format", "compact",
+                    "--limit", "1",
+                ],
+                _jsonOptions,
+                "test"));
+
+            Assert.Equal(CommandExitCodes.Success, compactExitCode);
+            Assert.Equal(string.Empty, compactStderr);
+            using var compactDocument = ParseJsonOutput(compactStdout);
+            var cursoringHint = compactDocument.RootElement
+                .GetProperty("summary")
+                .GetProperty("cursoring_hint")
+                .GetString();
+            Assert.Contains("cdidx audit <recipe>/<query> --cursor", cursoringHint, StringComparison.Ordinal);
+            Assert.DoesNotContain("--recipe", cursoringHint, StringComparison.Ordinal);
+            var nextCommands = compactDocument.RootElement
+                .GetProperty("next_commands")
+                .EnumerateArray()
+                .Select(item => item.GetString())
+                .ToArray();
+            Assert.NotEmpty(nextCommands);
+            Assert.All(
+                nextCommands,
+                command => Assert.StartsWith("cdidx audit risky-code/raw-diagnostic-echo", command, StringComparison.Ordinal));
+            Assert.DoesNotContain(
+                nextCommands,
+                command => command?.Contains("cdidx search --recipe", StringComparison.Ordinal) == true);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunAudit_CountRejectsRowSelectorsBeforeExecution_Issue4843()
     {
         foreach (var selectorArgs in new[]

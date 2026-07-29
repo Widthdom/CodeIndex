@@ -1071,19 +1071,23 @@ public partial class DbReader
             before = 0;
         if (after < 0)
             after = 0;
+        var requestedStartLine = startLine;
+        var requestedEndLine = endLine;
         // `endLine` + `after` (and `startLine` - `before`) come from untrusted MCP callers in
         // some entry points and can overflow int when endLine is near `int.MaxValue`. Clamp via
         // long intermediates so the subsequent `Math.Max/Min` sees the real window (#1528).
         // 一部の MCP 経路では `endLine` + `after`（および `startLine` - `before`）が信頼できない
         // 入力で、`int.MaxValue` 近傍の endLine だと int 加算で overflow する。long 中間で実窓を
         // 確定させてから clamp する（#1528）。
-        var requestedStart = (int)Math.Max(1L, (long)startLine - before);
-        var requestedEndCeiling = (int)Math.Min(int.MaxValue, (long)endLine + after);
-        if (!TryLoadIndexedFileLines(path, out var lang, out var totalLines, out var lineMap, requestedStart, requestedEndCeiling))
+        var expandedStart = (int)Math.Max(1L, (long)startLine - before);
+        var expandedEndCeiling = (int)Math.Min(int.MaxValue, (long)endLine + after);
+        if (!TryLoadIndexedFileLines(path, out var lang, out var totalLines, out var lineMap, expandedStart, expandedEndCeiling))
             return null;
-        var requestedEnd = Math.Min(totalLines, requestedEndCeiling);
+        var expandedEnd = Math.Min(totalLines, expandedEndCeiling);
+        if (expandedStart > expandedEnd)
+            return null;
 
-        var selectedLines = Enumerable.Range(requestedStart, requestedEnd - requestedStart + 1)
+        var selectedLines = Enumerable.Range(expandedStart, expandedEnd - expandedStart + 1)
             .Where(lineMap.ContainsKey)
             .ToList();
 
@@ -1127,10 +1131,11 @@ public partial class DbReader
             Lang = lang,
             StartLine = selectedLines[0],
             EndLine = selectedLines[^1],
-            RequestedStartLine = requestedStart,
-            RequestedEndLine = requestedEndCeiling,
+            RequestedStartLine = requestedStartLine,
+            RequestedEndLine = requestedEndLine,
             EffectiveStartLine = selectedLines[0],
             EffectiveEndLine = selectedLines[^1],
+            TotalLines = totalLines,
             Content = string.Join("\n", excerptLines),
             ContentTruncated = contentTruncated,
             ContentTruncationReasons = contentTruncated ? ["line_width_cap"] : [],

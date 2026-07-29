@@ -84,12 +84,16 @@ public partial class SymbolExtractorTests
     {
         var supported = SymbolExtractor.GetSupportedLanguages();
 
-        foreach (var language in new[] { "toml", "jsonl", "gitignore", "gitattributes", "editorconfig", "dockerignore", "config" })
+        foreach (var language in new[] { "toml", "gitignore", "gitattributes", "editorconfig", "dockerignore", "config" })
         {
             Assert.Contains(language, supported);
             Assert.Equal(SymbolExtractor.RepositoryMetadataContractVersion, SymbolExtractor.GetContractVersion(language));
         }
 
+        Assert.Contains("jsonl", supported);
+        Assert.Equal(
+            SymbolExtractor.JsonLinesContractVersion,
+            SymbolExtractor.GetContractVersion("jsonl"));
         Assert.Equal(
             SymbolExtractor.ApplicationManifestContractVersion,
             SymbolExtractor.GetContractVersion("app_manifest"));

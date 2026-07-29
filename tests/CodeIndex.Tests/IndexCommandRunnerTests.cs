@@ -7718,7 +7718,7 @@ public sealed class Caller
     }
 
     [Fact]
-    public void Run_FilesUpdate_ReindexesUnchangedJsonFileWhenExpandedLanguageExtractorVersionChanged()
+    public void Run_FilesUpdate_ReindexesUnchangedJsonFileWhenJsonExtractorVersionChanged_Issue4874()
     {
         var projectRoot = CreateTempProject();
         try
@@ -7745,7 +7745,7 @@ public sealed class Caller
                 cmd.CommandText = """
                     DELETE FROM symbols WHERE file_id = (SELECT id FROM files WHERE path = 'settings.json');
                     DELETE FROM symbol_references WHERE file_id = (SELECT id FROM files WHERE path = 'settings.json');
-                    INSERT OR REPLACE INTO codeindex_meta(key, value) VALUES('symbol_extractor_version_json', '1');
+                    INSERT OR REPLACE INTO codeindex_meta(key, value) VALUES('symbol_extractor_version_json', '2');
                     """;
                 cmd.ExecuteNonQuery();
             }

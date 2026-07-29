@@ -4219,6 +4219,73 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FullScan_ReindexesYamlHierarchyWhenExtractorContractChanges_Issue4873()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { public void Run() { } }");
+            File.WriteAllText(
+                Path.Combine(projectRoot, "workflow.yml"),
+                """
+                jobs:
+                  build:
+                    steps:
+                      - name: Upload
+                        with:
+                          path: artifacts
+                """);
+
+            var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var conn = OpenNonPoolingConnection(dbPath))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = """
+                    UPDATE symbols
+                    SET container_name = 'jobs.build.steps[0]',
+                        container_qualified_name = 'jobs.build.steps[0]'
+                    WHERE name = 'jobs.build.steps[0].with';
+                    UPDATE codeindex_meta
+                    SET value = '2'
+                    WHERE key = 'symbol_extractor_version_yaml';
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.True(json.GetProperty("summary").GetProperty("files_skipped").GetInt32() > 0);
+
+            using var verify = OpenNonPoolingConnection(dbPath);
+            verify.Open();
+
+            using var parentCmd = verify.CreateCommand();
+            parentCmd.CommandText = """
+                SELECT container_name || '|' || container_qualified_name
+                FROM symbols
+                WHERE name = 'jobs.build.steps[0].with'
+                """;
+            Assert.Equal("jobs.build.steps|jobs.build.steps[0]", parentCmd.ExecuteScalar() as string);
+
+            using var versionCmd = verify.CreateCommand();
+            versionCmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = 'symbol_extractor_version_yaml'";
+            Assert.Equal(
+                SymbolExtractor.YamlContractVersion.ToString(CultureInfo.InvariantCulture),
+                versionCmd.ExecuteScalar() as string);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_FullScan_ReindexesNormalizedCSharpFieldsWhenExtractorContractChanges_Issue4865()
     {
         var projectRoot = CreateTempProject();
