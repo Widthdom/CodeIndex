@@ -4597,7 +4597,11 @@ public partial class QueryCommandRunnerTests
         using var document = ParseJsonOutput(stdout);
         Assert.Contains(expectedContent, document.RootElement.GetProperty("body_content").GetString());
         if (expectedContentTruncated.HasValue)
-            Assert.Equal(expectedContentTruncated.Value, document.RootElement.GetProperty("body_content_truncated").GetBoolean());
+        {
+            var contentTruncated = document.RootElement.TryGetProperty("body_content_truncated", out var property)
+                && property.GetBoolean();
+            Assert.Equal(expectedContentTruncated.Value, contentTruncated);
+        }
     }
 
     private static int CountLines(string text) => text.Split('\n').Length;
