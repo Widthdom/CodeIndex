@@ -163,6 +163,7 @@ public partial class QueryCommandRunnerTests
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             TestProjectHelper.InsertIndexedFile(dbPath, "src/compact.json", "json", """[{"arr":[1]}]""");
             TestProjectHelper.InsertIndexedFile(dbPath, "src/compact.jsonl", "jsonl", """[{"arr":[1]}]""");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/compact-nul.json", "json", """[{"\u0000":{"a":[]}}]""");
 
             var fixtures = new[]
             {
@@ -172,6 +173,9 @@ public partial class QueryCommandRunnerTests
                 (
                     Path: "src/compact.jsonl",
                     Expected: new[] { ("[0]", 0), ("[0][0]", 1), ("[0][0].arr", 2), ("[0][0].arr[0]", 3) }),
+                (
+                    Path: "src/compact-nul.json",
+                    Expected: new[] { ("[0]", 0), ("[0].\0", 1), ("[0].\0.a", 2) }),
             };
 
             foreach (var fixture in fixtures)

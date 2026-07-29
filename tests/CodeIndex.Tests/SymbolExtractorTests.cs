@@ -1110,6 +1110,28 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Json_EmptyPropertyAfterEmptyArrayValueKeepsItsLine_Issue4874()
+    {
+        const string content = """
+            {
+              "items": [
+                "",
+                {
+                  "": 1
+                }
+              ]
+            }
+            """;
+
+        var symbol = Assert.Single(
+            SymbolExtractor.Extract(1, "json", content),
+            candidate => candidate.Name == "items[1].");
+
+        Assert.Equal(5, symbol.Line);
+        Assert.Equal("\"\": 1", symbol.Signature);
+    }
+
+    [Fact]
     public void Extract_Json_CapsStructuredSignatureLength_Issue3808()
     {
         var content = "{\"key\":\"" + new string('x', SymbolExtractor.StructuredDataMaxSignatureLength + 80) + "\"}";

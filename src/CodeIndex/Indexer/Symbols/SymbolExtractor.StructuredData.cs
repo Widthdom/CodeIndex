@@ -674,7 +674,7 @@ public static partial class SymbolExtractor
                 continue;
 
             var name = reader.GetString();
-            if (string.IsNullOrEmpty(name))
+            if (name == null)
                 continue;
 
             var byteOffset = (int)Math.Min(reader.TokenStartIndex, (long)bytes.Length);

@@ -31,7 +31,7 @@ public partial class DbReader
 
         var startColumnOrderSql = GetSymbolColumnSql("start_column", "CAST(2147483647 AS INTEGER)");
         var structuredHierarchyOrderSql = lang is "json" or "jsonl"
-            ? "LENGTH(s.name) ASC,"
+            ? "LENGTH(CAST(s.name AS BLOB)) ASC,"
             : string.Empty;
         var includeReferenceCountSql = includeReferenceCounts && _hasReferencesTable;
         var referenceCountSql = includeReferenceCountSql
