@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
@@ -1659,6 +1660,59 @@ public partial class QueryCommandRunnerTests
 
         Assert.Equal(expected, options.RankMode);
         Assert.Equal("Target", options.Query);
+    }
+
+    [Fact]
+    public void RunCallers_CountRankingControlsHumanAndJsonOrderAndPublishesRecipe_Issue4881()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("caller_rank_recipe");
+        var dbPath = CreateCallerRankingFixtureDb(projectRoot);
+
+        var (jsonExitCode, jsonStdOut, jsonStdErr) = RunCallersInProcess(
+            "RankedTarget",
+            dbPath,
+            "csharp",
+            true,
+            "--rank-by",
+            "count");
+        Assert.True(
+            jsonExitCode == CommandExitCodes.Success,
+            $"Expected success, got {jsonExitCode}.{Environment.NewLine}stdout:{Environment.NewLine}{jsonStdOut}{Environment.NewLine}stderr:{Environment.NewLine}{jsonStdErr}");
+        Assert.Equal(string.Empty, jsonStdErr);
+        var jsonRows = jsonStdOut
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => JsonNode.Parse(line)!)
+            .Where(row => row["path"] != null)
+            .ToArray();
+        Assert.Equal("tests/HighVolumeTests.cs", jsonRows[0]["path"]!.GetValue<string>());
+        Assert.Equal("src/ProductionCaller.cs", jsonRows[1]["path"]!.GetValue<string>());
+
+        var queryContext = jsonRows[0]["query_context"]!;
+        Assert.Equal("count", queryContext["rank_by"]!.GetValue<string>());
+        var recipe = queryContext["ranking_recipe"]!;
+        Assert.Equal("count", recipe["mode"]!.GetValue<string>());
+        Assert.Equal(
+            "reference_count_desc",
+            recipe["precedence"]![0]!.GetValue<string>());
+        Assert.Equal(
+            "path_category_asc",
+            recipe["precedence"]![3]!.GetValue<string>());
+
+        var (humanExitCode, humanStdOut, humanStdErr) = CaptureConsole(
+            () => QueryCommandRunner.RunCallers(
+                [
+                    "RankedTarget",
+                    "--db", dbPath,
+                    "--lang", "csharp",
+                    "--exact-name",
+                    "--rank-by", "count",
+                ],
+                _jsonOptions));
+        Assert.Equal(CommandExitCodes.Success, humanExitCode);
+        Assert.Contains("(2 callers in 2 files)", humanStdErr, StringComparison.Ordinal);
+        Assert.True(
+            humanStdOut.IndexOf("tests/HighVolumeTests.cs", StringComparison.Ordinal)
+            < humanStdOut.IndexOf("src/ProductionCaller.cs", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -8826,6 +8880,45 @@ public partial class QueryCommandRunnerTests
         }
 
         return dbPath;
+    }
+
+    private static string CreateCallerRankingFixtureDb(string projectRoot)
+    {
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+        var writer = new DbWriter(db.Connection);
+
+        InsertCaller("tests/HighVolumeTests.cs", "HighVolumeTests", 284);
+        InsertCaller("src/ProductionCaller.cs", "ProductionCaller", 1);
+        writer.MarkGraphReady();
+        writer.MarkFoldReady();
+        return dbPath;
+
+        void InsertCaller(string path, string containerName, int count)
+        {
+            var fileId = writer.UpsertFile(new FileRecord
+            {
+                Path = path,
+                Lang = "csharp",
+                Size = count,
+                Lines = count,
+                Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+            });
+            writer.InsertReferences(
+                Enumerable.Range(1, count)
+                    .Select(line => new ReferenceRecord
+                    {
+                        FileId = fileId,
+                        SymbolName = "RankedTarget",
+                        ReferenceKind = "call",
+                        Line = line,
+                        Column = 9,
+                        Context = "RankedTarget();",
+                        ContainerKind = "function",
+                        ContainerName = containerName,
+                    })
+                    .ToArray());
+        }
     }
 
     private static string CreateHotspotFamilyFixtureDb(string projectRoot, bool markHotspotFamilyReady)

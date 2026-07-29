@@ -212,6 +212,93 @@ public enum ReferenceRankMode
     Kind,
 }
 
+internal enum ReferenceRankDimension
+{
+    ReferenceWeightScoreDescending,
+    ReferenceCountDescending,
+    ReferenceKindPriorityAscending,
+    ExactCaseMatchDescending,
+    ExactNameMatchDescending,
+    PathCategoryAscending,
+    PathAscending,
+    FirstLineAscending,
+    FirstColumnAscending,
+    LanguageAscending,
+    ContainerKindAscending,
+    ContainerNameAscending,
+    SymbolNameAscending,
+    ReferenceKindAscending,
+}
+
+internal static class ReferenceRankRecipes
+{
+    private static readonly IReadOnlyList<ReferenceRankDimension> StableTieBreakers =
+        Array.AsReadOnly(
+        [
+            ReferenceRankDimension.ExactCaseMatchDescending,
+            ReferenceRankDimension.ExactNameMatchDescending,
+            ReferenceRankDimension.PathCategoryAscending,
+            ReferenceRankDimension.PathAscending,
+            ReferenceRankDimension.FirstLineAscending,
+            ReferenceRankDimension.FirstColumnAscending,
+            ReferenceRankDimension.LanguageAscending,
+            ReferenceRankDimension.ContainerKindAscending,
+            ReferenceRankDimension.ContainerNameAscending,
+            ReferenceRankDimension.SymbolNameAscending,
+            ReferenceRankDimension.ReferenceKindAscending,
+        ]);
+
+    private static readonly IReadOnlyList<ReferenceRankDimension> Weighted =
+        Build(
+            ReferenceRankDimension.ReferenceWeightScoreDescending,
+            ReferenceRankDimension.ReferenceCountDescending);
+
+    private static readonly IReadOnlyList<ReferenceRankDimension> Count =
+        Build(ReferenceRankDimension.ReferenceCountDescending);
+
+    private static readonly IReadOnlyList<ReferenceRankDimension> Kind =
+        Build(
+            ReferenceRankDimension.ReferenceKindPriorityAscending,
+            ReferenceRankDimension.ReferenceCountDescending);
+
+    internal static IReadOnlyList<ReferenceRankDimension> Get(ReferenceRankMode mode) => mode switch
+    {
+        ReferenceRankMode.Count => Count,
+        ReferenceRankMode.Kind => Kind,
+        _ => Weighted,
+    };
+
+    internal static string Format(ReferenceRankDimension dimension) => dimension switch
+    {
+        ReferenceRankDimension.ReferenceWeightScoreDescending => "reference_weight_score_desc",
+        ReferenceRankDimension.ReferenceCountDescending => "reference_count_desc",
+        ReferenceRankDimension.ReferenceKindPriorityAscending => "reference_kind_priority_asc",
+        ReferenceRankDimension.ExactCaseMatchDescending => "exact_case_match_desc",
+        ReferenceRankDimension.ExactNameMatchDescending => "exact_name_match_desc",
+        ReferenceRankDimension.PathCategoryAscending => "path_category_asc",
+        ReferenceRankDimension.PathAscending => "path_asc",
+        ReferenceRankDimension.FirstLineAscending => "first_line_asc",
+        ReferenceRankDimension.FirstColumnAscending => "first_column_asc",
+        ReferenceRankDimension.LanguageAscending => "language_asc",
+        ReferenceRankDimension.ContainerKindAscending => "container_kind_asc",
+        ReferenceRankDimension.ContainerNameAscending => "container_name_asc",
+        ReferenceRankDimension.SymbolNameAscending => "symbol_name_asc",
+        ReferenceRankDimension.ReferenceKindAscending => "reference_kind_asc",
+        _ => throw new ArgumentOutOfRangeException(nameof(dimension), dimension, null),
+    };
+
+    private static IReadOnlyList<ReferenceRankDimension> Build(
+        params ReferenceRankDimension[] primaryDimensions)
+    {
+        var recipe = new ReferenceRankDimension[
+            primaryDimensions.Length + StableTieBreakers.Count];
+        primaryDimensions.CopyTo(recipe, 0);
+        for (var index = 0; index < StableTieBreakers.Count; index++)
+            recipe[primaryDimensions.Length + index] = StableTieBreakers[index];
+        return Array.AsReadOnly(recipe);
+    }
+}
+
 public enum SymbolSortMode
 {
     Name,

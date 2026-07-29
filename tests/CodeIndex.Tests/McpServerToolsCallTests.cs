@@ -470,7 +470,7 @@ public partial class McpServerTests
             """);
 
         var firstRequest = JsonNode.Parse(
-            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"callers","arguments":{"query":"Target","lang":"csharp","exactName":true,"path":"src/paged-callers.cs","limit":2}}}""")!;
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"callers","arguments":{"query":"Target","lang":"csharp","exactName":true,"path":"src/paged-callers.cs","rankBy":"count","limit":2}}}""")!;
         var firstResponse = _server.HandleMessage(firstRequest)!;
         var first = firstResponse["result"]!["structuredContent"]!;
 
@@ -478,12 +478,21 @@ public partial class McpServerTests
         Assert.True(first["truncated"]!.GetValue<bool>());
         Assert.True(first["more_available"]!.GetValue<bool>());
         Assert.Equal(2, first["next_offset"]!.GetValue<int>());
+        Assert.Equal("count", first["rankBy"]!.GetValue<string>());
+        var firstRecipe = first["rankingRecipe"]!;
+        Assert.Equal("count", firstRecipe["mode"]!.GetValue<string>());
+        Assert.Equal(
+            "reference_count_desc",
+            firstRecipe["precedence"]![0]!.GetValue<string>());
+        Assert.Contains(
+            "path_category_asc",
+            firstRecipe["precedence"]!.AsArray().Select(item => item!.GetValue<string>()));
         var firstNames = first["results"]!.AsArray()
             .Select(row => row!["callerName"]!.GetValue<string>())
             .ToArray();
 
         var secondRequest = JsonNode.Parse(
-            """{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"callers","arguments":{"query":"Target","lang":"csharp","exactName":true,"path":"src/paged-callers.cs","limit":2,"offset":2}}}""")!;
+            """{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"callers","arguments":{"query":"Target","lang":"csharp","exactName":true,"path":"src/paged-callers.cs","rankBy":"count","limit":2,"offset":2}}}""")!;
         var secondResponse = _server.HandleMessage(secondRequest)!;
         var second = secondResponse["result"]!["structuredContent"]!;
 
@@ -491,6 +500,7 @@ public partial class McpServerTests
         Assert.False(second["truncated"]!.GetValue<bool>());
         Assert.False(second["more_available"]!.GetValue<bool>());
         Assert.Null(second["next_offset"]);
+        Assert.True(JsonNode.DeepEquals(firstRecipe, second["rankingRecipe"]));
         var secondNames = second["results"]!.AsArray()
             .Select(row => row!["callerName"]!.GetValue<string>())
             .ToArray();

@@ -179,6 +179,8 @@ public partial class McpServer
                 countOnlyPayload["lang"] = lang;
                 countOnlyPayload["path"] = PathEcho(pathPatterns);
                 countOnlyPayload["excludeTests"] = excludeTests;
+                countOnlyPayload["rankBy"] = QueryCommandRunner.FormatReferenceRankMode(rankMode);
+                countOnlyPayload["rankingRecipe"] = QueryCommandRunner.BuildReferenceRankingRecipeJson(rankMode);
                 AddReferenceGraphCompletenessSignal(
                     countOnlyPayload,
                     reader,
@@ -218,6 +220,7 @@ public partial class McpServer
                 ["path"] = PathEcho(pathPatterns),
                 ["excludeTests"] = excludeTests,
                 ["rankBy"] = QueryCommandRunner.FormatReferenceRankMode(rankMode),
+                ["rankingRecipe"] = QueryCommandRunner.BuildReferenceRankingRecipeJson(rankMode),
                 ["graph_language"] = graphSupport.GraphLanguage,
                 ["graph_supported"] = graphSupport.GraphSupported,
                 ["graph_support_reason"] = graphSupport.GraphSupportReason,
@@ -305,6 +308,8 @@ public partial class McpServer
                 countOnlyPayload["lang"] = lang;
                 countOnlyPayload["path"] = PathEcho(pathPatterns);
                 countOnlyPayload["excludeTests"] = excludeTests;
+                countOnlyPayload["rankBy"] = QueryCommandRunner.FormatReferenceRankMode(rankMode);
+                countOnlyPayload["rankingRecipe"] = QueryCommandRunner.BuildReferenceRankingRecipeJson(rankMode);
                 AddReferenceGraphCompletenessSignal(
                     countOnlyPayload,
                     reader,
@@ -344,6 +349,7 @@ public partial class McpServer
                 ["path"] = PathEcho(pathPatterns),
                 ["excludeTests"] = excludeTests,
                 ["rankBy"] = QueryCommandRunner.FormatReferenceRankMode(rankMode),
+                ["rankingRecipe"] = QueryCommandRunner.BuildReferenceRankingRecipeJson(rankMode),
                 ["graph_language"] = graphSupport.GraphLanguage,
                 ["graph_supported"] = graphSupport.GraphSupported,
                 ["graph_support_reason"] = graphSupport.GraphSupportReason,
