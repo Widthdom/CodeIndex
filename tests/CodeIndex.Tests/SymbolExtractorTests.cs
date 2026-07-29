@@ -1060,6 +1060,56 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Json_SkippedOverlongPropertySubtreesDoNotStealArrayItemLines_Issue4874()
+    {
+        var longName = new string('a', SymbolExtractor.StructuredDataMaxPathLength + 1);
+        var content = $$"""
+            [
+              {
+                "{{longName}}": [
+                  [
+                    1
+                  ]
+                ]
+              },
+              2
+            ]
+            """;
+
+        var symbol = Assert.Single(
+            SymbolExtractor.Extract(1, "json", content),
+            candidate => candidate.Name == "[1]");
+
+        Assert.Equal(9, symbol.Line);
+        Assert.Equal("2", symbol.Signature);
+    }
+
+    [Fact]
+    public void Extract_Json_SkippedOverlongArraySubtreesDoNotStealArrayItemLines_Issue4874()
+    {
+        var longName = new string('a', SymbolExtractor.StructuredDataMaxPathLength - 6);
+        var content = $$"""
+            [
+              {
+                "{{longName}}": [
+                  [
+                    1
+                  ]
+                ]
+              },
+              2
+            ]
+            """;
+
+        var symbol = Assert.Single(
+            SymbolExtractor.Extract(1, "json", content),
+            candidate => candidate.Name == "[1]");
+
+        Assert.Equal(9, symbol.Line);
+        Assert.Equal("2", symbol.Signature);
+    }
+
+    [Fact]
     public void Extract_Json_CapsStructuredSignatureLength_Issue3808()
     {
         var content = "{\"key\":\"" + new string('x', SymbolExtractor.StructuredDataMaxSignatureLength + 80) + "\"}";

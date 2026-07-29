@@ -142,7 +142,7 @@ public static partial class SymbolExtractor
             {
                 if (propertyLines != null)
                     _ = TryDequeueJsonPropertyLine(propertyLines, propertyName, out _);
-                DrainJsonPropertyLines(property.Value, propertyLines);
+                DrainJsonLineQueues(property.Value, propertyLines, arrayItemLines);
                 continue;
             }
 
@@ -239,7 +239,7 @@ public static partial class SymbolExtractor
             var itemPath = CombineJsonArrayIndexPath(arrayPath, index);
             if (itemPath.Length > StructuredDataMaxPathLength)
             {
-                DrainJsonPropertyLines(item, propertyLines);
+                DrainJsonLineQueues(item, propertyLines, arrayItemLines);
                 index++;
                 continue;
             }
@@ -278,23 +278,28 @@ public static partial class SymbolExtractor
         }
     }
 
-    private static void DrainJsonPropertyLines(JsonElement element, Dictionary<string, Queue<int>>? propertyLines)
+    private static void DrainJsonLineQueues(
+        JsonElement element,
+        Dictionary<string, Queue<int>>? propertyLines,
+        Queue<int>? arrayItemLines)
     {
-        if (propertyLines == null)
-            return;
-
         if (element.ValueKind == JsonValueKind.Object)
         {
             foreach (var property in element.EnumerateObject())
             {
-                _ = TryDequeueJsonPropertyLine(propertyLines, property.Name, out _);
-                DrainJsonPropertyLines(property.Value, propertyLines);
+                if (propertyLines != null)
+                    _ = TryDequeueJsonPropertyLine(propertyLines, property.Name, out _);
+                DrainJsonLineQueues(property.Value, propertyLines, arrayItemLines);
             }
         }
         else if (element.ValueKind == JsonValueKind.Array)
         {
             foreach (var item in element.EnumerateArray())
-                DrainJsonPropertyLines(item, propertyLines);
+            {
+                if (arrayItemLines is { Count: > 0 })
+                    _ = arrayItemLines.Dequeue();
+                DrainJsonLineQueues(item, propertyLines, arrayItemLines);
+            }
         }
     }
 
