@@ -1169,6 +1169,9 @@ public partial class DbReader
             : _foldReady
                 ? " OR (f.lang = 'csharp' AND r.symbol_name_folded IN (" + string.Join(", ", polymorphicCSharpSymbolNames.Select((_, i) => $"@polymorphicSymbolNameFolded{i}")) + "))"
                 : " OR (f.lang = 'csharp' AND r.symbol_name COLLATE NOCASE IN (" + string.Join(", ", polymorphicCSharpSymbolNames.Select((_, i) => $"@polymorphicSymbolName{i}")) + "))";
+        var unscopedPolymorphicNameCondition = hasIdentityTargetScope
+            ? string.Empty
+            : polymorphicNameCondition;
         var nameCondition = _foldReady
             ? allowSqlLeafFallback
                 ? @"
@@ -1200,7 +1203,7 @@ public partial class DbReader
                   OR (
                       COALESCE(r.resolution_state, 'unresolved') NOT IN ('resolved', 'resolved_group')
                       " + nameCondition + @"
-                  )" + polymorphicNameCondition + @"
+                  )" + unscopedPolymorphicNameCondition + @"
               )"
             : nameCondition;
         // impact BFS must share the call-graph contract with `callers`/`callees`/`hotspots`,
@@ -1361,34 +1364,54 @@ public partial class DbReader
         // 定義を通じてシンボル名を解決し、"run" → "Run" のようなケース違いを補正する。
         // 見つからなければユーザ入力をフォールバック使用。
         var resolvedName = ResolveSymbolName(symbolName, lang);
-        var rootDefinitionResolution = ResolveImpactDefinitions(symbolName, limit, lang, pathPatterns, excludePathPatterns, excludeTests);
+        var hasResolvedIdentityGraph = _referenceIdentityContractCurrent;
+        var canResolveQualifiedCSharpIdentity =
+            hasResolvedIdentityGraph
+            && SqlNameResolver.HasQualifier(symbolName)
+            && lang is null or "csharp";
+        var rootDefinitionLimit = canResolveQualifiedCSharpIdentity
+            ? DefaultImpactGraphStateEntryBudget
+            : limit;
+        var rootDefinitionResolution = ResolveImpactDefinitions(symbolName, rootDefinitionLimit, lang, pathPatterns, excludePathPatterns, excludeTests);
         if (rootDefinitionResolution.Definitions.Count == 0
             && !string.Equals(symbolName, resolvedName, StringComparison.Ordinal))
         {
-            rootDefinitionResolution = ResolveImpactDefinitions(resolvedName, limit, lang, pathPatterns, excludePathPatterns, excludeTests);
+            rootDefinitionResolution = ResolveImpactDefinitions(resolvedName, rootDefinitionLimit, lang, pathPatterns, excludePathPatterns, excludeTests);
         }
         var rootDefinitions = rootDefinitionResolution.Definitions;
         var rootDefinitionPaths = rootDefinitions
             .Select(definition => definition.Path)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var hasResolvedIdentityGraph = _referenceIdentityContractCurrent;
-        if (hasResolvedIdentityGraph && rootDefinitionPaths.Count > 1)
+        var qualifiedCSharpRootSymbolIds =
+            canResolveQualifiedCSharpIdentity
+            && rootDefinitions.Count > 0
+            && rootDefinitions.All(definition => definition.Lang == "csharp")
+            && rootDefinitions.All(definition => definition.SymbolId != null)
+            && rootDefinitionResolution.LogicalCount == rootDefinitions.Count
+                ? rootDefinitions
+                    .Select(definition => definition.SymbolId!.Value)
+                    .ToHashSet()
+                : [];
+        if (hasResolvedIdentityGraph
+            && rootDefinitionPaths.Count > 1
+            && qualifiedCSharpRootSymbolIds.Count == 0)
         {
             return ([], false, null, ImpactTerminationReasons.Completed, []);
         }
-        var qualifiedRootSymbolId = hasResolvedIdentityGraph
-                                    && SqlNameResolver.HasQualifier(symbolName)
-                                    && rootDefinitions.Count == 1
-                                    && rootDefinitions[0].Lang == "csharp"
-            ? rootDefinitions[0].SymbolId
-            : null;
         var ambiguousMRootSymbolId = hasResolvedIdentityGraph
                                      && rootDefinitions.Count == 1
                                      && lang is "matlab" or "objc"
                                      && string.Equals(rootDefinitions[0].Lang, lang, StringComparison.Ordinal)
             ? rootDefinitions[0].SymbolId
             : null;
-        var identityRootSymbolId = qualifiedRootSymbolId ?? ambiguousMRootSymbolId;
+        var identityRootSymbolIds = qualifiedCSharpRootSymbolIds.Count > 0
+            ? qualifiedCSharpRootSymbolIds
+            : ambiguousMRootSymbolId is long ambiguousRootSymbolId
+                ? [ambiguousRootSymbolId]
+                : [];
+        var singleIdentityRootSymbolId = identityRootSymbolIds.Count == 1
+            ? identityRootSymbolIds.Single()
+            : (long?)null;
         var includeAmbiguousMSource = ambiguousMRootSymbolId != null;
 
         var results = new List<ImpactResult>();
@@ -1396,9 +1419,19 @@ public partial class DbReader
         var resultWindowEnd = checked(resultOffset + limit);
         var discoveredResultCount = 0;
         var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var rootTraversalNodeKey = BuildImpactTraversalNodeKey(identityRootSymbolId, resolvedName);
+        var rootTraversalNodeKey = identityRootSymbolIds.Count > 1
+            ? $"identity:{NameFold.Fold(symbolName) ?? symbolName}"
+            : BuildImpactTraversalNodeKey(singleIdentityRootSymbolId, resolvedName);
         var queue = new Queue<(string Symbol, long? SymbolId, string NodeKey, int Depth)>();
-        queue.Enqueue((resolvedName, identityRootSymbolId, rootTraversalNodeKey, 0));
+        if (identityRootSymbolIds.Count > 0)
+        {
+            foreach (var identityRootSymbolId in identityRootSymbolIds.Order())
+                queue.Enqueue((resolvedName, identityRootSymbolId, rootTraversalNodeKey, 0));
+        }
+        else
+        {
+            queue.Enqueue((resolvedName, null, rootTraversalNodeKey, 0));
+        }
         visited.Add(resolvedName);
         var truncated = false;
         var maxDepthReached = false;
@@ -1435,7 +1468,7 @@ public partial class DbReader
             ? new Dictionary<string, ImpactPathNode>(StringComparer.OrdinalIgnoreCase)
             : null;
         if (withPaths)
-            pathNodesByKey![rootTraversalNodeKey] = ResolveImpactPathNode(resolvedName, identityRootSymbolId, kind: null, lang, referencePath: null, referenceLine: null);
+            pathNodesByKey![rootTraversalNodeKey] = ResolveImpactPathNode(resolvedName, singleIdentityRootSymbolId, kind: null, lang, referencePath: null, referenceLine: null);
 
         while (queue.Count > 0 && discoveredResultCount < resultWindowEnd && !graphStateBudgetHit && !boundaryProbeBudgetHit)
         {
@@ -1480,7 +1513,7 @@ public partial class DbReader
                         if (IsCycleEdge(cycleEdge.Caller.Key, cycleEdge.Callee.Key, cycleParentsByKey))
                             AddImpactCycle(cycles, cycleKeys, BuildCycleMembers(cycleEdge.Caller.Key, cycleEdge.Callee.Key, cycleParentsByKey), cycleNodesByKey);
                     }
-                    if (IsImpactRootCaller(caller, callerName, resolvedName, rootDefinitionPaths, identityRootSymbolId))
+                    if (IsImpactRootCaller(caller, callerName, resolvedName, rootDefinitionPaths, identityRootSymbolIds))
                         continue;
                     var callerNodeKey = BuildImpactTraversalNodeKey(callerSymbolId, callerName);
                     var key = BuildImpactVisitedKey(caller, callerName, hasResolvedIdentityGraph);
@@ -1610,7 +1643,7 @@ public partial class DbReader
                             callerSymbolId,
                             resolvedName,
                             rootDefinitionPaths,
-                            identityRootSymbolId,
+                            identityRootSymbolIds,
                             visited,
                             cycleParentsByKey,
                             cycleNodesByKey,
@@ -1767,10 +1800,10 @@ public partial class DbReader
         string callerName,
         string resolvedName,
         HashSet<string> rootDefinitionPaths,
-        long? identityRootSymbolId)
+        IReadOnlySet<long> identityRootSymbolIds)
     {
-        if (identityRootSymbolId is long rootSymbolId && caller.CallerSymbolId is long callerSymbolId)
-            return rootSymbolId == callerSymbolId;
+        if (identityRootSymbolIds.Count > 0 && caller.CallerSymbolId is long callerSymbolId)
+            return identityRootSymbolIds.Contains(callerSymbolId);
         return string.Equals(callerName, resolvedName, StringComparison.OrdinalIgnoreCase)
                && (rootDefinitionPaths.Count == 0 || rootDefinitionPaths.Contains(caller.Path));
     }
@@ -1780,7 +1813,7 @@ public partial class DbReader
         long? symbolId,
         string resolvedName,
         HashSet<string> rootDefinitionPaths,
-        long? identityRootSymbolId,
+        IReadOnlySet<long> identityRootSymbolIds,
         HashSet<string> visited,
         Dictionary<string, HashSet<string>> cycleParentsByKey,
         Dictionary<string, ImpactCycleMemberResult> cycleNodesByKey,
@@ -1819,7 +1852,7 @@ public partial class DbReader
                     if (IsCycleEdge(cycleEdge.Caller.Key, cycleEdge.Callee.Key, cycleParentsByKey))
                         AddImpactCycle(cycles, cycleKeys, BuildCycleMembers(cycleEdge.Caller.Key, cycleEdge.Callee.Key, cycleParentsByKey), cycleNodesByKey);
                 }
-                var isRoot = IsImpactRootCaller(caller, callerName, resolvedName, rootDefinitionPaths, identityRootSymbolId);
+                var isRoot = IsImpactRootCaller(caller, callerName, resolvedName, rootDefinitionPaths, identityRootSymbolIds);
                 if (isRoot)
                     continue;
 

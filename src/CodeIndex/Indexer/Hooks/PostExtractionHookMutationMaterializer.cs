@@ -76,11 +76,19 @@ internal static class PostExtractionHookMutationMaterializer
         {
             foreach (var symbol in symbols)
             {
+                var previousIdentityNameFolded = symbol.IdentityNameFolded;
+                var previousDisplayNameFolded = symbol.DisplayNameFolded;
                 symbol.IdentityNameFolded =
                     CSharpSymbolNameNormalizer.BuildExplicitInterfaceIdentityNameFolded(
                         symbol.Name,
                         symbol.Signature,
-                        symbol.Kind);
+                        symbol.Kind)
+                    ?? CSharpSymbolNameNormalizer.RebuildExplicitInterfaceIdentityAfterNameMutation(
+                        symbol.Name,
+                        symbol.Signature,
+                        symbol.Kind,
+                        previousIdentityNameFolded,
+                        previousDisplayNameFolded);
                 symbol.DisplayNameFolded = symbol.IdentityNameFolded != null
                     ? NameFold.Fold(symbol.Name)
                     : null;

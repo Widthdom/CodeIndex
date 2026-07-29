@@ -114,6 +114,99 @@ internal static class CSharpSymbolNameNormalizer
             kind: kind);
     }
 
+    /// <summary>
+    /// Preserve an explicit-interface qualifier when a post-extraction hook changes only the
+    /// public member name. The hook cannot edit the internal identity fields, and the persisted
+    /// signature intentionally retains the original source spelling, so rebuilding solely from
+    /// the new name would otherwise discard the qualifier.
+    ///
+    /// post-extraction hook が公開 member 名だけを変更した場合に、明示的 interface 修飾子を
+    /// 保持する。hook は内部 identity field を編集できず、永続 signature は元の source
+    /// 表記を意図的に保持するため、新しい名前だけから再構築すると修飾子が失われてしまう。
+    /// </summary>
+    internal static string? RebuildExplicitInterfaceIdentityAfterNameMutation(
+        string name,
+        string? signature,
+        string kind,
+        string? previousIdentityNameFolded,
+        string? previousDisplayNameFolded)
+    {
+        if (string.IsNullOrWhiteSpace(name)
+            || string.IsNullOrWhiteSpace(signature)
+            || string.IsNullOrWhiteSpace(previousIdentityNameFolded)
+            || string.IsNullOrWhiteSpace(previousDisplayNameFolded)
+            || kind is not ("function" or "test.method" or "property" or "event"))
+        {
+            return null;
+        }
+
+        var normalizedName = NormalizeVerbatimIdentifiers(name);
+        var newDisplayNameFolded = NameFold.Fold(normalizedName) ?? normalizedName;
+        if (string.Equals(
+                newDisplayNameFolded,
+                previousDisplayNameFolded,
+                StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var memberSeparator = previousIdentityNameFolded.LastIndexOf('.');
+        if (memberSeparator <= 0
+            || memberSeparator == previousIdentityNameFolded.Length - 1)
+        {
+            return null;
+        }
+
+        var previousLeaf = previousIdentityNameFolded[(memberSeparator + 1)..];
+        var aritySeparator = previousLeaf.LastIndexOf('`');
+        var aritySuffix = string.Empty;
+        if (aritySeparator >= 0)
+        {
+            aritySuffix = previousLeaf[aritySeparator..];
+            if (aritySeparator == 0
+                || aritySuffix.Length == 1
+                || !aritySuffix.AsSpan(1).ToString().All(char.IsDigit))
+            {
+                return null;
+            }
+            previousLeaf = previousLeaf[..aritySeparator];
+        }
+        if (!string.Equals(
+                previousLeaf,
+                previousDisplayNameFolded,
+                StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        // Only preserve the old qualifier when the unchanged declaration header still contains
+        // that old qualified member. This avoids carrying an explicit identity across a hook
+        // mutation that converted the record into an ordinary declaration.
+        // 変更後も declaration header に元の修飾 member が残る場合だけ修飾子を保持し、
+        // 通常宣言へ変換した hook mutation に古い explicit identity を持ち越さない。
+        var decodedSignature = ExactSourceSearchNormalizer.NormalizeCSharpUnicodeEscapes(
+            signature,
+            out _);
+        var declarationHeader = decodedSignature[..FindDeclarationBodyStart(decodedSignature)];
+        declarationHeader = TypeWhitespaceRegex.Replace(declarationHeader, " ");
+        declarationHeader = TypeDotWhitespaceRegex.Replace(declarationHeader, ".");
+        declarationHeader = NormalizeVerbatimIdentifiers(declarationHeader);
+        var declarationHeaderFolded =
+            NameFold.Fold(declarationHeader) ?? declarationHeader;
+        var previousQualifiedMember =
+            previousIdentityNameFolded[..(memberSeparator + 1)] + previousLeaf;
+        if (!declarationHeaderFolded.Contains(
+                previousQualifiedMember,
+                StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        return previousIdentityNameFolded[..(memberSeparator + 1)]
+               + newDisplayNameFolded
+               + aritySuffix;
+    }
+
     private static string? TryBuildExplicitInterfaceIdentityNameFolded(
         string name,
         string signature,

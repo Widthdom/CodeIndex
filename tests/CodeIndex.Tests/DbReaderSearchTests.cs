@@ -2410,6 +2410,128 @@ public partial class DbReaderTests
     }
 
     [Fact]
+    public void AnalyzeImpact_QualifiedExplicitInterfaceIdentityTraversesAllDefinitionIds_Issue4866Review()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_explicit_interface_impact_4866");
+        var dbPath = Path.Combine(project.Root, "codeindex.db");
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+        db.InitializeSchema();
+        var writer = new DbWriter(db.Connection);
+        const string contractPath = "src/IFoo.cs";
+        const string contractContent = """
+            namespace Demo;
+
+            public interface IFoo
+            {
+                void Run();
+            }
+            """;
+        const string servicePath = "src/Service.cs";
+        const string serviceContent = """
+            namespace Demo;
+
+            public sealed class Service : IFoo
+            {
+                void IFoo.Run() { }
+                public void Run() { }
+                public void CallInterface(IFoo target) { target.Run(); }
+                public void CallPublic() { Run(); }
+            }
+            """;
+
+        var contractFileId = writer.UpsertFile(new FileRecord
+        {
+            Path = contractPath,
+            Lang = "csharp",
+            Size = contractContent.Length,
+            Lines = contractContent.Count(ch => ch == '\n') + 1,
+            Modified = new DateTime(2026, 7, 29, 0, 0, 0, DateTimeKind.Utc),
+        });
+        var serviceFileId = writer.UpsertFile(new FileRecord
+        {
+            Path = servicePath,
+            Lang = "csharp",
+            Size = serviceContent.Length,
+            Lines = serviceContent.Count(ch => ch == '\n') + 1,
+            Modified = new DateTime(2026, 7, 29, 0, 0, 1, DateTimeKind.Utc),
+        });
+        writer.InsertChunks([
+            new ChunkRecord
+            {
+                FileId = contractFileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = contractContent.Count(ch => ch == '\n') + 1,
+                Content = contractContent,
+            },
+            new ChunkRecord
+            {
+                FileId = serviceFileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = serviceContent.Count(ch => ch == '\n') + 1,
+                Content = serviceContent,
+            },
+        ]);
+        var contractSymbols = SymbolExtractor.Extract(
+            contractFileId,
+            "csharp",
+            contractContent,
+            filePath: contractPath);
+        var serviceSymbols = SymbolExtractor.Extract(
+            serviceFileId,
+            "csharp",
+            serviceContent,
+            filePath: servicePath);
+        SymbolExtractor.ApplyFamilyScope(
+            contractSymbols,
+            FileIndexer.DeriveFallbackFamilyScopeKey(contractPath));
+        SymbolExtractor.ApplyFamilyScope(
+            serviceSymbols,
+            FileIndexer.DeriveFallbackFamilyScopeKey(servicePath));
+        writer.InsertSymbols(contractSymbols);
+        writer.InsertSymbols(serviceSymbols);
+        writer.InsertReferences(ReferenceExtractor.Extract(
+            contractFileId,
+            "csharp",
+            contractContent,
+            contractSymbols,
+            path: contractPath));
+        writer.InsertReferences(ReferenceExtractor.Extract(
+            serviceFileId,
+            "csharp",
+            serviceContent,
+            serviceSymbols,
+            path: servicePath));
+        writer.BackfillFoldedColumns(rewriteAll: true);
+        Assert.True(writer.MarkFoldReady());
+        writer.MarkCSharpSymbolNameContractReady();
+        writer.MarkGraphReady();
+
+        using var reader = new DbReader(db.Connection);
+        var impact = reader.AnalyzeImpact(
+            "IFoo.Run",
+            maxDepth: 1,
+            limit: 20,
+            lang: "csharp",
+            pathPatterns: ["src/**"]);
+
+        Assert.Equal(2, impact.Definitions.Count);
+        Assert.Equal(
+            [contractPath, servicePath],
+            impact.Definitions.Select(definition => definition.Path).Order().ToArray());
+        var interfaceCaller = Assert.Single(
+            impact.Callers,
+            caller => caller.CallerName == "CallInterface");
+        Assert.Contains(
+            interfaceCaller.CalleeSymbolId,
+            impact.Definitions.Select(definition => definition.SymbolId));
+        Assert.DoesNotContain(
+            impact.Callers,
+            caller => caller.CallerName == "CallPublic");
+    }
+
+    [Fact]
     public void SearchSymbols_QualifiedExactWithoutLanguagePreservesLegacyCSharpAndTerraform_Issue4866Review()
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_explicit_interface_cross_language_4866");

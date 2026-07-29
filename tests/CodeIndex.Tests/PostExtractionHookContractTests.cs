@@ -209,6 +209,18 @@ public class PostExtractionHookContractTests
                 StartLine = 2,
                 EndLine = 2,
             },
+            new()
+            {
+                FileId = 7,
+                Kind = "function",
+                Name = "Execute",
+                Signature = "void IFoo.Run()",
+                IdentityNameFolded = "ifoo.run",
+                DisplayNameFolded = "run",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 3,
+            },
         };
 
         PostExtractionHookMutationMaterializer.RefreshLanguageIdentity("csharp", symbols);
@@ -217,5 +229,7 @@ public class PostExtractionHookContractTests
         Assert.Equal("run", symbols[0].DisplayNameFolded);
         Assert.Null(symbols[1].IdentityNameFolded);
         Assert.Null(symbols[1].DisplayNameFolded);
+        Assert.Equal("ifoo.execute", symbols[2].IdentityNameFolded);
+        Assert.Equal("execute", symbols[2].DisplayNameFolded);
     }
 }
