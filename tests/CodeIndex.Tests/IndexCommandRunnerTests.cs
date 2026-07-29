@@ -6460,6 +6460,79 @@ public sealed class Caller
     }
 
     [Fact]
+    public void RunBackfillFold_RefusesCSharpV3StampWhenLegacySignaturesAreMissing_Issue4866()
+    {
+        var dbPath = CreateTempDbPath("cdidx_backfill_fold_csharp_v2_missing_signature");
+        try
+        {
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                db.InitializeSchema();
+                var writer = new DbWriter(db.Connection);
+                var fileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = "src/LegacyExplicit.cs",
+                    Lang = "csharp",
+                    Size = 32,
+                    Lines = 1,
+                    Modified = new DateTime(2026, 7, 29, 0, 0, 0, DateTimeKind.Utc),
+                });
+                writer.InsertSymbols([
+                    new SymbolRecord
+                    {
+                        FileId = fileId,
+                        Kind = "function",
+                        Name = "Run",
+                        Signature = null,
+                        Line = 1,
+                        StartLine = 1,
+                        EndLine = 1,
+                    },
+                ]);
+                writer.SetMeta(DbContext.CSharpSymbolNameContractVersionMetaKey, "2");
+                Assert.False(
+                    writer.CanReconstructCSharpExplicitInterfaceIdentitiesFromPersistedRows());
+            }
+
+            string outputText;
+            int exitCode;
+            lock (TestConsoleLock.Gate)
+            {
+                var originalOut = Console.Out;
+                using var output = new StringWriter();
+                try
+                {
+                    Console.SetOut(output);
+                    exitCode = IndexCommandRunner.RunBackfillFold(
+                        ["--db", dbPath, "--json"],
+                        _jsonOptions);
+                    outputText = output.ToString();
+                }
+                finally
+                {
+                    Console.SetOut(originalOut);
+                }
+            }
+
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            Assert.Contains(
+                "C# explicit-interface identities cannot be reconstructed",
+                outputText,
+                StringComparison.Ordinal);
+
+            using var verifyDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            Assert.Equal(
+                "2",
+                verifyDb.GetMetaString(DbContext.CSharpSymbolNameContractVersionMetaKey));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteFile(dbPath);
+        }
+    }
+
+    [Fact]
     public void RunBackfillFold_DryRunReportsEffectiveFoldReadyWhenMetadataStale()
     {
         var dbPath = CreateTempDbPath("cdidx_backfill_fold_stale_dry");

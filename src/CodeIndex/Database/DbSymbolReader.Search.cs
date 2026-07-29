@@ -1194,7 +1194,8 @@ public partial class DbReader
             return query?.Trim();
         if (exact
             && !string.IsNullOrWhiteSpace(query)
-            && string.Equals(NormalizeQueryLanguage(lang), "csharp", StringComparison.Ordinal)
+            && (string.IsNullOrWhiteSpace(lang)
+                || string.Equals(NormalizeQueryLanguage(lang), "csharp", StringComparison.Ordinal))
             && SqlNameResolver.HasQualifier(query))
         {
             return CSharpSymbolNameNormalizer.NormalizeExplicitInterfaceQueryDisplayName(query);

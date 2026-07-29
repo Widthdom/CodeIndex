@@ -2113,6 +2113,24 @@ public partial class DbReaderTests
         Assert.Equal(
             itemResults.Select(result => result.SymbolId).Order().ToArray(),
             sourceSpelledItemResults.Select(result => result.SymbolId).Order().ToArray());
+        var sourceSpelledItemResultsWithoutLanguage = reader.SearchSymbols(
+            "IFoo.this",
+            exact: true);
+        Assert.Equal(
+            itemResults.Select(result => result.SymbolId).Order().ToArray(),
+            sourceSpelledItemResultsWithoutLanguage.Select(result => result.SymbolId).Order().ToArray());
+        Assert.Equal(
+            itemResults.Count,
+            reader.CountSearchSymbols("IFoo.this", exact: true));
+        Assert.Equal(
+            itemResults.Count,
+            reader.CountSearchSymbolsTotal("IFoo.this", exact: true).Count);
+        Assert.Equal(
+            itemResults.Select(result => result.SymbolId).Order().ToArray(),
+            reader.GetDefinitions("IFoo.this", exact: true)
+                .Select(result => result.SymbolId)
+                .Order()
+                .ToArray());
 
         var namedItemPropertyResults = reader.SearchSymbols(
             "IItemContract.Item",
@@ -2155,6 +2173,12 @@ public partial class DbReaderTests
         Assert.All(
             verbatimThisDefinitions,
             result => Assert.DoesNotContain("IFoo.this[", result.Signature, StringComparison.Ordinal));
+        var verbatimThisResultsWithoutLanguage = reader.SearchSymbols(
+            "IFoo.@this",
+            exact: true);
+        Assert.Equal(
+            verbatimThisResults.Select(result => result.SymbolId).Order().ToArray(),
+            verbatimThisResultsWithoutLanguage.Select(result => result.SymbolId).Order().ToArray());
         var qualifiedService = Assert.Single(reader.SearchSymbols(
             "Demo.Service",
             lang: "csharp",

@@ -26,6 +26,40 @@ public partial class DbWriter
     }
 
     /// <summary>
+    /// A pre-v3 C# naming contract can be upgraded without reparsing only when every symbol kind
+    /// that may represent an explicit-interface member still has its declaration signature.
+    /// Without that source evidence, a short legacy name cannot be distinguished from a qualified
+    /// explicit implementation, so stamping v3 would make the readiness signal untrustworthy.
+    ///
+    /// v3 より前の C# naming contract を再解析なしで更新できるのは、明示的 interface member
+    /// になり得る全 symbol kind に宣言 signature が残っている場合だけである。source evidence
+    /// がなければ短い legacy 名と修飾済み実装を区別できず、v3 stamp が不正確になる。
+    /// </summary>
+    public bool CanReconstructCSharpExplicitInterfaceIdentitiesFromPersistedRows()
+    {
+        var command = RentCommand(
+            """
+            SELECT COUNT(*)
+            FROM symbols s
+            JOIN files f ON f.id = s.file_id
+            WHERE f.lang = 'csharp'
+              AND s.kind IN ('function', 'property', 'event')
+              AND (s.signature IS NULL OR trim(s.signature) = '')
+            """,
+            static _ => { });
+        try
+        {
+            var raw = command.ExecuteScalar();
+            var missing = raw is long value ? value : Convert.ToInt64(raw ?? 0);
+            return missing == 0;
+        }
+        finally
+        {
+            ReleaseCommand(command);
+        }
+    }
+
+    /// <summary>
     /// True only when every existing row in symbols / symbol_references has a populated folded
     /// value for each source name that is itself non-NULL. Callers use this before stamping
     /// `FoldReadyFlag` on a full scan because the default incremental path skips unchanged files
