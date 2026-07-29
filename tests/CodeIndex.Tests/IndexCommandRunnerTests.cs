@@ -6359,6 +6359,16 @@ public sealed class Caller
                         StartLine = 1,
                         EndLine = 1,
                     },
+                    new SymbolRecord
+                    {
+                        FileId = fileId,
+                        Kind = "namespace",
+                        Name = "CodeIndex.Tests",
+                        Signature = "namespace CodeIndex.Tests;",
+                        Line = 1,
+                        StartLine = 1,
+                        EndLine = 1,
+                    },
                 ]);
                 writer.SetMeta(DbContext.CSharpSymbolNameContractVersionMetaKey, "2");
             }
@@ -6386,7 +6396,7 @@ public sealed class Caller
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.True(json.GetProperty("rewrite_all").GetBoolean());
-            Assert.Equal(1, json.GetProperty("symbols").GetInt32());
+            Assert.Equal(2, json.GetProperty("symbols").GetInt32());
             Assert.True(json.GetProperty("verified").GetBoolean());
 
             using var verifyDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
@@ -6404,6 +6414,13 @@ public sealed class Caller
             Assert.True(identityReader.Read());
             Assert.Equal("ifoo.run", identityReader.GetString(0));
             Assert.Equal("run", identityReader.GetString(1));
+            using var namespaceAlias = verifyDb.Connection.CreateCommand();
+            namespaceAlias.CommandText = """
+                SELECT display_name_folded
+                FROM symbols
+                WHERE kind = 'namespace'
+                """;
+            Assert.Equal(DBNull.Value, namespaceAlias.ExecuteScalar());
 
             using var reader = new DbReader(verifyDb.Connection);
             Assert.Single(reader.SearchSymbols(

@@ -78,7 +78,7 @@ public partial class DbWriter
                  FROM symbols s
                  JOIN files f ON f.id = s.file_id
                  WHERE f.lang = 'csharp'
-                   AND instr(s.name_folded, '.') > 0
+                   AND s.name_folded <> codeindex_name_fold(s.name)
                    AND s.display_name_folded IS NULL)
               + (SELECT COUNT(*) FROM symbol_references WHERE symbol_name IS NOT NULL AND symbol_name_folded IS NULL)
               + (SELECT COUNT(*) FROM symbol_references WHERE container_name IS NOT NULL AND container_name_folded IS NULL)",
@@ -357,7 +357,7 @@ public partial class DbWriter
               WHERE s.name IS NOT NULL
                 AND (s.name_folded IS NULL
                      OR (f.lang = 'csharp'
-                         AND instr(s.name_folded, '.') > 0
+                         AND s.name_folded <> codeindex_name_fold(s.name)
                          AND s.display_name_folded IS NULL))
               """;
         var symbolsUsesCheckpoint = rewriteAll && phase != "references";
@@ -441,7 +441,7 @@ public partial class DbWriter
               WHERE s.name IS NOT NULL
                 AND (s.name_folded IS NULL
                      OR (f.lang = 'csharp'
-                         AND instr(s.name_folded, '.') > 0
+                         AND s.name_folded <> codeindex_name_fold(s.name)
                          AND s.display_name_folded IS NULL))
               """;
         var select = RentCommand(
