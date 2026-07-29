@@ -1074,6 +1074,10 @@ public partial class DbReader
             : allowLeafFallback
                 ? "(s.name = @name COLLATE NOCASE OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @segmentCount AND sql_normalize_name(s.name) = @normalizedName COLLATE NOCASE) OR sql_leaf_name(s.name) = @leafName COLLATE NOCASE)))"
                 : "(s.name = @name COLLATE NOCASE OR (f.lang = 'sql' AND sql_segment_count(s.name) = @segmentCount AND sql_normalize_name(s.name) = @normalizedName COLLATE NOCASE))";
+        var csharpExplicitInterfaceClause = allowLeafFallback
+            ? BuildCSharpExplicitInterfaceShortAliasMatchSql("name")
+            : BuildCSharpExplicitInterfaceIdentityMatchSql("name");
+        nameCondition = $"({nameCondition} OR {csharpExplicitInterfaceClause})";
         cmd.CommandText = @"SELECT s.name FROM symbols s JOIN files f ON s.file_id = f.id
                             WHERE " + nameCondition + @"
                               AND " + supportedLangFilter + @"
@@ -1090,8 +1094,11 @@ public partial class DbReader
         SqliteCommandPolicy.Add(cmd, "@normalizedNameFolded", NameFold.Fold(normalizedName) ?? normalizedName);
         SqliteCommandPolicy.Add(cmd, "@leafName", leafName);
         SqliteCommandPolicy.Add(cmd, "@leafNameFolded", NameFold.Fold(leafName) ?? leafName);
+        SqliteCommandPolicy.Add(cmd, "@nameLeaf", leafName);
+        SqliteCommandPolicy.Add(cmd, "@nameLeafFolded", NameFold.Fold(leafName) ?? leafName);
         SqliteCommandPolicy.Add(cmd, "@segmentCount", segmentCount);
         SqliteCommandPolicy.Add(cmd, "@allowLeafFallback", allowLeafFallback ? 1 : 0);
+        AddCSharpExplicitInterfaceIdentityQueryParameter(cmd, "name", normalizedSymbolName);
         if (_foldReady)
             SqliteCommandPolicy.Add(cmd, "@nameFolded", NameFold.Fold(normalizedSymbolName) ?? normalizedSymbolName);
         using var reader = cmd.ExecuteTrackedReader();
@@ -2404,6 +2411,10 @@ public partial class DbReader
             : allowLeafFallback
                 ? "(s.name = @resolvedName COLLATE NOCASE OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @resolvedNameSegmentCount AND sql_normalize_name(s.name) = @resolvedNameNormalized COLLATE NOCASE) OR sql_leaf_name(s.name) = @resolvedNameLeaf COLLATE NOCASE)))"
                 : "(s.name = @resolvedName COLLATE NOCASE OR (f.lang = 'sql' AND sql_segment_count(s.name) = @resolvedNameSegmentCount AND sql_normalize_name(s.name) = @resolvedNameNormalized COLLATE NOCASE))";
+        var csharpExplicitInterfaceClause = allowLeafFallback
+            ? BuildCSharpExplicitInterfaceShortAliasMatchSql("resolvedName")
+            : BuildCSharpExplicitInterfaceIdentityMatchSql("resolvedName");
+        nameCondition = $"({nameCondition} OR {csharpExplicitInterfaceClause})";
         if (SqlNameResolver.HasQualifier(resolvedName))
         {
             var containerNameSql = GetSymbolColumnSql("container_name", "''");
@@ -2530,6 +2541,7 @@ public partial class DbReader
         SqliteCommandPolicy.Add(cmd, "@resolvedNameLeafFolded", FoldNameForLanguage(leafName, lang));
         SqliteCommandPolicy.Add(cmd, "@resolvedNameSegmentCount", segmentCount);
         SqliteCommandPolicy.Add(cmd, "@allowLeafFallback", allowLeafFallback ? 1 : 0);
+        AddCSharpExplicitInterfaceIdentityQueryParameter(cmd, "resolvedName", resolvedName);
         if (SqlNameResolver.HasQualifier(resolvedName))
         {
             var container = GetQualifiedQueryContainer(resolvedName);

@@ -1926,6 +1926,12 @@ public partial class DbReaderTests
             {
                 public Demo.Service[] Service() => [];
             }
+
+            public sealed class ExternalService : External.IFoo
+            {
+                void External.IFoo.Run<TExternal>(TExternal value) { ExternalHelper(); }
+                public void ExternalHelper() { }
+            }
             """;
         var fileId = writer.UpsertFile(new FileRecord
         {
@@ -2121,6 +2127,40 @@ public partial class DbReaderTests
         Assert.Contains(
             reader.SearchSymbols("Run", limit: 20, lang: "csharp", exact: true),
             result => result.SymbolId == fooRun.SymbolId);
+
+        var qualifiedExternalImpact = reader.AnalyzeImpact(
+            "External.IFoo.Run<T>",
+            maxDepth: 0,
+            limit: 20,
+            lang: "csharp",
+            pathPatterns: [path]);
+        var qualifiedExternalDefinition = Assert.Single(qualifiedExternalImpact.Definitions);
+        Assert.Contains(
+            "External.IFoo.Run<TExternal>",
+            qualifiedExternalDefinition.Signature,
+            StringComparison.Ordinal);
+        Assert.NotEqual("no_matching_definition", qualifiedExternalImpact.ZeroResultReason);
+
+        var shortExplicitImpact = reader.AnalyzeImpact(
+            "Run",
+            maxDepth: 0,
+            limit: 20,
+            lang: "csharp",
+            pathPatterns: [path]);
+        Assert.Contains(
+            shortExplicitImpact.Definitions,
+            definition => definition.SymbolId == qualifiedExternalDefinition.SymbolId);
+
+        var shortExternalImpact = reader.AnalyzeImpact(
+            "ExternalHelper",
+            maxDepth: 1,
+            limit: 20,
+            lang: "csharp",
+            pathPatterns: [path]);
+        Assert.Contains(
+            shortExternalImpact.Callers,
+            caller => caller.CallerName == "Run"
+                      && caller.CallerSymbolId == qualifiedExternalDefinition.SymbolId);
 
         var valueResults = reader.SearchSymbols("IFoo.Value", lang: "csharp", exact: true);
         Assert.Equal(2, valueResults.Count);
