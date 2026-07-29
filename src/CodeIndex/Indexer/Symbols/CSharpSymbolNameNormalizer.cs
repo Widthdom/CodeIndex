@@ -71,27 +71,48 @@ internal static class CSharpSymbolNameNormalizer
         if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(signature))
             return null;
 
-        var sourceName = string.Equals(name, "Item", StringComparison.Ordinal) ? "this" : name;
-        var memberMarker = "." + sourceName;
+        var isIndexer = string.Equals(name, "Item", StringComparison.Ordinal);
+        var sourceName = isIndexer ? "this" : name;
         var declarationBodyStart = FindDeclarationBodyStart(signature);
         var searchStart = 0;
         while (searchStart < signature.Length)
         {
             var memberIndex = signature.IndexOf(
-                memberMarker,
+                sourceName,
                 searchStart,
                 StringComparison.Ordinal);
-            if (memberIndex <= 0)
+            if (memberIndex < 0)
                 return null;
             if (memberIndex >= declarationBodyStart)
                 return null;
 
-            var cursor = memberIndex + memberMarker.Length;
+            var memberTokenStart = memberIndex;
+            if (memberTokenStart > 0 && signature[memberTokenStart - 1] == '@')
+                memberTokenStart--;
+            var memberTokenEnd = memberIndex + sourceName.Length;
+            var hasIdentifierBoundary =
+                (memberTokenStart == 0 || !IsIdentifierChar(signature[memberTokenStart - 1]))
+                && (memberTokenEnd >= signature.Length || !IsIdentifierChar(signature[memberTokenEnd]));
+            var cursorBeforeMember = memberTokenStart - 1;
+            while (cursorBeforeMember >= 0 && char.IsWhiteSpace(signature[cursorBeforeMember]))
+                cursorBeforeMember--;
+            var hasQualifierDot = cursorBeforeMember >= 0 && signature[cursorBeforeMember] == '.';
+            var isVerbatimIndexerSpelling =
+                isIndexer && memberTokenStart < memberIndex && signature[memberTokenStart] == '@';
+            if (!hasIdentifierBoundary || !hasQualifierDot || isVerbatimIndexerSpelling)
+            {
+                searchStart = memberTokenEnd;
+                continue;
+            }
+
+            var cursor = memberTokenEnd;
             while (cursor < signature.Length && char.IsWhiteSpace(signature[cursor]))
                 cursor++;
-            if (TryReadExplicitInterfaceMemberArity(signature, cursor, out var arity))
+            if (TryReadExplicitInterfaceMemberArity(signature, cursor, isIndexer, out var arity))
             {
-                var qualifierEnd = memberIndex;
+                var qualifierEnd = cursorBeforeMember;
+                while (qualifierEnd > 0 && char.IsWhiteSpace(signature[qualifierEnd - 1]))
+                    qualifierEnd--;
                 var qualifierStart = FindExplicitInterfaceQualifierStart(signature, qualifierEnd);
                 if (qualifierStart < qualifierEnd)
                 {
@@ -100,7 +121,7 @@ internal static class CSharpSymbolNameNormalizer
                 }
             }
 
-            searchStart = memberIndex + memberMarker.Length;
+            searchStart = memberTokenEnd;
         }
 
         return null;
@@ -125,6 +146,7 @@ internal static class CSharpSymbolNameNormalizer
     private static bool TryReadExplicitInterfaceMemberArity(
         string signature,
         int cursor,
+        bool isIndexer,
         out int arity)
     {
         arity = 0;
@@ -136,7 +158,8 @@ internal static class CSharpSymbolNameNormalizer
             // Reject a matching qualified return/parameter type such as `Models.Run Run()`.
             // A non-generic explicit member name is followed immediately by its
             // parameter/indexer list, accessor body, expression body, or terminator.
-            return signature[cursor] is '(' or '[' or '{' or '=' or ';';
+            return signature[cursor] is '(' or '{' or '=' or ';'
+                || (isIndexer && signature[cursor] == '[');
         }
 
         var typeParameterEnd = FindBalancedTypeArgumentListEnd(signature, cursor);
@@ -174,9 +197,43 @@ internal static class CSharpSymbolNameNormalizer
     /// `IFoo.Run&lt;T&gt;` と `IFoo.Run&lt;TValue&gt;` を同一 identity としつつ、非修飾の
     /// `Run` へは統合しない。
     /// </summary>
+    internal static string NormalizeExplicitInterfaceQueryDisplayName(string query)
+    {
+        var rawLastDot = FindLastTopLevelDot(query);
+        var rawTerminalToken = rawLastDot >= 0
+            ? query[(rawLastDot + 1)..].Trim()
+            : string.Empty;
+        var isIndexerSpelling = string.Equals(
+            rawTerminalToken,
+            "this",
+            StringComparison.Ordinal);
+        var isVerbatimThisSpelling = string.Equals(
+            rawTerminalToken,
+            "@this",
+            StringComparison.Ordinal);
+        var normalized = NormalizeTypeDisplayName(query);
+        var lastDot = FindLastTopLevelDot(normalized);
+        if (lastDot < 0)
+            return normalized;
+
+        if (isIndexerSpelling
+            && string.Equals(normalized[(lastDot + 1)..], "this", StringComparison.Ordinal))
+        {
+            normalized = normalized[..(lastDot + 1)] + "Item";
+        }
+        else if (isVerbatimThisSpelling
+                 && string.Equals(normalized[(lastDot + 1)..], "this", StringComparison.Ordinal))
+        {
+            normalized = normalized[..(lastDot + 1)] + "@this";
+        }
+
+        return normalized;
+    }
+
     internal static string NormalizeExplicitInterfaceQueryIdentityNameFolded(string query)
     {
-        var normalized = NormalizeTypeDisplayName(query);
+        var normalized = NormalizeTypeDisplayName(
+            NormalizeExplicitInterfaceQueryDisplayName(query));
         var lastDot = FindLastTopLevelDot(normalized);
         if (lastDot < 0)
             return NameFold.Fold(normalized) ?? normalized;
@@ -189,9 +246,6 @@ internal static class CSharpSymbolNameNormalizer
         {
             normalized = normalized[..genericStart] + $"`{arity}";
         }
-
-        if (string.Equals(normalized[(lastDot + 1)..], "this", StringComparison.Ordinal))
-            normalized = normalized[..(lastDot + 1)] + "Item";
 
         return NameFold.Fold(normalized) ?? normalized;
     }
@@ -392,6 +446,18 @@ internal static class CSharpSymbolNameNormalizer
                         && angleDepth == 0
                         && bracketDepth == 0)
                     {
+                        var previous = index - 1;
+                        while (previous >= 0 && char.IsWhiteSpace(signature[previous]))
+                            previous--;
+                        var next = index + 1;
+                        while (next < qualifierEnd && char.IsWhiteSpace(signature[next]))
+                            next++;
+                        if ((previous >= 0 && signature[previous] is '.' or ':' or '<')
+                            || (next < qualifierEnd && signature[next] is '.' or ':' or '<'))
+                        {
+                            break;
+                        }
+
                         return index + 1;
                     }
                     break;

@@ -179,4 +179,39 @@ public class PostExtractionHookContractTests
         Assert.Equal("pkg", reference.TargetQualifier);
         Assert.True(reference.SuppressInferredTargetQualifier);
     }
+
+    [Fact]
+    public void MutationMaterializer_RecomputesCSharpExplicitInterfaceIdentityAfterHookMutation_Issue4866()
+    {
+        var symbols = new List<SymbolRecord>
+        {
+            new()
+            {
+                FileId = 7,
+                Kind = "function",
+                Name = "Run",
+                Signature = "void IFoo.@Run()",
+                IdentityNameFolded = "stale",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 1,
+            },
+            new()
+            {
+                FileId = 7,
+                Kind = "function",
+                Name = "Plain",
+                Signature = "void Plain()",
+                IdentityNameFolded = "stale",
+                Line = 2,
+                StartLine = 2,
+                EndLine = 2,
+            },
+        };
+
+        PostExtractionHookMutationMaterializer.RefreshLanguageIdentity("csharp", symbols);
+
+        Assert.Equal("ifoo.run", symbols[0].IdentityNameFolded);
+        Assert.Null(symbols[1].IdentityNameFolded);
+    }
 }

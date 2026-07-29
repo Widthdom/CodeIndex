@@ -1888,6 +1888,8 @@ public partial class DbReaderTests
                 int Value { get; }
                 event System.EventHandler Changed;
                 string this[int index] { get; }
+                void Ä();
+                void @this();
             }
 
             public interface IBar
@@ -1900,10 +1902,17 @@ public partial class DbReaderTests
                 void IFoo.Run<TValue>(TValue value) { }
                 void IBar.Run<TLeft, TRight>(TLeft left, TRight right) { }
                 int IFoo.Value => 1;
-                event System.EventHandler IFoo.Changed { add { } remove { } }
+                event System.EventHandler IFoo . Changed { add { } remove { } }
                 string IFoo.this[int index] => index.ToString();
+                void IFoo.Ä() { }
+                void IFoo.@this() { }
                 public void Run<T>(T value) { }
                 public void CallPublicRun() { Run(1); }
+            }
+
+            public sealed class ArrayFactory
+            {
+                public Demo.Service[] Service() => [];
             }
             """;
         var fileId = writer.UpsertFile(new FileRecord
@@ -1930,6 +1939,7 @@ public partial class DbReaderTests
         writer.InsertReferences(ReferenceExtractor.Extract(fileId, "csharp", content, symbols, path: path));
         var rewritten = writer.BackfillFoldedColumns(rewriteAll: true);
         Assert.True(rewritten.Symbols > 0);
+        Assert.True(writer.AllFoldedColumnValuesMatchCurrentFold());
         Assert.True(writer.MarkFoldReady());
         writer.MarkCSharpSymbolNameContractReady();
         writer.MarkGraphReady();
@@ -1948,6 +1958,9 @@ public partial class DbReaderTests
             "Run",
             "Models.Run<T> Run()"));
         Assert.Null(CSharpSymbolNameNormalizer.BuildExplicitInterfaceIdentityNameFolded(
+            "Run",
+            "Models.Run[] Run()"));
+        Assert.Null(CSharpSymbolNameNormalizer.BuildExplicitInterfaceIdentityNameFolded(
             "Count",
             "public int Count => inner.Count;"));
         Assert.Null(CSharpSymbolNameNormalizer.BuildExplicitInterfaceIdentityNameFolded(
@@ -1964,6 +1977,29 @@ public partial class DbReaderTests
             CSharpSymbolNameNormalizer.BuildExplicitInterfaceIdentityNameFolded(
                 "Run",
                 "Models.Run<T> IFoo.Run<TValue>(TValue value)"));
+        Assert.Equal(
+            "ifoo.changed",
+            CSharpSymbolNameNormalizer.BuildExplicitInterfaceIdentityNameFolded(
+                "Changed",
+                "event System.EventHandler IFoo . Changed { add { } remove { } }"));
+        Assert.Equal(
+            "ifoo.run",
+            CSharpSymbolNameNormalizer.BuildExplicitInterfaceIdentityNameFolded(
+                "Run",
+                "void IFoo.@Run()"));
+        Assert.Equal(
+            "ifoo.this",
+            CSharpSymbolNameNormalizer.BuildExplicitInterfaceIdentityNameFolded(
+                "this",
+                "void IFoo.@this()"));
+        Assert.Equal(
+            "ifoo.item",
+            CSharpSymbolNameNormalizer.NormalizeExplicitInterfaceQueryIdentityNameFolded(
+                "IFoo.this"));
+        Assert.Equal(
+            "ifoo.this",
+            CSharpSymbolNameNormalizer.NormalizeExplicitInterfaceQueryIdentityNameFolded(
+                "IFoo.@this"));
         Assert.True(SqlNameResolver.HasQualifier("IFoo.Run<T>"));
         using (var identityCommand = db.Connection.CreateCommand())
         {
@@ -2018,7 +2054,50 @@ public partial class DbReaderTests
         var itemResults = reader.SearchSymbols("IFoo.Item", lang: "csharp", exact: true);
         Assert.Equal(2, itemResults.Count);
         Assert.Equal(2, itemResults.Select(result => result.SymbolId).Distinct().Count());
-        Assert.Single(reader.SearchSymbols("IFoo.this", lang: "csharp", exact: true));
+        var sourceSpelledItemResults = reader.SearchSymbols(
+            "IFoo.this",
+            lang: "csharp",
+            exact: true);
+        Assert.Equal(
+            itemResults.Select(result => result.SymbolId).Order().ToArray(),
+            sourceSpelledItemResults.Select(result => result.SymbolId).Order().ToArray());
+
+        var unicodeShortAliasResults = reader.SearchSymbols(
+            "ä",
+            lang: "csharp",
+            exact: true);
+        Assert.Equal(2, unicodeShortAliasResults.Count);
+        Assert.Contains(
+            unicodeShortAliasResults,
+            result => result.Signature?.Contains("IFoo.Ä", StringComparison.Ordinal) == true);
+        Assert.Equal(
+            2,
+            reader.SearchSymbols("IFoo.Ä", lang: "csharp", exact: true).Count);
+
+        var verbatimThisResults = reader.SearchSymbols(
+            "IFoo.@this",
+            lang: "csharp",
+            exact: true);
+        Assert.Equal(2, verbatimThisResults.Count);
+        Assert.All(
+            verbatimThisResults,
+            result => Assert.DoesNotContain("IFoo.this[", result.Signature, StringComparison.Ordinal));
+        Assert.Equal(
+            2,
+            reader.CountSearchSymbols("IFoo.@this", lang: "csharp", exact: true));
+        var verbatimThisDefinitions = reader.GetDefinitions(
+            "IFoo.@this",
+            lang: "csharp",
+            exact: true);
+        Assert.Equal(2, verbatimThisDefinitions.Count);
+        Assert.All(
+            verbatimThisDefinitions,
+            result => Assert.DoesNotContain("IFoo.this[", result.Signature, StringComparison.Ordinal));
+        var qualifiedService = Assert.Single(reader.SearchSymbols(
+            "Demo.Service",
+            lang: "csharp",
+            exact: true));
+        Assert.Equal("class", qualifiedService.Kind);
         Assert.Single(reader.SearchSymbols("IFoo.Run<T>", lang: "csharp", exact: false));
 
         var definitions = reader.GetDefinitions(

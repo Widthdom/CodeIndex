@@ -80,13 +80,24 @@ public partial class DbReader
     public List<SymbolResult> SearchSymbols(string? query = null, int limit = 20, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null, SymbolSortMode sortMode = SymbolSortMode.Name, int? startLine = null, int? endLine = null, bool groupPartials = false, int offset = 0)
     {
         var normalizedQuery = NormalizeSymbolSearchQueryForSymbolSearch(query, lang, exact);
-        return SearchSymbols(normalizedQuery == null ? null : new[] { normalizedQuery }, limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact, visibilityFilters, excludeVisibilityFilters, sortMode, startLine, endLine, groupPartials, offset);
+        return SearchSymbols(
+            normalizedQuery == null
+                ? null
+                : new NormalizedSymbolSearchQueryList([normalizedQuery]),
+            limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact,
+            visibilityFilters, excludeVisibilityFilters, sortMode, startLine, endLine,
+            groupPartials, offset);
     }
 
     public int CountSearchSymbols(string? query = null, int limit = 20, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null)
     {
         var normalizedQuery = NormalizeSymbolSearchQueryForSymbolSearch(query, lang, exact);
-        return CountSearchSymbols(normalizedQuery == null ? null : new[] { normalizedQuery }, limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact, visibilityFilters, excludeVisibilityFilters);
+        return CountSearchSymbols(
+            normalizedQuery == null
+                ? null
+                : new NormalizedSymbolSearchQueryList([normalizedQuery]),
+            limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact,
+            visibilityFilters, excludeVisibilityFilters);
     }
 
     public bool AnySearchSymbols(IReadOnlyList<string>? queries, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null)
@@ -97,8 +108,19 @@ public partial class DbReader
 
         foreach (var query in validQueries)
         {
-            if (CountSearchSymbols([query], 1, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact) > 0)
+            if (CountSearchSymbols(
+                    new NormalizedSymbolSearchQueryList([query]),
+                    1,
+                    kind,
+                    lang,
+                    pathPatterns,
+                    excludePathPatterns,
+                    excludeTests,
+                    since,
+                    exact) > 0)
+            {
                 return true;
+            }
         }
 
         return false;
@@ -129,11 +151,13 @@ public partial class DbReader
         return $"({fileAlias}.lang = 'csharp' AND {symbolAlias}.name_folded = @{parameterStem}CSharpExplicitInterfaceIdentityFolded)";
     }
 
-    private static string BuildCSharpExplicitInterfaceShortAliasMatchSql(
+    private string BuildCSharpExplicitInterfaceShortAliasMatchSql(
         string parameterStem,
         string symbolAlias = "s",
         string fileAlias = "f")
-        => $"({fileAlias}.lang = 'csharp' AND {symbolAlias}.name = @{parameterStem}Leaf COLLATE NOCASE)";
+        => _foldReady
+            ? $"({fileAlias}.lang = 'csharp' AND instr({symbolAlias}.name_folded, '.') > 0 AND codeindex_name_fold({symbolAlias}.name) = @{parameterStem}LeafFolded)"
+            : $"({fileAlias}.lang = 'csharp' AND {symbolAlias}.name = @{parameterStem}Leaf COLLATE NOCASE)";
 
     private static void AddCSharpExplicitInterfaceIdentityQueryParameter(
         SqliteCommand cmd,
@@ -161,6 +185,12 @@ public partial class DbReader
             return normalized;
         var previousDot = normalized.LastIndexOf('.', lastDot - 1);
         return previousDot >= 0 ? normalized[(previousDot + 1)..] : normalized;
+    }
+
+    private static string GetQualifiedQueryLeaf(string query, string? lang)
+    {
+        var leaf = SqlNameResolver.GetLeafName(query);
+        return NormalizeCSharpVerbatimQuery(leaf, lang) ?? leaf;
     }
 
     private static void AddQualifiedSymbolQueryParameters(SqliteCommand cmd, string parameterStem, string query)
@@ -287,8 +317,9 @@ public partial class DbReader
                 SqliteCommandPolicy.Add(cmd, "@query0", paramValue);
             SqliteCommandPolicy.Add(cmd, "@query0Normalized", SqlNameResolver.NormalizeQualifiedName(value));
             SqliteCommandPolicy.Add(cmd, "@query0NormalizedFolded", NameFold.Fold(SqlNameResolver.NormalizeQualifiedName(value)) ?? SqlNameResolver.NormalizeQualifiedName(value));
-            SqliteCommandPolicy.Add(cmd, "@query0Leaf", SqlNameResolver.GetLeafName(value));
-            SqliteCommandPolicy.Add(cmd, "@query0LeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(value)) ?? SqlNameResolver.GetLeafName(value));
+            var queryLeaf = GetQualifiedQueryLeaf(value, lang);
+            SqliteCommandPolicy.Add(cmd, "@query0Leaf", queryLeaf);
+            SqliteCommandPolicy.Add(cmd, "@query0LeafFolded", NameFold.Fold(queryLeaf) ?? queryLeaf);
             SqliteCommandPolicy.Add(cmd, "@query0SegmentCount", SqlNameResolver.GetSegmentCount(value));
             SqliteCommandPolicy.Add(cmd, "@query0NormalizedLike", $"%{EscapeLikeQuery(SqlNameResolver.NormalizeQualifiedName(value))}%");
             AddCSharpExplicitInterfaceIdentityQueryParameter(cmd, "query0", value);
@@ -755,8 +786,9 @@ public partial class DbReader
                 }
                 SqliteCommandPolicy.Add(cmd, $"@query{idx}Normalized", SqlNameResolver.NormalizeQualifiedName(effectiveQueries[idx]));
                 SqliteCommandPolicy.Add(cmd, $"@query{idx}NormalizedFolded", NameFold.Fold(SqlNameResolver.NormalizeQualifiedName(effectiveQueries[idx])) ?? SqlNameResolver.NormalizeQualifiedName(effectiveQueries[idx]));
-                SqliteCommandPolicy.Add(cmd, $"@query{idx}Leaf", SqlNameResolver.GetLeafName(effectiveQueries[idx]));
-                SqliteCommandPolicy.Add(cmd, $"@query{idx}LeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(effectiveQueries[idx])) ?? SqlNameResolver.GetLeafName(effectiveQueries[idx]));
+                var queryLeaf = GetQualifiedQueryLeaf(effectiveQueries[idx], lang);
+                SqliteCommandPolicy.Add(cmd, $"@query{idx}Leaf", queryLeaf);
+                SqliteCommandPolicy.Add(cmd, $"@query{idx}LeafFolded", NameFold.Fold(queryLeaf) ?? queryLeaf);
                 SqliteCommandPolicy.Add(cmd, $"@query{idx}SegmentCount", SqlNameResolver.GetSegmentCount(effectiveQueries[idx]));
                 SqliteCommandPolicy.Add(cmd, $"@query{idx}NormalizedLike", $"%{EscapeLikeQuery(SqlNameResolver.NormalizeQualifiedName(effectiveQueries[idx]))}%");
                 AddCSharpExplicitInterfaceIdentityQueryParameter(cmd, $"query{idx}", effectiveQueries[idx]);
@@ -1156,6 +1188,13 @@ public partial class DbReader
     {
         if (ShouldPreserveRustQualifiedExactQuery(query, lang, exact))
             return query?.Trim();
+        if (exact
+            && !string.IsNullOrWhiteSpace(query)
+            && string.Equals(NormalizeQueryLanguage(lang), "csharp", StringComparison.Ordinal)
+            && SqlNameResolver.HasQualifier(query))
+        {
+            return CSharpSymbolNameNormalizer.NormalizeExplicitInterfaceQueryDisplayName(query);
+        }
 
         return NormalizeSymbolSearchQuery(query, lang, exact) ?? query;
     }

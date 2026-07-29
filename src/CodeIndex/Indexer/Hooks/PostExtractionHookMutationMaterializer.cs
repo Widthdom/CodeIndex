@@ -61,11 +61,23 @@ internal static class PostExtractionHookMutationMaterializer
 
     internal static void RefreshLanguageIdentity(string? language, IEnumerable<SymbolRecord> symbols)
     {
-        if (!string.Equals(language, "nim", StringComparison.Ordinal))
+        if (string.Equals(language, "nim", StringComparison.Ordinal))
+        {
+            foreach (var symbol in symbols)
+                symbol.IdentityNameFolded = NimIdentifierIdentity.Fold(symbol.Name);
             return;
+        }
 
-        foreach (var symbol in symbols)
-            symbol.IdentityNameFolded = NimIdentifierIdentity.Fold(symbol.Name);
+        if (string.Equals(language, "csharp", StringComparison.Ordinal))
+        {
+            foreach (var symbol in symbols)
+            {
+                symbol.IdentityNameFolded =
+                    CSharpSymbolNameNormalizer.BuildExplicitInterfaceIdentityNameFolded(
+                        symbol.Name,
+                        symbol.Signature);
+            }
+        }
     }
 
     internal static void RefreshLanguageIdentity(string? language, IEnumerable<ReferenceRecord> references)
