@@ -29,7 +29,7 @@ internal static partial class JsonEnvelopeWrapper
 
     private static readonly HashSet<string> AutoWrapByteBudgetCommands = new(StringComparer.Ordinal)
     {
-        "find", "status", "references", "callers", "callees", "languages",
+        "find", "status", "references", "callers", "callees", "languages", "outline",
     };
 
     private static readonly HashSet<string> AutoWrapCompactCommands = new(StringComparer.Ordinal)
@@ -46,7 +46,7 @@ internal static partial class JsonEnvelopeWrapper
     private static readonly HashSet<string> PageableResponseCommands = new(StringComparer.Ordinal)
     {
         "search", "definition", "find", "hotspots", "references", "callers", "callees",
-        "symbols", "files", "languages", "impact", "map",
+        "symbols", "files", "languages", "impact", "map", "outline",
     };
 
     private static readonly HashSet<string> CountableResponseCommands = new(StringComparer.Ordinal)
@@ -57,7 +57,8 @@ internal static partial class JsonEnvelopeWrapper
 
     internal static bool ShouldAutoWrapBoundedResponse(string command, string[] args)
     {
-        if (!BoundedResponseCommands.Contains(command))
+        if (!BoundedResponseCommands.Contains(command)
+            && !(command == "outline" && HasArgument(args, "--max-json-bytes")))
             return false;
         if (command == "search" && IsSearchAggregateResponseRequest(args))
             return false;
@@ -78,7 +79,8 @@ internal static partial class JsonEnvelopeWrapper
 
     private static bool IsBoundedResponseRequest(string command, string[] args)
     {
-        if (!BoundedResponseCommands.Contains(command))
+        if (!BoundedResponseCommands.Contains(command)
+            && !(command == "outline" && HasArgument(args, "--max-json-bytes")))
             return false;
         if (command == "search" && IsSearchAggregateResponseRequest(args))
             return false;
@@ -556,7 +558,7 @@ internal static partial class JsonEnvelopeWrapper
         return Encoding.UTF8.GetString(stream.ToArray());
     }
 
-    private static bool JsonFitsResponseBudget(string json, int maxJsonBytes)
+    internal static bool JsonFitsResponseBudget(string json, int maxJsonBytes)
         => Encoding.UTF8.GetByteCount(json) + Encoding.UTF8.GetByteCount(Environment.NewLine) <= maxJsonBytes;
 
     private static int WriteProjectionRegistryResponse(
@@ -723,6 +725,8 @@ internal static partial class JsonEnvelopeWrapper
             return ExtractNestedCollection(filesPayload, "files");
         if (command == "languages" && rawResults.FirstOrDefault() is JsonObject languagesPayload)
             return ExtractNestedCollection(languagesPayload, "languages");
+        if (command == "outline" && rawResults.FirstOrDefault() is JsonObject outlinePayload)
+            return ExtractOutlineSymbols(outlinePayload);
         if (command == "impact" && rawResults.FirstOrDefault() is JsonObject impactPayload)
         {
             var requestedCollection = SelectRequestedCollection(controls.Fields, "callers", "file_impacts", "definitions");
@@ -772,6 +776,23 @@ internal static partial class JsonEnvelopeWrapper
             rows.Add(result?.DeepClone());
         }
         return new ResponseExtraction(rows, null, null, null);
+    }
+
+    private static ResponseExtraction ExtractOutlineSymbols(JsonObject payload)
+    {
+        var extraction = ExtractNestedCollection(payload, "symbols");
+        foreach (var pagingField in new[]
+                 {
+                     "returned_symbol_count",
+                     "cursor_offset",
+                     "next_cursor",
+                     "has_more",
+                     "result_stable_at",
+                 })
+        {
+            extraction.Context?.Remove(pagingField);
+        }
+        return extraction;
     }
 
     private static ResponseExtraction ExtractDiscoveryRows(string command, JsonArray rawResults)
