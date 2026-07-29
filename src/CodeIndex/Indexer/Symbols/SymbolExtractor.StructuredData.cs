@@ -50,13 +50,6 @@ public static partial class SymbolExtractor
                 JsonCommentHandling.Skip,
                 allowTrailingCommas: true);
 
-            if (document.RootElement.ValueKind != JsonValueKind.Object)
-                return [];
-
-            var rootProperties = document.RootElement.EnumerateObject();
-            if (!rootProperties.MoveNext())
-                return [];
-
             var symbols = CreateSymbolListForLines(lines.Length);
             int[]? lineStarts = null;
             var searchOffset = 0;
@@ -66,19 +59,40 @@ public static partial class SymbolExtractor
                 && content.IndexOf('\r', StringComparison.Ordinal) < 0
                 ? null
                 : BuildJsonPropertyLineQueues(content);
-            ExtractJsonObjectSymbols(
-                fileId,
-                content,
-                lines,
-                ref lineStarts,
-                document.RootElement,
-                parentPath: null,
-                ref searchOffset,
-                symbols,
-                propertyLines,
-                depth: 0,
-                ref traversalNodes,
-                ref truncated);
+            if (document.RootElement.ValueKind == JsonValueKind.Object)
+            {
+                ExtractJsonObjectSymbols(
+                    fileId,
+                    content,
+                    lines,
+                    ref lineStarts,
+                    document.RootElement,
+                    parentPath: null,
+                    ref searchOffset,
+                    symbols,
+                    propertyLines,
+                    depth: 0,
+                    ref traversalNodes,
+                    ref truncated);
+            }
+            else if (document.RootElement.ValueKind == JsonValueKind.Array)
+            {
+                ExtractJsonArraySymbols(
+                    fileId,
+                    content,
+                    lines,
+                    ref lineStarts,
+                    document.RootElement,
+                    arrayPath: string.Empty,
+                    arrayLine: 1,
+                    ref searchOffset,
+                    symbols,
+                    propertyLines,
+                    depth: 0,
+                    ref traversalNodes,
+                    ref truncated);
+            }
+
             return symbols;
         }
         catch (Exception ex) when (ex is JsonException or InvalidDataException)
@@ -117,10 +131,8 @@ public static partial class SymbolExtractor
 
             traversalNodes++;
             var propertyName = property.Name;
-            var nameLength = string.IsNullOrEmpty(parentPath)
-                ? propertyName.Length
-                : parentPath.Length + 1 + propertyName.Length;
-            if (nameLength > StructuredDataMaxPathLength)
+            var name = CombineStructuredDataPath(parentPath, propertyName);
+            if (name.Length > StructuredDataMaxPathLength)
             {
                 if (propertyLines != null)
                     _ = TryDequeueJsonPropertyLine(propertyLines, propertyName, out _);
@@ -128,9 +140,6 @@ public static partial class SymbolExtractor
                 continue;
             }
 
-            var name = string.IsNullOrEmpty(parentPath)
-                ? propertyName
-                : parentPath + "." + propertyName;
             var propertyOffset = FindJsonPropertyOffset(content, propertyName, ref searchOffset);
             var line = propertyLines != null
                 && TryDequeueJsonPropertyLine(propertyLines, propertyName, out var mappedLine)
@@ -144,7 +153,17 @@ public static partial class SymbolExtractor
                 _ => "property",
             };
 
-            if (!TryAddStructuredDataSymbol(fileId, kind, name, line, lines, parentPath, symbols, "structured_data_symbol_budget_exceeded", ref truncated))
+            if (!TryAddStructuredDataSymbol(
+                    fileId,
+                    kind,
+                    name,
+                    line,
+                    lines,
+                    parentPath,
+                    symbols,
+                    "structured_data_symbol_budget_exceeded",
+                    ref truncated,
+                    parentKind: "object"))
                 return;
 
             if (property.Value.ValueKind == JsonValueKind.Object)
@@ -206,7 +225,7 @@ public static partial class SymbolExtractor
             }
 
             traversalNodes++;
-            var itemPath = $"{arrayPath}[{index}]";
+            var itemPath = CombineStructuredDataPath(arrayPath, $"[{index}]");
             if (itemPath.Length > StructuredDataMaxPathLength)
             {
                 DrainJsonPropertyLines(item, propertyLines);
@@ -221,7 +240,17 @@ public static partial class SymbolExtractor
                 _ => "value",
             };
             var itemLine = FindJsonElementLine(content, lines, ref lineStarts, item, arrayLine, ref searchOffset);
-            if (!TryAddStructuredDataSymbol(fileId, kind, itemPath, itemLine, lines, arrayPath, symbols, "structured_data_symbol_budget_exceeded", ref truncated))
+            if (!TryAddStructuredDataSymbol(
+                    fileId,
+                    kind,
+                    itemPath,
+                    itemLine,
+                    lines,
+                    string.IsNullOrEmpty(arrayPath) ? null : arrayPath,
+                    symbols,
+                    "structured_data_symbol_budget_exceeded",
+                    ref truncated,
+                    parentKind: "array"))
                 return;
 
             if (item.ValueKind == JsonValueKind.Object)
@@ -337,7 +366,7 @@ public static partial class SymbolExtractor
                     StructuredDataMaxJsonDepth + 2,
                     JsonCommentHandling.Skip,
                     allowTrailingCommas: true);
-                if (document.RootElement.ValueKind != JsonValueKind.Object)
+                if (document.RootElement.ValueKind is not (JsonValueKind.Object or JsonValueKind.Array))
                 {
                     recordIndex++;
                     continue;
@@ -356,14 +385,20 @@ public static partial class SymbolExtractor
                     if (symbols.Count >= StructuredDataMaxSymbols)
                         return symbols;
 
-                    symbol.Name = recordPath + "." + symbol.Name;
+                    symbol.Name = CombineStructuredDataPath(recordPath, symbol.Name);
                     symbol.Line = lineIndex + 1;
                     symbol.StartLine = lineIndex + 1;
                     symbol.EndLine = lineIndex + 1;
                     symbol.Signature = LimitStructuredDataSignature(recordText.Trim());
-                    symbol.ContainerName = symbol.ContainerName == null
-                        ? recordPath
-                        : recordPath + "." + symbol.ContainerName;
+                    if (symbol.ContainerName == null)
+                    {
+                        symbol.ContainerName = recordPath;
+                        symbol.ContainerKind = "record";
+                    }
+                    else
+                    {
+                        symbol.ContainerName = CombineStructuredDataPath(recordPath, symbol.ContainerName);
+                    }
                     symbol.ContainerQualifiedName = symbol.ContainerName;
                     symbols.Add(symbol);
                 }
@@ -502,11 +537,12 @@ public static partial class SymbolExtractor
         string? parentPath,
         List<SymbolRecord> symbols,
         string category,
-        ref bool truncated)
+        ref bool truncated,
+        string? parentKind = "namespace")
     {
         if (symbols.Count < StructuredDataMaxSymbols)
         {
-            symbols.Add(CreateStructuredDataSymbol(fileId, kind, name, line, lines, parentPath));
+            symbols.Add(CreateStructuredDataSymbol(fileId, kind, name, line, lines, parentPath, parentKind));
             return true;
         }
 
@@ -587,7 +623,8 @@ public static partial class SymbolExtractor
         string name,
         int line,
         string[] lines,
-        string? parentPath)
+        string? parentPath,
+        string? parentKind)
     {
         var signatureIndex = Math.Clamp(line - 1, 0, Math.Max(0, lines.Length - 1));
         return new SymbolRecord
@@ -599,10 +636,20 @@ public static partial class SymbolExtractor
             StartLine = line,
             EndLine = line,
             Signature = lines.Length == 0 ? null : LimitStructuredDataLineSignature(lines[signatureIndex]),
-            ContainerKind = parentPath == null ? null : "namespace",
+            ContainerKind = parentPath == null ? null : parentKind,
             ContainerName = parentPath,
             ContainerQualifiedName = parentPath,
         };
+    }
+
+    private static string CombineStructuredDataPath(string? parentPath, string childPath)
+    {
+        if (string.IsNullOrEmpty(parentPath))
+            return childPath;
+
+        return childPath.Length > 0 && childPath[0] == '['
+            ? parentPath + childPath
+            : parentPath + "." + childPath;
     }
 
     private static string LimitStructuredDataSignature(string signature) =>

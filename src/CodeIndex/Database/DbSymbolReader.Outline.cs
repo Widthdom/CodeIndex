@@ -177,9 +177,20 @@ public partial class DbReader
         if (string.IsNullOrWhiteSpace(containerQualifiedName))
             return name;
 
-        return name.StartsWith(containerQualifiedName + ".", StringComparison.Ordinal)
+        return IsQualifiedOutlineChildPath(containerQualifiedName, name)
             ? name
             : $"{containerQualifiedName}.{name}";
+    }
+
+    private static bool IsQualifiedOutlineChildPath(string containerPath, string childPath)
+    {
+        if (!childPath.StartsWith(containerPath, StringComparison.Ordinal)
+            || childPath.Length <= containerPath.Length)
+        {
+            return false;
+        }
+
+        return childPath[containerPath.Length] is '.' or '[';
     }
 
     private static bool IsCallableOutlineSymbol(string kind)
@@ -388,9 +399,14 @@ public partial class DbReader
             return null;
 
         var suffix = "." + symbol.Name;
-        return symbol.Path.EndsWith(suffix, StringComparison.Ordinal)
-            ? symbol.Path[..^suffix.Length]
-            : null;
+        if (symbol.Path.EndsWith(suffix, StringComparison.Ordinal))
+            return symbol.Path[..^suffix.Length];
+
+        return !string.IsNullOrWhiteSpace(symbol.ContainerName)
+            && string.Equals(symbol.Path, symbol.Name, StringComparison.Ordinal)
+            && IsQualifiedOutlineChildPath(symbol.ContainerName, symbol.Name)
+                ? symbol.ContainerName
+                : null;
     }
 
     private static bool IsOutlineContainerMatch(OutlineSymbol candidate, int childLine)
@@ -398,9 +414,9 @@ public partial class DbReader
         if (candidate.StartLine <= childLine && candidate.EndLine >= childLine)
             return true;
 
-        // file-scoped namespaces have no body range, so they do not enclose children by lines
-        // even though they are the correct logical container.
-        return candidate.Kind == "namespace"
+        // File-scoped namespaces and structured-data containers have no body range, so they
+        // do not enclose children by lines even though their exact paths identify the parent.
+        return candidate.Kind is "namespace" or "object" or "array" or "record"
             && candidate.BodyStartLine == null
             && candidate.BodyEndLine == null
             && candidate.Line <= childLine;

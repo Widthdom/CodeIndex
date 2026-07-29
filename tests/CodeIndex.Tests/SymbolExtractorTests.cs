@@ -842,6 +842,103 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Json_ArraysPreservePathsParentsAndEmptyContainers_Issue4874()
+    {
+        const string objectRoot = """
+            {
+              "command_cases": [
+                {
+                  "command_cases": "nested",
+                  "nested": [
+                    ["scalar", { "leaf": true }],
+                    [],
+                    {}
+                  ]
+                },
+                7,
+                [],
+                {}
+              ],
+              "empty_object": {},
+              "empty_array": []
+            }
+            """;
+        const string arrayRoot = """
+            [
+              { "name": "first" },
+              1,
+              [2],
+              [],
+              {}
+            ]
+            """;
+        const string jsonLines = """
+            {"items":[{"leaf":1}]}
+            [{"name":"first"},[]]
+            """;
+
+        var objectSymbols = SymbolExtractor.Extract(1, "json", objectRoot);
+        var rootSymbols = SymbolExtractor.Extract(1, "json", arrayRoot);
+        var jsonLineSymbols = SymbolExtractor.Extract(1, "jsonl", jsonLines);
+
+        Assert.Collection(
+            objectSymbols,
+            symbol => AssertStructuredJsonSymbol(symbol, "array", "command_cases", 2, null, null),
+            symbol => AssertStructuredJsonSymbol(symbol, "object", "command_cases[0]", 3, "array", "command_cases"),
+            symbol => AssertStructuredJsonSymbol(symbol, "property", "command_cases[0].command_cases", 4, "object", "command_cases[0]"),
+            symbol => AssertStructuredJsonSymbol(symbol, "array", "command_cases[0].nested", 5, "object", "command_cases[0]"),
+            symbol => AssertStructuredJsonSymbol(symbol, "array", "command_cases[0].nested[0]", 6, "array", "command_cases[0].nested"),
+            symbol => AssertStructuredJsonSymbol(symbol, "value", "command_cases[0].nested[0][0]", 6, "array", "command_cases[0].nested[0]"),
+            symbol => AssertStructuredJsonSymbol(symbol, "object", "command_cases[0].nested[0][1]", 6, "array", "command_cases[0].nested[0]"),
+            symbol => AssertStructuredJsonSymbol(symbol, "property", "command_cases[0].nested[0][1].leaf", 6, "object", "command_cases[0].nested[0][1]"),
+            symbol => AssertStructuredJsonSymbol(symbol, "array", "command_cases[0].nested[1]", 7, "array", "command_cases[0].nested"),
+            symbol => AssertStructuredJsonSymbol(symbol, "object", "command_cases[0].nested[2]", 8, "array", "command_cases[0].nested"),
+            symbol => AssertStructuredJsonSymbol(symbol, "value", "command_cases[1]", 11, "array", "command_cases"),
+            symbol => AssertStructuredJsonSymbol(symbol, "array", "command_cases[2]", 12, "array", "command_cases"),
+            symbol => AssertStructuredJsonSymbol(symbol, "object", "command_cases[3]", 13, "array", "command_cases"),
+            symbol => AssertStructuredJsonSymbol(symbol, "object", "empty_object", 15, null, null),
+            symbol => AssertStructuredJsonSymbol(symbol, "array", "empty_array", 16, null, null));
+        Assert.Collection(
+            rootSymbols,
+            symbol => AssertStructuredJsonSymbol(symbol, "object", "[0]", 2, null, null),
+            symbol => AssertStructuredJsonSymbol(symbol, "property", "[0].name", 2, "object", "[0]"),
+            symbol => AssertStructuredJsonSymbol(symbol, "value", "[1]", 3, null, null),
+            symbol => AssertStructuredJsonSymbol(symbol, "array", "[2]", 4, null, null),
+            symbol => AssertStructuredJsonSymbol(symbol, "value", "[2][0]", 4, "array", "[2]"),
+            symbol => AssertStructuredJsonSymbol(symbol, "array", "[3]", 5, null, null),
+            symbol => AssertStructuredJsonSymbol(symbol, "object", "[4]", 6, null, null));
+        Assert.Collection(
+            jsonLineSymbols,
+            symbol => AssertStructuredJsonSymbol(symbol, "record", "[0]", 1, null, null),
+            symbol => AssertStructuredJsonSymbol(symbol, "array", "[0].items", 1, "record", "[0]"),
+            symbol => AssertStructuredJsonSymbol(symbol, "object", "[0].items[0]", 1, "array", "[0].items"),
+            symbol => AssertStructuredJsonSymbol(symbol, "property", "[0].items[0].leaf", 1, "object", "[0].items[0]"),
+            symbol => AssertStructuredJsonSymbol(symbol, "record", "[1]", 2, null, null),
+            symbol => AssertStructuredJsonSymbol(symbol, "object", "[1][0]", 2, "record", "[1]"),
+            symbol => AssertStructuredJsonSymbol(symbol, "property", "[1][0].name", 2, "object", "[1][0]"),
+            symbol => AssertStructuredJsonSymbol(symbol, "array", "[1][1]", 2, "record", "[1]"));
+        Assert.Empty(SymbolExtractor.Extract(1, "json", "[]"));
+    }
+
+    private static void AssertStructuredJsonSymbol(
+        SymbolRecord symbol,
+        string kind,
+        string name,
+        int line,
+        string? containerKind,
+        string? containerName)
+    {
+        Assert.Equal(kind, symbol.Kind);
+        Assert.Equal(name, symbol.Name);
+        Assert.Equal(line, symbol.Line);
+        Assert.Equal(line, symbol.StartLine);
+        Assert.Equal(line, symbol.EndLine);
+        Assert.Equal(containerKind, symbol.ContainerKind);
+        Assert.Equal(containerName, symbol.ContainerName);
+        Assert.Equal(containerName, symbol.ContainerQualifiedName);
+    }
+
+    [Fact]
     public void Extract_Json_IndexesReflectionSensitivePropertyNames_Issue4709()
     {
         const string content = """
