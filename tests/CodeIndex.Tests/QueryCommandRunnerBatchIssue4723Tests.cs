@@ -174,12 +174,12 @@ public partial class QueryCommandRunnerTests
             {"command":"languages","args":["--format","count"]}
 
             """;
-            var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
+            var (exitCode, batchStdout, stderr) = CaptureConsoleWithInput(
                 input,
                 () => QueryCommandRunner.RunBatch(
                     ["--db", dbPath, "--json-summary", "--parallel", "3"],
                     _jsonOptions));
-            var lines = ParseJsonLines(stdout);
+            var lines = ParseJsonLines(batchStdout);
             try
             {
                 Assert.Equal(CommandExitCodes.UsageError, exitCode);
@@ -314,7 +314,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunBatch_ParallelReadsPropagateCancellationAndRestoreConsole_Issue4723()
+    public void RunBatch_ParallelReadsSerializeCancellationAndRestoreConsole_Issues4723_4871()
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_batch_cancel_4723");
         var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
@@ -327,18 +327,31 @@ public partial class QueryCommandRunnerTests
 
         try
         {
-            var exception = Record.Exception(() => CaptureConsoleWithInput(
-                """
-                {"command":"recipes","args":["--json"]}
-                {"command":"languages","args":["--format","count"]}
-
-                """,
+            var (exitCode, batchStdout, stderr) = CaptureConsoleWithInput(
+                """{"command":"recipes","args":["--json"]}""" + "\n",
                 () => QueryCommandRunner.RunBatch(
                     ["--db", dbPath, "--json-summary", "--parallel", "2"],
                     _jsonOptions,
-                    cancellationToken: cancellation.Token)));
+                    cancellationToken: cancellation.Token));
             Assert.True(cancellation.IsCancellationRequested);
-            Assert.IsAssignableFrom<OperationCanceledException>(exception);
+            Assert.Equal(CommandExitCodes.CancelledBySignal, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            var lines = ParseJsonLines(batchStdout);
+            try
+            {
+                Assert.Equal(2, lines.Count);
+                Assert.Equal(
+                    "batch_cancelled",
+                    lines[0].RootElement.GetProperty("error").GetProperty("category").GetString());
+                Assert.Equal(
+                    CommandExitCodes.CancelledBySignal,
+                    lines[1].RootElement.GetProperty("exit_code").GetInt32());
+            }
+            finally
+            {
+                foreach (var document in lines)
+                    document.Dispose();
+            }
         }
         finally
         {

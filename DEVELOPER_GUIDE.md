@@ -419,13 +419,17 @@ By default, child query commands stream their normal stdout/stderr directly. In
 `--json-summary` mode, every non-blank stdin line must instead emit one
 machine-readable batch envelope before the final summary: parsed commands use
 `record: "batch_result"` and include `line`, `command`, `arguments`,
-`exit_code`, and captured child `stderr`. The requested command/output format,
-rather than output-text sniffing, selects the projection: successful
+and `exit_code`. The requested command/output format, rather than output-text
+sniffing, selects the projection: successful
 single-document JSON is embedded as typed `result`, while successful NDJSON is
-embedded as a stable typed `results` array even when it has one row. Text and failed
-commands remain raw `stdout` text so diagnostics are not lost. Malformed or
-over-limit input lines use `record: "batch_error"` and an `error` object. Child
-output must not be written directly beside batch metadata in this mode. The entire
+embedded as a stable typed `results` array even when it has one row. Successful
+text remains `stdout`, while every failure uses one typed `error` object with a
+stable `error_code`, `category`, safe `message` / `hint`, and `scope`.
+Malformed or over-limit input lines use `record: "batch_error"` and the same
+typed error serializer. Failed records omit captured child stdout/stderr by
+default; `--include-raw-streams` explicitly adds them under a bounded
+`raw_streams` object. Child output must not be written directly beside batch
+metadata in this mode. The entire
 serialized stream—including envelopes, arguments, escaping expansion, terminal
 errors, and the final summary—uses the configured `--max-output-chars` budget
 (default 10,485,760; maximum 67,108,864). An item that exhausts it retains its
@@ -439,8 +443,13 @@ SQLite connection and thread-local batch reader, and buffer only the active
 worker window. `ScopedConsoleOutput` keeps nested JSON-envelope capture on the
 current worker's routed stdout instead of replacing another worker's process-wide
 writer. Completed records are committed to the shared output writer in input
-order; an ordinary item failure remains isolated, while caller cancellation
-stops scheduling and propagates.
+order; an ordinary item failure remains isolated. Caller cancellation is
+serialized as `batch_cancelled` for a consumed input item and in the final
+summary before batch processing stops. Serial and parallel input waits share a
+bounded pump for each input reader, so cancellation remains prompt while stdin
+is blocked and any line completed in flight stays buffered for a subsequent
+batch invocation. Cancellation during database setup still emits the typed
+final summary.
 
 Editor integrations can request standard location shapes directly. `definition`, `references`, `search`, `find`, and `validate` accept `--format <text|json|lsp|qf|sarif>`; `lsp` emits LSP `Location` arrays, `qf` emits Vim quickfix lines, and `sarif` emits SARIF 2.1.0. `goto <symbol>` returns the single unambiguous definition as one LSP `Location`, while `goto --all <symbol>` returns all matching locations without applying the default or environment-provided query limit. An explicit `--limit` or `--top` still bounds the returned location array.
 
@@ -3725,11 +3734,14 @@ path filter を受け付ける query コマンド（`search`, `definition`, `ref
 既定では child query command の通常の stdout / stderr を直接 stream する。`--json-summary`
 mode では、空白でない stdin 行ごとに final summary より前へ 1 つの machine-readable batch
 envelope を出力しなければならない。parse 済み command は `record: "batch_result"` として
-`line`、`command`、`arguments`、`exit_code`、捕捉した child `stderr` を含める。output text の
-推測ではなく requested command / output format で projection を選び、成功した単一 document JSON
+`line`、`command`、`arguments`、`exit_code` を含める。output text の推測ではなく requested
+command / output format で projection を選び、成功した単一 document JSON
 は型付き `result`、NDJSON は 1 row の場合も安定した型付き `results` array として埋め込む。
-text と失敗 command の出力は診断を失わないよう raw `stdout` text のまま
-保持する。malformed line や入力上限超過 line は `record: "batch_error"` と `error` object を使う。
+成功した text command は `stdout` のまま保持する一方、すべての失敗は安定した `error_code`、
+`category`、安全な `message` / `hint`、`scope` を持つ共通の型付き `error` object を使う。
+malformed line や入力上限超過 line は `record: "batch_error"` と同じ typed error serializer を
+使う。失敗 record は既定で捕捉した child stdout / stderr を省略し、
+`--include-raw-streams` を明示した場合だけ上限付きの `raw_streams` object に追加する。
 この mode では child output を batch metadata と並べて直接出力してはならない。envelope、
 arguments、escape 展開、terminal error、final summary を含む serialized stream 全体には
 設定された `--max-output-chars` budget（既定 10,485,760、最大 67,108,864）を適用し、
@@ -3742,7 +3754,11 @@ command ごとの bounded writer へ route し、分離した read-only SQLite c
 batch reader を使い、active worker window だけを buffer する。`ScopedConsoleOutput` は nested
 JSON-envelope capture を現在の worker の routed stdout に保ち、他 worker の process-wide writer を
 置き換えない。完了 record は入力順で共有 output writer へ commit する。通常の item failure は
-他 item から隔離し、caller cancellation は scheduling を停止して伝播する。
+他 item から隔離する。caller cancellation は、消費済み input item と final summary に
+`batch_cancelled` を記録してから後続処理を停止する。serial / parallel の input wait は input
+reader ごとの bounded pump を共有するため、stdin が block 中でも cancellation を迅速に検知し、
+同時に完成した line は後続の batch invocation 用に buffer したまま保持する。database setup
+中の cancellation でも型付き final summary を出力する。
 
 editor integration は標準的な location 形状を直接要求できる。`definition`、`references`、`search`、`find`、`validate` は `--format <text|json|lsp|qf|sarif>` を受け付け、`lsp` は LSP `Location` 配列、`qf` は Vim quickfix 行、`sarif` は SARIF 2.1.0 を出力する。`goto <symbol>` は曖昧でない単一定義を 1 つの LSP `Location` として返し、`goto --all <symbol>` は既定または環境変数由来の query limit を適用せず、一致する全 location を返す。明示的な `--limit` または `--top` を指定した場合は location 配列をその件数に制限する。
 

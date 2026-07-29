@@ -146,7 +146,7 @@ public static partial class ConsoleUi
         ("export-ctags", "cdidx export ctags [--output <path>] [--db <path>] [--json] [--lang <lang>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--include-generated]"),
         ("import", "cdidx import <archive> [--db <path>] [--prune-paths] [--no-backup] [--dry-run|--check] [--limit <n<=10000>] [--offset <n>] [--json]"),
         ("languages", "cdidx languages [--db <path>] [--json] [--format <text|json|count>] [--summary-only] [--limit <n>|--top <n>] [--cursor <next_cursor>] [--max-json-bytes <n>] [--indexed-only] [--language <lang>|--extension <ext>|--alias <alias>] [--capability <all|none|graph|references|symbols|missing-any|missing-graph|missing-references|missing-symbols|search-only>]"),
-        ("batch", "cdidx batch [--db <path>] [--json-summary] [--max-input-lines <n>] [--max-output-chars <n>] [--parallel <n>]  # stdin is JSON Lines; --json-summary embeds typed child JSON plus a final summary"),
+        ("batch", "cdidx batch [--db <path>] [--json-summary] [--include-raw-streams] [--max-input-lines <n>] [--max-output-chars <n>] [--parallel <n>]  # stdin is JSON Lines; --json-summary embeds typed child JSON plus a final summary"),
         ("hooks-install", "cdidx hooks install [--project <path>] [--force] [--dry-run] [--json]"),
         ("hooks-uninstall", "cdidx hooks uninstall [--project <path>] [--force] [--json]"),
         ("hooks-status", "cdidx hooks status [--project <path>] [--json]"),
