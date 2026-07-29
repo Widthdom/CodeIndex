@@ -24,7 +24,8 @@ public static partial class QueryCommandRunner
 
         WriteUsageError(
             "--max-json-bytes cannot be combined with --profile or --verbose because those diagnostics add separate stdout records outside the bounded result payload.",
-            GetUsageLineOrThrow(commandName),
+            options,
+            commandName,
             "Remove --profile/--verbose to keep a hard stdout byte cap, or remove --max-json-bytes when diagnostic records are required.");
         return true;
     }
@@ -155,7 +156,8 @@ public static partial class QueryCommandRunner
                 }
                 WriteUsageError(
                     $"{commandName} NDJSON terminal record is {JsonLineBytes(requiredTerminal)} bytes and exceeds --max-json-bytes {options.MaxJsonBytes.Value}.",
-                    GetUsageLineOrThrow(commandName),
+                    options,
+                    commandName,
                     "Increase --max-json-bytes; the hard cap includes both result records and the terminal record.");
                 return new(0, false, null, null, CommandExitCodes.UsageError);
             }

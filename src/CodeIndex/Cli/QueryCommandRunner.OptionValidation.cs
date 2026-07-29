@@ -28,9 +28,23 @@ public static partial class QueryCommandRunner
         => TryWriteParseError(options, commandName, jsonOptions: null);
 
     private static bool TryWriteParseError(QueryCommandOptions options, string commandName, JsonSerializerOptions? jsonOptions)
+        => TryWriteParseError(
+            options,
+            new QueryCommandInvocationContext(
+                commandName,
+                commandName,
+                commandName,
+                RecipeNameIsPositional: false,
+                StructuredMachineUsageErrors: false),
+            jsonOptions);
+
+    private static bool TryWriteParseError(
+        QueryCommandOptions options,
+        QueryCommandInvocationContext invocationContext,
+        JsonSerializerOptions? jsonOptions)
     {
         var dbPathError = BuildExplicitDbPathParseError(options);
-        var inspectCursorScopeError = BuildInspectCursorScopeParseError(options, commandName);
+        var inspectCursorScopeError = BuildInspectCursorScopeParseError(options, invocationContext.CommandName);
         if (options.ParseError == null && dbPathError == null && inspectCursorScopeError == null)
             return false;
 
@@ -40,15 +54,19 @@ public static partial class QueryCommandRunner
             : primaryError == inspectCursorScopeError && options.ParseError == null && dbPathError == null
                 ? "Pass this cursor back to the unchanged `cdidx inspect` query that returned it."
                 : "fix the invalid or missing option value, then rerun with the command shape below.";
-        WriteParseError(primaryError, primaryHint, commandName, options, jsonOptions);
+        var machineErrorOutput = options.Json
+            && jsonOptions != null
+            && (!invocationContext.StructuredMachineUsageErrors
+                || options.InvocationMachineErrorOutputRequested);
+        WriteParseError(primaryError, primaryHint, invocationContext, options, jsonOptions);
         if (options.ParseError != null
             && dbPathError != null
-            && !(options.Json && jsonOptions != null))
+            && !machineErrorOutput)
         {
             WriteParseError(
                 dbPathError,
                 "create or refresh the index with `cdidx index <projectPath>` (or `cdidx .`) and then rerun this command.",
-                commandName,
+                invocationContext,
                 options,
                 jsonOptions);
         }
@@ -111,11 +129,14 @@ public static partial class QueryCommandRunner
     private static void WriteParseError(
         string error,
         string hint,
-        string commandName,
+        QueryCommandInvocationContext invocationContext,
         QueryCommandOptions options,
         JsonSerializerOptions? jsonOptions)
     {
-        if (options.Json && jsonOptions != null)
+        if (options.Json
+            && jsonOptions != null
+            && (!invocationContext.StructuredMachineUsageErrors
+                || options.InvocationMachineErrorOutputRequested))
         {
             CommandErrorWriter.WriteJsonOrHuman(
                 true,
@@ -123,19 +144,21 @@ public static partial class QueryCommandRunner
                 StripErrorPrefix(error),
                 CommandExitCodes.UsageError,
                 hint,
-                GetUsageLineOrThrow(commandName),
+                invocationContext.StructuredMachineUsageErrors
+                    ? null
+                    : invocationContext.UsageLine,
                 ExtractErrorCode(error),
                 category: "usage",
-                command: commandName);
+                command: invocationContext.CommandName);
             return;
         }
 
         CommandErrorWriter.Write(
             StripErrorPrefix(error),
             hint,
-            GetUsageLineOrThrow(commandName),
+            invocationContext.UsageLine,
             ExtractErrorCode(error)
-                ?? (string.Equals(commandName, "outline", StringComparison.Ordinal)
+                ?? (string.Equals(invocationContext.CommandName, "outline", StringComparison.Ordinal)
                     ? CommandErrorCodes.UsageError
                     : null));
     }
@@ -286,11 +309,31 @@ public static partial class QueryCommandRunner
         IEnumerable<string> supportedOptions,
         string? queryLiteral = null,
         JsonSerializerOptions? jsonOptions = null)
+        => TryWriteUnsupportedOptionError(
+            new QueryCommandInvocationContext(
+                commandName,
+                commandName,
+                commandName,
+                RecipeNameIsPositional: false,
+                StructuredMachineUsageErrors: false),
+            cmdArgs,
+            supportedOptions,
+            queryLiteral,
+            jsonOptions);
+
+    private static bool TryWriteUnsupportedOptionError(
+        QueryCommandInvocationContext invocationContext,
+        string[] cmdArgs,
+        IEnumerable<string> supportedOptions,
+        string? queryLiteral = null,
+        JsonSerializerOptions? jsonOptions = null)
     {
+        var commandName = invocationContext.CommandName;
+
         void WriteOptionError(string message, string hint, string? errorCode = null)
         {
             if (jsonOptions != null
-                && cmdArgs.Any(static arg => arg == "--json" || arg.StartsWith("--json=", StringComparison.Ordinal)))
+                && ProgramRunner.ContainsJsonOutputFlag(cmdArgs))
             {
                 CommandErrorWriter.WriteJsonOrHuman(
                     true,
@@ -298,7 +341,9 @@ public static partial class QueryCommandRunner
                     message,
                     CommandExitCodes.UsageError,
                     hint,
-                    GetUsageLineOrThrow(commandName),
+                    invocationContext.StructuredMachineUsageErrors
+                        ? null
+                        : invocationContext.UsageLine,
                     errorCode ?? CommandErrorCodes.UsageError,
                     command: commandName);
                 return;
@@ -307,7 +352,7 @@ public static partial class QueryCommandRunner
             CommandErrorWriter.Write(
                 message,
                 hint,
-                GetUsageLineOrThrow(commandName),
+                invocationContext.UsageLine,
                 errorCode
                     ?? (string.Equals(commandName, "outline", StringComparison.Ordinal)
                         ? CommandErrorCodes.UsageError

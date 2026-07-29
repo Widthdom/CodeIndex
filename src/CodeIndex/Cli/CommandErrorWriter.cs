@@ -66,6 +66,8 @@ internal static class CommandErrorWriter
                     exitCode,
                     usage),
                 CliJsonSerializerContextFactory.Create(jsonOptions).CommandErrorJsonResult)!.AsObject();
+            if (usage == null)
+                payload.Remove("usage");
             if (additionalJsonProperties != null)
             {
                 foreach (var property in additionalJsonProperties)

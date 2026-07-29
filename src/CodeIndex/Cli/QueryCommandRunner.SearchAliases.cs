@@ -22,12 +22,17 @@ public static partial class QueryCommandRunner
     {
         if (subArgs.Length == 0 || subArgs[0].StartsWith("-", StringComparison.Ordinal))
         {
+            var machineOutputRequested = ProgramRunner.ContainsJsonOutputFlag(subArgs);
             return CommandErrorWriter.WriteJsonOrHuman(
-                ProgramRunner.ContainsJsonOutputFlag(subArgs),
+                machineOutputRequested,
                 jsonOptions,
                 "audit requires a recipe name.",
                 CommandExitCodes.UsageError,
-                "pass a recipe name after `cdidx audit`, or run `cdidx recipes` to list built-in recipes.");
+                "pass a recipe name after `cdidx audit`, or run `cdidx recipes` to list built-in recipes.",
+                machineOutputRequested ? null : ConsoleUi.GetUsageLine("audit"),
+                CommandErrorCodes.UsageError,
+                category: "usage",
+                command: "audit");
         }
 
         var hasSummaryOnly = false;
@@ -63,6 +68,11 @@ public static partial class QueryCommandRunner
                 subArgs.Length - insertIndex);
         }
 
-        return RunSearch(searchArgs, jsonOptions, cancellationToken);
+        return RunSearchCore(
+            searchArgs,
+            subArgs,
+            QueryCommandInvocationContext.Audit,
+            jsonOptions,
+            cancellationToken);
     }
 }

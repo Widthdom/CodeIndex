@@ -138,6 +138,47 @@ public static partial class QueryCommandRunner
     private static void WriteUsageError(string message, string usage, string hint)
         => CommandErrorWriter.Write(message, hint, usage);
 
+    private static void WriteUsageError(string message, QueryCommandOptions options, string hint)
+    {
+        var invocationContext = options.InvocationContext;
+        if (options.InvocationMachineErrorOutputRequested
+            && invocationContext.StructuredMachineUsageErrors
+            && options.InvocationJsonOptions != null)
+        {
+            CommandErrorWriter.WriteJsonOrHuman(
+                true,
+                options.InvocationJsonOptions,
+                message,
+                CommandExitCodes.UsageError,
+                hint,
+                usage: null,
+                errorCode: CommandErrorCodes.UsageError,
+                category: "usage",
+                command: invocationContext.CommandName);
+            return;
+        }
+
+        CommandErrorWriter.Write(
+            message,
+            hint,
+            invocationContext.UsageLine);
+    }
+
+    private static void WriteUsageError(
+        string message,
+        QueryCommandOptions options,
+        string fallbackCommandName,
+        string hint)
+    {
+        if (options.InvocationContext.StructuredMachineUsageErrors)
+        {
+            WriteUsageError(message, options, hint);
+            return;
+        }
+
+        WriteUsageError(message, GetUsageLineOrThrow(fallbackCommandName), hint);
+    }
+
     private static bool TryWriteUnsupportedOutputFormat(string commandName, QueryCommandOptions options, IReadOnlySet<string> supportedFormats, string hint)
     {
         if (supportedFormats.Contains(options.OutputFormat))

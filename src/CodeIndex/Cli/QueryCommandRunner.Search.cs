@@ -10,7 +10,12 @@ public static partial class QueryCommandRunner
         string[] cmdArgs,
         JsonSerializerOptions jsonOptions,
         CancellationToken cancellationToken = default) =>
-        RunSearchCore(cmdArgs, cmdArgs, "search", jsonOptions, cancellationToken);
+        RunSearchCore(
+            cmdArgs,
+            cmdArgs,
+            QueryCommandInvocationContext.Search,
+            jsonOptions,
+            cancellationToken);
 
     internal static int RunRecipeList(
         string[] cmdArgs,
@@ -30,13 +35,18 @@ public static partial class QueryCommandRunner
         var searchArgs = new string[cmdArgs.Length + 1];
         searchArgs[0] = "--list-recipes";
         Array.Copy(cmdArgs, 0, searchArgs, 1, cmdArgs.Length);
-        return RunSearchCore(searchArgs, cmdArgs, "recipes", jsonOptions, cancellationToken);
+        return RunSearchCore(
+            searchArgs,
+            cmdArgs,
+            QueryCommandInvocationContext.Recipes,
+            jsonOptions,
+            cancellationToken);
     }
 
     private static int RunSearchCore(
         string[] cmdArgs,
         string[] validationArgs,
-        string usageCommandName,
+        QueryCommandInvocationContext invocationContext,
         JsonSerializerOptions jsonOptions,
         CancellationToken cancellationToken)
     {
@@ -52,25 +62,43 @@ public static partial class QueryCommandRunner
             allowNamedQuery: true,
             allowIssueDraftsFormat: true,
             applySearchSourceDefaults: true);
+        options.InvocationContext = invocationContext;
+        options.InvocationJsonOptions = jsonOptions;
+        options.InvocationMachineErrorOutputRequested = ProgramRunner.ContainsJsonOutputFlag(validationArgs);
         using var exactLanguageScope = DbReader.BeginExactQueryLanguageScope(
             options.Lang);
-        if (TryWriteUnsupportedOptionError(usageCommandName, validationArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand(usageCommandName), options.Query))
+        if (TryWriteUnsupportedOptionError(
+            invocationContext,
+            validationArgs,
+            CliFlagSchema.GetAcceptedFlagNamesForCommand(invocationContext.ValidationCommandName),
+            options.Query,
+            invocationContext.StructuredMachineUsageErrors ? jsonOptions : null))
             return CommandExitCodes.UsageError;
         if (TryWriteParseError(
             options,
-            usageCommandName,
-            options.LanguageValidationError ? jsonOptions : null))
+            invocationContext,
+            options.LanguageValidationError || invocationContext.StructuredMachineUsageErrors ? jsonOptions : null))
             return CommandExitCodes.UsageError;
         if (!TryResolveSearchExactMode(options, out var exact, out var exactError))
         {
-            CommandErrorWriter.WriteStderr(exactError);
+            if (invocationContext.StructuredMachineUsageErrors)
+            {
+                WriteUsageError(
+                    StripErrorPrefix(exactError!),
+                    options,
+                    "Use one compatible exact-search mode, or remove the exact-mode flags.");
+            }
+            else
+            {
+                CommandErrorWriter.WriteStderr(exactError);
+            }
             return CommandExitCodes.UsageError;
         }
         if (options.OpenIssuesPath != null && options.OutputFormat != OutputFormatIssueDrafts)
         {
             WriteUsageError(
                 "--open-issues can only be used with `cdidx search --format issue-drafts`.",
-                GetUsageLineOrThrow("search"),
+                options,
                 "Use an open-issues JSON file from `gh issue list --state open --json number,title,labels,url`.");
             return CommandExitCodes.UsageError;
         }
@@ -78,20 +106,20 @@ public static partial class QueryCommandRunner
         {
             WriteUsageError(
                 "--repo can only be used with `--open-issues github`.",
-                GetUsageLineOrThrow("search"),
+                options,
                 "Use `--open-issues github --repo owner/name` to fetch open issues directly from GitHub.");
             return CommandExitCodes.UsageError;
         }
         if (options.IssueState != IssueDuplicatePreflight.DefaultIssueState && !IssueDuplicatePreflight.IsGitHubOpenIssuesSource(options.OpenIssuesPath))
         {
-            WriteUsageError("--issue-state can only be used with `--open-issues github`.", GetUsageLineOrThrow("search"), "Use `--open-issues github --repo owner/name --issue-state all`.");
+            WriteUsageError("--issue-state can only be used with `--open-issues github`.", options, "Use `--open-issues github --repo owner/name --issue-state all`.");
             return CommandExitCodes.UsageError;
         }
         if (options.DuplicatePreflightTuningExplicit && options.OutputFormat != OutputFormatIssueDrafts)
         {
             WriteUsageError(
                 "--duplicate-confidence and --duplicate-threshold can only be used with `cdidx search --format issue-drafts`.",
-                GetUsageLineOrThrow("search"),
+                options,
                 "Use these controls when exporting issue draft JSON with duplicate-preflight metadata.");
             return CommandExitCodes.UsageError;
         }
@@ -99,7 +127,7 @@ public static partial class QueryCommandRunner
         {
             WriteUsageError(
                 "--include-query and --exclude-query can only be used with --recipe.",
-                GetUsageLineOrThrow("search"),
+                options,
                 "Use `--recipe risky-code --include-query raw-diagnostic-echo` to run a child query subset.");
             return CommandExitCodes.UsageError;
         }
@@ -107,7 +135,7 @@ public static partial class QueryCommandRunner
         {
             WriteUsageError(
                 "--cursor can only be used with --recipe.",
-                GetUsageLineOrThrow("search"),
+                options,
                 "Use `--recipe risky-code/raw-diagnostic-echo --format compact --cursor <next_cursor>` to fetch the next page for one child query.");
             return CommandExitCodes.UsageError;
         }
@@ -115,7 +143,7 @@ public static partial class QueryCommandRunner
         {
             WriteUsageError(
                 "--cursor for search must be a search pagination cursor returned by recipe search.",
-                GetUsageLineOrThrow("search"),
+                options,
                 "Use `--cursor <next_cursor>` only with `--recipe`; `unused:<offset>` cursors are for `cdidx unused`.");
             return CommandExitCodes.UsageError;
         }
@@ -123,7 +151,7 @@ public static partial class QueryCommandRunner
         {
             WriteUsageError(
                 "--cursor for search must be a search pagination cursor returned by recipe search.",
-                GetUsageLineOrThrow("search"),
+                options,
                 "`outline:<offset>` cursors are for `cdidx outline <path>`.");
             return CommandExitCodes.UsageError;
         }
@@ -131,7 +159,7 @@ public static partial class QueryCommandRunner
         {
             WriteUsageError(
                 "--cursor for search must be a search pagination cursor returned by recipe search.",
-                GetUsageLineOrThrow("search"),
+                options,
                 "Dependency-cycle cursors are for `cdidx deps --cycles`.");
             return CommandExitCodes.UsageError;
         }
@@ -139,7 +167,7 @@ public static partial class QueryCommandRunner
         {
             WriteUsageError(
                 "--audit-scope cannot be combined with `cdidx search --list-recipes`.",
-                GetUsageLineOrThrow("search"),
+                options,
                 "Use `--query <text>` with --list-recipes to filter recipe discovery, or run an ad hoc search with `--source-only`.");
             return CommandExitCodes.UsageError;
         }
@@ -147,7 +175,7 @@ public static partial class QueryCommandRunner
         {
             WriteUsageError(
                 "--show-excluded is only supported with `cdidx search --recipe <name>`.",
-                GetUsageLineOrThrow("search"),
+                options,
                 "Use it with a recipe run to include the effective scope and exclusion diagnostics in JSON output.");
             return CommandExitCodes.UsageError;
         }
@@ -155,7 +183,7 @@ public static partial class QueryCommandRunner
         {
             WriteUsageError(
                 "--issue-title and --issue-label can only be used with `cdidx search --format issue-drafts`.",
-                GetUsageLineOrThrow("search"),
+                options,
                 "Use these hints when exporting issue draft JSON for a plain search.");
             return CommandExitCodes.UsageError;
         }
@@ -163,7 +191,7 @@ public static partial class QueryCommandRunner
         {
             WriteUsageError(
                 "--snippet-lines 0 is only supported with --format issue-drafts.",
-                GetUsageLineOrThrow("search"),
+                options,
                 "Use `--format issue-drafts --snippet-lines 0` for path/line-only draft evidence, or pass a positive snippet line count for search output.");
             return CommandExitCodes.UsageError;
         }
@@ -171,7 +199,7 @@ public static partial class QueryCommandRunner
         {
             WriteUsageError(
                 "--issue-title is only supported for ad hoc search issue drafts.",
-                GetUsageLineOrThrow("search"),
+                options,
                 "Recipe issue-drafts produce one draft per recipe query, so their titles are derived from the recipe metadata.");
             return CommandExitCodes.UsageError;
         }
@@ -179,7 +207,7 @@ public static partial class QueryCommandRunner
         {
             WriteUsageError(
                 "--count cannot be combined with --format issue-drafts.",
-                GetUsageLineOrThrow("search"),
+                options,
                 "Issue-draft export needs result evidence; remove --count.");
             return CommandExitCodes.UsageError;
         }
@@ -187,7 +215,7 @@ public static partial class QueryCommandRunner
         {
             WriteUsageError(
                 "--names is only supported with `cdidx recipes` or `cdidx search --list-recipes`.",
-                GetUsageLineOrThrow("search"),
+                options,
                 "Use `cdidx recipes --names --json` for a small deterministic recipe-name list.");
             return CommandExitCodes.UsageError;
         }
@@ -195,7 +223,7 @@ public static partial class QueryCommandRunner
         {
             WriteUsageError(
                 "--names cannot be combined with --summary-only.",
-                GetUsageLineOrThrow(usageCommandName),
+                options,
                 "Use one recipe-list shape at a time.");
             return CommandExitCodes.UsageError;
         }
@@ -210,7 +238,7 @@ public static partial class QueryCommandRunner
         {
             WriteUsageError(
                 "--summary-only is only supported with `cdidx recipes` / `cdidx search --list-recipes`, named-query count output, recipe count output, or recipe issue-drafts output.",
-                GetUsageLineOrThrow("search"),
+                options,
                 "Use `cdidx recipes --summary-only --json`, `cdidx search --named-query <name>=<query> --summary-only --json`, `cdidx search --recipe <name> --format compact --summary-only --json`, `cdidx search --recipe <name> --format count --summary-only`, or `cdidx search --recipe <name> --format issue-drafts --summary-only`.");
             return CommandExitCodes.UsageError;
         }
@@ -218,7 +246,7 @@ public static partial class QueryCommandRunner
         {
             WriteUsageError(
                 "--json=array is not supported with --format issue-drafts because draft export is a JSON object.",
-                GetUsageLineOrThrow("search"),
+                options,
                 "Use plain `--json` or omit --json when exporting issue drafts.");
             return CommandExitCodes.UsageError;
         }
@@ -226,22 +254,24 @@ public static partial class QueryCommandRunner
         {
             WriteUsageError(
                 "--cursor cannot be combined with --format issue-drafts.",
-                GetUsageLineOrThrow("search"),
+                options,
                 "Use --cursor with recipe JSON or compact output, then export issue drafts after choosing the desired query page.");
             return CommandExitCodes.UsageError;
         }
         var exactSearch = exact || options.TokenBoundary;
         if (options.TokenBoundary && options.RawFts)
         {
-            WriteValidationError(
+            WriteUsageError(
                 "--token-boundary cannot be combined with --fts.",
+                options,
                 "Drop --fts to use exact token-boundary matching, or drop --token-boundary to keep raw FTS5 syntax.");
             return CommandExitCodes.UsageError;
         }
         if (exactSearch && options.Prefix)
         {
-            WriteValidationError(
+            WriteUsageError(
                 "--prefix cannot be combined with --exact / --exact-substring / --token-boundary (exact uses instr(), not FTS5 prefix phrases).",
+                options,
                 "Drop --prefix to keep the exact substring path, or drop the exact-mode flag to opt into FTS5 prefix matching.");
             return CommandExitCodes.UsageError;
         }
@@ -252,7 +282,7 @@ public static partial class QueryCommandRunner
                 : "--named-query";
             WriteUsageError(
                 $"--group-by is not supported with {mode}.",
-                GetUsageLineOrThrow("search"),
+                options,
                 "Use `cdidx search <query> --group-by file --count` or remove --group-by for recipe-list and named-batch output.");
             return CommandExitCodes.UsageError;
         }
@@ -265,11 +295,13 @@ public static partial class QueryCommandRunner
                     : "--recipe";
             WriteUsageError(
                 "--format grouped is only supported for plain search output.",
-                GetUsageLineOrThrow("search"),
-                $"Remove {mode}, or run a plain `cdidx search <query> --format grouped`.");
+                options,
+                invocationContext.RecipeNameIsPositional && mode == "--recipe"
+                    ? "Run a plain `cdidx search <query> --format grouped`; audit recipe execution does not support grouped output."
+                    : $"Remove {mode}, or run a plain `cdidx search <query> --format grouped`.");
             return CommandExitCodes.UsageError;
         }
-        if (TryWriteCappedJsonDiagnosticsUsageError(usageCommandName, options))
+        if (TryWriteCappedJsonDiagnosticsUsageError(invocationContext.CommandName, options))
             return CommandExitCodes.UsageError;
         if (options.ListRecipes)
         {
@@ -277,7 +309,7 @@ public static partial class QueryCommandRunner
             {
                 WriteUsageError(
                     "row-selection controls are not supported with --list-recipes because recipe discovery does not emit search rows.",
-                    GetUsageLineOrThrow(usageCommandName),
+                    options,
                     "Remove --first-per-file / --sample, or execute a recipe or plain search that returns rows.");
                 return CommandExitCodes.UsageError;
             }
@@ -285,7 +317,7 @@ public static partial class QueryCommandRunner
             {
                 WriteUsageError(
                     "--list-recipes cannot be combined with --recipe, --named-query, or extra positional arguments.",
-                    GetUsageLineOrThrow(usageCommandName),
+                    options,
                     "Run `cdidx search --list-recipes --query <text>` to filter built-in audit recipes by recipe, query, label, severity, path, or search text.");
                 return CommandExitCodes.UsageError;
             }
@@ -293,7 +325,7 @@ public static partial class QueryCommandRunner
             {
                 WriteUsageError(
                     "--format count/csv/tsv/lsp/qf/sarif/issue-drafts is not supported with --list-recipes.",
-                    GetUsageLineOrThrow(usageCommandName),
+                    options,
                     "Use plain text output, `--json` / `--format json` for the full recipe list, or `--format compact` for a compact summary.");
                 return CommandExitCodes.UsageError;
             }
@@ -301,12 +333,12 @@ public static partial class QueryCommandRunner
             {
                 WriteUsageError(
                     "--json=array is not supported with --list-recipes because recipe-list output is a JSON object.",
-                    GetUsageLineOrThrow(usageCommandName),
+                    options,
                     "Use plain `--json` for the recipe-list object.");
                 return CommandExitCodes.UsageError;
             }
 
-            return WriteSearchRecipeList(options, jsonOptions, usageCommandName);
+            return WriteSearchRecipeList(options, jsonOptions, invocationContext.CommandName);
         }
         if (options.NamedSearchQueries.Count > 0)
         {
@@ -314,7 +346,7 @@ public static partial class QueryCommandRunner
             {
                 WriteUsageError(
                     "row-selection controls are not supported with --named-query because named batches do not expose selector accounting.",
-                    GetUsageLineOrThrow("search"),
+                    options,
                     "Remove --first-per-file / --sample, or run each query as a plain search or recipe row output.");
                 return CommandExitCodes.UsageError;
             }
@@ -322,7 +354,7 @@ public static partial class QueryCommandRunner
             {
                 WriteUsageError(
                     "--named-query cannot be combined with a positional query, --query, --recipe, or extra positional arguments.",
-                    GetUsageLineOrThrow("search"),
+                    options,
                     "Pass one or more `--named-query <name>=<query>` values, or run a plain `cdidx search <query>`.");
                 return CommandExitCodes.UsageError;
             }
@@ -330,7 +362,7 @@ public static partial class QueryCommandRunner
             {
                 WriteUsageError(
                     "--open-issues can only be used with `cdidx search --recipe <name> --format issue-drafts`.",
-                    GetUsageLineOrThrow("search"),
+                    options,
                     "Remove --open-issues for ad hoc named batches.");
                 return CommandExitCodes.UsageError;
             }
@@ -338,7 +370,7 @@ public static partial class QueryCommandRunner
             {
                 WriteUsageError(
                     "--format csv/tsv/lsp/qf/sarif/issue-drafts is not supported with --named-query.",
-                    GetUsageLineOrThrow("search"),
+                    options,
                     "Use plain text output, `--json`, `--format count`, or `--format compact` for grouped ad hoc results.");
                 return CommandExitCodes.UsageError;
             }
@@ -346,7 +378,7 @@ public static partial class QueryCommandRunner
             {
                 WriteUsageError(
                     "--json=array is not supported with --named-query because named batch output is grouped by query.",
-                    GetUsageLineOrThrow("search"),
+                    options,
                     "Use plain `--json` for the grouped named-query object.");
                 return CommandExitCodes.UsageError;
             }
@@ -354,7 +386,7 @@ public static partial class QueryCommandRunner
             {
                 WriteUsageError(
                     "--max-json-bytes is only supported with JSON search output.",
-                    GetUsageLineOrThrow("search"),
+                    options,
                     "Use `--json` or `--format compact` with --named-query when bounding named batch output.");
                 return CommandExitCodes.UsageError;
             }
@@ -370,7 +402,7 @@ public static partial class QueryCommandRunner
             {
                 WriteUsageError(
                     "--token-boundary is only supported for ad hoc search and --named-query batches, not recipe execution.",
-                    GetUsageLineOrThrow("search"),
+                    options,
                     "Run an individual query without --recipe if token-boundary filtering is required.");
                 return CommandExitCodes.UsageError;
             }
@@ -378,7 +410,7 @@ public static partial class QueryCommandRunner
             {
                 WriteUsageError(
                     "--recipe expands into its own curated query set and cannot be combined with a search query.",
-                    GetUsageLineOrThrow("search"),
+                    options,
                     "Remove the positional query, or run a plain `cdidx search <query>` without --recipe.");
                 return CommandExitCodes.UsageError;
             }
@@ -386,7 +418,7 @@ public static partial class QueryCommandRunner
             {
                 WriteUsageError(
                     "--prefix is not supported with --recipe because each recipe query defines its own match mode.",
-                    GetUsageLineOrThrow("search"),
+                    options,
                     "Remove --prefix, or run the individual query from the recipe list yourself.");
                 return CommandExitCodes.UsageError;
             }
@@ -394,7 +426,7 @@ public static partial class QueryCommandRunner
             {
                 WriteUsageError(
                     "--format csv/tsv/lsp/qf is not supported with --recipe.",
-                    GetUsageLineOrThrow("search"),
+                    options,
                     "Use `--count` / `--format count` for count-only recipe output, `--json` for grouped recipe results, `--format compact` for summary-first compact JSON, `--format sarif` for audit findings, or `--format issue-drafts` for draft exports.");
                 return CommandExitCodes.UsageError;
             }
@@ -402,7 +434,7 @@ public static partial class QueryCommandRunner
             {
                 WriteUsageError(
                     "--json=array is not supported with --recipe because recipe output is grouped by query.",
-                    GetUsageLineOrThrow("search"),
+                    options,
                     "Use plain `--json` for the grouped recipe object.");
                 return CommandExitCodes.UsageError;
             }
@@ -421,7 +453,7 @@ public static partial class QueryCommandRunner
             {
                 WriteUsageError(
                     "--format sarif cannot be combined with recipe count, summary, aggregation, projection, row-selection, or NDJSON controls.",
-                    GetUsageLineOrThrow("search"),
+                    options,
                     "Use `--recipe <name> --format sarif` with result filters and `--limit` / `--total-limit`, or choose the JSON/count output shape instead.");
                 return CommandExitCodes.UsageError;
             }
@@ -429,7 +461,7 @@ public static partial class QueryCommandRunner
             {
                 WriteUsageError(
                     "--per-file-limit is not supported with --recipe because recipe execution does not produce grouped search output.",
-                    GetUsageLineOrThrow("search"),
+                    options,
                     "Use --first-per-file for one selected recipe row per file, or remove --recipe and use grouped ad hoc search output.");
                 return CommandExitCodes.UsageError;
             }
@@ -438,7 +470,7 @@ public static partial class QueryCommandRunner
             {
                 WriteUsageError(
                     "recipe row-selection controls cannot be combined with --cursor because raw recipe cursors cannot preserve selector state.",
-                    GetUsageLineOrThrow("search"),
+                    options,
                     "Remove --cursor and rerun selection from the beginning, or remove --first-per-file / --sample to resume from the cursor.");
                 return CommandExitCodes.UsageError;
             }
@@ -452,7 +484,7 @@ public static partial class QueryCommandRunner
             {
                 WriteUsageError(
                     "recipe row-selection controls cannot be combined with count, aggregation, results-only, or summary-only compact output.",
-                    GetUsageLineOrThrow("search"),
+                    options,
                     "Remove --first-per-file / --sample to keep the non-row output, or choose text, JSON, compact, NDJSON, or issue-drafts row output.");
                 return CommandExitCodes.UsageError;
             }
@@ -460,7 +492,7 @@ public static partial class QueryCommandRunner
             {
                 WriteUsageError(
                     "--max-json-bytes is only supported with JSON search output.",
-                    GetUsageLineOrThrow("search"),
+                    options,
                     "Use `--json=ndjson`, `--format count`, `--format compact`, grouped/count-by JSON, or `--format issue-drafts` with --max-json-bytes.");
                 return CommandExitCodes.UsageError;
             }
@@ -468,7 +500,7 @@ public static partial class QueryCommandRunner
             {
                 WriteUsageError(
                     "--results-only is only supported with NDJSON recipe output.",
-                    GetUsageLineOrThrow("search"),
+                    options,
                     "Use `--recipe <name> --results-only --search-fields path,line,query_name`, or remove --results-only.");
                 return CommandExitCodes.UsageError;
             }
@@ -478,7 +510,7 @@ public static partial class QueryCommandRunner
                 {
                     WriteUsageError(
                         "--group-by for recipe search must be one of file, symbol, origin, return-type, or subsystem.",
-                        GetUsageLineOrThrow("search"),
+                        options,
                         "Use `cdidx search --recipe <name> --group-by file --count`, `--group-by symbol --count`, `--group-by return-type --count`, `--group-by subsystem --count`, or `--count-by origin`.");
                     return CommandExitCodes.UsageError;
                 }
@@ -486,7 +518,7 @@ public static partial class QueryCommandRunner
                 {
                     WriteUsageError(
                         "search --recipe --group-by requires --count.",
-                        GetUsageLineOrThrow("search"),
+                        options,
                         "Add --count to request grouped recipe result counts, or remove --group-by to print matching snippets.");
                     return CommandExitCodes.UsageError;
                 }
@@ -495,7 +527,7 @@ public static partial class QueryCommandRunner
             {
                 WriteUsageError(
                     "--count-by for recipe search must be one of path, file, symbol, origin, return-type, or subsystem.",
-                    GetUsageLineOrThrow("search"),
+                    options,
                     "Use `--count-by path`, `--count-by symbol`, `--count-by return-type`, `--count-by subsystem`, or `--count-by origin`.");
                 return CommandExitCodes.UsageError;
             }
@@ -503,7 +535,7 @@ public static partial class QueryCommandRunner
             {
                 WriteUsageError(
                     "--unique for recipe search must be one of path, file, symbol, origin, return-type, or subsystem.",
-                    GetUsageLineOrThrow("search"),
+                    options,
                     "Use `--unique path`, `--unique symbol`, `--unique return-type`, `--unique subsystem`, or `--unique origin`.");
                 return CommandExitCodes.UsageError;
             }
@@ -511,7 +543,7 @@ public static partial class QueryCommandRunner
             {
                 WriteUsageError(
                     "--count-by cannot be combined with --unique.",
-                    GetUsageLineOrThrow("search"),
+                    options,
                     "Run one recipe aggregation mode at a time.");
                 return CommandExitCodes.UsageError;
             }
@@ -519,7 +551,7 @@ public static partial class QueryCommandRunner
             {
                 WriteUsageError(
                     "--group-by cannot be combined with --count-by or --unique.",
-                    GetUsageLineOrThrow("search"),
+                    options,
                     "Use either `--group-by <field> --count`, `--count-by <field>`, or `--unique <field>`.");
                 return CommandExitCodes.UsageError;
             }
@@ -527,7 +559,7 @@ public static partial class QueryCommandRunner
             {
                 WriteUsageError(
                     "recipe aggregation cannot be combined with --results-only or --search-fields.",
-                    GetUsageLineOrThrow("search"),
+                    options,
                     "Run the aggregation separately, or remove --count-by/--group-by to stream projected recipe rows.");
                 return CommandExitCodes.UsageError;
             }
@@ -566,7 +598,7 @@ public static partial class QueryCommandRunner
         {
             WriteUsageError(
                 QueryLimits.FormatQueryTooLongError(),
-                GetUsageLineOrThrow("search"),
+                options,
                 "Shorten the search text or split generated input into smaller queries before running `cdidx search`.");
             return CommandExitCodes.UsageError;
         }
@@ -581,7 +613,7 @@ public static partial class QueryCommandRunner
         {
             WriteUsageError(
                 "search row-selection controls cannot be combined with count or aggregation output.",
-                GetUsageLineOrThrow("search"),
+                options,
                 "Remove --first-per-file / --sample to count the full filtered population, or choose a row output that reports selector accounting.");
             return CommandExitCodes.UsageError;
         }
@@ -589,7 +621,7 @@ public static partial class QueryCommandRunner
         {
             WriteUsageError(
                 "search row-selection controls cannot be combined with --results-only because that stream omits selector accounting.",
-                GetUsageLineOrThrow("search"),
+                options,
                 "Remove --results-only to retain the NDJSON terminal record, or remove --first-per-file / --sample.");
             return CommandExitCodes.UsageError;
         }
@@ -598,7 +630,7 @@ public static partial class QueryCommandRunner
         {
             WriteUsageError(
                 "search row-selection controls cannot be combined with metadata-free --json=array output.",
-                GetUsageLineOrThrow("search"),
+                options,
                 "Add --json-envelope to retain selector accounting, use --json=ndjson / --format compact, or remove --first-per-file / --sample.");
             return CommandExitCodes.UsageError;
         }
@@ -610,7 +642,7 @@ public static partial class QueryCommandRunner
         {
             WriteUsageError(
                 "search row-selection controls are only supported by text, JSON, compact, and issue-drafts row output.",
-                GetUsageLineOrThrow("search"),
+                options,
                 "Choose an output shape that reports selector accounting, or remove --first-per-file / --sample.");
             return CommandExitCodes.UsageError;
         }
@@ -620,7 +652,7 @@ public static partial class QueryCommandRunner
             {
                 WriteUsageError(
                     "--group-by for search must be one of file, symbol, origin, return-type, or subsystem.",
-                    GetUsageLineOrThrow("search"),
+                    options,
                     "Use `cdidx search <query> --group-by file --count`, `--group-by symbol --count`, `--group-by return-type --count`, `--group-by subsystem --count`, or `--count-by origin`.");
                 return CommandExitCodes.UsageError;
             }
@@ -628,7 +660,7 @@ public static partial class QueryCommandRunner
             {
                 WriteUsageError(
                     "search --group-by requires --count.",
-                    GetUsageLineOrThrow("search"),
+                    options,
                     "Add --count to request grouped result counts, or remove --group-by to print matching snippets.");
                 return CommandExitCodes.UsageError;
             }
@@ -636,7 +668,7 @@ public static partial class QueryCommandRunner
             {
                 WriteUsageError(
                     "--group-by for search only supports plain count output or JSON.",
-                    GetUsageLineOrThrow("search"),
+                    options,
                     "Use `--count`, optionally with `--json`, instead of compact/location formats.");
                 return CommandExitCodes.UsageError;
             }
@@ -644,7 +676,7 @@ public static partial class QueryCommandRunner
             {
                 WriteUsageError(
                     "--json=array is not supported with search --group-by because grouped count output is a JSON object.",
-                    GetUsageLineOrThrow("search"),
+                    options,
                     "Use plain `--json` for the grouped-count object.");
                 return CommandExitCodes.UsageError;
             }
@@ -653,7 +685,7 @@ public static partial class QueryCommandRunner
         {
             WriteUsageError(
                 "--count-by cannot be combined with --unique.",
-                GetUsageLineOrThrow("search"),
+                options,
                 "Run one aggregation mode at a time.");
             return CommandExitCodes.UsageError;
         }
@@ -661,7 +693,7 @@ public static partial class QueryCommandRunner
         {
             WriteUsageError(
                 "--group-by cannot be combined with --count-by or --unique.",
-                GetUsageLineOrThrow("search"),
+                options,
                 "Use either `--group-by <field> --count`, `--count-by <field>`, or `--unique <field>`.");
             return CommandExitCodes.UsageError;
         }
@@ -669,7 +701,7 @@ public static partial class QueryCommandRunner
         {
             WriteUsageError(
                 "--json=array is not supported with search aggregation because aggregation output is a JSON object.",
-                GetUsageLineOrThrow("search"),
+                options,
                 "Use plain `--json` for `--count-by` or `--unique` aggregation output.");
             return CommandExitCodes.UsageError;
         }
@@ -677,7 +709,7 @@ public static partial class QueryCommandRunner
         {
             WriteUsageError(
                 "--json=array is not supported with search --format grouped because grouped output is a JSON object.",
-                GetUsageLineOrThrow("search"),
+                options,
                 "Use plain `--json` or omit --json when using `--format grouped`.");
             return CommandExitCodes.UsageError;
         }
@@ -685,7 +717,7 @@ public static partial class QueryCommandRunner
         {
             WriteUsageError(
                 "--results-only is only supported with NDJSON search output.",
-                GetUsageLineOrThrow("search"),
+                options,
                 "Use `--results-only --json=ndjson`, or remove --results-only when using --json=array.");
             return CommandExitCodes.UsageError;
         }
@@ -693,7 +725,7 @@ public static partial class QueryCommandRunner
         {
             WriteUsageError(
                 "--max-json-bytes is only supported with JSON search output.",
-                GetUsageLineOrThrow("search"),
+                options,
                 "Use `--json=ndjson`, `--json=array`, `--format count`, `--format compact`, grouped/count-by JSON, or `--format issue-drafts` with --max-json-bytes.");
             return CommandExitCodes.UsageError;
         }
@@ -701,7 +733,7 @@ public static partial class QueryCommandRunner
         {
             WriteUsageError(
                 "--count-by for search must be one of path, file, symbol, origin, return-type, or subsystem.",
-                GetUsageLineOrThrow("search"),
+                options,
                 "Use `--count-by path`, `--count-by symbol`, `--count-by return-type`, `--count-by subsystem`, or `--count-by origin`.");
             return CommandExitCodes.UsageError;
         }
@@ -709,7 +741,7 @@ public static partial class QueryCommandRunner
         {
             WriteUsageError(
                 "--unique for search must be one of path, file, symbol, origin, return-type, or subsystem.",
-                GetUsageLineOrThrow("search"),
+                options,
                 "Use `--unique path`, `--unique symbol`, `--unique return-type`, `--unique subsystem`, or `--unique origin`.");
             return CommandExitCodes.UsageError;
         }
