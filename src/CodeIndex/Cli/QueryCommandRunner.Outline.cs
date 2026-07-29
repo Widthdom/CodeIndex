@@ -125,17 +125,23 @@ public static partial class QueryCommandRunner
 
             var filteredSymbols = ApplyOutlineKindFilters(outline.Symbols, kindFilters);
             var displaySourceSymbols = ApplyOutlineSort(filteredSymbols, outlineSortMode, includeDerivedMetadata);
+            var boundedLimit = JsonEnvelopeWrapper.GetBoundedResponseLimit("outline");
+            var boundedOffset = boundedLimit.HasValue
+                ? JsonEnvelopeWrapper.GetBoundedResponseOffset("outline")
+                : (int?)null;
+            if (boundedLimit.HasValue)
+                JsonEnvelopeWrapper.ReportBoundedResponseTotal("outline", displaySourceSymbols.Count, authoritative: true);
             if (options.Json)
             {
                 if (options.Compact)
                 {
-                    var payload = BuildOutlineJsonPayload(outline, displaySourceSymbols, kindFilters, outlineSortMode, options, cursorContext, jsonOptions, compact: true);
+                    var payload = BuildOutlineJsonPayload(outline, displaySourceSymbols, kindFilters, outlineSortMode, options, cursorContext, jsonOptions, compact: true, boundedOffset);
                     AddActiveSqliteDiagnostics(payload);
                     Console.WriteLine(payload.ToJsonString(jsonOptions));
                 }
                 else if (HasOutlineJsonControls(options, kindFilters))
                 {
-                    var payload = BuildOutlineJsonPayload(outline, displaySourceSymbols, kindFilters, outlineSortMode, options, cursorContext, jsonOptions, compact: false);
+                    var payload = BuildOutlineJsonPayload(outline, displaySourceSymbols, kindFilters, outlineSortMode, options, cursorContext, jsonOptions, compact: false, boundedOffset);
                     AddActiveSqliteDiagnostics(payload);
                     Console.WriteLine(payload.ToJsonString(jsonOptions));
                 }
@@ -394,10 +400,11 @@ public static partial class QueryCommandRunner
         QueryCommandOptions options,
         PaginationCursorContext cursorContext,
         JsonSerializerOptions jsonOptions,
-        bool compact)
+        bool compact,
+        int? boundedOffset = null)
     {
         var totalMatchingSymbols = filteredSymbols.Count;
-        var offset = Math.Min(options.OutlineCursorOffset ?? 0, totalMatchingSymbols);
+        var offset = Math.Min(boundedOffset ?? options.OutlineCursorOffset ?? 0, totalMatchingSymbols);
         var remainingSymbols = offset == 0
             ? filteredSymbols.ToList()
             : filteredSymbols.Skip(offset).ToList();

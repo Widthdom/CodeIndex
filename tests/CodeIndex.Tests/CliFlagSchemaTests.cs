@@ -453,7 +453,7 @@ public class CliFlagSchemaTests
         Assert.Contains("--dry-run", hookFlags);
         Assert.DoesNotContain(CliFlagSchema.GetCompletionFlagsForCommand("hooks"), flag => flag.Name == "--dry-run");
         Assert.Contains(CliFlagSchema.GetCompletionFlagsForCommand("hooks", "install"), flag => flag.Name == "--dry-run");
-        Assert.DoesNotContain(CliFlagSchema.GetCompletionFlagsForCommand("hooks", "uninstall"), flag => flag.Name == "--dry-run");
+        Assert.Contains(CliFlagSchema.GetCompletionFlagsForCommand("hooks", "uninstall"), flag => flag.Name == "--dry-run");
         Assert.DoesNotContain(CliFlagSchema.GetCompletionFlagsForCommand("hooks", "status"), flag => flag.Name == "--dry-run");
         Assert.Contains(CliFlagSchema.GetCompletionFlagsForCommand("hooks", "install"), flag => flag.Name == "--force");
         Assert.Contains(CliFlagSchema.GetCompletionFlagsForCommand("hooks", "uninstall"), flag => flag.Name == "--force");
