@@ -389,6 +389,56 @@ public partial class McpServer
                     ["properties"] = new JsonObject
                     {
                         ["path"] = new JsonObject { ["type"] = "string", ["description"] = "Indexed file path (e.g. src/app.cs)" },
+                        ["fields"] = new JsonObject
+                        {
+                            ["oneOf"] = new JsonArray
+                            {
+                                new JsonObject { ["type"] = "string", ["minLength"] = 1, ["maxLength"] = 256 },
+                                new JsonObject
+                                {
+                                    ["type"] = "array",
+                                    ["minItems"] = 1,
+                                    ["maxItems"] = 16,
+                                    ["items"] = new JsonObject
+                                    {
+                                        ["type"] = "string",
+                                        ["enum"] = new JsonArray
+                                        {
+                                            "all", "kind", "name", "display_name", "path", "line", "start_line", "end_line",
+                                            "depth", "body_start_line", "body_end_line", "signature", "signature_truncated",
+                                            "signature_original_length", "container_kind", "container_name", "visibility",
+                                            "return_type", "sort_mode", "reference_count", "size_lines", "complexity_score",
+                                            "range", "lines", "body", "body_range", "container", "refs", "references",
+                                            "size", "span", "complexity"
+                                        }
+                                    }
+                                }
+                            },
+                            ["description"] = "CLI-compatible outline projection fields. A string may be comma-separated; aliases expand exactly as `cdidx outline --outline-fields` does."
+                        },
+                        ["sort"] = new JsonObject
+                        {
+                            ["type"] = "string",
+                            ["enum"] = new JsonArray { "source", "name", "kind", "references", "size", "complexity", "path" },
+                            ["description"] = "Deterministic outline ordering shared with `cdidx outline --sort`.",
+                            ["default"] = "source"
+                        },
+                        ["limit"] = new JsonObject
+                        {
+                            ["type"] = "integer",
+                            ["minimum"] = 1,
+                            ["maximum"] = MaxLimit,
+                            ["description"] = "Maximum complete symbol rows to return (default: 100, maximum: 200).",
+                            ["default"] = 100
+                        },
+                        ["cursor"] = new JsonObject { ["type"] = "string", ["description"] = "Opaque `page:v1` continuation returned as `next_cursor`; it is bound to path, ordering, and index generation." },
+                        ["maxBytes"] = new JsonObject
+                        {
+                            ["type"] = "integer",
+                            ["minimum"] = 1,
+                            ["maximum"] = MaxClientResponseJsonBytes,
+                            ["description"] = "Maximum UTF-8 bytes for serialized structured content. Pages shrink only at complete symbol-row boundaries."
+                        },
                     },
                     ["required"] = new JsonArray { "path" }
                 },

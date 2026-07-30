@@ -22,6 +22,30 @@ namespace CodeIndex.Tests;
 public partial class McpServerTests
 {
     [Fact]
+    public void ToolsList_OutlinePublishesPaginationProjectionAndByteControls_Issue4897()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":4897,"method":"tools/list"}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var outline = response["result"]!["tools"]!.AsArray()
+            .Single(tool => tool!["name"]!.GetValue<string>() == "outline")!;
+        var properties = outline["inputSchema"]!["properties"]!;
+
+        Assert.NotNull(properties["fields"]);
+        Assert.Contains(
+            properties["sort"]!["enum"]!.AsArray(),
+            value => value!.GetValue<string>() == "source");
+        Assert.Equal(100, properties["limit"]!["default"]!.GetValue<int>());
+        Assert.Equal(1, properties["limit"]!["minimum"]!.GetValue<int>());
+        Assert.Equal(200, properties["limit"]!["maximum"]!.GetValue<int>());
+        Assert.Contains("page:v1", properties["cursor"]!["description"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.Equal(1, properties["maxBytes"]!["minimum"]!.GetValue<int>());
+        Assert.Equal(
+            McpServer.MaxClientResponseJsonBytes,
+            properties["maxBytes"]!["maximum"]!.GetValue<int>());
+    }
+
+    [Fact]
     public void ToolsList_IndexPathSchemaReflectsProjectPathContract_Issue3186()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
