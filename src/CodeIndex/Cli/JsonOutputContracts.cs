@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using CodeIndex.Database;
 using CodeIndex.Indexer.Extensibility;
@@ -798,8 +799,10 @@ internal sealed record LanguageEntryJsonResult(
     [property: JsonPropertyName("legacy_patterns")] List<string> LegacyPatterns,
     [property: JsonPropertyName("pattern_provenance")] List<LanguagePatternProvenanceJsonResult> PatternProvenance,
     [property: JsonPropertyName("aliases")] List<string> Aliases,
+    [property: JsonPropertyName("detection")] bool Detection,
     [property: JsonPropertyName("symbol_extraction")] bool SymbolExtraction,
     [property: JsonPropertyName("reference_extraction")] bool ReferenceExtraction,
+    [property: JsonPropertyName("outline")] bool Outline,
     [property: JsonPropertyName("graph_queries")] bool GraphQueries,
     [property: JsonPropertyName("capability_gaps")] List<string> CapabilityGaps,
     [property: JsonPropertyName("unsupported_guidance")] List<LanguageUnsupportedGuidance> UnsupportedGuidance,
@@ -825,6 +828,7 @@ internal sealed record LanguageMapDiagnosticJsonResult(
 
 internal sealed record LanguagesJsonResult(
     [property: JsonPropertyName("languages")] List<LanguageEntryJsonResult> Languages,
+    [property: JsonPropertyName("language_capability_counts")] JsonObject LanguageCapabilityCounts,
     [property: JsonPropertyName("detection_policy")] LanguageDetectionPolicyJsonResult DetectionPolicy,
     [property: JsonPropertyName("language_map_diagnostics")] List<LanguageMapDiagnosticJsonResult> LanguageMapDiagnostics,
     [property: JsonPropertyName("reference_extraction_limits")] ReferenceExtractionSafetyLimits ReferenceExtractionLimits,
