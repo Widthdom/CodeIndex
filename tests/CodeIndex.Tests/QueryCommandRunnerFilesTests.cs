@@ -1953,6 +1953,7 @@ public partial class QueryCommandRunnerTests
 
     [Theory]
     [InlineData("maintenance_guidance.recommended_command", "Recommended maintenance command", "single maintenance action", "maintenance_guidance.wal_state")]
+    [InlineData("maintenance_guidance.fts_optimization", "FTS optimization guidance", "optimizing FTS indexes", "maintenance_guidance.fts_optimization.state")]
     [InlineData("reference_extraction_cap_hits.files", "Reference cap-hit file sample", "bounded", "reference_extraction_cap_hits.file_limit")]
     [InlineData("extractors.diagnostics", "Extractor diagnostics", "sanitized diagnostics", "extractors.diagnostic_count")]
     [InlineData("hooks.callback_budget_ms", "Hook callback budget", "maximum elapsed time", "hook_diagnostics")]
