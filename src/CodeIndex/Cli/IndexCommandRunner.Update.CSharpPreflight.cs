@@ -175,6 +175,13 @@ public static partial class IndexCommandRunner
             && writer.HasCSharpMemberReadTargetSymbolsInFileIds(
                 context.ScopedCleanupPlan.FileIds,
                 cancellationToken);
+        var changedCSharpPaths = state.CSharpPrepassTargets
+            .Select(target => target.IndexPath)
+            .ToHashSet(StringComparer.Ordinal);
+        var changedPathHadMemberReadTarget =
+            writer.HasCSharpMemberReadTargetSymbolsInPaths(
+                changedCSharpPaths,
+                cancellationToken);
         state.CSharpTargetAffected = state.CSharpPrepassTargets.Count > 0
             || transitionedPathWasCSharp
             || context.ScopedCleanupHadCSharp;
@@ -189,7 +196,8 @@ public static partial class IndexCommandRunner
         if (state.CSharpPrepassTargets.Count == 0
             && !persistedContractEvidence
             && !transitionedPathHadMemberReadTarget
-            && !scopedCleanupHadMemberReadTarget)
+            && !scopedCleanupHadMemberReadTarget
+            && !changedPathHadMemberReadTarget)
         {
             state.CSharpWorkspace =
                 new CSharpStaticInterfaceWorkspaceSymbols(
@@ -197,7 +205,8 @@ public static partial class IndexCommandRunner
                     transitionedPathHadContract);
         }
         else if (transitionedPathHadMemberReadTarget
-                 || scopedCleanupHadMemberReadTarget)
+                 || scopedCleanupHadMemberReadTarget
+                 || changedPathHadMemberReadTarget)
         {
             state.CSharpWorkspace =
                 new CSharpStaticInterfaceWorkspaceSymbols(
@@ -270,6 +279,8 @@ public static partial class IndexCommandRunner
                     state
                         .ExistingCSharpPathsNowUnsupportedOrNonCSharp?
                         .Contains(path) == true,
+                loadExistingSymbolsOnlyForPendingQualifiedMemberAccess:
+                    true,
                 parallelism: context.Options.Parallelism,
                 cancellationToken: context.CancellationToken);
         if (!CSharpStaticInterfacePrepass.TryValidateFileStatSnapshots(

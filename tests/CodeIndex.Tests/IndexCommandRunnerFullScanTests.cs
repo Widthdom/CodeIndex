@@ -4913,6 +4913,9 @@ public partial class IndexCommandRunnerTests
                     "--quiet",
                 ],
                 _jsonOptions));
+            Assert.Equal(1L, CountMemberReadReferences(dbPath, "Limit"));
+            Assert.Equal(1L, CountMemberReadReferences(dbPath, "Other"));
+            Assert.Equal(1L, CountMemberReadReferences(dbPath, "Property"));
 
             File.WriteAllText(
                 callerPath,

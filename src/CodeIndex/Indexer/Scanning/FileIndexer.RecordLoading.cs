@@ -116,6 +116,17 @@ public partial class FileIndexer
         string absolutePath,
         string relativePath,
         CancellationToken cancellationToken = default)
+        => LoadCSharpStaticInterfaceCandidateContentForPrepass(
+            absolutePath,
+            relativePath,
+            includeQualifiedMemberAccessCandidate: false,
+            cancellationToken);
+
+    internal string? LoadCSharpStaticInterfaceCandidateContentForPrepass(
+        string absolutePath,
+        string relativePath,
+        bool includeQualifiedMemberAccessCandidate,
+        CancellationToken cancellationToken = default)
     {
         var normalizedRelativePath = NormalizeIndexPath(relativePath);
         for (var attempt = 0; ; attempt++)
@@ -134,6 +145,7 @@ public partial class FileIndexer
                 normalizedRelativePath,
                 relativePath,
                 retryOnMutation: attempt == 0,
+                includeQualifiedMemberAccessCandidate,
                 cancellationToken);
             if (!requiresRetry)
                 return content;
