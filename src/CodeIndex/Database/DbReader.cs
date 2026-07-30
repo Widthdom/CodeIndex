@@ -752,7 +752,7 @@ public partial class DbReader : IDisposable
         cmd.Parameters[name].Value = value ?? DBNull.Value;
     }
 
-    private static (bool Newer, string? Reason) DetectNewerThanReaderContracts(SqliteConnection conn, int userVersion)
+    internal static (bool Newer, string? Reason) DetectNewerThanReaderContracts(SqliteConnection conn, int userVersion)
     {
         var newerContracts = new List<string>();
         // Numeric contract stamps. Each pair maps the persisted meta key to the binary's

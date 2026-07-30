@@ -181,6 +181,12 @@ public static partial class QueryCommandRunner
                 "read-only fallback or stale-snapshot risk fields identify when the preferred query-only connection path could not be used safely or may omit hot WAL content.",
                 "Inspect the nested policy and WAL diagnostics; avoid explicit immutable mode for a hot WAL database, or rerun after the writer checkpoints and closes."),
             new(
+                "maintenance_guidance",
+                "Database maintenance guidance",
+                "`fts_optimization` reports one shared `recommended`, `action`, `reason`, `threshold_writes`, `observed_writes`, and `state` decision used by status and optimize.",
+                "`state=stale` or `state=unavailable` suppresses an optimize recommendation because the persisted write counter or database-page snapshot is not trustworthy.",
+                "Wait for active indexing to finish and rerun `cdidx status --json`; run `cdidx optimize --dry-run --json` to inspect the same decision before mutation."),
+            new(
                 "unknown_extension_file_count",
                 "Unknown extension inventory",
                 "`0` means the last successful full scan found no non-empty unknown extensions; positive values summarize skipped files with extensions that no language recognized.",
