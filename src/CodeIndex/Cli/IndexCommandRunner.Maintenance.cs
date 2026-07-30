@@ -11,7 +11,7 @@ public static partial class IndexCommandRunner
     private static readonly string[] AcceptedBackfillFoldFlags =
     [
         "--db", "--json", "--dry-run", "--help",
-        "--no-checkpoint", "--show-paths",
+        "--checkpoint", "--no-checkpoint", "--show-paths",
     ];
     private static readonly (string Name, string[] Columns)[] OptimizeObjectDefinitions =
     [
@@ -564,6 +564,12 @@ public static partial class IndexCommandRunner
 
         try
         {
+            var normalizedDbPath = Path.GetFullPath(DbPathResolver.NormalizeDbPath(options.DbPath));
+            using var indexLock = options.DryRun
+                ? null
+                : IndexLock.Acquire(
+                    IndexLock.GetLockPath(normalizedDbPath),
+                    Path.GetDirectoryName(normalizedDbPath) ?? Environment.CurrentDirectory);
             using var db = new DbContext(
                 options.DryRun ? DbOpenIntent.QueryOnly : DbOpenIntent.Migration,
                 options.DbPath);
@@ -617,45 +623,89 @@ public static partial class IndexCommandRunner
             var symbolReferences = 0;
             var verified = false;
             var userVersionAfter = userVersionBefore;
+            var pendingRows = writer.CountBackfillFoldedColumns(rewriteAll);
+            if (!rewriteAll
+                && pendingRows.Symbols == 0
+                && pendingRows.SymbolReferences == 0
+                && !writer.AllFoldedColumnsBackfilled(requireCurrentFoldKeys: true))
+            {
+                // A current metadata stamp plus non-NULL folded values is not sufficient:
+                // verify the persisted values before declaring a no-op. If they drifted,
+                // repair every row under the same checkpoint protection as stale metadata.
+                // current metadata と非 NULL 値だけでは no-op と断定せず実値を検証する。
+                // drift があれば stale metadata と同様に checkpoint 保護下で全行を修復する。
+                rewriteAll = true;
+                pendingRows = writer.CountBackfillFoldedColumns(rewriteAll);
+            }
+            var graphRefreshPending = writer.IsFoldBackfillGraphRefreshPending();
+            var symbolExtractorVersionsCurrent = writer.SymbolExtractorVersionsMatchCurrent();
+            var mutationRequired = pendingRows.Symbols > 0
+                || pendingRows.SymbolReferences > 0
+                || !foldReadyBefore
+                || csharpSymbolNameContractUpgradeRequired
+                || graphRefreshPending
+                || !symbolExtractorVersionsCurrent;
+            var wasAlreadyComplete = foldReadyBefore
+                && !rewriteAll
+                && !csharpSymbolNameContractUpgradeRequired
+                && !graphRefreshPending
+                && symbolExtractorVersionsCurrent
+                && pendingRows.Symbols == 0
+                && pendingRows.SymbolReferences == 0;
+            var checkpointSkippedReason = options.DryRun
+                ? "dry_run"
+                : options.NoCheckpoint
+                ? "disabled_by_option"
+                : !mutationRequired && !options.Checkpoint
+                ? "already_complete"
+                : null;
+            var checkpointSkipped = checkpointSkippedReason != null;
 
             if (options.DryRun)
             {
-                (symbols, symbolReferences) = writer.CountBackfillFoldedColumns(rewriteAll);
+                (symbols, symbolReferences) = pendingRows;
             }
             else
             {
-                if (!options.NoCheckpoint)
+                backfillCancellation.Token.ThrowIfCancellationRequested();
+                if (!checkpointSkipped)
                     DbCommandRunner.CreateAutomaticCheckpoint(options.DbPath);
 
-                (symbols, symbolReferences) = writer.BackfillFoldedColumns(
-                    rewriteAll,
-                    backfillCancellation.Token);
-                // Row rewrites commit before the final FoldReady stamp so interrupted
-                // backfills can resume from the remaining rows.
-                // 行更新は FoldReady stamp より前に永続化し、中断後に残り行から再開できるようにする。
-                using var transaction = writer.BeginTransaction(backfillCancellation.Token, "backfill fold readiness stamp");
-                verified = writer.MarkFoldReady();
-                if (!verified)
+                if (mutationRequired)
                 {
-                    return WriteCommandError(
-                        options.Json,
-                        jsonOptions,
-                        "folded-name backfill verification failed: some rows still have NULL folded values",
-                        CommandExitCodes.DatabaseError,
-                        "Retry `cdidx backfill-fold`. If the DB still does not verify, rebuild it with `cdidx index <projectPath> --rebuild`.",
-                        CommandErrorCodes.DbError);
-                }
-                writer.MarkCSharpSymbolNameContractReady();
+                    (symbols, symbolReferences) = writer.BackfillFoldedColumns(
+                        rewriteAll,
+                        backfillCancellation.Token);
+                    // Row rewrites commit before the final FoldReady stamp so interrupted
+                    // backfills can resume from the remaining rows.
+                    // 行更新は FoldReady stamp より前に永続化し、中断後に残り行から再開できるようにする。
+                    using var transaction = writer.BeginTransaction(backfillCancellation.Token, "backfill fold readiness stamp");
+                    verified = writer.MarkFoldReady();
+                    if (!verified)
+                    {
+                        return WriteCommandError(
+                            options.Json,
+                            jsonOptions,
+                            "folded-name backfill verification failed: some rows still have NULL folded values",
+                            CommandExitCodes.DatabaseError,
+                            "Retry `cdidx backfill-fold`. If the DB still does not verify, rebuild it with `cdidx index <projectPath> --rebuild`.",
+                            CommandErrorCodes.DbError);
+                    }
+                    writer.MarkCSharpSymbolNameContractReady();
 
-                transaction.Commit();
-                userVersionAfter = db.GetUserVersion();
+                    transaction.Commit();
+                    userVersionAfter = db.GetUserVersion();
+                }
+                else
+                {
+                    verified = true;
+                }
             }
             var foldMetadataCurrentAfter = options.DryRun
                 ? foldMetadataCurrentBefore
                 : true;
             var foldReadyAfter = (userVersionAfter & DbContext.FoldReadyFlag) != 0
                 && foldMetadataCurrentAfter;
-            var wasAlreadyComplete = foldReadyBefore && !rewriteAll && symbols == 0 && symbolReferences == 0;
 
             if (options.Json)
             {
@@ -670,7 +720,9 @@ public static partial class IndexCommandRunner
                     verified,
                     userVersionBefore,
                     userVersionAfter,
-                    foldReadyAfter), jsonContext.BackfillFoldJsonResult));
+                    foldReadyAfter,
+                    checkpointSkipped,
+                    checkpointSkippedReason), jsonContext.BackfillFoldJsonResult));
             }
             else
             {
@@ -683,6 +735,13 @@ public static partial class IndexCommandRunner
                 if (rewriteAll)
                     CommandOutputWriter.WriteLine("  mode:               full folded-key refresh (fold metadata missing or mismatched)");
                 CommandOutputWriter.WriteLine($"  already complete:   {(wasAlreadyComplete ? "yes" : "no")}");
+                CommandOutputWriter.WriteLine(checkpointSkippedReason switch
+                {
+                    "dry_run" => "  checkpoint:         skipped (dry run)",
+                    "disabled_by_option" => "  checkpoint:         skipped (--no-checkpoint)",
+                    "already_complete" => "  checkpoint:         skipped (already complete)",
+                    _ => "  checkpoint:         created",
+                });
                 CommandOutputWriter.WriteLine($"  fold_ready:         {foldReadyBefore} -> {foldReadyAfter}");
                 if (!options.DryRun)
                 {
@@ -692,6 +751,21 @@ public static partial class IndexCommandRunner
             }
 
             return CommandExitCodes.Success;
+        }
+        catch (IndexLockConflictException ex)
+        {
+            var holderDescription = DescribeLockHolder(ex.Holder);
+            return MaintenanceDatabaseErrorWriter.Write(
+                options.Json,
+                jsonOptions,
+                MaintenanceDatabaseErrorClassifier.Create(
+                    "backfill-fold",
+                    options.DbPath,
+                    options.ShowPaths,
+                    MaintenanceDatabaseFailureKind.Locked,
+                    details: string.IsNullOrEmpty(holderDescription)
+                        ? null
+                        : [holderDescription]));
         }
         catch (OperationCanceledException)
         {
@@ -769,6 +843,7 @@ public static partial class IndexCommandRunner
         var dbPath = Path.Combine(".cdidx", "codeindex.db");
         var json = false;
         var dryRun = false;
+        var checkpoint = false;
         var noCheckpoint = false;
         var showPaths = false;
         string? parseError = null;
@@ -786,6 +861,9 @@ public static partial class IndexCommandRunner
                 case "--dry-run":
                     dryRun = true;
                     break;
+                case "--checkpoint":
+                    checkpoint = true;
+                    break;
                 case "--no-checkpoint":
                     noCheckpoint = true;
                     break;
@@ -793,7 +871,7 @@ public static partial class IndexCommandRunner
                     showPaths = true;
                     break;
                 case "--help" or "-h":
-                    return new BackfillFoldCommandOptions { ShowHelp = true, DbPath = dbPath, Json = json, DryRun = dryRun, NoCheckpoint = noCheckpoint, ShowPaths = showPaths };
+                    return new BackfillFoldCommandOptions { ShowHelp = true, DbPath = dbPath, Json = json, DryRun = dryRun, Checkpoint = checkpoint, NoCheckpoint = noCheckpoint, ShowPaths = showPaths };
                 default:
                     if (args[i].StartsWith("-", StringComparison.Ordinal))
                     {
@@ -807,11 +885,15 @@ public static partial class IndexCommandRunner
             }
         }
 
+        if (checkpoint && noCheckpoint)
+            parseError ??= "--checkpoint and --no-checkpoint cannot be used together";
+
         return new BackfillFoldCommandOptions
         {
             DbPath = dbPath,
             Json = json,
             DryRun = dryRun,
+            Checkpoint = checkpoint,
             NoCheckpoint = noCheckpoint,
             ShowPaths = showPaths,
             ParseError = parseError,
