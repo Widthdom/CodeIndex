@@ -12,7 +12,7 @@ public static partial class QueryCommandRunner
     private static void WriteLangHint(string? lang, DbReader reader)
     {
         if (lang == null) return;
-        var status = reader.GetStatus();
+        var status = reader.GetStatus(includeDatabaseSizeAttribution: false);
         if (status.Languages.Count > 0 && status.Languages.ContainsKey(lang))
             return;
 
@@ -51,7 +51,7 @@ public static partial class QueryCommandRunner
         if (SymbolExtractor.GetSupportedLanguages(reader.GetIndexedProjectRoot()).Contains(lang, StringComparer.Ordinal))
             return;
 
-        var status = reader.GetStatus();
+        var status = reader.GetStatus(includeDatabaseSizeAttribution: false);
         if (status.Languages.Count == 0 || !status.Languages.ContainsKey(lang))
             return;
 

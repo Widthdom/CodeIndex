@@ -747,6 +747,7 @@ public sealed class BackfillFoldCommandOptions
     public bool Json { get; init; }
     public bool DryRun { get; init; }
     public bool ShowPaths { get; init; }
+    public bool Checkpoint { get; init; }
     public bool NoCheckpoint { get; init; }
     public string? ParseError { get; init; }
 }

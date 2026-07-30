@@ -847,14 +847,129 @@ public class CdidxConfigFileTests
         {
             File.WriteAllText(Path.Combine(dir, ".cdidxrc.json"), "{ not-json");
 
-            var (exitCode, _, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
                 ["definitely-not-a-command"],
                 appVersion: "1.21.0",
                 configStartDirectory: dir));
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Empty(stdout);
+            Assert.Contains($"Error [{CommandErrorCodes.ConfigInvalid}]", stderr);
             Assert.Contains("Invalid JSON", stderr);
             Assert.Contains("CDIDX_DISABLE_CONFIG_FILE", stderr);
+            Assert.Contains("Usage:", stderr);
+        }
+        finally { TestProjectHelper.DeleteDirectory(dir); }
+    }
+
+    [Fact]
+    public void Run_StaticCommandsIgnoreMalformedSupportedConfigs_Issue4886()
+    {
+        var root = CreateTempDir();
+        try
+        {
+            var configRelativePaths = new[]
+            {
+                CdidxConfigFile.ProjectConfigRelativePath,
+                CdidxConfigFile.FileName,
+            };
+            var commandCases = new (string Name, string[] Args)[]
+            {
+                ("license", ["license", "--json"]),
+                ("version_with_global_flag", ["--quiet", "--version", "--json"]),
+                ("help", ["help", "status"]),
+                ("subcommand_help", ["index", "--help"]),
+                ("validate_config_help", ["validate-config", "--help"]),
+                ("config_show_help", ["config", "show", "--help"]),
+                ("completions", ["completions", "bash"]),
+            };
+
+            for (var configIndex = 0; configIndex < configRelativePaths.Length; configIndex++)
+            {
+                var project = Path.Combine(root, $"project-{configIndex}");
+                Directory.CreateDirectory(project);
+                var configPath = Path.Combine(project, configRelativePaths[configIndex]);
+                Directory.CreateDirectory(Path.GetDirectoryName(configPath)!);
+                File.WriteAllText(configPath, "{ not-json");
+
+                foreach (var commandCase in commandCases)
+                {
+                    var result = CaptureConsole(() => ProgramRunner.Run(
+                        commandCase.Args,
+                        appVersion: "1.40.3",
+                        configStartDirectory: project));
+
+                    Assert.True(
+                        result.ExitCode == CommandExitCodes.Success,
+                        $"{commandCase.Name} was blocked by {configRelativePaths[configIndex]}: {result.Stderr}");
+                    Assert.DoesNotContain("Invalid JSON", result.Stdout, StringComparison.Ordinal);
+                    Assert.DoesNotContain("Invalid JSON", result.Stderr, StringComparison.Ordinal);
+                }
+            }
+        }
+        finally { TestProjectHelper.DeleteDirectory(root); }
+    }
+
+    [Fact]
+    public void Run_ConfigDependentCommandsReturnTypedJsonForMalformedConfig_Issue4886()
+    {
+        var dir = CreateTempDir();
+        try
+        {
+            var configPath = Path.Combine(dir, CdidxConfigFile.ProjectConfigRelativePath);
+            Directory.CreateDirectory(Path.GetDirectoryName(configPath)!);
+            File.WriteAllText(configPath, "{ not-json");
+
+            var commandCases = new (string Command, string[] Args)[]
+            {
+                ("index", ["index", dir, "--json"]),
+                ("search", ["search", "needle", "--json"]),
+                ("search", ["search", "needle", "--format", "json"]),
+                ("config", ["config", "unknown", "--json"]),
+            };
+
+            foreach (var commandCase in commandCases)
+            {
+                var result = CaptureConsole(() => ProgramRunner.Run(
+                    commandCase.Args,
+                    appVersion: "1.40.3",
+                    configStartDirectory: dir));
+
+                Assert.Equal(CommandExitCodes.UsageError, result.ExitCode);
+                Assert.Empty(result.Stderr);
+                using var document = JsonDocument.Parse(result.Stdout);
+                var payload = document.RootElement;
+                Assert.Equal("1", payload.GetProperty("api_version").GetString());
+                Assert.Equal("error", payload.GetProperty("status").GetString());
+                Assert.Equal(CommandErrorCodes.ConfigInvalid, payload.GetProperty("error_code").GetString());
+                Assert.Equal("configuration", payload.GetProperty("category").GetString());
+                Assert.Equal(commandCase.Command, payload.GetProperty("command").GetString());
+                Assert.Equal(CommandExitCodes.UsageError, payload.GetProperty("exit_code").GetInt32());
+                Assert.Contains("Invalid JSON", payload.GetProperty("message").GetString(), StringComparison.Ordinal);
+                Assert.Contains(
+                    CdidxConfigFile.DisableEnvVar,
+                    payload.GetProperty("hint").GetString(),
+                    StringComparison.Ordinal);
+                Assert.False(string.IsNullOrWhiteSpace(payload.GetProperty("usage").GetString()));
+            }
+
+            var optionValueResult = CaptureConsole(() => ProgramRunner.Run(
+                ["search", "--query", "--json"],
+                appVersion: "1.40.3",
+                configStartDirectory: dir));
+
+            Assert.Equal(CommandExitCodes.UsageError, optionValueResult.ExitCode);
+            Assert.Empty(optionValueResult.Stdout);
+            Assert.Contains($"Error [{CommandErrorCodes.ConfigInvalid}]", optionValueResult.Stderr);
+
+            var globalOptionValueResult = CaptureConsole(() => ProgramRunner.Run(
+                ["--metrics", "--json", "search", "needle"],
+                appVersion: "1.40.3",
+                configStartDirectory: dir));
+
+            Assert.Equal(CommandExitCodes.UsageError, globalOptionValueResult.ExitCode);
+            Assert.Empty(globalOptionValueResult.Stdout);
+            Assert.Contains($"Error [{CommandErrorCodes.ConfigInvalid}]", globalOptionValueResult.Stderr);
         }
         finally { TestProjectHelper.DeleteDirectory(dir); }
     }
@@ -1059,6 +1174,105 @@ public sealed class CdidxConfigProcessStateTests
             using var document = JsonDocument.Parse(stdout);
             Assert.Equal("error", document.RootElement.GetProperty("status").GetString());
             Assert.Contains("Invalid JSON", document.RootElement.GetProperty("message").GetString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            Environment.CurrentDirectory = previous;
+            TestProjectHelper.DeleteDirectory(dir);
+        }
+    }
+
+    [Fact]
+    public void Run_SelfManagedCommandsApplyValidConfigBeforeDispatch_Issue4886()
+    {
+        var dir = TestProjectHelper.CreateTempProject("cdidx_config_self_managed_4886");
+        var previous = Environment.CurrentDirectory;
+        var sourceEnvName = CdidxConfigFile.ConfigSourceEnvironmentVariablePrefix + MetricsSink.EnvVarName;
+        using var env = EnvironmentVariableScope.Capture(
+            MetricsSink.EnvVarName,
+            sourceEnvName,
+            CdidxConfigFile.DisableEnvVar);
+        env.Set(MetricsSink.EnvVarName, null);
+        env.Set(sourceEnvName, null);
+        env.Set(CdidxConfigFile.DisableEnvVar, null);
+        try
+        {
+            var metricsPath = Path.Combine(dir, "metrics.jsonl");
+            File.WriteAllText(
+                Path.Combine(dir, CdidxConfigFile.FileName),
+                """{ "metrics_path": "./metrics.jsonl" }""");
+            Environment.CurrentDirectory = dir;
+
+            var validateResult = ConsoleCapture.Capture(() => ProgramRunner.Run(
+                ["validate-config", "--json"],
+                _jsonOptions,
+                appVersion: "test"));
+            var showResult = ConsoleCapture.Capture(() => ProgramRunner.Run(
+                ["config", "show", "--json"],
+                _jsonOptions,
+                appVersion: "test"));
+
+            Assert.Equal(CommandExitCodes.Success, validateResult.ExitCode);
+            Assert.Equal(CommandExitCodes.Success, showResult.ExitCode);
+            Assert.Empty(validateResult.Stderr);
+            Assert.Empty(showResult.Stderr);
+            var metrics = File.ReadAllLines(metricsPath);
+            Assert.Contains(metrics, line => line.Contains("\"tool\":\"validate-config\"", StringComparison.Ordinal));
+            Assert.Contains(metrics, line => line.Contains("\"tool\":\"config\"", StringComparison.Ordinal));
+
+            var metricsCountBeforeHelp = metrics.Length;
+            var validateHelpResult = ConsoleCapture.Capture(() => ProgramRunner.Run(
+                ["validate-config", "--help"],
+                _jsonOptions,
+                appVersion: "test"));
+            var showHelpResult = ConsoleCapture.Capture(() => ProgramRunner.Run(
+                ["config", "show", "--help"],
+                _jsonOptions,
+                appVersion: "test"));
+
+            Assert.Equal(CommandExitCodes.Success, validateHelpResult.ExitCode);
+            Assert.Equal(CommandExitCodes.Success, showHelpResult.ExitCode);
+            Assert.Equal(metricsCountBeforeHelp, File.ReadAllLines(metricsPath).Length);
+        }
+        finally
+        {
+            Environment.CurrentDirectory = previous;
+            TestProjectHelper.DeleteDirectory(dir);
+        }
+    }
+
+    [Fact]
+    public void Run_MalformedConfigRoutingHonorsNestedGlobalFlagsAndCommandIdentity_Issue4886()
+    {
+        var dir = TestProjectHelper.CreateTempProject("cdidx_config_routing_4886");
+        var previous = Environment.CurrentDirectory;
+        using var env = EnvironmentVariableScope.Capture(CdidxConfigFile.DisableEnvVar);
+        env.Set(CdidxConfigFile.DisableEnvVar, null);
+        try
+        {
+            File.WriteAllText(Path.Combine(dir, CdidxConfigFile.FileName), "{ invalid json");
+            Directory.CreateDirectory(Path.Combine(dir, "search"));
+            Environment.CurrentDirectory = dir;
+
+            var showResult = ConsoleCapture.Capture(() => ProgramRunner.Run(
+                ["config", "--quiet", "show", "--json"],
+                _jsonOptions,
+                appVersion: "test"));
+            var searchResult = ConsoleCapture.Capture(() => ProgramRunner.Run(
+                ["search", "needle", "--json"],
+                _jsonOptions,
+                appVersion: "test"));
+
+            Assert.Equal(CommandExitCodes.Success, showResult.ExitCode);
+            Assert.Empty(showResult.Stderr);
+            using (var showDocument = JsonDocument.Parse(showResult.Stdout))
+                Assert.Equal("invalid", showDocument.RootElement.GetProperty("config_file").GetProperty("status").GetString());
+
+            Assert.Equal(CommandExitCodes.UsageError, searchResult.ExitCode);
+            Assert.Empty(searchResult.Stderr);
+            using var searchDocument = JsonDocument.Parse(searchResult.Stdout);
+            Assert.Equal("search", searchDocument.RootElement.GetProperty("command").GetString());
+            Assert.StartsWith("cdidx search ", searchDocument.RootElement.GetProperty("usage").GetString(), StringComparison.Ordinal);
         }
         finally
         {

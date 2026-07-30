@@ -239,7 +239,7 @@ public partial class McpServer
 
         return WithDbReader(id, args, reader =>
         {
-            var status = reader.GetStatus();
+            var status = reader.GetStatus(includeDatabaseSizeAttribution: false);
             var indexedLanguages = indexedOnly
                 ? new HashSet<string>(status.Languages.Keys, StringComparer.Ordinal)
                 : null;

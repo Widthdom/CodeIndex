@@ -14,7 +14,7 @@ public static partial class QueryCommandRunner
 
     private static string BuildCSharpCanonicalNameRepairCommand(DbReader reader, QueryCommandOptions options)
     {
-        var status = reader.GetStatus();
+        var status = reader.GetStatus(includeDatabaseSizeAttribution: false);
         WorkspaceMetadataEnricher.Enrich(status, options.DbPath, options.DbPathExplicit);
         return BuildCSharpCanonicalNameRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit);
     }
@@ -24,7 +24,7 @@ public static partial class QueryCommandRunner
 
     private static string BuildSqlGraphContractRepairCommand(DbReader reader, QueryCommandOptions options)
     {
-        var status = reader.GetStatus();
+        var status = reader.GetStatus(includeDatabaseSizeAttribution: false);
         WorkspaceMetadataEnricher.Enrich(status, options.DbPath, options.DbPathExplicit);
         return BuildSqlGraphContractRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit);
     }

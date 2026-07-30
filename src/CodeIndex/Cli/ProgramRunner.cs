@@ -51,6 +51,8 @@ internal static partial class ProgramRunner
     private static readonly TimeSpan McpHttpDisposeTimeout = TimeSpan.FromSeconds(5);
     private static readonly HashSet<string> NonLogGlobalOptionNames =
         CliFlagSchema.GetTopLevelGlobalOptionNames(includeLogOptions: false);
+    private static readonly HashSet<string> TopLevelGlobalOptionNames =
+        CliFlagSchema.GetTopLevelGlobalOptionNames(includeLogOptions: true);
     private static readonly HashSet<string> TopLevelValueOptionNames =
         CliFlagSchema.GetTopLevelValueOptionNames();
     private static readonly AsyncLocal<TimeProvider?> ScopedTimeProviderForTesting = new();
@@ -149,19 +151,35 @@ internal static partial class ProgramRunner
 
         using var recoveryInvocationScope = ExcerptRecoveryCommandFormatter.UseCurrentProcessInvocation();
         appVersion ??= ConsoleUi.LoadVersion();
+        jsonOptions ??= CreateDefaultJsonOptions();
+        EnsureRedirectedStdoutUsesUtf8();
 
-        // Load project-local `.cdidxrc.json` before anything else reads env vars so log
-        // location, debug mode, and MCP gates honor the file (#1571). Hard-fail on
-        // validation errors so silent typos cannot quietly change behavior.
-        // 環境変数を読む処理より先に `.cdidxrc.json` を読み込み、ログ位置 / debug / MCP ゲート
-        // などが config を反映できるようにする (#1571)。スキーマ違反は黙って無視せず exit する。
-        var configResult = CdidxConfigFile.Load(configStartDirectory ?? Environment.CurrentDirectory);
-        if (configResult.Failed && !IsConfigShowCommand(args) && !IsValidateConfigCommand(args))
+        // Resolve the command's config dependency before discovery. Static metadata
+        // commands never parse project config, while validate-config and config show
+        // report malformed files through their own contracts. Commands that can consume
+        // config still load before environment consumers so valid log/debug/MCP settings apply.
+        // discovery 前に command の config 依存性を解決する。static metadata command は
+        // project config を parse せず、validate-config / config show は不正な file を固有の
+        // 契約で報告する。config を利用できる command は environment consumer より前に
+        // load し、有効な log / debug / MCP 設定を従来どおり反映する。
+        var configDependency = ResolveProjectConfigDependency(args);
+        var configResult = configDependency == ProjectConfigDependency.Independent
+            ? new CdidxConfigFile.LoadResult(ConfigPath: null, Error: null)
+            : CdidxConfigFile.Load(configStartDirectory ?? Environment.CurrentDirectory);
+        if (configDependency == ProjectConfigDependency.Required && configResult.Failed)
         {
-            return CommandErrorWriter.Write(
+            var configCommand = ResolveProjectConfigCommandName(args);
+            var usage = ConsoleUi.GetUsageLine(configCommand) ?? "cdidx <command> [options]";
+            return CommandErrorWriter.WriteJsonOrHuman(
+                RequestsProjectConfigJsonError(args),
+                jsonOptions,
                 StripErrorPrefix(configResult.Error ?? "configuration file validation failed."),
                 CommandExitCodes.UsageError,
-                $"fix or remove `{CdidxConfigFile.FileName}`, or set `{CdidxConfigFile.DisableEnvVar}=1` to bypass it.");
+                $"fix or remove the discovered config file, or set `{CdidxConfigFile.DisableEnvVar}=1` to bypass it.",
+                usage,
+                CommandErrorCodes.ConfigInvalid,
+                "configuration",
+                configCommand);
         }
 
         using var configEnvironment = CdidxEnvironment.Push(configResult.Settings, configResult.Sources);
@@ -176,8 +194,6 @@ internal static partial class ProgramRunner
         using var globalToolLog = GlobalToolLog.TryStart(args, appVersion);
         if (configResult.Loaded)
             GlobalToolLog.Info($"config_file_loaded path={configResult.ConfigPath}");
-        jsonOptions ??= CreateDefaultJsonOptions();
-        EnsureRedirectedStdoutUsesUtf8();
 
         var quiet = TryConsumeQuietFlag(ref args) || IsTruthyEnvironmentVariable(QuietEnvironmentVariable);
         using var quietScope = quiet ? QuietStderrScope.Start() : null;
@@ -288,34 +304,63 @@ internal static partial class ProgramRunner
         }
     }
 
-    private static bool IsConfigShowCommand(IReadOnlyList<string> args)
+    private enum ProjectConfigDependency
     {
-        var commandIndex = 0;
-        while (commandIndex < args.Count && args[commandIndex].StartsWith("--", StringComparison.Ordinal))
-        {
-            var option = args[commandIndex];
-            var optionName = option.Split('=', 2)[0];
-            commandIndex++;
-            if (!option.Contains('=', StringComparison.Ordinal)
-                && TopLevelValueOptionNames.Contains(optionName)
-                && commandIndex < args.Count)
-            {
-                commandIndex++;
-            }
-        }
-
-        return commandIndex + 1 < args.Count
-               && string.Equals(args[commandIndex], "config", StringComparison.Ordinal)
-               && string.Equals(args[commandIndex + 1], "show", StringComparison.Ordinal);
+        Required,
+        Independent,
+        SelfManaged,
     }
 
-    private static bool IsValidateConfigCommand(IReadOnlyList<string> args)
+    private static ProjectConfigDependency ResolveProjectConfigDependency(IReadOnlyList<string> args)
     {
-        var commandIndex = 0;
-        while (commandIndex < args.Count && args[commandIndex].StartsWith("--", StringComparison.Ordinal))
+        var commandIndex = FindProjectConfigCommandIndex(args);
+        if (commandIndex >= args.Count)
+            return ProjectConfigDependency.Independent;
+
+        var rawCommand = args[commandIndex];
+        if (rawCommand is "--help" or "-h" or "--help-all" or "--help-extended"
+            or "help-all" or "help-extended" or "--help-flags"
+            or "--version" or "-V" or "--license" or "--completions")
+        {
+            return ProjectConfigDependency.Independent;
+        }
+
+        var command = CliCommandCatalog.NormalizePublicCommandName(rawCommand);
+        if (commandIndex + 1 < args.Count
+            && ArgHelper.WantsHelp(args.Skip(commandIndex + 1).ToArray()))
+        {
+            return ProjectConfigDependency.Independent;
+        }
+        if (CliCommandMetadata.ProjectConfigIndependentCommands.Contains(command))
+            return ProjectConfigDependency.Independent;
+        if (CliCommandMetadata.ProjectConfigSelfManagedCommands.Contains(command))
+            return ProjectConfigDependency.SelfManaged;
+        var nestedCommandIndex = SkipProjectConfigGlobalOptions(args, commandIndex + 1);
+        if (command == "config"
+            && nestedCommandIndex < args.Count
+            && string.Equals(args[nestedCommandIndex], "show", StringComparison.Ordinal))
+        {
+            return ProjectConfigDependency.SelfManaged;
+        }
+
+        return ProjectConfigDependency.Required;
+    }
+
+    private static int FindProjectConfigCommandIndex(IReadOnlyList<string> args)
+    {
+        return SkipProjectConfigGlobalOptions(args, startIndex: 0);
+    }
+
+    private static int SkipProjectConfigGlobalOptions(IReadOnlyList<string> args, int startIndex)
+    {
+        var commandIndex = startIndex;
+        while (commandIndex < args.Count)
         {
             var option = args[commandIndex];
             var optionName = option.Split('=', 2)[0];
+            if (!TopLevelGlobalOptionNames.Contains(optionName))
+                break;
+
             commandIndex++;
             if (!option.Contains('=', StringComparison.Ordinal)
                 && TopLevelValueOptionNames.Contains(optionName)
@@ -325,8 +370,63 @@ internal static partial class ProgramRunner
             }
         }
 
-        return commandIndex < args.Count
-               && string.Equals(args[commandIndex], "validate-config", StringComparison.Ordinal);
+        return commandIndex;
+    }
+
+    private static bool RequestsProjectConfigJsonError(string[] args)
+    {
+        // Leading global options can legally take values that look like command JSON
+        // flags (for example `--metrics --json`). Consume those pairs before detecting
+        // the selected command's output contract.
+        // 先頭の global option は command の JSON flag に見える値（例:
+        // `--metrics --json`）を正当な値として取れるため、command の output 契約を
+        // 判定する前に option/value の組を消費する。
+        for (var i = FindProjectConfigCommandIndex(args); i < args.Length; i++)
+        {
+            var arg = args[i];
+            if (arg == "--")
+                break;
+            if (GetQueryCommandTokenRole(args, i) == QueryCommandTokenRole.CommandOptionValue)
+                continue;
+
+            if (arg == "--json"
+                || arg.StartsWith("--json=", StringComparison.Ordinal)
+                || arg is "--json-summary" or "--results-only" or "--compact"
+                || arg == JsonEnvelopeWrapper.EnvelopeFlag)
+            {
+                return true;
+            }
+
+            if (arg.StartsWith("--format=", StringComparison.Ordinal)
+                && CliOutputFormatCapabilities.TryGet(arg["--format=".Length..], out var inlineCapability)
+                && inlineCapability.IsJsonContract)
+            {
+                return true;
+            }
+
+            if (arg == "--format"
+                && i + 1 < args.Length
+                && CliOutputFormatCapabilities.TryGet(args[i + 1], out var separatedCapability)
+                && separatedCapability.IsJsonContract)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static string ResolveProjectConfigCommandName(IReadOnlyList<string> args)
+    {
+        var commandIndex = FindProjectConfigCommandIndex(args);
+        if (commandIndex >= args.Count)
+            return "unknown";
+
+        var rawCommand = args[commandIndex];
+        if (CliCommandCatalog.TryResolvePublicCommand(rawCommand, out var command))
+            return command;
+
+        return IsProjectPathArg(rawCommand) ? "index" : "unknown";
     }
 
 

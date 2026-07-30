@@ -129,9 +129,14 @@ public partial class DbWriter
     public bool AllFoldedColumnValuesMatchCurrentFold()
     {
         var markdownSymbolIdentityFolds = BuildMarkdownSymbolIdentityFoldMap();
+        var hasDisplayNameFolded =
+            DbSchemaCache.LoadColumns(_conn, "symbols").Contains("display_name_folded");
+        var displayNameFoldedProjection = hasDisplayNameFolded
+            ? "s.display_name_folded"
+            : "NULL";
         var symbols = RentCommand(
-            """
-            SELECT s.id, s.name, s.name_folded, s.display_name_folded,
+            $"""
+            SELECT s.id, s.name, s.name_folded, {displayNameFoldedProjection},
                    f.lang, s.kind, s.signature
             FROM symbols s
             JOIN files f ON f.id = s.file_id
@@ -429,6 +434,12 @@ public partial class DbWriter
             ReleaseCommand(symbols);
         }
     }
+
+    internal bool IsFoldBackfillGraphRefreshPending()
+        => string.Equals(
+            GetMetaString(FoldBackfillGraphRefreshPendingMetaKey),
+            "1",
+            StringComparison.Ordinal);
 
     private static int ToInt32Count(object? value)
     {

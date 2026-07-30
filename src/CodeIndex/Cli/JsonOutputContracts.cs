@@ -23,6 +23,9 @@ internal sealed record BackfillFoldJsonResult(
     [property: JsonPropertyName("user_version_before")] int UserVersionBefore,
     [property: JsonPropertyName("user_version_after")] int UserVersionAfter,
     [property: JsonPropertyName("fold_ready")] bool FoldReady,
+    [property: JsonPropertyName("checkpoint_skipped")] bool CheckpointSkipped,
+    [property: JsonPropertyName("checkpoint_skipped_reason")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? CheckpointSkippedReason,
     [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion) : IVersionedJsonResult;
 
 internal sealed record OptimizeFtsJsonResult(
@@ -1330,6 +1333,8 @@ internal sealed record ValidateConfigJsonResult(
 [JsonSerializable(typeof(LicenseTermsJsonResult))]
 [JsonSerializable(typeof(LicenseTrademarkJsonResult))]
 [JsonSerializable(typeof(StatusResult))]
+[JsonSerializable(typeof(StatusDatabaseSizeAttribution))]
+[JsonSerializable(typeof(StatusDatabaseObjectSize))]
 [JsonSerializable(typeof(StatusLogPathJsonResult))]
 [JsonSerializable(typeof(StatusHeadFreshness))]
 [JsonSerializable(typeof(StatusSqliteConnectionPolicy))]

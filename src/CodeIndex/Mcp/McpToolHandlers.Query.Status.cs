@@ -40,7 +40,11 @@ public partial class McpServer
         var response = WithDbReader(id, args, reader =>
         {
             var requestToken = _currentRequestToken.Value;
-            var status = reader.GetStatus();
+            var includeDatabaseSizeAttribution =
+                format == "full"
+                && (projectionFields == null
+                    || projectionFields.Contains("database_size_attribution", StringComparer.Ordinal));
+            var status = reader.GetStatus(includeDatabaseSizeAttribution);
             QueryCommandRunner.ApplyStatusSymbolKindLimits(status, reader.GetSymbolKindCounts());
             WorkspaceMetadataEnricher.Enrich(status, _dbPath, _dbPathExplicit, requestToken);
             status.DbFileMode = DbContext.GetUnixFileModeString(
