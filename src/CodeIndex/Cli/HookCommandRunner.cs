@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -15,6 +16,13 @@ public static class HookCommandRunner
     private const string ChainedHookName = "pre-commit.cdidx-chain";
     private const string BeginMarker = "# BEGIN CDIDX MANAGED PRE-COMMIT";
     private const string EndMarker = "# END CDIDX MANAGED PRE-COMMIT";
+    private const string ExecutableManifestPrefix = "# CDIDX EXECUTABLE MANIFEST ";
+    private const int MaxExecutableManifestChars = 32 * 1024;
+    private const int MaxExecutableArgumentChars = 8 * 1024;
+    private const int UnixExecuteAccess = 1;
+    private const int UnixReadAccess = 4;
+    private const int UnixFileTypeMask = 0xF000;
+    private const int UnixRegularFileType = 0x8000;
     private static readonly byte[] BeginMarkerBytes = Encoding.ASCII.GetBytes(BeginMarker);
     private static readonly byte[] EndMarkerBytes = Encoding.ASCII.GetBytes(EndMarker);
     private static readonly byte[] HookPreambleBytes = Encoding.ASCII.GetBytes("#!/bin/sh");
@@ -22,9 +30,11 @@ public static class HookCommandRunner
     internal const int MaxHookMarkerBytes = 64 * 1024;
     internal static Action<string>? DeleteFileForTesting { get; set; }
     internal static Action<string, string, string?>? ReplaceFileForTesting { get; set; }
+    internal static Func<string, HookExecutableSelection>? ExecutableSelectionForTesting { get; set; }
 
-    public static int Run(string[] args, JsonSerializerOptions jsonOptions)
+    public static int Run(string[] args, JsonSerializerOptions jsonOptions, string? appVersion = null)
     {
+        appVersion ??= ConsoleUi.LoadVersion();
         var options = ParseArgs(args);
         var wantsJson = args.Any(static arg => arg == "--json" || arg.StartsWith("--json=", StringComparison.Ordinal));
         if (wantsJson && !options.Json)
@@ -110,9 +120,9 @@ public static class HookCommandRunner
 
             return options.Command switch
             {
-                "install" => Install(options, jsonOptions, projectPath, gitDir, hooksDir, hookPath, chainedHookPath),
+                "install" => Install(options, jsonOptions, appVersion, projectPath, gitDir, hooksDir, hookPath, chainedHookPath),
                 "uninstall" => Uninstall(options, jsonOptions, projectPath, gitDir, hooksDir, hookPath, chainedHookPath),
-                "status" => Status(options, jsonOptions, projectPath, hookPath, chainedHookPath),
+                "status" => Status(options, jsonOptions, appVersion, projectPath, hookPath, chainedHookPath),
                 _ => UnknownCommand(options, jsonOptions, projectPath)
             };
         }
@@ -183,25 +193,92 @@ public static class HookCommandRunner
         return new HookCommandOptions(command, projectPath, json, force, dryRun, showHelp, parseError);
     }
 
-    private static int Install(HookCommandOptions options, JsonSerializerOptions jsonOptions, string projectPath, string gitDir, string hooksDir, string hookPath, string chainedHookPath)
+    private static int Install(
+        HookCommandOptions options,
+        JsonSerializerOptions jsonOptions,
+        string appVersion,
+        string projectPath,
+        string gitDir,
+        string hooksDir,
+        string hookPath,
+        string chainedHookPath)
     {
+        if (!TryResolveCurrentExecutable(appVersion, out var executableSelection, out var resolutionFailure))
+        {
+            var message = $"could not pin the current cdidx executable ({resolutionFailure})";
+            var unresolvedExecutable = HookExecutableJsonResult.Unresolved(resolutionFailure);
+            if (options.DryRun)
+            {
+                var preflightPlan = BuildInstallPreflightFailurePlan(
+                    hookPath,
+                    chainedHookPath,
+                    message);
+                return WriteDryRunResult(
+                    options,
+                    jsonOptions,
+                    projectPath,
+                    hookPath,
+                    chainedHookPath,
+                    preflightPlan,
+                    unresolvedExecutable);
+            }
+
+            return WriteResult(
+                options.Json,
+                jsonOptions,
+                "error",
+                message,
+                projectPath,
+                hookPath,
+                null,
+                CommandExitCodes.InstallError,
+                executable: unresolvedExecutable);
+        }
+
+        var executable = InspectExecutable(executableSelection, executableSelection);
         var warnings = new List<HookCommandWarningJsonResult>();
-        var hookScript = BuildHookScript(chainedHookPath, projectPath);
+        if (!TryBuildHookScript(
+                chainedHookPath,
+                projectPath,
+                executableSelection,
+                out var hookScript))
+        {
+            return WriteGeneratedHookTooLargeResult(
+                options,
+                jsonOptions,
+                projectPath,
+                hookPath,
+                chainedHookPath,
+                executable);
+        }
         var plan = BuildInstallPlan(options, hookPath, chainedHookPath, hookScript);
         if (options.DryRun)
-            return WriteDryRunResult(options, jsonOptions, projectPath, hookPath, chainedHookPath, plan, hookScript);
+            return WriteDryRunResult(options, jsonOptions, projectPath, hookPath, chainedHookPath, plan, executable, hookScript);
 
         if (plan.Blocked)
-            return WriteBlockedPlanResult(options, jsonOptions, projectPath, hookPath, chainedHookPath, plan);
+            return WriteBlockedPlanResult(options, jsonOptions, projectPath, hookPath, chainedHookPath, plan, executable);
 
         Directory.CreateDirectory(LongPath.EnsureWindowsPrefix(hooksDir));
         if (!TryResolveHookWritePaths(gitDir, out hooksDir, out hookPath, out chainedHookPath))
             return WriteResult(options.Json, jsonOptions, "error", "unsafe Git hook file path", projectPath, null, null, CommandExitCodes.InstallError);
 
-        hookScript = BuildHookScript(chainedHookPath, projectPath);
+        if (!TryBuildHookScript(
+                chainedHookPath,
+                projectPath,
+                executableSelection,
+                out hookScript))
+        {
+            return WriteGeneratedHookTooLargeResult(
+                options,
+                jsonOptions,
+                projectPath,
+                hookPath,
+                chainedHookPath,
+                executable);
+        }
         plan = BuildInstallPlan(options, hookPath, chainedHookPath, hookScript);
         if (plan.Blocked)
-            return WriteBlockedPlanResult(options, jsonOptions, projectPath, hookPath, chainedHookPath, plan);
+            return WriteBlockedPlanResult(options, jsonOptions, projectPath, hookPath, chainedHookPath, plan, executable);
 
         if (plan.PlannedAction == "none")
         {
@@ -213,7 +290,8 @@ public static class HookCommandRunner
                 projectPath,
                 hookPath,
                 plan.ChainedHookState == "present" ? chainedHookPath : null,
-                CommandExitCodes.Success);
+                CommandExitCodes.Success,
+                executable: executable);
         }
 
         if (plan.PlannedAction == "chain_existing")
@@ -221,23 +299,55 @@ public static class HookCommandRunner
             try
             {
                 if (!TryResolveHookWritePaths(gitDir, out hooksDir, out hookPath, out chainedHookPath))
-                    return WriteResult(options.Json, jsonOptions, "error", "Git hook file path became unsafe before write", projectPath, null, null, CommandExitCodes.InstallError);
-                ReplaceCustomHookWithManagedHook(hooksDir, hookPath, chainedHookPath, projectPath, warnings);
+                    return WriteResult(options.Json, jsonOptions, "error", "Git hook file path became unsafe before write", projectPath, null, null, CommandExitCodes.InstallError, executable: executable);
+                if (!TryBuildHookScript(
+                        chainedHookPath,
+                        projectPath,
+                        executableSelection,
+                        out hookScript))
+                {
+                    return WriteGeneratedHookTooLargeResult(
+                        options,
+                        jsonOptions,
+                        projectPath,
+                        hookPath,
+                        chainedHookPath,
+                        executable);
+                }
+                ReplaceCustomHookWithManagedHook(
+                    hooksDir,
+                    hookPath,
+                    chainedHookPath,
+                    hookScript,
+                    warnings);
             }
             catch (Exception ex) when (IsHookFileOperationException(ex))
             {
                 RecordHookWarning(warnings, "chained_hook_backup", chainedHookPath, "failed to back up existing hook", ex);
                 var message = $"failed to install cdidx pre-commit hook ({CommandErrorWriter.FormatSanitizedException(ex)})";
-                return WriteResult(options.Json, jsonOptions, "error", message, projectPath, hookPath, chainedHookPath, CommandExitCodes.InstallError, warnings);
+                return WriteResult(options.Json, jsonOptions, "error", message, projectPath, hookPath, chainedHookPath, CommandExitCodes.InstallError, warnings, executable: executable);
             }
 
-            return WriteResult(options.Json, jsonOptions, "updated", "cdidx pre-commit hook updated", projectPath, hookPath, chainedHookPath, CommandExitCodes.Success, warnings);
+            return WriteResult(options.Json, jsonOptions, "updated", "cdidx pre-commit hook updated", projectPath, hookPath, chainedHookPath, CommandExitCodes.Success, warnings, executable: executable);
         }
 
         if (!TryResolveHookWritePaths(gitDir, out hooksDir, out hookPath, out chainedHookPath))
-            return WriteResult(options.Json, jsonOptions, "error", "Git hook file path became unsafe before write", projectPath, null, null, CommandExitCodes.InstallError);
+            return WriteResult(options.Json, jsonOptions, "error", "Git hook file path became unsafe before write", projectPath, null, null, CommandExitCodes.InstallError, executable: executable);
 
-        hookScript = BuildHookScript(chainedHookPath, projectPath);
+        if (!TryBuildHookScript(
+                chainedHookPath,
+                projectPath,
+                executableSelection,
+                out hookScript))
+        {
+            return WriteGeneratedHookTooLargeResult(
+                options,
+                jsonOptions,
+                projectPath,
+                hookPath,
+                chainedHookPath,
+                executable);
+        }
         var status = plan.PlannedAction == "create" ? "installed" : "updated";
         var resultMessage = status == "updated"
             ? "cdidx pre-commit hook updated"
@@ -253,7 +363,8 @@ public static class HookCommandRunner
             hookPath,
             File.Exists(LongPath.EnsureWindowsPrefix(chainedHookPath)) ? chainedHookPath : null,
             CommandExitCodes.Success,
-            warnings);
+            warnings,
+            executable: executable);
     }
 
     private static HookOperationPlan BuildInstallPlan(
@@ -576,14 +687,62 @@ public static class HookCommandRunner
             ]);
     }
 
-    private static int Status(HookCommandOptions options, JsonSerializerOptions jsonOptions, string projectPath, string hookPath, string chainedHookPath)
+    private static int Status(
+        HookCommandOptions options,
+        JsonSerializerOptions jsonOptions,
+        string appVersion,
+        string projectPath,
+        string hookPath,
+        string chainedHookPath)
     {
         var ioHookPath = LongPath.EnsureWindowsPrefix(hookPath);
         var ioChainedHookPath = LongPath.EnsureWindowsPrefix(chainedHookPath);
         var hookExists = File.Exists(ioHookPath);
-        var installed = hookExists && IsManagedHookFile(ioHookPath);
+        var hookContent = hookExists ? ReadHookBytesWithinLimit(ioHookPath) : null;
+        var installed = hookExists && AnalyzeManagedHook(hookContent).State == "managed";
         var status = installed ? "installed" : hookExists ? "custom" : "absent";
-        return WriteResult(options.Json, jsonOptions, status, $"cdidx pre-commit hook is {status}", projectPath, hookPath, File.Exists(ioChainedHookPath) ? chainedHookPath : null, CommandExitCodes.Success);
+        HookExecutableJsonResult? executable = null;
+        string? hookState = null;
+        if (installed)
+        {
+            if (!TryReadExecutableManifest(hookContent, out var installedSelection))
+            {
+                hookState = "executable_manifest_unresolved";
+                executable = HookExecutableJsonResult.Unresolved("managed_hook_missing_executable_manifest");
+            }
+            else if (!TryAnalyzeManagedInvocation(
+                         hookContent,
+                         projectPath,
+                         chainedHookPath,
+                         installedSelection,
+                         out hookState))
+            {
+                hookState = "executable_manifest_unresolved";
+                executable = HookExecutableJsonResult.Unresolved("managed_hook_executable_manifest_mismatch");
+            }
+            else
+            {
+                _ = TryResolveCurrentExecutable(appVersion, out var currentSelection, out _);
+                executable = InspectExecutable(installedSelection, currentSelection);
+            }
+        }
+
+        var message = $"cdidx pre-commit hook is {status}";
+        if (executable is { Status: not "available" })
+            message += $"; pinned executable is {executable.Status}";
+        if (hookState is not null and not "managed" and not "executable_manifest_unresolved")
+            message += $"; managed hook state is {hookState}";
+        return WriteResult(
+            options.Json,
+            jsonOptions,
+            status,
+            message,
+            projectPath,
+            hookPath,
+            File.Exists(ioChainedHookPath) ? chainedHookPath : null,
+            CommandExitCodes.Success,
+            hookState: hookState,
+            executable: executable);
     }
 
     private static int UnknownCommand(HookCommandOptions options, JsonSerializerOptions jsonOptions, string projectPath)
@@ -591,12 +750,6 @@ public static class HookCommandRunner
         if (!options.Json)
             PrintUsage();
         return WriteResult(options.Json, jsonOptions, "error", $"unknown hooks command: {ConsoleUi.FormatBoundedValue(options.Command)}", projectPath, null, null, CommandExitCodes.UsageError);
-    }
-
-    private static bool IsManagedHookFile(string ioHookPath)
-    {
-        var content = ReadHookBytesWithinLimit(ioHookPath);
-        return AnalyzeManagedHook(content).State == "managed";
     }
 
     private static byte[]? ReadHookBytesWithinLimit(string ioHookPath)
@@ -620,21 +773,15 @@ public static class HookCommandRunner
     private static ManagedHookAnalysis AnalyzeRawManagedHook(byte[] content)
     {
         var contentSpan = content.AsSpan();
-        var beginCount = CountOccurrences(contentSpan, BeginMarkerBytes);
-        var endCount = CountOccurrences(contentSpan, EndMarkerBytes);
+        var beginCount = CountMarkerLines(contentSpan, BeginMarkerBytes, out var beginIndex);
+        var endCount = CountMarkerLines(contentSpan, EndMarkerBytes, out var endIndex);
         if (beginCount == 0 && endCount == 0)
             return new ManagedHookAnalysis("unmanaged", null, false);
         if (beginCount != 1 || endCount != 1)
             return new ManagedHookAnalysis("conflicted", null, false);
 
-        var beginIndex = contentSpan.IndexOf(BeginMarkerBytes);
-        var endIndex = contentSpan.IndexOf(EndMarkerBytes);
-        if (endIndex < beginIndex
-            || !IsMarkerOnlyLine(contentSpan, beginIndex, BeginMarkerBytes)
-            || !IsMarkerOnlyLine(contentSpan, endIndex, EndMarkerBytes))
-        {
+        if (endIndex < beginIndex)
             return new ManagedHookAnalysis("conflicted", null, false);
-        }
 
         var blockStart = FindLineStart(contentSpan, beginIndex);
         var blockEnd = FindLineEndIncludingTerminator(
@@ -664,21 +811,15 @@ public static class HookCommandRunner
             return new ManagedHookAnalysis("unmanaged", null, false);
         }
 
-        var beginCount = CountOccurrences(text, BeginMarker);
-        var endCount = CountOccurrences(text, EndMarker);
+        var beginCount = CountMarkerLines(text, BeginMarker, out var beginIndex);
+        var endCount = CountMarkerLines(text, EndMarker, out var endIndex);
         if (beginCount == 0 && endCount == 0)
             return new ManagedHookAnalysis("unmanaged", null, false);
         if (beginCount != 1 || endCount != 1)
             return new ManagedHookAnalysis("conflicted", null, false);
 
-        var beginIndex = text.IndexOf(BeginMarker, StringComparison.Ordinal);
-        var endIndex = text.IndexOf(EndMarker, StringComparison.Ordinal);
-        if (endIndex < beginIndex
-            || !IsMarkerOnlyLine(text, beginIndex, BeginMarker)
-            || !IsMarkerOnlyLine(text, endIndex, EndMarker))
-        {
+        if (endIndex < beginIndex)
             return new ManagedHookAnalysis("conflicted", null, false);
-        }
 
         var blockStart = FindLineStart(text, beginIndex);
         var blockEnd = FindLineEndIncludingTerminator(
@@ -758,16 +899,24 @@ public static class HookCommandRunner
         return false;
     }
 
-    private static int CountOccurrences(string value, string marker)
+    private static int CountMarkerLines(
+        string value,
+        string marker,
+        out int firstMarkerIndex)
     {
         var count = 0;
+        firstMarkerIndex = -1;
         var offset = 0;
         while (offset <= value.Length - marker.Length)
         {
             var index = value.IndexOf(marker, offset, StringComparison.Ordinal);
             if (index < 0)
                 break;
-            count++;
+            if (IsMarkerOnlyLine(value, index, marker))
+            {
+                firstMarkerIndex = firstMarkerIndex < 0 ? index : firstMarkerIndex;
+                count++;
+            }
             offset = index + marker.Length;
         }
 
@@ -818,17 +967,26 @@ public static class HookCommandRunner
     private static bool IsLineTerminator(char value)
         => value is '\r' or '\n';
 
-    private static int CountOccurrences(ReadOnlySpan<byte> value, ReadOnlySpan<byte> marker)
+    private static int CountMarkerLines(
+        ReadOnlySpan<byte> value,
+        ReadOnlySpan<byte> marker,
+        out int firstMarkerIndex)
     {
         var count = 0;
+        firstMarkerIndex = -1;
         var offset = 0;
         while (offset <= value.Length - marker.Length)
         {
             var relativeIndex = value[offset..].IndexOf(marker);
             if (relativeIndex < 0)
                 break;
-            count++;
-            offset += relativeIndex + marker.Length;
+            var index = offset + relativeIndex;
+            if (IsMarkerOnlyLine(value, index, marker))
+            {
+                firstMarkerIndex = firstMarkerIndex < 0 ? index : firstMarkerIndex;
+                count++;
+            }
+            offset = index + marker.Length;
         }
 
         return count;
@@ -919,7 +1077,7 @@ public static class HookCommandRunner
         string hooksDir,
         string hookPath,
         string chainedHookPath,
-        string projectPath,
+        string hookScript,
         List<HookCommandWarningJsonResult> warnings)
     {
         var stagedHookPath = Path.Combine(hooksDir, $".{HookName}.{Guid.NewGuid():N}.tmp");
@@ -930,7 +1088,7 @@ public static class HookCommandRunner
 
         try
         {
-            WriteStagedHookScript(ioStagedHookPath, chainedHookPath, projectPath);
+            WriteStagedHookScript(ioStagedHookPath, hookScript);
             ReplaceFile(ioStagedHookPath, ioHookPath, ioChainedHookPath);
             stagedHookMoved = true;
             MakeExecutable(ioHookPath);
@@ -942,7 +1100,9 @@ public static class HookCommandRunner
         }
     }
 
-    private static void WriteStagedHookScript(string ioStagedHookPath, string chainedHookPath, string projectPath)
+    private static void WriteStagedHookScript(
+        string ioStagedHookPath,
+        string hookScript)
     {
         using (var stream = CreateStagedHookFileStream(ioStagedHookPath))
         {
@@ -952,7 +1112,7 @@ public static class HookCommandRunner
                 bufferSize: 1024,
                 leaveOpen: true))
             {
-                writer.Write(BuildHookScript(chainedHookPath, projectPath));
+                writer.Write(hookScript);
                 writer.Flush();
             }
 
@@ -1016,14 +1176,930 @@ public static class HookCommandRunner
         warnings.Add(new HookCommandWarningJsonResult(category, path, DiagnosticSanitizer.ForPath(path), message));
     }
 
-    private static string BuildHookScript(string chainedHookPath, string projectPath)
+    private static bool TryResolveCurrentExecutable(
+        string appVersion,
+        out HookExecutableSelection selection,
+        out string failureReason)
+    {
+        if (ExecutableSelectionForTesting != null)
+        {
+            selection = ExecutableSelectionForTesting(appVersion);
+            return ValidateExecutableSelection(selection, out failureReason);
+        }
+
+        // Single-file apphosts pin Environment.ProcessPath and never consume this
+        // entry-assembly value; framework-dependent `dotnet` launches require it.
+#pragma warning disable IL3000 // Assembly.Location is intentionally unused by single-file apphosts.
+        var entryAssemblyPath = typeof(HookCommandRunner).Assembly.Location;
+#pragma warning restore IL3000
+        return TryCreateExecutableSelection(
+            Environment.ProcessPath,
+            entryAssemblyPath,
+            appVersion,
+            out selection,
+            out failureReason);
+    }
+
+    internal static bool TryCreateExecutableSelection(
+        string? processPath,
+        string? entryAssemblyPath,
+        string appVersion,
+        out HookExecutableSelection selection,
+        out string failureReason)
+    {
+        selection = default!;
+        if (string.IsNullOrWhiteSpace(processPath))
+        {
+            failureReason = "current_process_path_unavailable";
+            return false;
+        }
+
+        var launcherIsDotnetHost = IsDotnetHost(processPath);
+        if (!TryResolvePinnedPath(processPath, out var resolvedProcessPath, out failureReason))
+            return false;
+
+        if (!launcherIsDotnetHost && !IsDotnetHost(resolvedProcessPath))
+        {
+            string? resolvedEntryAssemblyPath = null;
+            if (!string.IsNullOrWhiteSpace(entryAssemblyPath))
+            {
+                if (!TryResolvePinnedPath(
+                        entryAssemblyPath,
+                        out resolvedEntryAssemblyPath,
+                        out failureReason))
+                {
+                    return false;
+                }
+            }
+
+            selection = new HookExecutableSelection(
+                "process_path",
+                appVersion,
+                [resolvedProcessPath],
+                resolvedEntryAssemblyPath);
+            return ValidateExecutableSelection(selection, out failureReason);
+        }
+
+        if (string.IsNullOrWhiteSpace(entryAssemblyPath))
+        {
+            failureReason = "current_entry_assembly_path_unavailable";
+            return false;
+        }
+
+        if (!TryResolvePinnedPath(entryAssemblyPath, out var resolvedAssemblyPath, out failureReason))
+            return false;
+
+        selection = new HookExecutableSelection(
+            "dotnet_host_and_assembly",
+            appVersion,
+            [resolvedProcessPath, resolvedAssemblyPath]);
+        return ValidateExecutableSelection(selection, out failureReason);
+    }
+
+    private static bool TryResolvePinnedPath(
+        string path,
+        out string resolvedPath,
+        out string failureReason)
+    {
+        resolvedPath = string.Empty;
+        try
+        {
+            var fullPath = Path.GetFullPath(path);
+            if (!File.Exists(LongPath.EnsureWindowsPrefix(fullPath)))
+            {
+                failureReason = "current_executable_path_missing";
+                return false;
+            }
+
+            var linkTarget = new FileInfo(LongPath.EnsureWindowsPrefix(fullPath))
+                .ResolveLinkTarget(returnFinalTarget: true);
+            resolvedPath = Path.GetFullPath(linkTarget?.FullName ?? fullPath);
+            if (!File.Exists(LongPath.EnsureWindowsPrefix(resolvedPath)))
+            {
+                failureReason = "resolved_executable_path_missing";
+                return false;
+            }
+
+            failureReason = string.Empty;
+            return true;
+        }
+        catch (Exception ex) when (IsHookFileOperationException(ex))
+        {
+            failureReason = $"current_executable_path_unusable:{DiagnosticRedactor.ClassifyException(ex)}";
+            return false;
+        }
+    }
+
+    private static bool ValidateExecutableSelection(
+        HookExecutableSelection selection,
+        out string failureReason)
+    {
+        if (!HasValidExecutableSelectionShape(selection))
+        {
+            failureReason = "current_executable_provenance_invalid";
+            return false;
+        }
+
+        foreach (var argument in selection.Argv)
+        {
+            if (!File.Exists(LongPath.EnsureWindowsPrefix(argument)))
+            {
+                failureReason = "current_executable_path_unusable";
+                return false;
+            }
+        }
+        if (!IsRunnableExecutable(selection.Argv[0]))
+        {
+            failureReason = "current_executable_not_runnable";
+            return false;
+        }
+        var entryAssemblyPath = GetEntryAssemblyPath(selection);
+        if (entryAssemblyPath != null
+            && !ValidateManagedDeploymentFiles(entryAssemblyPath, out failureReason))
+        {
+            return false;
+        }
+        if (EncodeExecutableManifest(selection).Length > MaxExecutableManifestChars)
+        {
+            failureReason = "current_executable_provenance_too_large";
+            return false;
+        }
+
+        failureReason = string.Empty;
+        return true;
+    }
+
+    private static bool HasValidExecutableSelectionShape(HookExecutableSelection selection)
+        => selection.Source is "process_path" or "dotnet_host_and_assembly"
+           && !string.IsNullOrWhiteSpace(selection.Version)
+           && selection.Version.Length <= 128
+           && !selection.Version.Any(char.IsControl)
+           && ((selection.Source == "process_path" && selection.Argv.Count == 1)
+               || (selection.Source == "dotnet_host_and_assembly" && selection.Argv.Count == 2))
+           && selection.Argv.All(static argument =>
+               !string.IsNullOrWhiteSpace(argument)
+               && argument.Length <= MaxExecutableArgumentChars
+               && IsCanonicalFullyQualifiedPath(argument)
+               && argument.IndexOfAny(['\0', '\r', '\n']) < 0)
+           && (selection.EntryAssemblyPath == null
+               || (!string.IsNullOrWhiteSpace(selection.EntryAssemblyPath)
+                   && selection.EntryAssemblyPath.Length <= MaxExecutableArgumentChars
+                   && IsCanonicalFullyQualifiedPath(selection.EntryAssemblyPath)
+                   && selection.EntryAssemblyPath.IndexOfAny(['\0', '\r', '\n']) < 0))
+           && (selection.Source != "dotnet_host_and_assembly"
+               || selection.EntryAssemblyPath == null
+               || string.Equals(
+                   selection.EntryAssemblyPath,
+                   selection.Argv[1],
+                   OperatingSystem.IsWindows()
+                       ? StringComparison.OrdinalIgnoreCase
+                       : StringComparison.Ordinal));
+
+    private static string? GetEntryAssemblyPath(HookExecutableSelection selection)
+        => selection.EntryAssemblyPath
+           ?? (selection.Source == "dotnet_host_and_assembly" && selection.Argv.Count > 1
+               ? selection.Argv[1]
+               : null);
+
+    internal static bool IsCanonicalFullyQualifiedPath(string path)
+    {
+        if (!Path.IsPathFullyQualified(path))
+            return false;
+
+        try
+        {
+            var comparison = OperatingSystem.IsWindows()
+                ? StringComparison.OrdinalIgnoreCase
+                : StringComparison.Ordinal;
+            return string.Equals(path, Path.GetFullPath(path), comparison);
+        }
+        catch (Exception ex) when (IsHookFileOperationException(ex))
+        {
+            return false;
+        }
+    }
+
+    private static HookExecutableJsonResult InspectExecutable(
+        HookExecutableSelection installedSelection,
+        HookExecutableSelection? currentSelection)
+    {
+        var currentInvocationMatches = currentSelection != null
+            && ExecutableSelectionsMatch(installedSelection, currentSelection);
+        var inspectedSelection = currentInvocationMatches
+            ? currentSelection!
+            : installedSelection;
+        var path = inspectedSelection.Argv.FirstOrDefault();
+        var entryAssemblyPath = GetEntryAssemblyPath(inspectedSelection);
+        var diagnosticArgv = inspectedSelection.Argv
+            .Select(DiagnosticSanitizer.ForSupportSafePath)
+            .ToArray();
+        HookExecutableJsonResult Result(
+            string status,
+            string failureReason,
+            string? actualVersion = null)
+            => new(
+                inspectedSelection.Source,
+                path,
+                entryAssemblyPath,
+                inspectedSelection.Argv,
+                path == null ? null : DiagnosticSanitizer.ForSupportSafePath(path),
+                entryAssemblyPath == null ? null : DiagnosticSanitizer.ForSupportSafePath(entryAssemblyPath),
+                diagnosticArgv,
+                installedSelection.Version,
+                actualVersion,
+                status,
+                failureReason);
+
+        var missingPath = inspectedSelection.Argv.FirstOrDefault(
+            static argument => !File.Exists(LongPath.EnsureWindowsPrefix(argument)));
+        if (missingPath != null)
+            return Result("missing", "pinned_executable_missing");
+        if (!IsRunnableExecutable(inspectedSelection.Argv[0]))
+            return Result("not_executable", "pinned_executable_not_runnable");
+        if (entryAssemblyPath != null)
+        {
+            if (!File.Exists(LongPath.EnsureWindowsPrefix(entryAssemblyPath)))
+                return Result("missing", "pinned_entry_assembly_missing");
+            if (!IsReadableRegularFile(entryAssemblyPath))
+                return Result("not_executable", "pinned_entry_assembly_unreadable");
+
+            foreach (var runtimePath in GetManagedRuntimePaths(entryAssemblyPath))
+            {
+                if (!File.Exists(LongPath.EnsureWindowsPrefix(runtimePath)))
+                    return Result("missing", "pinned_runtime_file_missing");
+                if (!IsReadableRegularFile(runtimePath))
+                    return Result("not_executable", "pinned_runtime_file_unreadable");
+            }
+        }
+
+        string? actualVersion;
+        if (currentInvocationMatches)
+            actualVersion = inspectedSelection.Version;
+        else
+            actualVersion = TryReadPinnedVersion(inspectedSelection);
+
+        var status = actualVersion == null
+            ? "available_unverified"
+            : string.Equals(actualVersion, installedSelection.Version, StringComparison.Ordinal)
+                ? "available"
+                : "version_mismatch";
+        var failureReason = status switch
+        {
+            "available_unverified" => "pinned_executable_version_unavailable",
+            "version_mismatch" => "pinned_executable_version_mismatch",
+            _ => null,
+        };
+        return new HookExecutableJsonResult(
+            inspectedSelection.Source,
+            path,
+            entryAssemblyPath,
+            inspectedSelection.Argv,
+            path == null ? null : DiagnosticSanitizer.ForSupportSafePath(path),
+            entryAssemblyPath == null ? null : DiagnosticSanitizer.ForSupportSafePath(entryAssemblyPath),
+            diagnosticArgv,
+            installedSelection.Version,
+            actualVersion,
+            status,
+            failureReason);
+    }
+
+    internal static bool ExecutableSelectionsMatch(
+        HookExecutableSelection left,
+        HookExecutableSelection right)
+    {
+        if (!string.Equals(left.Source, right.Source, StringComparison.Ordinal)
+            || left.Argv.Count != right.Argv.Count)
+        {
+            return false;
+        }
+
+        for (var index = 0; index < left.Argv.Count; index++)
+        {
+            var comparison = PathCasing.ComparisonFor(left.Argv[index]);
+            if (!string.Equals(left.Argv[index], right.Argv[index], comparison))
+                return false;
+        }
+
+        // A process-path hook invokes the apphost or wrapper directly. Its managed
+        // payload may change during an in-place upgrade without changing that argv.
+        if (left.Source == "process_path")
+            return true;
+
+        var leftEntryAssemblyPath = GetEntryAssemblyPath(left);
+        var rightEntryAssemblyPath = GetEntryAssemblyPath(right);
+        if (leftEntryAssemblyPath == null || rightEntryAssemblyPath == null)
+            return leftEntryAssemblyPath == rightEntryAssemblyPath;
+
+        return string.Equals(
+            leftEntryAssemblyPath,
+            rightEntryAssemblyPath,
+            PathCasing.ComparisonFor(leftEntryAssemblyPath));
+    }
+
+    private static string? TryReadPinnedVersion(HookExecutableSelection selection)
+    {
+        var versionTarget = GetEntryAssemblyPath(selection) ?? selection.Argv[0];
+        try
+        {
+            var directory = Path.GetDirectoryName(versionTarget);
+            if (directory == null)
+                return null;
+            var versionPath = Path.Combine(directory, "version.json");
+            if (!IsReadableRegularFile(versionPath))
+                return null;
+            var versionBytes = DataDirectorySecurity.ReadBytesWithinLimit(
+                versionPath,
+                16 * 1024,
+                FileShare.ReadWrite);
+            if (versionBytes is null)
+                return null;
+
+            using var document = JsonDocument.Parse(versionBytes);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+                return null;
+            if (!document.RootElement.TryGetProperty("version", out var version)
+                || version.ValueKind != JsonValueKind.String)
+            {
+                return null;
+            }
+
+            var value = version.GetString();
+            return !string.IsNullOrWhiteSpace(value)
+                   && value.Length <= 128
+                   && !value.Any(char.IsControl)
+                ? value
+                : null;
+        }
+        catch (Exception ex) when (ex is IOException
+                                       or UnauthorizedAccessException
+                                       or ArgumentException
+                                       or NotSupportedException
+                                       or JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static string EncodeExecutableManifest(HookExecutableSelection selection)
+    {
+        using var buffer = new MemoryStream();
+        using (var writer = new BinaryWriter(buffer, Encoding.UTF8, leaveOpen: true))
+        {
+            writer.Write(2);
+            WriteManifestString(writer, selection.Source);
+            WriteManifestString(writer, selection.Version);
+            writer.Write(selection.Argv.Count);
+            foreach (var argument in selection.Argv)
+                WriteManifestString(writer, argument);
+            var entryAssemblyPath = GetEntryAssemblyPath(selection);
+            writer.Write(entryAssemblyPath != null);
+            if (entryAssemblyPath != null)
+                WriteManifestString(writer, entryAssemblyPath);
+        }
+
+        return Convert.ToBase64String(buffer.ToArray());
+    }
+
+    private static bool TryReadExecutableManifest(
+        byte[]? hookContent,
+        out HookExecutableSelection selection)
+    {
+        selection = default!;
+        if (hookContent == null)
+            return false;
+
+        string text;
+        try
+        {
+            text = new UTF8Encoding(
+                encoderShouldEmitUTF8Identifier: false,
+                throwOnInvalidBytes: true).GetString(hookContent);
+        }
+        catch (DecoderFallbackException)
+        {
+            return false;
+        }
+
+        if (CountMarkerLines(text, BeginMarker, out var beginIndex) != 1)
+            return false;
+        var headerOffset = FindLineEndIncludingTerminator(
+            text,
+            beginIndex + BeginMarker.Length);
+        if (!TryReadLine(text, ref headerOffset, out var sourceLine)
+            || !sourceLine.StartsWith(
+                "# CDIDX EXECUTABLE SOURCE: ",
+                StringComparison.Ordinal)
+            || !TryReadLine(text, ref headerOffset, out var versionLine)
+            || !versionLine.StartsWith(
+                "# CDIDX EXECUTABLE VERSION: ",
+                StringComparison.Ordinal)
+            || !TryReadLine(text, ref headerOffset, out var manifestLine)
+            || !manifestLine.StartsWith(
+                ExecutableManifestPrefix,
+                StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var encoded = manifestLine[ExecutableManifestPrefix.Length..].Trim();
+        if (encoded.Length is 0 or > MaxExecutableManifestChars)
+            return false;
+
+        try
+        {
+            var bytes = Convert.FromBase64String(encoded);
+            using var buffer = new MemoryStream(bytes, writable: false);
+            using var reader = new BinaryReader(buffer, Encoding.UTF8, leaveOpen: false);
+            var manifestVersion = reader.ReadInt32();
+            if (manifestVersion is not 1 and not 2)
+                return false;
+            if (!TryReadManifestString(reader, 64, out var source)
+                || !TryReadManifestString(reader, 128, out var version))
+            {
+                return false;
+            }
+            var argumentCount = reader.ReadInt32();
+            if (argumentCount is < 1 or > 2)
+                return false;
+            var arguments = new string[argumentCount];
+            for (var index = 0; index < arguments.Length; index++)
+            {
+                if (!TryReadManifestString(reader, MaxExecutableArgumentChars, out arguments[index]))
+                    return false;
+            }
+
+            string? entryAssemblyPath = null;
+            if (manifestVersion == 2
+                && reader.ReadBoolean()
+                && !TryReadManifestString(
+                    reader,
+                    MaxExecutableArgumentChars,
+                    out entryAssemblyPath))
+            {
+                return false;
+            }
+
+            if (buffer.Position != buffer.Length)
+                return false;
+            selection = new HookExecutableSelection(
+                source,
+                version,
+                arguments,
+                entryAssemblyPath);
+            return HasValidExecutableSelectionShape(selection);
+        }
+        catch (Exception ex) when (ex is FormatException
+                                       or EndOfStreamException
+                                       or IOException
+                                       or ArgumentException
+                                       or DecoderFallbackException)
+        {
+            return false;
+        }
+    }
+
+    private static bool TryAnalyzeManagedInvocation(
+        byte[]? hookContent,
+        string projectPath,
+        string chainedHookPath,
+        HookExecutableSelection selection,
+        out string hookState)
+    {
+        hookState = "executable_manifest_unresolved";
+        if (hookContent is null)
+            return false;
+
+        string actualText;
+        try
+        {
+            actualText = new UTF8Encoding(
+                encoderShouldEmitUTF8Identifier: false,
+                throwOnInvalidBytes: true).GetString(hookContent);
+        }
+        catch (DecoderFallbackException)
+        {
+            return false;
+        }
+
+        if (!TryExtractManagedBlock(actualText, out var actualBlock))
+            return false;
+
+        var invocation = string.Join(
+            ' ',
+            selection.Argv.Select(static argument => QuoteShell(NormalizeShellPath(argument))));
+        var header = $"""
+{BeginMarker}
+# CDIDX EXECUTABLE SOURCE: {FormatManifestComment(selection.Source)}
+# CDIDX EXECUTABLE VERSION: {FormatManifestComment(selection.Version)}
+{ExecutableManifestPrefix}{EncodeExecutableManifest(selection)}
+{invocation} index
+""" + " ";
+        if (!actualBlock.StartsWith(header, StringComparison.Ordinal))
+            return false;
+
+        var offset = header.Length;
+        if (!TryReadQuotedShellValue(actualBlock, ref offset, out var installedProjectPath))
+            return false;
+        const string beforeChainedPath = """
+ --quiet
+cdidx_status=$?
+if [ "$cdidx_status" -ne 0 ]; then
+  echo "cdidx pre-commit index failed; commit aborted. Use git commit --no-verify to bypass hooks." >&2
+  exit "$cdidx_status"
+fi
+if [ -x
+""" + " ";
+        if (!actualBlock.AsSpan(offset).StartsWith(beforeChainedPath, StringComparison.Ordinal))
+            return false;
+        offset += beforeChainedPath.Length;
+        if (!TryReadQuotedShellValue(actualBlock, ref offset, out var installedChainedHookPath))
+            return false;
+        if (!IsCanonicalFullyQualifiedPath(installedProjectPath)
+            || !IsCanonicalFullyQualifiedPath(installedChainedHookPath))
+        {
+            return false;
+        }
+
+        if (!TryBuildHookScript(
+                installedChainedHookPath,
+                installedProjectPath,
+                selection,
+                out var expectedText)
+            || !TryExtractManagedBlock(expectedText, out var expectedBlock)
+            || !string.Equals(actualBlock, expectedBlock, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        bool projectPathMatches;
+        bool chainedHookPathMatches;
+        try
+        {
+            projectPathMatches = RepositoryPathsEqual(projectPath, installedProjectPath);
+            chainedHookPathMatches = RepositoryPathsEqual(
+                chainedHookPath,
+                installedChainedHookPath);
+        }
+        catch (Exception ex) when (IsHookFileOperationException(ex) || ex is CodeIndexException)
+        {
+            return false;
+        }
+
+        hookState = (projectPathMatches, chainedHookPathMatches) switch
+        {
+            (true, true) => "managed",
+            (false, true) => "project_path_mismatch",
+            (true, false) => "chained_hook_path_mismatch",
+            _ => "repository_path_mismatch",
+        };
+        return true;
+    }
+
+    internal static bool RepositoryPathsEqual(string currentPath, string installedPath)
+    {
+        var normalizedCurrentPath = PathCasing.NormalizeBoundaryPath(currentPath);
+        var normalizedInstalledPath = PathCasing.NormalizeBoundaryPath(installedPath);
+        if (PathCasing.PathsEqual(normalizedCurrentPath, normalizedInstalledPath))
+            return true;
+        if (OperatingSystem.IsWindows()
+            || !TryResolveRepositoryPathAliases(normalizedCurrentPath, out var resolvedCurrentPath)
+            || !TryResolveRepositoryPathAliases(normalizedInstalledPath, out var resolvedInstalledPath))
+        {
+            return false;
+        }
+
+        return PathCasing.PathsEqual(resolvedCurrentPath, resolvedInstalledPath);
+    }
+
+    private static bool TryResolveRepositoryPathAliases(string path, out string resolvedPath)
+    {
+        resolvedPath = string.Empty;
+        var suffix = new Stack<string>();
+        var existingAncestor = Path.GetFullPath(path);
+        while (!File.Exists(LongPath.EnsureWindowsPrefix(existingAncestor))
+               && !Directory.Exists(LongPath.EnsureWindowsPrefix(existingAncestor)))
+        {
+            var name = Path.GetFileName(existingAncestor);
+            var parent = Path.GetDirectoryName(existingAncestor);
+            if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(parent))
+                return false;
+            suffix.Push(name);
+            existingAncestor = parent;
+        }
+
+        IntPtr pointer = IntPtr.Zero;
+        try
+        {
+            pointer = UnixRealPath(existingAncestor, IntPtr.Zero);
+            if (pointer == IntPtr.Zero)
+                return false;
+            var realAncestor = Marshal.PtrToStringUTF8(pointer);
+            if (string.IsNullOrEmpty(realAncestor))
+                return false;
+
+            resolvedPath = suffix.Aggregate(realAncestor, Path.Combine);
+            resolvedPath = Path.GetFullPath(resolvedPath);
+            return true;
+        }
+        catch (Exception ex) when (IsHookFileOperationException(ex)
+                                   || ex is DllNotFoundException
+                                       or EntryPointNotFoundException)
+        {
+            return false;
+        }
+        finally
+        {
+            if (pointer != IntPtr.Zero)
+                UnixFree(pointer);
+        }
+    }
+
+    private static bool TryReadQuotedShellValue(
+        string text,
+        ref int offset,
+        out string value)
+    {
+        value = string.Empty;
+        if (offset >= text.Length || text[offset] != '\'')
+            return false;
+
+        offset++;
+        var builder = new StringBuilder();
+        while (offset < text.Length)
+        {
+            if (text[offset] != '\'')
+            {
+                builder.Append(text[offset++]);
+                continue;
+            }
+
+            if (text.AsSpan(offset).StartsWith("'\"'\"'", StringComparison.Ordinal))
+            {
+                builder.Append('\'');
+                offset += 5;
+                continue;
+            }
+
+            offset++;
+            value = builder.ToString();
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryReadLine(
+        string text,
+        ref int offset,
+        out string line)
+    {
+        line = string.Empty;
+        if (offset < 0 || offset >= text.Length)
+            return false;
+
+        var lineEnd = FindLineEnd(text, offset);
+        line = text[offset..lineEnd];
+        offset = FindLineEndIncludingTerminator(text, lineEnd);
+        return true;
+    }
+
+    private static bool TryExtractManagedBlock(string text, out string block)
+    {
+        block = string.Empty;
+        if (CountMarkerLines(text, BeginMarker, out var beginIndex) != 1
+            || CountMarkerLines(text, EndMarker, out var endIndex) != 1)
+        {
+            return false;
+        }
+
+        if (endIndex < beginIndex)
+            return false;
+
+        var blockStart = FindLineStart(text, beginIndex);
+        var blockEnd = FindLineEndIncludingTerminator(text, endIndex + EndMarker.Length);
+        block = text[blockStart..blockEnd];
+        return true;
+    }
+
+    private static void WriteManifestString(BinaryWriter writer, string value)
+    {
+        var bytes = Encoding.UTF8.GetBytes(value);
+        writer.Write(bytes.Length);
+        writer.Write(bytes);
+    }
+
+    private static bool TryReadManifestString(
+        BinaryReader reader,
+        int maxCharacters,
+        out string value)
+    {
+        value = string.Empty;
+        var byteLength = reader.ReadInt32();
+        var maxBytes = checked(maxCharacters * 4);
+        if (byteLength is < 0 || byteLength > maxBytes)
+            return false;
+        var bytes = reader.ReadBytes(byteLength);
+        if (bytes.Length != byteLength)
+            return false;
+        value = new UTF8Encoding(
+            encoderShouldEmitUTF8Identifier: false,
+            throwOnInvalidBytes: true).GetString(bytes);
+        return value.Length <= maxCharacters;
+    }
+
+    private static string FormatManifestComment(string value)
+        => new(value.Select(static character => char.IsControl(character) ? '?' : character).ToArray());
+
+    private static string NormalizeShellPath(string value)
+        => OperatingSystem.IsWindows()
+            ? value.Replace('\\', '/')
+            : value;
+
+    private static bool IsRunnableExecutable(string path)
+    {
+        if (!IsRegularFile(path))
+            return false;
+        if (OperatingSystem.IsWindows())
+            return true;
+        try
+        {
+            return UnixAccess(LongPath.EnsureWindowsPrefix(path), UnixExecuteAccess) == 0;
+        }
+        catch (Exception ex) when (IsHookFileOperationException(ex)
+                                   || ex is DllNotFoundException
+                                       or EntryPointNotFoundException)
+        {
+            return false;
+        }
+    }
+
+    private static bool ValidateManagedDeploymentFiles(
+        string assemblyPath,
+        out string failureReason)
+    {
+        if (!IsReadableRegularFile(assemblyPath))
+        {
+            failureReason = "current_entry_assembly_unreadable";
+            return false;
+        }
+
+        foreach (var runtimePath in GetManagedRuntimePaths(assemblyPath))
+        {
+            if (!File.Exists(LongPath.EnsureWindowsPrefix(runtimePath)))
+            {
+                failureReason = "current_runtime_file_missing";
+                return false;
+            }
+            if (!IsReadableRegularFile(runtimePath))
+            {
+                failureReason = "current_runtime_file_unreadable";
+                return false;
+            }
+        }
+
+        failureReason = string.Empty;
+        return true;
+    }
+
+    private static string[] GetManagedRuntimePaths(string assemblyPath)
+        =>
+        [
+            Path.ChangeExtension(assemblyPath, ".runtimeconfig.json"),
+            Path.ChangeExtension(assemblyPath, ".deps.json"),
+        ];
+
+    private static bool IsReadableRegularFile(string path)
+    {
+        if (!IsRegularFile(path))
+            return false;
+
+        if (!OperatingSystem.IsWindows())
+        {
+            try
+            {
+                return UnixAccess(LongPath.EnsureWindowsPrefix(path), UnixReadAccess) == 0;
+            }
+            catch (Exception ex) when (IsHookFileOperationException(ex)
+                                       || ex is DllNotFoundException
+                                           or EntryPointNotFoundException)
+            {
+                return false;
+            }
+        }
+
+        try
+        {
+            using var stream = File.Open(
+                LongPath.EnsureWindowsPrefix(path),
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete);
+            return stream.CanRead;
+        }
+        catch (Exception ex) when (IsHookFileOperationException(ex))
+        {
+            return false;
+        }
+    }
+
+    private static bool IsRegularFile(string path)
+    {
+        try
+        {
+            var ioPath = LongPath.EnsureWindowsPrefix(path);
+            var attributes = File.GetAttributes(ioPath);
+            if ((attributes
+                 & (FileAttributes.Directory | FileAttributes.ReparsePoint | FileAttributes.Device)) != 0)
+            {
+                return false;
+            }
+
+            if (OperatingSystem.IsWindows())
+                return true;
+
+            return UnixStat(ioPath, out var status) == 0
+                   && (status.Mode & UnixFileTypeMask) == UnixRegularFileType;
+        }
+        catch (Exception ex) when (IsHookFileOperationException(ex)
+                                   || ex is DllNotFoundException
+                                       or EntryPointNotFoundException)
+        {
+            return false;
+        }
+    }
+
+    [DllImport("libc", EntryPoint = "access", SetLastError = true)]
+    private static extern int UnixAccess(string path, int mode);
+
+    [DllImport("libSystem.Native", EntryPoint = "SystemNative_Stat", CharSet = CharSet.Ansi)]
+    private static extern int UnixStat(string path, out UnixFileStatus status);
+
+    [DllImport("libc", EntryPoint = "realpath", SetLastError = true)]
+    private static extern IntPtr UnixRealPath(string path, IntPtr resolvedPath);
+
+    [DllImport("libc", EntryPoint = "free")]
+    private static extern void UnixFree(IntPtr pointer);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct UnixFileStatus
+    {
+        internal uint Flags;
+        internal int Mode;
+        internal uint Uid;
+        internal uint Gid;
+        internal long Size;
+        internal long ATime;
+        internal long ATimeNsec;
+        internal long MTime;
+        internal long MTimeNsec;
+        internal long CTime;
+        internal long CTimeNsec;
+        internal long BirthTime;
+        internal long BirthTimeNsec;
+        internal long Dev;
+        internal long RDev;
+        internal long Ino;
+        internal uint UserFlags;
+    }
+
+    private static bool IsDotnetHost(string processPath)
+        => string.Equals(
+            Path.GetFileNameWithoutExtension(processPath.Replace('\\', '/')),
+            "dotnet",
+            StringComparison.OrdinalIgnoreCase);
+
+    internal static bool TryBuildHookScript(
+        string chainedHookPath,
+        string projectPath,
+        HookExecutableSelection executableSelection,
+        out string hookScript)
+    {
+        hookScript = BuildHookScript(chainedHookPath, projectPath, executableSelection);
+        if (Encoding.UTF8.GetByteCount(hookScript) <= MaxHookMarkerBytes)
+            return true;
+
+        hookScript = string.Empty;
+        return false;
+    }
+
+    private static string BuildHookScript(
+        string chainedHookPath,
+        string projectPath,
+        HookExecutableSelection executableSelection)
     {
         var quotedChainedHook = QuoteShell(chainedHookPath);
         var quotedProjectPath = QuoteShell(projectPath);
+        var invocation = string.Join(
+            ' ',
+            executableSelection.Argv.Select(static argument => QuoteShell(NormalizeShellPath(argument))));
+        var manifest = EncodeExecutableManifest(executableSelection);
         return $"""
 #!/bin/sh
 {BeginMarker}
-cdidx index {quotedProjectPath} --quiet
+# CDIDX EXECUTABLE SOURCE: {FormatManifestComment(executableSelection.Source)}
+# CDIDX EXECUTABLE VERSION: {FormatManifestComment(executableSelection.Version)}
+{ExecutableManifestPrefix}{manifest}
+{invocation} index {quotedProjectPath} --quiet
 cdidx_status=$?
 if [ "$cdidx_status" -ne 0 ]; then
   echo "cdidx pre-commit index failed; commit aborted. Use git commit --no-verify to bypass hooks." >&2
@@ -1067,6 +2143,7 @@ fi
         string hookPath,
         string chainedHookPath,
         HookOperationPlan plan,
+        HookExecutableJsonResult? executable = null,
         string? managedHookPreview = null)
     {
         var reportedChainedHookPath = plan.ChainedHookState == "present"
@@ -1088,7 +2165,8 @@ fi
             filesystemMutation: false,
             hookState: plan.HookState,
             chainedHookState: plan.ChainedHookState,
-            plannedChanges: plan.PlannedChanges);
+            plannedChanges: plan.PlannedChanges,
+            executable: executable);
     }
 
     private static int WriteBlockedPlanResult(
@@ -1097,7 +2175,8 @@ fi
         string projectPath,
         string hookPath,
         string chainedHookPath,
-        HookOperationPlan plan)
+        HookOperationPlan plan,
+        HookExecutableJsonResult? executable = null)
         => WriteResult(
             options.Json,
             jsonOptions,
@@ -1106,7 +2185,68 @@ fi
             projectPath,
             hookPath,
             plan.ChainedHookState == "present" ? chainedHookPath : null,
-            plan.BlockExitCode);
+            plan.BlockExitCode,
+            executable: executable);
+
+    private static int WriteGeneratedHookTooLargeResult(
+        HookCommandOptions options,
+        JsonSerializerOptions jsonOptions,
+        string projectPath,
+        string hookPath,
+        string chainedHookPath,
+        HookExecutableJsonResult executable)
+    {
+        var message =
+            $"generated cdidx pre-commit hook exceeds the {MaxHookMarkerBytes}-byte management limit";
+        if (options.DryRun)
+        {
+            var plan = BuildInstallPreflightFailurePlan(
+                hookPath,
+                chainedHookPath,
+                message);
+            return WriteDryRunResult(
+                options,
+                jsonOptions,
+                projectPath,
+                hookPath,
+                chainedHookPath,
+                plan,
+                executable);
+        }
+
+        return WriteResult(
+            options.Json,
+            jsonOptions,
+            "error",
+            message,
+            projectPath,
+            hookPath,
+            null,
+            CommandExitCodes.InstallError,
+            executable: executable);
+    }
+
+    private static HookOperationPlan BuildInstallPreflightFailurePlan(
+        string hookPath,
+        string chainedHookPath,
+        string message)
+    {
+        var ioHookPath = LongPath.EnsureWindowsPrefix(hookPath);
+        var hookState = File.Exists(ioHookPath)
+            ? AnalyzeManagedHook(ReadHookBytesWithinLimit(ioHookPath)).State
+            : "absent";
+        var chainedHookState = File.Exists(LongPath.EnsureWindowsPrefix(chainedHookPath))
+            ? "present"
+            : "absent";
+        return new HookOperationPlan(
+            "blocked",
+            message,
+            hookState,
+            chainedHookState,
+            [],
+            Blocked: true,
+            BlockExitCode: CommandExitCodes.InstallError);
+    }
 
     private static int WriteResult(
         bool json,
@@ -1124,11 +2264,15 @@ fi
         bool? filesystemMutation = null,
         string? hookState = null,
         string? chainedHookState = null,
-        IReadOnlyList<HookCommandFileChangeJsonResult>? plannedChanges = null)
+        IReadOnlyList<HookCommandFileChangeJsonResult>? plannedChanges = null,
+        HookExecutableJsonResult? executable = null)
     {
         var hasWarnings = warnings is { Count: > 0 };
         if (exitCode != CommandExitCodes.Success)
         {
+            var safeManagedHookPreview = managedHookPreview == null
+                ? null
+                : SanitizeManagedHookPreviewForError(managedHookPreview);
             if (!json && hasWarnings)
             {
                 foreach (var warning in warnings!)
@@ -1159,6 +2303,9 @@ fi
                             : DiagnosticSanitizer.ForPath(change.SourcePath),
                     })
                     .ToArray();
+                var safeExecutable = executable == null
+                    ? null
+                    : SanitizeExecutableResult(executable);
                 additionalJsonProperties = JsonSerializer.SerializeToNode(
                     new HookCommandJsonResult(
                         status,
@@ -1172,13 +2319,12 @@ fi
                         safeWarnings,
                         dryRun,
                         plannedAction,
-                        managedHookPreview == null
-                            ? null
-                            : DiagnosticRedactor.RedactSensitiveText(managedHookPreview, "[redacted]", redactPaths: true),
+                        safeManagedHookPreview,
                         filesystemMutation,
                         hookState,
                         chainedHookState,
-                        safePlannedChanges),
+                        safePlannedChanges,
+                        safeExecutable),
                     CliJsonSerializerContextFactory.Create(jsonOptions).HookCommandJsonResult)!.AsObject();
             }
 
@@ -1209,7 +2355,7 @@ fi
                     hookState,
                     chainedHookState,
                     plannedChanges,
-                    managedHookPreview);
+                    safeManagedHookPreview);
             }
 
             return result;
@@ -1234,7 +2380,8 @@ fi
                     filesystemMutation,
                     hookState,
                     chainedHookState,
-                    plannedChanges),
+                    plannedChanges,
+                    executable),
                 CliJsonSerializerContextFactory.Create(jsonOptions).HookCommandJsonResult));
         }
         else
@@ -1252,6 +2399,7 @@ fi
                     CommandErrorWriter.WriteStdout($"Hook: {hookPath}");
                 if (chainedHookPath != null)
                     CommandErrorWriter.WriteStdout($"Chained hook: {chainedHookPath}");
+                WriteExecutableDetails(executable);
             }
             else
             {
@@ -1301,6 +2449,59 @@ fi
             CommandErrorWriter.WriteStdout("Managed hook preview:");
             CommandErrorWriter.WriteStdout(managedHookPreview);
         }
+    }
+
+    private static HookExecutableJsonResult SanitizeExecutableResult(HookExecutableJsonResult executable)
+        => executable with
+        {
+            Path = executable.DiagnosticPath,
+            EntryAssemblyPath = executable.DiagnosticEntryAssemblyPath,
+            Argv = executable.DiagnosticArgv,
+            FailureReason = executable.FailureReason == null
+                ? null
+                : DiagnosticSanitizer.ForMessage(executable.FailureReason),
+        };
+
+    private static string SanitizeManagedHookPreviewForError(string managedHookPreview)
+    {
+        var manifestStart = managedHookPreview.IndexOf(
+            ExecutableManifestPrefix,
+            StringComparison.Ordinal);
+        if (manifestStart >= 0)
+        {
+            var payloadStart = manifestStart + ExecutableManifestPrefix.Length;
+            var payloadEnd = managedHookPreview.IndexOfAny(['\r', '\n'], payloadStart);
+            if (payloadEnd < 0)
+                payloadEnd = managedHookPreview.Length;
+            managedHookPreview = string.Concat(
+                managedHookPreview.AsSpan(0, payloadStart),
+                "[redacted]",
+                managedHookPreview.AsSpan(payloadEnd));
+        }
+
+        return DiagnosticRedactor.RedactSensitiveText(
+            managedHookPreview,
+            "[redacted]",
+            redactPaths: true);
+    }
+
+    private static void WriteExecutableDetails(HookExecutableJsonResult? executable)
+    {
+        if (executable == null)
+            return;
+
+        CommandErrorWriter.WriteStdout($"Executable status: {executable.Status}");
+        CommandErrorWriter.WriteStdout($"Executable source: {executable.Source}");
+        if (executable.Path != null)
+            CommandErrorWriter.WriteStdout($"Executable: {executable.Path}");
+        if (executable.EntryAssemblyPath != null)
+            CommandErrorWriter.WriteStdout($"Entry assembly: {executable.EntryAssemblyPath}");
+        if (executable.ExpectedVersion != null)
+            CommandErrorWriter.WriteStdout($"Expected version: {executable.ExpectedVersion}");
+        if (executable.ActualVersion != null)
+            CommandErrorWriter.WriteStdout($"Actual version: {executable.ActualVersion}");
+        if (executable.FailureReason != null)
+            CommandErrorWriter.WriteStdout($"Executable diagnostic: {executable.FailureReason}");
     }
 
     private static string GetUsage()
@@ -1369,4 +2570,39 @@ public sealed record HookCommandJsonResult(
     string? HookState = null,
     string? ChainedHookState = null,
     IReadOnlyList<HookCommandFileChangeJsonResult>? PlannedChanges = null,
+    HookExecutableJsonResult? Executable = null,
     [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion) : IVersionedJsonResult;
+
+internal sealed record HookExecutableSelection(
+    string Source,
+    string Version,
+    IReadOnlyList<string> Argv,
+    string? EntryAssemblyPath = null);
+
+public sealed record HookExecutableJsonResult(
+    [property: JsonPropertyName("source")] string Source,
+    [property: JsonPropertyName("path")] string? Path,
+    [property: JsonPropertyName("entry_assembly_path")] string? EntryAssemblyPath,
+    [property: JsonPropertyName("argv")] IReadOnlyList<string>? Argv,
+    [property: JsonPropertyName("diagnostic_path")] string? DiagnosticPath,
+    [property: JsonPropertyName("diagnostic_entry_assembly_path")] string? DiagnosticEntryAssemblyPath,
+    [property: JsonPropertyName("diagnostic_argv")] IReadOnlyList<string>? DiagnosticArgv,
+    [property: JsonPropertyName("expected_version")] string? ExpectedVersion,
+    [property: JsonPropertyName("actual_version")] string? ActualVersion,
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("failure_reason")] string? FailureReason)
+{
+    public static HookExecutableJsonResult Unresolved(string failureReason)
+        => new(
+            "unresolved",
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            "unresolved",
+            failureReason);
+}

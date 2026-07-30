@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using CodeIndex.Database;
@@ -263,64 +262,17 @@ public static partial class QueryCommandRunner
     }
 
     private static bool LanguageMatchesLookup(string lang, LanguageCatalogSupportInfo language, QueryCommandOptions options)
-        => options.LanguageLookups.Any(lookup => string.Equals(DbReader.NormalizeQueryLanguage(lookup), lang, StringComparison.Ordinal))
-           || options.LanguageExtensionLookups.Any(lookup => LanguageMatchesExtensionLookup(language, lookup))
-           || options.LanguageAliasLookups.Any(lookup => LanguageMatchesAliasLookup(language, lookup));
-
-    private static bool LanguageMatchesExtensionLookup(LanguageCatalogSupportInfo language, string lookup)
-    {
-        var normalized = NormalizeLanguageLookupKey(lookup);
-        return language.Extensions.Any(ext => string.Equals(NormalizeLanguageLookupKey(ext), normalized, StringComparison.Ordinal));
-    }
-
-    private static bool LanguageMatchesAliasLookup(LanguageCatalogSupportInfo language, string lookup)
-    {
-        var normalized = NormalizeLanguageLookupKey(lookup);
-        return language.Aliases.Any(alias => string.Equals(NormalizeLanguageLookupKey(alias), normalized, StringComparison.Ordinal));
-    }
-
-    private static string NormalizeLanguageLookupKey(string value)
-    {
-        var builder = new StringBuilder(value.Length);
-        foreach (var ch in value.Trim())
-        {
-            if (char.IsWhiteSpace(ch) || ch is '-' or '_' or '.')
-                continue;
-            builder.Append(char.ToLowerInvariant(ch));
-        }
-        return builder.ToString();
-    }
+        => options.LanguageLookups.Any(lookup => LanguageCapabilityCatalog.MatchesLanguage(lang, lookup))
+           || options.LanguageExtensionLookups.Any(lookup => LanguageCapabilityCatalog.MatchesExtension(language, lookup))
+           || options.LanguageAliasLookups.Any(lookup => LanguageCapabilityCatalog.MatchesAlias(language, lookup));
 
     private static bool LanguageMatchesCapability(LanguageCatalogSupportInfo language, string capability)
-        => capability switch
-        {
-            LanguageCapabilityAll => language.Symbols && language.References && language.Graph,
-            LanguageCapabilityNone => !language.Symbols && !language.References && !language.Graph,
-            LanguageCapabilitySymbols => language.Symbols,
-            LanguageCapabilityReferences => language.References,
-            LanguageCapabilityGraph => language.Graph,
-            LanguageCapabilityMissingAny => language.CapabilityGaps.Count > 0,
-            LanguageCapabilityMissingSymbols => !language.Symbols,
-            LanguageCapabilityMissingReferences => !language.References,
-            LanguageCapabilityMissingGraph => !language.Graph,
-            LanguageCapabilitySearchOnly => !language.Symbols && !language.References && !language.Graph,
-            _ => false,
-        };
+        => LanguageCapabilityCatalog.MatchesCapability(language, capability);
 
     private static bool TryNormalizeLanguageCapability(string value, out string capability)
     {
         capability = value.Trim().ToLowerInvariant();
-        return capability is
-            LanguageCapabilityGraph or
-            LanguageCapabilityReferences or
-            LanguageCapabilitySymbols or
-            LanguageCapabilityAll or
-            LanguageCapabilityNone or
-            LanguageCapabilityMissingAny or
-            LanguageCapabilityMissingGraph or
-            LanguageCapabilityMissingReferences or
-            LanguageCapabilityMissingSymbols or
-            LanguageCapabilitySearchOnly;
+        return LanguageCapabilityCatalog.IsKnownCapability(capability);
     }
 
     private static JsonObject BuildLanguageSummaryPayload(

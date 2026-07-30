@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Text.Json.Nodes;
 using CodeIndex.Mcp;
+using CodeIndex.Models;
 
 namespace CodeIndex.Tests;
 
@@ -128,6 +129,40 @@ public class McpToolContractTests
             "`file_issues_data_current` が true の間だけ authoritative",
             validateDescription,
             StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ToolsList_LanguagesAdvertisesBoundedCatalogContract_Issue4896()
+    {
+        var properties = GetAdvertisedToolSchemas()["languages"];
+        var allowed = GetAllowedToolArguments("languages");
+
+        foreach (var argumentName in new[] { "language", "extension", "alias", "limit", "cursor", "maxBytes" })
+        {
+            Assert.True(properties.ContainsKey(argumentName));
+            Assert.Contains(argumentName, allowed);
+        }
+
+        Assert.Equal((true, "string"), TryGetExpectedJsonType("languages", "language"));
+        Assert.Equal((true, "integer"), TryGetExpectedJsonType("languages", "limit"));
+        Assert.Equal((true, "string"), TryGetExpectedJsonType("languages", "cursor"));
+        Assert.Equal((true, "integer"), TryGetExpectedJsonType("languages", "maxBytes"));
+        Assert.Equal(
+            McpServer.MaxMcpQueryCursorCharacters,
+            properties["cursor"]["maxLength"]!.GetValue<int>());
+        Assert.Equal(
+            McpServer.MinLanguageCatalogMaxBytes,
+            properties["maxBytes"]["minimum"]!.GetValue<int>());
+        Assert.Equal(
+            McpServer.MaxLanguageCatalogMaxBytes,
+            properties["maxBytes"]["maximum"]!.GetValue<int>());
+        var capabilitySchemas = properties["capability"]["oneOf"]!.AsArray();
+        var scalarCapabilities = capabilitySchemas[0]!["enum"]!.AsArray()
+            .Select(value => value!.GetValue<string>());
+        var arrayCapabilities = capabilitySchemas[1]!["items"]!["enum"]!.AsArray()
+            .Select(value => value!.GetValue<string>());
+        Assert.Equal(LanguageCapabilityCatalog.SupportedCapabilities, scalarCapabilities);
+        Assert.Equal(LanguageCapabilityCatalog.SupportedCapabilities, arrayCapabilities);
     }
 
     [Fact]
