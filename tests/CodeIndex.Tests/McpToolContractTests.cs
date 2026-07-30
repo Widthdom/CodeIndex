@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Text.Json.Nodes;
+using CodeIndex.Cli;
 using CodeIndex.Mcp;
 
 namespace CodeIndex.Tests;
@@ -155,6 +156,13 @@ public class McpToolContractTests
         Assert.Equal(
             McpServer.MaxLanguageCatalogMaxBytes,
             properties["maxBytes"]["maximum"]!.GetValue<int>());
+        var capabilitySchemas = properties["capability"]["oneOf"]!.AsArray();
+        var scalarCapabilities = capabilitySchemas[0]!["enum"]!.AsArray()
+            .Select(value => value!.GetValue<string>());
+        var arrayCapabilities = capabilitySchemas[1]!["items"]!["enum"]!.AsArray()
+            .Select(value => value!.GetValue<string>());
+        Assert.Equal(LanguageCatalog.SupportedCapabilities, scalarCapabilities);
+        Assert.Equal(LanguageCatalog.SupportedCapabilities, arrayCapabilities);
     }
 
     [Fact]

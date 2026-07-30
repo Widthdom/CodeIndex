@@ -27,6 +27,20 @@ internal sealed record LanguageCatalogSnapshot(
 
 internal static class LanguageCatalog
 {
+    internal static IReadOnlyList<string> SupportedCapabilities { get; } = Array.AsReadOnly(
+    [
+        "all",
+        "none",
+        "graph",
+        "references",
+        "symbols",
+        "missing-any",
+        "missing-graph",
+        "missing-references",
+        "missing-symbols",
+        "search-only",
+    ]);
+
     internal static LanguageCatalogSnapshot Build(string? workspaceRoot)
     {
         ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(workspaceRoot);
@@ -110,6 +124,9 @@ internal static class LanguageCatalog
             "search-only" => !language.Symbols && !language.References && !language.Graph,
             _ => false,
         };
+
+    internal static bool IsKnownCapability(string capability)
+        => SupportedCapabilities.Contains(capability, StringComparer.Ordinal);
 
     internal static string NormalizeLookupKey(string value)
     {

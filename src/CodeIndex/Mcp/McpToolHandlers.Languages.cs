@@ -36,7 +36,11 @@ public partial class McpServer
         foreach (var capability in capabilities)
         {
             if (!IsKnownLanguageCapability(capability))
-                return CreateToolErrorResponse(id, $"Invalid language capability '{capability}'. Use one of: symbols, graph, references.");
+            {
+                return CreateToolErrorResponse(
+                    id,
+                    $"Invalid language capability '{capability}'. Use one of: {string.Join(", ", LanguageCatalog.SupportedCapabilities)}.");
+            }
         }
 
         var requestedMaxBytes = DefaultLanguageCatalogMaxBytes;

@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using CodeIndex.Cli;
 using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Mcp;
 
@@ -54,6 +55,23 @@ public partial class McpServerTests
         Assert.False(emptyUnicodeLookup["has_more"]!.GetValue<bool>());
         Assert.Null(emptyUnicodeLookup["next_cursor"]);
         Assert.Equal("complete", emptyUnicodeLookup["continuation_reason"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void Languages_AcceptsEveryCliCapabilityFilter_Issue4896()
+    {
+        foreach (var capability in LanguageCatalog.SupportedCapabilities)
+        {
+            var response = CallIssue4896Languages(new JsonObject
+            {
+                ["capability"] = capability,
+            }, id: 6);
+
+            Assert.Equal(
+                [capability],
+                response["filters"]!["capability"]!.AsArray()
+                    .Select(value => value!.GetValue<string>()));
+        }
     }
 
     [Fact]

@@ -7,6 +7,14 @@ namespace CodeIndex.Mcp;
 
 public partial class McpServer
 {
+    private static JsonArray CreateLanguageCapabilityEnum()
+    {
+        var values = new JsonArray();
+        foreach (var capability in LanguageCatalog.SupportedCapabilities)
+            values.Add(capability);
+        return values;
+    }
+
     private static JsonArray CreateToolCatalog()
     {
         var tools = new JsonArray
@@ -416,7 +424,7 @@ public partial class McpServer
                     ["properties"] = new JsonObject
                     {
                         ["indexedOnly"] = new JsonObject { ["type"] = "boolean", ["description"] = "Return only languages currently present in the index. Requires the configured database.", ["default"] = false },
-                        ["capability"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string", ["enum"] = new JsonArray { "symbols", "graph", "references" } }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray { "symbols", "graph", "references" } } } }, ["description"] = "Filter by language capability. `graph` and `references` both require call-graph/reference extraction support. Accepts a single value or an array; all requested capabilities must match." },
+                        ["capability"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string", ["enum"] = CreateLanguageCapabilityEnum() }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string", ["enum"] = CreateLanguageCapabilityEnum() } } }, ["description"] = "Filter by the same capability or capability-gap values as CLI `languages --capability`. Accepts a single value or an array; all requested capabilities must match." },
                         ["language"] = new JsonObject { ["type"] = "string", ["description"] = "Look up one canonical language using the same exact normalization as CLI `languages --language`, e.g. `csharp` or `cs`." },
                         ["extension"] = new JsonObject { ["type"] = "string", ["description"] = "Look up languages by file extension. Accepts `cs` or `.cs` style values." },
                         ["alias"] = new JsonObject { ["type"] = "string", ["description"] = "Look up languages by exact CLI language alias; canonical language names remain accepted for backward compatibility." },
