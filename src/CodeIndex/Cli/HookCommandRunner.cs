@@ -20,6 +20,9 @@ public static class HookCommandRunner
     private const int MaxExecutableManifestChars = 32 * 1024;
     private const int MaxExecutableArgumentChars = 8 * 1024;
     private const int UnixExecuteAccess = 1;
+    private const int UnixReadAccess = 4;
+    private const int UnixFileTypeMask = 0xF000;
+    private const int UnixRegularFileType = 0x8000;
     private static readonly byte[] BeginMarkerBytes = Encoding.ASCII.GetBytes(BeginMarker);
     private static readonly byte[] EndMarkerBytes = Encoding.ASCII.GetBytes(EndMarker);
     private static readonly byte[] HookPreambleBytes = Encoding.ASCII.GetBytes("#!/bin/sh");
@@ -1258,6 +1261,11 @@ public static class HookCommandRunner
             failureReason = "current_executable_not_runnable";
             return false;
         }
+        if (selection.Source == "dotnet_host_and_assembly"
+            && !ValidateManagedDeploymentFiles(selection.Argv[1], out failureReason))
+        {
+            return false;
+        }
         if (EncodeExecutableManifest(selection).Length > MaxExecutableManifestChars)
         {
             failureReason = "current_executable_provenance_too_large";
@@ -1278,8 +1286,26 @@ public static class HookCommandRunner
            && selection.Argv.All(static argument =>
                !string.IsNullOrWhiteSpace(argument)
                && argument.Length <= MaxExecutableArgumentChars
-               && Path.IsPathRooted(argument)
+               && IsCanonicalFullyQualifiedPath(argument)
                && argument.IndexOfAny(['\0', '\r', '\n']) < 0);
+
+    internal static bool IsCanonicalFullyQualifiedPath(string path)
+    {
+        if (!Path.IsPathFullyQualified(path))
+            return false;
+
+        try
+        {
+            var comparison = OperatingSystem.IsWindows()
+                ? StringComparison.OrdinalIgnoreCase
+                : StringComparison.Ordinal;
+            return string.Equals(path, Path.GetFullPath(path), comparison);
+        }
+        catch (Exception ex) when (IsHookFileOperationException(ex))
+        {
+            return false;
+        }
+    }
 
     private static HookExecutableJsonResult InspectExecutable(
         HookExecutableSelection installedSelection,
@@ -1292,37 +1318,41 @@ public static class HookCommandRunner
         var diagnosticArgv = installedSelection.Argv
             .Select(DiagnosticSanitizer.ForSupportSafePath)
             .ToArray();
+        HookExecutableJsonResult Result(
+            string status,
+            string failureReason,
+            string? actualVersion = null)
+            => new(
+                installedSelection.Source,
+                path,
+                entryAssemblyPath,
+                installedSelection.Argv,
+                path == null ? null : DiagnosticSanitizer.ForSupportSafePath(path),
+                entryAssemblyPath == null ? null : DiagnosticSanitizer.ForSupportSafePath(entryAssemblyPath),
+                diagnosticArgv,
+                installedSelection.Version,
+                actualVersion,
+                status,
+                failureReason);
+
         var missingPath = installedSelection.Argv.FirstOrDefault(
             static argument => !File.Exists(LongPath.EnsureWindowsPrefix(argument)));
         if (missingPath != null)
-        {
-            return new HookExecutableJsonResult(
-                installedSelection.Source,
-                path,
-                entryAssemblyPath,
-                installedSelection.Argv,
-                path == null ? null : DiagnosticSanitizer.ForSupportSafePath(path),
-                entryAssemblyPath == null ? null : DiagnosticSanitizer.ForSupportSafePath(entryAssemblyPath),
-                diagnosticArgv,
-                installedSelection.Version,
-                null,
-                "missing",
-                "pinned_executable_missing");
-        }
+            return Result("missing", "pinned_executable_missing");
         if (!IsRunnableExecutable(installedSelection.Argv[0]))
+            return Result("not_executable", "pinned_executable_not_runnable");
+        if (installedSelection.Source == "dotnet_host_and_assembly")
         {
-            return new HookExecutableJsonResult(
-                installedSelection.Source,
-                path,
-                entryAssemblyPath,
-                installedSelection.Argv,
-                path == null ? null : DiagnosticSanitizer.ForSupportSafePath(path),
-                entryAssemblyPath == null ? null : DiagnosticSanitizer.ForSupportSafePath(entryAssemblyPath),
-                diagnosticArgv,
-                installedSelection.Version,
-                null,
-                "not_executable",
-                "pinned_executable_not_runnable");
+            if (!IsReadableRegularFile(installedSelection.Argv[1]))
+                return Result("not_executable", "pinned_entry_assembly_unreadable");
+
+            foreach (var runtimePath in GetManagedRuntimePaths(installedSelection.Argv[1]))
+            {
+                if (!File.Exists(LongPath.EnsureWindowsPrefix(runtimePath)))
+                    return Result("missing", "pinned_runtime_file_missing");
+                if (!IsReadableRegularFile(runtimePath))
+                    return Result("not_executable", "pinned_runtime_file_unreadable");
+            }
         }
 
         string? actualVersion;
@@ -1389,6 +1419,8 @@ public static class HookCommandRunner
             if (directory == null)
                 return null;
             var versionPath = Path.Combine(directory, "version.json");
+            if (!IsReadableRegularFile(versionPath))
+                return null;
             var versionBytes = DataDirectorySecurity.ReadBytesWithinLimit(
                 versionPath,
                 16 * 1024,
@@ -1601,8 +1633,10 @@ public static class HookCommandRunner
 
     private static bool IsRunnableExecutable(string path)
     {
+        if (!IsRegularFile(path))
+            return false;
         if (OperatingSystem.IsWindows())
-            return File.Exists(LongPath.EnsureWindowsPrefix(path));
+            return true;
         try
         {
             return UnixAccess(LongPath.EnsureWindowsPrefix(path), UnixExecuteAccess) == 0;
@@ -1615,8 +1649,128 @@ public static class HookCommandRunner
         }
     }
 
+    private static bool ValidateManagedDeploymentFiles(
+        string assemblyPath,
+        out string failureReason)
+    {
+        if (!IsReadableRegularFile(assemblyPath))
+        {
+            failureReason = "current_entry_assembly_unreadable";
+            return false;
+        }
+
+        foreach (var runtimePath in GetManagedRuntimePaths(assemblyPath))
+        {
+            if (!File.Exists(LongPath.EnsureWindowsPrefix(runtimePath)))
+            {
+                failureReason = "current_runtime_file_missing";
+                return false;
+            }
+            if (!IsReadableRegularFile(runtimePath))
+            {
+                failureReason = "current_runtime_file_unreadable";
+                return false;
+            }
+        }
+
+        failureReason = string.Empty;
+        return true;
+    }
+
+    private static string[] GetManagedRuntimePaths(string assemblyPath)
+        =>
+        [
+            Path.ChangeExtension(assemblyPath, ".runtimeconfig.json"),
+            Path.ChangeExtension(assemblyPath, ".deps.json"),
+        ];
+
+    private static bool IsReadableRegularFile(string path)
+    {
+        if (!IsRegularFile(path))
+            return false;
+
+        if (!OperatingSystem.IsWindows())
+        {
+            try
+            {
+                return UnixAccess(LongPath.EnsureWindowsPrefix(path), UnixReadAccess) == 0;
+            }
+            catch (Exception ex) when (IsHookFileOperationException(ex)
+                                       || ex is DllNotFoundException
+                                           or EntryPointNotFoundException)
+            {
+                return false;
+            }
+        }
+
+        try
+        {
+            using var stream = File.Open(
+                LongPath.EnsureWindowsPrefix(path),
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete);
+            return stream.CanRead;
+        }
+        catch (Exception ex) when (IsHookFileOperationException(ex))
+        {
+            return false;
+        }
+    }
+
+    private static bool IsRegularFile(string path)
+    {
+        try
+        {
+            var ioPath = LongPath.EnsureWindowsPrefix(path);
+            var attributes = File.GetAttributes(ioPath);
+            if ((attributes
+                 & (FileAttributes.Directory | FileAttributes.ReparsePoint | FileAttributes.Device)) != 0)
+            {
+                return false;
+            }
+
+            if (OperatingSystem.IsWindows())
+                return true;
+
+            return UnixStat(ioPath, out var status) == 0
+                   && (status.Mode & UnixFileTypeMask) == UnixRegularFileType;
+        }
+        catch (Exception ex) when (IsHookFileOperationException(ex)
+                                   || ex is DllNotFoundException
+                                       or EntryPointNotFoundException)
+        {
+            return false;
+        }
+    }
+
     [DllImport("libc", EntryPoint = "access", SetLastError = true)]
     private static extern int UnixAccess(string path, int mode);
+
+    [DllImport("libSystem.Native", EntryPoint = "SystemNative_Stat", CharSet = CharSet.Ansi)]
+    private static extern int UnixStat(string path, out UnixFileStatus status);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct UnixFileStatus
+    {
+        internal uint Flags;
+        internal int Mode;
+        internal uint Uid;
+        internal uint Gid;
+        internal long Size;
+        internal long ATime;
+        internal long ATimeNsec;
+        internal long MTime;
+        internal long MTimeNsec;
+        internal long CTime;
+        internal long CTimeNsec;
+        internal long BirthTime;
+        internal long BirthTimeNsec;
+        internal long Dev;
+        internal long RDev;
+        internal long Ino;
+        internal uint UserFlags;
+    }
 
     private static bool IsDotnetHost(string processPath)
         => string.Equals(
