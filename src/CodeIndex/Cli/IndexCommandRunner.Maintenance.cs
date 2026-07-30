@@ -230,7 +230,7 @@ public static partial class IndexCommandRunner
                         MaintenanceDatabaseFailureKind.NotDatabase));
             }
 
-            var status = new DbReader(db).GetStatus();
+            var status = new DbReader(db).GetStatus(includeDatabaseSizeAttribution: false);
             var objectSizes = ReadOptimizeObjectSizes(
                 db,
                 forceLogicalObjectSizeFallbackForTesting,

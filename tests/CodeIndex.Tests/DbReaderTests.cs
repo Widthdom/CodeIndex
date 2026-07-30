@@ -168,6 +168,392 @@ public partial class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetStatus_AttributesDatabasePagesWithoutMutatingSource_Issue4888()
+    {
+        var rawObjectName =
+            "/Users/example/private/token=database-secret-"
+            + new string('x', 180);
+        using (var command = _db.Connection.CreateCommand())
+        {
+            command.CommandText =
+                $"CREATE TABLE {SqliteIdentifier.Quote(rawObjectName)} (payload BLOB NOT NULL);"
+                + $"INSERT INTO {SqliteIdentifier.Quote(rawObjectName)}(payload) VALUES (zeroblob(1048576));";
+            command.ExecuteNonQuery();
+        }
+
+        long totalChangesBefore;
+        long queryOnlyBefore;
+        using (var command = _db.Connection.CreateCommand())
+        {
+            command.CommandText = "SELECT total_changes()";
+            totalChangesBefore = (long)command.ExecuteScalar()!;
+            command.CommandText = "PRAGMA query_only";
+            queryOnlyBefore = (long)command.ExecuteScalar()!;
+        }
+
+        var attribution = _reader.GetStatus().DatabaseSizeAttribution;
+
+        Assert.True(attribution.Available);
+        Assert.Contains(
+            attribution.Measurement,
+            ["dbstat_page_bytes", "sqlite_file_btree_pages"]);
+        Assert.NotNull(attribution.LogicalDatabaseBytes);
+        Assert.Equal(
+            attribution.LogicalDatabaseBytes,
+            attribution.AllocatedObjectBytes
+            + attribution.FreelistBytes
+            + attribution.UnexplainedResidualBytes);
+        Assert.Equal(
+            attribution.AllocatedObjectBytes,
+            attribution.TableBytes
+            + attribution.IndexBytes
+            + attribution.OtherObjectBytes);
+        Assert.Equal(
+            attribution.AllocatedObjectBytes,
+            attribution.InternalPageBytes
+            + attribution.LeafPageBytes
+            + attribution.OverflowPageBytes
+            + attribution.OtherPageBytes);
+        Assert.Equal(
+            attribution.AllocatedObjectBytes,
+            attribution.PayloadBytes
+            + attribution.UnusedBytes
+            + attribution.StructuralOverheadBytes);
+        Assert.True(attribution.OverflowPageBytes > 0);
+        Assert.NotNull(attribution.TopObjects);
+        Assert.InRange(
+            attribution.TopObjects!.Count,
+            1,
+            DbReader.DatabaseSizeAttributionTopObjectLimit);
+        Assert.Equal(
+            attribution.ObjectCount > attribution.TopObjects.Count,
+            attribution.TopObjectsTruncated);
+        Assert.All(
+            attribution.TopObjects,
+            item => Assert.InRange(
+                item.Name.Length,
+                1,
+                DbReader.DatabaseSizeAttributionObjectNameLimit));
+        var redactedObject = Assert.Single(
+            attribution.TopObjects,
+            item => item.NameRedactedOrTruncated);
+        Assert.DoesNotContain("database-secret", redactedObject.Name, StringComparison.Ordinal);
+        Assert.DoesNotContain("/Users/example", redactedObject.Name, StringComparison.Ordinal);
+
+        if (attribution.PhysicalFileSetBytes is { } physicalFileSetBytes)
+        {
+            Assert.Equal(
+                physicalFileSetBytes,
+                attribution.MainFileBytes
+                + attribution.WalFileBytes
+                + attribution.ShmFileBytes);
+        }
+
+        using (var command = _db.Connection.CreateCommand())
+        {
+            command.CommandText = "SELECT total_changes()";
+            Assert.Equal(totalChangesBefore, (long)command.ExecuteScalar()!);
+            command.CommandText = "PRAGMA query_only";
+            Assert.Equal(queryOnlyBefore, (long)command.ExecuteScalar()!);
+        }
+    }
+
+    [Fact]
+    public void DatabaseSizeAttribution_UnavailableDoesNotReportZeroObjectSizes_Issue4888()
+    {
+        var attribution = DbReader.BuildUnavailableDatabaseSizeAttribution(
+            "dbstat_unavailable",
+            new StatusDbPragmaSettings
+            {
+                PageSize = 4096,
+                PageCount = 10,
+                FreelistCount = 2,
+            },
+            logicalDatabaseBytes: 40960,
+            mainFileBytes: 40960,
+            walFileBytes: 0,
+            shmFileBytes: 0,
+            physicalFileSetBytes: 40960,
+            freelistBytes: 8192);
+
+        Assert.False(attribution.Available);
+        Assert.Equal("unavailable", attribution.Measurement);
+        Assert.Equal("dbstat_unavailable", attribution.UnavailableReason);
+        Assert.Null(attribution.AllocatedObjectBytes);
+        Assert.Null(attribution.TableBytes);
+        Assert.Null(attribution.IndexBytes);
+        Assert.Null(attribution.UnexplainedResidualBytes);
+        Assert.Null(attribution.TopObjects);
+    }
+
+    [Fact]
+    public void DatabaseSizeAttribution_CorruptDatabaseHeaderFailsClosed_Issue4888()
+    {
+        var corruptPath = Path.Combine(_dbDir, "corrupt-attribution.db");
+        File.WriteAllBytes(corruptPath, new byte[4096]);
+
+        Assert.Throws<InvalidDataException>(() => SqlitePageAttributionReader.Read(
+            _db.Connection,
+            corruptPath,
+            pageCount: 1,
+            pageSize: 4096,
+            CancellationToken.None));
+    }
+
+    [Fact]
+    public void DatabaseSizeAttribution_EmptyDatabaseAttributesSchemaPage_Issue4888()
+    {
+        var emptyPath = Path.Combine(_dbDir, "empty-attribution.db");
+        using var connection = new SqliteConnection($"Data Source={emptyPath}");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "CREATE TABLE scratch (value INTEGER); DROP TABLE scratch;";
+        command.ExecuteNonQuery();
+        command.CommandText = "PRAGMA page_count";
+        var pageCount = (long)command.ExecuteScalar()!;
+        command.CommandText = "PRAGMA page_size";
+        var pageSize = (long)command.ExecuteScalar()!;
+
+        var attribution = SqlitePageAttributionReader.Read(
+            connection,
+            emptyPath,
+            pageCount,
+            pageSize,
+            CancellationToken.None);
+
+        Assert.Equal(1, attribution.ObjectCount);
+        Assert.Equal(pageSize, attribution.AllocatedObjectBytes);
+        Assert.Equal(pageSize, attribution.TableBytes);
+        Assert.Equal(0, attribution.IndexBytes);
+        Assert.Equal(pageSize, attribution.LeafPageBytes);
+        Assert.InRange(
+            attribution.PayloadBytes + attribution.UnusedBytes,
+            0,
+            attribution.AllocatedObjectBytes);
+        var schemaObject = Assert.Single(attribution.TopObjects);
+        Assert.Equal("sqlite_schema", schemaObject.Name);
+    }
+
+    [Fact]
+    public void DatabaseSizeAttribution_RejectsPageCountsBeyondScanLimit_Issue4888()
+    {
+        Assert.Throws<InvalidDataException>(() => SqlitePageAttributionReader.Read(
+            _db.Connection,
+            _dbPath,
+            pageCount: DbReader.DatabaseSizeAttributionPageLimit + 1,
+            pageSize: 4096,
+            CancellationToken.None));
+    }
+
+    [Fact]
+    public void GetStatus_CancelsDbstatAggregationWithoutFallingBack_Issue4888()
+    {
+        using var cancellation = new CancellationTokenSource();
+        _db.Connection.CreateFunction(
+            "cancel_database_attribution",
+            () =>
+            {
+                cancellation.Cancel();
+                return 0L;
+            });
+        using (var command = _db.Connection.CreateCommand())
+        {
+            command.CommandText = """
+                CREATE TEMP VIEW dbstat AS
+                WITH RECURSIVE pages(value) AS (
+                    VALUES(1)
+                    UNION ALL
+                    SELECT value + 1
+                    FROM pages
+                    WHERE value < 1000000
+                )
+                SELECT
+                    'sqlite_schema' AS name,
+                    '/' AS path,
+                    value AS pageno,
+                    'leaf' AS pagetype,
+                    0 AS ncell,
+                    0 AS payload,
+                    cancel_database_attribution() AS unused,
+                    0 AS mx_payload,
+                    (value - 1) * 4096 AS pgoffset,
+                    4096 AS pgsize
+                FROM pages
+                """;
+            command.ExecuteNonQuery();
+        }
+        using var reader = new DbReader(_db, cancellation.Token);
+
+        var exception = Assert.Throws<OperationCanceledException>(() => reader.GetStatus());
+
+        var sqliteException = Assert.IsType<SqliteException>(exception.InnerException);
+        Assert.Equal(9, sqliteException.SqliteErrorCode);
+    }
+
+    [Fact]
+    public void DatabaseSizeAttribution_TruncatingWalSkipsObsoleteFramesAndObservesCancellation_Issue4888()
+    {
+        var walPath = Path.Combine(_dbDir, "truncating-wal-attribution.db");
+        using var connection = new SqliteConnection($"Data Source={walPath}");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            PRAGMA page_size=4096;
+            PRAGMA auto_vacuum=INCREMENTAL;
+            VACUUM;
+            PRAGMA journal_mode=WAL;
+            PRAGMA wal_autocheckpoint=0;
+            CREATE TABLE scratch (payload BLOB NOT NULL);
+            BEGIN;
+            """;
+        command.ExecuteNonQuery();
+        command.CommandText = "INSERT INTO scratch(payload) VALUES (zeroblob(3000))";
+        for (var row = 0; row < 64; row++)
+            command.ExecuteNonQuery();
+        command.CommandText = "COMMIT";
+        command.ExecuteNonQuery();
+        command.CommandText = "PRAGMA page_count";
+        var peakPageCount = (long)command.ExecuteScalar()!;
+        command.CommandText = "DROP TABLE scratch; PRAGMA incremental_vacuum(1000000);";
+        command.ExecuteNonQuery();
+        command.CommandText = "PRAGMA page_count";
+        var pageCount = (long)command.ExecuteScalar()!;
+        command.CommandText = "PRAGMA page_size";
+        var pageSize = (long)command.ExecuteScalar()!;
+
+        Assert.True(peakPageCount > pageCount);
+        Assert.True(new FileInfo(walPath + "-wal").Length > 0);
+        Assert.Throws<OperationCanceledException>(() => SqlitePageAttributionReader.Read(
+            connection,
+            walPath,
+            pageCount,
+            pageSize,
+            new CancellationToken(canceled: true)));
+
+        var attribution = SqlitePageAttributionReader.Read(
+            connection,
+            walPath,
+            pageCount,
+            pageSize,
+            CancellationToken.None);
+
+        Assert.Equal(1, pageCount);
+        Assert.Equal(1, attribution.ObjectCount);
+        Assert.Equal(pageSize, attribution.AllocatedObjectBytes);
+        Assert.Equal(pageSize, attribution.TableBytes);
+    }
+
+    [Fact]
+    public void DatabaseSizeAttribution_ConnectionSnapshotIgnoresNewerWalCommits_Issue4888()
+    {
+        var walPath = Path.Combine(_dbDir, "connection-snapshot-attribution.db");
+        var connectionString = new SqliteConnectionStringBuilder
+        {
+            DataSource = walPath,
+            Pooling = false,
+        }.ToString();
+        using var writer = new SqliteConnection(connectionString);
+        writer.Open();
+        using (var command = writer.CreateCommand())
+        {
+            command.CommandText = """
+                PRAGMA page_size=4096;
+                PRAGMA journal_mode=WAL;
+                PRAGMA wal_autocheckpoint=0;
+                CREATE TABLE scratch (payload BLOB NOT NULL);
+                BEGIN;
+                """;
+            command.ExecuteNonQuery();
+            command.CommandText =
+                "INSERT INTO scratch(payload) VALUES (zeroblob(3000))";
+            for (var row = 0; row < 200; row++)
+                command.ExecuteNonQuery();
+            command.CommandText = "COMMIT; PRAGMA wal_checkpoint(TRUNCATE);";
+            command.ExecuteNonQuery();
+        }
+
+        using var connection = new SqliteConnection(connectionString);
+        connection.Open();
+        using var transaction = connection.BeginTransaction(deferred: true);
+        using var readerCommand = connection.CreateCommand();
+        readerCommand.CommandText = "SELECT COUNT(*) FROM scratch";
+        Assert.Equal(200, (long)readerCommand.ExecuteScalar()!);
+        readerCommand.CommandText = "PRAGMA page_count";
+        var pageCount = (long)readerCommand.ExecuteScalar()!;
+        readerCommand.CommandText = "PRAGMA page_size";
+        var pageSize = (long)readerCommand.ExecuteScalar()!;
+
+        var before = SqlitePageAttributionReader.ReadConnectionSnapshot(
+            connection,
+            pageCount,
+            pageSize,
+            CancellationToken.None);
+        using (var command = writer.CreateCommand())
+        {
+            command.CommandText = "DELETE FROM scratch";
+            command.ExecuteNonQuery();
+        }
+        var after = SqlitePageAttributionReader.ReadConnectionSnapshot(
+            connection,
+            pageCount,
+            pageSize,
+            CancellationToken.None);
+
+        Assert.Equal(
+            new
+            {
+                before.ObjectCount,
+                before.AllocatedObjectBytes,
+                before.TableBytes,
+                before.IndexBytes,
+                before.OtherObjectBytes,
+                before.InternalPageBytes,
+                before.LeafPageBytes,
+                before.OverflowPageBytes,
+                before.OtherPageBytes,
+                before.PayloadBytes,
+                before.UnusedBytes,
+            },
+            new
+            {
+                after.ObjectCount,
+                after.AllocatedObjectBytes,
+                after.TableBytes,
+                after.IndexBytes,
+                after.OtherObjectBytes,
+                after.InternalPageBytes,
+                after.LeafPageBytes,
+                after.OverflowPageBytes,
+                after.OtherPageBytes,
+                after.PayloadBytes,
+                after.UnusedBytes,
+            });
+        Assert.Equal(before.TopObjects.ToArray(), after.TopObjects.ToArray());
+        Assert.True(before.AllocatedObjectBytes > pageSize);
+        readerCommand.CommandText = "SELECT COUNT(*) FROM scratch";
+        Assert.Equal(200, (long)readerCommand.ExecuteScalar()!);
+        Assert.Throws<OperationCanceledException>(() =>
+            SqlitePageAttributionReader.ReadConnectionSnapshot(
+                connection,
+                pageCount,
+                pageSize,
+                new CancellationToken(canceled: true)));
+    }
+
+    [Fact]
+    public void GetStatus_CanSkipDatabasePageScanForInternalConsumers_Issue4888()
+    {
+        var attribution = _reader.GetStatus(
+            includeDatabaseSizeAttribution: false).DatabaseSizeAttribution;
+
+        Assert.False(attribution.Available);
+        Assert.Equal("unavailable", attribution.Measurement);
+        Assert.Equal("not_requested", attribution.UnavailableReason);
+        Assert.Null(attribution.AllocatedObjectBytes);
+        Assert.Null(attribution.TopObjects);
+    }
+
+    [Fact]
     public void GetStatus_NormalizesIndexedHeadTimestampOffsetForMachineJson_Issue4321()
     {
         _writer.SetMeta(DbContext.IndexedHeadShaMetaKey, "abc123");

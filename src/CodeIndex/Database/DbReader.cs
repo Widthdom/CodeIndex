@@ -65,6 +65,7 @@ public partial class DbReader : IDisposable
     private readonly bool _readOnlyImmutableFallback;
     private readonly bool _immutableReadOnly;
     private readonly bool _immutableReadOnlyWalRisk;
+    private readonly bool _databaseFileSnapshotStable;
     private readonly bool _connectionPooling;
     private readonly string? _walCheckpointSkippedReason;
     private readonly string? _walCheckpointFailureReason;
@@ -475,7 +476,9 @@ public partial class DbReader : IDisposable
                context.WalCheckpointCheckpointedPageCount,
                context.WalCheckpointRemainingPageCount,
                context.DatabasePermissionPolicyName,
-               context.DatabasePermissionDiagnostics)
+               context.DatabasePermissionDiagnostics,
+               context.QueryOnlySnapshotRequiresRefresh
+                   || (context.ImmutableReadOnly && !context.ImmutableReadOnlyWalRisk))
     {
     }
 
@@ -505,7 +508,9 @@ public partial class DbReader : IDisposable
                context.WalCheckpointCheckpointedPageCount,
                context.WalCheckpointRemainingPageCount,
                context.DatabasePermissionPolicyName,
-               context.DatabasePermissionDiagnostics)
+               context.DatabasePermissionDiagnostics,
+               context.QueryOnlySnapshotRequiresRefresh
+                   || (context.ImmutableReadOnly && !context.ImmutableReadOnlyWalRisk))
     {
     }
 
@@ -551,7 +556,8 @@ public partial class DbReader : IDisposable
         long? walCheckpointCheckpointedPageCount = null,
         long? walCheckpointRemainingPageCount = null,
         string databasePermissionPolicy = DatabasePermissionPolicy.BestEffortName,
-        IReadOnlyList<StatusDatabasePermissionDiagnostic>? databasePermissionDiagnostics = null)
+        IReadOnlyList<StatusDatabasePermissionDiagnostic>? databasePermissionDiagnostics = null,
+        bool databaseFileSnapshotStable = false)
     {
         _conn = connection;
         _commandCache = commandCache;
@@ -568,6 +574,7 @@ public partial class DbReader : IDisposable
         _readOnlyImmutableFallback = readOnlyImmutableFallback;
         _immutableReadOnly = immutableReadOnly;
         _immutableReadOnlyWalRisk = immutableReadOnlyWalRisk;
+        _databaseFileSnapshotStable = databaseFileSnapshotStable;
         _connectionPooling = connectionPooling;
         _walCheckpointSkippedReason = walCheckpointSkippedReason;
         _walCheckpointFailureReason = walCheckpointFailureReason;

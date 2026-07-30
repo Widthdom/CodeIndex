@@ -1327,6 +1327,8 @@ internal sealed record ValidateConfigJsonResult(
 [JsonSerializable(typeof(LicenseTermsJsonResult))]
 [JsonSerializable(typeof(LicenseTrademarkJsonResult))]
 [JsonSerializable(typeof(StatusResult))]
+[JsonSerializable(typeof(StatusDatabaseSizeAttribution))]
+[JsonSerializable(typeof(StatusDatabaseObjectSize))]
 [JsonSerializable(typeof(StatusLogPathJsonResult))]
 [JsonSerializable(typeof(StatusHeadFreshness))]
 [JsonSerializable(typeof(StatusSqliteConnectionPolicy))]

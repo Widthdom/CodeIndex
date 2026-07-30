@@ -1104,6 +1104,111 @@ public sealed record GitExecutableStatus(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     bool? AncestorDirectoriesTrusted);
 
+/// <summary>
+/// Bounded per-object page attribution for SQLite status diagnostics.
+/// SQLite status 診断向けの件数上限付きオブジェクト別ページ内訳。
+/// </summary>
+public sealed class StatusDatabaseObjectSize
+{
+    public string Name { get; set; } = string.Empty;
+    [JsonPropertyName("object_type")]
+    public string ObjectType { get; set; } = string.Empty;
+    [JsonPropertyName("name_redacted_or_truncated")]
+    public bool NameRedactedOrTruncated { get; set; }
+    [JsonPropertyName("page_bytes")]
+    public long PageBytes { get; set; }
+    [JsonPropertyName("payload_bytes")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? PayloadBytes { get; set; }
+    [JsonPropertyName("unused_bytes")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? UnusedBytes { get; set; }
+}
+
+/// <summary>
+/// Read-only reconciliation of SQLite logical pages and physical database files.
+/// SQLite の論理ページと物理 database file を読み取り専用で再照合した結果。
+/// </summary>
+public sealed class StatusDatabaseSizeAttribution
+{
+    public bool Available { get; set; }
+    public string Measurement { get; set; } = "unavailable";
+    [JsonPropertyName("unavailable_reason")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? UnavailableReason { get; set; }
+    [JsonPropertyName("page_size_bytes")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? PageSizeBytes { get; set; }
+    [JsonPropertyName("page_count")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? PageCount { get; set; }
+    [JsonPropertyName("logical_database_bytes")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? LogicalDatabaseBytes { get; set; }
+    [JsonPropertyName("main_file_bytes")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? MainFileBytes { get; set; }
+    [JsonPropertyName("wal_file_bytes")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? WalFileBytes { get; set; }
+    [JsonPropertyName("shm_file_bytes")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? ShmFileBytes { get; set; }
+    [JsonPropertyName("physical_file_set_bytes")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? PhysicalFileSetBytes { get; set; }
+    [JsonPropertyName("allocated_object_bytes")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? AllocatedObjectBytes { get; set; }
+    [JsonPropertyName("table_bytes")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? TableBytes { get; set; }
+    [JsonPropertyName("index_bytes")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? IndexBytes { get; set; }
+    [JsonPropertyName("other_object_bytes")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? OtherObjectBytes { get; set; }
+    [JsonPropertyName("internal_page_bytes")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? InternalPageBytes { get; set; }
+    [JsonPropertyName("leaf_page_bytes")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? LeafPageBytes { get; set; }
+    [JsonPropertyName("overflow_page_bytes")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? OverflowPageBytes { get; set; }
+    [JsonPropertyName("other_page_bytes")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? OtherPageBytes { get; set; }
+    [JsonPropertyName("payload_bytes")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? PayloadBytes { get; set; }
+    [JsonPropertyName("unused_bytes")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? UnusedBytes { get; set; }
+    [JsonPropertyName("structural_overhead_bytes")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? StructuralOverheadBytes { get; set; }
+    [JsonPropertyName("freelist_bytes")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? FreelistBytes { get; set; }
+    [JsonPropertyName("unexplained_residual_bytes")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? UnexplainedResidualBytes { get; set; }
+    [JsonPropertyName("object_count")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? ObjectCount { get; set; }
+    [JsonPropertyName("top_object_limit")]
+    public int TopObjectLimit { get; set; }
+    [JsonPropertyName("top_objects_truncated")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? TopObjectsTruncated { get; set; }
+    [JsonPropertyName("top_objects")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<StatusDatabaseObjectSize>? TopObjects { get; set; }
+}
+
 public class StatusResult
 {
     internal const string SqliteConnectionPolicyJsonFieldName = "sqlite_connection_policy";
@@ -1545,6 +1650,8 @@ public class StatusResult
     [JsonPropertyName("wal_size_bytes")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public long? WalSizeBytes { get; set; }
+    [JsonPropertyName("database_size_attribution")]
+    public StatusDatabaseSizeAttribution DatabaseSizeAttribution { get; set; } = new();
     [JsonPropertyName("process")]
     public StatusProcessMetrics Process { get; set; } = StatusProcessMetrics.Capture();
     [JsonPropertyName("last_index_run")]

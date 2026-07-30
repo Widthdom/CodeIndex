@@ -37,7 +37,7 @@ public static partial class QueryCommandRunner
         {
             return WithDb(options, jsonOptions, reader =>
             {
-                var status = reader.GetStatus();
+                var status = reader.GetStatus(includeDatabaseSizeAttribution: false);
                 var catalog = BuildLanguageCatalog(reader.GetIndexedProjectRoot());
                 var indexedLanguageCounts = loadIndexedCounts ? status.Languages : null;
                 return WriteLanguages(

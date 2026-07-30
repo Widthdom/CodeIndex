@@ -48,6 +48,7 @@ public class DocumentationStatusContractTests
         "mac_profile",
         "db_size_bytes",
         "wal_size_bytes",
+        "database_size_attribution",
         "db_pragma_settings",
         "prepared_command_cache",
         "maintenance_guidance",
