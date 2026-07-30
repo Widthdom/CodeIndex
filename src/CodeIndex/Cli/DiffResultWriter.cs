@@ -168,10 +168,12 @@ internal static class DiffResultWriter
         Console.WriteLine($"  left   : {result.LeftDb}");
         Console.WriteLine($"  right  : {result.RightDb}");
         Console.WriteLine($"  status : {result.Status}");
+        Console.WriteLine($"  mode   : {result.Summary.ComparisonMode}");
         Console.WriteLine($"  schema : {result.Summary.LeftSchemaVersion} -> {result.Summary.RightSchemaVersion}");
         Console.WriteLine($"  files  : {result.Summary.LeftFileCount} -> {result.Summary.RightFileCount} ({FormatDelta(result.Summary.FileCountDelta)})");
         Console.WriteLine($"  symbols: {result.Summary.LeftSymbolCount} -> {result.Summary.RightSymbolCount} ({FormatDelta(result.Summary.SymbolCountDelta)})");
         Console.WriteLine($"  refs   : {result.Summary.LeftReferenceCount} -> {result.Summary.RightReferenceCount} ({FormatDelta(result.Summary.ReferenceCountDelta)})");
+        WriteDifferenceCategories(result.Summary.Categories);
         if (result.Offset > 0)
             Console.WriteLine($"  page   : offset {result.Offset}, limit {result.Limit}");
 
@@ -192,6 +194,16 @@ internal static class DiffResultWriter
         Console.WriteLine($"  {label}:");
         foreach (var value in values)
             Console.WriteLine($"    - {value}");
+    }
+
+    private static void WriteDifferenceCategories(List<DiffCategorySummaryJsonResult> categories)
+    {
+        foreach (var category in categories.Where(category => category.Different))
+        {
+            var disposition = category.Included ? "included" : "excluded";
+            Console.WriteLine(
+                $"  {category.Category} ({disposition}): {string.Join(", ", category.Reasons)}");
+        }
     }
 
     private static void WriteRecords(List<DiffRecordJsonResult> records)

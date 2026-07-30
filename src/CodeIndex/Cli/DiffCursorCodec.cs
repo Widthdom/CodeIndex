@@ -9,19 +9,34 @@ internal static class DiffCursorCodec
     internal const string Prefix = "diff:v1:";
     internal const int MaxCursorLength = 512;
 
-    internal static string CreateSelectionFingerprint(string leftDb, string rightDb, bool includeContent)
+    internal static string CreateSelectionFingerprint(
+        string leftDb,
+        string rightDb,
+        bool includeContent,
+        bool dataOnly,
+        bool includeTelemetry)
     {
-        using var hash = CreateSelectionHash(leftDb, rightDb, includeContent);
+        using var hash = CreateSelectionHash(leftDb, rightDb, includeContent, dataOnly, includeTelemetry);
         return CompleteSelectionFingerprint(hash);
     }
 
-    internal static IncrementalHash CreateSelectionHash(string leftDb, string rightDb, bool includeContent)
+    internal static IncrementalHash CreateSelectionHash(
+        string leftDb,
+        string rightDb,
+        bool includeContent,
+        bool dataOnly,
+        bool includeTelemetry)
     {
         var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         AppendSelectionPart(hash, "diff-record-selection:v1");
         AppendSelectionPart(hash, leftDb);
         AppendSelectionPart(hash, rightDb);
         AppendSelectionPart(hash, includeContent ? "include-content" : "redacted");
+        AppendSelectionPart(
+            hash,
+            includeTelemetry
+                ? "semantic-with-telemetry"
+                : dataOnly ? "data-only" : "semantic");
         return hash;
     }
 
