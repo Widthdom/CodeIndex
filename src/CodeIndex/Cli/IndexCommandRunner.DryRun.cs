@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
+using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Cli;
@@ -12,6 +13,7 @@ public static partial class IndexCommandRunner
     internal const int DryRunLanguageDetectionLimit = 100;
     internal const int DryRunWarningSampleLimit = 100;
     internal const int DryRunErrorSampleLimit = 100;
+    internal const int DryRunParseEstimateFileLimit = 100;
     internal const int DefaultDryRunPathLimit = 100_000;
     internal const int MaxDryRunPathLimit = 1_000_000;
     private const int DryRunScanErrorKeyLimit = 2048;
@@ -48,7 +50,7 @@ public static partial class IndexCommandRunner
         var warningCount = 0;
         var dryScanErrorKeys = new HashSet<string>(StringComparer.Ordinal);
         DryRunScanMetadata dryScanMetadata;
-        var dbSnapshot = ReadDryRunDbSnapshot(resolvedDbPath, options.SymbolKindFilter);
+        var dbSnapshot = ReadDryRunDbSnapshot(resolvedDbPath);
         if (options.MemoryTrace)
             memorySamples.Add(CaptureMemorySample("snapshot", stopwatch));
         var normalizedProjectRoot = Path.GetFullPath(projectPath);
@@ -59,10 +61,19 @@ public static partial class IndexCommandRunner
         var retainedRelativePaths = new HashSet<string>(StringComparer.Ordinal);
         var projectedDeletePaths = new HashSet<string>(StringComparer.Ordinal);
         var projectedPurgePaths = new HashSet<string>(StringComparer.Ordinal);
-        var estimatedTableMutations = CreateEmptyEstimatedTableMutations();
+        var mutationEstimates = new DryRunMutationEstimateAccumulator();
         var estimatedSymbolsDroppedByKindFilter = 0L;
+        var projectedFileUpdates = 0;
+        var projectedFileSkips = 0;
+        var projectedPolicySkips = 0;
+        var projectedSymbolCapHits = 0;
+        var projectedReferenceCapHits = 0;
+        var parseEstimateFilesProcessed = 0;
+        var parseEstimateFilesTruncated = false;
         var unsupportedTotal = 0;
         var unknownExtensionTotal = 0;
+        using var symbolExtractionWorker = new LazyDisposable<SymbolExtractionWorkerClient>(
+            () => new SymbolExtractionWorkerClient(options.MaxFileSizeBytes));
         var normalizedUpdatePaths = options.UpdateFiles.Count > 0
             ? NormalizeUpdateFileTargets(projectPath, options.UpdateFiles, options.Json)
             : [];
@@ -178,6 +189,36 @@ public static partial class IndexCommandRunner
                 ? FileIndexer.GetReusableDetectedLanguage(f, dryScanMetadata.FileLanguages)
                 : null;
             var probe = ProbeDryRunFile(dryIndexer, f, displayRelativePath, knownLanguage);
+            if (probe.PolicySkipped)
+            {
+                dryFileCount++;
+                projectedFileUpdates++;
+                projectedPolicySkips++;
+                retainedRelativePaths.Add(dbRelativePath);
+                AddEstimatedExistingUpdateMutations(
+                    mutationEstimates,
+                    dbSnapshot,
+                    dbRelativePath);
+                mutationEstimates.AddParsedEstimate(new DryRunParsedMutationEstimate(
+                    0,
+                    0,
+                    0,
+                    0,
+                    1,
+                    0,
+                    SymbolCapHit: false,
+                    ReferenceCapHit: false));
+                if (dryFileSamples.Count < DryRunFileSampleLimit)
+                    dryFileSamples.Add(displayRelativePath);
+                langCounts[probe.Language] = langCounts.GetValueOrDefault(probe.Language) + 1;
+                if (probe.Error != null)
+                {
+                    RecordDryRunError(displayRelativePath, probe.Error);
+                    if (!options.Json && !options.Quiet)
+                        ConsoleUi.PrintWarning($"{displayRelativePath}: {probe.Error}");
+                }
+                continue;
+            }
             if (!probe.Supported)
             {
                 if (probe.UnknownExtension)
@@ -238,7 +279,62 @@ public static partial class IndexCommandRunner
                         dbRelativePath);
                 }
             }
-            estimatedSymbolsDroppedByKindFilter += AddEstimatedUpdateMutation(estimatedTableMutations, dbSnapshot, dbRelativePath);
+            var projectedSkip = !options.Rebuild
+                && dbSnapshot.Files.TryGetValue(dbRelativePath, out var existingRows)
+                && !string.IsNullOrEmpty(probe.Checksum)
+                && string.Equals(existingRows.Checksum, probe.Checksum, StringComparison.Ordinal);
+            if (projectedSkip)
+            {
+                projectedFileSkips++;
+            }
+            else
+            {
+                projectedFileUpdates++;
+                AddEstimatedExistingUpdateMutations(
+                    mutationEstimates,
+                    dbSnapshot,
+                    dbRelativePath);
+                if (parseEstimateFilesProcessed >= DryRunParseEstimateFileLimit)
+                {
+                    parseEstimateFilesTruncated = true;
+                    mutationEstimates.MarkParseUnknown("parse_estimate_file_limit_reached");
+                }
+                else
+                {
+                    parseEstimateFilesProcessed++;
+                    try
+                    {
+                        var injectedFailure = DryRunParseEstimateFailureForTesting?.Invoke(displayRelativePath);
+                        if (injectedFailure != null)
+                            throw injectedFailure;
+                        var parsedEstimate = BuildDryRunParsedMutationEstimate(
+                            options,
+                            dryIndexer,
+                            probe.Loaded!.Value,
+                            f,
+                            projectPath,
+                            symbolExtractionWorker.Value,
+                            cancellationToken);
+                        mutationEstimates.AddParsedEstimate(parsedEstimate);
+                        estimatedSymbolsDroppedByKindFilter += parsedEstimate.SymbolsDroppedByKindFilter;
+                        if (parsedEstimate.SymbolCapHit)
+                            projectedSymbolCapHits++;
+                        if (parsedEstimate.ReferenceCapHit)
+                            projectedReferenceCapHits++;
+                    }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        return WriteDryRunInterrupted(options, jsonOptions);
+                    }
+                    catch (Exception ex)
+                    {
+                        mutationEstimates.MarkParseUnknown("parse_estimation_failed");
+                        RecordDryRunError(
+                            displayRelativePath,
+                            $"Parse-only mutation estimate unavailable: {CommandErrorWriter.FormatSanitizedExceptionMessage(ex)}");
+                    }
+                }
+            }
             if (dryFileSamples.Count < DryRunFileSampleLimit)
                 dryFileSamples.Add(displayRelativePath);
             langCounts[probe.Language] = langCounts.GetValueOrDefault(probe.Language) + 1;
@@ -273,9 +369,15 @@ public static partial class IndexCommandRunner
         var projectedPurges = projectedPurgePaths.Count;
 
         foreach (var relativePath in projectedDeletePaths)
-            AddEstimatedDeleteMutation(estimatedTableMutations, dbSnapshot, relativePath);
+            AddEstimatedDeleteMutation(mutationEstimates, dbSnapshot, relativePath);
         foreach (var relativePath in projectedPurgePaths)
-            AddEstimatedDeleteMutation(estimatedTableMutations, dbSnapshot, relativePath);
+            AddEstimatedDeleteMutation(mutationEstimates, dbSnapshot, relativePath);
+
+        if (candidatePathsTruncated)
+            mutationEstimates.MarkAllUnknown("candidate_path_limit_reached");
+
+        var estimatedTableMutations = mutationEstimates.BuildValues();
+        var estimatedTableMutationDetails = mutationEstimates.BuildDetails();
 
         if (options.MemoryTrace)
         {
@@ -292,16 +394,24 @@ public static partial class IndexCommandRunner
                 Status = "dry_run",
                 FilesTotal = dryFileCount,
                 Estimates = true,
-                ProjectedFileUpdates = dryFileCount,
+                ProjectedFileUpdates = projectedFileUpdates,
+                ProjectedFileSkips = projectedFileSkips,
+                ProjectedPolicySkips = projectedPolicySkips,
                 ProjectedFileDeletes = projectedDeletes,
                 ProjectedFilePurges = projectedPurges,
+                ProjectedSymbolCapHits = projectedSymbolCapHits,
+                ProjectedReferenceCapHits = projectedReferenceCapHits,
                 UnsupportedTotal = unsupportedTotal,
                 UnknownExtensionTotal = unknownExtensionTotal,
                 CandidatePathLimit = dryRunPathLimit,
                 CandidatePathsProcessed = candidatePathsProcessed,
                 CandidatePathsTruncated = candidatePathsTruncated,
                 TotalsLowerBound = candidatePathsTruncated,
+                ParseEstimateFileLimit = DryRunParseEstimateFileLimit,
+                ParseEstimateFilesProcessed = parseEstimateFilesProcessed,
+                ParseEstimateFilesTruncated = parseEstimateFilesTruncated,
                 EstimatedTableMutations = estimatedTableMutations,
+                EstimatedTableMutationDetails = estimatedTableMutationDetails,
                 SymbolsDroppedByKindFilter = estimatedSymbolsDroppedByKindFilter,
                 SymbolKindFilter = options.SymbolKindFilter.ToJsonResult(),
                 FileSamples = dryFileSamples.Count > 0 ? dryFileSamples : null,
@@ -326,11 +436,28 @@ public static partial class IndexCommandRunner
         else
         {
             var lowerBound = candidatePathsTruncated ? " (truncated; totals are lower bounds)" : string.Empty;
-            CommandOutputWriter.WriteLine($"Dry run: {dryFileCount} files would be indexed{lowerBound}");
+            CommandOutputWriter.WriteLine($"Dry run: {dryFileCount} indexable files inspected{lowerBound}");
             if (candidatePathsTruncated)
                 CommandOutputWriter.WriteLine($"  candidate paths processed {candidatePathsProcessed.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)} of limit {dryRunPathLimit.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)}");
+            CommandOutputWriter.WriteLine($"  projected updates {projectedFileUpdates,6}");
+            CommandOutputWriter.WriteLine($"  projected skips   {projectedFileSkips,6}");
+            CommandOutputWriter.WriteLine($"  projected policy skips {projectedPolicySkips,6}");
             CommandOutputWriter.WriteLine($"  projected deletes {projectedDeletes,6}");
             CommandOutputWriter.WriteLine($"  projected purges  {projectedPurges,6}");
+            CommandOutputWriter.WriteLine($"  projected symbol cap hits    {projectedSymbolCapHits,6}");
+            CommandOutputWriter.WriteLine($"  projected reference cap hits {projectedReferenceCapHits,6}");
+            foreach (var metric in DryRunMutationEstimateAccumulator.MetricNames)
+            {
+                var estimate = estimatedTableMutationDetails[metric];
+                var value = estimate.Value?.ToString("N0", System.Globalization.CultureInfo.InvariantCulture) ?? "unknown";
+                var reasons = estimate.UnknownReasons.Count == 0
+                    ? string.Empty
+                    : $"; reason {string.Join(",", estimate.UnknownReasons)}";
+                CommandOutputWriter.WriteLine(
+                    $"  estimated {metric,-17} {value,10} ({estimate.Source}, {estimate.Confidence}{reasons})");
+            }
+            if (parseEstimateFilesTruncated)
+                CommandOutputWriter.WriteLine($"  parse estimates capped at {DryRunParseEstimateFileLimit.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)} update files");
             foreach (var (lang, count) in langCounts.OrderByDescending(kv => kv.Value))
                 CommandOutputWriter.WriteLine($"  {lang,-12} {count,6}");
             foreach (var detection in languageDetectionSamples)
@@ -703,7 +830,29 @@ public static partial class IndexCommandRunner
                 Unsupported: false,
                 UnknownExtension: false,
                 DetectionSource: loaded.LanguageDetection.DetectionSource,
-                DetectionConfidence: loaded.LanguageDetection.Confidence);
+                DetectionConfidence: loaded.LanguageDetection.Confidence,
+                Loaded: loaded,
+                PolicySkipped: false);
+        }
+        catch (FileIndexer.FileTooLargeSkippedException ex)
+        {
+            var skipped = indexer.BuildSkippedFileRecord(
+                absolutePath,
+                relativePath,
+                reusableLanguage);
+            return DryRunFileProbe.FromPolicySkip(
+                skipped,
+                CommandErrorWriter.FormatSanitizedExceptionMessage(ex));
+        }
+        catch (FileIndexer.BinaryFileSkippedException ex)
+        {
+            var skipped = indexer.BuildSkippedFileRecord(
+                absolutePath,
+                relativePath,
+                reusableLanguage);
+            return DryRunFileProbe.FromPolicySkip(
+                skipped,
+                CommandErrorWriter.FormatSanitizedExceptionMessage(ex));
         }
         catch (Exception ex)
         {
@@ -711,55 +860,216 @@ public static partial class IndexCommandRunner
         }
     }
 
-    private static Dictionary<string, long> CreateEmptyEstimatedTableMutations()
-        => new(StringComparer.Ordinal)
+    private static DryRunParsedMutationEstimate BuildDryRunParsedMutationEstimate(
+        IndexCommandOptions options,
+        FileIndexer indexer,
+        LoadedFileRecord loaded,
+        string absolutePath,
+        string projectRoot,
+        SymbolExtractionWorkerClient symbolExtractionWorker,
+        CancellationToken cancellationToken)
+    {
+        var record = loaded.Record;
+        var chunks = ChunkSplitter.SplitNormalized(
+            0,
+            loaded.Content,
+            loaded.HasOversizeLine,
+            record.Lines);
+        var generatedSuppressionIssue = indexer.IsGeneratedCodeExtractionSuppressed(record.Path)
+            ? indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path)
+            : null;
+        if (generatedSuppressionIssue != null)
         {
-            ["files"] = 0,
-            ["chunks"] = 0,
-            ["symbols"] = 0,
-            ["symbol_references"] = 0,
-            ["reference_lines"] = 0,
-            ["file_issues"] = 0,
-        };
+            var generatedIssues = AppendIssueIfMissing(
+                FileIndexer.ValidateContent(
+                    record.Path,
+                    loaded.RawBytes,
+                    loaded.Content,
+                    record.Lang,
+                    loaded.Inspection,
+                    loaded.HasOversizeLine,
+                    loaded.ConflictMarkerLine),
+                generatedSuppressionIssue);
+            return new DryRunParsedMutationEstimate(
+                chunks.Count,
+                0,
+                0,
+                0,
+                generatedIssues.Count,
+                0,
+                SymbolCapHit: false,
+                ReferenceCapHit: false);
+        }
 
-    private static long AddEstimatedUpdateMutation(
-        Dictionary<string, long> mutations,
+        var symbolExtraction = ExtractSymbolsWithStallTimeout(
+            0,
+            record.Lang,
+            loaded.Content,
+            absolutePath,
+            projectRoot,
+            record.Path,
+            FormatIndexPhasePath(record.Path, "dry_run_symbols"),
+            true,
+            loaded.HasOversizeLine,
+            loaded.ConflictMarkerLine,
+            symbolExtractionWorker,
+            cancellationToken);
+        var symbols = symbolExtraction.Symbols;
+        if (symbols.Count > options.MaxSymbolsPerFile)
+        {
+            var issueCount = symbolExtraction.RegexTimeoutIssue == null ? 1 : 2;
+            return new DryRunParsedMutationEstimate(
+                0,
+                0,
+                0,
+                0,
+                issueCount,
+                0,
+                SymbolCapHit: true,
+                ReferenceCapHit: false);
+        }
+
+        SymbolExtractor.ApplyFamilyScope(
+            symbols,
+            indexer.GetFamilyScopeKey(absolutePath, record.Lang));
+        var symbolsDroppedByKindFilter = options.SymbolKindFilter.Apply(symbols);
+        if (symbols.Count > options.MaxSymbolsPerFile)
+        {
+            var issueCount = symbolExtraction.RegexTimeoutIssue == null ? 1 : 2;
+            return new DryRunParsedMutationEstimate(
+                0,
+                0,
+                0,
+                0,
+                issueCount,
+                symbolsDroppedByKindFilter,
+                SymbolCapHit: true,
+                ReferenceCapHit: false);
+        }
+
+        FileIndexer.ValidateSymbolLineRanges(record, symbols);
+        List<CodeIndex.Models.ReferenceRecord> references;
+        FileIssue? referenceRegexTimeoutIssue = null;
+        ReferenceExtractionResult? referenceExtraction = null;
+        if (options.SymbolsOnly)
+        {
+            references = [];
+        }
+        else
+        {
+            using var regexTimeouts = BoundedRegex.CaptureTimeouts(
+                record.Lang,
+                "reference_extraction");
+            referenceExtraction = ReferenceExtractor.ExtractDetailedNormalized(
+                0,
+                record.Lang,
+                loaded.Content,
+                loaded.HasOversizeLine,
+                symbols,
+                record.Path,
+                workspaceSymbols: null,
+                cancellationToken,
+                maxReferenceCount: options.MaxReferencesPerFile + 1,
+                conflictMarkerLine: loaded.ConflictMarkerLine,
+                workspaceRoot: projectRoot,
+                csharpStaticInterfaceMemberLookups: null);
+            references = referenceExtraction.References;
+            referenceRegexTimeoutIssue = BuildRegexTimeoutIssue(record.Path, regexTimeouts);
+        }
+
+        var extractedReferenceCount = references.Count;
+        var referenceCapHit = extractedReferenceCount > options.MaxReferencesPerFile;
+        if (referenceCapHit)
+            references = [];
+
+        IReadOnlyList<FileIssue> issues = FileIndexer.ValidateContent(
+            record.Path,
+            loaded.RawBytes,
+            loaded.Content,
+            record.Lang,
+            loaded.Inspection,
+            loaded.HasOversizeLine,
+            loaded.ConflictMarkerLine);
+        if (symbolExtraction.RegexTimeoutIssue != null)
+            issues = AppendIssue(issues, symbolExtraction.RegexTimeoutIssue);
+        if (referenceRegexTimeoutIssue != null)
+            issues = AppendIssue(issues, referenceRegexTimeoutIssue);
+        if (referenceExtraction != null)
+        {
+            issues = AppendReferenceExtractionDiagnosticIssues(
+                issues,
+                record.Path,
+                referenceExtraction.Diagnostics);
+        }
+        if (referenceCapHit)
+        {
+            issues = AppendIssue(
+                issues,
+                BuildReferenceCountExceededIssue(
+                    record.Path,
+                    extractedReferenceCount,
+                    options.MaxReferencesPerFile));
+        }
+
+        var referenceLines = references
+            .Select(reference => (reference.Line, reference.Context))
+            .Distinct()
+            .Count();
+        return new DryRunParsedMutationEstimate(
+            chunks.Count,
+            symbols.Count,
+            references.Count,
+            referenceLines,
+            issues.Count,
+            symbolsDroppedByKindFilter,
+            SymbolCapHit: false,
+            ReferenceCapHit: referenceCapHit);
+    }
+
+    private static void AddEstimatedExistingUpdateMutations(
+        DryRunMutationEstimateAccumulator mutations,
         DryRunDbSnapshot snapshot,
         string relativePath)
     {
-        mutations["files"]++;
+        mutations.Add("files", 1);
         if (!snapshot.Files.TryGetValue(relativePath, out var rows))
-            return 0;
+            return;
 
-        AddExistingChildRows(mutations, rows, rows.FilteredSymbols);
-        return rows.Symbols - rows.FilteredSymbols;
+        AddExistingChildRows(mutations, snapshot, rows, rows.Symbols);
     }
 
     private static void AddEstimatedDeleteMutation(
-        Dictionary<string, long> mutations,
+        DryRunMutationEstimateAccumulator mutations,
         DryRunDbSnapshot snapshot,
         string relativePath)
     {
         if (!snapshot.Files.TryGetValue(relativePath, out var rows))
             return;
 
-        mutations["files"]++;
-        AddExistingChildRows(mutations, rows, rows.Symbols);
+        mutations.Add("files", 1);
+        AddExistingChildRows(mutations, snapshot, rows, rows.Symbols);
     }
 
     private static void AddExistingChildRows(
-        Dictionary<string, long> mutations,
+        DryRunMutationEstimateAccumulator mutations,
+        DryRunDbSnapshot snapshot,
         DryRunExistingFileRows rows,
         long symbols)
     {
-        mutations["chunks"] += rows.Chunks;
-        mutations["symbols"] += symbols;
-        mutations["symbol_references"] += rows.SymbolReferences;
-        mutations["reference_lines"] += rows.ReferenceLines;
-        mutations["file_issues"] += rows.FileIssues;
+        mutations.AddExisting("chunks", rows.Chunks, snapshot.ChunksAvailable);
+        mutations.AddExisting("symbols", symbols, snapshot.SymbolsAvailable);
+        mutations.AddExisting(
+            "symbol_references",
+            rows.SymbolReferences,
+            snapshot.SymbolReferencesAvailable);
+        mutations.AddExisting(
+            "reference_lines",
+            rows.ReferenceLines,
+            snapshot.ReferenceLinesAvailable);
+        mutations.AddExisting("file_issues", rows.FileIssues, snapshot.FileIssuesAvailable);
     }
 
-    private static DryRunDbSnapshot ReadDryRunDbSnapshot(string dbPath, SymbolKindFilter symbolKindFilter)
+    private static DryRunDbSnapshot ReadDryRunDbSnapshot(string dbPath)
     {
         try
         {
@@ -786,15 +1096,11 @@ public static partial class IndexCommandRunner
             var hasFileIssues = DryRunTableExists(connection, "file_issues");
 
             using var command = connection.CreateCommand();
-            var filteredSymbolsExpression = hasSymbols && symbolKindFilter.IsActive
-                ? BuildDryRunFilteredSymbolCountExpression(command, symbolKindFilter)
-                : "0";
             command.CommandText = $"""
                 SELECT f.path,
                        f.checksum,
                        {(hasChunks ? "(SELECT COUNT(*) FROM chunks c WHERE c.file_id = f.id)" : "0")} AS chunks_count,
                        {(hasSymbols ? "(SELECT COUNT(*) FROM symbols s WHERE s.file_id = f.id)" : "0")} AS symbols_count,
-                       {filteredSymbolsExpression} AS filtered_symbols_count,
                        {(hasSymbolReferences ? "(SELECT COUNT(*) FROM symbol_references r WHERE r.file_id = f.id)" : "0")} AS symbol_references_count,
                        {(hasReferenceLines ? "(SELECT COUNT(*) FROM reference_lines l WHERE l.file_id = f.id)" : "0")} AS reference_lines_count,
                        {(hasFileIssues ? "(SELECT COUNT(*) FROM file_issues i WHERE i.file_id = f.id)" : "0")} AS file_issues_count
@@ -805,18 +1111,23 @@ public static partial class IndexCommandRunner
             using var reader = command.ExecuteReader();
             while (reader.Read())
             {
-                var symbols = reader.GetInt64(3);
                 files[reader.GetString(0)] = new DryRunExistingFileRows(
                     reader.IsDBNull(1) ? null : reader.GetString(1),
                     reader.GetInt64(2),
-                    symbols,
-                    symbolKindFilter.IsActive ? reader.GetInt64(4) : symbols,
+                    reader.GetInt64(3),
+                    reader.GetInt64(4),
                     reader.GetInt64(5),
-                    reader.GetInt64(6),
-                    reader.GetInt64(7));
+                    reader.GetInt64(6));
             }
 
-            return new DryRunDbSnapshot(files, indexedProjectRoot);
+            return new DryRunDbSnapshot(
+                files,
+                indexedProjectRoot,
+                hasChunks,
+                hasSymbols,
+                hasSymbolReferences,
+                hasReferenceLines,
+                hasFileIssues);
         }
         catch (SqliteException)
         {
@@ -830,39 +1141,6 @@ public static partial class IndexCommandRunner
         {
             return DryRunDbSnapshot.Empty;
         }
-    }
-
-    private static string BuildDryRunFilteredSymbolCountExpression(
-        SqliteCommand command,
-        SymbolKindFilter symbolKindFilter)
-    {
-        var conditions = new List<string>();
-        if (symbolKindFilter.Include.Count > 0)
-        {
-            var parameters = AddDryRunSymbolKindParameters(command, "include", symbolKindFilter.Include);
-            conditions.Add($"s.kind IS NOT NULL AND trim(s.kind) <> '' AND s.kind COLLATE NOCASE IN ({parameters})");
-        }
-        if (symbolKindFilter.Exclude.Count > 0)
-        {
-            var parameters = AddDryRunSymbolKindParameters(command, "exclude", symbolKindFilter.Exclude);
-            conditions.Add($"(s.kind IS NULL OR trim(s.kind) = '' OR s.kind COLLATE NOCASE NOT IN ({parameters}))");
-        }
-
-        return $"(SELECT COUNT(*) FROM symbols s WHERE s.file_id = f.id AND {string.Join(" AND ", conditions)})";
-    }
-
-    private static string AddDryRunSymbolKindParameters(
-        SqliteCommand command,
-        string prefix,
-        IReadOnlyList<string> values)
-    {
-        var names = new string[values.Count];
-        for (var i = 0; i < values.Count; i++)
-        {
-            names[i] = $"@{prefix}{i}";
-            command.Parameters.AddWithValue(names[i], values[i]);
-        }
-        return string.Join(", ", names);
     }
 
     private static bool DryRunTableExists(SqliteConnection connection, string tableName)
@@ -892,16 +1170,131 @@ public static partial class IndexCommandRunner
         "Rerun `cdidx index --dry-run` when you are ready to inspect the candidate files again.",
         CommandErrorCodes.Interrupted);
 
-    private sealed record DryRunDbSnapshot(IReadOnlyDictionary<string, DryRunExistingFileRows> Files, string? IndexedProjectRoot)
+    private readonly record struct DryRunParsedMutationEstimate(
+        long Chunks,
+        long Symbols,
+        long SymbolReferences,
+        long ReferenceLines,
+        long FileIssues,
+        long SymbolsDroppedByKindFilter,
+        bool SymbolCapHit,
+        bool ReferenceCapHit);
+
+    private sealed class DryRunMutationEstimateAccumulator
     {
-        public static DryRunDbSnapshot Empty { get; } = new(new Dictionary<string, DryRunExistingFileRows>(StringComparer.Ordinal), null);
+        internal static readonly string[] MetricNames =
+        [
+            "files",
+            "chunks",
+            "symbols",
+            "symbol_references",
+            "reference_lines",
+            "file_issues",
+        ];
+
+        private readonly Dictionary<string, long> values = MetricNames.ToDictionary(
+            static metric => metric,
+            static _ => 0L,
+            StringComparer.Ordinal);
+        private readonly Dictionary<string, SortedSet<string>> unknownReasons = MetricNames.ToDictionary(
+            static metric => metric,
+            static _ => new SortedSet<string>(StringComparer.Ordinal),
+            StringComparer.Ordinal);
+
+        internal void Add(string metric, long value)
+            => values[metric] += value;
+
+        internal void AddExisting(string metric, long value, bool available)
+        {
+            if (!available)
+            {
+                MarkUnknown(metric, "existing_table_unavailable");
+                return;
+            }
+
+            Add(metric, value);
+        }
+
+        internal void AddParsedEstimate(DryRunParsedMutationEstimate estimate)
+        {
+            Add("chunks", estimate.Chunks);
+            Add("symbols", estimate.Symbols);
+            Add("symbol_references", estimate.SymbolReferences);
+            Add("reference_lines", estimate.ReferenceLines);
+            Add("file_issues", estimate.FileIssues);
+        }
+
+        internal void MarkParseUnknown(string reason)
+        {
+            foreach (var metric in MetricNames)
+            {
+                if (metric != "files")
+                    MarkUnknown(metric, reason);
+            }
+        }
+
+        internal void MarkAllUnknown(string reason)
+        {
+            foreach (var metric in MetricNames)
+                MarkUnknown(metric, reason);
+        }
+
+        internal Dictionary<string, long?> BuildValues()
+            => MetricNames.ToDictionary(
+                static metric => metric,
+                metric => unknownReasons[metric].Count == 0 ? (long?)values[metric] : null,
+                StringComparer.Ordinal);
+
+        internal Dictionary<string, IndexDryRunEstimateJsonResult> BuildDetails()
+            => MetricNames.ToDictionary(
+                static metric => metric,
+                metric =>
+                {
+                    var reasons = unknownReasons[metric].ToList();
+                    var value = reasons.Count == 0 ? (long?)values[metric] : null;
+                    var source = metric == "files"
+                        ? "filesystem_plan"
+                        : "parse_only_and_index_snapshot";
+                    var confidence = reasons.Count > 0
+                        ? "unknown"
+                        : metric == "files"
+                            ? "exact"
+                            : "estimate";
+                    return new IndexDryRunEstimateJsonResult(
+                        value,
+                        source,
+                        confidence,
+                        reasons);
+                },
+                StringComparer.Ordinal);
+
+        private void MarkUnknown(string metric, string reason)
+            => unknownReasons[metric].Add(reason);
+    }
+
+    private sealed record DryRunDbSnapshot(
+        IReadOnlyDictionary<string, DryRunExistingFileRows> Files,
+        string? IndexedProjectRoot,
+        bool ChunksAvailable,
+        bool SymbolsAvailable,
+        bool SymbolReferencesAvailable,
+        bool ReferenceLinesAvailable,
+        bool FileIssuesAvailable)
+    {
+        public static DryRunDbSnapshot Empty { get; } = new(
+            new Dictionary<string, DryRunExistingFileRows>(StringComparer.Ordinal),
+            null,
+            false,
+            false,
+            false,
+            false,
+            false);
     }
 
     private readonly record struct DryRunExistingFileRows(
         string? Checksum,
         long Chunks,
         long Symbols,
-        long FilteredSymbols,
         long SymbolReferences,
         long ReferenceLines,
         long FileIssues);
@@ -946,10 +1339,25 @@ public static partial class IndexCommandRunner
         bool Unsupported,
         bool UnknownExtension,
         string? DetectionSource,
-        FileIndexer.LanguageDetectionConfidence? DetectionConfidence)
+        FileIndexer.LanguageDetectionConfidence? DetectionConfidence,
+        LoadedFileRecord? Loaded,
+        bool PolicySkipped)
     {
-        public static DryRunFileProbe FromError(string message) => new(false, string.Empty, null, message, Unsupported: false, UnknownExtension: false, null, null);
-        public static DryRunFileProbe FromUnsupported() => new(false, string.Empty, null, null, Unsupported: true, UnknownExtension: false, null, null);
-        public static DryRunFileProbe FromUnknownExtension() => new(false, string.Empty, null, null, Unsupported: false, UnknownExtension: true, null, null);
+        public static DryRunFileProbe FromError(string message) => new(false, string.Empty, null, message, Unsupported: false, UnknownExtension: false, null, null, null, PolicySkipped: false);
+        public static DryRunFileProbe FromUnsupported() => new(false, string.Empty, null, null, Unsupported: true, UnknownExtension: false, null, null, null, PolicySkipped: false);
+        public static DryRunFileProbe FromUnknownExtension() => new(false, string.Empty, null, null, Unsupported: false, UnknownExtension: true, null, null, null, PolicySkipped: false);
+        public static DryRunFileProbe FromPolicySkip(
+            FileRecord record,
+            string message) => new(
+                false,
+                record.Lang ?? "unknown",
+                record.Checksum,
+                message,
+                Unsupported: false,
+                UnknownExtension: false,
+                null,
+                null,
+                null,
+                PolicySkipped: true);
     }
 }

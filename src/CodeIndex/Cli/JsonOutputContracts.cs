@@ -820,6 +820,12 @@ internal sealed record IndexLanguageDetectionJsonResult(
     [property: JsonPropertyName("source")] string Source,
     [property: JsonPropertyName("confidence")] string Confidence);
 
+internal sealed record IndexDryRunEstimateJsonResult(
+    [property: JsonPropertyName("value")] long? Value,
+    [property: JsonPropertyName("source")] string Source,
+    [property: JsonPropertyName("confidence")] string Confidence,
+    [property: JsonPropertyName("unknown_reasons")] List<string> UnknownReasons);
+
 internal sealed class IndexDryRunJsonResult : IVersionedJsonResult
 {
     public string ApiVersion { get; init; } = JsonOutputContract.ApiVersion;
@@ -827,15 +833,23 @@ internal sealed class IndexDryRunJsonResult : IVersionedJsonResult
     public int FilesTotal { get; init; }
     public bool Estimates { get; init; }
     public int ProjectedFileUpdates { get; init; }
+    public int ProjectedFileSkips { get; init; }
+    public int ProjectedPolicySkips { get; init; }
     public int ProjectedFileDeletes { get; init; }
     public int ProjectedFilePurges { get; init; }
+    public int ProjectedSymbolCapHits { get; init; }
+    public int ProjectedReferenceCapHits { get; init; }
     public int UnsupportedTotal { get; init; }
     public int UnknownExtensionTotal { get; init; }
     public int CandidatePathLimit { get; init; }
     public int CandidatePathsProcessed { get; init; }
     public bool CandidatePathsTruncated { get; init; }
     public bool TotalsLowerBound { get; init; }
-    public Dictionary<string, long> EstimatedTableMutations { get; init; } = new();
+    public int ParseEstimateFileLimit { get; init; }
+    public int ParseEstimateFilesProcessed { get; init; }
+    public bool ParseEstimateFilesTruncated { get; init; }
+    public Dictionary<string, long?> EstimatedTableMutations { get; init; } = new();
+    public Dictionary<string, IndexDryRunEstimateJsonResult> EstimatedTableMutationDetails { get; init; } = new();
     public long SymbolsDroppedByKindFilter { get; init; }
     public IndexSymbolKindFilterJsonResult SymbolKindFilter { get; init; } = new();
     public List<string>? FileSamples { get; init; }
