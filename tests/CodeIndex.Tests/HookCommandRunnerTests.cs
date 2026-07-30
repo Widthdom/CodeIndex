@@ -314,6 +314,11 @@ public class HookCommandRunnerTests
             Assert.Contains("Planned action: blocked", blockedHumanPreview.StdOut, StringComparison.Ordinal);
             Assert.Contains("Filesystem mutation: false", blockedHumanPreview.StdOut, StringComparison.Ordinal);
             Assert.Contains("Managed hook preview:", blockedHumanPreview.StdOut, StringComparison.Ordinal);
+            Assert.Contains(
+                "# CDIDX EXECUTABLE MANIFEST [redacted]",
+                blockedHumanPreview.StdOut,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain(projectRoot, blockedHumanPreview.StdOut, StringComparison.Ordinal);
             Assert.Contains("chained hook already exists", blockedHumanPreview.StdErr, StringComparison.Ordinal);
             Assert.Contains("Hint:", blockedHumanPreview.StdErr, StringComparison.Ordinal);
             Assert.Contains("Usage:", blockedHumanPreview.StdErr, StringComparison.Ordinal);
@@ -1070,6 +1075,24 @@ public class HookCommandRunnerTests
                 PathCasing.IgnoreCaseProbeForTesting = previousProbe;
                 PathCasing.ResetCacheForTests();
             }
+        }
+    }
+
+    [Fact]
+    public void RepositoryPathComparison_NormalizesTrailingSeparators_Issue4892()
+    {
+        var parent = TestProjectHelper.CreateTempProject("hook_repository_path_normalization");
+        try
+        {
+            var missingRepositoryPath = Path.Combine(parent, "missing-repository");
+
+            Assert.True(HookCommandRunner.RepositoryPathsEqual(
+                missingRepositoryPath + Path.DirectorySeparatorChar,
+                missingRepositoryPath));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(parent);
         }
     }
 

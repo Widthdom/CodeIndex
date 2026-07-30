@@ -1663,13 +1663,15 @@ if [ -x
         return true;
     }
 
-    private static bool RepositoryPathsEqual(string currentPath, string installedPath)
+    internal static bool RepositoryPathsEqual(string currentPath, string installedPath)
     {
-        if (PathCasing.PathsEqual(currentPath, installedPath))
+        var normalizedCurrentPath = PathCasing.NormalizeBoundaryPath(currentPath);
+        var normalizedInstalledPath = PathCasing.NormalizeBoundaryPath(installedPath);
+        if (PathCasing.PathsEqual(normalizedCurrentPath, normalizedInstalledPath))
             return true;
         if (OperatingSystem.IsWindows()
-            || !TryResolveRepositoryPathAliases(currentPath, out var resolvedCurrentPath)
-            || !TryResolveRepositoryPathAliases(installedPath, out var resolvedInstalledPath))
+            || !TryResolveRepositoryPathAliases(normalizedCurrentPath, out var resolvedCurrentPath)
+            || !TryResolveRepositoryPathAliases(normalizedInstalledPath, out var resolvedInstalledPath))
         {
             return false;
         }
@@ -2167,6 +2169,9 @@ fi
         var hasWarnings = warnings is { Count: > 0 };
         if (exitCode != CommandExitCodes.Success)
         {
+            var safeManagedHookPreview = managedHookPreview == null
+                ? null
+                : SanitizeManagedHookPreviewForError(managedHookPreview);
             if (!json && hasWarnings)
             {
                 foreach (var warning in warnings!)
@@ -2213,9 +2218,7 @@ fi
                         safeWarnings,
                         dryRun,
                         plannedAction,
-                        managedHookPreview == null
-                            ? null
-                            : SanitizeManagedHookPreviewForError(managedHookPreview),
+                        safeManagedHookPreview,
                         filesystemMutation,
                         hookState,
                         chainedHookState,
@@ -2251,7 +2254,7 @@ fi
                     hookState,
                     chainedHookState,
                     plannedChanges,
-                    managedHookPreview);
+                    safeManagedHookPreview);
             }
 
             return result;
