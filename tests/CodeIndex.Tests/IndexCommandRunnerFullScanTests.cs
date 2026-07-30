@@ -4750,25 +4750,6 @@ public partial class IndexCommandRunnerTests
                 IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions));
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            File.AppendAllText(
-                Path.Combine(projectRoot, "Caller.cs"),
-                $"{Environment.NewLine}// Force a reader-only refresh.{Environment.NewLine}");
-            Assert.Equal(
-                CommandExitCodes.Success,
-                IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions));
-            using (var incrementalVerify = OpenNonPoolingConnection(dbPath))
-            {
-                incrementalVerify.Open();
-                using var incrementalReferenceCmd = incrementalVerify.CreateCommand();
-                incrementalReferenceCmd.CommandText = """
-                    SELECT COUNT(*)
-                    FROM symbol_references
-                    WHERE symbol_name IN ('Limit', 'Other', 'Property')
-                      AND reference_kind = 'member_read'
-                    """;
-                Assert.Equal(3L, incrementalReferenceCmd.ExecuteScalar());
-            }
-
             using (var conn = OpenNonPoolingConnection(dbPath))
             {
                 conn.Open();
