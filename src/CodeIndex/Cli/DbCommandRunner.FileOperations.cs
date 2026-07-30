@@ -4,6 +4,7 @@ using System.Text.Json.Nodes;
 using CodeIndex.Database;
 using CodeIndex.Diagnostics;
 using CodeIndex.Indexer;
+using CodeIndex.Indexer.Extensibility;
 using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Cli;
@@ -112,7 +113,8 @@ public static partial class DbCommandRunner
             return false;
         }
 
-        if ((attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint | FileAttributes.Device)) != 0)
+        if ((attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint | FileAttributes.Device)) != 0
+            || !ExecutableExtensionBoundary.IsRegularFilePath(normalizedPath))
             throw new InvalidOperationException($"checkpoint file is not a regular file: {ConsoleUi.FormatBoundedValue(path)}");
 
         return true;

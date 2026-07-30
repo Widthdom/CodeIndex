@@ -100,43 +100,55 @@ public static partial class DbCommandRunner
 
         try
         {
+            var plan = PlanCheckpoint(fullDbPath, options.Name ?? MakeTimestampCheckpointName());
             if (options.CheckpointDryRun)
             {
-                var preview = PreviewCheckpoint(fullDbPath, options.Name ?? MakeTimestampCheckpointName());
                 if (options.Json)
                 {
                     Console.WriteLine(JsonSerializer.Serialize(
                         new DbCheckpointJsonResult(
                             "dry_run",
                             fullDbPath,
-                            preview.Name,
-                            preview.CheckpointPath,
-                            preview.Files,
-                            preview.FilesTruncated,
+                            plan.Name,
+                            plan.CheckpointPath,
+                            plan.SourceFiles.Select(source => source.OutputName).ToList(),
+                            plan.SourceFilesTruncated,
                             CheckpointFileInspectLimit,
-                            preview.Diagnostics,
+                            plan.Diagnostics.ToList(),
                             DryRun: true,
-                            Bytes: preview.Bytes),
+                            Bytes: plan.SourceBytes,
+                            SourceFiles: plan.SourceFiles.Select(source => source.OutputName).ToList(),
+                            SourceBytes: plan.SourceBytes,
+                            PlannedOutputFiles: plan.PlannedOutputFiles.ToList(),
+                            EstimatedOutputBytes: plan.EstimatedOutputBytes,
+                            Ready: plan.Ready,
+                            DestinationExists: plan.DestinationExists,
+                            DestinationPolicy: plan.DestinationPolicy,
+                            ConflictPolicy: plan.ConflictPolicy,
+                            Uncertainty: plan.Uncertainty,
+                            ManifestSchema: plan.ManifestSchema,
+                            ManifestContents: plan.ManifestContents,
+                            ManifestSha256: plan.ManifestSha256,
+                            SidecarPolicy: plan.SidecarPolicy,
+                            Compression: plan.CompressionPolicy,
+                            MetadataPolicy: plan.MetadataPolicy),
                         CliJsonSerializerContextFactory.Create(jsonOptions).DbCheckpointJsonResult));
                 }
                 else
                 {
                     Console.WriteLine("Database checkpoint dry run.");
                     Console.WriteLine($"  database  : {fullDbPath}");
-                    Console.WriteLine($"  name      : {preview.Name}");
-                    Console.WriteLine($"  checkpoint: {preview.CheckpointPath}");
-                    Console.WriteLine($"  side effect: none (run without --dry-run to copy DB/WAL/SHM files)");
-                    Console.WriteLine($"  files     : {ConsoleUi.Counted(preview.Files.Count, "file")}{(preview.FilesTruncated ? " (truncated)" : string.Empty)}");
-                    Console.WriteLine($"  bytes     : {preview.Bytes:N0}");
+                    WriteCheckpointPlan(plan);
+                    Console.WriteLine("  side effect: none");
                 }
 
-                foreach (var diagnostic in preview.Diagnostics)
+                foreach (var diagnostic in plan.Diagnostics)
                     CommandErrorWriter.WriteStderr($"Warning [{diagnostic.Code}]: {diagnostic.Message}");
 
                 return CommandExitCodes.Success;
             }
 
-            var result = CreateCheckpoint(fullDbPath, options.Name ?? MakeTimestampCheckpointName());
+            var result = CreateCheckpoint(plan);
             if (options.Json)
             {
                 Console.WriteLine(JsonSerializer.Serialize(
@@ -149,23 +161,49 @@ public static partial class DbCommandRunner
                         result.FilesTruncated,
                         CheckpointFileInspectLimit,
                         result.Diagnostics,
-                        Bytes: result.Bytes),
+                        Bytes: result.Bytes,
+                        SourceFiles: plan.SourceFiles.Select(source => source.OutputName).ToList(),
+                        SourceBytes: plan.SourceBytes,
+                        PlannedOutputFiles: plan.PlannedOutputFiles.ToList(),
+                        EstimatedOutputBytes: plan.EstimatedOutputBytes,
+                        FinalOutputBytes: plan.EstimatedOutputBytes,
+                        Ready: plan.Ready,
+                        DestinationExists: plan.DestinationExists,
+                        DestinationPolicy: plan.DestinationPolicy,
+                        ConflictPolicy: plan.ConflictPolicy,
+                        Uncertainty: plan.Uncertainty,
+                        ManifestSchema: plan.ManifestSchema,
+                        ManifestContents: plan.ManifestContents,
+                        ManifestSha256: plan.ManifestSha256,
+                        SidecarPolicy: plan.SidecarPolicy,
+                        Compression: plan.CompressionPolicy,
+                        MetadataPolicy: plan.MetadataPolicy),
                     CliJsonSerializerContextFactory.Create(jsonOptions).DbCheckpointJsonResult));
             }
             else
             {
                 Console.WriteLine("Created database checkpoint.");
                 Console.WriteLine($"  database  : {fullDbPath}");
-                Console.WriteLine($"  name      : {result.Name}");
-                Console.WriteLine($"  checkpoint: {result.CheckpointPath}");
-                Console.WriteLine($"  files     : {ConsoleUi.Counted(result.Files.Count, "file")}{(result.FilesTruncated ? " (truncated)" : string.Empty)}");
-                Console.WriteLine($"  bytes     : {result.Bytes:N0}");
+                WriteCheckpointPlan(plan);
+                Console.WriteLine($"  final files: {ConsoleUi.Counted(result.Files.Count, "file")}{(result.FilesTruncated ? " (truncated)" : string.Empty)}");
+                Console.WriteLine($"  final bytes: {plan.EstimatedOutputBytes:N0}");
             }
 
             foreach (var diagnostic in result.Diagnostics)
                 CommandErrorWriter.WriteStderr($"Warning [{diagnostic.Code}]: {diagnostic.Message}");
 
             return CommandExitCodes.Success;
+        }
+        catch (DbCheckpointPlanDriftException)
+        {
+            return WriteCommandError(
+                options.Json,
+                jsonOptions,
+                "checkpoint plan drift detected; no checkpoint was published",
+                CommandExitCodes.DatabaseError,
+                "Stop database writers and retry `cdidx db checkpoint`; execution creates a fresh plan and refuses changes before publish.",
+                CommandErrorCodes.DbError,
+                category: "checkpoint_plan_drift");
         }
         catch (Exception ex)
         {
@@ -185,6 +223,36 @@ public static partial class DbCommandRunner
                 category: isInputError ? null : DiagnosticRedactor.ClassifyException(ex));
         }
     }
+
+    private static void WriteCheckpointPlan(DbCheckpointPlan plan)
+    {
+        Console.WriteLine($"  name      : {plan.Name}");
+        Console.WriteLine($"  checkpoint: {plan.CheckpointPath}");
+        Console.WriteLine($"  ready     : {(plan.Ready ? "yes" : "no")}");
+        Console.WriteLine($"  destination exists: {(plan.DestinationExists ? "yes" : "no")}");
+        Console.WriteLine($"  destination policy: {FormatCheckpointPolicy(plan.DestinationPolicy)}");
+        Console.WriteLine($"  conflict policy: {FormatCheckpointPolicy(plan.ConflictPolicy)}");
+        Console.WriteLine($"  source files: {ConsoleUi.Counted(plan.SourceFiles.Count, "file")}{(plan.SourceFilesTruncated ? " (truncated)" : string.Empty)}");
+        foreach (var source in plan.SourceFiles)
+            Console.WriteLine($"    {source.OutputName} ({source.Bytes:N0} bytes)");
+        Console.WriteLine($"  source bytes: {plan.SourceBytes:N0}");
+        Console.WriteLine($"  planned outputs: {ConsoleUi.Counted(plan.PlannedOutputFiles.Count, "file")}");
+        foreach (var output in plan.PlannedOutputFiles)
+            Console.WriteLine($"    {output}");
+        Console.WriteLine($"  estimated output bytes: {plan.EstimatedOutputBytes:N0}");
+        Console.WriteLine($"  manifest schema: {plan.ManifestSchema}");
+        Console.WriteLine("  manifest contents:");
+        foreach (var line in plan.ManifestContents.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries))
+            Console.WriteLine($"    {line}");
+        Console.WriteLine($"  manifest sha256: {plan.ManifestSha256}");
+        Console.WriteLine($"  sidecar policy: {FormatCheckpointPolicy(plan.SidecarPolicy)}");
+        Console.WriteLine($"  compression: {FormatCheckpointPolicy(plan.CompressionPolicy)}");
+        Console.WriteLine($"  metadata policy: {FormatCheckpointPolicy(plan.MetadataPolicy)}");
+        Console.WriteLine($"  uncertainty: {FormatCheckpointPolicy(plan.Uncertainty)}");
+    }
+
+    private static string FormatCheckpointPolicy(string value)
+        => value.Replace('_', ' ').Replace(";", "; ", StringComparison.Ordinal);
 
     private static int RunCheckpoints(DbCommandOptions options, JsonSerializerOptions jsonOptions)
     {
