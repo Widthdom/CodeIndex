@@ -1,8 +1,8 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using CodeIndex.Cli;
+using CodeIndex.Database;
 using CodeIndex.Indexer;
-using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Models;
 
 namespace CodeIndex.Mcp;
@@ -30,81 +30,17 @@ public partial class McpServer
                 return CreateToolErrorResponse(id, $"Invalid language capability '{capability}'. Use one of: symbols, graph, references.");
         }
 
-        (Dictionary<string, McpLanguageSupportInfo> Languages, int SymbolLanguageCount, int ReferenceLanguageCount, IReadOnlyList<LanguageMapOverrides.Diagnostic> Diagnostics) BuildCatalog(string? workspaceRoot)
+        JsonNode BuildResponse(
+            IReadOnlyDictionary<string, long>? indexedLanguageCounts,
+            string? workspaceRoot)
         {
-            ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(workspaceRoot);
-            var languagePatterns = FileIndexer.GetLanguagePatterns(workspaceRoot, out var diagnostics);
-            var symbolLangs = SymbolExtractor.GetSupportedLanguages(workspaceRoot);
-            var referenceLangs = ReferenceExtractor.GetSupportedLanguages(workspaceRoot);
-            var languages = new Dictionary<string, McpLanguageSupportInfo>(StringComparer.Ordinal);
-            foreach (var pattern in languagePatterns)
-            {
-                var lang = pattern.Language;
-                if (!languages.TryGetValue(lang, out var info))
-                {
-                    var hasSymbols = symbolLangs.Contains(lang);
-                    var hasReferences = referenceLangs.Contains(lang);
-                    info = new McpLanguageSupportInfo(
-                        [],
-                        [],
-                        [],
-                        [],
-                        [],
-                        QueryCommandRunner.GetLanguageAliases(lang).ToList(),
-                        hasSymbols,
-                        hasReferences,
-                        hasReferences,
-                        LanguageCapabilitySupport.BuildGaps(hasSymbols, hasReferences, hasReferences),
-                        LanguageCapabilitySupport.BuildUnsupportedGuidance(lang, hasSymbols, hasReferences, hasReferences));
-                    languages[lang] = info;
-                }
-
-                switch (pattern.Kind)
-                {
-                    case FileIndexer.LanguagePatternKind.Extension:
-                        info.Extensions.Add(pattern.Pattern);
-                        break;
-                    case FileIndexer.LanguagePatternKind.ExactFilename:
-                        info.ExactFilenames.Add(pattern.Pattern);
-                        break;
-                    case FileIndexer.LanguagePatternKind.FilenamePrefixPattern:
-                        info.FilenamePrefixPatterns.Add(pattern.Pattern);
-                        break;
-                }
-                if (!info.LegacyPatterns.Contains(pattern.Pattern, StringComparer.Ordinal))
-                    info.LegacyPatterns.Add(pattern.Pattern);
-                info.PatternProvenance.Add(pattern);
-            }
-
-            foreach (var lang in FileIndexer.GetContentDetectedLanguageBuckets())
-            {
-                if (languages.ContainsKey(lang))
-                    continue;
-
-                var hasSymbols = symbolLangs.Contains(lang);
-                var hasReferences = referenceLangs.Contains(lang);
-                languages[lang] = new McpLanguageSupportInfo(
-                    [],
-                    [],
-                    [],
-                    [],
-                    [],
-                    QueryCommandRunner.GetLanguageAliases(lang).ToList(),
-                    hasSymbols,
-                    hasReferences,
-                    hasReferences,
-                    LanguageCapabilitySupport.BuildGaps(hasSymbols, hasReferences, hasReferences),
-                    LanguageCapabilitySupport.BuildUnsupportedGuidance(lang, hasSymbols, hasReferences, hasReferences));
-            }
-
-            return (languages, symbolLangs.Count, referenceLangs.Count, diagnostics);
-        }
-
-        JsonNode BuildResponse(HashSet<string>? indexedLanguages, string? workspaceRoot)
-        {
-            var catalog = BuildCatalog(workspaceRoot);
+            var catalog = LanguageCapabilityCatalog.Build(
+                workspaceRoot,
+                QueryCommandRunner.GetLanguageAliases);
             var sorted = catalog.Languages
-                .Where(kv => !indexedOnly || indexedLanguages?.Contains(kv.Key) == true)
+                .Where(kv => !indexedOnly
+                             || (indexedLanguageCounts?.TryGetValue(kv.Key, out var indexedCount) == true
+                                 && indexedCount > 0))
                 .Where(kv => capabilities.All(capability => LanguageMatchesCapability(kv.Value.Symbols, kv.Value.References, kv.Value.Graph, capability)))
                 .Where(kv => normalizedExtension is null || kv.Value.Extensions.Contains(normalizedExtension, StringComparer.OrdinalIgnoreCase))
                 .Where(kv => aliasFilter is null
@@ -162,7 +98,7 @@ public partial class McpServer
                     });
                 }
 
-                languagesArray.Add(new JsonObject
+                var languageRow = new JsonObject
                 {
                     ["lang"] = lang,
                     ["extensions"] = extArray,
@@ -171,17 +107,32 @@ public partial class McpServer
                     ["legacy_patterns"] = legacyPatternArray,
                     ["pattern_provenance"] = provenanceArray,
                     ["aliases"] = new JsonArray(info.Aliases.OrderBy(alias => alias, StringComparer.Ordinal).Select(alias => JsonValue.Create(alias)).ToArray()),
+                    ["detection"] = info.Detection,
                     ["symbol_extraction"] = info.Symbols,
                     ["reference_extraction"] = info.References,
+                    ["outline"] = info.Outline,
                     ["graph_queries"] = info.Graph,
                     ["capability_gaps"] = new JsonArray(info.CapabilityGaps.Select(gap => JsonValue.Create(gap)).ToArray()),
                     ["unsupported_guidance"] = guidanceArray,
-                });
+                };
+                if (indexedLanguageCounts is not null)
+                {
+                    languageRow["indexed_file_count"] = indexedLanguageCounts.TryGetValue(lang, out var indexedFileCount)
+                        ? indexedFileCount
+                        : 0;
+                }
+                languagesArray.Add(languageRow);
             }
 
+            var scopedCounts = LanguageCapabilityCatalog.Count(
+                catalog.Languages,
+                sorted,
+                indexedLanguageCounts);
             var payload = new JsonObject
             {
+                ["api_version"] = JsonOutputContract.ApiVersion,
                 ["languages"] = languagesArray,
+                ["language_capability_counts"] = scopedCounts.ToJson(),
                 ["detection_policy"] = new JsonObject
                 {
                     ["filename_case_policy"] = "filesystem",
@@ -227,8 +178,10 @@ public partial class McpServer
                 };
             }
 
-            var summary = $"{sorted.Count} languages supported. {catalog.SymbolLanguageCount} with symbol extraction, {catalog.ReferenceLanguageCount} with reference extraction, {catalog.ReferenceLanguageCount} with call-graph queries.";
-            return CreateToolResult(id, summary, payload);
+            return CreateToolResult(
+                id,
+                $"{sorted.Count} languages supported in matched catalog. {scopedCounts.FormatSummary()}.",
+                payload);
         }
 
         var configuredDatabaseAvailable = _dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase)
@@ -240,25 +193,7 @@ public partial class McpServer
         return WithDbReader(id, args, reader =>
         {
             var status = reader.GetStatus(includeDatabaseSizeAttribution: false);
-            var indexedLanguages = indexedOnly
-                ? new HashSet<string>(status.Languages.Keys, StringComparer.Ordinal)
-                : null;
-            return BuildResponse(indexedLanguages, reader.GetIndexedProjectRoot());
+            return BuildResponse(status.Languages, reader.GetIndexedProjectRoot());
         });
     }
-
-    private sealed record McpLanguageSupportInfo(
-        List<string> Extensions,
-        List<string> ExactFilenames,
-        List<string> FilenamePrefixPatterns,
-        List<string> LegacyPatterns,
-        List<FileIndexer.LanguagePattern> PatternProvenance,
-        List<string> Aliases,
-        bool Symbols,
-        bool References,
-        bool Graph,
-        List<string> CapabilityGaps,
-        List<LanguageUnsupportedGuidance> UnsupportedGuidance);
-
-
 }
