@@ -847,14 +847,108 @@ public class CdidxConfigFileTests
         {
             File.WriteAllText(Path.Combine(dir, ".cdidxrc.json"), "{ not-json");
 
-            var (exitCode, _, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
                 ["definitely-not-a-command"],
                 appVersion: "1.21.0",
                 configStartDirectory: dir));
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Empty(stdout);
+            Assert.Contains($"Error [{CommandErrorCodes.ConfigInvalid}]", stderr);
             Assert.Contains("Invalid JSON", stderr);
             Assert.Contains("CDIDX_DISABLE_CONFIG_FILE", stderr);
+            Assert.Contains("Usage:", stderr);
+        }
+        finally { TestProjectHelper.DeleteDirectory(dir); }
+    }
+
+    [Fact]
+    public void Run_StaticCommandsIgnoreMalformedSupportedConfigs_Issue4886()
+    {
+        var root = CreateTempDir();
+        try
+        {
+            var configRelativePaths = new[]
+            {
+                CdidxConfigFile.ProjectConfigRelativePath,
+                CdidxConfigFile.FileName,
+            };
+            var commandCases = new (string Name, string[] Args)[]
+            {
+                ("license", ["license", "--json"]),
+                ("version_with_global_flag", ["--quiet", "--version", "--json"]),
+                ("help", ["help", "status"]),
+                ("subcommand_help", ["index", "--help"]),
+                ("completions", ["completions", "bash"]),
+            };
+
+            for (var configIndex = 0; configIndex < configRelativePaths.Length; configIndex++)
+            {
+                var project = Path.Combine(root, $"project-{configIndex}");
+                Directory.CreateDirectory(project);
+                var configPath = Path.Combine(project, configRelativePaths[configIndex]);
+                Directory.CreateDirectory(Path.GetDirectoryName(configPath)!);
+                File.WriteAllText(configPath, "{ not-json");
+
+                foreach (var commandCase in commandCases)
+                {
+                    var result = CaptureConsole(() => ProgramRunner.Run(
+                        commandCase.Args,
+                        appVersion: "1.40.3",
+                        configStartDirectory: project));
+
+                    Assert.True(
+                        result.ExitCode == CommandExitCodes.Success,
+                        $"{commandCase.Name} was blocked by {configRelativePaths[configIndex]}: {result.Stderr}");
+                    Assert.DoesNotContain("Invalid JSON", result.Stdout, StringComparison.Ordinal);
+                    Assert.DoesNotContain("Invalid JSON", result.Stderr, StringComparison.Ordinal);
+                }
+            }
+        }
+        finally { TestProjectHelper.DeleteDirectory(root); }
+    }
+
+    [Fact]
+    public void Run_ConfigDependentCommandsReturnTypedJsonForMalformedConfig_Issue4886()
+    {
+        var dir = CreateTempDir();
+        try
+        {
+            var configPath = Path.Combine(dir, CdidxConfigFile.ProjectConfigRelativePath);
+            Directory.CreateDirectory(Path.GetDirectoryName(configPath)!);
+            File.WriteAllText(configPath, "{ not-json");
+
+            var commandCases = new (string Command, string[] Args)[]
+            {
+                ("index", ["index", dir, "--json"]),
+                ("search", ["search", "needle", "--json"]),
+                ("config", ["config", "unknown", "--json"]),
+            };
+
+            foreach (var commandCase in commandCases)
+            {
+                var result = CaptureConsole(() => ProgramRunner.Run(
+                    commandCase.Args,
+                    appVersion: "1.40.3",
+                    configStartDirectory: dir));
+
+                Assert.Equal(CommandExitCodes.UsageError, result.ExitCode);
+                Assert.Empty(result.Stderr);
+                using var document = JsonDocument.Parse(result.Stdout);
+                var payload = document.RootElement;
+                Assert.Equal("1", payload.GetProperty("api_version").GetString());
+                Assert.Equal("error", payload.GetProperty("status").GetString());
+                Assert.Equal(CommandErrorCodes.ConfigInvalid, payload.GetProperty("error_code").GetString());
+                Assert.Equal("configuration", payload.GetProperty("category").GetString());
+                Assert.Equal(commandCase.Command, payload.GetProperty("command").GetString());
+                Assert.Equal(CommandExitCodes.UsageError, payload.GetProperty("exit_code").GetInt32());
+                Assert.Contains("Invalid JSON", payload.GetProperty("message").GetString(), StringComparison.Ordinal);
+                Assert.Contains(
+                    CdidxConfigFile.DisableEnvVar,
+                    payload.GetProperty("hint").GetString(),
+                    StringComparison.Ordinal);
+                Assert.False(string.IsNullOrWhiteSpace(payload.GetProperty("usage").GetString()));
+            }
         }
         finally { TestProjectHelper.DeleteDirectory(dir); }
     }

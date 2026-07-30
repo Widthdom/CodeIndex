@@ -51,6 +51,8 @@ internal static partial class ProgramRunner
     private static readonly TimeSpan McpHttpDisposeTimeout = TimeSpan.FromSeconds(5);
     private static readonly HashSet<string> NonLogGlobalOptionNames =
         CliFlagSchema.GetTopLevelGlobalOptionNames(includeLogOptions: false);
+    private static readonly HashSet<string> TopLevelGlobalOptionNames =
+        CliFlagSchema.GetTopLevelGlobalOptionNames(includeLogOptions: true);
     private static readonly HashSet<string> TopLevelValueOptionNames =
         CliFlagSchema.GetTopLevelValueOptionNames();
     private static readonly AsyncLocal<TimeProvider?> ScopedTimeProviderForTesting = new();
@@ -149,19 +151,35 @@ internal static partial class ProgramRunner
 
         using var recoveryInvocationScope = ExcerptRecoveryCommandFormatter.UseCurrentProcessInvocation();
         appVersion ??= ConsoleUi.LoadVersion();
+        jsonOptions ??= CreateDefaultJsonOptions();
+        EnsureRedirectedStdoutUsesUtf8();
 
-        // Load project-local `.cdidxrc.json` before anything else reads env vars so log
-        // location, debug mode, and MCP gates honor the file (#1571). Hard-fail on
-        // validation errors so silent typos cannot quietly change behavior.
-        // 環境変数を読む処理より先に `.cdidxrc.json` を読み込み、ログ位置 / debug / MCP ゲート
-        // などが config を反映できるようにする (#1571)。スキーマ違反は黙って無視せず exit する。
-        var configResult = CdidxConfigFile.Load(configStartDirectory ?? Environment.CurrentDirectory);
-        if (configResult.Failed && !IsConfigShowCommand(args) && !IsValidateConfigCommand(args))
+        // Resolve the command's config dependency before discovery. Static metadata
+        // commands never parse project config, while validate-config and config show
+        // load it through their own reporting contracts. Config-dependent commands
+        // still load before any environment consumer so log/debug/MCP settings apply.
+        // discovery 前に command の config 依存性を解決する。static metadata command は
+        // project config を parse せず、validate-config / config show は固有の報告契約で
+        // 自ら load する。依存 command は environment consumer より前に load し、
+        // log / debug / MCP 設定を従来どおり反映する。
+        var configDependency = ResolveProjectConfigDependency(args);
+        var configResult = configDependency == ProjectConfigDependency.Required
+            ? CdidxConfigFile.Load(configStartDirectory ?? Environment.CurrentDirectory)
+            : new CdidxConfigFile.LoadResult(ConfigPath: null, Error: null);
+        if (configResult.Failed)
         {
-            return CommandErrorWriter.Write(
+            var configCommand = ResolveProjectConfigCommandName(args);
+            var usage = ConsoleUi.GetUsageLine(configCommand) ?? "cdidx <command> [options]";
+            return CommandErrorWriter.WriteJsonOrHuman(
+                ContainsJsonOutputFlag(args),
+                jsonOptions,
                 StripErrorPrefix(configResult.Error ?? "configuration file validation failed."),
                 CommandExitCodes.UsageError,
-                $"fix or remove `{CdidxConfigFile.FileName}`, or set `{CdidxConfigFile.DisableEnvVar}=1` to bypass it.");
+                $"fix or remove the discovered config file, or set `{CdidxConfigFile.DisableEnvVar}=1` to bypass it.",
+                usage,
+                CommandErrorCodes.ConfigInvalid,
+                "configuration",
+                configCommand);
         }
 
         using var configEnvironment = CdidxEnvironment.Push(configResult.Settings, configResult.Sources);
@@ -176,8 +194,6 @@ internal static partial class ProgramRunner
         using var globalToolLog = GlobalToolLog.TryStart(args, appVersion);
         if (configResult.Loaded)
             GlobalToolLog.Info($"config_file_loaded path={configResult.ConfigPath}");
-        jsonOptions ??= CreateDefaultJsonOptions();
-        EnsureRedirectedStdoutUsesUtf8();
 
         var quiet = TryConsumeQuietFlag(ref args) || IsTruthyEnvironmentVariable(QuietEnvironmentVariable);
         using var quietScope = quiet ? QuietStderrScope.Start() : null;
@@ -288,34 +304,57 @@ internal static partial class ProgramRunner
         }
     }
 
-    private static bool IsConfigShowCommand(IReadOnlyList<string> args)
+    private enum ProjectConfigDependency
     {
-        var commandIndex = 0;
-        while (commandIndex < args.Count && args[commandIndex].StartsWith("--", StringComparison.Ordinal))
-        {
-            var option = args[commandIndex];
-            var optionName = option.Split('=', 2)[0];
-            commandIndex++;
-            if (!option.Contains('=', StringComparison.Ordinal)
-                && TopLevelValueOptionNames.Contains(optionName)
-                && commandIndex < args.Count)
-            {
-                commandIndex++;
-            }
-        }
-
-        return commandIndex + 1 < args.Count
-               && string.Equals(args[commandIndex], "config", StringComparison.Ordinal)
-               && string.Equals(args[commandIndex + 1], "show", StringComparison.Ordinal);
+        Required,
+        Independent,
+        SelfManaged,
     }
 
-    private static bool IsValidateConfigCommand(IReadOnlyList<string> args)
+    private static ProjectConfigDependency ResolveProjectConfigDependency(IReadOnlyList<string> args)
+    {
+        var commandIndex = FindProjectConfigCommandIndex(args);
+        if (commandIndex >= args.Count)
+            return ProjectConfigDependency.Independent;
+
+        var rawCommand = args[commandIndex];
+        if (rawCommand is "--help" or "-h" or "--help-all" or "--help-extended"
+            or "help-all" or "help-extended" or "--help-flags"
+            or "--version" or "-V" or "--license" or "--completions")
+        {
+            return ProjectConfigDependency.Independent;
+        }
+
+        var command = CliCommandCatalog.NormalizePublicCommandName(rawCommand);
+        if (CliCommandMetadata.ProjectConfigIndependentCommands.Contains(command))
+            return ProjectConfigDependency.Independent;
+        if (CliCommandMetadata.ProjectConfigSelfManagedCommands.Contains(command))
+            return ProjectConfigDependency.SelfManaged;
+        if (command == "config"
+            && commandIndex + 1 < args.Count
+            && string.Equals(args[commandIndex + 1], "show", StringComparison.Ordinal))
+        {
+            return ProjectConfigDependency.SelfManaged;
+        }
+        if (commandIndex + 1 < args.Count
+            && ArgHelper.WantsHelp(args.Skip(commandIndex + 1).ToArray()))
+        {
+            return ProjectConfigDependency.Independent;
+        }
+
+        return ProjectConfigDependency.Required;
+    }
+
+    private static int FindProjectConfigCommandIndex(IReadOnlyList<string> args)
     {
         var commandIndex = 0;
-        while (commandIndex < args.Count && args[commandIndex].StartsWith("--", StringComparison.Ordinal))
+        while (commandIndex < args.Count)
         {
             var option = args[commandIndex];
             var optionName = option.Split('=', 2)[0];
+            if (!TopLevelGlobalOptionNames.Contains(optionName))
+                break;
+
             commandIndex++;
             if (!option.Contains('=', StringComparison.Ordinal)
                 && TopLevelValueOptionNames.Contains(optionName)
@@ -325,8 +364,23 @@ internal static partial class ProgramRunner
             }
         }
 
-        return commandIndex < args.Count
-               && string.Equals(args[commandIndex], "validate-config", StringComparison.Ordinal);
+        return commandIndex;
+    }
+
+    private static string ResolveProjectConfigCommandName(IReadOnlyList<string> args)
+    {
+        var commandIndex = FindProjectConfigCommandIndex(args);
+        if (commandIndex >= args.Count)
+            return "unknown";
+
+        var rawCommand = args[commandIndex];
+        if (IsProjectPathArg(rawCommand))
+            return "index";
+
+        var command = CliCommandCatalog.NormalizePublicCommandName(rawCommand);
+        return CliCommandMetadata.PublicCommandNames.Contains(command, StringComparer.Ordinal)
+            ? command
+            : "unknown";
     }
 
 

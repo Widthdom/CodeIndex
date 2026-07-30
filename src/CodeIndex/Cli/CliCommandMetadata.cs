@@ -41,6 +41,18 @@ internal static class CliCommandMetadata
     internal static IReadOnlySet<string> OptionalSubcommandCommands { get; } =
         new[] { "recipes", "suggestions" }.ToFrozenSet(StringComparer.Ordinal);
 
+    // These commands render process-static metadata and must not discover or parse
+    // project configuration. validate-config owns config loading itself so it can
+    // report malformed files through its command-specific contract.
+    // これらの command は process-static metadata を描画するため、project config を
+    // 探索・parse しない。validate-config は不正な file を command 固有契約で報告するため、
+    // config loading を自身で所有する。
+    internal static IReadOnlySet<string> ProjectConfigIndependentCommands { get; } =
+        new[] { "help", "completions", "license" }.ToFrozenSet(StringComparer.Ordinal);
+
+    internal static IReadOnlySet<string> ProjectConfigSelfManagedCommands { get; } =
+        new[] { "validate-config" }.ToFrozenSet(StringComparer.Ordinal);
+
     private static ReadOnlyCollection<string> ReadOnly(params string[] values) =>
         Array.AsReadOnly(values);
 }
