@@ -4089,7 +4089,7 @@ public class DatabaseTests : IDisposable
             DbWriter.FtsIncrementalWritesSinceOptimizeMetaKey,
             DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold.ToString(CultureInfo.InvariantCulture));
 
-        var dbBytesBeforeStatus = File.ReadAllBytes(_dbPath);
+        var dbBytesBeforeStatus = ReadDatabaseBytesWithSqliteSharing(_dbPath);
         using (var readOnlyDb = new DbContext(DbOpenIntent.QueryOnly, _dbPath))
         {
             var currentGuidance = new DbReader(readOnlyDb).GetStatus().MaintenanceGuidance;
@@ -4103,12 +4103,12 @@ public class DatabaseTests : IDisposable
             Assert.Equal("current", current.State);
             Assert.Equal("cdidx optimize --db <db>", currentGuidance.RecommendedCommand);
         }
-        Assert.Equal(dbBytesBeforeStatus, File.ReadAllBytes(_dbPath));
+        Assert.Equal(dbBytesBeforeStatus, ReadDatabaseBytesWithSqliteSharing(_dbPath));
 
         _writer.MarkBatchInProgress();
         try
         {
-            var dbBytesBeforeStaleStatus = File.ReadAllBytes(_dbPath);
+            var dbBytesBeforeStaleStatus = ReadDatabaseBytesWithSqliteSharing(_dbPath);
             using var staleDb = new DbContext(DbOpenIntent.QueryOnly, _dbPath);
             var staleGuidance = new DbReader(staleDb).GetStatus().MaintenanceGuidance;
             var stale = staleGuidance.FtsOptimization;
@@ -4119,12 +4119,24 @@ public class DatabaseTests : IDisposable
             Assert.Equal(DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold, stale.ObservedWrites);
             Assert.Equal("stale", stale.State);
             Assert.Equal("none", staleGuidance.RecommendedCommand);
-            Assert.Equal(dbBytesBeforeStaleStatus, File.ReadAllBytes(_dbPath));
+            Assert.Equal(dbBytesBeforeStaleStatus, ReadDatabaseBytesWithSqliteSharing(_dbPath));
         }
         finally
         {
             _writer.ClearBatchInProgress();
         }
+    }
+
+    private static byte[] ReadDatabaseBytesWithSqliteSharing(string path)
+    {
+        using var stream = new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete);
+        using var buffer = new MemoryStream();
+        stream.CopyTo(buffer);
+        return buffer.ToArray();
     }
 
     private static int GetTransactionDepth(DbWriter writer)
