@@ -1187,9 +1187,14 @@ public static class HookCommandRunner
             return ValidateExecutableSelection(selection, out failureReason);
         }
 
+        // Single-file apphosts pin Environment.ProcessPath and never consume this
+        // entry-assembly value; framework-dependent `dotnet` launches require it.
+#pragma warning disable IL3000 // Assembly.Location is intentionally unused by single-file apphosts.
+        var entryAssemblyPath = typeof(HookCommandRunner).Assembly.Location;
+#pragma warning restore IL3000
         return TryCreateExecutableSelection(
             Environment.ProcessPath,
-            typeof(HookCommandRunner).Assembly.Location,
+            entryAssemblyPath,
             appVersion,
             out selection,
             out failureReason);
