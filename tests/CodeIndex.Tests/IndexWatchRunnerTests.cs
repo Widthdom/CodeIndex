@@ -2117,8 +2117,10 @@ public class IndexWatchRunnerTests
             File.WriteAllText(ignorePath, "subproj/ignored.py\n");
             if (OperatingSystem.IsMacOS() && Environment.Version.Major >= 9)
             {
-                Assert.NotNull(enqueue);
-                enqueue(ignorePath);
+                // .NET 9 keeps FSEvents selection, but host delivery is not a deterministic test oracle on macOS.
+                // .NET 9 は FSEvents 選択を維持するが、macOS の host 配信は決定的な test oracle ではない。
+                var enqueueCallback = Assert.IsType<Action<string>>(enqueue);
+                enqueueCallback(ignorePath);
             }
             Assert.True(
                 SpinWait.SpinUntil(

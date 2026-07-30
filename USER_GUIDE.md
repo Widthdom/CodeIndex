@@ -534,12 +534,25 @@ Use `cdidx diff <db1> <db2> --detailed --json` to verify the restored index.
 Database identity is based on semantic index content: reference-line links are
 compared by their indexed path, line, and context rather than SQLite surrogate
 row IDs, so equivalent databases remain identical after rows are rehydrated.
+Every diff summary classifies observed changes as `data`, `schema`,
+`readiness_provenance`, or `volatile_telemetry`. The default `semantic` mode
+includes the first three categories in `status` / `identical` while observing
+but excluding volatile run telemetry, so a no-op reindex that changes only
+timestamps, duration, mode, or byte counters still compares identical.
+`--data-only` also excludes readiness/provenance from the result status, while
+`--include-telemetry` explicitly includes volatile telemetry; these two flags
+cannot be combined. `summary.categories[]` reports `evaluated`, `included`,
+`different`, and stable `reasons` for every category, and
+`summary.difference_reasons` lists every included reason that made the result
+non-identical. Human output prints the same category reasons.
 Detailed JSON returns one deterministic `records` sequence. Each record names
 its `area` and `side`, carries a stable `identity_sha256`, and exposes named
 `fields` instead of an opaque encoded row. By default, text fields and database
 paths are redacted to SHA-256 and UTF-8 byte-length metadata; source text is
 returned only when `--include-content` is explicitly combined with
-`--detailed --json`.
+`--detailed --json`. Readiness/provenance metadata records remain visible for
+diagnosis even when `--data-only` excludes that category from status. Volatile
+telemetry records are emitted only with `--include-telemetry`.
 
 Detailed JSON is capped at 1 MiB by default. Every JSON mode accepts
 `--max-json-bytes <n>` (4096 through 16777216) for a caller-controlled
@@ -3807,12 +3820,25 @@ SHA-256 と UTF-8 byte length metadata として表現されます。record の 
 復元した index の確認には `cdidx diff <db1> <db2> --detailed --json` を使います。
 database の同一性は semantic index content に基づきます。reference-line link は SQLite の
 surrogate row ID ではなく indexed path、line、context で比較されるため、row が再構築されても
-意味的に同等な database は identical のままです。詳細 JSON は deterministic な単一の
+意味的に同等な database は identical のままです。
+すべての diff summary は観測した変更を `data`、`schema`、`readiness_provenance`、
+`volatile_telemetry` に分類します。既定の `semantic` mode は最初の3カテゴリを
+`status` / `identical` の判定に含め、volatile な実行 telemetry は観測しつつ除外します。
+そのため、timestamp、duration、mode、byte counter だけが変わる no-op reindex は
+identical と比較されます。`--data-only` は readiness/provenance も結果 status から除外し、
+`--include-telemetry` は volatile telemetry を明示的に判定へ含めます。この2 flag は
+同時指定できません。`summary.categories[]` は各カテゴリの `evaluated`、`included`、
+`different`、stable な `reasons` を報告し、`summary.difference_reasons` は
+non-identical の原因になった判定対象の理由をすべて列挙します。human output も同じ
+category reason を表示します。
+詳細 JSON は deterministic な単一の
 `records` sequence を返します。各 record は `area` と `side` を明示し、stable な
 `identity_sha256` と、opaque な encoded row ではなく名前付きの `fields` を持ちます。
 既定では text field と database path を SHA-256 と UTF-8 byte length metadata に
 redact します。source text を返すには `--detailed --json` とともに
-`--include-content` を明示的に指定してください。
+`--include-content` を明示的に指定してください。readiness/provenance metadata record は
+`--data-only` で status 判定から除外した場合も診断用に表示されます。volatile telemetry
+record は `--include-telemetry` を指定した場合だけ出力されます。
 
 詳細 JSON は既定で 1 MiB に制限されます。すべての JSON mode で、caller が output
 全体の UTF-8 budget を指定するための `--max-json-bytes <n>`（4096 以上 16777216 以下）

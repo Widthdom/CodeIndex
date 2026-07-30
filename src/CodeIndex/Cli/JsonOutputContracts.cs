@@ -469,7 +469,19 @@ internal sealed record DiffSummaryJsonResult(
     [property: JsonPropertyName("reference_count_delta")] long ReferenceCountDelta,
     [property: JsonPropertyName("left_schema_version")] long LeftSchemaVersion,
     [property: JsonPropertyName("right_schema_version")] long RightSchemaVersion,
-    [property: JsonPropertyName("schema_versions_equal")] bool SchemaVersionsEqual);
+    [property: JsonPropertyName("schema_versions_equal")] bool SchemaVersionsEqual,
+    [property: JsonPropertyName("comparison_mode")] string ComparisonMode,
+    [property: JsonPropertyName("difference_reason_count")] int DifferenceReasonCount,
+    [property: JsonPropertyName("difference_reasons")] List<string> DifferenceReasons,
+    [property: JsonPropertyName("categories")] List<DiffCategorySummaryJsonResult> Categories);
+
+internal sealed record DiffCategorySummaryJsonResult(
+    [property: JsonPropertyName("category")] string Category,
+    [property: JsonPropertyName("evaluated")] bool Evaluated,
+    [property: JsonPropertyName("included")] bool Included,
+    [property: JsonPropertyName("different")] bool Different,
+    [property: JsonPropertyName("reason_count")] int ReasonCount,
+    [property: JsonPropertyName("reasons")] List<string> Reasons);
 
 internal sealed record DiffJsonResult(
     [property: JsonPropertyName("status")] string Status,

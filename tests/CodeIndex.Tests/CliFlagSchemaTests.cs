@@ -150,6 +150,17 @@ public class CliFlagSchemaTests
     }
 
     [Fact]
+    public void DiffComparisonModes_AreRegisteredForCompletions_Issue4884()
+    {
+        var flags = CliFlagSchema.GetCompletionFlagsForCommand("diff")
+            .Select(flag => flag.Name)
+            .ToHashSet(StringComparer.Ordinal);
+
+        Assert.Contains("--data-only", flags);
+        Assert.Contains("--include-telemetry", flags);
+    }
+
+    [Fact]
     public void AuditAggregationFlags_SurfaceDocumentedRecipeGrouping_Issues4301_4339()
     {
         var accepted = CliFlagSchema.GetAcceptedFlagNamesForCommand("audit");

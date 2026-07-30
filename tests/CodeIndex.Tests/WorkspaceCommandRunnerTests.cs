@@ -10,6 +10,14 @@ public class WorkspaceCommandRunnerTests
 {
     private readonly JsonSerializerOptions _jsonOptions = ProgramRunner.CreateDefaultJsonOptions();
 
+    private void IndexProject(string projectRoot)
+    {
+        var (exitCode, _, stderr) = ConsoleCapture.Capture(
+            () => IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions));
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Empty(stderr);
+    }
+
     [Fact]
     public void WorkspaceList_ReadsManifestMembers()
     {
@@ -100,6 +108,7 @@ public class WorkspaceCommandRunnerTests
             Assert.Empty(stderr);
             using var document = JsonDocument.Parse(stdout);
             var payload = document.RootElement;
+            Assert.False(payload.GetProperty("check_mode").GetBoolean());
             var healthSummary = payload.GetProperty("member_health_summary");
             Assert.Equal(4, healthSummary.GetProperty("member_count").GetInt32());
             Assert.Equal(3, healthSummary.GetProperty("database_probe_count").GetInt32());
@@ -108,15 +117,25 @@ public class WorkspaceCommandRunnerTests
                 healthSummary.GetProperty("database_probe_limit").GetInt32());
             Assert.Equal(0, healthSummary.GetProperty("probe_limit_skipped_member_count").GetInt32());
             Assert.False(healthSummary.GetProperty("truncated").GetBoolean());
+            Assert.Equal(0, healthSummary.GetProperty("healthy_member_count").GetInt32());
+            Assert.Equal(3, healthSummary.GetProperty("degraded_member_count").GetInt32());
+            Assert.Equal(1, healthSummary.GetProperty("missing_member_count").GetInt32());
+            Assert.Equal("missing", healthSummary.GetProperty("status").GetString());
+            Assert.Equal("required_member_missing", healthSummary.GetProperty("reason").GetString());
+            Assert.Equal(CommandExitCodes.NotFound, healthSummary.GetProperty("check_exit_code").GetInt32());
 
             var members = payload.GetProperty("members").EnumerateArray().ToArray();
-            var ready = members.Single(member => PathCasing.PathsEqual(member.GetProperty("path").GetString()!, runtimeReadyRoot))
-                .GetProperty("index_health");
+            var readyMember = members.Single(member => PathCasing.PathsEqual(member.GetProperty("path").GetString()!, runtimeReadyRoot));
+            Assert.True(readyMember.GetProperty("exists").GetBoolean());
+            Assert.True(readyMember.GetProperty("project_exists").GetBoolean());
+            Assert.True(readyMember.GetProperty("db_exists").GetBoolean());
+            var ready = readyMember.GetProperty("index_health");
             Assert.True(ready.GetProperty("db_exists").GetBoolean());
             Assert.True(ready.GetProperty("probed").GetBoolean());
             Assert.True(ready.GetProperty("schema_compatible").GetBoolean());
             Assert.True(ready.GetProperty("index_matches_workspace").GetBoolean());
             Assert.Equal("matched", ready.GetProperty("freshness_reason").GetString());
+            Assert.Equal("rebuild_member_index", ready.GetProperty("repair_action").GetProperty("action").GetString());
             var graphTableAvailable = ready.GetProperty("graph_table_available").GetBoolean();
             var graphDataCurrent = ready.GetProperty("graph_data_current").GetBoolean();
             var referenceGraphComplete = ready.GetProperty("reference_graph_complete").GetBoolean();
@@ -137,13 +156,219 @@ public class WorkspaceCommandRunnerTests
             Assert.Equal("index_newer_than_reader", future.GetProperty("reason").GetString());
             Assert.False(future.GetProperty("schema_compatible").GetBoolean());
             Assert.True(future.GetProperty("index_newer_than_reader").GetBoolean());
+            Assert.Equal("upgrade_cdidx", future.GetProperty("repair_action").GetProperty("action").GetString());
 
-            var missingDb = members.Single(member => PathCasing.PathsEqual(member.GetProperty("path").GetString()!, runtimeMissingDbRoot))
-                .GetProperty("index_health");
+            var missingDbMember = members.Single(member => PathCasing.PathsEqual(member.GetProperty("path").GetString()!, runtimeMissingDbRoot));
+            Assert.True(missingDbMember.GetProperty("project_exists").GetBoolean());
+            Assert.False(missingDbMember.GetProperty("db_exists").GetBoolean());
+            var missingDb = missingDbMember.GetProperty("index_health");
             Assert.Equal("missing", missingDb.GetProperty("status").GetString());
             Assert.Equal("database_not_found", missingDb.GetProperty("reason").GetString());
             Assert.False(missingDb.GetProperty("db_exists").GetBoolean());
             Assert.False(missingDb.GetProperty("probed").GetBoolean());
+            Assert.Equal("index_member", missingDb.GetProperty("repair_action").GetProperty("action").GetString());
+
+            var (checkExitCode, checkStdout, checkStderr) = ConsoleCapture.Capture(
+                () => WorkspaceCommandRunner.Run(["status", "--check", "--json"], _jsonOptions));
+            Assert.Equal(CommandExitCodes.NotFound, checkExitCode);
+            Assert.Empty(checkStderr);
+            using var checkDocument = JsonDocument.Parse(checkStdout);
+            Assert.True(checkDocument.RootElement.GetProperty("check_mode").GetBoolean());
+        }
+        finally
+        {
+            Environment.CurrentDirectory = previous;
+        }
+    }
+
+    [Fact]
+    public void WorkspaceStatusCheck_UsesStableAggregateExitPolicy_Issue4885()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_workspace_status_check");
+        var root = project.Root;
+        var healthyRoot = Path.Combine(root, "members", "project with spaces");
+        var degradedRoot = Path.Combine(root, "members", "degraded");
+        var missingRoot = Path.Combine(root, "members", "missing");
+        Directory.CreateDirectory(healthyRoot);
+        Directory.CreateDirectory(degradedRoot);
+        var manifestPath = Path.Combine(root, "cdidx.workspace.json");
+        var previous = Environment.CurrentDirectory;
+        try
+        {
+            Environment.CurrentDirectory = root;
+
+            var (informationalExitCode, _, informationalStderr) = ConsoleCapture.Capture(
+                () => WorkspaceCommandRunner.Run(["status", "--json"], _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, informationalExitCode);
+            Assert.Empty(informationalStderr);
+            var (noManifestExitCode, noManifestStdout, noManifestStderr) = ConsoleCapture.Capture(
+                () => WorkspaceCommandRunner.Run(["status", "--check", "--json"], _jsonOptions));
+            Assert.Equal(CommandExitCodes.NotFound, noManifestExitCode);
+            Assert.Empty(noManifestStderr);
+            using (var noManifestDocument = JsonDocument.Parse(noManifestStdout))
+            {
+                var summary = noManifestDocument.RootElement.GetProperty("member_health_summary");
+                Assert.Equal("missing", summary.GetProperty("status").GetString());
+                Assert.Equal("workspace_manifest_not_found", summary.GetProperty("reason").GetString());
+            }
+
+            File.WriteAllText(manifestPath, """{ "members": [] }""");
+            var (emptyExitCode, emptyStdout, emptyStderr) = ConsoleCapture.Capture(
+                () => WorkspaceCommandRunner.Run(["status", "--check", "--json"], _jsonOptions));
+            Assert.Equal(CommandExitCodes.NotFound, emptyExitCode);
+            Assert.Empty(emptyStderr);
+            using (var emptyDocument = JsonDocument.Parse(emptyStdout))
+            {
+                var summary = emptyDocument.RootElement.GetProperty("member_health_summary");
+                Assert.Equal("empty", summary.GetProperty("status").GetString());
+                Assert.Equal("workspace_has_no_members", summary.GetProperty("reason").GetString());
+                Assert.Equal(["add_workspace_members"], summary.GetProperty("recommended_actions").EnumerateArray().Select(item => item.GetString()));
+            }
+
+            File.WriteAllText(
+                manifestPath,
+                JsonSerializer.Serialize(new { members = new[] { "members/missing" } }));
+            var (missingProjectExitCode, missingProjectStdout, _) = ConsoleCapture.Capture(
+                () => WorkspaceCommandRunner.Run(["status", "--check", "--json"], _jsonOptions));
+            Assert.Equal(CommandExitCodes.NotFound, missingProjectExitCode);
+            using (var missingProjectDocument = JsonDocument.Parse(missingProjectStdout))
+            {
+                var member = missingProjectDocument.RootElement.GetProperty("members")[0];
+                Assert.False(member.GetProperty("project_exists").GetBoolean());
+                Assert.False(member.GetProperty("db_exists").GetBoolean());
+                Assert.Equal(
+                    "create_project_directory",
+                    member.GetProperty("index_health").GetProperty("repair_action").GetProperty("action").GetString());
+            }
+
+            File.WriteAllText(
+                manifestPath,
+                JsonSerializer.Serialize(new
+                {
+                    members = new[]
+                    {
+                        "members/project with spaces",
+                        "members/degraded",
+                    },
+                }));
+            var (missingDatabaseExitCode, missingDatabaseStdout, _) = ConsoleCapture.Capture(
+                () => WorkspaceCommandRunner.Run(["status", "--check", "--json"], _jsonOptions));
+            Assert.Equal(CommandExitCodes.NotFound, missingDatabaseExitCode);
+            using (var missingDatabaseDocument = JsonDocument.Parse(missingDatabaseStdout))
+            {
+                var members = missingDatabaseDocument.RootElement.GetProperty("members").EnumerateArray().ToArray();
+                Assert.All(members, member => Assert.False(member.GetProperty("db_exists").GetBoolean()));
+                var repairCommand = members[0]
+                    .GetProperty("index_health")
+                    .GetProperty("repair_action")
+                    .GetProperty("command");
+                Assert.Equal("cdidx", repairCommand.GetProperty("name").GetString());
+                var memberPath = members[0].GetProperty("path").GetString();
+                Assert.Contains(
+                    repairCommand.GetProperty("args").EnumerateArray().Select(item => item.GetString()),
+                    argument => argument == memberPath);
+            }
+
+            const string IndexedContent = "class App {}\n";
+            File.WriteAllText(Path.Combine(healthyRoot, "App.cs"), IndexedContent);
+            IndexProject(healthyRoot);
+            File.WriteAllText(Path.Combine(degradedRoot, "App.cs"), IndexedContent);
+            IndexProject(degradedRoot);
+            File.WriteAllText(Path.Combine(degradedRoot, "App.cs"), "class App { void Changed() {} }\n");
+
+            var (degradedExitCode, degradedStdout, degradedStderr) = ConsoleCapture.Capture(
+                () => WorkspaceCommandRunner.Run(["status", "--check", "--json"], _jsonOptions));
+            Assert.Equal(CommandExitCodes.StaleIndex, degradedExitCode);
+            Assert.Empty(degradedStderr);
+            using (var degradedDocument = JsonDocument.Parse(degradedStdout))
+            {
+                var summary = degradedDocument.RootElement.GetProperty("member_health_summary");
+                Assert.Equal("degraded", summary.GetProperty("status").GetString());
+                Assert.Equal(1, summary.GetProperty("healthy_member_count").GetInt32());
+                Assert.Equal(1, summary.GetProperty("degraded_member_count").GetInt32());
+                Assert.Equal(0, summary.GetProperty("missing_member_count").GetInt32());
+            }
+
+            File.WriteAllText(Path.Combine(degradedRoot, "App.cs"), IndexedContent);
+            var (healthyExitCode, healthyStdout, healthyStderr) = ConsoleCapture.Capture(
+                () => WorkspaceCommandRunner.Run(["status", "--check", "--json"], _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, healthyExitCode);
+            Assert.Empty(healthyStderr);
+            using var healthyDocument = JsonDocument.Parse(healthyStdout);
+            var healthySummary = healthyDocument.RootElement.GetProperty("member_health_summary");
+            Assert.Equal("healthy", healthySummary.GetProperty("status").GetString());
+            Assert.Equal("all_members_ready", healthySummary.GetProperty("reason").GetString());
+        }
+        finally
+        {
+            Environment.CurrentDirectory = previous;
+        }
+    }
+
+    [Fact]
+    public void WorkspaceStatusJson_SingleStrategyReusesSharedDatabaseProbe_Issue4885()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_workspace_status_shared_db");
+        var root = project.Root;
+        Directory.CreateDirectory(Path.Combine(root, "members", "a"));
+        Directory.CreateDirectory(Path.Combine(root, "members", "b"));
+        const string ManifestContent = """
+            {
+              "members": ["members/a", "members/b"],
+              "index_strategy": "single"
+            }
+            """;
+        File.WriteAllText(Path.Combine(root, "cdidx.workspace.json"), ManifestContent);
+        IndexProject(root);
+
+        var previous = Environment.CurrentDirectory;
+        try
+        {
+            Environment.CurrentDirectory = root;
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(
+                () => WorkspaceCommandRunner.Run(["status", "--check", "--json"], _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Empty(stderr);
+            using var document = JsonDocument.Parse(stdout);
+            var summary = document.RootElement.GetProperty("member_health_summary");
+            Assert.Equal(1, summary.GetProperty("database_probe_count").GetInt32());
+            Assert.Equal(2, summary.GetProperty("healthy_member_count").GetInt32());
+            var members = document.RootElement.GetProperty("members").EnumerateArray().ToArray();
+            Assert.All(members, member => Assert.True(member.GetProperty("db_exists").GetBoolean()));
+            Assert.All(
+                members,
+                member => Assert.Equal("ready", member.GetProperty("index_health").GetProperty("status").GetString()));
+        }
+        finally
+        {
+            Environment.CurrentDirectory = previous;
+        }
+    }
+
+    [Fact]
+    public void WorkspaceStatusCheckHuman_ReportsUnambiguousExistenceAndAggregate_Issue4885()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_workspace_status_human");
+        var root = project.Root;
+        Directory.CreateDirectory(Path.Combine(root, "member with spaces"));
+        File.WriteAllText(
+            Path.Combine(root, "cdidx.workspace.json"),
+            """{ "members": ["member with spaces"] }""");
+
+        var previous = Environment.CurrentDirectory;
+        try
+        {
+            Environment.CurrentDirectory = root;
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(
+                () => WorkspaceCommandRunner.Run(["status", "--check"], _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.NotFound, exitCode);
+            Assert.Empty(stderr);
+            Assert.Contains("project present; database missing", stdout);
+            Assert.Contains("reason=database_not_found; action=index_member", stdout);
+            Assert.Contains("Workspace health: missing", stdout);
+            Assert.Contains($"check_exit_code={CommandExitCodes.NotFound}", stdout);
         }
         finally
         {
@@ -253,9 +478,12 @@ public class WorkspaceCommandRunnerTests
     }
 
     [Theory]
-    [InlineData("list")]
-    [InlineData("status")]
-    public void WorkspaceListJson_InvalidMemberShape_ReturnsStructuredError_Issue4359(string command)
+    [InlineData("list", false)]
+    [InlineData("status", false)]
+    [InlineData("status", true)]
+    public void WorkspaceListJson_InvalidMemberShape_ReturnsStructuredError_Issue4359(
+        string command,
+        bool check)
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_workspace_manifest_invalid_shape");
         var root = project.Root;
@@ -272,7 +500,11 @@ public class WorkspaceCommandRunnerTests
         try
         {
             Environment.CurrentDirectory = root;
-            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() => WorkspaceCommandRunner.Run([command, "--json"], _jsonOptions));
+            var commandArgs = check
+                ? new[] { command, "--check", "--json" }
+                : [command, "--json"];
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(
+                () => WorkspaceCommandRunner.Run(commandArgs, _jsonOptions));
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
             Assert.Equal(string.Empty, stderr);
