@@ -2015,7 +2015,10 @@ public partial class QueryCommandRunnerTests
             .Select(item => item.GetString())
             .ToHashSet(StringComparer.Ordinal);
         Assert.All(serializedFields, field => Assert.Contains(field, knownFields));
-        Assert.False(knownFieldsDocument.RootElement.GetProperty("known_fields_truncated").GetBoolean());
+        Assert.True(knownFieldsDocument.RootElement.GetProperty("known_fields_truncated").GetBoolean());
+        Assert.Equal(
+            knownFieldsDocument.RootElement.GetProperty("known_field_limit").GetInt32(),
+            knownFields.Count);
     }
 
     [Fact]
@@ -2031,6 +2034,18 @@ public partial class QueryCommandRunnerTests
         Assert.Contains(
             "maintenance_guidance.recommended_command",
             nestedDocument.RootElement.GetProperty("hint").GetString(),
+            StringComparison.Ordinal);
+
+        var (typoExitCode, typoStdout, typoStderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+            ["--explain", "db_pragma_settings.journal_mdoe", "--json"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, typoExitCode);
+        Assert.Equal(string.Empty, typoStderr);
+        using var typoDocument = ParseJsonOutput(typoStdout);
+        Assert.Contains(
+            "db_pragma_settings.journal_mode",
+            typoDocument.RootElement.GetProperty("hint").GetString(),
             StringComparison.Ordinal);
 
         var sensitiveInput = "/Users/example/.ssh/id_rsa-" + new string('x', 400);

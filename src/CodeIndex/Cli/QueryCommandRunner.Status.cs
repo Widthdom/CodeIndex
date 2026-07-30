@@ -508,25 +508,102 @@ public static partial class QueryCommandRunner
     {
         var serializerFields = GetStatusSerializableFieldNames(jsonOptions);
         var result = new List<string>(Math.Min(MaxStatusExplainKnownFields, serializerFields.Count));
+        var seen = new HashSet<string>(StringComparer.Ordinal);
         foreach (var fieldName in serializerFields)
         {
             if (result.Count == MaxStatusExplainKnownFields)
                 break;
             result.Add(fieldName);
+            seen.Add(fieldName);
         }
 
         foreach (var field in StatusMemberExplainFields)
         {
             if (result.Count == MaxStatusExplainKnownFields)
                 break;
-            if (TryResolveStatusJsonPath(field.FieldName, jsonOptions, out _))
+            if (TryResolveStatusJsonPath(field.FieldName, jsonOptions, out _)
+                && seen.Add(field.FieldName))
+            {
                 result.Add(field.FieldName);
+            }
         }
 
-        var totalResolvableMembers = StatusMemberExplainFields.Count(
-            field => TryResolveStatusJsonPath(field.FieldName, jsonOptions, out _));
-        truncated = serializerFields.Count + totalResolvableMembers > result.Count;
+        truncated = false;
+        foreach (var memberPath in EnumerateStatusExplainNestedPaths(jsonOptions))
+        {
+            if (!seen.Add(memberPath))
+                continue;
+            if (result.Count == MaxStatusExplainKnownFields)
+            {
+                truncated = true;
+                break;
+            }
+            result.Add(memberPath);
+        }
         return result;
+    }
+
+    private static IEnumerable<string> EnumerateStatusExplainNestedPaths(
+        JsonSerializerOptions jsonOptions,
+        string? topLevelFilter = null)
+    {
+        var context = CliJsonSerializerContextFactory.Create(jsonOptions);
+        foreach (var topLevelProperty in context.StatusResult.Properties)
+        {
+            if (topLevelProperty.Get == null
+                || topLevelFilter != null
+                   && !string.Equals(topLevelProperty.Name, topLevelFilter, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var nestedType = GetStatusExplainNestedType(topLevelProperty.PropertyType);
+            if (nestedType == null)
+                continue;
+            foreach (var path in EnumerateStatusExplainNestedPaths(
+                         context,
+                         nestedType,
+                         topLevelProperty.Name,
+                         segmentCount: 1))
+            {
+                yield return path;
+            }
+        }
+    }
+
+    private static IEnumerable<string> EnumerateStatusExplainNestedPaths(
+        CliJsonSerializerContext context,
+        Type nestedType,
+        string prefix,
+        int segmentCount)
+    {
+        if (segmentCount >= MaxStatusExplainPathDepth)
+            yield break;
+
+        var typeInfo = GetStatusExplainTypeInfo(context, nestedType);
+        if (typeInfo == null)
+            yield break;
+
+        foreach (var property in typeInfo.Properties)
+        {
+            if (property.Get == null)
+                continue;
+
+            var path = $"{prefix}.{property.Name}";
+            yield return path;
+
+            var childType = GetStatusExplainNestedType(property.PropertyType);
+            if (childType == null)
+                continue;
+            foreach (var childPath in EnumerateStatusExplainNestedPaths(
+                         context,
+                         childType,
+                         path,
+                         segmentCount + 1))
+            {
+                yield return childPath;
+            }
+        }
     }
 
     private static bool TryResolveStatusJsonPath(
@@ -566,7 +643,7 @@ public static partial class QueryCommandRunner
             topLevelProperty ??= leafProperty;
             canonicalSegments.Add(leafProperty.Name);
             var nestedType = GetStatusExplainNestedType(leafProperty.PropertyType);
-            typeInfo = nestedType == null ? null : context.GetTypeInfo(nestedType);
+            typeInfo = nestedType == null ? null : GetStatusExplainTypeInfo(context, nestedType);
         }
 
         resolution = new StatusJsonPathResolution(
@@ -604,6 +681,20 @@ public static partial class QueryCommandRunner
         }
 
         return type.IsClass ? type : null;
+    }
+
+    private static JsonTypeInfo? GetStatusExplainTypeInfo(
+        CliJsonSerializerContext context,
+        Type type)
+    {
+        try
+        {
+            return context.GetTypeInfo(type);
+        }
+        catch (NotSupportedException)
+        {
+            return null;
+        }
     }
 
     private static StatusFieldExplanation BuildGeneratedStatusFieldExplanation(
@@ -660,18 +751,21 @@ public static partial class QueryCommandRunner
         var knownFields = GetStatusExplainKnownFieldNames(jsonOptions, out var truncated);
         var requestedTopLevel = fieldName.Split('.', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
         IReadOnlyList<string> candidates = knownFields;
+        var candidatesTruncated = truncated;
         if (requestedTopLevel != null
             && TryResolveStatusJsonPath(requestedTopLevel, jsonOptions, out _))
         {
-            var prefix = requestedTopLevel + ".";
-            var memberCandidates = knownFields
-                .Where(candidate => candidate.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            var memberCandidates = EnumerateStatusExplainNestedPaths(jsonOptions, requestedTopLevel)
+                .Take(MaxStatusExplainKnownFields + 1)
                 .ToArray();
             if (memberCandidates.Length > 0)
-                candidates = memberCandidates;
+            {
+                candidatesTruncated = memberCandidates.Length > MaxStatusExplainKnownFields;
+                candidates = memberCandidates.Take(MaxStatusExplainKnownFields).ToArray();
+            }
         }
 
-        var suffix = truncated ? $" (first {MaxStatusExplainKnownFields} candidates)." : ".";
+        var suffix = candidatesTruncated ? $" (first {MaxStatusExplainKnownFields} candidates)." : ".";
         return $"use one of: {string.Join(", ", candidates)}{suffix}";
     }
 
