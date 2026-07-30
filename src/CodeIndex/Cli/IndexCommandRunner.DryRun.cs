@@ -79,6 +79,8 @@ public static partial class IndexCommandRunner
         var projectedDeletePaths = new HashSet<string>(StringComparer.Ordinal);
         var projectedPurgePaths = new HashSet<string>(StringComparer.Ordinal);
         var mutationEstimates = new DryRunMutationEstimateAccumulator();
+        if (dbSnapshot.ReadFailed)
+            mutationEstimates.MarkAllUnknown("index_snapshot_unavailable");
         var estimatedSymbolsDroppedByKindFilter = 0L;
         var projectedFileUpdates = 0;
         var projectedFileSkips = 0;
@@ -87,6 +89,9 @@ public static partial class IndexCommandRunner
         var projectedReferenceCapHits = 0;
         var parseEstimateFilesProcessed = 0;
         var parseEstimateFilesTruncated = false;
+        var projectedCSharpSkips = new List<DryRunProjectedCSharpSkip>();
+        var csharpWorkspaceContractDetected = false;
+        var csharpWorkspaceEstimateUnavailable = false;
         var unsupportedTotal = 0;
         var unknownExtensionTotal = 0;
         using var symbolExtractionWorker = new LazyDisposable<SymbolExtractionWorkerClient>(
@@ -150,6 +155,28 @@ public static partial class IndexCommandRunner
             }
         }
 
+        var currentHotspotFamilyMarkerFingerprints =
+            GetHotspotFamilyMarkerFingerprints(dryIndexer, cancellationToken);
+        var priorHotspotFamilyVersions = FileIndexer
+            .GetHotspotFamilyMarkerLanguages()
+            .ToDictionary(
+                static language => language,
+                language => dbSnapshot.GetMeta(
+                    DbContext.GetHotspotFamilyVersionMetaKey(language)),
+                StringComparer.Ordinal);
+        var priorHotspotFamilyMarkerFingerprints = FileIndexer
+            .GetHotspotFamilyMarkerLanguages()
+            .ToDictionary(
+                static language => language,
+                language => dbSnapshot.GetMeta(
+                    DbContext.GetHotspotFamilyMarkerFingerprintMetaKey(language)),
+                StringComparer.Ordinal);
+        var hotspotFamilyTrustMatchesCurrent =
+            GetHotspotFamilyTrustMatchesCurrent(
+                priorHotspotFamilyVersions,
+                priorHotspotFamilyMarkerFingerprints,
+                currentHotspotFamilyMarkerFingerprints);
+
         if (!TryResolveDryRunCandidates(
             options,
             dryIndexer,
@@ -162,6 +189,8 @@ public static partial class IndexCommandRunner
             out dryDeleteCandidates,
             out authoritativeFullScan,
             out dryScanMetadata,
+            out var forceExtractorRefresh,
+            out var forceJavaScriptTypeScriptRefresh,
             out var exitCode))
         {
             return exitCode;
@@ -223,10 +252,20 @@ public static partial class IndexCommandRunner
                         probe.Modified,
                         dryIndexer.IsGeneratedCodeExtractionSuppressed(dbRelativePath),
                         authoritativeFullScan,
-                        normalizedProjectRoot);
+                        normalizedProjectRoot,
+                        forceExtractorRefresh,
+                        forceJavaScriptTypeScriptRefresh,
+                        hotspotFamilyTrustMatchesCurrent);
                 if (projectedBinarySkip)
                 {
                     projectedFileSkips++;
+                    if (probe.Language == "csharp")
+                    {
+                        projectedCSharpSkips.Add(
+                            new DryRunProjectedCSharpSkip(
+                                dbRelativePath,
+                                PolicySkipped: true));
+                    }
                     continue;
                 }
 
@@ -320,10 +359,20 @@ public static partial class IndexCommandRunner
                 probe.Loaded!.Value.Record,
                 dryIndexer.IsGeneratedCodeExtractionSuppressed(dbRelativePath),
                 authoritativeFullScan,
-                normalizedProjectRoot);
+                normalizedProjectRoot,
+                forceExtractorRefresh,
+                forceJavaScriptTypeScriptRefresh,
+                hotspotFamilyTrustMatchesCurrent);
             if (projectedSkip)
             {
                 projectedFileSkips++;
+                if (probe.Language == "csharp")
+                {
+                    projectedCSharpSkips.Add(
+                        new DryRunProjectedCSharpSkip(
+                            dbRelativePath,
+                            PolicySkipped: false));
+                }
             }
             else
             {
@@ -336,6 +385,8 @@ public static partial class IndexCommandRunner
                 {
                     parseEstimateFilesTruncated = true;
                     mutationEstimates.MarkParseUnknown("parse_estimate_file_limit_reached");
+                    if (probe.Language == "csharp")
+                        csharpWorkspaceEstimateUnavailable = true;
                 }
                 else
                 {
@@ -359,6 +410,8 @@ public static partial class IndexCommandRunner
                             projectedSymbolCapHits++;
                         if (parsedEstimate.ReferenceCapHit)
                             projectedReferenceCapHits++;
+                        csharpWorkspaceContractDetected |=
+                            parsedEstimate.CSharpStaticInterfaceContract;
                     }
                     catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                     {
@@ -367,6 +420,8 @@ public static partial class IndexCommandRunner
                     catch (Exception ex)
                     {
                         mutationEstimates.MarkParseUnknown("parse_estimation_failed");
+                        if (probe.Language == "csharp")
+                            csharpWorkspaceEstimateUnavailable = true;
                         RecordDryRunError(
                             displayRelativePath,
                             $"Parse-only mutation estimate unavailable: {CommandErrorWriter.FormatSanitizedExceptionMessage(ex)}");
@@ -376,6 +431,28 @@ public static partial class IndexCommandRunner
             if (dryFileSamples.Count < DryRunFileSampleLimit)
                 dryFileSamples.Add(displayRelativePath);
             langCounts[probe.Language] = langCounts.GetValueOrDefault(probe.Language) + 1;
+        }
+
+        if (authoritativeFullScan
+            && projectedCSharpSkips.Count > 0
+            && (csharpWorkspaceContractDetected
+                || csharpWorkspaceEstimateUnavailable))
+        {
+            projectedFileSkips -= projectedCSharpSkips.Count;
+            projectedFileUpdates += projectedCSharpSkips.Count;
+            projectedPolicySkips += projectedCSharpSkips.Count(
+                static skip => skip.PolicySkipped);
+            foreach (var skip in projectedCSharpSkips)
+            {
+                AddEstimatedExistingUpdateMutations(
+                    mutationEstimates,
+                    dbSnapshot,
+                    skip.RelativePath);
+            }
+            mutationEstimates.MarkParseUnknown(
+                csharpWorkspaceContractDetected
+                    ? "csharp_workspace_augmentation_required"
+                    : "csharp_workspace_preflight_unavailable");
         }
 
         foreach (var relativePath in dryDeleteCandidates)
@@ -519,21 +596,34 @@ public static partial class IndexCommandRunner
         out IEnumerable<string> dryDeleteCandidates,
         out bool authoritativeFullScan,
         out DryRunScanMetadata scanMetadata,
+        out bool forceExtractorRefresh,
+        out bool forceJavaScriptTypeScriptRefresh,
         out int exitCode)
     {
         dryCandidates = [];
         dryDeleteCandidates = [];
         authoritativeFullScan = false;
         scanMetadata = DryRunScanMetadata.Empty;
+        forceExtractorRefresh = false;
+        forceJavaScriptTypeScriptRefresh = false;
         exitCode = CommandExitCodes.Success;
 
         if (options.UpdateFiles.Count > 0)
         {
             // --files: only the specified files / --files: 指定ファイルのみ
             var relevantIgnoreFileChanged = ContainsRelevantIgnoreFileUpdate(projectPath, options.UpdateFiles);
+            forceJavaScriptTypeScriptRefresh =
+                ContainsJavaScriptTypeScriptConfigPath(normalizedUpdatePaths);
+            forceExtractorRefresh =
+                ContainsExtractorConfigurationPath(
+                    projectPath,
+                    normalizedUpdatePaths)
+                || normalizedUpdatePaths.Any(
+                    FileIndexer.IsAmbiguousLanguageProjectMarkerPath);
             if (relevantIgnoreFileChanged
                 || ContainsIgnoreFilePath(normalizedUpdatePaths)
-                || ContainsExtractorConfigurationPath(projectPath, normalizedUpdatePaths))
+                || forceJavaScriptTypeScriptRefresh
+                || forceExtractorRefresh)
             {
                 FileIndexer.ScanFilesResult scanResult;
                 try
@@ -621,9 +711,16 @@ public static partial class IndexCommandRunner
                 }
             }
 
+            forceJavaScriptTypeScriptRefresh =
+                ContainsJavaScriptTypeScriptConfigPath(changedFiles);
+            forceExtractorRefresh =
+                ContainsExtractorConfigurationPath(projectPath, changedFiles)
+                || changedFiles.Any(
+                    FileIndexer.IsAmbiguousLanguageProjectMarkerPath);
             if (relevantIgnoreFileChanged
                 || ContainsIgnoreFilePath(changedFiles)
-                || ContainsExtractorConfigurationPath(projectPath, changedFiles))
+                || forceJavaScriptTypeScriptRefresh
+                || forceExtractorRefresh)
             {
                 FileIndexer.ScanFilesResult scanResult;
                 try
@@ -958,6 +1055,10 @@ public static partial class IndexCommandRunner
             symbolExtractionWorker,
             cancellationToken);
         var symbols = symbolExtraction.Symbols;
+        var csharpStaticInterfaceContract =
+            record.Lang == "csharp"
+            && CSharpStaticInterfacePrepass
+                .HasCSharpStaticInterfaceContractSymbol(symbols);
         if (symbols.Count > options.MaxSymbolsPerFile)
         {
             var issueCount = symbolExtraction.RegexTimeoutIssue == null ? 1 : 2;
@@ -969,7 +1070,8 @@ public static partial class IndexCommandRunner
                 issueCount,
                 0,
                 SymbolCapHit: true,
-                ReferenceCapHit: false);
+                ReferenceCapHit: false,
+                csharpStaticInterfaceContract);
         }
 
         SymbolExtractor.ApplyFamilyScope(
@@ -987,7 +1089,8 @@ public static partial class IndexCommandRunner
                 issueCount,
                 symbolsDroppedByKindFilter,
                 SymbolCapHit: true,
-                ReferenceCapHit: false);
+                ReferenceCapHit: false,
+                csharpStaticInterfaceContract);
         }
 
         FileIndexer.ValidateSymbolLineRanges(record, symbols);
@@ -1066,7 +1169,8 @@ public static partial class IndexCommandRunner
             issues.Count,
             symbolsDroppedByKindFilter,
             SymbolCapHit: false,
-            ReferenceCapHit: referenceCapHit);
+            ReferenceCapHit: referenceCapHit,
+            csharpStaticInterfaceContract);
     }
 
     private static bool IsDryRunLoadedFileReusable(
@@ -1076,15 +1180,23 @@ public static partial class IndexCommandRunner
         FileRecord record,
         bool generatedExtractionSuppressed,
         bool authoritativeFullScan,
-        string projectRoot)
+        string projectRoot,
+        bool forceExtractorRefresh,
+        bool forceJavaScriptTypeScriptRefresh,
+        IReadOnlyDictionary<string, bool>
+            hotspotFamilyTrustMatchesCurrent)
     {
         if (!snapshot.Files.TryGetValue(relativePath, out var existing)
             || !IsDryRunReuseAllowed(
                 options,
                 snapshot,
+                relativePath,
                 record.Lang,
                 authoritativeFullScan,
-                projectRoot)
+                projectRoot,
+                forceExtractorRefresh,
+                forceJavaScriptTypeScriptRefresh,
+                hotspotFamilyTrustMatchesCurrent)
             || !existing.ContentReuseEligible
             || existing.GeneratedExtractionSuppressed
                 != generatedExtractionSuppressed)
@@ -1117,7 +1229,11 @@ public static partial class IndexCommandRunner
         DateTime? modified,
         bool generatedExtractionSuppressed,
         bool authoritativeFullScan,
-        string projectRoot)
+        string projectRoot,
+        bool forceExtractorRefresh,
+        bool forceJavaScriptTypeScriptRefresh,
+        IReadOnlyDictionary<string, bool>
+            hotspotFamilyTrustMatchesCurrent)
     {
         if (!size.HasValue
             || !modified.HasValue
@@ -1128,9 +1244,13 @@ public static partial class IndexCommandRunner
             || !IsDryRunReuseAllowed(
                 options,
                 snapshot,
+                relativePath,
                 language,
                 authoritativeFullScan,
-                projectRoot))
+                projectRoot,
+                forceExtractorRefresh,
+                forceJavaScriptTypeScriptRefresh,
+                hotspotFamilyTrustMatchesCurrent))
         {
             return false;
         }
@@ -1146,11 +1266,17 @@ public static partial class IndexCommandRunner
     private static bool IsDryRunReuseAllowed(
         IndexCommandOptions options,
         DryRunDbSnapshot snapshot,
+        string indexPath,
         string? language,
         bool authoritativeFullScan,
-        string projectRoot)
+        string projectRoot,
+        bool forceExtractorRefresh,
+        bool forceJavaScriptTypeScriptRefresh,
+        IReadOnlyDictionary<string, bool>
+            hotspotFamilyTrustMatchesCurrent)
     {
         if (options.Rebuild
+            || forceExtractorRefresh
             || string.IsNullOrWhiteSpace(language)
             || !string.Equals(
                 snapshot.SymbolKindFilterSignature,
@@ -1161,8 +1287,20 @@ public static partial class IndexCommandRunner
             return false;
         }
 
-        if (authoritativeFullScan && snapshot.SymbolsOnlyGraphOmitted)
+        if (authoritativeFullScan
+            && (options.SymbolsOnly
+                || snapshot.SymbolsOnlyGraphOmitted
+                || !AllowReuseWithCurrentHotspotFamilyTrust(
+                    language,
+                    hotspotFamilyTrustMatchesCurrent)))
             return false;
+
+        if (forceJavaScriptTypeScriptRefresh
+            && (IsJavaScriptTypeScriptLanguage(language)
+                || IsJavaScriptTypeScriptConfigPath(indexPath)))
+        {
+            return false;
+        }
 
         if (language == "csharp")
         {
@@ -1182,7 +1320,7 @@ public static partial class IndexCommandRunner
                     DbContext.CSharpSymbolNameContractVersionMetaKey),
                 currentContract,
                 StringComparison.Ordinal)
-                || snapshot.CSharpStaticInterfaceSourceEvidence == true)
+                || snapshot.CSharpStaticInterfaceSourceEvidence is not false)
             {
                 return false;
             }
@@ -1487,19 +1625,20 @@ public static partial class IndexCommandRunner
                 hasSymbols,
                 hasSymbolReferences,
                 hasReferenceLines,
-                hasFileIssues);
+                hasFileIssues,
+                ReadFailed: false);
         }
         catch (SqliteException)
         {
-            return DryRunDbSnapshot.Empty;
+            return DryRunDbSnapshot.ReadFailure;
         }
         catch (IOException)
         {
-            return DryRunDbSnapshot.Empty;
+            return DryRunDbSnapshot.ReadFailure;
         }
         catch (UnauthorizedAccessException)
         {
-            return DryRunDbSnapshot.Empty;
+            return DryRunDbSnapshot.ReadFailure;
         }
     }
 
@@ -1580,7 +1719,12 @@ public static partial class IndexCommandRunner
         long FileIssues,
         long SymbolsDroppedByKindFilter,
         bool SymbolCapHit,
-        bool ReferenceCapHit);
+        bool ReferenceCapHit,
+        bool CSharpStaticInterfaceContract = false);
+
+    private readonly record struct DryRunProjectedCSharpSkip(
+        string RelativePath,
+        bool PolicySkipped);
 
     private sealed class DryRunMutationEstimateAccumulator
     {
@@ -1682,7 +1826,8 @@ public static partial class IndexCommandRunner
         bool SymbolsAvailable,
         bool SymbolReferencesAvailable,
         bool ReferenceLinesAvailable,
-        bool FileIssuesAvailable)
+        bool FileIssuesAvailable,
+        bool ReadFailed)
     {
         internal string? SymbolKindFilterSignature
             => GetMeta(SymbolKindFilterMetaKey);
@@ -1711,7 +1856,13 @@ public static partial class IndexCommandRunner
             false,
             false,
             false,
-            false);
+            false,
+            ReadFailed: false);
+
+        public static DryRunDbSnapshot ReadFailure { get; } = Empty with
+        {
+            ReadFailed = true,
+        };
     }
 
     private readonly record struct DryRunExistingFileRows(

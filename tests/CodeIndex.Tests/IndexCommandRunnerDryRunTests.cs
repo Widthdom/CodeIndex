@@ -649,6 +649,218 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_DryRun_ExtractorConfigCommitForcesFullRefresh_Issue4893()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            RunGit(projectRoot, "init");
+            File.WriteAllText(
+                Path.Combine(projectRoot, "app.cs"),
+                "public class App { }\n");
+            RunGit(projectRoot, "add", "app.cs");
+            RunGit(projectRoot, "commit", "-m", "initial");
+            var (indexExitCode, _) = RunAndCaptureJson([
+                projectRoot,
+                "--json",
+            ]);
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+
+            var patternDirectory = Path.Combine(
+                projectRoot,
+                ".cdidx",
+                "patterns");
+            Directory.CreateDirectory(patternDirectory);
+            File.WriteAllText(
+                Path.Combine(patternDirectory, "custom.json"),
+                "{}\n");
+            RunGit(
+                projectRoot,
+                "add",
+                "-f",
+                ".cdidx/patterns/custom.json");
+            RunGit(projectRoot, "commit", "-m", "change extractor config");
+
+            var (exitCode, json) = RunAndCaptureJson([
+                projectRoot,
+                "--commits",
+                "HEAD",
+                "--dry-run",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(
+                1,
+                json.GetProperty("projected_file_updates").GetInt32());
+            Assert.Equal(
+                0,
+                json.GetProperty("projected_file_skips").GetInt32());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRun_CSharpContractRefreshesCrossFileSkips_Issue4893()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "contract.cs"),
+                "public interface IContract<T> { }\n");
+            File.WriteAllText(
+                Path.Combine(projectRoot, "consumer.cs"),
+                "public class Consumer { }\n");
+            var (indexExitCode, _) = RunAndCaptureJson([
+                projectRoot,
+                "--json",
+            ]);
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+
+            File.WriteAllText(
+                Path.Combine(projectRoot, "contract.cs"),
+                """
+                public interface IContract<T>
+                    where T : IContract<T>
+                {
+                    static abstract T Parse(string value);
+                }
+                """);
+
+            var (exitCode, json) = RunAndCaptureJson([
+                projectRoot,
+                "--dry-run",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(
+                2,
+                json.GetProperty("projected_file_updates").GetInt32());
+            Assert.Equal(
+                0,
+                json.GetProperty("projected_file_skips").GetInt32());
+            var symbolDetails = json
+                .GetProperty("estimated_table_mutation_details")
+                .GetProperty("symbols");
+            Assert.Equal(
+                "unknown",
+                symbolDetails.GetProperty("confidence").GetString());
+            Assert.Contains(
+                "csharp_workspace_augmentation_required",
+                symbolDetails.GetProperty("unknown_reasons")
+                    .EnumerateArray()
+                    .Select(static value => value.GetString()));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRun_HotspotMarkerChangeInvalidatesFamilyReuse_Issue4893()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "one.targets"),
+                "<Project />\n");
+            File.WriteAllText(
+                Path.Combine(projectRoot, "two.targets"),
+                "<Project />\n");
+            File.WriteAllText(
+                Path.Combine(projectRoot, "sample.csproj"),
+                "<Project />\n");
+            var (indexExitCode, _) = RunAndCaptureJson([
+                projectRoot,
+                "--json",
+            ]);
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+
+            File.WriteAllText(
+                Path.Combine(projectRoot, "second.csproj"),
+                "<Project Sdk=\"Microsoft.NET.Sdk\" />\n");
+
+            var (exitCode, json) = RunAndCaptureJson([
+                projectRoot,
+                "--dry-run",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(
+                4,
+                json.GetProperty("projected_file_updates").GetInt32());
+            Assert.Equal(
+                0,
+                json.GetProperty("projected_file_skips").GetInt32());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRun_SnapshotReadFailureReturnsExplicitUnknown_Issue4893()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "app.cs"),
+                "public class App { }\n");
+            var indexDirectory = Path.Combine(projectRoot, ".cdidx");
+            Directory.CreateDirectory(indexDirectory);
+            var dbPath = Path.Combine(indexDirectory, "codeindex.db");
+            File.WriteAllText(dbPath, "not a sqlite database\n");
+            var before = File.ReadAllBytes(dbPath);
+
+            var (exitCode, json) = RunAndCaptureJson([
+                projectRoot,
+                "--dry-run",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            foreach (var metric in new[]
+                     {
+                         "files",
+                         "chunks",
+                         "symbols",
+                         "symbol_references",
+                         "reference_lines",
+                         "file_issues",
+                     })
+            {
+                Assert.Equal(
+                    JsonValueKind.Null,
+                    json.GetProperty("estimated_table_mutations")
+                        .GetProperty(metric)
+                        .ValueKind);
+                Assert.Contains(
+                    "index_snapshot_unavailable",
+                    json.GetProperty("estimated_table_mutation_details")
+                        .GetProperty(metric)
+                        .GetProperty("unknown_reasons")
+                        .EnumerateArray()
+                        .Select(static value => value.GetString()));
+            }
+            Assert.Equal(before, File.ReadAllBytes(dbPath));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_DryRun_ParseEstimateFailureReturnsExplicitUnknown_Issue4893()
     {
         var projectRoot = CreateTempProject();
