@@ -11,13 +11,31 @@ internal sealed record WorkspaceMember(
     string DbPath,
     bool Exists,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    WorkspaceMemberIndexHealth? IndexHealth = null);
+    WorkspaceMemberIndexHealth? IndexHealth = null)
+{
+    [JsonPropertyName("project_exists")]
+    public bool ProjectExists => Exists;
+
+    [JsonPropertyName("db_exists")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? DatabaseExists => IndexHealth?.DbExists;
+}
+
+internal sealed record WorkspaceRepairCommand(
+    string Name,
+    IReadOnlyList<string> Args);
+
+internal sealed record WorkspaceMemberRepairAction(
+    string Action,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    WorkspaceRepairCommand? Command = null);
 
 internal sealed record WorkspaceMemberIndexHealth(
     bool DbExists,
     bool Probed,
     string Status,
     string Reason,
+    WorkspaceMemberRepairAction RepairAction,
     bool? SchemaCompatible = null,
     bool? IndexMatchesWorkspace = null,
     string? FreshnessReason = null,
@@ -35,7 +53,14 @@ internal sealed record WorkspaceMemberHealthSummary(
     int DatabaseProbeCount,
     int DatabaseProbeLimit,
     int ProbeLimitSkippedMemberCount,
-    bool Truncated);
+    bool Truncated,
+    int HealthyMemberCount,
+    int DegradedMemberCount,
+    int MissingMemberCount,
+    string Status,
+    string Reason,
+    int CheckExitCode,
+    IReadOnlyList<string> RecommendedActions);
 
 internal sealed record WorkspaceManifest(
     string Path,
@@ -51,6 +76,8 @@ internal sealed record WorkspaceListJsonResult(
     ActiveWorkspaceJsonResult? ActiveWorkspaceStatus = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     WorkspaceMemberHealthSummary? MemberHealthSummary = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    bool? CheckMode = null,
     [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion) : IVersionedJsonResult
 {
     [JsonPropertyName("manifest_found")]
