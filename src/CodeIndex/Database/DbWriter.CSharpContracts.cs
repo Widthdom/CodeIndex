@@ -67,6 +67,21 @@ public partial class DbWriter
             WHERE f.lang = 'csharp'
               AND " + CSharpStaticInterfaceContractMemberPredicateSql;
 
+    internal const string CSharpMemberReadTargetWorkspaceSql = @"
+            SELECT " + CSharpContractWorkspaceProjectionSql + @"
+            FROM files f INDEXED BY idx_files_lang
+            CROSS JOIN symbols s INDEXED BY idx_symbols_file_kind
+              ON s.file_id = f.id
+            WHERE f.lang = 'csharp'
+              AND (
+                    (s.kind = 'enum' AND s.container_kind = 'enum')
+                    OR (
+                        s.kind IN ('field', 'property')
+                        AND s.container_kind IN ('class', 'struct')
+                        AND (s.signature LIKE '%static%' OR s.signature LIKE '%const%')
+                    )
+              )";
+
     internal bool? GetCSharpStaticInterfaceSourceEvidence()
     {
         var raw = GetMetaString(DbContext.CSharpStaticInterfaceSourceEvidenceMetaKey);
@@ -226,6 +241,12 @@ public partial class DbWriter
                 cancellationToken);
         }
 
+        AppendCSharpMemberReadTargetSymbols(
+            symbols,
+            excludedPaths,
+            excludedExistingFileIds,
+            isExistingSymbolPathExcluded,
+            cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         CSharpContractWorkspaceReadStatsForTesting?.Invoke(
             new CSharpContractWorkspaceReadStats(
@@ -235,6 +256,53 @@ public partial class DbWriter
                 interfaceDeclarationBatchQueries));
 
         return symbols;
+    }
+
+    private void AppendCSharpMemberReadTargetSymbols(
+        List<SymbolRecord> symbols,
+        IReadOnlySet<string>? excludedPaths,
+        IReadOnlyList<long>? excludedExistingFileIds,
+        Func<string, bool>? isExistingSymbolPathExcluded,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var cmd = RentCommand(CSharpMemberReadTargetWorkspaceSql, static _ => { });
+        try
+        {
+            using var cancellationRegistration = RegisterSqliteInterrupt(cancellationToken);
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var fileId = reader.GetInt64(1);
+                if (FilePurgePlan.ContainsSortedFileId(excludedExistingFileIds, fileId))
+                    continue;
+
+                var path = reader.GetString(0);
+                if (excludedPaths?.Contains(path) == true
+                    || isExistingSymbolPathExcluded?.Invoke(path) == true)
+                {
+                    continue;
+                }
+
+                var symbol = ReadCSharpContractWorkspaceSymbol(reader);
+                if (ReferenceExtractor.IsCSharpQualifiedMemberReadTargetSymbol(symbol))
+                    symbols.Add(symbol);
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+        catch (SqliteException ex) when (IsSqliteInterruptCancellation(ex, cancellationToken))
+        {
+            throw new OperationCanceledException(
+                "C# member-read target workspace read was interrupted.",
+                ex,
+                cancellationToken);
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
     }
 
     internal static string BuildCSharpStaticInterfaceDeclarationWorkspaceSql(int batchCount)

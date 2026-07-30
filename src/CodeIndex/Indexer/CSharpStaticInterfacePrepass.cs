@@ -98,7 +98,7 @@ internal static class CSharpStaticInterfacePrepass
                         target.FilePath,
                         target.RelativePath,
                         cancellationToken);
-                    if (content is not null && MayContainCSharpStaticInterfaceContract(content))
+                    if (content is not null && MayContainCSharpWorkspaceReferenceTargets(content))
                         extractedByCandidate[candidateIndex] = SymbolExtractor.Extract(
                             0,
                             "csharp",
@@ -164,7 +164,8 @@ internal static class CSharpStaticInterfacePrepass
             ReferenceExtractor.BuildCSharpStaticInterfaceMemberLookups(symbols),
             hasSourceStaticInterfaceContracts,
             sourceEvidenceComplete != 0,
-            incompletePaths);
+            incompletePaths,
+            ReferenceExtractor.BuildCSharpQualifiedPatternLookups(symbols));
     }
 
     internal static CSharpStaticInterfaceWorkspaceSymbols BuildWorkspaceSymbols(
@@ -222,6 +223,14 @@ internal static class CSharpStaticInterfacePrepass
         return CSharpCodeMayContainStaticInterfaceContract(contentSpan);
     }
 
+    internal static bool MayContainCSharpWorkspaceReferenceTargets(string content)
+    {
+        var contentSpan = content.AsSpan();
+        return ContainsCSharpWord(contentSpan, "enum")
+            || ContainsCSharpWord(contentSpan, "const")
+            || ContainsCSharpWord(contentSpan, "static");
+    }
+
     internal static bool RawBytesMayContainCSharpStaticInterfaceContract(byte[] bytes)
     {
         var span = bytes.AsSpan();
@@ -257,14 +266,23 @@ internal static class CSharpStaticInterfacePrepass
         private bool _hasStatic;
         private bool _hasAbstract;
         private bool _hasVirtual;
+        private bool _hasEnum;
+        private bool _hasConst;
         private bool _mayContainUtf16;
 
         internal bool MayContainContractCandidate => _hasInterface && _hasStatic && (_hasAbstract || _hasVirtual);
+        internal bool MayContainWorkspaceCandidate => _hasStatic || _hasEnum || _hasConst;
 
         internal bool AppendAndCheck(ReadOnlySpan<byte> bytes)
         {
             Append(bytes);
             return MayContainContractCandidate;
+        }
+
+        internal bool AppendAndCheckWorkspaceCandidate(ReadOnlySpan<byte> bytes)
+        {
+            Append(bytes);
+            return MayContainWorkspaceCandidate;
         }
 
         internal void Append(ReadOnlySpan<byte> bytes)
@@ -298,6 +316,10 @@ internal static class CSharpStaticInterfacePrepass
                 _hasInterface = ContainsAsciiTokenInCommonEncodings(bytes, CSharpInterfaceKeywordBytes, _mayContainUtf16);
             if (!_hasStatic)
                 _hasStatic = ContainsAsciiTokenInCommonEncodings(bytes, CSharpStaticKeywordBytes, _mayContainUtf16);
+            if (!_hasEnum)
+                _hasEnum = ContainsAsciiTokenInCommonEncodings(bytes, "enum"u8, _mayContainUtf16);
+            if (!_hasConst)
+                _hasConst = ContainsAsciiTokenInCommonEncodings(bytes, "const"u8, _mayContainUtf16);
             if (!_hasAbstract && !_hasVirtual)
             {
                 _hasAbstract = ContainsAsciiTokenInCommonEncodings(bytes, CSharpAbstractKeywordBytes, _mayContainUtf16);
@@ -1013,4 +1035,5 @@ internal sealed record CSharpStaticInterfaceWorkspaceSymbols(
         ReferenceExtractor.CSharpStaticInterfaceMemberLookups? StaticInterfaceMemberLookups = null,
         bool HasSourceStaticInterfaceContracts = false,
         bool SourceContractEvidenceComplete = true,
-        IReadOnlyList<string>? IncompleteSourcePaths = null);
+        IReadOnlyList<string>? IncompleteSourcePaths = null,
+        ReferenceExtractor.CSharpQualifiedPatternLookups? QualifiedPatternLookups = null);

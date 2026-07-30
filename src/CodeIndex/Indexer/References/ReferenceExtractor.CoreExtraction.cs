@@ -143,16 +143,26 @@ public static partial class ReferenceExtractor
                 KnownTypeNames: EmptyCSharpStringSet,
                 NonEnumTypeNames: EmptyCSharpStringSet);
         var csharpKnownTypeNames = csharpTypeNameSets.KnownTypeNames;
-        var csharpQualifiedPatternLookups = language == "csharp"
+        var localCSharpQualifiedPatternLookups = language == "csharp"
             ? BuildCSharpQualifiedPatternLookups(
-                language,
                 symbols,
                 csharpTypeNameSets.NonEnumTypeNames)
-            : (
-                EnumMemberLookup: EmptyCSharpQualifiedEnumMemberLookup,
-                ConstantPatternMemberLookup:
-                    EmptyCSharpQualifiedPatternLookup,
-                TypePatternLookup: EmptyCSharpQualifiedPatternLookup);
+            : null;
+        var workspaceCSharpQualifiedPatternLookups = language == "csharp"
+            ? request.CSharpQualifiedPatternLookups
+                ?? (workspaceSymbols is { Count: > 0 }
+                    ? BuildCSharpQualifiedPatternLookups(workspaceSymbols)
+                    : localCSharpQualifiedPatternLookups)
+            : null;
+        var csharpQualifiedPatternLookups = language == "csharp"
+            ? new CSharpQualifiedPatternLookups(
+                workspaceCSharpQualifiedPatternLookups!.EnumMemberLookup,
+                workspaceCSharpQualifiedPatternLookups.ConstantPatternMemberLookup,
+                localCSharpQualifiedPatternLookups!.TypePatternLookup)
+            : new CSharpQualifiedPatternLookups(
+                EmptyCSharpQualifiedEnumMemberLookup,
+                EmptyCSharpQualifiedPatternLookup,
+                EmptyCSharpQualifiedPatternLookup);
         var csharpQualifiedEnumMemberLookup =
             csharpQualifiedPatternLookups.EnumMemberLookup;
         var csharpQualifiedConstantPatternMemberLookup =
@@ -350,6 +360,7 @@ public static partial class ReferenceExtractor
                 preparedLines,
                 references,
                 lookups);
+            RemoveCSharpCallsDuplicatedByMemberReads(references);
         }
 
         lookups.ApplyCSharpUsingAliasReferenceNames(references);
@@ -361,6 +372,33 @@ public static partial class ReferenceExtractor
         }
         MarkMutualRecursionReferences(references);
         return references;
+    }
+
+    private static void RemoveCSharpCallsDuplicatedByMemberReads(
+        List<ReferenceRecord> references)
+    {
+        var memberReadSites = references
+            .Where(reference => reference.ReferenceKind == "member_read")
+            .Select(reference => (
+                reference.FileId,
+                reference.Line,
+                reference.Column,
+                reference.SymbolName,
+                reference.ContainerKind,
+                reference.ContainerName))
+            .ToHashSet();
+        if (memberReadSites.Count == 0)
+            return;
+
+        references.RemoveAll(reference =>
+            reference.ReferenceKind == "call"
+            && memberReadSites.Contains((
+                reference.FileId,
+                reference.Line,
+                reference.Column,
+                reference.SymbolName,
+                reference.ContainerKind,
+                reference.ContainerName)));
     }
 
     private static void RewriteCSharpPropertyReceiverReferences(

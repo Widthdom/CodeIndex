@@ -24,6 +24,10 @@ public static partial class ReferenceExtractor
         new Dictionary<string, List<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)>>(StringComparer.Ordinal);
     private static readonly IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> EmptyCSharpQualifiedPatternLookup =
         new Dictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>>(StringComparer.Ordinal);
+    internal sealed record CSharpQualifiedPatternLookups(
+        IReadOnlyDictionary<string, List<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)>> EnumMemberLookup,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> ConstantPatternMemberLookup,
+        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> TypePatternLookup);
 
     private static (
         IReadOnlyList<CSharpUsingAliasRecord> Aliases,
@@ -519,17 +523,17 @@ public static partial class ReferenceExtractor
             names.InstanceNames.Add(symbol.Name);
     }
 
-    private static (
-        IReadOnlyDictionary<string, List<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)>> EnumMemberLookup,
-        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> ConstantPatternMemberLookup,
-        IReadOnlyDictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>> TypePatternLookup) BuildCSharpQualifiedPatternLookups(
-        string language,
+    internal static CSharpQualifiedPatternLookups BuildCSharpQualifiedPatternLookups(
+        IReadOnlyList<SymbolRecord> symbols)
+    {
+        var typeNameSets = BuildCSharpTypeNameSets("csharp", symbols);
+        return BuildCSharpQualifiedPatternLookups(symbols, typeNameSets.NonEnumTypeNames);
+    }
+
+    private static CSharpQualifiedPatternLookups BuildCSharpQualifiedPatternLookups(
         IReadOnlyList<SymbolRecord> symbols,
         IReadOnlySet<string> conflictingNonEnumTypeNames)
     {
-        if (language != "csharp")
-            return (EmptyCSharpQualifiedEnumMemberLookup, EmptyCSharpQualifiedPatternLookup, EmptyCSharpQualifiedPatternLookup);
-
         Dictionary<string, List<(string EnumName, string? QualifiedEnumName, bool AllowShortNameFallback)>>? enumMemberLookup = null;
         Dictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>>? constantPatternMemberLookup = null;
         Dictionary<string, List<(string ContainerName, string? QualifiedContainerName, bool AllowShortNameFallback)>>? typePatternLookup = null;
@@ -597,7 +601,7 @@ public static partial class ReferenceExtractor
             }
         }
 
-        return (
+        return new CSharpQualifiedPatternLookups(
             enumMemberLookup ?? EmptyCSharpQualifiedEnumMemberLookup,
             constantPatternMemberLookup ?? EmptyCSharpQualifiedPatternLookup,
             typePatternLookup ?? EmptyCSharpQualifiedPatternLookup);
@@ -654,6 +658,13 @@ public static partial class ReferenceExtractor
 
         targets.Add((containerName, qualifiedContainerName, allowShortNameFallback));
     }
+
+    internal static bool IsCSharpQualifiedMemberReadTargetSymbol(SymbolRecord symbol)
+        => symbol.Kind == "enum" && symbol.ContainerKind == "enum"
+            || IsCSharpConstMemberSymbol(symbol)
+            || symbol.ContainerKind is "class" or "struct"
+                && symbol.Kind is "field" or "property"
+                && IsStaticCSharpSymbol(symbol);
 
     private static bool IsCSharpConstMemberSymbol(SymbolRecord symbol)
     {

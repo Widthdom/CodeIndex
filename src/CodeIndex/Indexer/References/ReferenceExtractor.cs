@@ -115,7 +115,8 @@ public static partial class ReferenceExtractor
             cancellationToken,
             maxReferenceCount,
             workspaceRoot: null,
-            csharpStaticInterfaceMemberLookups: null);
+            csharpStaticInterfaceMemberLookups: null,
+            csharpQualifiedPatternLookups: null);
 
     internal static ReferenceExtractionResult ExtractDetailedNormalized(
         long fileId,
@@ -129,7 +130,8 @@ public static partial class ReferenceExtractor
         int? maxReferenceCount = null,
         int? conflictMarkerLine = null,
         string? workspaceRoot = null,
-        CSharpStaticInterfaceMemberLookups? csharpStaticInterfaceMemberLookups = null)
+        CSharpStaticInterfaceMemberLookups? csharpStaticInterfaceMemberLookups = null,
+        CSharpQualifiedPatternLookups? csharpQualifiedPatternLookups = null)
         => ExtractDetailedCore(
             fileId,
             lang,
@@ -143,7 +145,8 @@ public static partial class ReferenceExtractor
             cancellationToken,
             maxReferenceCount,
             workspaceRoot,
-            csharpStaticInterfaceMemberLookups);
+            csharpStaticInterfaceMemberLookups,
+            csharpQualifiedPatternLookups);
 
     private static ReferenceExtractionResult ExtractDetailedCore(
         long fileId,
@@ -158,7 +161,8 @@ public static partial class ReferenceExtractor
         CancellationToken cancellationToken,
         int? maxReferenceCount,
         string? workspaceRoot,
-        CSharpStaticInterfaceMemberLookups? csharpStaticInterfaceMemberLookups)
+        CSharpStaticInterfaceMemberLookups? csharpStaticInterfaceMemberLookups,
+        CSharpQualifiedPatternLookups? csharpQualifiedPatternLookups)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var requestedLanguage = lang;
@@ -214,6 +218,7 @@ public static partial class ReferenceExtractor
             conflictMarkerLine)
         {
             CSharpStaticInterfaceMemberLookups = csharpStaticInterfaceMemberLookups,
+            CSharpQualifiedPatternLookups = csharpQualifiedPatternLookups,
         };
         var builtInReferences = extractor.Extract(extractionContext);
         return new ReferenceExtractionResult(

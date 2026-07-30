@@ -132,7 +132,7 @@ internal sealed partial class FileContentLoader(
                 stream,
                 initialLength,
                 normalizedRelativePath,
-                probe.AppendAndCheck,
+                probe.AppendAndCheckWorkspaceCandidate,
                 cancellationToken);
             if (rawCandidate)
             {

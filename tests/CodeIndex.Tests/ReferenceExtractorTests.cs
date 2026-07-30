@@ -13941,12 +13941,29 @@ public partial class ReferenceExtractorTests
                 public const int Constant = 1;
                 public static readonly int Readonly = 2;
                 public static int Property => 3;
+                public static int Mutable;
+                public static int Settable { get; set; }
                 public static int Method() => 4;
+            }
+
+            static class CallableNameCollisions
+            {
+                public static int Constant() => 0;
+                public static int Readonly() => 0;
+                public static int Property() => 0;
+                public static int Mutable() => 0;
+                public static int Settable() => 0;
             }
 
             class Demo
             {
                 int Run() => Values.Constant + Values.Readonly + Values.Property + Values.Method();
+
+                void Write()
+                {
+                    Values.Mutable = 5;
+                    Values.Settable = 6;
+                }
             }
             """;
 
@@ -13958,6 +13975,58 @@ public partial class ReferenceExtractorTests
         Assert.Contains(references, r => r.SymbolName == "Property" && r.ReferenceKind == "member_read" && r.ContainerName == "Run");
         Assert.Contains(references, r => r.SymbolName == "Method" && r.ReferenceKind == "call" && r.ContainerName == "Run");
         Assert.DoesNotContain(references, r => (r.SymbolName is "Constant" or "Readonly" or "Property") && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r =>
+            (r.SymbolName is "Mutable" or "Settable")
+            && (r.ReferenceKind is "member_read" or "call")
+            && r.ContainerName == "Write");
+    }
+
+    [Fact]
+    public void Extract_CsharpQualifiedValueReads_ResolveWorkspaceTargets_Issue4894()
+    {
+        const string definitions = """
+            namespace Probe;
+
+            static class Values
+            {
+                public const int Limit = 10;
+                public static readonly int Other = 20;
+                public static int Property => 30;
+            }
+            """;
+        const string reader = """
+            namespace Probe;
+
+            class Reader
+            {
+                private static int Limit() => 0;
+                private static int Other() => 0;
+                private static int Property() => 0;
+
+                int Read() => Values.Limit + Values.Other + Values.Property;
+            }
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "csharp", reader);
+        var workspaceSymbols = SymbolExtractor.Extract(2, "csharp", definitions);
+        var references = ReferenceExtractor.Extract(
+            1,
+            "csharp",
+            reader,
+            symbols,
+            "Reader.cs",
+            workspaceSymbols);
+
+        Assert.Equal(
+            ["Limit", "Other", "Property"],
+            references
+                .Where(reference => reference.ReferenceKind == "member_read")
+                .Select(reference => reference.SymbolName)
+                .Order(StringComparer.Ordinal)
+                .ToArray());
+        Assert.DoesNotContain(references, reference =>
+            reference.ReferenceKind == "call"
+            && (reference.SymbolName is "Limit" or "Other" or "Property"));
     }
 
     [Fact]

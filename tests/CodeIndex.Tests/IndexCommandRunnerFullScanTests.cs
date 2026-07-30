@@ -4750,6 +4750,25 @@ public partial class IndexCommandRunnerTests
                 IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions));
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            File.AppendAllText(
+                Path.Combine(projectRoot, "Caller.cs"),
+                $"{Environment.NewLine}// Force a reader-only refresh.{Environment.NewLine}");
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions));
+            using (var incrementalVerify = OpenNonPoolingConnection(dbPath))
+            {
+                incrementalVerify.Open();
+                using var incrementalReferenceCmd = incrementalVerify.CreateCommand();
+                incrementalReferenceCmd.CommandText = """
+                    SELECT COUNT(*)
+                    FROM symbol_references
+                    WHERE symbol_name IN ('Limit', 'Other', 'Property')
+                      AND reference_kind = 'member_read'
+                    """;
+                Assert.Equal(3L, incrementalReferenceCmd.ExecuteScalar());
+            }
+
             using (var conn = OpenNonPoolingConnection(dbPath))
             {
                 conn.Open();
@@ -4807,11 +4826,19 @@ public partial class IndexCommandRunnerTests
                 public static class Values
                 {
                     public const int Limit = 10;
+                    public static readonly int Other = 20;
+                    public static int Property => 30;
                 }
+                """);
 
+            File.WriteAllText(
+                Path.Combine(projectRoot, "Caller.cs"),
+                """
                 public sealed class Caller
                 {
-                    public int Read() => Values.Limit;
+                    private static int Limit() => 0;
+
+                    public int Read() => Values.Limit + Values.Other + Values.Property;
                 }
                 """);
 
@@ -4827,7 +4854,7 @@ public partial class IndexCommandRunnerTests
                 cmd.CommandText = $"""
                     UPDATE symbol_references
                     SET reference_kind = 'call'
-                    WHERE symbol_name = 'Limit';
+                    WHERE symbol_name IN ('Limit', 'Other', 'Property');
                     UPDATE codeindex_meta
                     SET value = '8'
                     WHERE key = '{DbContext.GetSymbolExtractorVersionMetaKey("csharp")}';
@@ -4845,11 +4872,25 @@ public partial class IndexCommandRunnerTests
             verify.Open();
             using var referenceCmd = verify.CreateCommand();
             referenceCmd.CommandText = """
-                SELECT reference_kind
+                SELECT symbol_name, reference_kind
                 FROM symbol_references
-                WHERE symbol_name = 'Limit'
+                WHERE symbol_name IN ('Limit', 'Other', 'Property')
+                ORDER BY symbol_name
                 """;
-            Assert.Equal("member_read", referenceCmd.ExecuteScalar() as string);
+            using (var reader = referenceCmd.ExecuteReader())
+            {
+                var actual = new List<(string Name, string Kind)>();
+                while (reader.Read())
+                    actual.Add((reader.GetString(0), reader.GetString(1)));
+
+                Assert.Equal(
+                    [
+                        ("Limit", "member_read"),
+                        ("Other", "member_read"),
+                        ("Property", "member_read"),
+                    ],
+                    actual);
+            }
 
             using var versionCmd = verify.CreateCommand();
             versionCmd.CommandText =

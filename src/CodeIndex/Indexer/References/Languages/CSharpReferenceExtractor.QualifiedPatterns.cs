@@ -66,6 +66,8 @@ public static partial class ReferenceExtractor
             var nextTokenIndex = SkipWhitespace(preparedLine, member.End);
             if (nextTokenIndex < preparedLine.Length && preparedLine[nextTokenIndex] == '(')
                 continue;
+            if (IsCSharpSimpleAssignmentTarget(preparedLine, nextTokenIndex))
+                continue;
 
             var insideCSharpAttributeRange = csharpAttrRangesOnLine != null
                 && IsInsideCSharpAttributeRange(csharpAttrRangesOnLine, member.Start);
@@ -83,6 +85,12 @@ public static partial class ReferenceExtractor
                 callContainer);
         }
     }
+
+    private static bool IsCSharpSimpleAssignmentTarget(string preparedLine, int nextTokenIndex)
+        => nextTokenIndex < preparedLine.Length
+            && preparedLine[nextTokenIndex] == '='
+            && (nextTokenIndex + 1 >= preparedLine.Length
+                || preparedLine[nextTokenIndex + 1] is not ('=' or '>'));
 
     private static bool IsCSharpQualifiedConstantPatternReferenceSite(
         string preparedLine,

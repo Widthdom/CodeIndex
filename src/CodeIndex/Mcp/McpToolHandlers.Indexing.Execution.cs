@@ -1550,7 +1550,8 @@ public partial class McpServer
                             maxReferenceCount: maxReferencesPerFile + 1,
                             conflictMarkerLine: loaded.ConflictMarkerLine,
                             workspaceRoot: projectPath,
-                            csharpStaticInterfaceMemberLookups: csharpWorkspace.StaticInterfaceMemberLookups);
+                            csharpStaticInterfaceMemberLookups: csharpWorkspace.StaticInterfaceMemberLookups,
+                            csharpQualifiedPatternLookups: csharpWorkspace.QualifiedPatternLookups);
                         references = referenceExtraction.References;
                         regexTimeoutIssue = IndexCommandRunner.BuildRegexTimeoutIssue(record.Path, regexTimeouts);
                     }
