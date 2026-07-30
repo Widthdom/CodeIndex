@@ -1268,6 +1268,60 @@ public class HookCommandRunnerTests
         }
     }
 
+    [Theory]
+    [InlineData("# BEGIN CDIDX MANAGED PRE-COMMIT")]
+    [InlineData("# END CDIDX MANAGED PRE-COMMIT")]
+    public void Hooks_ManagedMarkersInsideExecutablePath_DoNotConflict_Issue4892(
+        string marker)
+    {
+        var parent = TestProjectHelper.CreateTempProject("hook_executable_marker");
+        var projectRoot = Path.Combine(parent, "repo");
+        var toolDirectory = Path.Combine(parent, $"tool-{marker}");
+        var toolPath = Path.Combine(
+            toolDirectory,
+            OperatingSystem.IsWindows() ? "cdidx.cmd" : "cdidx");
+        try
+        {
+            Directory.CreateDirectory(projectRoot);
+            Directory.CreateDirectory(toolDirectory);
+            WriteRunnableFile(toolPath);
+            WriteVersionFile(toolDirectory, "1.0.0");
+            HookCommandRunner.ExecutableSelectionForTesting = _ =>
+                new HookExecutableSelection("process_path", "1.0.0", [toolPath]);
+            TestProjectHelper.InitializeGitRepo(projectRoot);
+
+            var install = RunHooksAndCaptureStreams(
+                ["install", "--project", projectRoot, "--json"]);
+            var status = RunHooksAndCaptureStreams(
+                ["status", "--project", projectRoot, "--json"]);
+            var reinstall = RunHooksAndCaptureStreams(
+                ["install", "--project", projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, install.ExitCode);
+            Assert.Equal(CommandExitCodes.Success, status.ExitCode);
+            using (var document = JsonDocument.Parse(status.StdOut))
+            {
+                Assert.Equal("installed", document.RootElement.GetProperty("status").GetString());
+                Assert.Equal("managed", document.RootElement.GetProperty("hook_state").GetString());
+            }
+            Assert.Equal(CommandExitCodes.Success, reinstall.ExitCode);
+            using (var document = JsonDocument.Parse(reinstall.StdOut))
+                Assert.Equal(
+                    "already_installed",
+                    document.RootElement.GetProperty("status").GetString());
+            Assert.False(File.Exists(Path.Combine(
+                projectRoot,
+                ".git",
+                "hooks",
+                "pre-commit.cdidx-chain")));
+        }
+        finally
+        {
+            HookCommandRunner.ExecutableSelectionForTesting = null;
+            TestProjectHelper.DeleteDirectory(parent);
+        }
+    }
+
     [Fact]
     public void Hooks_Install_RejectsSymlinkedGitDirectoryBeforeExternalWrite_Issue4599()
     {

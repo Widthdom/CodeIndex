@@ -773,21 +773,15 @@ public static class HookCommandRunner
     private static ManagedHookAnalysis AnalyzeRawManagedHook(byte[] content)
     {
         var contentSpan = content.AsSpan();
-        var beginCount = CountOccurrences(contentSpan, BeginMarkerBytes);
-        var endCount = CountOccurrences(contentSpan, EndMarkerBytes);
+        var beginCount = CountMarkerLines(contentSpan, BeginMarkerBytes, out var beginIndex);
+        var endCount = CountMarkerLines(contentSpan, EndMarkerBytes, out var endIndex);
         if (beginCount == 0 && endCount == 0)
             return new ManagedHookAnalysis("unmanaged", null, false);
         if (beginCount != 1 || endCount != 1)
             return new ManagedHookAnalysis("conflicted", null, false);
 
-        var beginIndex = contentSpan.IndexOf(BeginMarkerBytes);
-        var endIndex = contentSpan.IndexOf(EndMarkerBytes);
-        if (endIndex < beginIndex
-            || !IsMarkerOnlyLine(contentSpan, beginIndex, BeginMarkerBytes)
-            || !IsMarkerOnlyLine(contentSpan, endIndex, EndMarkerBytes))
-        {
+        if (endIndex < beginIndex)
             return new ManagedHookAnalysis("conflicted", null, false);
-        }
 
         var blockStart = FindLineStart(contentSpan, beginIndex);
         var blockEnd = FindLineEndIncludingTerminator(
@@ -817,21 +811,15 @@ public static class HookCommandRunner
             return new ManagedHookAnalysis("unmanaged", null, false);
         }
 
-        var beginCount = CountOccurrences(text, BeginMarker);
-        var endCount = CountOccurrences(text, EndMarker);
+        var beginCount = CountMarkerLines(text, BeginMarker, out var beginIndex);
+        var endCount = CountMarkerLines(text, EndMarker, out var endIndex);
         if (beginCount == 0 && endCount == 0)
             return new ManagedHookAnalysis("unmanaged", null, false);
         if (beginCount != 1 || endCount != 1)
             return new ManagedHookAnalysis("conflicted", null, false);
 
-        var beginIndex = text.IndexOf(BeginMarker, StringComparison.Ordinal);
-        var endIndex = text.IndexOf(EndMarker, StringComparison.Ordinal);
-        if (endIndex < beginIndex
-            || !IsMarkerOnlyLine(text, beginIndex, BeginMarker)
-            || !IsMarkerOnlyLine(text, endIndex, EndMarker))
-        {
+        if (endIndex < beginIndex)
             return new ManagedHookAnalysis("conflicted", null, false);
-        }
 
         var blockStart = FindLineStart(text, beginIndex);
         var blockEnd = FindLineEndIncludingTerminator(
@@ -911,16 +899,24 @@ public static class HookCommandRunner
         return false;
     }
 
-    private static int CountOccurrences(string value, string marker)
+    private static int CountMarkerLines(
+        string value,
+        string marker,
+        out int firstMarkerIndex)
     {
         var count = 0;
+        firstMarkerIndex = -1;
         var offset = 0;
         while (offset <= value.Length - marker.Length)
         {
             var index = value.IndexOf(marker, offset, StringComparison.Ordinal);
             if (index < 0)
                 break;
-            count++;
+            if (IsMarkerOnlyLine(value, index, marker))
+            {
+                firstMarkerIndex = firstMarkerIndex < 0 ? index : firstMarkerIndex;
+                count++;
+            }
             offset = index + marker.Length;
         }
 
@@ -971,17 +967,26 @@ public static class HookCommandRunner
     private static bool IsLineTerminator(char value)
         => value is '\r' or '\n';
 
-    private static int CountOccurrences(ReadOnlySpan<byte> value, ReadOnlySpan<byte> marker)
+    private static int CountMarkerLines(
+        ReadOnlySpan<byte> value,
+        ReadOnlySpan<byte> marker,
+        out int firstMarkerIndex)
     {
         var count = 0;
+        firstMarkerIndex = -1;
         var offset = 0;
         while (offset <= value.Length - marker.Length)
         {
             var relativeIndex = value[offset..].IndexOf(marker);
             if (relativeIndex < 0)
                 break;
-            count++;
-            offset += relativeIndex + marker.Length;
+            var index = offset + relativeIndex;
+            if (IsMarkerOnlyLine(value, index, marker))
+            {
+                firstMarkerIndex = firstMarkerIndex < 0 ? index : firstMarkerIndex;
+                count++;
+            }
+            offset = index + marker.Length;
         }
 
         return count;
@@ -1759,20 +1764,14 @@ if [ -x
     private static bool TryExtractManagedBlock(string text, out string block)
     {
         block = string.Empty;
-        if (CountOccurrences(text, BeginMarker) != 1
-            || CountOccurrences(text, EndMarker) != 1)
+        if (CountMarkerLines(text, BeginMarker, out var beginIndex) != 1
+            || CountMarkerLines(text, EndMarker, out var endIndex) != 1)
         {
             return false;
         }
 
-        var beginIndex = text.IndexOf(BeginMarker, StringComparison.Ordinal);
-        var endIndex = text.IndexOf(EndMarker, StringComparison.Ordinal);
-        if (endIndex < beginIndex
-            || !IsMarkerOnlyLine(text, beginIndex, BeginMarker)
-            || !IsMarkerOnlyLine(text, endIndex, EndMarker))
-        {
+        if (endIndex < beginIndex)
             return false;
-        }
 
         var blockStart = FindLineStart(text, beginIndex);
         var blockEnd = FindLineEndIncludingTerminator(text, endIndex + EndMarker.Length);
