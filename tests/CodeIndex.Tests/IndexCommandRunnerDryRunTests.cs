@@ -34,6 +34,20 @@ public partial class IndexCommandRunnerTests
             Assert.Equal("dry_run", json.GetProperty("status").GetString());
             Assert.Equal(1, json.GetProperty("files_total").GetInt32());
             Assert.Equal(1, json.GetProperty("languages").GetProperty("csharp").GetInt32());
+            Assert.Equal(1, json.GetProperty("projected_file_updates").GetInt32());
+            Assert.Equal(0, json.GetProperty("projected_file_skips").GetInt32());
+            Assert.Equal(1, json.GetProperty("parse_estimate_files_processed").GetInt32());
+            Assert.False(json.GetProperty("parse_estimate_files_truncated").GetBoolean());
+            var mutations = json.GetProperty("estimated_table_mutations");
+            Assert.True(mutations.GetProperty("chunks").GetInt64() > 0);
+            Assert.True(mutations.GetProperty("symbols").GetInt64() > 0);
+            Assert.Equal(0, mutations.GetProperty("symbol_references").GetInt64());
+            var symbolDetail = json
+                .GetProperty("estimated_table_mutation_details")
+                .GetProperty("symbols");
+            Assert.Equal("parse_only_and_index_snapshot", symbolDetail.GetProperty("source").GetString());
+            Assert.Equal("estimate", symbolDetail.GetProperty("confidence").GetString());
+            Assert.Empty(symbolDetail.GetProperty("unknown_reasons").EnumerateArray());
         }
         finally
         {
@@ -249,6 +263,19 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(IndexCommandRunner.DryRunFileSampleLimit, json.GetProperty("file_samples").GetArrayLength());
             Assert.Equal(0, json.GetProperty("errors_total").GetInt32());
             Assert.False(json.GetProperty("errors_truncated").GetBoolean());
+            Assert.Equal(IndexCommandRunner.DryRunParseEstimateFileLimit, json.GetProperty("parse_estimate_file_limit").GetInt32());
+            Assert.Equal(IndexCommandRunner.DryRunParseEstimateFileLimit, json.GetProperty("parse_estimate_files_processed").GetInt32());
+            Assert.True(json.GetProperty("parse_estimate_files_truncated").GetBoolean());
+            Assert.Equal(
+                JsonValueKind.Null,
+                json.GetProperty("estimated_table_mutations").GetProperty("chunks").ValueKind);
+            Assert.Contains(
+                "parse_estimate_file_limit_reached",
+                json.GetProperty("estimated_table_mutation_details")
+                    .GetProperty("chunks")
+                    .GetProperty("unknown_reasons")
+                    .EnumerateArray()
+                    .Select(value => value.GetString()));
         }
         finally
         {
@@ -278,6 +305,16 @@ public partial class IndexCommandRunnerTests
             Assert.True(json.GetProperty("totals_lower_bound").GetBoolean());
             Assert.True(json.GetProperty("file_samples_truncated").GetBoolean());
             Assert.Equal(0, json.GetProperty("errors_total").GetInt32());
+            Assert.Equal(
+                JsonValueKind.Null,
+                json.GetProperty("estimated_table_mutations").GetProperty("symbols").ValueKind);
+            var detail = json
+                .GetProperty("estimated_table_mutation_details")
+                .GetProperty("symbols");
+            Assert.Equal("unknown", detail.GetProperty("confidence").GetString());
+            Assert.Contains(
+                "candidate_path_limit_reached",
+                detail.GetProperty("unknown_reasons").EnumerateArray().Select(value => value.GetString()));
         }
         finally
         {
@@ -299,16 +336,622 @@ public partial class IndexCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal("dry_run", json.GetProperty("status").GetString());
-            Assert.Equal(0, json.GetProperty("files_total").GetInt32());
+            Assert.Equal(fileCount, json.GetProperty("files_total").GetInt32());
+            Assert.Equal(fileCount, json.GetProperty("projected_file_updates").GetInt32());
+            Assert.Equal(fileCount, json.GetProperty("projected_policy_skips").GetInt32());
+            Assert.Equal(0, json.GetProperty("parse_estimate_files_processed").GetInt32());
+            var mutations = json.GetProperty("estimated_table_mutations");
+            Assert.Equal(fileCount, mutations.GetProperty("files").GetInt32());
+            Assert.Equal(0, mutations.GetProperty("chunks").GetInt32());
+            Assert.Equal(0, mutations.GetProperty("symbols").GetInt32());
+            Assert.Equal(0, mutations.GetProperty("symbol_references").GetInt32());
+            Assert.Equal(0, mutations.GetProperty("reference_lines").GetInt32());
+            Assert.Equal(fileCount, mutations.GetProperty("file_issues").GetInt32());
             Assert.Equal(fileCount, json.GetProperty("errors_total").GetInt32());
             Assert.Equal(IndexCommandRunner.DryRunErrorSampleLimit, json.GetProperty("error_limit").GetInt32());
             Assert.True(json.GetProperty("errors_truncated").GetBoolean());
             Assert.Equal(IndexCommandRunner.DryRunErrorSampleLimit, json.GetProperty("errors").GetArrayLength());
             Assert.Equal(IndexCommandRunner.DryRunFileSampleLimit, json.GetProperty("file_sample_limit").GetInt32());
-            Assert.False(json.GetProperty("file_samples_truncated").GetBoolean());
+            Assert.True(json.GetProperty("file_samples_truncated").GetBoolean());
         }
         finally
         {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRun_EstimatesParseOnlyMutationsAndCapOutcomes_Issue4893()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "app.cs"),
+                """
+                public class App
+                {
+                    public void First()
+                    {
+                        Second();
+                        Third();
+                    }
+
+                    public void Second() { }
+                    public void Third() { }
+                }
+                """);
+
+            var (humanExitCode, humanOutput, _) = RunAndCaptureStreams([projectRoot, "--dry-run"]);
+            Assert.Equal(CommandExitCodes.Success, humanExitCode);
+            Assert.Contains("projected updates", humanOutput);
+            Assert.Contains("estimated chunks", humanOutput);
+            Assert.Contains("estimated symbols", humanOutput);
+            Assert.Contains("parse_only_and_index_snapshot", humanOutput);
+            Assert.Contains("estimate", humanOutput);
+
+            var (normalExitCode, normal) = RunAndCaptureJson([projectRoot, "--dry-run", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, normalExitCode);
+            Assert.Equal(1, normal.GetProperty("projected_file_updates").GetInt32());
+            Assert.Equal(0, normal.GetProperty("projected_file_skips").GetInt32());
+            Assert.Equal(0, normal.GetProperty("projected_symbol_cap_hits").GetInt32());
+            Assert.Equal(0, normal.GetProperty("projected_reference_cap_hits").GetInt32());
+            var normalMutations = normal.GetProperty("estimated_table_mutations");
+            Assert.True(normalMutations.GetProperty("chunks").GetInt64() > 0);
+            Assert.True(normalMutations.GetProperty("symbols").GetInt64() > 1);
+            Assert.True(normalMutations.GetProperty("symbol_references").GetInt64() > 1);
+            Assert.True(normalMutations.GetProperty("reference_lines").GetInt64() > 0);
+
+            var (symbolCapExitCode, symbolCap) = RunAndCaptureJson([
+                projectRoot,
+                "--dry-run",
+                "--max-symbols-per-file",
+                "1",
+                "--json",
+            ]);
+            Assert.Equal(CommandExitCodes.Success, symbolCapExitCode);
+            Assert.Equal(1, symbolCap.GetProperty("projected_symbol_cap_hits").GetInt32());
+            var symbolCapMutations = symbolCap.GetProperty("estimated_table_mutations");
+            Assert.Equal(0, symbolCapMutations.GetProperty("chunks").GetInt32());
+            Assert.Equal(0, symbolCapMutations.GetProperty("symbols").GetInt32());
+            Assert.Equal(0, symbolCapMutations.GetProperty("symbol_references").GetInt32());
+            Assert.True(symbolCapMutations.GetProperty("file_issues").GetInt32() > 0);
+
+            var (referenceCapExitCode, referenceCap) = RunAndCaptureJson([
+                projectRoot,
+                "--dry-run",
+                "--max-references-per-file",
+                "1",
+                "--json",
+            ]);
+            Assert.Equal(CommandExitCodes.Success, referenceCapExitCode);
+            Assert.Equal(1, referenceCap.GetProperty("projected_reference_cap_hits").GetInt32());
+            var referenceCapMutations = referenceCap.GetProperty("estimated_table_mutations");
+            Assert.Equal(0, referenceCapMutations.GetProperty("symbol_references").GetInt32());
+            Assert.Equal(0, referenceCapMutations.GetProperty("reference_lines").GetInt32());
+            Assert.True(referenceCapMutations.GetProperty("file_issues").GetInt32() > 0);
+
+            Assert.False(Directory.Exists(Path.Combine(projectRoot, ".cdidx")));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRun_ReestimatesUnchangedFileWithPersistedCapIssue_Issue4893()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "app.cs"),
+                """
+                public class App
+                {
+                    public void First() { }
+                    public void Second() { }
+                }
+                """);
+            var (indexExitCode, _) = RunAndCaptureJson([
+                projectRoot,
+                "--max-symbols-per-file",
+                "1",
+                "--json",
+            ]);
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+
+            var (exitCode, json) = RunAndCaptureJson([
+                projectRoot,
+                "--dry-run",
+                "--max-symbols-per-file",
+                "1",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(1, json.GetProperty("projected_file_updates").GetInt32());
+            Assert.Equal(0, json.GetProperty("projected_file_skips").GetInt32());
+            Assert.Equal(1, json.GetProperty("projected_symbol_cap_hits").GetInt32());
+            Assert.Equal(
+                0,
+                json.GetProperty("estimated_table_mutations")
+                    .GetProperty("symbols")
+                    .GetInt32());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRun_ReusesUnchangedIndexedBinaryFile_Issue4893()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllBytes(
+                Path.Combine(projectRoot, "binary.cs"),
+                [0x70, 0x00, 0x71]);
+            var (indexExitCode, _) = RunAndCaptureJson([
+                projectRoot,
+                "--json",
+            ]);
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+
+            var dbPath = Path.Combine(
+                projectRoot,
+                ".cdidx",
+                "codeindex.db");
+            SqliteConnection.ClearAllPools();
+            var before = File.ReadAllBytes(dbPath);
+
+            var (exitCode, json) = RunAndCaptureJson([
+                projectRoot,
+                "--dry-run",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(0, json.GetProperty("projected_file_updates").GetInt32());
+            Assert.Equal(1, json.GetProperty("projected_file_skips").GetInt32());
+            Assert.Equal(0, json.GetProperty("projected_policy_skips").GetInt32());
+            Assert.Equal(0, json.GetProperty("errors_total").GetInt32());
+            SqliteConnection.ClearAllPools();
+            Assert.Equal(before, File.ReadAllBytes(dbPath));
+
+            var (refreshExitCode, refreshJson) = RunAndCaptureJson([
+                projectRoot,
+                "--json",
+            ]);
+            Assert.Equal(CommandExitCodes.Success, refreshExitCode);
+            Assert.Equal(
+                1,
+                refreshJson.GetProperty("summary")
+                    .GetProperty("files_skipped")
+                    .GetInt32());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRun_DoesNotReuseAcrossFilterOrExtractorContractChange_Issue4893()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "app.cs"),
+                "public class App { public void Run() { } }\n");
+            var (indexExitCode, _) = RunAndCaptureJson([
+                projectRoot,
+                "--json",
+            ]);
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+
+            var (filterExitCode, filterJson) = RunAndCaptureJson([
+                projectRoot,
+                "--dry-run",
+                "--include-symbol-kind",
+                "class",
+                "--json",
+            ]);
+            Assert.Equal(CommandExitCodes.Success, filterExitCode);
+            Assert.Equal(
+                1,
+                filterJson.GetProperty("projected_file_updates").GetInt32());
+            Assert.Equal(
+                0,
+                filterJson.GetProperty("projected_file_skips").GetInt32());
+
+            var dbPath = Path.Combine(
+                projectRoot,
+                ".cdidx",
+                "codeindex.db");
+            using (var connection = new SqliteConnection(
+                $"Data Source={dbPath}"))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = """
+                    INSERT INTO codeindex_meta(key, value)
+                    VALUES (@key, 'stale')
+                    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                    """;
+                command.Parameters.AddWithValue(
+                    "@key",
+                    DbContext.GetSymbolExtractorVersionMetaKey("csharp"));
+                command.ExecuteNonQuery();
+            }
+            SqliteConnection.ClearAllPools();
+
+            var (contractExitCode, contractJson) = RunAndCaptureJson([
+                projectRoot,
+                "--dry-run",
+                "--json",
+            ]);
+            Assert.Equal(CommandExitCodes.Success, contractExitCode);
+            Assert.Equal(
+                1,
+                contractJson.GetProperty("projected_file_updates").GetInt32());
+            Assert.Equal(
+                0,
+                contractJson.GetProperty("projected_file_skips").GetInt32());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRun_RejectsScopedSymbolFilterChange_Issue4893()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "app.cs"),
+                "public class App { }\n");
+            var (indexExitCode, _) = RunAndCaptureJson([
+                projectRoot,
+                "--json",
+            ]);
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+
+            var (exitCode, json) = RunAndCaptureJson([
+                projectRoot,
+                "--files",
+                "app.cs",
+                "--dry-run",
+                "--include-symbol-kind",
+                "class",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal("error", json.GetProperty("status").GetString());
+            Assert.Contains(
+                "symbol-kind filter policy cannot change",
+                json.GetProperty("message").GetString());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRun_ExtractorConfigCommitForcesFullRefresh_Issue4893()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            RunGit(projectRoot, "init");
+            File.WriteAllText(
+                Path.Combine(projectRoot, "app.cs"),
+                "public class App { }\n");
+            RunGit(projectRoot, "add", "app.cs");
+            RunGit(projectRoot, "commit", "-m", "initial");
+            var (indexExitCode, _) = RunAndCaptureJson([
+                projectRoot,
+                "--json",
+            ]);
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+
+            var patternDirectory = Path.Combine(
+                projectRoot,
+                ".cdidx",
+                "patterns");
+            Directory.CreateDirectory(patternDirectory);
+            File.WriteAllText(
+                Path.Combine(patternDirectory, "custom.json"),
+                "{}\n");
+            RunGit(
+                projectRoot,
+                "add",
+                "-f",
+                ".cdidx/patterns/custom.json");
+            RunGit(projectRoot, "commit", "-m", "change extractor config");
+
+            var (exitCode, json) = RunAndCaptureJson([
+                projectRoot,
+                "--commits",
+                "HEAD",
+                "--dry-run",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(
+                1,
+                json.GetProperty("projected_file_updates").GetInt32());
+            Assert.Equal(
+                0,
+                json.GetProperty("projected_file_skips").GetInt32());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRun_CSharpContractRefreshesCrossFileSkips_Issue4893()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "contract.cs"),
+                "public interface IContract<T> { }\n");
+            File.WriteAllText(
+                Path.Combine(projectRoot, "consumer.cs"),
+                "public class Consumer { }\n");
+            var (indexExitCode, _) = RunAndCaptureJson([
+                projectRoot,
+                "--json",
+            ]);
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+
+            File.WriteAllText(
+                Path.Combine(projectRoot, "contract.cs"),
+                """
+                public interface IContract<T>
+                    where T : IContract<T>
+                {
+                    static abstract T Parse(string value);
+                }
+                """);
+
+            var (exitCode, json) = RunAndCaptureJson([
+                projectRoot,
+                "--dry-run",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(
+                2,
+                json.GetProperty("projected_file_updates").GetInt32());
+            Assert.Equal(
+                0,
+                json.GetProperty("projected_file_skips").GetInt32());
+            var symbolDetails = json
+                .GetProperty("estimated_table_mutation_details")
+                .GetProperty("symbols");
+            Assert.Equal(
+                "unknown",
+                symbolDetails.GetProperty("confidence").GetString());
+            Assert.Contains(
+                "csharp_workspace_augmentation_required",
+                symbolDetails.GetProperty("unknown_reasons")
+                    .EnumerateArray()
+                    .Select(static value => value.GetString()));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRun_HotspotMarkerChangeInvalidatesFamilyReuse_Issue4893()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "one.targets"),
+                "<Project />\n");
+            File.WriteAllText(
+                Path.Combine(projectRoot, "two.targets"),
+                "<Project />\n");
+            File.WriteAllText(
+                Path.Combine(projectRoot, "sample.csproj"),
+                "<Project />\n");
+            var (indexExitCode, _) = RunAndCaptureJson([
+                projectRoot,
+                "--json",
+            ]);
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+
+            File.WriteAllText(
+                Path.Combine(projectRoot, "second.csproj"),
+                "<Project Sdk=\"Microsoft.NET.Sdk\" />\n");
+
+            var (exitCode, json) = RunAndCaptureJson([
+                projectRoot,
+                "--dry-run",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(
+                4,
+                json.GetProperty("projected_file_updates").GetInt32());
+            Assert.Equal(
+                0,
+                json.GetProperty("projected_file_skips").GetInt32());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRun_SnapshotReadFailureReturnsExplicitUnknown_Issue4893()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "app.cs"),
+                "public class App { }\n");
+            var indexDirectory = Path.Combine(projectRoot, ".cdidx");
+            Directory.CreateDirectory(indexDirectory);
+            var dbPath = Path.Combine(indexDirectory, "codeindex.db");
+            File.WriteAllText(dbPath, "not a sqlite database\n");
+            var before = File.ReadAllBytes(dbPath);
+
+            var (exitCode, json) = RunAndCaptureJson([
+                projectRoot,
+                "--dry-run",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            foreach (var metric in new[]
+                     {
+                         "files",
+                         "chunks",
+                         "symbols",
+                         "symbol_references",
+                         "reference_lines",
+                         "file_issues",
+                     })
+            {
+                Assert.Equal(
+                    JsonValueKind.Null,
+                    json.GetProperty("estimated_table_mutations")
+                        .GetProperty(metric)
+                        .ValueKind);
+                Assert.Contains(
+                    "index_snapshot_unavailable",
+                    json.GetProperty("estimated_table_mutation_details")
+                        .GetProperty(metric)
+                        .GetProperty("unknown_reasons")
+                        .EnumerateArray()
+                        .Select(static value => value.GetString()));
+            }
+            Assert.Equal(before, File.ReadAllBytes(dbPath));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRun_ParseEstimateFailureReturnsExplicitUnknown_Issue4893()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { }\n");
+            IndexCommandRunner.DryRunParseEstimateFailureForTesting = static _ =>
+                new InvalidOperationException("injected parse-only estimate failure");
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--dry-run", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(1, json.GetProperty("parse_estimate_files_processed").GetInt32());
+            Assert.Equal(
+                JsonValueKind.Null,
+                json.GetProperty("estimated_table_mutations").GetProperty("symbols").ValueKind);
+            var detail = json
+                .GetProperty("estimated_table_mutation_details")
+                .GetProperty("symbols");
+            Assert.Equal(JsonValueKind.Null, detail.GetProperty("value").ValueKind);
+            Assert.Equal("unknown", detail.GetProperty("confidence").GetString());
+            Assert.Contains(
+                "parse_estimation_failed",
+                detail.GetProperty("unknown_reasons").EnumerateArray().Select(value => value.GetString()));
+            Assert.Equal(1, json.GetProperty("errors_total").GetInt32());
+            Assert.Contains(
+                "Parse-only mutation estimate unavailable",
+                json.GetProperty("errors")[0].GetProperty("message").GetString());
+            Assert.False(Directory.Exists(Path.Combine(projectRoot, ".cdidx")));
+        }
+        finally
+        {
+            IndexCommandRunner.DryRunParseEstimateFailureForTesting = null;
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRun_PartialIndexSchemaReturnsExplicitUnknownWithoutMutation_Issue4893()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { }\n");
+            var indexDirectory = Path.Combine(projectRoot, ".cdidx");
+            Directory.CreateDirectory(indexDirectory);
+            var dbPath = Path.Combine(indexDirectory, "codeindex.db");
+            using (var connection = new SqliteConnection($"Data Source={dbPath}"))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = """
+                    CREATE TABLE files (
+                        id INTEGER PRIMARY KEY,
+                        path TEXT NOT NULL,
+                        checksum TEXT
+                    );
+                    INSERT INTO files(id, path, checksum) VALUES (1, 'app.cs', 'stale');
+                    """;
+                command.ExecuteNonQuery();
+            }
+            SqliteConnection.ClearAllPools();
+            var before = File.ReadAllBytes(dbPath);
+
+            var (exitCode, json) = RunAndCaptureJson([
+                projectRoot,
+                "--db",
+                dbPath,
+                "--dry-run",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(1, json.GetProperty("projected_file_updates").GetInt32());
+            Assert.Equal(1, json.GetProperty("estimated_table_mutations").GetProperty("files").GetInt32());
+            Assert.Equal(
+                JsonValueKind.Null,
+                json.GetProperty("estimated_table_mutations").GetProperty("chunks").ValueKind);
+            var detail = json
+                .GetProperty("estimated_table_mutation_details")
+                .GetProperty("chunks");
+            Assert.Equal("unknown", detail.GetProperty("confidence").GetString());
+            Assert.Contains(
+                "existing_table_unavailable",
+                detail.GetProperty("unknown_reasons").EnumerateArray().Select(value => value.GetString()));
+            SqliteConnection.ClearAllPools();
+            Assert.Equal(before, File.ReadAllBytes(dbPath));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -417,10 +1060,11 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal("dry_run", json.GetProperty("status").GetString());
             Assert.Equal(1, json.GetProperty("files_total").GetInt32());
-            Assert.Equal(1, json.GetProperty("projected_file_updates").GetInt32());
+            Assert.Equal(0, json.GetProperty("projected_file_updates").GetInt32());
+            Assert.Equal(1, json.GetProperty("projected_file_skips").GetInt32());
             Assert.Equal(0, json.GetProperty("projected_file_deletes").GetInt32());
             Assert.Equal(0, json.GetProperty("projected_file_purges").GetInt32());
-            Assert.True(json.GetProperty("estimated_table_mutations").GetProperty("chunks").GetInt64() > 0);
+            Assert.Equal(0, json.GetProperty("estimated_table_mutations").GetProperty("chunks").GetInt64());
             Assert.Equal(1, CountRows(dbPath, "files"));
         }
         finally
@@ -441,9 +1085,10 @@ public partial class IndexCommandRunnerTests
             var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
             Assert.Equal(CommandExitCodes.Success, initialExitCode);
 
-            var (_, unfiltered) = RunAndCaptureJson([projectRoot, "--dry-run", "--json"]);
+            var (_, unfiltered) = RunAndCaptureJson([projectRoot, "--rebuild", "--dry-run", "--json"]);
             var (exitCode, filtered) = RunAndCaptureJson([
                 projectRoot,
+                "--rebuild",
                 "--dry-run",
                 "--include-symbol-kind",
                 "method,class,method",
@@ -457,8 +1102,8 @@ public partial class IndexCommandRunnerTests
             var filteredMutations = filtered.GetProperty("estimated_table_mutations");
             Assert.True(filteredMutations.GetProperty("symbols").GetInt64() < unfilteredMutations.GetProperty("symbols").GetInt64());
             Assert.Equal(
-                unfilteredMutations.GetProperty("symbol_references").GetInt64(),
-                filteredMutations.GetProperty("symbol_references").GetInt64());
+                JsonValueKind.Number,
+                filteredMutations.GetProperty("symbol_references").ValueKind);
             Assert.True(filtered.GetProperty("symbols_dropped_by_kind_filter").GetInt64() > 0);
             var policy = filtered.GetProperty("symbol_kind_filter");
             Assert.Equal(["class", "method"], policy.GetProperty("include").EnumerateArray().Select(value => value.GetString()).ToArray());
@@ -595,11 +1240,12 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal("dry_run", json.GetProperty("status").GetString());
             Assert.Equal(1, json.GetProperty("files_total").GetInt32());
+            Assert.Equal(1, json.GetProperty("projected_file_skips").GetInt32());
             Assert.Equal(0, json.GetProperty("projected_file_deletes").GetInt32());
             Assert.Equal(1, json.GetProperty("projected_file_purges").GetInt32());
             Assert.Equal(1, json.GetProperty("unknown_extension_total").GetInt32());
             Assert.True(json.TryGetProperty("unsupported_total", out _));
-            Assert.True(json.GetProperty("estimated_table_mutations").GetProperty("files").GetInt64() >= 2);
+            Assert.Equal(1, json.GetProperty("estimated_table_mutations").GetProperty("files").GetInt64());
             Assert.Equal(2, CountRows(dbPath, "files"));
         }
         finally
