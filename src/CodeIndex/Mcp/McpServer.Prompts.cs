@@ -24,7 +24,7 @@ public partial class McpServer : IDisposable
     {
         var prompts = new JsonArray
         {
-            CreatePromptDefinition("summarize_file", "Summarize the API surface and responsibilities of an indexed file.", "path", "Indexed file path to summarize."),
+            CreatePromptDefinition("summarize_file", "Summarize the API surface and responsibilities of an indexed file.", "path", "Required workspace-relative indexed file path to summarize.", argumentRequired: true),
             CreatePromptDefinition("find_unused", "Find likely unused symbols in an optional language or path scope.", "scope", "Optional language, module, or path scope."),
             CreatePromptDefinition("impact_of_changing", "Plan impact analysis for changing a symbol.", "symbol", "Symbol name to analyze."),
             CreatePromptDefinition("investigate_before_edit", "Investigate relevant code before making edits.", "topic", "Optional feature, symbol, file, or behavior to investigate."),
@@ -70,15 +70,71 @@ public partial class McpServer : IDisposable
             return McpBoundedText.ForDisplay(s, McpBoundedText.MaxPromptArgumentChars).Text;
         }
 
+        JsonNode? ReadRequiredWorkspaceRelativePathArg(string key, out string path)
+        {
+            path = string.Empty;
+            if (args == null
+                || !args.TryGetPropertyValue(key, out var node)
+                || node is null)
+            {
+                return CreateErrorResponse(hasId: true, id: id, code: -32602, message: $"Missing required prompt argument: {key}",
+                    category: McpErrorEnvelope.CategoryMissingParameter,
+                    suggestion: $"prompts/get for `summarize_file` requires a workspace-relative string in `params.arguments.{key}`.",
+                    retrySafe: false,
+                    extraData: new JsonObject { ["parameter"] = key });
+            }
+
+            if (node is not JsonValue value || !value.TryGetValue<string>(out var rawPath))
+            {
+                return CreateErrorResponse(hasId: true, id: id, code: -32602, message: $"Prompt argument '{key}' must be a string",
+                    category: McpErrorEnvelope.CategoryInvalidArgument,
+                    suggestion: $"Pass a workspace-relative indexed file path as `params.arguments.{key}`.",
+                    retrySafe: false,
+                    extraData: new JsonObject { ["parameter"] = key });
+            }
+
+            if (string.IsNullOrWhiteSpace(rawPath))
+            {
+                return CreateErrorResponse(hasId: true, id: id, code: -32602, message: $"Prompt argument '{key}' cannot be empty or whitespace-only",
+                    category: McpErrorEnvelope.CategoryInvalidArgument,
+                    suggestion: $"Pass a non-empty workspace-relative indexed file path as `params.arguments.{key}`.",
+                    retrySafe: false,
+                    extraData: new JsonObject { ["parameter"] = key });
+            }
+
+            if (rawPath.Length > McpBoundedText.MaxPromptArgumentChars)
+            {
+                return CreatePromptStringTooLongError(id, parameterName: key, value: rawPath, maxChars: McpBoundedText.MaxPromptArgumentChars,
+                    messagePrefix: $"Prompt argument '{key}' is too long",
+                    suggestion: "Shorten prompt arguments before calling prompts/get; long source or path context should be fetched with tools instead.");
+            }
+
+            if (!McpPathBoundary.TryValidateWorkspaceRelativePath(
+                    rawPath,
+                    McpBoundedText.MaxPromptArgumentChars,
+                    key,
+                    out var validationError))
+            {
+                return CreateErrorResponse(hasId: true, id: id, code: -32602, message: validationError!,
+                    category: McpErrorEnvelope.CategoryInvalidArgument,
+                    suggestion: $"Pass a workspace-relative indexed file path without absolute roots, drive prefixes, NUL bytes, or `..` traversal in `params.arguments.{key}`.",
+                    retrySafe: false,
+                    extraData: new JsonObject { ["parameter"] = key });
+            }
+
+            path = rawPath.Replace("\\", "/", StringComparison.Ordinal);
+            return null;
+        }
+
         string text;
         switch (name)
         {
             case "summarize_file":
                 {
-                    var path = ReadArg("path", out var argumentError);
+                    var argumentError = ReadRequiredWorkspaceRelativePathArg("path", out var path);
                     if (argumentError is not null)
                         return argumentError;
-                    text = $"Use the `outline` tool for `{path ?? "<path>"}`, then use `excerpt` only for the ranges needed to summarize public API, key symbols, and responsibilities.";
+                    text = $"Use the `outline` tool for `{path}`, then use `excerpt` only for the ranges needed to summarize public API, key symbols, and responsibilities.";
                     break;
                 }
             case "find_unused":
@@ -199,7 +255,12 @@ public partial class McpServer : IDisposable
         return CreateSuccessResponse(true, id, new JsonObject());
     }
 
-    private static JsonObject CreatePromptDefinition(string name, string description, string argumentName, string argumentDescription)
+    private static JsonObject CreatePromptDefinition(
+        string name,
+        string description,
+        string argumentName,
+        string argumentDescription,
+        bool argumentRequired = false)
         => new()
         {
             ["name"] = name,
@@ -210,7 +271,7 @@ public partial class McpServer : IDisposable
                 {
                     ["name"] = argumentName,
                     ["description"] = argumentDescription,
-                    ["required"] = false,
+                    ["required"] = argumentRequired,
                 },
             },
         };
