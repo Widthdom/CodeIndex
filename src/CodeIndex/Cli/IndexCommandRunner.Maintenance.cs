@@ -139,11 +139,11 @@ public static partial class IndexCommandRunner
             using var db = new DbContext(DbOpenIntent.Repair, dbPath);
             db.InitializeSchema();
             var writer = new DbWriter(db);
-            var beforeRecommendation = new DbReader(db).GetStatus().MaintenanceGuidance.FtsOptimization;
+            var beforeRecommendation = db.GetFtsOptimizationRecommendation();
             var before = checked((int)Math.Min(beforeRecommendation.ObservedWrites, int.MaxValue));
             writer.OptimizeFts();
             stopwatch.Stop();
-            var afterRecommendation = new DbReader(db).GetStatus().MaintenanceGuidance.FtsOptimization;
+            var afterRecommendation = db.GetFtsOptimizationRecommendation();
             var after = checked((int)Math.Min(afterRecommendation.ObservedWrites, int.MaxValue));
 
             if (json)

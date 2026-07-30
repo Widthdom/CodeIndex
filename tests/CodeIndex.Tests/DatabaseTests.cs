@@ -3984,6 +3984,28 @@ public class DatabaseTests : IDisposable
         Assert.Null(guidance.EstimatedBytesReclaimable);
     }
 
+    [Fact]
+    public void MaintenanceGuidance_FtsThresholdRecommendsOptimizeWhenHigherPriorityMaintenanceIsHealthy_Issue4887()
+    {
+        var ftsOptimization = FtsOptimizationRecommendationEvaluator.Evaluate(
+            new FtsOptimizationMetrics(
+                DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold,
+                PageCount: 100,
+                SnapshotCurrent: true));
+        var guidance = MaintenanceGuidanceBuilder.Build(
+            new MaintenanceMetrics(
+                PageCount: 100,
+                FreelistCount: 0,
+                PageSize: 4096,
+                WalSizeBytes: 0,
+                DbSizeBytes: 409_600,
+                AutoVacuumMode: 2),
+            ftsOptimization: ftsOptimization);
+
+        Assert.True(guidance.FtsOptimization.Recommended);
+        Assert.Equal("cdidx optimize --db <db>", guidance.RecommendedCommand);
+    }
+
     [Theory]
     [InlineData(24, false, "none", "incremental_write_threshold_not_reached")]
     [InlineData(25, true, "optimize", "incremental_write_threshold_reached")]
@@ -4040,7 +4062,8 @@ public class DatabaseTests : IDisposable
         var dbBytesBeforeStatus = File.ReadAllBytes(_dbPath);
         using (var readOnlyDb = new DbContext(DbOpenIntent.QueryOnly, _dbPath))
         {
-            var current = new DbReader(readOnlyDb).GetStatus().MaintenanceGuidance.FtsOptimization;
+            var currentGuidance = new DbReader(readOnlyDb).GetStatus().MaintenanceGuidance;
+            var current = currentGuidance.FtsOptimization;
 
             Assert.True(current.Recommended);
             Assert.Equal("optimize", current.Action);
@@ -4048,6 +4071,7 @@ public class DatabaseTests : IDisposable
             Assert.Equal(DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold, current.ThresholdWrites);
             Assert.Equal(DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold, current.ObservedWrites);
             Assert.Equal("current", current.State);
+            Assert.Equal("cdidx optimize --db <db>", currentGuidance.RecommendedCommand);
         }
         Assert.Equal(dbBytesBeforeStatus, File.ReadAllBytes(_dbPath));
 
@@ -4056,13 +4080,15 @@ public class DatabaseTests : IDisposable
         {
             var dbBytesBeforeStaleStatus = File.ReadAllBytes(_dbPath);
             using var staleDb = new DbContext(DbOpenIntent.QueryOnly, _dbPath);
-            var stale = new DbReader(staleDb).GetStatus().MaintenanceGuidance.FtsOptimization;
+            var staleGuidance = new DbReader(staleDb).GetStatus().MaintenanceGuidance;
+            var stale = staleGuidance.FtsOptimization;
             Assert.False(stale.Recommended);
             Assert.Equal("none", stale.Action);
             Assert.Equal("maintenance_snapshot_stale", stale.Reason);
             Assert.Equal(DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold, stale.ThresholdWrites);
             Assert.Equal(DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold, stale.ObservedWrites);
             Assert.Equal("stale", stale.State);
+            Assert.Equal("none", staleGuidance.RecommendedCommand);
             Assert.Equal(dbBytesBeforeStaleStatus, File.ReadAllBytes(_dbPath));
         }
         finally

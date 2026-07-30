@@ -419,6 +419,34 @@ public partial class DbContext : IDisposable
     public VacuumResult RunIncrementalVacuum(bool dryRun = false)
         => RunIncrementalVacuum(dryRun, CancellationToken.None);
 
+    internal FtsOptimizationRecommendation GetFtsOptimizationRecommendation()
+    {
+        using var transaction = _connection.BeginTransaction(deferred: true);
+        var metadata = GetMetaStrings(
+        [
+            DbWriter.FtsIncrementalWritesSinceOptimizeMetaKey,
+            BatchInProgressMetaKey,
+        ]);
+        var incrementalWrites = long.TryParse(
+            metadata[DbWriter.FtsIncrementalWritesSinceOptimizeMetaKey],
+            NumberStyles.Integer,
+            CultureInfo.InvariantCulture,
+            out var parsedWrites)
+                ? parsedWrites
+                : (long?)null;
+        var batchInProgress = bool.TryParse(
+            metadata[BatchInProgressMetaKey],
+            out var parsedBatchInProgress)
+                && parsedBatchInProgress;
+        var recommendation = FtsOptimizationRecommendationEvaluator.Evaluate(
+            new FtsOptimizationMetrics(
+                incrementalWrites,
+                ReadPragmaLong("page_count"),
+                SnapshotCurrent: !batchInProgress && !WalStaleSnapshotRisk));
+        transaction.Commit();
+        return recommendation;
+    }
+
     public VacuumResult RunIncrementalVacuum(bool dryRun, CancellationToken cancellationToken)
     {
         if (_isReadOnly && !dryRun)
@@ -456,13 +484,15 @@ public partial class DbContext : IDisposable
         var bytesReclaimed = pagesReclaimed * after.PageSize;
         var estimatedPagesReclaimable = Math.Max(0, before.FreelistCount);
         var estimatedBytesReclaimable = estimatedPagesReclaimable * before.PageSize;
+        var ftsOptimization = GetFtsOptimizationRecommendation();
         var guidance = MaintenanceGuidanceBuilder.Build(new MaintenanceMetrics(
             after.PageCount,
             after.FreelistCount,
             after.PageSize,
             after.WalSizeBytes,
             after.DbSizeBytes,
-            after.AutoVacuumMode));
+            after.AutoVacuumMode),
+            ftsOptimization: ftsOptimization);
         return new VacuumResult(
             Status: dryRun ? "dry_run" : "ok",
             DryRun: dryRun,

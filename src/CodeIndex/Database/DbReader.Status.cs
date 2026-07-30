@@ -139,7 +139,13 @@ public partial class DbReader
         var ftsIncrementalWritesSinceOptimize = ParseMetaLong(
             TryGetMetaStringInternal(DbWriter.FtsIncrementalWritesSinceOptimizeMetaKey));
         var maintenanceSnapshotCurrent = ParseMetaBool(
-            TryGetMetaStringInternal(DbContext.BatchInProgressMetaKey)) != true;
+            TryGetMetaStringInternal(DbContext.BatchInProgressMetaKey)) != true
+            && !WalStaleSnapshotRisk;
+        var ftsOptimization = FtsOptimizationRecommendationEvaluator.Evaluate(
+            new FtsOptimizationMetrics(
+                ftsIncrementalWritesSinceOptimize,
+                dbPragmaSettings.PageCount,
+                maintenanceSnapshotCurrent));
         var maintenanceGuidance = MaintenanceGuidanceBuilder.Build(new MaintenanceMetrics(
             dbPragmaSettings.PageCount,
             dbPragmaSettings.FreelistCount,
@@ -147,10 +153,7 @@ public partial class DbReader
             walSizeBytes,
             dbSizeBytes,
             dbPragmaSettings.AutoVacuum),
-            ftsOptimizationMetrics: new FtsOptimizationMetrics(
-                ftsIncrementalWritesSinceOptimize,
-                dbPragmaSettings.PageCount,
-                maintenanceSnapshotCurrent));
+            ftsOptimization: ftsOptimization);
         var lastIndexRun = GetLastIndexRun();
         var referenceExtractionCapHits = GetReferenceExtractionCapHits();
         var persistedReadiness = GetPersistedIndexGenerationReadiness(

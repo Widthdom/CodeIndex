@@ -4077,6 +4077,14 @@ public partial class QueryCommandRunnerTests
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", "class App {}\n");
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                new DbWriter(db).SetMeta(
+                    DbWriter.FtsIncrementalWritesSinceOptimizeMetaKey,
+                    DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold.ToString(
+                        System.Globalization.CultureInfo.InvariantCulture));
+            }
+            SqliteConnection.ClearAllPools();
 
             var options = QueryCommandRunner.ParseArgs(
                 ["--db", dbPath, "--read-only", "--json"],
@@ -4104,6 +4112,16 @@ public partial class QueryCommandRunnerTests
             Assert.True(policy.GetProperty("immutable_uri").GetBoolean());
             Assert.True(document.RootElement.GetProperty("wal_stale_snapshot_risk").GetBoolean());
             Assert.Equal("explicit_immutable_read_only", document.RootElement.GetProperty("wal_stale_snapshot_reason").GetString());
+            var ftsOptimization = document.RootElement
+                .GetProperty("maintenance_guidance")
+                .GetProperty("fts_optimization");
+            Assert.False(ftsOptimization.GetProperty("recommended").GetBoolean());
+            Assert.Equal("none", ftsOptimization.GetProperty("action").GetString());
+            Assert.Equal("maintenance_snapshot_stale", ftsOptimization.GetProperty("reason").GetString());
+            Assert.Equal(
+                DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold,
+                ftsOptimization.GetProperty("observed_writes").GetInt64());
+            Assert.Equal("stale", ftsOptimization.GetProperty("state").GetString());
             Assert.Equal(SqliteConnectionPolicy.DefaultCommandTimeoutSeconds, policy.GetProperty("command_timeout_seconds").GetInt32());
             Assert.True(policy.GetProperty("long_running_commands_require_cancellation").GetBoolean());
             Assert.False(policy.GetProperty("read_only_fallback").GetBoolean());

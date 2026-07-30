@@ -159,7 +159,8 @@ internal static class MaintenanceGuidanceBuilder
         MaintenanceMetrics metrics,
         string vacuumCommand = "cdidx vacuum --db <db>",
         string checkpointCommand = "sqlite3 <db> \"PRAGMA wal_checkpoint(TRUNCATE);\"",
-        FtsOptimizationMetrics? ftsOptimizationMetrics = null)
+        string optimizeCommand = "cdidx optimize --db <db>",
+        FtsOptimizationRecommendation? ftsOptimization = null)
     {
         var walThresholdBytes = ReadPositiveLongEnvironment(WalWarnBytesEnvironmentVariable, DefaultWalWarnBytes);
         var freelistThresholdRatio = ReadRatioEnvironment(FreelistWarnRatioEnvironmentVariable, DefaultFreelistWarnRatio);
@@ -173,12 +174,19 @@ internal static class MaintenanceGuidanceBuilder
                 ? "vacuum_recommended"
                 : "ok"
             : "unknown";
+        ftsOptimization ??= FtsOptimizationRecommendationEvaluator.Evaluate(
+            new FtsOptimizationMetrics(
+                IncrementalWritesSinceOptimize: null,
+                PageCount: metrics.PageCount,
+                SnapshotCurrent: true));
 
         var recommendedCommand = freelistState == "vacuum_recommended"
             ? vacuumCommand
             : walState == "checkpoint_recommended"
                 ? checkpointCommand
-                : "none";
+                : ftsOptimization.Recommended
+                    ? optimizeCommand
+                    : "none";
 
         return new StatusMaintenanceGuidance
         {
@@ -191,11 +199,7 @@ internal static class MaintenanceGuidanceBuilder
             EstimatedBytesReclaimable = estimatedBytes,
             AutoVacuumMode = metrics.AutoVacuumMode,
             AutoVacuumModeName = FormatAutoVacuumMode(metrics.AutoVacuumMode),
-            FtsOptimization = FtsOptimizationRecommendationEvaluator.Evaluate(
-                ftsOptimizationMetrics ?? new FtsOptimizationMetrics(
-                    IncrementalWritesSinceOptimize: null,
-                    PageCount: metrics.PageCount,
-                    SnapshotCurrent: true)),
+            FtsOptimization = ftsOptimization,
             RecommendedCommand = recommendedCommand,
             PostMaintenanceFollowUp = BuildFollowUp(walState, freelistState, checkpointCommand),
         };
