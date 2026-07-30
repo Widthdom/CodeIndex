@@ -1119,7 +1119,7 @@ public static class HookCommandRunner
             selection = new HookExecutableSelection(
                 "process_path",
                 appVersion,
-                [NormalizeShellPath(resolvedProcessPath)]);
+                [resolvedProcessPath]);
             return ValidateExecutableSelection(selection, out failureReason);
         }
 
@@ -1135,7 +1135,7 @@ public static class HookCommandRunner
         selection = new HookExecutableSelection(
             "dotnet_host_and_assembly",
             appVersion,
-            [NormalizeShellPath(resolvedProcessPath), NormalizeShellPath(resolvedAssemblyPath)]);
+            [resolvedProcessPath, resolvedAssemblyPath]);
         return ValidateExecutableSelection(selection, out failureReason);
     }
 
@@ -1332,9 +1332,19 @@ public static class HookCommandRunner
                 return null;
 
             using var document = JsonDocument.Parse(versionBytes);
-            return document.RootElement.TryGetProperty("version", out var version)
-                   && version.ValueKind == JsonValueKind.String
-                ? version.GetString()
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+                return null;
+            if (!document.RootElement.TryGetProperty("version", out var version)
+                || version.ValueKind != JsonValueKind.String)
+            {
+                return null;
+            }
+
+            var value = version.GetString();
+            return !string.IsNullOrWhiteSpace(value)
+                   && value.Length <= 128
+                   && !value.Any(char.IsControl)
+                ? value
                 : null;
         }
         catch (Exception ex) when (ex is IOException
@@ -1501,7 +1511,9 @@ public static class HookCommandRunner
     {
         var quotedChainedHook = QuoteShell(chainedHookPath);
         var quotedProjectPath = QuoteShell(projectPath);
-        var invocation = string.Join(' ', executableSelection.Argv.Select(QuoteShell));
+        var invocation = string.Join(
+            ' ',
+            executableSelection.Argv.Select(static argument => QuoteShell(NormalizeShellPath(argument))));
         var manifest = EncodeExecutableManifest(executableSelection);
         return $"""
 #!/bin/sh

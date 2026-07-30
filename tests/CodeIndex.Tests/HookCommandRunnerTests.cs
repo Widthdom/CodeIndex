@@ -708,7 +708,7 @@ public class HookCommandRunnerTests
             Assert.Equal(customHook, File.ReadAllText(chainedHookPath));
             var hook = File.ReadAllText(hookPath);
             Assert.Contains(
-                $"{QuoteShellForTest(toolPath)} index {QuoteShellForTest(projectRoot)} --quiet",
+                $"{QuoteShellForTest(NormalizeExpectedShellPath(toolPath))} index {QuoteShellForTest(projectRoot)} --quiet",
                 hook,
                 StringComparison.Ordinal);
             Assert.DoesNotContain("\ncdidx index ", hook, StringComparison.Ordinal);
@@ -806,6 +806,34 @@ public class HookCommandRunnerTests
                     executable.GetProperty("failure_reason").GetString());
             }
 
+            File.WriteAllText(
+                Path.Combine(v1Directory, "version.json"),
+                """["not-an-object"]""");
+            var nonObjectVersionMetadata = RunHooksAndCaptureStreams(
+                ["status", "--project", projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, nonObjectVersionMetadata.ExitCode);
+            using (var document = JsonDocument.Parse(nonObjectVersionMetadata.StdOut))
+            {
+                var executable = document.RootElement.GetProperty("executable");
+                Assert.Equal("available_unverified", executable.GetProperty("status").GetString());
+                Assert.Equal(
+                    "pinned_executable_version_unavailable",
+                    executable.GetProperty("failure_reason").GetString());
+            }
+
+            WriteVersionFile(v1Directory, "1.0.0\\nforged-status");
+            var unsafeVersionMetadata = RunHooksAndCaptureStreams(
+                ["status", "--project", projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, unsafeVersionMetadata.ExitCode);
+            using (var document = JsonDocument.Parse(unsafeVersionMetadata.StdOut))
+            {
+                var executable = document.RootElement.GetProperty("executable");
+                Assert.Equal("available_unverified", executable.GetProperty("status").GetString());
+                Assert.Equal(JsonValueKind.Null, executable.GetProperty("actual_version").ValueKind);
+            }
+
             File.Delete(v1Path);
             var missing = RunHooksAndCaptureStreams(
                 ["status", "--project", projectRoot, "--json"]);
@@ -860,7 +888,7 @@ public class HookCommandRunnerTests
                 out var wrapperFailure),
                 wrapperFailure);
             Assert.Equal("process_path", wrapperSelection.Source);
-            Assert.Equal(NormalizeExpectedShellPath(Path.GetFullPath(wrapperPath)), Assert.Single(wrapperSelection.Argv));
+            Assert.Equal(Path.GetFullPath(wrapperPath), Assert.Single(wrapperSelection.Argv));
 
             var dotnetPath = Path.Combine(root, OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet");
             var assemblyPath = Path.Combine(root, "tool version", "cdidx.dll");
@@ -877,8 +905,8 @@ public class HookCommandRunnerTests
             Assert.Equal("dotnet_host_and_assembly", dotnetSelection.Source);
             Assert.Equal(
                 [
-                    NormalizeExpectedShellPath(Path.GetFullPath(dotnetPath)),
-                    NormalizeExpectedShellPath(Path.GetFullPath(assemblyPath)),
+                    Path.GetFullPath(dotnetPath),
+                    Path.GetFullPath(assemblyPath),
                 ],
                 dotnetSelection.Argv);
         }
@@ -1488,7 +1516,10 @@ public class HookCommandRunnerTests
             out var selection,
             out var failureReason),
             failureReason);
-        return string.Join(' ', selection.Argv.Select(QuoteShellForTest));
+        return string.Join(
+            ' ',
+            selection.Argv.Select(static argument =>
+                QuoteShellForTest(NormalizeExpectedShellPath(argument))));
     }
 
     private static void WriteRunnableFile(string path)
