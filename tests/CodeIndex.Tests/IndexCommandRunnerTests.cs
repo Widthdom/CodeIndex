@@ -188,6 +188,36 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void RunBackfillFold_ConflictingCheckpointOptions_ReturnJsonUsageError_Issue4889()
+    {
+        var missingDb = CreateTempDbPath("cdidx_backfill_checkpoint_conflict_4889");
+
+        lock (TestConsoleLock.Gate)
+        {
+            var originalOut = Console.Out;
+            using var stdout = new StringWriter();
+            try
+            {
+                Console.SetOut(stdout);
+                var exitCode = IndexCommandRunner.RunBackfillFold(
+                    ["--db", missingDb, "--checkpoint", "--no-checkpoint", "--json"],
+                    _jsonOptions);
+
+                Assert.Equal(CommandExitCodes.UsageError, exitCode);
+                using var document = JsonDocument.Parse(stdout.ToString());
+                Assert.Equal(
+                    "--checkpoint and --no-checkpoint cannot be used together",
+                    document.RootElement.GetProperty("message").GetString());
+                Assert.False(Directory.Exists(missingDb + ".checkpoints"));
+            }
+            finally
+            {
+                Console.SetOut(originalOut);
+            }
+        }
+    }
+
+    [Fact]
     public void FormatIndexFileException_RegexTimeout_UsesBoundedExtractionMessage()
     {
         var ex = new RegexMatchTimeoutException("raw-sensitive-content", "raw-sensitive-pattern", TimeSpan.FromSeconds(2));
@@ -5279,6 +5309,7 @@ public sealed class Caller
                 Assert.True(json.GetProperty("path_redacted").GetBoolean());
                 Assert.Contains("database file was not found", json.GetProperty("message").GetString());
                 Assert.Contains("Create or refresh the index", json.GetProperty("hint").GetString());
+                Assert.False(Directory.Exists(missingDb + ".checkpoints"));
             }
             finally
             {
@@ -6243,6 +6274,11 @@ public sealed class Caller
             Assert.Equal(27, json.GetProperty("user_version_before").GetInt32());
             Assert.Equal(31, json.GetProperty("user_version_after").GetInt32());
             Assert.True(json.GetProperty("fold_ready").GetBoolean());
+            Assert.False(json.GetProperty("checkpoint_skipped").GetBoolean());
+            Assert.False(json.TryGetProperty("checkpoint_skipped_reason", out _));
+            var checkpointPath = Assert.Single(Directory.GetDirectories(dbPath + ".checkpoints"));
+            Assert.True(File.Exists(Path.Combine(checkpointPath, Path.GetFileName(dbPath))));
+            Assert.True(File.Exists(Path.Combine(checkpointPath, "manifest.txt")));
 
             using var verifyDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             verifyDb.TryMigrateForRead();
@@ -6255,6 +6291,7 @@ public sealed class Caller
         {
             SqliteConnection.ClearAllPools();
             DeleteFile(dbPath);
+            TestProjectHelper.DeleteDirectory(dbPath + ".checkpoints");
         }
     }
 
@@ -6315,6 +6352,9 @@ public sealed class Caller
             Assert.Equal(1, json.GetProperty("symbols").GetInt32());
             Assert.False(json.GetProperty("verified").GetBoolean());
             Assert.False(json.GetProperty("fold_ready_after").GetBoolean());
+            Assert.True(json.GetProperty("checkpoint_skipped").GetBoolean());
+            Assert.Equal("dry_run", json.GetProperty("checkpoint_skipped_reason").GetString());
+            Assert.False(Directory.Exists(dbPath + ".checkpoints"));
 
             using var verifyDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             using var count = verifyDb.Connection.CreateCommand();
@@ -6648,6 +6688,7 @@ public sealed class Caller
     public void RunBackfillFold_DoesNotRewriteCurrentFoldRowsWhenCSharpIsAbsent_Issue4866Review()
     {
         var dbPath = CreateTempDbPath("cdidx_backfill_fold_without_csharp");
+        var checkpointRoot = dbPath + ".checkpoints";
         try
         {
             using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
@@ -6678,8 +6719,86 @@ public sealed class Caller
                 writer.SetMeta(DbContext.CSharpSymbolNameContractVersionMetaKey, null);
             }
 
-            JsonElement json;
-            int exitCode;
+            (int ExitCode, JsonElement Json) RunBackfill(params string[] additionalArguments)
+            {
+                var arguments = new List<string> { "--db", dbPath, "--json" };
+                arguments.AddRange(additionalArguments);
+                lock (TestConsoleLock.Gate)
+                {
+                    var originalOut = Console.Out;
+                    using var output = new StringWriter();
+                    try
+                    {
+                        Console.SetOut(output);
+                        var exitCode = IndexCommandRunner.RunBackfillFold(
+                            arguments.ToArray(),
+                            _jsonOptions);
+                        using var document = JsonDocument.Parse(output.ToString());
+                        return (exitCode, document.RootElement.Clone());
+                    }
+                    finally
+                    {
+                        Console.SetOut(originalOut);
+                    }
+                }
+            }
+
+            var noOp = RunBackfill();
+            Assert.Equal(CommandExitCodes.Success, noOp.ExitCode);
+            Assert.False(noOp.Json.GetProperty("rewrite_all").GetBoolean());
+            Assert.Equal(0, noOp.Json.GetProperty("symbols").GetInt32());
+            Assert.Equal(0, noOp.Json.GetProperty("symbol_references").GetInt32());
+            Assert.True(noOp.Json.GetProperty("was_already_complete").GetBoolean());
+            Assert.True(noOp.Json.GetProperty("verified").GetBoolean());
+            Assert.True(noOp.Json.GetProperty("checkpoint_skipped").GetBoolean());
+            Assert.Equal(
+                "already_complete",
+                noOp.Json.GetProperty("checkpoint_skipped_reason").GetString());
+            Assert.False(Directory.Exists(checkpointRoot));
+
+            using (var walKeeper = new SqliteConnection($"Data Source={dbPath}"))
+            {
+                walKeeper.Open();
+                using var walWrite = walKeeper.CreateCommand();
+                walWrite.CommandText = """
+                    CREATE TABLE IF NOT EXISTS issue4889_wal_probe(value INTEGER NOT NULL);
+                    INSERT INTO issue4889_wal_probe(value) VALUES (1);
+                    """;
+                walWrite.ExecuteNonQuery();
+
+                var forced = RunBackfill("--checkpoint");
+                Assert.Equal(CommandExitCodes.Success, forced.ExitCode);
+                Assert.True(forced.Json.GetProperty("was_already_complete").GetBoolean());
+                Assert.False(forced.Json.GetProperty("checkpoint_skipped").GetBoolean());
+                Assert.False(forced.Json.TryGetProperty("checkpoint_skipped_reason", out _));
+
+                var forcedCheckpoint = Assert.Single(Directory.GetDirectories(checkpointRoot));
+                Assert.True(File.Exists(Path.Combine(forcedCheckpoint, Path.GetFileName(dbPath))));
+                Assert.True(File.Exists(Path.Combine(forcedCheckpoint, Path.GetFileName(dbPath) + "-wal")));
+                Assert.True(File.Exists(Path.Combine(forcedCheckpoint, Path.GetFileName(dbPath) + "-shm")));
+                Assert.True(File.Exists(Path.Combine(forcedCheckpoint, "manifest.txt")));
+            }
+
+            using (var conn = new SqliteConnection($"Data Source={dbPath}"))
+            {
+                conn.Open();
+                using var invalidate = conn.CreateCommand();
+                invalidate.CommandText = "UPDATE symbols SET name_folded = NULL WHERE name = 'run'";
+                Assert.Equal(1, invalidate.ExecuteNonQuery());
+            }
+
+            var disabled = RunBackfill("--no-checkpoint");
+            Assert.Equal(CommandExitCodes.Success, disabled.ExitCode);
+            Assert.Equal(1, disabled.Json.GetProperty("symbols").GetInt32());
+            Assert.False(disabled.Json.GetProperty("was_already_complete").GetBoolean());
+            Assert.True(disabled.Json.GetProperty("checkpoint_skipped").GetBoolean());
+            Assert.Equal(
+                "disabled_by_option",
+                disabled.Json.GetProperty("checkpoint_skipped_reason").GetString());
+            Assert.Single(Directory.GetDirectories(checkpointRoot));
+
+            string humanOutput;
+            int humanExitCode;
             lock (TestConsoleLock.Gate)
             {
                 var originalOut = Console.Out;
@@ -6687,11 +6806,10 @@ public sealed class Caller
                 try
                 {
                     Console.SetOut(output);
-                    exitCode = IndexCommandRunner.RunBackfillFold(
-                        ["--db", dbPath, "--json"],
+                    humanExitCode = IndexCommandRunner.RunBackfillFold(
+                        ["--db", dbPath],
                         _jsonOptions);
-                    using var document = JsonDocument.Parse(output.ToString());
-                    json = document.RootElement.Clone();
+                    humanOutput = output.ToString();
                 }
                 finally
                 {
@@ -6699,16 +6817,85 @@ public sealed class Caller
                 }
             }
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.False(json.GetProperty("rewrite_all").GetBoolean());
-            Assert.Equal(0, json.GetProperty("symbols").GetInt32());
-            Assert.Equal(0, json.GetProperty("symbol_references").GetInt32());
-            Assert.True(json.GetProperty("was_already_complete").GetBoolean());
+            Assert.Equal(CommandExitCodes.Success, humanExitCode);
+            Assert.Contains("checkpoint:         skipped (already complete)", humanOutput, StringComparison.Ordinal);
+            Assert.Single(Directory.GetDirectories(checkpointRoot));
+
+            using (var pendingDb = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                var pendingWriter = new DbWriter(pendingDb.Connection);
+                pendingWriter.SetMeta(DbWriter.FoldBackfillGraphRefreshPendingMetaKey, "1");
+            }
+
+            var resumed = RunBackfill();
+            Assert.Equal(CommandExitCodes.Success, resumed.ExitCode);
+            Assert.Equal(0, resumed.Json.GetProperty("symbols").GetInt32());
+            Assert.Equal(0, resumed.Json.GetProperty("symbol_references").GetInt32());
+            Assert.False(resumed.Json.GetProperty("was_already_complete").GetBoolean());
+            Assert.False(resumed.Json.GetProperty("checkpoint_skipped").GetBoolean());
+            Assert.Equal(2, Directory.GetDirectories(checkpointRoot).Length);
+            using var verifyPending = new DbContext(DbOpenIntent.QueryOnly, dbPath);
+            Assert.Null(verifyPending.GetMetaString(DbWriter.FoldBackfillGraphRefreshPendingMetaKey));
         }
         finally
         {
             SqliteConnection.ClearAllPools();
             DeleteFile(dbPath);
+            TestProjectHelper.DeleteDirectory(checkpointRoot);
+        }
+    }
+
+    [Fact]
+    public void RunBackfillFold_ForcedCheckpointRespectsIndexLock_Issue4889()
+    {
+        var dbPath = CreateTempDbPath("cdidx_backfill_fold_checkpoint_locked_4889");
+        var checkpointRoot = dbPath + ".checkpoints";
+        var lockPath = IndexLock.GetLockPath(dbPath);
+        try
+        {
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                db.InitializeSchema();
+                var writer = new DbWriter(db.Connection);
+                Assert.True(writer.MarkFoldReady());
+            }
+
+            using (IndexLock.Acquire(lockPath, Path.GetDirectoryName(dbPath)!))
+            {
+                JsonElement json;
+                int exitCode;
+                lock (TestConsoleLock.Gate)
+                {
+                    var originalOut = Console.Out;
+                    using var output = new StringWriter();
+                    try
+                    {
+                        Console.SetOut(output);
+                        exitCode = IndexCommandRunner.RunBackfillFold(
+                            ["--db", dbPath, "--checkpoint", "--json"],
+                            _jsonOptions);
+                        using var document = JsonDocument.Parse(output.ToString());
+                        json = document.RootElement.Clone();
+                    }
+                    finally
+                    {
+                        Console.SetOut(originalOut);
+                    }
+                }
+
+                Assert.Equal(CommandExitCodes.TransientDatabaseError, exitCode);
+                Assert.Equal(CommandErrorCodes.DbLocked, json.GetProperty("error_code").GetString());
+                Assert.Equal("database_locked", json.GetProperty("category").GetString());
+                Assert.False(Directory.Exists(checkpointRoot));
+            }
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteFile(dbPath);
+            DeleteFile(lockPath + ".info");
+            DeleteFile(lockPath);
+            TestProjectHelper.DeleteDirectory(checkpointRoot);
         }
     }
 
@@ -7019,6 +7206,8 @@ public sealed class Caller
             Assert.True(json.GetProperty("rewrite_all").GetBoolean());
             Assert.True(json.GetProperty("verified").GetBoolean());
             Assert.True(json.GetProperty("fold_ready").GetBoolean());
+            Assert.False(json.GetProperty("checkpoint_skipped").GetBoolean());
+            Assert.Single(Directory.GetDirectories(dbPath + ".checkpoints"));
 
             using var verifyDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             verifyDb.TryMigrateForRead();
@@ -7032,6 +7221,7 @@ public sealed class Caller
         {
             SqliteConnection.ClearAllPools();
             DeleteFile(dbPath);
+            TestProjectHelper.DeleteDirectory(dbPath + ".checkpoints");
         }
     }
 

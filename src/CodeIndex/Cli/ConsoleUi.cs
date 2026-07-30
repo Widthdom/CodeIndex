@@ -77,7 +77,7 @@ public static partial class ConsoleUi
     [
         ("index", "cdidx index <projectPath> [--db <path>] [--rebuild [--yes]] [--optimize [--show-paths]] [--symbols-only] [--verbose] [--dry-run [--dry-run-path-limit <n>]] [--force] [--quiet] [--json] [--allow-partial] [--memory-trace] [--duration-format <auto|seconds|hms>] [--notify <auto|bell|osc9|desktop|none>] [--max-file-bytes <bytes>] [--max-symbols-per-file <n>] [--max-references-per-file <n>] [--follow-symlinks <none|internal|all>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]] [--watch [--debounce <ms>] [--watch-pending-path-limit <n>]]"),
         ("hooks", "cdidx hooks <install|uninstall|status> [--project <path>] [--force] [--dry-run] [--json]"),
-        ("backfill-fold", "cdidx backfill-fold [--db <path>] [--dry-run] [--no-checkpoint] [--show-paths] [--json]"),
+        ("backfill-fold", "cdidx backfill-fold [--db <path>] [--dry-run] [--checkpoint|--no-checkpoint] [--show-paths] [--json]"),
         ("optimize", "cdidx optimize [--db <path>] [--dry-run] [--show-paths] [--json]"),
         ("vacuum", "cdidx vacuum [--db <path>] [--dry-run] [--show-paths] [--json]"),
         ("index-commits", "cdidx index <projectPath> --commits <commit-ref> [commit-ref ...] [--db <path>] [--verbose] [--dry-run [--dry-run-path-limit <n>]] [--json] [--allow-partial] [--memory-trace] [--duration-format <auto|seconds|hms>] [--max-file-bytes <bytes>] [--include-symbol-kind <kind>[,<kind>]] [--exclude-symbol-kind <kind>[,<kind>]]"),

@@ -430,6 +430,12 @@ public partial class DbWriter
         }
     }
 
+    internal bool IsFoldBackfillGraphRefreshPending()
+        => string.Equals(
+            GetMetaString(FoldBackfillGraphRefreshPendingMetaKey),
+            "1",
+            StringComparison.Ordinal);
+
     private static int ToInt32Count(object? value)
     {
         var count = value is long l ? l : (value is int i ? i : 0);

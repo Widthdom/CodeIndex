@@ -625,7 +625,8 @@ internal static class CliFlagSchema
             },
             new() { Name = "--show-paths", Description = "Show resolved local paths in maintenance diagnostics, recovery commands, or status --config output", PrimaryCommands = Set(RecoveryPathCommands.Concat(["index", "backfill-fold", "optimize", "vacuum", "db", "status"]).ToArray()) },
             new() { Name = "--dry-run-path-limit", ValuePlaceholder = "<n>", Description = "Dry run only: candidate path processing limit before truncated lower-bound estimates", PrimaryCommands = Set("index") },
-            new() { Name = "--no-checkpoint", Description = "Skip the automatic DB checkpoint before maintenance", PrimaryCommands = Set("backfill-fold") },
+            new() { Name = "--checkpoint", Description = "Create a DB checkpoint even when backfill preflight is already complete", PrimaryCommands = Set("backfill-fold") },
+            new() { Name = "--no-checkpoint", Description = "Skip the automatic DB checkpoint before a required backfill mutation", PrimaryCommands = Set("backfill-fold") },
             new()
             {
                 Name = "--force",
