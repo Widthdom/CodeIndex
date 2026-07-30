@@ -409,7 +409,7 @@ public partial class McpServer
                 ReadOnlyAnnotations()),
             CreateToolDefinition(
                 "languages",
-                "List supported languages with extensions, aliases, capabilities, and unsupported_guidance fallback commands. Use `indexedOnly`, `capability`, `extension`, or `alias` to match CLI language filters and extension lookup. / 対応言語一覧を拡張子・別名・機能・`unsupported_guidance` の代替コマンド付きで返す。`indexedOnly` / `capability` / `extension` / `alias` で CLI の言語フィルタと拡張子 lookup に合わせて絞り込める。",
+                "List supported languages with exact CLI-compatible language, extension, alias, and capability filters. Results use stable catalog-generation-bound cursor pagination and a JSON-RPC envelope byte budget. / 対応言語一覧を CLI 互換の言語・拡張子・別名・機能の完全一致フィルタで返す。結果はカタログ世代に拘束された安定 cursor pagination と JSON-RPC envelope の byte budget を使用する。",
                 new JsonObject
                 {
                     ["type"] = "object",
@@ -417,8 +417,12 @@ public partial class McpServer
                     {
                         ["indexedOnly"] = new JsonObject { ["type"] = "boolean", ["description"] = "Return only languages currently present in the index. Requires the configured database.", ["default"] = false },
                         ["capability"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string", ["enum"] = new JsonArray { "symbols", "graph", "references" } }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray { "symbols", "graph", "references" } } } }, ["description"] = "Filter by language capability. `graph` and `references` both require call-graph/reference extraction support. Accepts a single value or an array; all requested capabilities must match." },
+                        ["language"] = new JsonObject { ["type"] = "string", ["description"] = "Look up one canonical language using the same exact normalization as CLI `languages --language`, e.g. `csharp` or `cs`." },
                         ["extension"] = new JsonObject { ["type"] = "string", ["description"] = "Look up languages by file extension. Accepts `cs` or `.cs` style values." },
-                        ["alias"] = new JsonObject { ["type"] = "string", ["description"] = "Look up languages by canonical language name or CLI language alias, e.g. `cs` for `csharp`." }
+                        ["alias"] = new JsonObject { ["type"] = "string", ["description"] = "Look up languages by exact CLI language alias; canonical language names remain accepted for backward compatibility." },
+                        ["limit"] = new JsonObject { ["type"] = "integer", ["minimum"] = 1, ["maximum"] = MaxLimit, ["description"] = "Maximum catalog entries to return per page.", ["default"] = QueryCommandRunner.DefaultQueryLimit },
+                        ["cursor"] = new JsonObject { ["type"] = "string", ["maxLength"] = MaxMcpQueryCursorCharacters, ["description"] = "Opaque next_cursor from the previous languages page. Keep every filter, limit, and maxBytes unchanged." },
+                        ["maxBytes"] = new JsonObject { ["type"] = "integer", ["minimum"] = MinLanguageCatalogMaxBytes, ["maximum"] = MaxLanguageCatalogMaxBytes, ["description"] = "Maximum UTF-8 bytes for the complete JSON-RPC response envelope.", ["default"] = DefaultLanguageCatalogMaxBytes }
                     }
                 },
                 ReadOnlyAnnotations()),

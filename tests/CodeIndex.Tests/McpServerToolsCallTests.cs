@@ -6354,11 +6354,11 @@ public partial class McpServerTests
     [Fact]
     public void ToolsCall_Languages_ReturnsCapabilities()
     {
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"languages","arguments":{}}}""")!;
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"languages","arguments":{"limit":200}}}""")!;
         var response = _server.HandleMessage(request)!;
 
         var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
-        Assert.Contains("languages supported", text);
+        Assert.Contains("matching languages returned", text);
         var structured = response["result"]!["structuredContent"]!;
         var precedence = structured["detection_policy"]!["precedence"]!.AsArray()
             .Select(value => value!.GetValue<string>())
@@ -6461,7 +6461,7 @@ public partial class McpServerTests
     [Fact]
     public void ToolsCall_Languages_SeparatesFilenamePatternKindsAndKeepsLegacyPatterns_Issue4617()
     {
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"languages","arguments":{}}}""")!;
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"languages","arguments":{"limit":200}}}""")!;
         var response = _server.HandleMessage(request)!;
 
         var languages = response["result"]!["structuredContent"]!["languages"]!.AsArray();
@@ -6497,7 +6497,7 @@ public partial class McpServerTests
                 Assert.Contains("mcpcatalog", SymbolExtractor.GetSupportedLanguages(_projectRoot));
                 Assert.Contains("mcpcatalog", FileIndexer.GetLanguageExtensions(_projectRoot).Values);
 
-                var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"languages","arguments":{}}}""")!;
+                var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"languages","arguments":{"limit":200}}}""")!;
                 var response = _server.HandleMessage(request)!;
 
                 var language = Assert.Single(

@@ -131,6 +131,33 @@ public class McpToolContractTests
     }
 
     [Fact]
+    public void ToolsList_LanguagesAdvertisesBoundedCatalogContract_Issue4896()
+    {
+        var properties = GetAdvertisedToolSchemas()["languages"];
+        var allowed = GetAllowedToolArguments("languages");
+
+        foreach (var argumentName in new[] { "language", "extension", "alias", "limit", "cursor", "maxBytes" })
+        {
+            Assert.True(properties.ContainsKey(argumentName));
+            Assert.Contains(argumentName, allowed);
+        }
+
+        Assert.Equal((true, "string"), TryGetExpectedJsonType("languages", "language"));
+        Assert.Equal((true, "integer"), TryGetExpectedJsonType("languages", "limit"));
+        Assert.Equal((true, "string"), TryGetExpectedJsonType("languages", "cursor"));
+        Assert.Equal((true, "integer"), TryGetExpectedJsonType("languages", "maxBytes"));
+        Assert.Equal(
+            McpServer.MaxMcpQueryCursorCharacters,
+            properties["cursor"]["maxLength"]!.GetValue<int>());
+        Assert.Equal(
+            McpServer.MinLanguageCatalogMaxBytes,
+            properties["maxBytes"]["minimum"]!.GetValue<int>());
+        Assert.Equal(
+            McpServer.MaxLanguageCatalogMaxBytes,
+            properties["maxBytes"]["maximum"]!.GetValue<int>());
+    }
+
+    [Fact]
     public void ToolsList_DepsArgumentsHaveSharedArgumentContract_Issue3196()
     {
         var depsProperties = GetAdvertisedToolSchemas()["deps"];
