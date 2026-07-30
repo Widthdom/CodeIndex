@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
 using CodeIndex.Models;
@@ -65,7 +66,17 @@ public partial class McpServer
             if (On(name)) graphEnabled.Add(name);
         if (graphEnabled.Count > 0)
         {
-            var langs = string.Join(", ", ReferenceExtractor.GetSupportedLanguages());
+            var languageCatalog = LanguageCapabilityCatalog.Build(
+                workspaceRoot: null,
+                QueryCommandRunner.GetLanguageAliases);
+            var referenceLanguageNames = ReferenceExtractor.GetSupportedLanguages();
+            var langs = string.Join(
+                ", ",
+                languageCatalog.Languages
+                    .Where(language => language.Value.Graph)
+                    .SelectMany(language => new[] { language.Key }
+                        .Concat(language.Value.Aliases.Where(referenceLanguageNames.Contains)))
+                    .Distinct(StringComparer.Ordinal));
             var names = string.Join(", ", graphEnabled);
             var sentence = $"Graph tools ({names}) only work for supported languages ({langs});";
             sentence += On("search")

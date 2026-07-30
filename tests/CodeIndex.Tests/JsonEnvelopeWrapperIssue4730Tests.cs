@@ -237,6 +237,15 @@ public sealed class JsonEnvelopeWrapperIssue4730Tests
             Assert.False(string.IsNullOrWhiteSpace(languageMetadata.GetProperty("result_stable_at").GetString()));
             Assert.Single(languageDocument.RootElement.GetProperty("results").EnumerateArray());
             Assert.True(languageDocument.RootElement.GetProperty("results")[0].TryGetProperty("exact_filenames", out _));
+            var scopedCounts = languageMetadata
+                .GetProperty("response_context")
+                .GetProperty("language_capability_counts");
+            Assert.Equal(
+                languageMetadata.GetProperty("total_count").GetInt32(),
+                scopedCounts.GetProperty("catalog").GetProperty("catalog_membership").GetProperty("count").GetInt32());
+            Assert.Equal(
+                1,
+                scopedCounts.GetProperty("indexed_workspace").GetProperty("catalog_membership").GetProperty("count").GetInt32());
             var languageCursor = languageMetadata.GetProperty("next_cursor").GetString()!;
             var firstLanguage = languageDocument.RootElement.GetProperty("results")[0].GetProperty("lang").GetString();
 
@@ -247,8 +256,12 @@ public sealed class JsonEnvelopeWrapperIssue4730Tests
             Assert.Equal(string.Empty, nextLanguageStderr);
             using (var nextLanguageDocument = JsonDocument.Parse(nextLanguageStdout))
             {
-                Assert.Equal(1, nextLanguageDocument.RootElement.GetProperty("metadata").GetProperty("cursor_offset").GetInt32());
+                var nextMetadata = nextLanguageDocument.RootElement.GetProperty("metadata");
+                Assert.Equal(1, nextMetadata.GetProperty("cursor_offset").GetInt32());
                 Assert.NotEqual(firstLanguage, nextLanguageDocument.RootElement.GetProperty("results")[0].GetProperty("lang").GetString());
+                Assert.Equal(
+                    scopedCounts.GetRawText(),
+                    nextMetadata.GetProperty("response_context").GetProperty("language_capability_counts").GetRawText());
             }
 
             var (mismatchExitCode, mismatchStdout, mismatchStderr) = CaptureConsole(() =>

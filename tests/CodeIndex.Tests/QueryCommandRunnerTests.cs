@@ -2864,6 +2864,13 @@ public partial class QueryCommandRunnerTests
                 Assert.Contains(
                     ".workspacecatalog",
                     workspaceLanguage.GetProperty("extensions").EnumerateArray().Select(extension => extension.GetString()));
+                var scopedCounts = document.RootElement.GetProperty("language_capability_counts");
+                Assert.Equal(
+                    document.RootElement.GetProperty("languages").GetArrayLength(),
+                    scopedCounts.GetProperty("catalog").GetProperty("catalog_membership").GetProperty("count").GetInt32());
+                Assert.Equal(
+                    "symbol_extraction",
+                    scopedCounts.GetProperty("catalog").GetProperty("symbol_extraction").GetProperty("capability").GetString());
             }
             finally
             {
@@ -2871,6 +2878,79 @@ public partial class QueryCommandRunnerTests
                 ExtractorPluginRegistry.ResetForTests();
             }
         }
+    }
+
+    [Fact]
+    public void RunLanguages_JsonSeparatesCatalogMatchedAndIndexedCapabilityCounts_Issue4895()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_languages_scoped_counts_4895");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp", "class App { }\n");
+        TestProjectHelper.InsertIndexedFile(dbPath, "README.md", "markdown", "# App\n");
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() =>
+            QueryCommandRunner.RunLanguages(
+                ["--json", "--db", dbPath, "--language", "csharp"],
+                _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        var root = document.RootElement;
+        var language = Assert.Single(root.GetProperty("languages").EnumerateArray());
+        Assert.True(language.GetProperty("detection").GetBoolean());
+        Assert.True(language.GetProperty("outline").GetBoolean());
+
+        var counts = root.GetProperty("language_capability_counts");
+        var catalogMembership = counts.GetProperty("catalog").GetProperty("catalog_membership");
+        Assert.Equal("catalog", catalogMembership.GetProperty("scope").GetString());
+        Assert.Equal("catalog_membership", catalogMembership.GetProperty("capability").GetString());
+        Assert.True(catalogMembership.GetProperty("available").GetBoolean());
+        Assert.True(catalogMembership.GetProperty("count").GetInt32() > 1);
+
+        var matchedMembership = counts.GetProperty("matched_catalog").GetProperty("catalog_membership");
+        Assert.Equal("matched_catalog", matchedMembership.GetProperty("scope").GetString());
+        Assert.Equal(1, matchedMembership.GetProperty("count").GetInt32());
+
+        var indexedMembership = counts.GetProperty("indexed_workspace").GetProperty("catalog_membership");
+        Assert.Equal("indexed_workspace", indexedMembership.GetProperty("scope").GetString());
+        Assert.Equal(2, indexedMembership.GetProperty("count").GetInt32());
+
+        foreach (var capability in new[]
+                 {
+                     "detection",
+                     "symbol_extraction",
+                     "reference_extraction",
+                     "outline",
+                     "graph_queries",
+                 })
+        {
+            var count = counts.GetProperty("catalog").GetProperty(capability);
+            Assert.Equal("catalog", count.GetProperty("scope").GetString());
+            Assert.Equal(capability, count.GetProperty("capability").GetString());
+            Assert.True(count.GetProperty("available").GetBoolean());
+        }
+    }
+
+    [Fact]
+    public void RunLanguages_EmptyIndexReportsAvailableZeroIndexedScope_Issue4895()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_languages_empty_counts_4895");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() =>
+            QueryCommandRunner.RunLanguages(["--summary-only", "--db", dbPath], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        var indexedMembership = document.RootElement
+            .GetProperty("language_capability_counts")
+            .GetProperty("indexed_workspace")
+            .GetProperty("catalog_membership");
+        Assert.Equal("indexed_workspace", indexedMembership.GetProperty("scope").GetString());
+        Assert.True(indexedMembership.GetProperty("available").GetBoolean());
+        Assert.Equal(0, indexedMembership.GetProperty("count").GetInt32());
     }
 
     [Fact]
