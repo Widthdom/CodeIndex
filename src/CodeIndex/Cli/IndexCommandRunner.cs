@@ -192,6 +192,7 @@ public static partial class IndexCommandRunner
         if (validationExitCode != null)
             return validationExitCode.Value;
 
+        var requestedDbPath = dbPath;
         dbPath = DbPathResolver.NormalizeDbPath(dbPath);
         var resolvedDbPath = Path.GetFullPath(dbPath);
         var databaseExistedBeforeIndex = File.Exists(LongPath.EnsureWindowsPrefix(resolvedDbPath));
@@ -223,7 +224,8 @@ public static partial class IndexCommandRunner
                 jsonOptions,
                 options.ProjectPath,
                 options.DryRun,
-                showPaths: options.ShowPaths);
+                showPaths: options.ShowPaths,
+                queryOnlyDbPath: options.DryRun ? requestedDbPath : null);
 
         bool ignoreCase;
         string ignoreRuleRoot;

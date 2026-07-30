@@ -302,6 +302,14 @@
     "estimated_bytes_reclaimable": 0,
     "auto_vacuum_mode": 2,
     "auto_vacuum_mode_name": "incremental",
+    "fts_optimization": {
+      "recommended": false,
+      "action": "none",
+      "reason": "incremental_write_count_unavailable",
+      "threshold_writes": 25,
+      "observed_writes": 0,
+      "state": "unavailable"
+    },
     "recommended_command": "none"
   },
   "db_size_bytes": "\u003CCOUNT\u003E",
