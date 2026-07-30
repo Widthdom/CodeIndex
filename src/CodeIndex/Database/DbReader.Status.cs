@@ -22,6 +22,20 @@ public partial class DbReader
     /// データベースの統計情報を取得する。
     /// </summary>
     public StatusResult GetStatus()
+        => GetStatus(includeDatabaseSizeAttribution: true);
+
+    /// <summary>
+    /// Get database statistics while allowing internal non-status consumers to skip the
+    /// bounded page scan.
+    /// 内部の非 status 利用で件数上限付き page scan を省略可能にして database 統計を取得する。
+    /// </summary>
+    /// <param name="includeDatabaseSizeAttribution">
+    /// Whether to run the bounded page scan; internal consumers that do not emit the
+    /// attribution block can skip it.
+    /// 件数上限付き page scan を実行するかどうか。attribution block を出力しない内部利用では
+    /// scan を省略できる。
+    /// </param>
+    internal StatusResult GetStatus(bool includeDatabaseSizeAttribution)
     {
         // Issue #180: wrap the multi-statement status read in one DEFERRED transaction so
         // every COUNT(*) / freshness / readiness query resolves against the same WAL
@@ -136,6 +150,19 @@ public partial class DbReader
         var preparedCommandCache = GetPreparedCommandCacheStatus();
         var dbSizeBytes = TryGetDatabaseFileSize();
         var walSizeBytes = TryGetWalFileSize();
+        var databaseSizeAttribution = includeDatabaseSizeAttribution
+            ? ReadDatabaseSizeAttribution(
+                dbPragmaSettings,
+                dbSizeBytes,
+                walSizeBytes,
+                TryGetShmFileSize())
+            : new StatusDatabaseSizeAttribution
+            {
+                Available = false,
+                Measurement = "unavailable",
+                UnavailableReason = "not_requested",
+                TopObjectLimit = DatabaseSizeAttributionTopObjectLimit,
+            };
         var maintenanceGuidance = MaintenanceGuidanceBuilder.Build(new MaintenanceMetrics(
             dbPragmaSettings.PageCount,
             dbPragmaSettings.FreelistCount,
@@ -209,6 +236,7 @@ public partial class DbReader
             MaintenanceGuidance = maintenanceGuidance,
             DbSizeBytes = dbSizeBytes,
             WalSizeBytes = walSizeBytes,
+            DatabaseSizeAttribution = databaseSizeAttribution,
             Process = StatusProcessMetrics.Capture(),
             LastIndexRun = lastIndexRun,
             LastFailedOrPartialIndexRun = lastFailedOrPartialIndexRun,

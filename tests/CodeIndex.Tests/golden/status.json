@@ -306,6 +306,195 @@
   },
   "db_size_bytes": "\u003CCOUNT\u003E",
   "wal_size_bytes": "\u003CCOUNT\u003E",
+  "database_size_attribution": {
+    "available": true,
+    "measurement": "sqlite_file_btree_pages",
+    "page_size_bytes": "\u003CCOUNT\u003E",
+    "page_count": "\u003CCOUNT\u003E",
+    "logical_database_bytes": "\u003CCOUNT\u003E",
+    "main_file_bytes": "\u003CCOUNT\u003E",
+    "wal_file_bytes": "\u003CCOUNT\u003E",
+    "shm_file_bytes": "\u003CCOUNT\u003E",
+    "physical_file_set_bytes": "\u003CCOUNT\u003E",
+    "allocated_object_bytes": "\u003CCOUNT\u003E",
+    "table_bytes": "\u003CCOUNT\u003E",
+    "index_bytes": "\u003CCOUNT\u003E",
+    "other_object_bytes": "\u003CCOUNT\u003E",
+    "internal_page_bytes": "\u003CCOUNT\u003E",
+    "leaf_page_bytes": "\u003CCOUNT\u003E",
+    "overflow_page_bytes": "\u003CCOUNT\u003E",
+    "other_page_bytes": "\u003CCOUNT\u003E",
+    "payload_bytes": "\u003CCOUNT\u003E",
+    "unused_bytes": "\u003CCOUNT\u003E",
+    "structural_overhead_bytes": "\u003CCOUNT\u003E",
+    "freelist_bytes": "\u003CCOUNT\u003E",
+    "unexplained_residual_bytes": "\u003CCOUNT\u003E",
+    "object_count": "\u003CCOUNT\u003E",
+    "top_object_limit": 20,
+    "top_objects_truncated": true,
+    "top_objects": [
+      {
+        "name": "sqlite_schema",
+        "object_type": "table",
+        "name_redacted_or_truncated": false,
+        "page_bytes": "\u003CCOUNT\u003E",
+        "payload_bytes": "\u003CCOUNT\u003E",
+        "unused_bytes": "\u003CCOUNT\u003E"
+      },
+      {
+        "name": "chunks",
+        "object_type": "table",
+        "name_redacted_or_truncated": false,
+        "page_bytes": "\u003CCOUNT\u003E",
+        "payload_bytes": "\u003CCOUNT\u003E",
+        "unused_bytes": "\u003CCOUNT\u003E"
+      },
+      {
+        "name": "codeindex_meta",
+        "object_type": "table",
+        "name_redacted_or_truncated": false,
+        "page_bytes": "\u003CCOUNT\u003E",
+        "payload_bytes": "\u003CCOUNT\u003E",
+        "unused_bytes": "\u003CCOUNT\u003E"
+      },
+      {
+        "name": "file_issues",
+        "object_type": "table",
+        "name_redacted_or_truncated": false,
+        "page_bytes": "\u003CCOUNT\u003E",
+        "payload_bytes": "\u003CCOUNT\u003E",
+        "unused_bytes": "\u003CCOUNT\u003E"
+      },
+      {
+        "name": "files",
+        "object_type": "table",
+        "name_redacted_or_truncated": false,
+        "page_bytes": "\u003CCOUNT\u003E",
+        "payload_bytes": "\u003CCOUNT\u003E",
+        "unused_bytes": "\u003CCOUNT\u003E"
+      },
+      {
+        "name": "fts_chunks_config",
+        "object_type": "table",
+        "name_redacted_or_truncated": false,
+        "page_bytes": "\u003CCOUNT\u003E",
+        "payload_bytes": "\u003CCOUNT\u003E",
+        "unused_bytes": "\u003CCOUNT\u003E"
+      },
+      {
+        "name": "fts_chunks_data",
+        "object_type": "table",
+        "name_redacted_or_truncated": false,
+        "page_bytes": "\u003CCOUNT\u003E",
+        "payload_bytes": "\u003CCOUNT\u003E",
+        "unused_bytes": "\u003CCOUNT\u003E"
+      },
+      {
+        "name": "fts_chunks_docsize",
+        "object_type": "table",
+        "name_redacted_or_truncated": false,
+        "page_bytes": "\u003CCOUNT\u003E",
+        "payload_bytes": "\u003CCOUNT\u003E",
+        "unused_bytes": "\u003CCOUNT\u003E"
+      },
+      {
+        "name": "fts_chunks_idx",
+        "object_type": "table",
+        "name_redacted_or_truncated": false,
+        "page_bytes": "\u003CCOUNT\u003E",
+        "payload_bytes": "\u003CCOUNT\u003E",
+        "unused_bytes": "\u003CCOUNT\u003E"
+      },
+      {
+        "name": "fts_chunks_trigram_config",
+        "object_type": "table",
+        "name_redacted_or_truncated": false,
+        "page_bytes": "\u003CCOUNT\u003E",
+        "payload_bytes": "\u003CCOUNT\u003E",
+        "unused_bytes": "\u003CCOUNT\u003E"
+      },
+      {
+        "name": "fts_chunks_trigram_data",
+        "object_type": "table",
+        "name_redacted_or_truncated": false,
+        "page_bytes": "\u003CCOUNT\u003E",
+        "payload_bytes": "\u003CCOUNT\u003E",
+        "unused_bytes": "\u003CCOUNT\u003E"
+      },
+      {
+        "name": "fts_chunks_trigram_docsize",
+        "object_type": "table",
+        "name_redacted_or_truncated": false,
+        "page_bytes": "\u003CCOUNT\u003E",
+        "payload_bytes": "\u003CCOUNT\u003E",
+        "unused_bytes": "\u003CCOUNT\u003E"
+      },
+      {
+        "name": "fts_chunks_trigram_idx",
+        "object_type": "table",
+        "name_redacted_or_truncated": false,
+        "page_bytes": "\u003CCOUNT\u003E",
+        "payload_bytes": "\u003CCOUNT\u003E",
+        "unused_bytes": "\u003CCOUNT\u003E"
+      },
+      {
+        "name": "hotspot_reference_counts",
+        "object_type": "table",
+        "name_redacted_or_truncated": false,
+        "page_bytes": "\u003CCOUNT\u003E",
+        "payload_bytes": "\u003CCOUNT\u003E",
+        "unused_bytes": "\u003CCOUNT\u003E"
+      },
+      {
+        "name": "idx_chunks_file",
+        "object_type": "index",
+        "name_redacted_or_truncated": false,
+        "page_bytes": "\u003CCOUNT\u003E",
+        "payload_bytes": "\u003CCOUNT\u003E",
+        "unused_bytes": "\u003CCOUNT\u003E"
+      },
+      {
+        "name": "idx_chunks_file_end_start_nonnull",
+        "object_type": "index",
+        "name_redacted_or_truncated": false,
+        "page_bytes": "\u003CCOUNT\u003E",
+        "payload_bytes": "\u003CCOUNT\u003E",
+        "unused_bytes": "\u003CCOUNT\u003E"
+      },
+      {
+        "name": "idx_chunks_file_start_chunk_nonnull",
+        "object_type": "index",
+        "name_redacted_or_truncated": false,
+        "page_bytes": "\u003CCOUNT\u003E",
+        "payload_bytes": "\u003CCOUNT\u003E",
+        "unused_bytes": "\u003CCOUNT\u003E"
+      },
+      {
+        "name": "idx_file_issues_file_kind",
+        "object_type": "index",
+        "name_redacted_or_truncated": false,
+        "page_bytes": "\u003CCOUNT\u003E",
+        "payload_bytes": "\u003CCOUNT\u003E",
+        "unused_bytes": "\u003CCOUNT\u003E"
+      },
+      {
+        "name": "idx_files_checksum",
+        "object_type": "index",
+        "name_redacted_or_truncated": false,
+        "page_bytes": "\u003CCOUNT\u003E",
+        "payload_bytes": "\u003CCOUNT\u003E",
+        "unused_bytes": "\u003CCOUNT\u003E"
+      },
+      {
+        "name": "idx_files_generated",
+        "object_type": "index",
+        "name_redacted_or_truncated": false,
+        "page_bytes": "\u003CCOUNT\u003E",
+        "payload_bytes": "\u003CCOUNT\u003E",
+        "unused_bytes": "\u003CCOUNT\u003E"
+      }
+    ]
+  },
   "process": {
     "heap_bytes": "\u003CCOUNT\u003E",
     "gc_heap_size_bytes": "\u003CCOUNT\u003E",

@@ -2027,31 +2027,45 @@ public partial class DbReader
 
     private long? TryGetDatabaseFileSize()
     {
-        var path = _conn.DataSource;
-        if (string.IsNullOrWhiteSpace(path) || path.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+        var path = TryGetLocalDatabasePath();
+        if (path == null)
             return null;
 
-        try
-        {
-            var info = new FileInfo(path);
-            return info.Exists ? info.Length : null;
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
-        {
-            return null;
-        }
+        return TryGetFileSize(path, missingValue: null);
     }
 
     private long? TryGetWalFileSize()
+        => TryGetDatabaseSidecarFileSize("-wal");
+
+    private long? TryGetShmFileSize()
+        => TryGetDatabaseSidecarFileSize("-shm");
+
+    private long? TryGetDatabaseSidecarFileSize(string suffix)
     {
-        var path = _conn.DataSource;
-        if (string.IsNullOrWhiteSpace(path) || path.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+        var path = TryGetLocalDatabasePath();
+        if (path == null)
             return null;
 
+        return TryGetFileSize(path + suffix, missingValue: 0);
+    }
+
+    private string? TryGetLocalDatabasePath()
+    {
+        var path = _conn.DataSource;
+        if (string.IsNullOrWhiteSpace(path))
+            return null;
+
+        return path.StartsWith("file:", StringComparison.OrdinalIgnoreCase)
+            ? DbConnectionFactory.TryGetLocalPath(path)
+            : path;
+    }
+
+    private static long? TryGetFileSize(string path, long? missingValue)
+    {
         try
         {
-            var info = new FileInfo(path + "-wal");
-            return info.Exists ? info.Length : 0;
+            var info = new FileInfo(path);
+            return info.Exists ? info.Length : missingValue;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
         {

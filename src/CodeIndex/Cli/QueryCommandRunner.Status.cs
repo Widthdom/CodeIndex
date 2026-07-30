@@ -110,7 +110,7 @@ public static partial class QueryCommandRunner
                 }
             }
 
-            var status = reader.GetStatus();
+            var status = reader.GetStatus(includeDatabaseSizeAttribution: options.Json);
             WorkspaceMetadataEnricher.Enrich(status, options.DbPath, options.DbPathExplicit, cancellationToken);
             status.DataDir = options.DataDir;
             status.DataDirSource = options.DataDirSource;
