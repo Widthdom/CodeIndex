@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using CodeIndex.Cli;
@@ -29,7 +30,7 @@ public class HookCommandRunnerTests
             Assert.True(File.Exists(hookPath));
             var hook = File.ReadAllText(hookPath);
             Assert.Contains("BEGIN CDIDX MANAGED PRE-COMMIT", hook);
-            Assert.Contains($"cdidx index {QuoteShellForTest(projectRoot)} --quiet", hook);
+            Assert.Contains($"{BuildExpectedPinnedInvocation()} index {QuoteShellForTest(projectRoot)} --quiet", hook);
 
             var statusExit = RunHooksAndCaptureStreams(["status", "--project", projectRoot]).ExitCode;
             Assert.Equal(CommandExitCodes.Success, statusExit);
@@ -81,7 +82,7 @@ public class HookCommandRunnerTests
             Assert.Equal(string.Empty, updatedInstall.StdErr);
             using (var document = JsonDocument.Parse(updatedInstall.StdOut))
                 Assert.Equal("updated", document.RootElement.GetProperty("status").GetString());
-            Assert.Contains($"cdidx index {QuoteShellForTest(projectRoot)} --quiet", File.ReadAllText(hookPath));
+            Assert.Contains($"{BuildExpectedPinnedInvocation()} index {QuoteShellForTest(projectRoot)} --quiet", File.ReadAllText(hookPath));
             Assert.DoesNotContain("echo stale", File.ReadAllText(hookPath));
         }
         finally
@@ -298,6 +299,10 @@ public class HookCommandRunnerTests
                     "BEGIN CDIDX MANAGED PRE-COMMIT",
                     document.RootElement.GetProperty("managed_hook_preview").GetString(),
                     StringComparison.Ordinal);
+                Assert.Contains(
+                    "# CDIDX EXECUTABLE MANIFEST [redacted]",
+                    document.RootElement.GetProperty("managed_hook_preview").GetString(),
+                    StringComparison.Ordinal);
             }
             Assert.Equal(customHook, File.ReadAllText(hookPath));
             Assert.Equal(existingChain, File.ReadAllText(chainedHookPath));
@@ -309,6 +314,11 @@ public class HookCommandRunnerTests
             Assert.Contains("Planned action: blocked", blockedHumanPreview.StdOut, StringComparison.Ordinal);
             Assert.Contains("Filesystem mutation: false", blockedHumanPreview.StdOut, StringComparison.Ordinal);
             Assert.Contains("Managed hook preview:", blockedHumanPreview.StdOut, StringComparison.Ordinal);
+            Assert.Contains(
+                "# CDIDX EXECUTABLE MANIFEST [redacted]",
+                blockedHumanPreview.StdOut,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain(projectRoot, blockedHumanPreview.StdOut, StringComparison.Ordinal);
             Assert.Contains("chained hook already exists", blockedHumanPreview.StdErr, StringComparison.Ordinal);
             Assert.Contains("Hint:", blockedHumanPreview.StdErr, StringComparison.Ordinal);
             Assert.Contains("Usage:", blockedHumanPreview.StdErr, StringComparison.Ordinal);
@@ -375,6 +385,45 @@ public class HookCommandRunnerTests
         Assert.Equal(
             "--dry-run is supported only for hooks install or uninstall",
             document.RootElement.GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public void Hooks_InstallDryRun_PreflightFailurePreservesBlockedPlan_Issue4892()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("hook_preflight_failure");
+        try
+        {
+            TestProjectHelper.InitializeGitRepo(projectRoot);
+            HookCommandRunner.ExecutableSelectionForTesting = _ =>
+                new HookExecutableSelection(
+                    "process_path",
+                    "1.0.0",
+                    [Path.Combine(projectRoot, "missing-cdidx")]);
+
+            var preview = RunHooksAndCaptureStreams(
+                ["install", "--project", projectRoot, "--dry-run", "--json"]);
+
+            Assert.Equal(CommandExitCodes.InstallError, preview.ExitCode);
+            using var document = JsonDocument.Parse(preview.StdOut);
+            Assert.Equal("error", document.RootElement.GetProperty("status").GetString());
+            Assert.True(document.RootElement.GetProperty("dry_run").GetBoolean());
+            Assert.False(document.RootElement.GetProperty("filesystem_mutation").GetBoolean());
+            Assert.Equal("blocked", document.RootElement.GetProperty("planned_action").GetString());
+            Assert.Equal("absent", document.RootElement.GetProperty("hook_state").GetString());
+            Assert.Equal("absent", document.RootElement.GetProperty("chained_hook_state").GetString());
+            Assert.Empty(document.RootElement.GetProperty("planned_changes").EnumerateArray());
+            Assert.Equal(
+                "unresolved",
+                document.RootElement
+                    .GetProperty("executable")
+                    .GetProperty("status")
+                    .GetString());
+        }
+        finally
+        {
+            HookCommandRunner.ExecutableSelectionForTesting = null;
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
     }
 
     [Fact]
@@ -643,11 +692,790 @@ public class HookCommandRunnerTests
             var hook = File.ReadAllText(hookPath);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Contains($"cdidx index {QuoteShellForTest(projectRoot)} --quiet", hook);
-            Assert.DoesNotContain("cdidx index . --quiet", hook);
+            Assert.Contains($"{BuildExpectedPinnedInvocation()} index {QuoteShellForTest(projectRoot)} --quiet", hook);
+            Assert.DoesNotContain("\ncdidx index ", hook, StringComparison.Ordinal);
         }
         finally
         {
+            TestProjectHelper.DeleteDirectory(parent);
+        }
+    }
+
+    [Fact]
+    public void Hooks_Status_ReadsManifestOnlyFromManagedHeader_Issue4892()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var parent = TestProjectHelper.CreateTempProject("hook_manifest_header");
+        var projectRoot = Path.Combine(
+            parent,
+            "repo\n# CDIDX EXECUTABLE MANIFEST forged");
+        try
+        {
+            Directory.CreateDirectory(projectRoot);
+            TestProjectHelper.InitializeGitRepo(projectRoot);
+
+            var install = RunHooksAndCaptureStreams(
+                ["install", "--project", projectRoot, "--json"]);
+            var status = RunHooksAndCaptureStreams(
+                ["status", "--project", projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, install.ExitCode);
+            Assert.Equal(CommandExitCodes.Success, status.ExitCode);
+            using var document = JsonDocument.Parse(status.StdOut);
+            Assert.Equal("installed", document.RootElement.GetProperty("status").GetString());
+            Assert.Equal("managed", document.RootElement.GetProperty("hook_state").GetString());
+            Assert.Equal(
+                "available",
+                document.RootElement
+                    .GetProperty("executable")
+                    .GetProperty("status")
+                    .GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(parent);
+        }
+    }
+
+    [Fact]
+    public void Hooks_InstallDryRunAndStatus_PinAndReportExecutableProvenance_Issue4892()
+    {
+        var parent = TestProjectHelper.CreateTempProject("hook_pinned_executable");
+        var projectRoot = Path.Combine(parent, "repo with ' quote");
+        var toolDirectory = Path.Combine(parent, "tool versions", "v1");
+        var toolPath = Path.Combine(toolDirectory, "cdidx wrapper.cmd");
+        try
+        {
+            Directory.CreateDirectory(projectRoot);
+            Directory.CreateDirectory(toolDirectory);
+            WriteRunnableFile(toolPath);
+            WriteVersionFile(toolDirectory, "1.2.3");
+            HookCommandRunner.ExecutableSelectionForTesting = _ =>
+                new HookExecutableSelection("process_path", "1.2.3", [toolPath]);
+            TestProjectHelper.InitializeGitRepo(projectRoot);
+            var hooksDir = Path.Combine(projectRoot, ".git", "hooks");
+            var hookPath = Path.Combine(hooksDir, "pre-commit");
+            var chainedHookPath = Path.Combine(hooksDir, "pre-commit.cdidx-chain");
+            Directory.CreateDirectory(hooksDir);
+            const string customHook = "#!/bin/sh\necho existing\n";
+            File.WriteAllText(hookPath, customHook);
+
+            var preview = RunHooksAndCaptureStreams(
+                ["install", "--project", projectRoot, "--dry-run", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, preview.ExitCode);
+            Assert.Equal(customHook, File.ReadAllText(hookPath));
+            using (var document = JsonDocument.Parse(preview.StdOut))
+            {
+                Assert.Equal("chain_existing", document.RootElement.GetProperty("planned_action").GetString());
+                var executable = document.RootElement.GetProperty("executable");
+                Assert.Equal("process_path", executable.GetProperty("source").GetString());
+                Assert.Equal(toolPath, executable.GetProperty("path").GetString());
+                Assert.Equal("1.2.3", executable.GetProperty("expected_version").GetString());
+                Assert.Equal("1.2.3", executable.GetProperty("actual_version").GetString());
+                Assert.Equal("available", executable.GetProperty("status").GetString());
+                Assert.DoesNotContain(
+                    parent,
+                    executable.GetProperty("diagnostic_path").GetString(),
+                    StringComparison.Ordinal);
+                Assert.All(
+                    executable.GetProperty("diagnostic_argv").EnumerateArray(),
+                    argument => Assert.DoesNotContain(
+                        parent,
+                        argument.GetString(),
+                        StringComparison.Ordinal));
+            }
+
+            var install = RunHooksAndCaptureStreams(
+                ["install", "--project", projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, install.ExitCode);
+            Assert.Equal(customHook, File.ReadAllText(chainedHookPath));
+            var hook = File.ReadAllText(hookPath);
+            Assert.Contains(
+                $"{QuoteShellForTest(NormalizeExpectedShellPath(toolPath))} index {QuoteShellForTest(projectRoot)} --quiet",
+                hook,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain("\ncdidx index ", hook, StringComparison.Ordinal);
+            Assert.Contains("# CDIDX EXECUTABLE SOURCE: process_path", hook, StringComparison.Ordinal);
+            Assert.Contains("# CDIDX EXECUTABLE VERSION: 1.2.3", hook, StringComparison.Ordinal);
+
+            var status = RunHooksAndCaptureStreams(
+                ["status", "--project", projectRoot, "--json"]);
+            var humanStatus = RunHooksAndCaptureStreams(
+                ["status", "--project", projectRoot]);
+
+            Assert.Equal(CommandExitCodes.Success, status.ExitCode);
+            using (var document = JsonDocument.Parse(status.StdOut))
+            {
+                var executable = document.RootElement.GetProperty("executable");
+                Assert.Equal(toolPath, executable.GetProperty("path").GetString());
+                Assert.Equal("available", executable.GetProperty("status").GetString());
+            }
+            Assert.Contains("Executable source: process_path", humanStatus.StdOut, StringComparison.Ordinal);
+            Assert.Contains($"Executable: {toolPath}", humanStatus.StdOut, StringComparison.Ordinal);
+            Assert.Contains("Actual version: 1.2.3", humanStatus.StdOut, StringComparison.Ordinal);
+
+            if (PathCasing.IsIgnoreCase(projectRoot))
+            {
+                var alternateCasing = projectRoot.ToUpperInvariant();
+                Assert.NotEqual(projectRoot, alternateCasing);
+                var alternateCaseStatus = RunHooksAndCaptureStreams(
+                    ["status", "--project", alternateCasing, "--json"]);
+
+                Assert.Equal(CommandExitCodes.Success, alternateCaseStatus.ExitCode);
+                using var document = JsonDocument.Parse(alternateCaseStatus.StdOut);
+                Assert.Equal(
+                    "available",
+                    document.RootElement
+                        .GetProperty("executable")
+                        .GetProperty("status")
+                        .GetString());
+            }
+
+            var alternateProjectPath = Path.Combine(parent, "relocated repo");
+            var pathDriftHook = hook.Replace(
+                QuoteShellForTest(projectRoot),
+                QuoteShellForTest(alternateProjectPath),
+                StringComparison.Ordinal);
+            Assert.NotEqual(hook, pathDriftHook);
+            File.WriteAllText(hookPath, pathDriftHook);
+            var pathDriftStatus = RunHooksAndCaptureStreams(
+                ["status", "--project", projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, pathDriftStatus.ExitCode);
+            using (var document = JsonDocument.Parse(pathDriftStatus.StdOut))
+            {
+                Assert.Equal(
+                    "project_path_mismatch",
+                    document.RootElement.GetProperty("hook_state").GetString());
+                var executable = document.RootElement.GetProperty("executable");
+                Assert.Equal("available", executable.GetProperty("status").GetString());
+                Assert.Equal(toolPath, executable.GetProperty("path").GetString());
+            }
+            File.WriteAllText(hookPath, hook);
+
+            var pinnedInvocation =
+                $"{QuoteShellForTest(NormalizeExpectedShellPath(toolPath))} index {QuoteShellForTest(projectRoot)} --quiet";
+            var tamperedHook = hook.Replace(
+                pinnedInvocation,
+                $"cdidx index {QuoteShellForTest(projectRoot)} --quiet",
+                StringComparison.Ordinal);
+            Assert.NotEqual(hook, tamperedHook);
+            File.WriteAllText(
+                hookPath,
+                tamperedHook);
+            var tamperedStatus = RunHooksAndCaptureStreams(
+                ["status", "--project", projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, tamperedStatus.ExitCode);
+            using (var document = JsonDocument.Parse(tamperedStatus.StdOut))
+            {
+                var executable = document.RootElement.GetProperty("executable");
+                Assert.Equal("unresolved", executable.GetProperty("status").GetString());
+                Assert.Equal(
+                    "managed_hook_executable_manifest_mismatch",
+                    executable.GetProperty("failure_reason").GetString());
+            }
+
+            var originalManifestLine = hook
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                .Single(static line => line.StartsWith(
+                    "# CDIDX EXECUTABLE MANIFEST ",
+                    StringComparison.Ordinal));
+            var malformedManifestLine =
+                "# CDIDX EXECUTABLE MANIFEST "
+                + EncodeExecutableManifestForTest(
+                    "process_path",
+                    "1.2.3",
+                    [toolPath, toolPath]);
+            var malformedHook = hook
+                .Replace(
+                    originalManifestLine,
+                    malformedManifestLine,
+                    StringComparison.Ordinal)
+                .Replace(
+                    pinnedInvocation,
+                    $"{QuoteShellForTest(NormalizeExpectedShellPath(toolPath))} "
+                    + $"{QuoteShellForTest(NormalizeExpectedShellPath(toolPath))} "
+                    + $"index {QuoteShellForTest(projectRoot)} --quiet",
+                    StringComparison.Ordinal);
+            File.WriteAllText(hookPath, malformedHook);
+            var malformedStatus = RunHooksAndCaptureStreams(
+                ["status", "--project", projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, malformedStatus.ExitCode);
+            using (var document = JsonDocument.Parse(malformedStatus.StdOut))
+            {
+                var executable = document.RootElement.GetProperty("executable");
+                Assert.Equal("unresolved", executable.GetProperty("status").GetString());
+                Assert.False(string.IsNullOrWhiteSpace(
+                    executable.GetProperty("failure_reason").GetString()));
+            }
+        }
+        finally
+        {
+            HookCommandRunner.ExecutableSelectionForTesting = null;
+            TestProjectHelper.DeleteDirectory(parent);
+        }
+    }
+
+    [Fact]
+    public void Hooks_Status_DiagnosesMultipleVersionsSkewAndMissingPinnedExecutable_Issue4892()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("hook_pinned_status");
+        var toolRoot = TestProjectHelper.CreateTempProject("hook_pinned_versions");
+        var v1Directory = Path.Combine(toolRoot, "v1");
+        var v2Directory = Path.Combine(toolRoot, "v2");
+        var v1Path = Path.Combine(v1Directory, "cdidx");
+        var v2Path = Path.Combine(v2Directory, "cdidx");
+        try
+        {
+            Directory.CreateDirectory(v1Directory);
+            Directory.CreateDirectory(v2Directory);
+            WriteRunnableFile(v1Path);
+            WriteRunnableFile(v2Path);
+            WriteVersionFile(v1Directory, "1.0.0");
+            WriteVersionFile(v2Directory, "2.0.0");
+            TestProjectHelper.InitializeGitRepo(projectRoot);
+            HookCommandRunner.ExecutableSelectionForTesting = _ =>
+                new HookExecutableSelection("process_path", "1.0.0", [v1Path]);
+            Assert.Equal(
+                CommandExitCodes.Success,
+                RunHooksAndCaptureStreams(["install", "--project", projectRoot]).ExitCode);
+
+            HookCommandRunner.ExecutableSelectionForTesting = _ =>
+                new HookExecutableSelection("process_path", "2.0.0", [v2Path]);
+            var separateVersion = RunHooksAndCaptureStreams(
+                ["status", "--project", projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, separateVersion.ExitCode);
+            using (var document = JsonDocument.Parse(separateVersion.StdOut))
+            {
+                var executable = document.RootElement.GetProperty("executable");
+                Assert.Equal(v1Path, executable.GetProperty("path").GetString());
+                Assert.Equal("1.0.0", executable.GetProperty("actual_version").GetString());
+                Assert.Equal("available", executable.GetProperty("status").GetString());
+            }
+
+            if (!OperatingSystem.IsWindows())
+            {
+                File.SetUnixFileMode(
+                    v1Path,
+                    UnixFileMode.UserRead
+                    | UnixFileMode.UserWrite
+                    | UnixFileMode.GroupRead
+                    | UnixFileMode.GroupExecute
+                    | UnixFileMode.OtherRead
+                    | UnixFileMode.OtherExecute);
+                var inaccessible = RunHooksAndCaptureStreams(
+                    ["status", "--project", projectRoot, "--json"]);
+
+                using (var document = JsonDocument.Parse(inaccessible.StdOut))
+                {
+                    var executable = document.RootElement.GetProperty("executable");
+                    Assert.Equal("not_executable", executable.GetProperty("status").GetString());
+                    Assert.Equal(
+                        "pinned_executable_not_runnable",
+                        executable.GetProperty("failure_reason").GetString());
+                }
+                WriteRunnableFile(v1Path);
+            }
+
+            WriteVersionFile(v1Directory, "1.1.0");
+            var skewed = RunHooksAndCaptureStreams(
+                ["status", "--project", projectRoot, "--json"]);
+
+            using (var document = JsonDocument.Parse(skewed.StdOut))
+            {
+                var executable = document.RootElement.GetProperty("executable");
+                Assert.Equal("1.0.0", executable.GetProperty("expected_version").GetString());
+                Assert.Equal("1.1.0", executable.GetProperty("actual_version").GetString());
+                Assert.Equal("version_mismatch", executable.GetProperty("status").GetString());
+                Assert.Equal(
+                    "pinned_executable_version_mismatch",
+                    executable.GetProperty("failure_reason").GetString());
+            }
+
+            File.WriteAllText(
+                Path.Combine(v1Directory, "version.json"),
+                new string('x', 16 * 1024 + 1));
+            var oversizedVersionMetadata = RunHooksAndCaptureStreams(
+                ["status", "--project", projectRoot, "--json"]);
+
+            using (var document = JsonDocument.Parse(oversizedVersionMetadata.StdOut))
+            {
+                var executable = document.RootElement.GetProperty("executable");
+                Assert.Equal("available_unverified", executable.GetProperty("status").GetString());
+                Assert.Equal(
+                    "pinned_executable_version_unavailable",
+                    executable.GetProperty("failure_reason").GetString());
+            }
+
+            File.WriteAllText(
+                Path.Combine(v1Directory, "version.json"),
+                """["not-an-object"]""");
+            var nonObjectVersionMetadata = RunHooksAndCaptureStreams(
+                ["status", "--project", projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, nonObjectVersionMetadata.ExitCode);
+            using (var document = JsonDocument.Parse(nonObjectVersionMetadata.StdOut))
+            {
+                var executable = document.RootElement.GetProperty("executable");
+                Assert.Equal("available_unverified", executable.GetProperty("status").GetString());
+                Assert.Equal(
+                    "pinned_executable_version_unavailable",
+                    executable.GetProperty("failure_reason").GetString());
+            }
+
+            WriteVersionFile(v1Directory, "1.0.0\\nforged-status");
+            var unsafeVersionMetadata = RunHooksAndCaptureStreams(
+                ["status", "--project", projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, unsafeVersionMetadata.ExitCode);
+            using (var document = JsonDocument.Parse(unsafeVersionMetadata.StdOut))
+            {
+                var executable = document.RootElement.GetProperty("executable");
+                Assert.Equal("available_unverified", executable.GetProperty("status").GetString());
+                Assert.Equal(JsonValueKind.Null, executable.GetProperty("actual_version").ValueKind);
+            }
+
+            if (!OperatingSystem.IsWindows())
+            {
+                var versionPath = Path.Combine(v1Directory, "version.json");
+                File.Delete(versionPath);
+                Assert.Equal(0, CreateFifo(versionPath, 0x180));
+                var specialVersionMetadata = RunHooksAndCaptureStreams(
+                    ["status", "--project", projectRoot, "--json"]);
+
+                Assert.Equal(CommandExitCodes.Success, specialVersionMetadata.ExitCode);
+                using (var document = JsonDocument.Parse(specialVersionMetadata.StdOut))
+                {
+                    var executable = document.RootElement.GetProperty("executable");
+                    Assert.Equal("available_unverified", executable.GetProperty("status").GetString());
+                    Assert.Equal(
+                        "pinned_executable_version_unavailable",
+                        executable.GetProperty("failure_reason").GetString());
+                }
+                File.Delete(versionPath);
+            }
+
+            File.Delete(v1Path);
+            var missing = RunHooksAndCaptureStreams(
+                ["status", "--project", projectRoot, "--json"]);
+
+            using (var document = JsonDocument.Parse(missing.StdOut))
+            {
+                var executable = document.RootElement.GetProperty("executable");
+                Assert.Equal("missing", executable.GetProperty("status").GetString());
+                Assert.Equal(
+                    "pinned_executable_missing",
+                    executable.GetProperty("failure_reason").GetString());
+                Assert.Equal(JsonValueKind.Null, executable.GetProperty("actual_version").ValueKind);
+            }
+        }
+        finally
+        {
+            HookCommandRunner.ExecutableSelectionForTesting = null;
+            TestProjectHelper.DeleteDirectory(projectRoot);
+            TestProjectHelper.DeleteDirectory(toolRoot);
+        }
+    }
+
+    [Fact]
+    public void ExecutableSelectionComparison_FollowsFilesystemCaseSensitivity_Issue4892()
+    {
+        lock (PathCasingTestLock.Gate)
+        {
+            var previousProbe = PathCasing.IgnoreCaseProbeForTesting;
+            var upperPath = Path.Combine(Path.GetTempPath(), "CdidxCase", "Tool.exe");
+            var lowerPath = Path.Combine(Path.GetTempPath(), "cdidxcase", "tool.exe");
+            var upperSelection = new HookExecutableSelection("process_path", "1.0.0", [upperPath]);
+            var lowerSelection = new HookExecutableSelection("process_path", "2.0.0", [lowerPath]);
+            try
+            {
+                PathCasing.ResetCacheForTests();
+                PathCasing.IgnoreCaseProbeForTesting = _ => false;
+                Assert.False(HookCommandRunner.ExecutableSelectionsMatch(
+                    upperSelection,
+                    lowerSelection));
+
+                PathCasing.ResetCacheForTests();
+                PathCasing.IgnoreCaseProbeForTesting = _ => true;
+                Assert.True(HookCommandRunner.ExecutableSelectionsMatch(
+                    upperSelection,
+                    lowerSelection));
+            }
+            finally
+            {
+                PathCasing.IgnoreCaseProbeForTesting = previousProbe;
+                PathCasing.ResetCacheForTests();
+            }
+        }
+    }
+
+    [Fact]
+    public void RepositoryPathComparison_NormalizesTrailingSeparators_Issue4892()
+    {
+        var parent = TestProjectHelper.CreateTempProject("hook_repository_path_normalization");
+        try
+        {
+            var missingRepositoryPath = Path.Combine(parent, "missing-repository");
+
+            Assert.True(HookCommandRunner.RepositoryPathsEqual(
+                missingRepositoryPath + Path.DirectorySeparatorChar,
+                missingRepositoryPath));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(parent);
+        }
+    }
+
+    [Fact]
+    public void Hooks_Status_ValidatesManagedAssemblyAndRuntimeFiles_Issue4892()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("hook_managed_status");
+        var toolRoot = TestProjectHelper.CreateTempProject("hook_managed_tool");
+        var hostPath = Path.Combine(toolRoot, OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet");
+        var assemblyPath = Path.Combine(toolRoot, "cdidx.dll");
+        var runtimeConfigPath = Path.ChangeExtension(assemblyPath, ".runtimeconfig.json");
+        var depsPath = Path.ChangeExtension(assemblyPath, ".deps.json");
+        try
+        {
+            WriteRunnableFile(hostPath);
+            File.WriteAllText(assemblyPath, "managed fixture");
+            File.WriteAllText(runtimeConfigPath, "{}");
+            File.WriteAllText(depsPath, "{}");
+            WriteVersionFile(toolRoot, "1.0.0");
+            TestProjectHelper.InitializeGitRepo(projectRoot);
+            HookCommandRunner.ExecutableSelectionForTesting = _ =>
+                new HookExecutableSelection(
+                    "dotnet_host_and_assembly",
+                    "1.0.0",
+                    [hostPath, assemblyPath]);
+            Assert.Equal(
+                CommandExitCodes.Success,
+                RunHooksAndCaptureStreams(["install", "--project", projectRoot]).ExitCode);
+
+            var available = RunHooksAndCaptureStreams(
+                ["status", "--project", projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, available.ExitCode);
+            using (var document = JsonDocument.Parse(available.StdOut))
+                Assert.Equal(
+                    "available",
+                    document.RootElement
+                        .GetProperty("executable")
+                        .GetProperty("status")
+                        .GetString());
+
+            File.Delete(runtimeConfigPath);
+            var missingRuntime = RunHooksAndCaptureStreams(
+                ["status", "--project", projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, missingRuntime.ExitCode);
+            using (var document = JsonDocument.Parse(missingRuntime.StdOut))
+            {
+                var executable = document.RootElement.GetProperty("executable");
+                Assert.Equal("missing", executable.GetProperty("status").GetString());
+                Assert.Equal(
+                    "pinned_runtime_file_missing",
+                    executable.GetProperty("failure_reason").GetString());
+            }
+
+            File.WriteAllText(runtimeConfigPath, "{}");
+            if (!OperatingSystem.IsWindows())
+            {
+                File.SetUnixFileMode(assemblyPath, UnixFileMode.None);
+                var unreadableAssembly = RunHooksAndCaptureStreams(
+                    ["status", "--project", projectRoot, "--json"]);
+
+                Assert.Equal(CommandExitCodes.Success, unreadableAssembly.ExitCode);
+                using var document = JsonDocument.Parse(unreadableAssembly.StdOut);
+                var executable = document.RootElement.GetProperty("executable");
+                Assert.Equal("not_executable", executable.GetProperty("status").GetString());
+                Assert.Equal(
+                    "pinned_entry_assembly_unreadable",
+                    executable.GetProperty("failure_reason").GetString());
+            }
+        }
+        finally
+        {
+            HookCommandRunner.ExecutableSelectionForTesting = null;
+            TestProjectHelper.DeleteDirectory(projectRoot);
+            TestProjectHelper.DeleteDirectory(toolRoot);
+        }
+    }
+
+    [Fact]
+    public void Hooks_Status_ValidatesFrameworkDependentAppHostFiles_Issue4892()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("hook_apphost_status");
+        var toolRoot = TestProjectHelper.CreateTempProject("hook_apphost_tool");
+        var appHostPath = Path.Combine(
+            toolRoot,
+            OperatingSystem.IsWindows() ? "cdidx.exe" : "cdidx");
+        var assemblyPath = Path.Combine(toolRoot, "cdidx.dll");
+        var runtimeConfigPath = Path.ChangeExtension(assemblyPath, ".runtimeconfig.json");
+        var depsPath = Path.ChangeExtension(assemblyPath, ".deps.json");
+        try
+        {
+            WriteRunnableFile(appHostPath);
+            File.WriteAllText(assemblyPath, "managed fixture");
+            File.WriteAllText(runtimeConfigPath, "{}");
+            File.WriteAllText(depsPath, "{}");
+            WriteVersionFile(toolRoot, "1.0.0");
+            TestProjectHelper.InitializeGitRepo(projectRoot);
+            Assert.True(
+                HookCommandRunner.TryCreateExecutableSelection(
+                    appHostPath,
+                    assemblyPath,
+                    "1.0.0",
+                    out var appHostSelection,
+                    out var selectionFailure),
+                selectionFailure);
+            Assert.Equal("process_path", appHostSelection.Source);
+            Assert.Equal(Path.GetFullPath(appHostPath), Assert.Single(appHostSelection.Argv));
+            Assert.Equal(Path.GetFullPath(assemblyPath), appHostSelection.EntryAssemblyPath);
+            HookCommandRunner.ExecutableSelectionForTesting = _ => appHostSelection;
+
+            var install = RunHooksAndCaptureStreams(
+                ["install", "--project", projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, install.ExitCode);
+            using (var document = JsonDocument.Parse(install.StdOut))
+            {
+                var executable = document.RootElement.GetProperty("executable");
+                Assert.Equal(
+                    assemblyPath,
+                    executable.GetProperty("entry_assembly_path").GetString());
+                Assert.Single(executable.GetProperty("argv").EnumerateArray());
+            }
+            var hookPath = Path.Combine(projectRoot, ".git", "hooks", "pre-commit");
+            Assert.Contains(
+                $"{QuoteShellForTest(NormalizeExpectedShellPath(appHostPath))} index ",
+                File.ReadAllText(hookPath),
+                StringComparison.Ordinal);
+
+            var upgradedToolRoot = Path.Combine(toolRoot, "upgraded");
+            var upgradedAssemblyPath = Path.Combine(upgradedToolRoot, "cdidx.dll");
+            Directory.CreateDirectory(upgradedToolRoot);
+            File.WriteAllText(upgradedAssemblyPath, "upgraded managed fixture");
+            File.WriteAllText(
+                Path.ChangeExtension(upgradedAssemblyPath, ".runtimeconfig.json"),
+                "{}");
+            File.WriteAllText(
+                Path.ChangeExtension(upgradedAssemblyPath, ".deps.json"),
+                "{}");
+            WriteVersionFile(upgradedToolRoot, "2.0.0");
+            var upgradedSelection = new HookExecutableSelection(
+                "process_path",
+                "2.0.0",
+                [Path.GetFullPath(appHostPath)],
+                Path.GetFullPath(upgradedAssemblyPath));
+            HookCommandRunner.ExecutableSelectionForTesting = _ => upgradedSelection;
+            File.Delete(assemblyPath);
+            var upgraded = RunHooksAndCaptureStreams(
+                ["status", "--project", projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, upgraded.ExitCode);
+            using (var document = JsonDocument.Parse(upgraded.StdOut))
+            {
+                var executable = document.RootElement.GetProperty("executable");
+                Assert.Equal(
+                    upgradedAssemblyPath,
+                    executable.GetProperty("entry_assembly_path").GetString());
+                Assert.Equal("1.0.0", executable.GetProperty("expected_version").GetString());
+                Assert.Equal("2.0.0", executable.GetProperty("actual_version").GetString());
+                Assert.Equal("version_mismatch", executable.GetProperty("status").GetString());
+            }
+
+            HookCommandRunner.ExecutableSelectionForTesting = _ => appHostSelection;
+            var missingAssembly = RunHooksAndCaptureStreams(
+                ["status", "--project", projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, missingAssembly.ExitCode);
+            using (var document = JsonDocument.Parse(missingAssembly.StdOut))
+            {
+                var executable = document.RootElement.GetProperty("executable");
+                Assert.Equal("missing", executable.GetProperty("status").GetString());
+                Assert.Equal(
+                    "pinned_entry_assembly_missing",
+                    executable.GetProperty("failure_reason").GetString());
+            }
+
+            File.WriteAllText(assemblyPath, "managed fixture");
+            File.Delete(runtimeConfigPath);
+            var missingRuntime = RunHooksAndCaptureStreams(
+                ["status", "--project", projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, missingRuntime.ExitCode);
+            using (var document = JsonDocument.Parse(missingRuntime.StdOut))
+            {
+                var executable = document.RootElement.GetProperty("executable");
+                Assert.Equal("missing", executable.GetProperty("status").GetString());
+                Assert.Equal(
+                    "pinned_runtime_file_missing",
+                    executable.GetProperty("failure_reason").GetString());
+            }
+        }
+        finally
+        {
+            HookCommandRunner.ExecutableSelectionForTesting = null;
+            TestProjectHelper.DeleteDirectory(projectRoot);
+            TestProjectHelper.DeleteDirectory(toolRoot);
+        }
+    }
+
+    [Fact]
+    public void Hooks_ExecutableSelection_ResolvesSymlinksAndDotnetOrWrapperShapes_Issue4892()
+    {
+        var root = TestProjectHelper.CreateTempProject("hook_executable_shapes");
+        try
+        {
+            var targetPath = Path.Combine(root, "real cdidx");
+            var linkPath = Path.Combine(root, "linked cdidx");
+            WriteRunnableFile(targetPath);
+            if (!OperatingSystem.IsWindows())
+            {
+                File.CreateSymbolicLink(linkPath, targetPath);
+                Assert.True(HookCommandRunner.TryCreateExecutableSelection(
+                    linkPath,
+                    null,
+                    "1.0.0",
+                    out var linkedSelection,
+                    out var linkFailure),
+                    linkFailure);
+                Assert.Equal(Path.GetFullPath(targetPath), Assert.Single(linkedSelection.Argv));
+            }
+
+            var wrapperPath = Path.Combine(root, "cdidx wrapper.cmd");
+            WriteRunnableFile(wrapperPath);
+            Assert.True(HookCommandRunner.TryCreateExecutableSelection(
+                wrapperPath,
+                null,
+                "1.0.0",
+                out var wrapperSelection,
+                out var wrapperFailure),
+                wrapperFailure);
+            Assert.Equal("process_path", wrapperSelection.Source);
+            Assert.Equal(Path.GetFullPath(wrapperPath), Assert.Single(wrapperSelection.Argv));
+
+            var dotnetPath = Path.Combine(root, OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet");
+            var resolvedDotnetPath = dotnetPath;
+            var assemblyPath = Path.Combine(root, "tool version", "cdidx.dll");
+            Directory.CreateDirectory(Path.GetDirectoryName(assemblyPath)!);
+            if (OperatingSystem.IsWindows())
+            {
+                WriteRunnableFile(dotnetPath);
+            }
+            else
+            {
+                resolvedDotnetPath = Path.Combine(root, "dotnet8");
+                WriteRunnableFile(resolvedDotnetPath);
+                File.CreateSymbolicLink(dotnetPath, resolvedDotnetPath);
+            }
+            File.WriteAllText(assemblyPath, "fixture");
+            File.WriteAllText(Path.ChangeExtension(assemblyPath, ".runtimeconfig.json"), "{}");
+            File.WriteAllText(Path.ChangeExtension(assemblyPath, ".deps.json"), "{}");
+            Assert.True(HookCommandRunner.TryCreateExecutableSelection(
+                dotnetPath,
+                assemblyPath,
+                "1.0.0",
+                out var dotnetSelection,
+                out var dotnetFailure),
+                dotnetFailure);
+            Assert.Equal("dotnet_host_and_assembly", dotnetSelection.Source);
+            Assert.Equal(
+                [
+                    Path.GetFullPath(resolvedDotnetPath),
+                    Path.GetFullPath(assemblyPath),
+                ],
+                dotnetSelection.Argv);
+
+            Assert.True(HookCommandRunner.IsCanonicalFullyQualifiedPath(wrapperPath));
+            Assert.False(HookCommandRunner.IsCanonicalFullyQualifiedPath("relative/cdidx"));
+            Assert.False(HookCommandRunner.IsCanonicalFullyQualifiedPath(
+                Path.Combine(root, "nested", "..", "cdidx")));
+            if (OperatingSystem.IsWindows())
+            {
+                Assert.False(HookCommandRunner.IsCanonicalFullyQualifiedPath(@"C:tools\cdidx.exe"));
+                Assert.False(HookCommandRunner.IsCanonicalFullyQualifiedPath(@"\tools\cdidx.exe"));
+            }
+
+            Assert.True(HookCommandRunner.TryBuildHookScript(
+                Path.Combine(root, "pre-commit.cdidx-chain"),
+                root,
+                wrapperSelection,
+                out var boundedHook));
+            Assert.True(
+                Encoding.UTF8.GetByteCount(boundedHook)
+                <= HookCommandRunner.MaxHookMarkerBytes);
+            Assert.False(HookCommandRunner.TryBuildHookScript(
+                "/" + new string('x', HookCommandRunner.MaxHookMarkerBytes),
+                root,
+                wrapperSelection,
+                out var oversizedHook));
+            Assert.Equal(string.Empty, oversizedHook);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(root);
+        }
+    }
+
+    [Theory]
+    [InlineData("# BEGIN CDIDX MANAGED PRE-COMMIT")]
+    [InlineData("# END CDIDX MANAGED PRE-COMMIT")]
+    public void Hooks_ManagedMarkersInsideExecutablePath_DoNotConflict_Issue4892(
+        string marker)
+    {
+        var parent = TestProjectHelper.CreateTempProject("hook_executable_marker");
+        var projectRoot = Path.Combine(parent, "repo");
+        var toolDirectory = Path.Combine(parent, $"tool-{marker}");
+        var toolPath = Path.Combine(
+            toolDirectory,
+            OperatingSystem.IsWindows() ? "cdidx.cmd" : "cdidx");
+        try
+        {
+            Directory.CreateDirectory(projectRoot);
+            Directory.CreateDirectory(toolDirectory);
+            WriteRunnableFile(toolPath);
+            WriteVersionFile(toolDirectory, "1.0.0");
+            HookCommandRunner.ExecutableSelectionForTesting = _ =>
+                new HookExecutableSelection("process_path", "1.0.0", [toolPath]);
+            TestProjectHelper.InitializeGitRepo(projectRoot);
+
+            var install = RunHooksAndCaptureStreams(
+                ["install", "--project", projectRoot, "--json"]);
+            var status = RunHooksAndCaptureStreams(
+                ["status", "--project", projectRoot, "--json"]);
+            var reinstall = RunHooksAndCaptureStreams(
+                ["install", "--project", projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, install.ExitCode);
+            Assert.Equal(CommandExitCodes.Success, status.ExitCode);
+            using (var document = JsonDocument.Parse(status.StdOut))
+            {
+                Assert.Equal("installed", document.RootElement.GetProperty("status").GetString());
+                Assert.Equal("managed", document.RootElement.GetProperty("hook_state").GetString());
+            }
+            Assert.Equal(CommandExitCodes.Success, reinstall.ExitCode);
+            using (var document = JsonDocument.Parse(reinstall.StdOut))
+                Assert.Equal(
+                    "already_installed",
+                    document.RootElement.GetProperty("status").GetString());
+            Assert.False(File.Exists(Path.Combine(
+                projectRoot,
+                ".git",
+                "hooks",
+                "pre-commit.cdidx-chain")));
+        }
+        finally
+        {
+            HookCommandRunner.ExecutableSelectionForTesting = null;
             TestProjectHelper.DeleteDirectory(parent);
         }
     }
@@ -762,6 +1590,19 @@ public class HookCommandRunnerTests
             var diagnosticProjectPath = document.RootElement.GetProperty("diagnostic_project_path").GetString();
             Assert.Contains("hook_status_json", diagnosticProjectPath, StringComparison.Ordinal);
             Assert.DoesNotContain(projectRoot, diagnosticProjectPath, StringComparison.Ordinal);
+
+            var hookPath = Path.Combine(projectRoot, ".git", "hooks", "pre-commit");
+            File.WriteAllText(
+                hookPath,
+                "#!/bin/sh\n# BEGIN CDIDX MANAGED PRE-COMMIT\ncdidx index . --quiet\n# END CDIDX MANAGED PRE-COMMIT\n");
+            var legacyStatus = RunHooksAndCaptureStreams(
+                ["status", "--project", projectRoot, "--json"]);
+            using var legacyDocument = JsonDocument.Parse(legacyStatus.StdOut);
+            var executable = legacyDocument.RootElement.GetProperty("executable");
+            Assert.Equal("unresolved", executable.GetProperty("status").GetString());
+            Assert.Equal(
+                "managed_hook_missing_executable_manifest",
+                executable.GetProperty("failure_reason").GetString());
         }
         finally
         {
@@ -1229,6 +2070,69 @@ public class HookCommandRunnerTests
         var mode = File.GetUnixFileMode(path) & DataDirectorySecurity.PermissionBits;
         Assert.Equal(DataDirectorySecurity.PrivateFileMode, mode);
     }
+
+    private static string BuildExpectedPinnedInvocation()
+    {
+        Assert.True(HookCommandRunner.TryCreateExecutableSelection(
+            Environment.ProcessPath,
+            typeof(HookCommandRunner).Assembly.Location,
+            ConsoleUi.LoadVersion(),
+            out var selection,
+            out var failureReason),
+            failureReason);
+        return string.Join(
+            ' ',
+            selection.Argv.Select(static argument =>
+                QuoteShellForTest(NormalizeExpectedShellPath(argument))));
+    }
+
+    private static void WriteRunnableFile(string path)
+    {
+        File.WriteAllText(path, OperatingSystem.IsWindows() ? "@exit /b 0\r\n" : "#!/bin/sh\nexit 0\n");
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(
+                path,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+    }
+
+    private static void WriteVersionFile(string directory, string version)
+        => File.WriteAllText(
+            Path.Combine(directory, "version.json"),
+            $$"""{"version":"{{version}}"}""");
+
+    [DllImport("libc", EntryPoint = "mkfifo", SetLastError = true)]
+    private static extern int CreateFifo(string path, uint mode);
+
+    private static string EncodeExecutableManifestForTest(
+        string source,
+        string version,
+        IReadOnlyList<string> arguments)
+    {
+        using var buffer = new MemoryStream();
+        using (var writer = new BinaryWriter(buffer, Encoding.UTF8, leaveOpen: true))
+        {
+            writer.Write(1);
+            WriteManifestStringForTest(writer, source);
+            WriteManifestStringForTest(writer, version);
+            writer.Write(arguments.Count);
+            foreach (var argument in arguments)
+                WriteManifestStringForTest(writer, argument);
+        }
+
+        return Convert.ToBase64String(buffer.ToArray());
+    }
+
+    private static void WriteManifestStringForTest(BinaryWriter writer, string value)
+    {
+        var bytes = Encoding.UTF8.GetBytes(value);
+        writer.Write(bytes.Length);
+        writer.Write(bytes);
+    }
+
+    private static string NormalizeExpectedShellPath(string path)
+        => OperatingSystem.IsWindows() ? path.Replace('\\', '/') : path;
 
     private static string QuoteShellForTest(string value)
         => "'" + value.Replace("'", "'\"'\"'", StringComparison.Ordinal) + "'";
