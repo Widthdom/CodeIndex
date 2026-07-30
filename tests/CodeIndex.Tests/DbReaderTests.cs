@@ -5707,8 +5707,11 @@ public partial class DbReaderTests : IDisposable
         // the DB is merely "degraded due to stale stamp".
         // Issue #1515: stored > current の数値 contract を「未来 DB」として明示する。
         _writer.SetMeta(
+            DbWriter.FtsIncrementalWritesSinceOptimizeMetaKey,
+            DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold.ToString(CultureInfo.InvariantCulture));
+        _writer.SetMeta(
             DbContext.GetMetadataTargetVersionMetaKey("csharp"),
-            (DbContext.MetadataTargetVersion + 1).ToString(System.Globalization.CultureInfo.InvariantCulture));
+            (DbContext.MetadataTargetVersion + 1).ToString(CultureInfo.InvariantCulture));
         _writer.WriteCdidxWriterVersion("9.99.0");
         var freshReader = new DbReader(_db.Connection);
 
@@ -5718,6 +5721,20 @@ public partial class DbReaderTests : IDisposable
         Assert.NotNull(status.IndexNewerThanReaderReason);
         Assert.Contains("metadata_target_version_csharp", status.IndexNewerThanReaderReason);
         Assert.Equal("9.99.0", status.IndexWriterVersion);
+        var statusRecommendation = status.MaintenanceGuidance.FtsOptimization;
+        Assert.False(statusRecommendation.Recommended);
+        Assert.Equal(
+            FtsOptimizationRecommendationEvaluator.MaintenanceSnapshotStaleReason,
+            statusRecommendation.Reason);
+
+        using var focusedDb = new DbContext(DbOpenIntent.QueryOnly, _dbPath);
+        var focusedRecommendation = focusedDb.GetFtsOptimizationRecommendation();
+        Assert.Equal(statusRecommendation.Recommended, focusedRecommendation.Recommended);
+        Assert.Equal(statusRecommendation.Action, focusedRecommendation.Action);
+        Assert.Equal(statusRecommendation.Reason, focusedRecommendation.Reason);
+        Assert.Equal(statusRecommendation.ThresholdWrites, focusedRecommendation.ThresholdWrites);
+        Assert.Equal(statusRecommendation.ObservedWrites, focusedRecommendation.ObservedWrites);
+        Assert.Equal(statusRecommendation.State, focusedRecommendation.State);
     }
 
     [Theory]
@@ -5752,6 +5769,9 @@ public partial class DbReaderTests : IDisposable
         // mask therefore indicate the DB was written by a newer binary, even if every numeric
         // meta contract still equals the older binary's compiled max.
         // Issue #1515: CurrentSchemaVersion マスク外の bit も「未来 DB」シグナルにする。
+        _writer.SetMeta(
+            DbWriter.FtsIncrementalWritesSinceOptimizeMetaKey,
+            DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold.ToString(CultureInfo.InvariantCulture));
         var unknownBit = (DbContext.CurrentSchemaVersion + 1) | DbContext.CurrentSchemaVersion;
         using (var cmd = _db.Connection.CreateCommand())
         {
@@ -5765,6 +5785,29 @@ public partial class DbReaderTests : IDisposable
         Assert.True(status.IndexNewerThanReader);
         Assert.NotNull(status.IndexNewerThanReaderReason);
         Assert.Contains("user_version_bits", status.IndexNewerThanReaderReason);
+        Assert.False(status.MaintenanceGuidance.FtsOptimization.Recommended);
+        Assert.Equal(
+            FtsOptimizationRecommendationEvaluator.NoAction,
+            status.MaintenanceGuidance.FtsOptimization.Action);
+        Assert.Equal(
+            FtsOptimizationRecommendationEvaluator.MaintenanceSnapshotStaleReason,
+            status.MaintenanceGuidance.FtsOptimization.Reason);
+        Assert.Equal(
+            FtsOptimizationRecommendationEvaluator.StaleState,
+            status.MaintenanceGuidance.FtsOptimization.State);
+        Assert.Equal(
+            DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold,
+            status.MaintenanceGuidance.FtsOptimization.ObservedWrites);
+
+        using var focusedDb = new DbContext(DbOpenIntent.QueryOnly, _dbPath);
+        var focusedRecommendation = focusedDb.GetFtsOptimizationRecommendation();
+        Assert.False(focusedRecommendation.Recommended);
+        Assert.Equal(
+            FtsOptimizationRecommendationEvaluator.MaintenanceSnapshotStaleReason,
+            focusedRecommendation.Reason);
+        Assert.Equal(
+            FtsOptimizationRecommendationEvaluator.StaleState,
+            focusedRecommendation.State);
     }
 
     [Fact]

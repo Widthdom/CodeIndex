@@ -184,7 +184,9 @@ internal static class MaintenanceGuidanceBuilder
             ? vacuumCommand
             : walState == "checkpoint_recommended"
                 ? checkpointCommand
-                : ftsOptimization.Recommended
+                : walState == "ok"
+                    && freelistState == "ok"
+                    && ftsOptimization.Recommended
                     ? optimizeCommand
                     : "none";
 

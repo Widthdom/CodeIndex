@@ -140,6 +140,7 @@ public partial class DbReader
             TryGetMetaStringInternal(DbWriter.FtsIncrementalWritesSinceOptimizeMetaKey));
         var maintenanceSnapshotCurrent = ParseMetaBool(
             TryGetMetaStringInternal(DbContext.BatchInProgressMetaKey)) != true
+            && !_indexNewerThanReader
             && !WalStaleSnapshotRisk;
         var ftsOptimization = FtsOptimizationRecommendationEvaluator.Evaluate(
             new FtsOptimizationMetrics(

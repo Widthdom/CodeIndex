@@ -4007,6 +4007,36 @@ public class DatabaseTests : IDisposable
     }
 
     [Theory]
+    [InlineData(null, 0L, "unknown", "ok")]
+    [InlineData(0L, null, "ok", "unknown")]
+    public void MaintenanceGuidance_FtsThresholdDoesNotRecommendWhenHigherPriorityStateIsUnknown_Issue4887(
+        long? walSizeBytes,
+        long? freelistCount,
+        string expectedWalState,
+        string expectedFreelistState)
+    {
+        var ftsOptimization = FtsOptimizationRecommendationEvaluator.Evaluate(
+            new FtsOptimizationMetrics(
+                DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold,
+                PageCount: 100,
+                SnapshotCurrent: true));
+        var guidance = MaintenanceGuidanceBuilder.Build(
+            new MaintenanceMetrics(
+                PageCount: 100,
+                FreelistCount: freelistCount,
+                PageSize: 4096,
+                WalSizeBytes: walSizeBytes,
+                DbSizeBytes: 409_600,
+                AutoVacuumMode: 2),
+            ftsOptimization: ftsOptimization);
+
+        Assert.True(guidance.FtsOptimization.Recommended);
+        Assert.Equal(expectedWalState, guidance.WalState);
+        Assert.Equal(expectedFreelistState, guidance.FreelistState);
+        Assert.Equal("none", guidance.RecommendedCommand);
+    }
+
+    [Theory]
     [InlineData(24, false, "none", "incremental_write_threshold_not_reached")]
     [InlineData(25, true, "optimize", "incremental_write_threshold_reached")]
     [InlineData(26, true, "optimize", "incremental_write_threshold_reached")]

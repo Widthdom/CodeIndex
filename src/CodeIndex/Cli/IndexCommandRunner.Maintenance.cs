@@ -89,7 +89,8 @@ public static partial class IndexCommandRunner
             options.DryRun,
             forceLogicalObjectSizeFallbackForTesting,
             options.ShowPaths,
-            diagnosticDbPath: options.DbPath);
+            diagnosticDbPath: options.DbPath,
+            queryOnlyDbPath: options.DryRun ? options.DbPath : null);
     }
 
     private static int RunOptimizeFtsForDb(
@@ -100,12 +101,14 @@ public static partial class IndexCommandRunner
         bool dryRun = false,
         bool forceLogicalObjectSizeFallbackForTesting = false,
         bool showPaths = false,
-        string? diagnosticDbPath = null)
+        string? diagnosticDbPath = null,
+        string? queryOnlyDbPath = null)
     {
         var errorDbPath = diagnosticDbPath ?? dbPath;
         if (dryRun)
             return RunOptimizeFtsPreviewForDb(
                 dbPath,
+                queryOnlyDbPath ?? dbPath,
                 json,
                 jsonOptions,
                 forceLogicalObjectSizeFallbackForTesting,
@@ -212,6 +215,7 @@ public static partial class IndexCommandRunner
 
     private static int RunOptimizeFtsPreviewForDb(
         string dbPath,
+        string queryOnlyDbPath,
         bool json,
         JsonSerializerOptions jsonOptions,
         bool forceLogicalObjectSizeFallbackForTesting,
@@ -234,7 +238,7 @@ public static partial class IndexCommandRunner
         try
         {
             var (lockState, lockHolder) = IndexLock.ProbeReadOnly(IndexLock.GetLockPath(dbPath));
-            using var db = new DbContext(DbOpenIntent.QueryOnly, dbPath);
+            using var db = new DbContext(DbOpenIntent.QueryOnly, queryOnlyDbPath);
             if (!db.TryValidateIsCodeIndexDb(out _))
             {
                 return MaintenanceDatabaseErrorWriter.Write(

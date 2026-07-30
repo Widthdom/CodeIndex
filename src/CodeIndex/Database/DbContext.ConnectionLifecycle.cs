@@ -438,11 +438,17 @@ public partial class DbContext : IDisposable
             metadata[BatchInProgressMetaKey],
             out var parsedBatchInProgress)
                 && parsedBatchInProgress;
+        var userVersion = checked((int)ReadPragmaLong("user_version"));
+        var indexNewerThanReader = DbReader.DetectNewerThanReaderContracts(
+            _connection,
+            userVersion).Newer;
         var recommendation = FtsOptimizationRecommendationEvaluator.Evaluate(
             new FtsOptimizationMetrics(
                 incrementalWrites,
                 ReadPragmaLong("page_count"),
-                SnapshotCurrent: !batchInProgress && !WalStaleSnapshotRisk));
+                SnapshotCurrent: !batchInProgress
+                    && !indexNewerThanReader
+                    && !WalStaleSnapshotRisk));
         transaction.Commit();
         return recommendation;
     }
