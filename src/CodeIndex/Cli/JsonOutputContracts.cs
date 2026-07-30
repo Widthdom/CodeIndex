@@ -30,6 +30,8 @@ internal sealed record OptimizeFtsJsonResult(
     [property: JsonPropertyName("db_path")] string DbPath,
     [property: JsonPropertyName("writes_since_optimize_before")] int WritesSinceOptimizeBefore,
     [property: JsonPropertyName("writes_since_optimize_after")] int WritesSinceOptimizeAfter,
+    [property: JsonPropertyName("fts_optimization_before")] FtsOptimizationRecommendation FtsOptimizationBefore,
+    [property: JsonPropertyName("fts_optimization_after")] FtsOptimizationRecommendation FtsOptimizationAfter,
     [property: JsonPropertyName("elapsed_ms")] long ElapsedMs,
     [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion) : IVersionedJsonResult;
 
@@ -61,6 +63,7 @@ internal sealed class OptimizeFtsPreviewJsonResult : IVersionedJsonResult
     public bool WouldAcquireExclusiveIndexLock { get; init; }
     public bool OptimizationRecommended { get; init; }
     public string RecommendationReason { get; init; } = string.Empty;
+    public FtsOptimizationRecommendation FtsOptimization { get; init; } = new();
     public OptimizeFtsReadinessJsonResult? Readiness { get; init; }
     public List<string>? PlannedOperations { get; init; }
     public bool SourceDatabaseUnchanged { get; init; }
@@ -1335,6 +1338,7 @@ internal sealed record ValidateConfigJsonResult(
 [JsonSerializable(typeof(StatusDbPragmaSettings))]
 [JsonSerializable(typeof(StatusLastIndexRun))]
 [JsonSerializable(typeof(StatusMaintenanceGuidance))]
+[JsonSerializable(typeof(FtsOptimizationRecommendation))]
 [JsonSerializable(typeof(StatusProcessMetrics))]
 [JsonSerializable(typeof(StatusRepairCommand))]
 [JsonSerializable(typeof(StatusUnknownExtensionGroup))]

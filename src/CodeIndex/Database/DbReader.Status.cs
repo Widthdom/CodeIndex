@@ -136,13 +136,21 @@ public partial class DbReader
         var preparedCommandCache = GetPreparedCommandCacheStatus();
         var dbSizeBytes = TryGetDatabaseFileSize();
         var walSizeBytes = TryGetWalFileSize();
+        var ftsIncrementalWritesSinceOptimize = ParseMetaLong(
+            TryGetMetaStringInternal(DbWriter.FtsIncrementalWritesSinceOptimizeMetaKey));
+        var maintenanceSnapshotCurrent = ParseMetaBool(
+            TryGetMetaStringInternal(DbContext.BatchInProgressMetaKey)) != true;
         var maintenanceGuidance = MaintenanceGuidanceBuilder.Build(new MaintenanceMetrics(
             dbPragmaSettings.PageCount,
             dbPragmaSettings.FreelistCount,
             dbPragmaSettings.PageSize,
             walSizeBytes,
             dbSizeBytes,
-            dbPragmaSettings.AutoVacuum));
+            dbPragmaSettings.AutoVacuum),
+            ftsOptimizationMetrics: new FtsOptimizationMetrics(
+                ftsIncrementalWritesSinceOptimize,
+                dbPragmaSettings.PageCount,
+                maintenanceSnapshotCurrent));
         var lastIndexRun = GetLastIndexRun();
         var referenceExtractionCapHits = GetReferenceExtractionCapHits();
         var persistedReadiness = GetPersistedIndexGenerationReadiness(

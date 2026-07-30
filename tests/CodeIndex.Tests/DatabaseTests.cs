@@ -3984,6 +3984,93 @@ public class DatabaseTests : IDisposable
         Assert.Null(guidance.EstimatedBytesReclaimable);
     }
 
+    [Theory]
+    [InlineData(24, false, "none", "incremental_write_threshold_not_reached")]
+    [InlineData(25, true, "optimize", "incremental_write_threshold_reached")]
+    [InlineData(26, true, "optimize", "incremental_write_threshold_reached")]
+    public void FtsOptimizationRecommendation_UsesExactWriteThreshold_Issue4887(
+        long observedWrites,
+        bool expectedRecommended,
+        string expectedAction,
+        string expectedReason)
+    {
+        var recommendation = FtsOptimizationRecommendationEvaluator.Evaluate(
+            new FtsOptimizationMetrics(
+                observedWrites,
+                PageCount: 100,
+                SnapshotCurrent: true));
+
+        Assert.Equal(expectedRecommended, recommendation.Recommended);
+        Assert.Equal(expectedAction, recommendation.Action);
+        Assert.Equal(expectedReason, recommendation.Reason);
+        Assert.Equal(DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold, recommendation.ThresholdWrites);
+        Assert.Equal(observedWrites, recommendation.ObservedWrites);
+        Assert.Equal("current", recommendation.State);
+    }
+
+    [Theory]
+    [InlineData(null, 100L, true, "incremental_write_count_unavailable", "unavailable")]
+    [InlineData(57L, null, true, "page_count_unavailable", "unavailable")]
+    [InlineData(57L, 100L, false, "maintenance_snapshot_stale", "stale")]
+    public void FtsOptimizationRecommendation_UntrustedStateIsNeverRecommended_Issue4887(
+        long? observedWrites,
+        long? pageCount,
+        bool snapshotCurrent,
+        string expectedReason,
+        string expectedState)
+    {
+        var recommendation = FtsOptimizationRecommendationEvaluator.Evaluate(
+            new FtsOptimizationMetrics(observedWrites, pageCount, snapshotCurrent));
+
+        Assert.False(recommendation.Recommended);
+        Assert.Equal("none", recommendation.Action);
+        Assert.Equal(expectedReason, recommendation.Reason);
+        Assert.Equal(DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold, recommendation.ThresholdWrites);
+        Assert.Equal(Math.Max(0, observedWrites ?? 0), recommendation.ObservedWrites);
+        Assert.Equal(expectedState, recommendation.State);
+    }
+
+    [Fact]
+    public void StatusFtsOptimization_ReadOnlySnapshotUsesCounterAndRejectsStaleBatch_Issue4887()
+    {
+        _writer.SetMeta(
+            DbWriter.FtsIncrementalWritesSinceOptimizeMetaKey,
+            DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold.ToString(CultureInfo.InvariantCulture));
+
+        var dbBytesBeforeStatus = File.ReadAllBytes(_dbPath);
+        using (var readOnlyDb = new DbContext(DbOpenIntent.QueryOnly, _dbPath))
+        {
+            var current = new DbReader(readOnlyDb).GetStatus().MaintenanceGuidance.FtsOptimization;
+
+            Assert.True(current.Recommended);
+            Assert.Equal("optimize", current.Action);
+            Assert.Equal("incremental_write_threshold_reached", current.Reason);
+            Assert.Equal(DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold, current.ThresholdWrites);
+            Assert.Equal(DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold, current.ObservedWrites);
+            Assert.Equal("current", current.State);
+        }
+        Assert.Equal(dbBytesBeforeStatus, File.ReadAllBytes(_dbPath));
+
+        _writer.MarkBatchInProgress();
+        try
+        {
+            var dbBytesBeforeStaleStatus = File.ReadAllBytes(_dbPath);
+            using var staleDb = new DbContext(DbOpenIntent.QueryOnly, _dbPath);
+            var stale = new DbReader(staleDb).GetStatus().MaintenanceGuidance.FtsOptimization;
+            Assert.False(stale.Recommended);
+            Assert.Equal("none", stale.Action);
+            Assert.Equal("maintenance_snapshot_stale", stale.Reason);
+            Assert.Equal(DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold, stale.ThresholdWrites);
+            Assert.Equal(DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold, stale.ObservedWrites);
+            Assert.Equal("stale", stale.State);
+            Assert.Equal(dbBytesBeforeStaleStatus, File.ReadAllBytes(_dbPath));
+        }
+        finally
+        {
+            _writer.ClearBatchInProgress();
+        }
+    }
+
     private static int GetTransactionDepth(DbWriter writer)
     {
         var field = typeof(DbWriter).GetField("_transactionDepth", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)

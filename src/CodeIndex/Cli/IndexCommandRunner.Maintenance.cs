@@ -139,16 +139,25 @@ public static partial class IndexCommandRunner
             using var db = new DbContext(DbOpenIntent.Repair, dbPath);
             db.InitializeSchema();
             var writer = new DbWriter(db);
-            var before = writer.GetFtsIncrementalWritesSinceOptimize();
+            var beforeRecommendation = new DbReader(db).GetStatus().MaintenanceGuidance.FtsOptimization;
+            var before = checked((int)Math.Min(beforeRecommendation.ObservedWrites, int.MaxValue));
             writer.OptimizeFts();
             stopwatch.Stop();
-            var after = writer.GetFtsIncrementalWritesSinceOptimize();
+            var afterRecommendation = new DbReader(db).GetStatus().MaintenanceGuidance.FtsOptimization;
+            var after = checked((int)Math.Min(afterRecommendation.ObservedWrites, int.MaxValue));
 
             if (json)
             {
                 var jsonContext = CliJsonSerializerContextFactory.Create(jsonOptions);
                 CommandOutputWriter.WriteLine(JsonSerializer.Serialize(
-                    new OptimizeFtsJsonResult("success", dbPath, before, after, stopwatch.ElapsedMilliseconds),
+                    new OptimizeFtsJsonResult(
+                        "success",
+                        dbPath,
+                        before,
+                        after,
+                        beforeRecommendation,
+                        afterRecommendation,
+                        stopwatch.ElapsedMilliseconds),
                     jsonContext.OptimizeFtsJsonResult));
             }
             else
@@ -157,6 +166,14 @@ public static partial class IndexCommandRunner
                 CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("DB", dbPath, indent: "  "));
                 CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Writes before", before.ToString("N0", System.Globalization.CultureInfo.InvariantCulture), indent: "  "));
                 CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Writes after", after.ToString("N0", System.Globalization.CultureInfo.InvariantCulture), indent: "  "));
+                CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine(
+                    "Recommended before",
+                    FormatFtsOptimizationRecommendation(beforeRecommendation),
+                    indent: "  "));
+                CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine(
+                    "Recommended after",
+                    FormatFtsOptimizationRecommendation(afterRecommendation),
+                    indent: "  "));
                 CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Elapsed", ConsoleUi.FormatDuration(stopwatch.Elapsed), indent: "  "));
             }
 
@@ -236,8 +253,6 @@ public static partial class IndexCommandRunner
                 forceLogicalObjectSizeFallbackForTesting,
                 out var objectSizesMeasurement,
                 out var objectSizesUnavailableReason);
-            var writesSinceOptimize = ParseNonNegativeLong(
-                db.GetMetaString(DbWriter.FtsIncrementalWritesSinceOptimizeMetaKey));
             var estimatedDurationMs = ParseNullableNonNegativeLong(
                 db.GetMetaString(DbWriter.FtsLastOptimizeDurationMsMetaKey));
             var coreTableSizeBytes = SumObjectSizes(
@@ -252,7 +267,8 @@ public static partial class IndexCommandRunner
             var ftsSizeBytes = SumObjectSizes(
                 objectSizes,
                 OptimizeFtsObjectNames);
-            var optimizationRecommended = writesSinceOptimize >= DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold;
+            var ftsOptimization = status.MaintenanceGuidance.FtsOptimization;
+            var writesSinceOptimize = ftsOptimization.ObservedWrites;
             stopwatch.Stop();
 
             var result = new OptimizeFtsPreviewJsonResult
@@ -280,10 +296,9 @@ public static partial class IndexCommandRunner
                 LockState = lockState,
                 LockHolderVerification = lockHolder?.Verification.ToString().ToLowerInvariant(),
                 WouldAcquireExclusiveIndexLock = true,
-                OptimizationRecommended = optimizationRecommended,
-                RecommendationReason = optimizationRecommended
-                    ? "incremental_write_threshold_reached"
-                    : "incremental_write_threshold_not_reached",
+                OptimizationRecommended = ftsOptimization.Recommended,
+                RecommendationReason = ftsOptimization.Reason,
+                FtsOptimization = ftsOptimization,
                 Readiness = new OptimizeFtsReadinessJsonResult
                 {
                     FoldReady = status.FoldReady,
@@ -336,7 +351,10 @@ public static partial class IndexCommandRunner
                         ? ConsoleUi.FormatDuration(TimeSpan.FromMilliseconds(durationEstimateMs))
                         : "unavailable",
                     indent: "  "));
-                CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Recommended", result.OptimizationRecommended ? "yes" : "not yet", indent: "  "));
+                CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine(
+                    "Recommended",
+                    FormatFtsOptimizationRecommendation(result.FtsOptimization),
+                    indent: "  "));
                 CommandOutputWriter.WriteLine("  Planned operations:");
                 foreach (var operation in result.PlannedOperations ?? [])
                     CommandOutputWriter.WriteLine($"    - {operation}");
@@ -467,15 +485,14 @@ public static partial class IndexCommandRunner
         return total;
     }
 
-    private static long ParseNonNegativeLong(string? value)
-        => long.TryParse(
-            value,
-            System.Globalization.NumberStyles.Integer,
-            System.Globalization.CultureInfo.InvariantCulture,
-            out var parsed)
-            && parsed > 0
-                ? parsed
-                : 0;
+    private static string FormatFtsOptimizationRecommendation(FtsOptimizationRecommendation recommendation)
+    {
+        var culture = System.Globalization.CultureInfo.InvariantCulture;
+        return $"{(recommendation.Recommended ? "yes" : "no")} " +
+            $"(action={recommendation.Action}; reason={recommendation.Reason}; " +
+            $"threshold={recommendation.ThresholdWrites.ToString("N0", culture)}; " +
+            $"observed={recommendation.ObservedWrites.ToString("N0", culture)}; state={recommendation.State})";
+    }
 
     private static long? ParseNullableNonNegativeLong(string? value)
         => long.TryParse(

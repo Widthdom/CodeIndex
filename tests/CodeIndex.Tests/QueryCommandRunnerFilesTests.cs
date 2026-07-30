@@ -1805,6 +1805,23 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunStatus_Explain_MaintenanceGuidanceDescribesSharedOptimizationDecision_Issue4887()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+            ["--explain", "maintenance_guidance"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Contains("Database maintenance guidance (maintenance_guidance)", stdout);
+        Assert.Contains("fts_optimization", stdout);
+        Assert.Contains("threshold_writes", stdout);
+        Assert.Contains("observed_writes", stdout);
+        Assert.Contains("state=stale", stdout);
+        Assert.Contains("optimize --dry-run", stdout);
+    }
+
+    [Fact]
     public void RunStatus_Explain_PrintsHeadFreshnessFieldDescriptionWithoutDatabase_Issue3911()
     {
         var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
@@ -1888,6 +1905,7 @@ public partial class QueryCommandRunnerTests
         Assert.Contains("path_case_sensitive", json.GetProperty("known_fields").EnumerateArray().Select(item => item.GetString()));
         Assert.Contains("sqlite_connection_policy", json.GetProperty("known_fields").EnumerateArray().Select(item => item.GetString()));
         Assert.Contains("git_executable", json.GetProperty("known_fields").EnumerateArray().Select(item => item.GetString()));
+        Assert.Contains("maintenance_guidance", json.GetProperty("known_fields").EnumerateArray().Select(item => item.GetString()));
 
         var (policyExitCode, policyStdout, policyStderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
             ["--explain", "sqlite_connection_policy", "--json"],

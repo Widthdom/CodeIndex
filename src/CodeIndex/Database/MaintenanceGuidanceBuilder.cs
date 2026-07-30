@@ -28,6 +28,8 @@ public sealed class StatusMaintenanceGuidance
     [JsonPropertyName("auto_vacuum_mode_name")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? AutoVacuumModeName { get; set; }
+    [JsonPropertyName("fts_optimization")]
+    public FtsOptimizationRecommendation FtsOptimization { get; set; } = new();
     [JsonPropertyName("recommended_command")]
     public string RecommendedCommand { get; set; } = "none";
     [JsonPropertyName("post_maintenance_follow_up")]
@@ -43,6 +45,108 @@ internal readonly record struct MaintenanceMetrics(
     long? DbSizeBytes,
     long? AutoVacuumMode);
 
+public sealed class FtsOptimizationRecommendation
+{
+    [JsonPropertyName("recommended")]
+    public bool Recommended { get; init; }
+    [JsonPropertyName("action")]
+    public string Action { get; init; } = FtsOptimizationRecommendationEvaluator.NoAction;
+    [JsonPropertyName("reason")]
+    public string Reason { get; init; } = FtsOptimizationRecommendationEvaluator.IncrementalWriteCountUnavailableReason;
+    [JsonPropertyName("threshold_writes")]
+    public int ThresholdWrites { get; init; } = DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold;
+    [JsonPropertyName("observed_writes")]
+    public long ObservedWrites { get; init; }
+    [JsonPropertyName("state")]
+    public string State { get; init; } = FtsOptimizationRecommendationEvaluator.UnavailableState;
+}
+
+internal readonly record struct FtsOptimizationMetrics(
+    long? IncrementalWritesSinceOptimize,
+    long? PageCount,
+    bool SnapshotCurrent);
+
+internal static class FtsOptimizationRecommendationEvaluator
+{
+    public const string OptimizeAction = "optimize";
+    public const string NoAction = "none";
+    public const string IncrementalWriteThresholdReachedReason = "incremental_write_threshold_reached";
+    public const string IncrementalWriteThresholdNotReachedReason = "incremental_write_threshold_not_reached";
+    public const string IncrementalWriteCountUnavailableReason = "incremental_write_count_unavailable";
+    public const string PageCountUnavailableReason = "page_count_unavailable";
+    public const string MaintenanceSnapshotStaleReason = "maintenance_snapshot_stale";
+    public const string CurrentState = "current";
+    public const string StaleState = "stale";
+    public const string UnavailableState = "unavailable";
+
+    public static FtsOptimizationRecommendation Evaluate(
+        FtsOptimizationMetrics metrics,
+        int thresholdWrites = DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold)
+    {
+        if (thresholdWrites <= 0)
+            throw new ArgumentOutOfRangeException(nameof(thresholdWrites));
+
+        var observedWrites = metrics.IncrementalWritesSinceOptimize is >= 0
+            ? metrics.IncrementalWritesSinceOptimize.Value
+            : 0;
+
+        if (!metrics.SnapshotCurrent)
+            return Build(
+                recommended: false,
+                NoAction,
+                MaintenanceSnapshotStaleReason,
+                thresholdWrites,
+                observedWrites,
+                StaleState);
+
+        if (metrics.PageCount is null or <= 0)
+            return Build(
+                recommended: false,
+                NoAction,
+                PageCountUnavailableReason,
+                thresholdWrites,
+                observedWrites,
+                UnavailableState);
+
+        if (metrics.IncrementalWritesSinceOptimize is null or < 0)
+            return Build(
+                recommended: false,
+                NoAction,
+                IncrementalWriteCountUnavailableReason,
+                thresholdWrites,
+                observedWrites,
+                UnavailableState);
+
+        var recommended = observedWrites >= thresholdWrites;
+        return Build(
+            recommended,
+            recommended ? OptimizeAction : NoAction,
+            recommended
+                ? IncrementalWriteThresholdReachedReason
+                : IncrementalWriteThresholdNotReachedReason,
+            thresholdWrites,
+            observedWrites,
+            CurrentState);
+    }
+
+    private static FtsOptimizationRecommendation Build(
+        bool recommended,
+        string action,
+        string reason,
+        int thresholdWrites,
+        long observedWrites,
+        string state) =>
+        new()
+        {
+            Recommended = recommended,
+            Action = action,
+            Reason = reason,
+            ThresholdWrites = thresholdWrites,
+            ObservedWrites = observedWrites,
+            State = state,
+        };
+}
+
 internal static class MaintenanceGuidanceBuilder
 {
     public const string WalWarnBytesEnvironmentVariable = "CDIDX_MAINTENANCE_WAL_WARN_BYTES";
@@ -54,7 +158,8 @@ internal static class MaintenanceGuidanceBuilder
     public static StatusMaintenanceGuidance Build(
         MaintenanceMetrics metrics,
         string vacuumCommand = "cdidx vacuum --db <db>",
-        string checkpointCommand = "sqlite3 <db> \"PRAGMA wal_checkpoint(TRUNCATE);\"")
+        string checkpointCommand = "sqlite3 <db> \"PRAGMA wal_checkpoint(TRUNCATE);\"",
+        FtsOptimizationMetrics? ftsOptimizationMetrics = null)
     {
         var walThresholdBytes = ReadPositiveLongEnvironment(WalWarnBytesEnvironmentVariable, DefaultWalWarnBytes);
         var freelistThresholdRatio = ReadRatioEnvironment(FreelistWarnRatioEnvironmentVariable, DefaultFreelistWarnRatio);
@@ -86,6 +191,11 @@ internal static class MaintenanceGuidanceBuilder
             EstimatedBytesReclaimable = estimatedBytes,
             AutoVacuumMode = metrics.AutoVacuumMode,
             AutoVacuumModeName = FormatAutoVacuumMode(metrics.AutoVacuumMode),
+            FtsOptimization = FtsOptimizationRecommendationEvaluator.Evaluate(
+                ftsOptimizationMetrics ?? new FtsOptimizationMetrics(
+                    IncrementalWritesSinceOptimize: null,
+                    PageCount: metrics.PageCount,
+                    SnapshotCurrent: true)),
             RecommendedCommand = recommendedCommand,
             PostMaintenanceFollowUp = BuildFollowUp(walState, freelistState, checkpointCommand),
         };
