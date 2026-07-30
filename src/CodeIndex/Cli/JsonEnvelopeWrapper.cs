@@ -279,18 +279,22 @@ internal static partial class JsonEnvelopeWrapper
         JsonObject? error = null,
         JsonObject? streamTerminal = null,
         JsonArray? streamControlRecords = null,
-        ResponseSnapshot? responseSnapshot = null)
+        ResponseSnapshot? responseSnapshot = null,
+        bool suppressRuntimeMetadata = false)
     {
         var metadata = new JsonObject
         {
             ["api_version"] = JsonOutputContract.ApiVersion,
             ["command"] = command,
-            ["cdidx_version"] = appVersion,
-            ["elapsed_ms"] = Math.Round(elapsedMs, 3),
-            ["db_path"] = dbPath,
             ["result_count"] = results.Count,
             ["exit_code"] = exitCode,
         };
+        if (!suppressRuntimeMetadata)
+        {
+            metadata["cdidx_version"] = appVersion;
+            metadata["elapsed_ms"] = Math.Round(elapsedMs, 3);
+            metadata["db_path"] = dbPath;
+        }
 
         if (!string.IsNullOrEmpty(queryNormalized))
             metadata["query_normalized"] = queryNormalized;
@@ -301,11 +305,14 @@ internal static partial class JsonEnvelopeWrapper
         if (streamControlRecords is { Count: > 0 })
             metadata["stream_control_records"] = streamControlRecords.DeepClone();
 
-        var indexedHead = responseSnapshot.HasValue
-            ? responseSnapshot.Value.IndexedHead
-            : SafeReadIndexedHead(dbPath, dbPathExplicit);
-        if (!string.IsNullOrEmpty(indexedHead))
-            metadata["indexed_at_head_sha"] = indexedHead;
+        if (!suppressRuntimeMetadata)
+        {
+            var indexedHead = responseSnapshot.HasValue
+                ? responseSnapshot.Value.IndexedHead
+                : SafeReadIndexedHead(dbPath, dbPathExplicit);
+            if (!string.IsNullOrEmpty(indexedHead))
+                metadata["indexed_at_head_sha"] = indexedHead;
+        }
 
         return new JsonObject
         {

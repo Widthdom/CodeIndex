@@ -238,7 +238,17 @@ fields, including readiness fields and runtime diagnostics such as
 `path_case_sensitive`. `cdidx status --explain sqlite_connection_policy`
 describes the active SQLite open mode, immutable-URI choice, timeout,
 cancellation, and WAL snapshot-risk diagnostics.
-`cdidx status --explain maintenance_guidance` describes the shared FTS
+Accepted top-level explain keys come from the same source-generated
+`StatusResult` serializer registry as `status --json`, so every serialized
+top-level field remains explainable as the response evolves. Major composite
+sections such as `trust_overrides`, `extractors`, `hooks`,
+`maintenance_guidance`, and `reference_extraction_cap_hits` add structured
+meaning, source, dependencies, interpretation, and repair guidance. Dotted
+member paths such as `maintenance_guidance.recommended_command` are also
+accepted; explain output is bounded contract metadata and never includes live
+runtime values or paths. Bounded `--fields` / `--max-json-bytes` envelopes also
+omit database paths, timings, indexed HEADs, and stable-at timestamps.
+`cdidx status --explain maintenance_guidance` also describes the shared FTS
 optimization recommendation used by status and optimize.
 
 | Field group | Fields |
@@ -691,7 +701,16 @@ visible な status field の簡潔な説明は `cdidx status --explain <field>` 
 readiness field に加えて、`path_case_sensitive` などの runtime diagnostic field も対象です。
 `cdidx status --explain sqlite_connection_policy` は、有効な SQLite open mode、
 immutable URI の選択、timeout、cancellation、WAL snapshot risk の diagnostic を説明します。
-`cdidx status --explain maintenance_guidance` は、status と optimize が共有する
+top-level の explain key は `status --json` と同じ source-generated
+`StatusResult` serializer registry から生成されるため、response が拡張されても serialized
+top-level field はすべて説明可能な状態を維持します。`trust_overrides`、`extractors`、
+`hooks`、`maintenance_guidance`、`reference_extraction_cap_hits` などの主要な composite
+section は、meaning、source、dependencies、interpretation、repair guidance を構造化して返します。
+`maintenance_guidance.recommended_command` のような dot 区切り member path も受理します。
+explain output は上限付きの contract metadata だけで、live runtime value や path は含みません。
+bounded `--fields` / `--max-json-bytes` envelope も database path、timing、
+indexed HEAD、stable-at timestamp を省略します。
+`cdidx status --explain maintenance_guidance` はさらに、status と optimize が共有する
 FTS optimization recommendation を説明します。
 
 | field group | fields |
