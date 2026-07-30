@@ -33,9 +33,6 @@ public partial class McpServer
         var normalizedAlias = aliasFilter is null ? null : LanguageCatalog.NormalizeLookupKey(aliasFilter);
         var limit = ReadLimit(args, QueryCommandRunner.DefaultQueryLimit, adjustments);
 
-        if (args?["capability"] is JsonArray capabilityArray && capabilities.Count != capabilityArray.Count)
-            return CreateToolErrorResponse(id, "capability entries must be non-empty, unique strings.");
-
         foreach (var capability in capabilities)
         {
             if (!IsKnownLanguageCapability(capability))

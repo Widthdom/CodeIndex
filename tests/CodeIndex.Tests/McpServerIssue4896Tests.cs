@@ -19,17 +19,27 @@ public partial class McpServerTests
         Assert.True(language["summary"]!["catalog_language_count"]!.GetValue<int>() > 1);
         Assert.True(language["summary"]!["symbol_extraction_language_count"]!.GetValue<int>() > 1);
 
+        var duplicateCapability = CallIssue4896Languages(new JsonObject
+        {
+            ["language"] = "csharp",
+            ["capability"] = new JsonArray("graph", "graph"),
+        }, id: 2);
+        Assert.Equal(
+            "csharp",
+            Assert.Single(duplicateCapability["languages"]!.AsArray())!["lang"]!.GetValue<string>());
+        Assert.Single(duplicateCapability["filters"]!["capability"]!.AsArray());
+
         var alias = CallIssue4896Languages(new JsonObject
         {
             ["alias"] = "F#",
-        }, id: 2);
+        }, id: 3);
         Assert.Equal("fsharp", Assert.Single(alias["languages"]!.AsArray())!["lang"]!.GetValue<string>());
         Assert.Equal(1, alias["alias_lookup"]!["matched"]!.GetValue<int>());
 
         var ambiguousExtension = CallIssue4896Languages(new JsonObject
         {
             ["extension"] = "m",
-        }, id: 3);
+        }, id: 4);
         Assert.Equal(
             "ambiguous_m",
             Assert.Single(ambiguousExtension["languages"]!.AsArray())!["lang"]!.GetValue<string>());
@@ -38,7 +48,7 @@ public partial class McpServerTests
         var emptyUnicodeLookup = CallIssue4896Languages(new JsonObject
         {
             ["language"] = "日本語",
-        }, id: 4);
+        }, id: 5);
         Assert.Equal(0, emptyUnicodeLookup["total_count"]!.GetValue<int>());
         Assert.Equal(0, emptyUnicodeLookup["returned_count"]!.GetValue<int>());
         Assert.False(emptyUnicodeLookup["has_more"]!.GetValue<bool>());
