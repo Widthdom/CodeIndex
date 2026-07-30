@@ -4689,9 +4689,20 @@ public class DatabaseTests : IDisposable
             new SymbolRecord
             {
                 FileId = fileId,
+                Kind = "property",
+                Name = "InterfaceProperty",
+                Line = 10,
+                Signature = "public static int InterfaceProperty => 40;",
+                ContainerKind = "interface",
+                ContainerName = "IValues",
+                ContainerQualifiedName = "Demo.IValues",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
                 Kind = "field",
                 Name = "Instance",
-                Line = 10,
+                Line = 11,
                 Signature = "public int Instance;",
                 ContainerKind = "class",
                 ContainerName = "Values",
@@ -4702,7 +4713,7 @@ public class DatabaseTests : IDisposable
         var loaded = _writer.LoadCSharpStaticInterfaceContractSymbols();
 
         Assert.Equal(
-            ["Limit", "Other", "Property", "Ready"],
+            ["InterfaceProperty", "Limit", "Other", "Property", "Ready"],
             loaded.Select(symbol => symbol.Name).Order(StringComparer.Ordinal).ToArray());
     }
 

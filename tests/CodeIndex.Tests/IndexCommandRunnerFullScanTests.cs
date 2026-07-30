@@ -4815,6 +4815,176 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_ScopedUpdate_LoadsPersistedMemberReadTargetsAndRefreshesConsumers_Issue4894()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var valuesPath = Path.Combine(projectRoot, "Values.cs");
+            var callerPath = Path.Combine(projectRoot, "Caller.cs");
+            File.WriteAllText(
+                valuesPath,
+                """
+                public static class Values
+                {
+                }
+                """);
+            File.WriteAllText(
+                callerPath,
+                """
+                public sealed class Caller
+                {
+                    public int Read() => Values.Limit;
+                }
+                """);
+
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run(
+                    [projectRoot, "--json", "--quiet"],
+                    _jsonOptions));
+
+            var dbPath = Path.Combine(
+                projectRoot,
+                ".cdidx",
+                "codeindex.db");
+            Assert.Equal(0L, CountMemberReadReferences(dbPath, "Limit"));
+
+            File.WriteAllText(
+                valuesPath,
+                """
+                public static class Values
+                {
+                    public const int Limit = 10;
+                }
+                """);
+            File.SetLastWriteTimeUtc(
+                valuesPath,
+                DateTime.UtcNow.AddSeconds(2));
+
+            var (addExitCode, addJson) = RunAndCaptureJson(
+            [
+                projectRoot,
+                "--files",
+                valuesPath,
+                "--json",
+                "--quiet",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, addExitCode);
+            Assert.Equal("success", addJson.GetProperty("status").GetString());
+            Assert.Equal(1L, CountMemberReadReferences(dbPath, "Limit"));
+
+            File.WriteAllText(
+                valuesPath,
+                """
+                public static class Values
+                {
+                }
+                """);
+            File.SetLastWriteTimeUtc(
+                valuesPath,
+                DateTime.UtcNow.AddSeconds(4));
+
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run(
+                [
+                    projectRoot,
+                    "--files",
+                    valuesPath,
+                    "--json",
+                    "--quiet",
+                ],
+                _jsonOptions));
+            Assert.Equal(0L, CountMemberReadReferences(dbPath, "Limit"));
+
+            File.WriteAllText(
+                callerPath,
+                """
+                public sealed class Caller
+                {
+                    public int Read() =>
+                        Values.Limit + Values.Other + Values.Property;
+                }
+                """);
+            File.WriteAllText(
+                valuesPath,
+                """
+                public static class Values
+                {
+                    public const int Limit = 10;
+                    public static readonly int Other = 20;
+                    public static int Property => 30;
+                }
+                """);
+            File.SetLastWriteTimeUtc(
+                valuesPath,
+                DateTime.UtcNow.AddSeconds(6));
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run(
+                [
+                    projectRoot,
+                    "--files",
+                    valuesPath,
+                    "--json",
+                    "--quiet",
+                ],
+                _jsonOptions));
+
+            File.WriteAllText(
+                callerPath,
+                """
+                public sealed class Caller
+                {
+                    public int Read() =>
+                        Values.Limit + Values.Other + Values.Property + 1;
+                }
+                """);
+            File.SetLastWriteTimeUtc(
+                callerPath,
+                DateTime.UtcNow.AddSeconds(8));
+
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run(
+                [
+                    projectRoot,
+                    "--files",
+                    callerPath,
+                    "--json",
+                    "--quiet",
+                ],
+                _jsonOptions));
+            Assert.Equal(1L, CountMemberReadReferences(dbPath, "Limit"));
+            Assert.Equal(1L, CountMemberReadReferences(dbPath, "Other"));
+            Assert.Equal(1L, CountMemberReadReferences(dbPath, "Property"));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+
+        static long CountMemberReadReferences(
+            string dbPath,
+            string symbolName)
+        {
+            using var connection = OpenNonPoolingConnection(dbPath);
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT COUNT(*)
+                FROM symbol_references
+                WHERE symbol_name = $symbol_name
+                  AND reference_kind = 'member_read'
+                """;
+            command.Parameters.AddWithValue("$symbol_name", symbolName);
+            return (long)command.ExecuteScalar()!;
+        }
+    }
+
+    [Fact]
     public void Run_FullScan_ReclassifiesQualifiedValueReadsFromVersion8CSharpIndex_Issue4894()
     {
         var projectRoot = CreateTempProject();

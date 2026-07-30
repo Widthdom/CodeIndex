@@ -145,16 +145,22 @@ internal static class CSharpStaticInterfacePrepass
 
         var hasSourceStaticInterfaceContracts = HasCSharpStaticInterfaceContractSymbol(pendingSymbols);
         var hadPendingContracts = false;
+        var hadPendingMemberReadTargets = false;
         var symbols = includeExistingSymbols
             ? writer.LoadCSharpStaticInterfaceContractSymbols(
                 pendingPaths!,
                 excludedExistingFileIds,
                 isExistingSymbolPathExcluded,
                 out hadPendingContracts,
+                out hadPendingMemberReadTargets,
                 cancellationToken)
             : [];
         symbols.AddRange(pendingSymbols);
         var hasStaticInterfaceContracts = HasCSharpStaticInterfaceContractSymbol(symbols) || hadPendingContracts;
+        var requiresMemberReadReferenceRefresh =
+            hadPendingMemberReadTargets
+            || pendingSymbols.Any(
+                ReferenceExtractor.IsCSharpQualifiedMemberReadTargetSymbol);
         IReadOnlyList<string> incompletePaths = firstIncompleteSourcePath == null
             ? []
             : [firstIncompleteSourcePath];
@@ -165,7 +171,8 @@ internal static class CSharpStaticInterfacePrepass
             hasSourceStaticInterfaceContracts,
             sourceEvidenceComplete != 0,
             incompletePaths,
-            ReferenceExtractor.BuildCSharpQualifiedPatternLookups(symbols));
+            ReferenceExtractor.BuildCSharpQualifiedPatternLookups(symbols),
+            requiresMemberReadReferenceRefresh);
     }
 
     internal static CSharpStaticInterfaceWorkspaceSymbols BuildWorkspaceSymbols(
@@ -1036,4 +1043,5 @@ internal sealed record CSharpStaticInterfaceWorkspaceSymbols(
         bool HasSourceStaticInterfaceContracts = false,
         bool SourceContractEvidenceComplete = true,
         IReadOnlyList<string>? IncompleteSourcePaths = null,
-        ReferenceExtractor.CSharpQualifiedPatternLookups? QualifiedPatternLookups = null);
+        ReferenceExtractor.CSharpQualifiedPatternLookups? QualifiedPatternLookups = null,
+        bool RequiresMemberReadReferenceRefresh = false);

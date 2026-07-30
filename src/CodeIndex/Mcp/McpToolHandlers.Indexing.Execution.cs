@@ -718,7 +718,8 @@ public partial class McpServer
                     cancellationToken: requestToken));
             forceFullCSharpRefreshFromInvalidatedNoOp =
                 indexSnapshot.CSharpStaticInterfaceSourceEvidence == true
-                || csharpWorkspace.HasStaticInterfaceContracts;
+                || csharpWorkspace.HasStaticInterfaceContracts
+                || csharpWorkspace.RequiresMemberReadReferenceRefresh;
         }
         if (!csharpWorkspace.SourceContractEvidenceComplete)
         {

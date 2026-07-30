@@ -662,13 +662,13 @@ public static partial class ReferenceExtractor
     internal static bool IsCSharpQualifiedMemberReadTargetSymbol(SymbolRecord symbol)
         => symbol.Kind == "enum" && symbol.ContainerKind == "enum"
             || IsCSharpConstMemberSymbol(symbol)
-            || symbol.ContainerKind is "class" or "struct"
+            || symbol.ContainerKind is "class" or "struct" or "interface"
                 && symbol.Kind is "field" or "property"
                 && IsStaticCSharpSymbol(symbol);
 
     private static bool IsCSharpConstMemberSymbol(SymbolRecord symbol)
     {
-        if (symbol.ContainerKind is not ("class" or "struct"))
+        if (symbol.ContainerKind is not ("class" or "struct" or "interface"))
             return false;
         if (string.IsNullOrWhiteSpace(symbol.Signature))
             return false;
