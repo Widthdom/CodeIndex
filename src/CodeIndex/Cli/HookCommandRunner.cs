@@ -1220,10 +1220,23 @@ public static class HookCommandRunner
 
         if (!launcherIsDotnetHost && !IsDotnetHost(resolvedProcessPath))
         {
+            string? resolvedEntryAssemblyPath = null;
+            if (!string.IsNullOrWhiteSpace(entryAssemblyPath))
+            {
+                if (!TryResolvePinnedPath(
+                        entryAssemblyPath,
+                        out resolvedEntryAssemblyPath,
+                        out failureReason))
+                {
+                    return false;
+                }
+            }
+
             selection = new HookExecutableSelection(
                 "process_path",
                 appVersion,
-                [resolvedProcessPath]);
+                [resolvedProcessPath],
+                resolvedEntryAssemblyPath);
             return ValidateExecutableSelection(selection, out failureReason);
         }
 
@@ -1300,8 +1313,9 @@ public static class HookCommandRunner
             failureReason = "current_executable_not_runnable";
             return false;
         }
-        if (selection.Source == "dotnet_host_and_assembly"
-            && !ValidateManagedDeploymentFiles(selection.Argv[1], out failureReason))
+        var entryAssemblyPath = GetEntryAssemblyPath(selection);
+        if (entryAssemblyPath != null
+            && !ValidateManagedDeploymentFiles(entryAssemblyPath, out failureReason))
         {
             return false;
         }
@@ -1326,7 +1340,26 @@ public static class HookCommandRunner
                !string.IsNullOrWhiteSpace(argument)
                && argument.Length <= MaxExecutableArgumentChars
                && IsCanonicalFullyQualifiedPath(argument)
-               && argument.IndexOfAny(['\0', '\r', '\n']) < 0);
+               && argument.IndexOfAny(['\0', '\r', '\n']) < 0)
+           && (selection.EntryAssemblyPath == null
+               || (!string.IsNullOrWhiteSpace(selection.EntryAssemblyPath)
+                   && selection.EntryAssemblyPath.Length <= MaxExecutableArgumentChars
+                   && IsCanonicalFullyQualifiedPath(selection.EntryAssemblyPath)
+                   && selection.EntryAssemblyPath.IndexOfAny(['\0', '\r', '\n']) < 0))
+           && (selection.Source != "dotnet_host_and_assembly"
+               || selection.EntryAssemblyPath == null
+               || string.Equals(
+                   selection.EntryAssemblyPath,
+                   selection.Argv[1],
+                   OperatingSystem.IsWindows()
+                       ? StringComparison.OrdinalIgnoreCase
+                       : StringComparison.Ordinal));
+
+    private static string? GetEntryAssemblyPath(HookExecutableSelection selection)
+        => selection.EntryAssemblyPath
+           ?? (selection.Source == "dotnet_host_and_assembly" && selection.Argv.Count > 1
+               ? selection.Argv[1]
+               : null);
 
     internal static bool IsCanonicalFullyQualifiedPath(string path)
     {
@@ -1351,9 +1384,7 @@ public static class HookCommandRunner
         HookExecutableSelection? currentSelection)
     {
         var path = installedSelection.Argv.FirstOrDefault();
-        var entryAssemblyPath = installedSelection.Argv.Count > 1
-            ? installedSelection.Argv[1]
-            : null;
+        var entryAssemblyPath = GetEntryAssemblyPath(installedSelection);
         var diagnosticArgv = installedSelection.Argv
             .Select(DiagnosticSanitizer.ForSupportSafePath)
             .ToArray();
@@ -1380,12 +1411,14 @@ public static class HookCommandRunner
             return Result("missing", "pinned_executable_missing");
         if (!IsRunnableExecutable(installedSelection.Argv[0]))
             return Result("not_executable", "pinned_executable_not_runnable");
-        if (installedSelection.Source == "dotnet_host_and_assembly")
+        if (entryAssemblyPath != null)
         {
-            if (!IsReadableRegularFile(installedSelection.Argv[1]))
+            if (!File.Exists(LongPath.EnsureWindowsPrefix(entryAssemblyPath)))
+                return Result("missing", "pinned_entry_assembly_missing");
+            if (!IsReadableRegularFile(entryAssemblyPath))
                 return Result("not_executable", "pinned_entry_assembly_unreadable");
 
-            foreach (var runtimePath in GetManagedRuntimePaths(installedSelection.Argv[1]))
+            foreach (var runtimePath in GetManagedRuntimePaths(entryAssemblyPath))
             {
                 if (!File.Exists(LongPath.EnsureWindowsPrefix(runtimePath)))
                     return Result("missing", "pinned_runtime_file_missing");
@@ -1442,14 +1475,20 @@ public static class HookCommandRunner
                 return false;
         }
 
-        return true;
+        var leftEntryAssemblyPath = GetEntryAssemblyPath(left);
+        var rightEntryAssemblyPath = GetEntryAssemblyPath(right);
+        if (leftEntryAssemblyPath == null || rightEntryAssemblyPath == null)
+            return leftEntryAssemblyPath == rightEntryAssemblyPath;
+
+        return string.Equals(
+            leftEntryAssemblyPath,
+            rightEntryAssemblyPath,
+            PathCasing.ComparisonFor(leftEntryAssemblyPath));
     }
 
     private static string? TryReadPinnedVersion(HookExecutableSelection selection)
     {
-        var versionTarget = selection.Argv.Count > 1
-            ? selection.Argv[1]
-            : selection.Argv[0];
+        var versionTarget = GetEntryAssemblyPath(selection) ?? selection.Argv[0];
         try
         {
             var directory = Path.GetDirectoryName(versionTarget);
@@ -1496,12 +1535,16 @@ public static class HookCommandRunner
         using var buffer = new MemoryStream();
         using (var writer = new BinaryWriter(buffer, Encoding.UTF8, leaveOpen: true))
         {
-            writer.Write(1);
+            writer.Write(2);
             WriteManifestString(writer, selection.Source);
             WriteManifestString(writer, selection.Version);
             writer.Write(selection.Argv.Count);
             foreach (var argument in selection.Argv)
                 WriteManifestString(writer, argument);
+            var entryAssemblyPath = GetEntryAssemblyPath(selection);
+            writer.Write(entryAssemblyPath != null);
+            if (entryAssemblyPath != null)
+                WriteManifestString(writer, entryAssemblyPath);
         }
 
         return Convert.ToBase64String(buffer.ToArray());
@@ -1544,7 +1587,8 @@ public static class HookCommandRunner
             var bytes = Convert.FromBase64String(encoded);
             using var buffer = new MemoryStream(bytes, writable: false);
             using var reader = new BinaryReader(buffer, Encoding.UTF8, leaveOpen: false);
-            if (reader.ReadInt32() != 1)
+            var manifestVersion = reader.ReadInt32();
+            if (manifestVersion is not 1 and not 2)
                 return false;
             if (!TryReadManifestString(reader, 64, out var source)
                 || !TryReadManifestString(reader, 128, out var version))
@@ -1561,9 +1605,24 @@ public static class HookCommandRunner
                     return false;
             }
 
+            string? entryAssemblyPath = null;
+            if (manifestVersion == 2
+                && reader.ReadBoolean()
+                && !TryReadManifestString(
+                    reader,
+                    MaxExecutableArgumentChars,
+                    out entryAssemblyPath))
+            {
+                return false;
+            }
+
             if (buffer.Position != buffer.Length)
                 return false;
-            selection = new HookExecutableSelection(source, version, arguments);
+            selection = new HookExecutableSelection(
+                source,
+                version,
+                arguments,
+                entryAssemblyPath);
             return HasValidExecutableSelectionShape(selection);
         }
         catch (Exception ex) when (ex is FormatException
@@ -2479,7 +2538,8 @@ public sealed record HookCommandJsonResult(
 internal sealed record HookExecutableSelection(
     string Source,
     string Version,
-    IReadOnlyList<string> Argv);
+    IReadOnlyList<string> Argv,
+    string? EntryAssemblyPath = null);
 
 public sealed record HookExecutableJsonResult(
     [property: JsonPropertyName("source")] string Source,

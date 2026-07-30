@@ -1172,6 +1172,93 @@ public class HookCommandRunnerTests
     }
 
     [Fact]
+    public void Hooks_Status_ValidatesFrameworkDependentAppHostFiles_Issue4892()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("hook_apphost_status");
+        var toolRoot = TestProjectHelper.CreateTempProject("hook_apphost_tool");
+        var appHostPath = Path.Combine(
+            toolRoot,
+            OperatingSystem.IsWindows() ? "cdidx.exe" : "cdidx");
+        var assemblyPath = Path.Combine(toolRoot, "cdidx.dll");
+        var runtimeConfigPath = Path.ChangeExtension(assemblyPath, ".runtimeconfig.json");
+        var depsPath = Path.ChangeExtension(assemblyPath, ".deps.json");
+        try
+        {
+            WriteRunnableFile(appHostPath);
+            File.WriteAllText(assemblyPath, "managed fixture");
+            File.WriteAllText(runtimeConfigPath, "{}");
+            File.WriteAllText(depsPath, "{}");
+            WriteVersionFile(toolRoot, "1.0.0");
+            TestProjectHelper.InitializeGitRepo(projectRoot);
+            Assert.True(
+                HookCommandRunner.TryCreateExecutableSelection(
+                    appHostPath,
+                    assemblyPath,
+                    "1.0.0",
+                    out var appHostSelection,
+                    out var selectionFailure),
+                selectionFailure);
+            Assert.Equal("process_path", appHostSelection.Source);
+            Assert.Equal(Path.GetFullPath(appHostPath), Assert.Single(appHostSelection.Argv));
+            Assert.Equal(Path.GetFullPath(assemblyPath), appHostSelection.EntryAssemblyPath);
+            HookCommandRunner.ExecutableSelectionForTesting = _ => appHostSelection;
+
+            var install = RunHooksAndCaptureStreams(
+                ["install", "--project", projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, install.ExitCode);
+            using (var document = JsonDocument.Parse(install.StdOut))
+            {
+                var executable = document.RootElement.GetProperty("executable");
+                Assert.Equal(
+                    assemblyPath,
+                    executable.GetProperty("entry_assembly_path").GetString());
+                Assert.Single(executable.GetProperty("argv").EnumerateArray());
+            }
+            var hookPath = Path.Combine(projectRoot, ".git", "hooks", "pre-commit");
+            Assert.Contains(
+                $"{QuoteShellForTest(NormalizeExpectedShellPath(appHostPath))} index ",
+                File.ReadAllText(hookPath),
+                StringComparison.Ordinal);
+
+            File.Delete(assemblyPath);
+            var missingAssembly = RunHooksAndCaptureStreams(
+                ["status", "--project", projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, missingAssembly.ExitCode);
+            using (var document = JsonDocument.Parse(missingAssembly.StdOut))
+            {
+                var executable = document.RootElement.GetProperty("executable");
+                Assert.Equal("missing", executable.GetProperty("status").GetString());
+                Assert.Equal(
+                    "pinned_entry_assembly_missing",
+                    executable.GetProperty("failure_reason").GetString());
+            }
+
+            File.WriteAllText(assemblyPath, "managed fixture");
+            File.Delete(runtimeConfigPath);
+            var missingRuntime = RunHooksAndCaptureStreams(
+                ["status", "--project", projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, missingRuntime.ExitCode);
+            using (var document = JsonDocument.Parse(missingRuntime.StdOut))
+            {
+                var executable = document.RootElement.GetProperty("executable");
+                Assert.Equal("missing", executable.GetProperty("status").GetString());
+                Assert.Equal(
+                    "pinned_runtime_file_missing",
+                    executable.GetProperty("failure_reason").GetString());
+            }
+        }
+        finally
+        {
+            HookCommandRunner.ExecutableSelectionForTesting = null;
+            TestProjectHelper.DeleteDirectory(projectRoot);
+            TestProjectHelper.DeleteDirectory(toolRoot);
+        }
+    }
+
+    [Fact]
     public void Hooks_ExecutableSelection_ResolvesSymlinksAndDotnetOrWrapperShapes_Issue4892()
     {
         var root = TestProjectHelper.CreateTempProject("hook_executable_shapes");
