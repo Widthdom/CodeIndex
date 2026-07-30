@@ -246,7 +246,8 @@ sections such as `trust_overrides`, `extractors`, `hooks`,
 meaning, source, dependencies, interpretation, and repair guidance. Dotted
 member paths such as `maintenance_guidance.recommended_command` are also
 accepted; explain output is bounded contract metadata and never includes live
-runtime values or paths.
+runtime values or paths. Bounded `--fields` / `--max-json-bytes` envelopes also
+omit database paths, timings, indexed HEADs, and stable-at timestamps.
 `cdidx status --explain maintenance_guidance` also describes the shared FTS
 optimization recommendation used by status and optimize.
 
@@ -707,6 +708,8 @@ top-level field はすべて説明可能な状態を維持します。`trust_ove
 section は、meaning、source、dependencies、interpretation、repair guidance を構造化して返します。
 `maintenance_guidance.recommended_command` のような dot 区切り member path も受理します。
 explain output は上限付きの contract metadata だけで、live runtime value や path は含みません。
+bounded `--fields` / `--max-json-bytes` envelope も database path、timing、
+indexed HEAD、stable-at timestamp を省略します。
 `cdidx status --explain maintenance_guidance` はさらに、status と optimize が共有する
 FTS optimization recommendation を説明します。
 

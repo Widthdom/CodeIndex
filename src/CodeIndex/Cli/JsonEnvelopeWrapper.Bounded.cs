@@ -170,6 +170,10 @@ internal static partial class JsonEnvelopeWrapper
         return false;
     }
 
+    private static bool IsStaticStatusExplainRequest(string command, string[] args)
+        => string.Equals(command, "status", StringComparison.Ordinal)
+           && HasArgument(args, "--explain");
+
     private static int RunBoundedResponse(
         string command,
         string[] args,
@@ -218,7 +222,10 @@ internal static partial class JsonEnvelopeWrapper
         var queryNormalized = ExtractQueryArg(args);
         var (resolvedDbPath, dbPathExplicit) = ResolveQueryDbPath(args);
         var queryFingerprint = BuildResponseFingerprint(command, args);
-        var snapshot = SafeReadResponseSnapshot(resolvedDbPath, dbPathExplicit, appVersion);
+        var suppressRuntimeMetadata = IsStaticStatusExplainRequest(command, args);
+        var snapshot = suppressRuntimeMetadata
+            ? BuildFallbackResponseSnapshot(appVersion)
+            : SafeReadResponseSnapshot(resolvedDbPath, dbPathExplicit, appVersion);
         if (controls.CursorQueryFingerprint is not null
             && !string.Equals(controls.CursorQueryFingerprint, queryFingerprint, StringComparison.Ordinal))
         {
@@ -287,7 +294,8 @@ internal static partial class JsonEnvelopeWrapper
                 exitCode,
                 message,
                 "Reduce --limit, choose fewer --fields, or use a narrower query.",
-                controls.MaxJsonBytes);
+                controls.MaxJsonBytes,
+                suppressRuntimeMetadata);
         }
 
         JsonArray rawResults;
@@ -299,11 +307,11 @@ internal static partial class JsonEnvelopeWrapper
         }
         catch (JsonEnvelopeRawJsonItemLimitExceededException ex)
         {
-            return WriteBoundedParseError(command, queryNormalized, resolvedDbPath, dbPathExplicit, appVersion, stopwatch.Elapsed.TotalMilliseconds, jsonOptions, $"Bounded response raw JSON item line exceeded {ex.MaxChars} characters.", "Reduce --limit or exclude large detail fields.", "max_chars", ex.MaxChars, controls.MaxJsonBytes);
+            return WriteBoundedParseError(command, queryNormalized, resolvedDbPath, dbPathExplicit, appVersion, stopwatch.Elapsed.TotalMilliseconds, jsonOptions, $"Bounded response raw JSON item line exceeded {ex.MaxChars} characters.", "Reduce --limit or exclude large detail fields.", "max_chars", ex.MaxChars, controls.MaxJsonBytes, suppressRuntimeMetadata);
         }
         catch (JsonEnvelopeRawJsonBudgetExceededException ex)
         {
-            return WriteBoundedParseError(command, queryNormalized, resolvedDbPath, dbPathExplicit, appVersion, stopwatch.Elapsed.TotalMilliseconds, jsonOptions, $"Bounded response raw JSON {ex.BudgetName} exceeded {ex.MaxValue}.", "Reduce --limit or narrow the query.", ex.JsonPropertyName, ex.MaxValue, controls.MaxJsonBytes);
+            return WriteBoundedParseError(command, queryNormalized, resolvedDbPath, dbPathExplicit, appVersion, stopwatch.Elapsed.TotalMilliseconds, jsonOptions, $"Bounded response raw JSON {ex.BudgetName} exceeded {ex.MaxValue}.", "Reduce --limit or narrow the query.", ex.JsonPropertyName, ex.MaxValue, controls.MaxJsonBytes, suppressRuntimeMetadata);
         }
 
         var commandError = TakeCommandError(rawResults, exitCode);
@@ -330,7 +338,9 @@ internal static partial class JsonEnvelopeWrapper
             extraction = extraction with { Context = MergeResponseContexts(extraction.Context, count.Context) };
         var totalCount = Math.Max(count.TotalCount, controls.Offset + pageItems.Count);
         var totalAuthoritative = count.Authoritative;
-        var completedSnapshot = SafeReadResponseSnapshot(resolvedDbPath, dbPathExplicit, appVersion);
+        var completedSnapshot = suppressRuntimeMetadata
+            ? snapshot
+            : SafeReadResponseSnapshot(resolvedDbPath, dbPathExplicit, appVersion);
         if (!string.Equals(snapshot.GenerationFingerprint, completedSnapshot.GenerationFingerprint, StringComparison.Ordinal))
         {
             return WriteBoundedResponseUsageError(
@@ -356,6 +366,7 @@ internal static partial class JsonEnvelopeWrapper
             commandError,
             streamTerminal,
             streamControlRecords,
+            suppressRuntimeMetadata,
             jsonOptions,
             out var emittedJson,
             out var emittedCount);
@@ -427,6 +438,7 @@ internal static partial class JsonEnvelopeWrapper
         JsonObject? commandError,
         JsonObject? streamTerminal,
         JsonArray streamControlRecords,
+        bool suppressRuntimeMetadata,
         JsonSerializerOptions jsonOptions,
         out string emittedJson,
         out int emittedCount)
@@ -454,9 +466,11 @@ internal static partial class JsonEnvelopeWrapper
                 error: commandError is null ? null : (JsonObject)commandError.DeepClone(),
                 streamTerminal: adjustedStreamTerminal,
                 streamControlRecords: streamControlRecords,
-                responseSnapshot: snapshot);
+                responseSnapshot: snapshot,
+                suppressRuntimeMetadata: suppressRuntimeMetadata);
             var metadata = (JsonObject)envelope["metadata"]!;
-            metadata["result_stable_at"] = snapshot.ResultStableAt;
+            if (!suppressRuntimeMetadata)
+                metadata["result_stable_at"] = snapshot.ResultStableAt;
             if (commandError is not null)
             {
                 metadata["returned_count"] = 0;
@@ -1603,8 +1617,9 @@ internal static partial class JsonEnvelopeWrapper
         int exitCode,
         string message,
         string hint,
-        int? maxJsonBytes)
-        => WriteBoundedErrorEnvelope(command, queryNormalized, dbPath, dbPathExplicit, appVersion, elapsedMs, jsonOptions, exitCode, message, hint, null, null, maxJsonBytes);
+        int? maxJsonBytes,
+        bool suppressRuntimeMetadata)
+        => WriteBoundedErrorEnvelope(command, queryNormalized, dbPath, dbPathExplicit, appVersion, elapsedMs, jsonOptions, exitCode, message, hint, null, null, maxJsonBytes, suppressRuntimeMetadata);
 
     private static int WriteBoundedParseError(
         string command,
@@ -1618,8 +1633,9 @@ internal static partial class JsonEnvelopeWrapper
         string hint,
         string budgetProperty,
         int budgetValue,
-        int? maxJsonBytes)
-        => WriteBoundedErrorEnvelope(command, queryNormalized, dbPath, dbPathExplicit, appVersion, elapsedMs, jsonOptions, CommandExitCodes.InvalidArgument, message, hint, budgetProperty, budgetValue, maxJsonBytes);
+        int? maxJsonBytes,
+        bool suppressRuntimeMetadata)
+        => WriteBoundedErrorEnvelope(command, queryNormalized, dbPath, dbPathExplicit, appVersion, elapsedMs, jsonOptions, CommandExitCodes.InvalidArgument, message, hint, budgetProperty, budgetValue, maxJsonBytes, suppressRuntimeMetadata);
 
     private static int WriteBoundedErrorEnvelope(
         string command,
@@ -1634,7 +1650,8 @@ internal static partial class JsonEnvelopeWrapper
         string hint,
         string? budgetProperty,
         int? budgetValue,
-        int? maxJsonBytes)
+        int? maxJsonBytes,
+        bool suppressRuntimeMetadata)
     {
         CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.UsageError}]: {message}");
         CommandErrorWriter.WriteStderr($"Hint: {hint}");
@@ -1646,7 +1663,17 @@ internal static partial class JsonEnvelopeWrapper
         };
         if (budgetProperty is not null)
             error[budgetProperty] = budgetValue;
-        var envelope = BuildEnvelope(command, queryNormalized, dbPath, dbPathExplicit, appVersion, elapsedMs, [], exitCode, error);
+        var envelope = BuildEnvelope(
+            command,
+            queryNormalized,
+            dbPath,
+            dbPathExplicit,
+            appVersion,
+            elapsedMs,
+            [],
+            exitCode,
+            error,
+            suppressRuntimeMetadata: suppressRuntimeMetadata);
         var json = envelope.ToJsonString(jsonOptions);
         if (!maxJsonBytes.HasValue || JsonFitsResponseBudget(json, maxJsonBytes.Value))
             Console.WriteLine(json);

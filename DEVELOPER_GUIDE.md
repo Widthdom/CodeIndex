@@ -1767,7 +1767,9 @@ the DTO evolves. Dotted paths resolve against the same source-generated nested
 metadata (including collection element DTOs), while unknown paths receive
 bounded valid candidates. Explain responses contain static contract metadata
 only, cap known fields and dependencies, sanitize unknown input, and never
-include runtime field values or paths.
+include runtime field values or paths. Bounded `--fields` /
+`--max-json-bytes` envelopes also omit database paths, timings, indexed HEADs,
+and stable-at timestamps.
 
 `head_freshness` is a compact summary for machine consumers. `state=fresh`
 requires a successful complete `status --check` workspace comparison,
@@ -5191,7 +5193,9 @@ serialized scalar field も、DTO 拡張時に unknown へ戻らず上限付き 
 dot 区切り path は collection element DTO を含む同じ source-generated nested metadata で解決し、
 unknown path には上限付きの有効な candidate を返します。explain response は static contract
 metadata だけを含み、known field と dependency の件数を制限し、unknown input を sanitize し、
-runtime field value や path を含めません。
+runtime field value や path を含めません。bounded `--fields` /
+`--max-json-bytes` envelope も database path、timing、indexed HEAD、
+stable-at timestamp を省略します。
 
 `head_freshness` は machine consumer 向けの compact summary です。
 `state=fresh` は complete な index に対する `status --check` の workspace 比較成功が必要で、

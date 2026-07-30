@@ -151,7 +151,7 @@ public sealed class ProjectionFieldRegistryIssue4836Tests
                     "files",
                     "--json",
                     "--fields",
-                    "meaning,source,known_fields_truncated",
+                    "meaning,source,redaction,known_fields_truncated",
                     "--max-json-bytes",
                     "8192"
                 ],
@@ -165,9 +165,27 @@ public sealed class ProjectionFieldRegistryIssue4836Tests
         var row = Assert.Single(root.GetProperty("results").EnumerateArray());
         Assert.Contains("files", row.GetProperty("meaning").GetString(), StringComparison.Ordinal);
         Assert.Contains("StatusResult", row.GetProperty("source").GetString(), StringComparison.Ordinal);
+        var redaction = row.GetProperty("redaction");
+        Assert.False(redaction.GetProperty("runtime_values_included").GetBoolean());
+        Assert.False(redaction.GetProperty("paths_included").GetBoolean());
         Assert.True(row.GetProperty("known_fields_truncated").GetBoolean());
-        Assert.Equal(3, row.EnumerateObject().Count());
-        Assert.Equal(8192, root.GetProperty("metadata").GetProperty("max_json_bytes").GetInt32());
+        Assert.Equal(4, row.EnumerateObject().Count());
+        var metadata = root.GetProperty("metadata");
+        Assert.Equal(8192, metadata.GetProperty("max_json_bytes").GetInt32());
+        foreach (var forbiddenField in new[]
+                 {
+                     "cdidx_version",
+                     "elapsed_ms",
+                     "db_path",
+                     "indexed_at_head_sha",
+                     "result_stable_at",
+                 })
+        {
+            Assert.False(
+                metadata.TryGetProperty(forbiddenField, out _),
+                $"Bounded status explain metadata must omit runtime field '{forbiddenField}'.");
+        }
+        Assert.DoesNotContain(Directory.GetCurrentDirectory(), stdout, StringComparison.Ordinal);
     }
 
     [Fact]
