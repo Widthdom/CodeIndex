@@ -5616,8 +5616,8 @@ public sealed class Caller
                         Content = "public sealed class Preview; // 日本語",
                     },
                 ]);
-                writer.RecordFtsIncrementalWrite();
-                writer.RecordFtsIncrementalWrite();
+                for (var i = 0; i < DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold; i++)
+                    writer.RecordFtsIncrementalWrite();
             }
 
             SqliteConnection.ClearAllPools();
@@ -5648,8 +5648,23 @@ public sealed class Caller
             Assert.Equal("dry_run", previewJson.GetProperty("status").GetString());
             Assert.True(previewJson.GetProperty("dry_run").GetBoolean());
             Assert.Equal(dbPath, previewJson.GetProperty("db_path").GetString());
-            Assert.Equal(2, previewJson.GetProperty("writes_since_optimize_before").GetInt32());
-            Assert.Equal(2, previewJson.GetProperty("writes_since_optimize_after").GetInt32());
+            Assert.Equal(
+                DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold,
+                previewJson.GetProperty("writes_since_optimize_before").GetInt32());
+            Assert.Equal(
+                DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold,
+                previewJson.GetProperty("writes_since_optimize_after").GetInt32());
+            var previewRecommendation = previewJson.GetProperty("fts_optimization");
+            Assert.True(previewRecommendation.GetProperty("recommended").GetBoolean());
+            Assert.Equal("optimize", previewRecommendation.GetProperty("action").GetString());
+            Assert.Equal("incremental_write_threshold_reached", previewRecommendation.GetProperty("reason").GetString());
+            Assert.Equal(
+                DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold,
+                previewRecommendation.GetProperty("threshold_writes").GetInt32());
+            Assert.Equal(
+                DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold,
+                previewRecommendation.GetProperty("observed_writes").GetInt64());
+            Assert.Equal("current", previewRecommendation.GetProperty("state").GetString());
             Assert.True(previewJson.GetProperty("db_size_bytes").GetInt64() > 0);
             Assert.True(previewJson.GetProperty("page_count").GetInt64() > 0);
             Assert.True(previewJson.GetProperty("object_sizes_available").GetBoolean());
@@ -5671,6 +5686,17 @@ public sealed class Caller
             Assert.Equal(dbBytesBeforePreview, File.ReadAllBytes(dbPath));
             Assert.False(File.Exists(IndexLock.GetLockPath(dbPath)));
             Assert.False(File.Exists(IndexLock.GetInfoPath(IndexLock.GetLockPath(dbPath))));
+
+            using (var statusDb = new DbContext(DbOpenIntent.QueryOnly, dbPath))
+            {
+                var statusRecommendation = new DbReader(statusDb).GetStatus().MaintenanceGuidance.FtsOptimization;
+                Assert.Equal(previewRecommendation.GetProperty("recommended").GetBoolean(), statusRecommendation.Recommended);
+                Assert.Equal(previewRecommendation.GetProperty("action").GetString(), statusRecommendation.Action);
+                Assert.Equal(previewRecommendation.GetProperty("reason").GetString(), statusRecommendation.Reason);
+                Assert.Equal(previewRecommendation.GetProperty("threshold_writes").GetInt32(), statusRecommendation.ThresholdWrites);
+                Assert.Equal(previewRecommendation.GetProperty("observed_writes").GetInt64(), statusRecommendation.ObservedWrites);
+                Assert.Equal(previewRecommendation.GetProperty("state").GetString(), statusRecommendation.State);
+            }
 
             int humanPreviewExitCode;
             string humanPreviewOutput;
@@ -5697,6 +5723,11 @@ public sealed class Caller
             Assert.Contains("Core size", humanPreviewOutput, StringComparison.Ordinal);
             Assert.Contains("Readiness", humanPreviewOutput, StringComparison.Ordinal);
             Assert.Contains("Est. duration", humanPreviewOutput, StringComparison.Ordinal);
+            Assert.Contains("action=optimize", humanPreviewOutput, StringComparison.Ordinal);
+            Assert.Contains("reason=incremental_write_threshold_reached", humanPreviewOutput, StringComparison.Ordinal);
+            Assert.Contains("threshold=25", humanPreviewOutput, StringComparison.Ordinal);
+            Assert.Contains("observed=25", humanPreviewOutput, StringComparison.Ordinal);
+            Assert.Contains("state=current", humanPreviewOutput, StringComparison.Ordinal);
             Assert.Contains("Planned operations", humanPreviewOutput, StringComparison.Ordinal);
             Assert.Contains("initialize_or_migrate_schema", humanPreviewOutput, StringComparison.Ordinal);
             Assert.Equal(dbBytesBeforePreview, File.ReadAllBytes(dbPath));
@@ -5722,11 +5753,32 @@ public sealed class Caller
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal("success", json.GetProperty("status").GetString());
-            Assert.Equal(2, json.GetProperty("writes_since_optimize_before").GetInt32());
+            Assert.Equal(
+                DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold,
+                json.GetProperty("writes_since_optimize_before").GetInt32());
             Assert.Equal(0, json.GetProperty("writes_since_optimize_after").GetInt32());
-            Assert.Equal(6, json.EnumerateObject().Count());
+            Assert.Equal(8, json.EnumerateObject().Count());
             Assert.False(json.TryGetProperty("dry_run", out _));
             Assert.False(json.TryGetProperty("planned_operations", out _));
+            var beforeRecommendation = json.GetProperty("fts_optimization_before");
+            Assert.True(beforeRecommendation.GetProperty("recommended").GetBoolean());
+            Assert.Equal("optimize", beforeRecommendation.GetProperty("action").GetString());
+            Assert.Equal("incremental_write_threshold_reached", beforeRecommendation.GetProperty("reason").GetString());
+            Assert.Equal(
+                DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold,
+                beforeRecommendation.GetProperty("threshold_writes").GetInt32());
+            Assert.Equal(
+                DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold,
+                beforeRecommendation.GetProperty("observed_writes").GetInt64());
+            var afterRecommendation = json.GetProperty("fts_optimization_after");
+            Assert.False(afterRecommendation.GetProperty("recommended").GetBoolean());
+            Assert.Equal("none", afterRecommendation.GetProperty("action").GetString());
+            Assert.Equal("incremental_write_threshold_not_reached", afterRecommendation.GetProperty("reason").GetString());
+            Assert.Equal(
+                DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold,
+                afterRecommendation.GetProperty("threshold_writes").GetInt32());
+            Assert.Equal(0, afterRecommendation.GetProperty("observed_writes").GetInt64());
+            Assert.Equal("current", afterRecommendation.GetProperty("state").GetString());
 
             using var verifyDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             Assert.Equal("0", verifyDb.GetMetaString(DbWriter.FtsIncrementalWritesSinceOptimizeMetaKey));
@@ -5897,6 +5949,15 @@ public sealed class Caller
             Assert.Contains(
                 json.GetProperty("planned_operations").EnumerateArray().Select(item => item.GetString()),
                 operation => operation == "initialize_or_migrate_schema");
+            var recommendation = json.GetProperty("fts_optimization");
+            Assert.False(recommendation.GetProperty("recommended").GetBoolean());
+            Assert.Equal("none", recommendation.GetProperty("action").GetString());
+            Assert.Equal("incremental_write_count_unavailable", recommendation.GetProperty("reason").GetString());
+            Assert.Equal(
+                DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold,
+                recommendation.GetProperty("threshold_writes").GetInt32());
+            Assert.Equal(0, recommendation.GetProperty("observed_writes").GetInt64());
+            Assert.Equal("unavailable", recommendation.GetProperty("state").GetString());
             Assert.Equal(bytesBefore, File.ReadAllBytes(dbPath));
             Assert.False(File.Exists(IndexLock.GetLockPath(dbPath)));
         }
@@ -6051,7 +6112,7 @@ public sealed class Caller
     }
 
     [Fact]
-    public void RunOptimizeFts_ReadOnlyUri_ReturnsDbNotWritable()
+    public void RunOptimizeFts_ReadOnlyUri_PreservesImmutableFreshnessAndReturnsDbNotWritable_Issue4887()
     {
         var dbPath = CreateTempDbPath("cdidx_optimize_readonly");
         try
@@ -6059,61 +6120,175 @@ public sealed class Caller
             using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 db.InitializeSchema();
-                var writer = new DbWriter(db);
-                writer.RecordFtsIncrementalWrite();
+                using var checkpoint = db.Connection.CreateCommand();
+                checkpoint.CommandText = "PRAGMA wal_checkpoint(TRUNCATE);";
+                checkpoint.ExecuteNonQuery();
             }
+            SqliteConnection.ClearAllPools();
 
             var dbUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
-            int previewExitCode;
-            JsonElement previewJson;
-            lock (TestConsoleLock.Gate)
+            using (var hotWalConnection = new SqliteConnection(
+                new SqliteConnectionStringBuilder
+                {
+                    DataSource = dbPath,
+                    Mode = SqliteOpenMode.ReadWrite,
+                    Pooling = false,
+                }.ToString()))
             {
-                var originalOut = Console.Out;
-                try
+                hotWalConnection.Open();
+                using (var command = hotWalConnection.CreateCommand())
                 {
-                    using var stdout = new StringWriter();
-                    Console.SetOut(stdout);
-                    previewExitCode = IndexCommandRunner.RunOptimizeFts(["--db", dbUri, "--dry-run", "--json"], _jsonOptions);
-                    using var document = JsonDocument.Parse(stdout.ToString());
-                    previewJson = document.RootElement.Clone();
+                    command.CommandText = """
+                        PRAGMA journal_mode=WAL;
+                        PRAGMA wal_autocheckpoint=0;
+                        INSERT INTO codeindex_meta(key, value)
+                        VALUES (@key, @value)
+                        ON CONFLICT(key) DO UPDATE SET value = excluded.value;
+                        """;
+                    command.Parameters.AddWithValue(
+                        "@key",
+                        DbWriter.FtsIncrementalWritesSinceOptimizeMetaKey);
+                    command.Parameters.AddWithValue(
+                        "@value",
+                        DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold.ToString(CultureInfo.InvariantCulture));
+                    command.ExecuteNonQuery();
                 }
-                finally
+                Assert.True(File.Exists(dbPath + "-wal"));
+
+                FtsOptimizationRecommendation statusRecommendation;
+                using (var statusDb = new DbContext(DbOpenIntent.QueryOnly, dbUri))
+                    statusRecommendation = new DbReader(statusDb).GetStatus().MaintenanceGuidance.FtsOptimization;
+                Assert.False(statusRecommendation.Recommended);
+                Assert.Equal(
+                    FtsOptimizationRecommendationEvaluator.MaintenanceSnapshotStaleReason,
+                    statusRecommendation.Reason);
+                Assert.Equal(
+                    FtsOptimizationRecommendationEvaluator.StaleState,
+                    statusRecommendation.State);
+
+                int previewExitCode;
+                JsonElement previewJson;
+                lock (TestConsoleLock.Gate)
                 {
-                    Console.SetOut(originalOut);
+                    var originalOut = Console.Out;
+                    try
+                    {
+                        using var stdout = new StringWriter();
+                        Console.SetOut(stdout);
+                        previewExitCode = IndexCommandRunner.RunOptimizeFts(["--db", dbUri, "--dry-run", "--json"], _jsonOptions);
+                        using var document = JsonDocument.Parse(stdout.ToString());
+                        previewJson = document.RootElement.Clone();
+                    }
+                    finally
+                    {
+                        Console.SetOut(originalOut);
+                    }
                 }
+
+                Assert.Equal(CommandExitCodes.Success, previewExitCode);
+                Assert.Equal("dry_run", previewJson.GetProperty("status").GetString());
+                Assert.True(previewJson.GetProperty("source_database_unchanged").GetBoolean());
+                var previewRecommendation = previewJson.GetProperty("fts_optimization");
+                Assert.Equal(
+                    statusRecommendation.Recommended,
+                    previewRecommendation.GetProperty("recommended").GetBoolean());
+                Assert.Equal(
+                    statusRecommendation.Action,
+                    previewRecommendation.GetProperty("action").GetString());
+                Assert.Equal(
+                    statusRecommendation.Reason,
+                    previewRecommendation.GetProperty("reason").GetString());
+                Assert.Equal(
+                    statusRecommendation.ThresholdWrites,
+                    previewRecommendation.GetProperty("threshold_writes").GetInt32());
+                Assert.Equal(
+                    statusRecommendation.ObservedWrites,
+                    previewRecommendation.GetProperty("observed_writes").GetInt64());
+                Assert.Equal(
+                    statusRecommendation.State,
+                    previewRecommendation.GetProperty("state").GetString());
+
+                int aliasPreviewExitCode;
+                JsonElement aliasPreviewJson;
+                lock (TestConsoleLock.Gate)
+                {
+                    var originalOut = Console.Out;
+                    try
+                    {
+                        using var stdout = new StringWriter();
+                        Console.SetOut(stdout);
+                        aliasPreviewExitCode = IndexCommandRunner.Run(
+                            [
+                                Path.GetDirectoryName(dbPath)!,
+                                "--optimize",
+                                "--dry-run",
+                                "--db",
+                                dbUri,
+                                "--json",
+                            ],
+                            _jsonOptions);
+                        using var document = JsonDocument.Parse(stdout.ToString());
+                        aliasPreviewJson = document.RootElement.Clone();
+                    }
+                    finally
+                    {
+                        Console.SetOut(originalOut);
+                    }
+                }
+
+                Assert.Equal(CommandExitCodes.Success, aliasPreviewExitCode);
+                Assert.Equal("dry_run", aliasPreviewJson.GetProperty("status").GetString());
+                Assert.True(aliasPreviewJson.GetProperty("source_database_unchanged").GetBoolean());
+                var aliasPreviewRecommendation = aliasPreviewJson.GetProperty("fts_optimization");
+                Assert.Equal(
+                    statusRecommendation.Recommended,
+                    aliasPreviewRecommendation.GetProperty("recommended").GetBoolean());
+                Assert.Equal(
+                    statusRecommendation.Action,
+                    aliasPreviewRecommendation.GetProperty("action").GetString());
+                Assert.Equal(
+                    statusRecommendation.Reason,
+                    aliasPreviewRecommendation.GetProperty("reason").GetString());
+                Assert.Equal(
+                    statusRecommendation.ThresholdWrites,
+                    aliasPreviewRecommendation.GetProperty("threshold_writes").GetInt32());
+                Assert.Equal(
+                    statusRecommendation.ObservedWrites,
+                    aliasPreviewRecommendation.GetProperty("observed_writes").GetInt64());
+                Assert.Equal(
+                    statusRecommendation.State,
+                    aliasPreviewRecommendation.GetProperty("state").GetString());
+
+                int exitCode;
+                JsonElement json;
+                lock (TestConsoleLock.Gate)
+                {
+                    var originalOut = Console.Out;
+                    try
+                    {
+                        using var stdout = new StringWriter();
+                        Console.SetOut(stdout);
+                        exitCode = IndexCommandRunner.RunOptimizeFts(["--db", dbUri, "--json"], _jsonOptions);
+                        using var document = JsonDocument.Parse(stdout.ToString());
+                        json = document.RootElement.Clone();
+                    }
+                    finally
+                    {
+                        Console.SetOut(originalOut);
+                    }
+                }
+
+                Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+                Assert.Equal("error", json.GetProperty("status").GetString());
+                Assert.Equal(CommandErrorCodes.DbNotWritable, json.GetProperty("error_code").GetString());
+                Assert.Equal("database_not_writable", json.GetProperty("category").GetString());
+                Assert.Equal("database is not writable", json.GetProperty("message").GetString());
             }
-
-            Assert.Equal(CommandExitCodes.Success, previewExitCode);
-            Assert.Equal("dry_run", previewJson.GetProperty("status").GetString());
-            Assert.True(previewJson.GetProperty("source_database_unchanged").GetBoolean());
-
-            int exitCode;
-            JsonElement json;
-            lock (TestConsoleLock.Gate)
-            {
-                var originalOut = Console.Out;
-                try
-                {
-                    using var stdout = new StringWriter();
-                    Console.SetOut(stdout);
-                    exitCode = IndexCommandRunner.RunOptimizeFts(["--db", dbUri, "--json"], _jsonOptions);
-                    using var document = JsonDocument.Parse(stdout.ToString());
-                    json = document.RootElement.Clone();
-                }
-                finally
-                {
-                    Console.SetOut(originalOut);
-                }
-            }
-
-            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
-            Assert.Equal("error", json.GetProperty("status").GetString());
-            Assert.Equal(CommandErrorCodes.DbNotWritable, json.GetProperty("error_code").GetString());
-            Assert.Equal("database_not_writable", json.GetProperty("category").GetString());
-            Assert.Equal("database is not writable", json.GetProperty("message").GetString());
 
             using var verifyDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
-            Assert.Equal("1", verifyDb.GetMetaString(DbWriter.FtsIncrementalWritesSinceOptimizeMetaKey));
+            Assert.Equal(
+                DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold.ToString(CultureInfo.InvariantCulture),
+                verifyDb.GetMetaString(DbWriter.FtsIncrementalWritesSinceOptimizeMetaKey));
         }
         finally
         {

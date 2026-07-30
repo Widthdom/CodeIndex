@@ -150,6 +150,17 @@ public partial class DbReader
         var preparedCommandCache = GetPreparedCommandCacheStatus();
         var dbSizeBytes = TryGetDatabaseFileSize();
         var walSizeBytes = TryGetWalFileSize();
+        var ftsIncrementalWritesSinceOptimize = ParseMetaLong(
+            TryGetMetaStringInternal(DbWriter.FtsIncrementalWritesSinceOptimizeMetaKey));
+        var maintenanceSnapshotCurrent = ParseMetaBool(
+            TryGetMetaStringInternal(DbContext.BatchInProgressMetaKey)) != true
+            && !_indexNewerThanReader
+            && !WalStaleSnapshotRisk;
+        var ftsOptimization = FtsOptimizationRecommendationEvaluator.Evaluate(
+            new FtsOptimizationMetrics(
+                ftsIncrementalWritesSinceOptimize,
+                dbPragmaSettings.PageCount,
+                maintenanceSnapshotCurrent));
         var databaseSizeAttribution = includeDatabaseSizeAttribution
             ? ReadDatabaseSizeAttribution(
                 dbPragmaSettings,
@@ -169,7 +180,8 @@ public partial class DbReader
             dbPragmaSettings.PageSize,
             walSizeBytes,
             dbSizeBytes,
-            dbPragmaSettings.AutoVacuum));
+            dbPragmaSettings.AutoVacuum),
+            ftsOptimization: ftsOptimization);
         var lastIndexRun = GetLastIndexRun();
         var referenceExtractionCapHits = GetReferenceExtractionCapHits();
         var persistedReadiness = GetPersistedIndexGenerationReadiness(

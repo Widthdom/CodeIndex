@@ -991,6 +991,10 @@ public partial class QueryCommandRunnerTests
         var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
         using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
         {
+            new DbWriter(db).SetMeta(
+                DbWriter.FtsIncrementalWritesSinceOptimizeMetaKey,
+                DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold.ToString(
+                    System.Globalization.CultureInfo.InvariantCulture));
             using var command = db.Connection.CreateCommand();
             command.CommandText = @"
                 CREATE TABLE vacuum_payload (id INTEGER PRIMARY KEY, payload BLOB);
@@ -1023,6 +1027,14 @@ public partial class QueryCommandRunnerTests
         var guidance = root.GetProperty("maintenance_guidance");
         Assert.Equal("vacuum_recommended", guidance.GetProperty("freelist_state").GetString());
         Assert.Equal("cdidx vacuum --db <db>", guidance.GetProperty("recommended_command").GetString());
+        var ftsOptimization = guidance.GetProperty("fts_optimization");
+        Assert.True(ftsOptimization.GetProperty("recommended").GetBoolean());
+        Assert.Equal("optimize", ftsOptimization.GetProperty("action").GetString());
+        Assert.Equal("incremental_write_threshold_reached", ftsOptimization.GetProperty("reason").GetString());
+        Assert.Equal(
+            DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold,
+            ftsOptimization.GetProperty("observed_writes").GetInt64());
+        Assert.Equal("current", ftsOptimization.GetProperty("state").GetString());
     }
 
     [Fact]

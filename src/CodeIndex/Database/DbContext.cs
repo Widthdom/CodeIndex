@@ -361,6 +361,8 @@ public partial class DbContext : IDisposable
     public bool ReadOnlyImmutableFallback => _readOnlyImmutableFallback;
     internal bool ImmutableReadOnly => _immutableReadOnly;
     internal bool ImmutableReadOnlyWalRisk => _immutableReadOnlyWalRisk;
+    internal bool WalStaleSnapshotRisk =>
+        (_immutableReadOnlyWalRisk || _readOnlyImmutableFallback) && !_walCheckpointSucceeded;
     internal bool ConnectionPooling => _connectionPooling;
     internal bool QueryOnlySnapshotRequiresRefresh => _queryOnlySnapshotRequiresRefresh;
     internal DbConnectionFactory.QueryOnlySnapshotSourceState? QueryOnlySnapshotSourceState
