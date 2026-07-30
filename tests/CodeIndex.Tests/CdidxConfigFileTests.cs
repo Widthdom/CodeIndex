@@ -879,6 +879,8 @@ public class CdidxConfigFileTests
                 ("version_with_global_flag", ["--quiet", "--version", "--json"]),
                 ("help", ["help", "status"]),
                 ("subcommand_help", ["index", "--help"]),
+                ("validate_config_help", ["validate-config", "--help"]),
+                ("config_show_help", ["config", "show", "--help"]),
                 ("completions", ["completions", "bash"]),
             };
 
@@ -959,6 +961,15 @@ public class CdidxConfigFileTests
             Assert.Equal(CommandExitCodes.UsageError, optionValueResult.ExitCode);
             Assert.Empty(optionValueResult.Stdout);
             Assert.Contains($"Error [{CommandErrorCodes.ConfigInvalid}]", optionValueResult.Stderr);
+
+            var globalOptionValueResult = CaptureConsole(() => ProgramRunner.Run(
+                ["--metrics", "--json", "search", "needle"],
+                appVersion: "1.40.3",
+                configStartDirectory: dir));
+
+            Assert.Equal(CommandExitCodes.UsageError, globalOptionValueResult.ExitCode);
+            Assert.Empty(globalOptionValueResult.Stdout);
+            Assert.Contains($"Error [{CommandErrorCodes.ConfigInvalid}]", globalOptionValueResult.Stderr);
         }
         finally { TestProjectHelper.DeleteDirectory(dir); }
     }
@@ -1208,6 +1219,20 @@ public sealed class CdidxConfigProcessStateTests
             var metrics = File.ReadAllLines(metricsPath);
             Assert.Contains(metrics, line => line.Contains("\"tool\":\"validate-config\"", StringComparison.Ordinal));
             Assert.Contains(metrics, line => line.Contains("\"tool\":\"config\"", StringComparison.Ordinal));
+
+            var metricsCountBeforeHelp = metrics.Length;
+            var validateHelpResult = ConsoleCapture.Capture(() => ProgramRunner.Run(
+                ["validate-config", "--help"],
+                _jsonOptions,
+                appVersion: "test"));
+            var showHelpResult = ConsoleCapture.Capture(() => ProgramRunner.Run(
+                ["config", "show", "--help"],
+                _jsonOptions,
+                appVersion: "test"));
+
+            Assert.Equal(CommandExitCodes.Success, validateHelpResult.ExitCode);
+            Assert.Equal(CommandExitCodes.Success, showHelpResult.ExitCode);
+            Assert.Equal(metricsCountBeforeHelp, File.ReadAllLines(metricsPath).Length);
         }
         finally
         {

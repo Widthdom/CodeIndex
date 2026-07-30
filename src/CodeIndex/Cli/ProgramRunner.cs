@@ -326,6 +326,11 @@ internal static partial class ProgramRunner
         }
 
         var command = CliCommandCatalog.NormalizePublicCommandName(rawCommand);
+        if (commandIndex + 1 < args.Count
+            && ArgHelper.WantsHelp(args.Skip(commandIndex + 1).ToArray()))
+        {
+            return ProjectConfigDependency.Independent;
+        }
         if (CliCommandMetadata.ProjectConfigIndependentCommands.Contains(command))
             return ProjectConfigDependency.Independent;
         if (CliCommandMetadata.ProjectConfigSelfManagedCommands.Contains(command))
@@ -336,11 +341,6 @@ internal static partial class ProgramRunner
             && string.Equals(args[nestedCommandIndex], "show", StringComparison.Ordinal))
         {
             return ProjectConfigDependency.SelfManaged;
-        }
-        if (commandIndex + 1 < args.Count
-            && ArgHelper.WantsHelp(args.Skip(commandIndex + 1).ToArray()))
-        {
-            return ProjectConfigDependency.Independent;
         }
 
         return ProjectConfigDependency.Required;
@@ -375,7 +375,13 @@ internal static partial class ProgramRunner
 
     private static bool RequestsProjectConfigJsonError(string[] args)
     {
-        for (var i = 0; i < args.Length; i++)
+        // Leading global options can legally take values that look like command JSON
+        // flags (for example `--metrics --json`). Consume those pairs before detecting
+        // the selected command's output contract.
+        // 先頭の global option は command の JSON flag に見える値（例:
+        // `--metrics --json`）を正当な値として取れるため、command の output 契約を
+        // 判定する前に option/value の組を消費する。
+        for (var i = FindProjectConfigCommandIndex(args); i < args.Length; i++)
         {
             var arg = args[i];
             if (arg == "--")
