@@ -141,6 +141,54 @@ public sealed class ProjectionFieldRegistryIssue4836Tests
     }
 
     [Fact]
+    public void StatusExplain_StructuredFieldsSupportBoundedProjection_Issue4891()
+    {
+        var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
+            ProgramRunner.Run(
+                [
+                    "status",
+                    "--explain",
+                    "files",
+                    "--json",
+                    "--fields",
+                    "meaning,source,redaction,known_fields_truncated",
+                    "--max-json-bytes",
+                    "8192"
+                ],
+                _jsonOptions,
+                "1.0.0-test"));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = JsonDocument.Parse(stdout);
+        var root = document.RootElement;
+        var row = Assert.Single(root.GetProperty("results").EnumerateArray());
+        Assert.Contains("files", row.GetProperty("meaning").GetString(), StringComparison.Ordinal);
+        Assert.Contains("StatusResult", row.GetProperty("source").GetString(), StringComparison.Ordinal);
+        var redaction = row.GetProperty("redaction");
+        Assert.False(redaction.GetProperty("runtime_values_included").GetBoolean());
+        Assert.False(redaction.GetProperty("paths_included").GetBoolean());
+        Assert.True(row.GetProperty("known_fields_truncated").GetBoolean());
+        Assert.Equal(4, row.EnumerateObject().Count());
+        var metadata = root.GetProperty("metadata");
+        Assert.Equal(8192, metadata.GetProperty("max_json_bytes").GetInt32());
+        foreach (var forbiddenField in new[]
+                 {
+                     "cdidx_version",
+                     "elapsed_ms",
+                     "db_path",
+                     "indexed_at_head_sha",
+                     "result_stable_at",
+                 })
+        {
+            Assert.False(
+                metadata.TryGetProperty(forbiddenField, out _),
+                $"Bounded status explain metadata must omit runtime field '{forbiddenField}'.");
+        }
+        Assert.DoesNotContain(Directory.GetCurrentDirectory(), stdout, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RegistryAliasesAndNestedCollections_AreMachineDiscoverable_Issue4836()
     {
         var search = ProjectionFieldRegistry.CreateDiscoveryDocument("search");
@@ -186,6 +234,16 @@ public sealed class ProjectionFieldRegistryIssue4836Tests
     [InlineData("status", "index_matches_workspace")]
     [InlineData("status", "effective_config")]
     [InlineData("status", "update_check")]
+    [InlineData("status", "scope")]
+    [InlineData("status", "meaning")]
+    [InlineData("status", "source")]
+    [InlineData("status", "dependencies")]
+    [InlineData("status", "dependencies_truncated")]
+    [InlineData("status", "interpretation")]
+    [InlineData("status", "repair_guidance")]
+    [InlineData("status", "redaction")]
+    [InlineData("status", "known_field_limit")]
+    [InlineData("status", "known_fields_truncated")]
     [InlineData("references", "body_content")]
     [InlineData("callers", "aggregate_truncated")]
     [InlineData("callers", "first_column")]

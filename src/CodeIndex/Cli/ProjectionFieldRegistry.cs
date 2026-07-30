@@ -205,7 +205,9 @@ internal static class ProjectionFieldRegistry
                 .Fields(GetJsonFieldNames<StatusResult>())
                 .Fields(
                     "effective_config", "log_path", "field", "label", "ready", "degraded",
-                    "remediation", "known_fields"));
+                    "remediation", "known_fields", "scope", "meaning", "source", "dependencies",
+                    "dependencies_truncated", "interpretation", "repair_guidance", "redaction",
+                    "known_field_limit", "known_fields_truncated"));
 
     private static ProjectionCommandFieldSchema CreateHotspotsSchema()
         => Create(

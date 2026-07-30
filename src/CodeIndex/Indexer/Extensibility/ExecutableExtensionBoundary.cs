@@ -78,12 +78,22 @@ internal static class ExecutableExtensionBoundary
     private const int CopyBufferBytes = 64 * 1024;
     private const uint UnixFileTypeMask = 0xF000;
     private const uint UnixRegularFileType = 0x8000;
+
     private const uint UnixDirectoryType = 0x4000;
     private const uint UnixGroupWrite = 0x0010;
     private const uint UnixOtherWrite = 0x0002;
     private const uint UnixStickyBit = 0x0200;
 
     internal static Action<string, string>? StagedForTesting { get; set; }
+
+    internal static bool IsRegularFilePath(string path)
+    {
+        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
+            return true;
+
+        return UnixFileIdentity.TryRead(path, out var mode, out _)
+            && (mode & UnixFileTypeMask) == UnixRegularFileType;
+    }
 
     internal static bool TryValidateDirectory(
         string directory,
