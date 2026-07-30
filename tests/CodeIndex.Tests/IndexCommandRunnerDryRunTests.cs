@@ -440,6 +440,215 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_DryRun_ReestimatesUnchangedFileWithPersistedCapIssue_Issue4893()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "app.cs"),
+                """
+                public class App
+                {
+                    public void First() { }
+                    public void Second() { }
+                }
+                """);
+            var (indexExitCode, _) = RunAndCaptureJson([
+                projectRoot,
+                "--max-symbols-per-file",
+                "1",
+                "--json",
+            ]);
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+
+            var (exitCode, json) = RunAndCaptureJson([
+                projectRoot,
+                "--dry-run",
+                "--max-symbols-per-file",
+                "1",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(1, json.GetProperty("projected_file_updates").GetInt32());
+            Assert.Equal(0, json.GetProperty("projected_file_skips").GetInt32());
+            Assert.Equal(1, json.GetProperty("projected_symbol_cap_hits").GetInt32());
+            Assert.Equal(
+                0,
+                json.GetProperty("estimated_table_mutations")
+                    .GetProperty("symbols")
+                    .GetInt32());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRun_ReusesUnchangedIndexedBinaryFile_Issue4893()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllBytes(
+                Path.Combine(projectRoot, "binary.cs"),
+                [0x70, 0x00, 0x71]);
+            var (indexExitCode, _) = RunAndCaptureJson([
+                projectRoot,
+                "--json",
+            ]);
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+
+            var dbPath = Path.Combine(
+                projectRoot,
+                ".cdidx",
+                "codeindex.db");
+            SqliteConnection.ClearAllPools();
+            var before = File.ReadAllBytes(dbPath);
+
+            var (exitCode, json) = RunAndCaptureJson([
+                projectRoot,
+                "--dry-run",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(0, json.GetProperty("projected_file_updates").GetInt32());
+            Assert.Equal(1, json.GetProperty("projected_file_skips").GetInt32());
+            Assert.Equal(0, json.GetProperty("projected_policy_skips").GetInt32());
+            Assert.Equal(0, json.GetProperty("errors_total").GetInt32());
+            SqliteConnection.ClearAllPools();
+            Assert.Equal(before, File.ReadAllBytes(dbPath));
+
+            var (refreshExitCode, refreshJson) = RunAndCaptureJson([
+                projectRoot,
+                "--json",
+            ]);
+            Assert.Equal(CommandExitCodes.Success, refreshExitCode);
+            Assert.Equal(
+                1,
+                refreshJson.GetProperty("summary")
+                    .GetProperty("files_skipped")
+                    .GetInt32());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRun_DoesNotReuseAcrossFilterOrExtractorContractChange_Issue4893()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "app.cs"),
+                "public class App { public void Run() { } }\n");
+            var (indexExitCode, _) = RunAndCaptureJson([
+                projectRoot,
+                "--json",
+            ]);
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+
+            var (filterExitCode, filterJson) = RunAndCaptureJson([
+                projectRoot,
+                "--dry-run",
+                "--include-symbol-kind",
+                "class",
+                "--json",
+            ]);
+            Assert.Equal(CommandExitCodes.Success, filterExitCode);
+            Assert.Equal(
+                1,
+                filterJson.GetProperty("projected_file_updates").GetInt32());
+            Assert.Equal(
+                0,
+                filterJson.GetProperty("projected_file_skips").GetInt32());
+
+            var dbPath = Path.Combine(
+                projectRoot,
+                ".cdidx",
+                "codeindex.db");
+            using (var connection = new SqliteConnection(
+                $"Data Source={dbPath}"))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = """
+                    INSERT INTO codeindex_meta(key, value)
+                    VALUES (@key, 'stale')
+                    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                    """;
+                command.Parameters.AddWithValue(
+                    "@key",
+                    DbContext.GetSymbolExtractorVersionMetaKey("csharp"));
+                command.ExecuteNonQuery();
+            }
+            SqliteConnection.ClearAllPools();
+
+            var (contractExitCode, contractJson) = RunAndCaptureJson([
+                projectRoot,
+                "--dry-run",
+                "--json",
+            ]);
+            Assert.Equal(CommandExitCodes.Success, contractExitCode);
+            Assert.Equal(
+                1,
+                contractJson.GetProperty("projected_file_updates").GetInt32());
+            Assert.Equal(
+                0,
+                contractJson.GetProperty("projected_file_skips").GetInt32());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRun_RejectsScopedSymbolFilterChange_Issue4893()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "app.cs"),
+                "public class App { }\n");
+            var (indexExitCode, _) = RunAndCaptureJson([
+                projectRoot,
+                "--json",
+            ]);
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+
+            var (exitCode, json) = RunAndCaptureJson([
+                projectRoot,
+                "--files",
+                "app.cs",
+                "--dry-run",
+                "--include-symbol-kind",
+                "class",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal("error", json.GetProperty("status").GetString());
+            Assert.Contains(
+                "symbol-kind filter policy cannot change",
+                json.GetProperty("message").GetString());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_DryRun_ParseEstimateFailureReturnsExplicitUnknown_Issue4893()
     {
         var projectRoot = CreateTempProject();

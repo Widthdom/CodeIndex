@@ -50,7 +50,24 @@ public static partial class IndexCommandRunner
         var warningCount = 0;
         var dryScanErrorKeys = new HashSet<string>(StringComparer.Ordinal);
         DryRunScanMetadata dryScanMetadata;
-        var dbSnapshot = ReadDryRunDbSnapshot(resolvedDbPath);
+        var dbSnapshot = ReadDryRunDbSnapshot(resolvedDbPath, options);
+        var scopedUpdateSymbolKindFilterMatchesPrior = string.Equals(
+                dbSnapshot.SymbolKindFilterSignature,
+                options.SymbolKindFilter.Signature,
+                StringComparison.Ordinal)
+            || (dbSnapshot.SymbolKindFilterSignature == null
+                && !options.SymbolKindFilter.IsActive);
+        if (IsUpdateMode(options)
+            && !scopedUpdateSymbolKindFilterMatchesPrior)
+        {
+            return WriteCommandError(
+                options.Json,
+                jsonOptions,
+                "symbol-kind filter policy cannot change during a scoped update because existing files would keep symbols from the prior index policy",
+                CommandExitCodes.UsageError,
+                "Run a full index refresh without --files, --commits, or --changed-between when changing --include-symbol-kind or --exclude-symbol-kind.",
+                CommandErrorCodes.UsageError);
+        }
         if (options.MemoryTrace)
             memorySamples.Add(CaptureMemorySample("snapshot", stopwatch));
         var normalizedProjectRoot = Path.GetFullPath(projectPath);
@@ -192,9 +209,29 @@ public static partial class IndexCommandRunner
             if (probe.PolicySkipped)
             {
                 dryFileCount++;
+                retainedRelativePaths.Add(dbRelativePath);
+                if (dryFileSamples.Count < DryRunFileSampleLimit)
+                    dryFileSamples.Add(displayRelativePath);
+                langCounts[probe.Language] = langCounts.GetValueOrDefault(probe.Language) + 1;
+                var projectedBinarySkip = probe.PolicySkipKind == DryRunPolicySkipKind.Binary
+                    && IsDryRunStatReusable(
+                        options,
+                        dbSnapshot,
+                        dbRelativePath,
+                        probe.Language,
+                        probe.Size,
+                        probe.Modified,
+                        dryIndexer.IsGeneratedCodeExtractionSuppressed(dbRelativePath),
+                        authoritativeFullScan,
+                        normalizedProjectRoot);
+                if (projectedBinarySkip)
+                {
+                    projectedFileSkips++;
+                    continue;
+                }
+
                 projectedFileUpdates++;
                 projectedPolicySkips++;
-                retainedRelativePaths.Add(dbRelativePath);
                 AddEstimatedExistingUpdateMutations(
                     mutationEstimates,
                     dbSnapshot,
@@ -208,9 +245,6 @@ public static partial class IndexCommandRunner
                     0,
                     SymbolCapHit: false,
                     ReferenceCapHit: false));
-                if (dryFileSamples.Count < DryRunFileSampleLimit)
-                    dryFileSamples.Add(displayRelativePath);
-                langCounts[probe.Language] = langCounts.GetValueOrDefault(probe.Language) + 1;
                 if (probe.Error != null)
                 {
                     RecordDryRunError(displayRelativePath, probe.Error);
@@ -279,10 +313,14 @@ public static partial class IndexCommandRunner
                         dbRelativePath);
                 }
             }
-            var projectedSkip = !options.Rebuild
-                && dbSnapshot.Files.TryGetValue(dbRelativePath, out var existingRows)
-                && !string.IsNullOrEmpty(probe.Checksum)
-                && string.Equals(existingRows.Checksum, probe.Checksum, StringComparison.Ordinal);
+            var projectedSkip = IsDryRunLoadedFileReusable(
+                options,
+                dbSnapshot,
+                dbRelativePath,
+                probe.Loaded!.Value.Record,
+                dryIndexer.IsGeneratedCodeExtractionSuppressed(dbRelativePath),
+                authoritativeFullScan,
+                normalizedProjectRoot);
             if (projectedSkip)
             {
                 projectedFileSkips++;
@@ -832,7 +870,10 @@ public static partial class IndexCommandRunner
                 DetectionSource: loaded.LanguageDetection.DetectionSource,
                 DetectionConfidence: loaded.LanguageDetection.Confidence,
                 Loaded: loaded,
-                PolicySkipped: false);
+                PolicySkipped: false,
+                DryRunPolicySkipKind.None,
+                record.Size,
+                record.Modified);
         }
         catch (FileIndexer.FileTooLargeSkippedException ex)
         {
@@ -842,7 +883,8 @@ public static partial class IndexCommandRunner
                 reusableLanguage);
             return DryRunFileProbe.FromPolicySkip(
                 skipped,
-                CommandErrorWriter.FormatSanitizedExceptionMessage(ex));
+                CommandErrorWriter.FormatSanitizedExceptionMessage(ex),
+                DryRunPolicySkipKind.FileTooLarge);
         }
         catch (FileIndexer.BinaryFileSkippedException ex)
         {
@@ -852,7 +894,8 @@ public static partial class IndexCommandRunner
                 reusableLanguage);
             return DryRunFileProbe.FromPolicySkip(
                 skipped,
-                CommandErrorWriter.FormatSanitizedExceptionMessage(ex));
+                CommandErrorWriter.FormatSanitizedExceptionMessage(ex),
+                DryRunPolicySkipKind.Binary);
         }
         catch (Exception ex)
         {
@@ -1026,6 +1069,193 @@ public static partial class IndexCommandRunner
             ReferenceCapHit: referenceCapHit);
     }
 
+    private static bool IsDryRunLoadedFileReusable(
+        IndexCommandOptions options,
+        DryRunDbSnapshot snapshot,
+        string relativePath,
+        FileRecord record,
+        bool generatedExtractionSuppressed,
+        bool authoritativeFullScan,
+        string projectRoot)
+    {
+        if (!snapshot.Files.TryGetValue(relativePath, out var existing)
+            || !IsDryRunReuseAllowed(
+                options,
+                snapshot,
+                record.Lang,
+                authoritativeFullScan,
+                projectRoot)
+            || !existing.ContentReuseEligible
+            || existing.GeneratedExtractionSuppressed
+                != generatedExtractionSuppressed)
+        {
+            return false;
+        }
+
+        var statMatches = existing.StatReuseEligible
+            && existing.ModifiedUtc == record.Modified
+            && existing.Size == record.Size
+            && string.Equals(
+                existing.Language,
+                record.Lang,
+                StringComparison.Ordinal);
+        var checksumMatches = !string.IsNullOrEmpty(record.Checksum)
+            && string.Equals(
+                existing.Checksum,
+                record.Checksum,
+                StringComparison.Ordinal)
+            && existing.Lines == record.Lines;
+        return statMatches || checksumMatches;
+    }
+
+    private static bool IsDryRunStatReusable(
+        IndexCommandOptions options,
+        DryRunDbSnapshot snapshot,
+        string relativePath,
+        string language,
+        long? size,
+        DateTime? modified,
+        bool generatedExtractionSuppressed,
+        bool authoritativeFullScan,
+        string projectRoot)
+    {
+        if (!size.HasValue
+            || !modified.HasValue
+            || !snapshot.Files.TryGetValue(relativePath, out var existing)
+            || !existing.StatReuseEligible
+            || existing.GeneratedExtractionSuppressed
+                != generatedExtractionSuppressed
+            || !IsDryRunReuseAllowed(
+                options,
+                snapshot,
+                language,
+                authoritativeFullScan,
+                projectRoot))
+        {
+            return false;
+        }
+
+        return existing.Size == size.Value
+            && existing.ModifiedUtc == modified.Value
+            && string.Equals(
+                existing.Language,
+                language,
+                StringComparison.Ordinal);
+    }
+
+    private static bool IsDryRunReuseAllowed(
+        IndexCommandOptions options,
+        DryRunDbSnapshot snapshot,
+        string? language,
+        bool authoritativeFullScan,
+        string projectRoot)
+    {
+        if (options.Rebuild
+            || string.IsNullOrWhiteSpace(language)
+            || !string.Equals(
+                snapshot.SymbolKindFilterSignature,
+                options.SymbolKindFilter.Signature,
+                StringComparison.Ordinal)
+            || !DryRunExtractorContractsMatchCurrent(snapshot, language))
+        {
+            return false;
+        }
+
+        if (authoritativeFullScan && snapshot.SymbolsOnlyGraphOmitted)
+            return false;
+
+        if (language == "csharp")
+        {
+            var indexedProjectRoot = snapshot.IndexedProjectRoot;
+            if (!string.IsNullOrWhiteSpace(indexedProjectRoot)
+                && !PathsEqual(
+                    Path.GetFullPath(indexedProjectRoot),
+                    projectRoot))
+            {
+                return false;
+            }
+
+            var currentContract = DbContext.CSharpSymbolNameContractVersion
+                .ToString(System.Globalization.CultureInfo.InvariantCulture);
+            if (!string.Equals(
+                snapshot.GetMeta(
+                    DbContext.CSharpSymbolNameContractVersionMetaKey),
+                currentContract,
+                StringComparison.Ordinal)
+                || snapshot.CSharpStaticInterfaceSourceEvidence == true)
+            {
+                return false;
+            }
+        }
+
+        if (language == "sql")
+        {
+            var currentContract = DbContext.SqlGraphContractVersion
+                .ToString(System.Globalization.CultureInfo.InvariantCulture);
+            if (!string.Equals(
+                snapshot.GetMeta(DbContext.SqlGraphContractVersionMetaKey),
+                currentContract,
+                StringComparison.Ordinal))
+            {
+                return false;
+            }
+        }
+
+        if (language is "verilog" or "systemverilog" or "vhdl")
+        {
+            var currentContract = DbContext.HdlGraphContractVersion
+                .ToString(System.Globalization.CultureInfo.InvariantCulture);
+            if (!string.Equals(
+                snapshot.GetMeta(DbContext.HdlGraphContractVersionMetaKey),
+                currentContract,
+                StringComparison.Ordinal))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool DryRunExtractorContractsMatchCurrent(
+        DryRunDbSnapshot snapshot,
+        string language)
+    {
+        var storedExtractorVersion = snapshot.GetMeta(
+            DbContext.GetSymbolExtractorVersionMetaKey(language));
+        if (storedExtractorVersion != null)
+        {
+            var currentExtractorVersion = SymbolExtractor
+                .GetContractVersion(language)
+                .ToString(
+                    System.Globalization.CultureInfo.InvariantCulture);
+            if (!string.Equals(
+                storedExtractorVersion,
+                currentExtractorVersion,
+                StringComparison.Ordinal))
+            {
+                return false;
+            }
+        }
+
+        if (!SymbolExtractor
+            .RequiresExplicitReferenceGraphContractStamp(language))
+        {
+            return true;
+        }
+
+        var storedGraphContract = snapshot.GetMeta(
+            DbContext.GetDynamicReferenceGraphContractVersionMetaKey(
+                language));
+        var currentGraphContract = SymbolExtractor
+            .GetReferenceGraphContractVersion(language)
+            .ToString(System.Globalization.CultureInfo.InvariantCulture);
+        return string.Equals(
+            storedGraphContract,
+            currentGraphContract,
+            StringComparison.Ordinal);
+    }
+
     private static void AddEstimatedExistingUpdateMutations(
         DryRunMutationEstimateAccumulator mutations,
         DryRunDbSnapshot snapshot,
@@ -1069,7 +1299,9 @@ public static partial class IndexCommandRunner
         mutations.AddExisting("file_issues", rows.FileIssues, snapshot.FileIssuesAvailable);
     }
 
-    private static DryRunDbSnapshot ReadDryRunDbSnapshot(string dbPath)
+    private static DryRunDbSnapshot ReadDryRunDbSnapshot(
+        string dbPath,
+        IndexCommandOptions options)
     {
         try
         {
@@ -1088,22 +1320,96 @@ public static partial class IndexCommandRunner
             if (!DryRunTableExists(connection, "files"))
                 return DryRunDbSnapshot.Empty;
 
-            var indexedProjectRoot = DryRunReadMetaString(connection, DbContext.IndexedProjectRootMetaKey);
+            var metadata = DryRunReadMetadata(connection);
+            metadata.TryGetValue(
+                DbContext.IndexedProjectRootMetaKey,
+                out var indexedProjectRoot);
             var hasChunks = DryRunTableExists(connection, "chunks");
             var hasSymbols = DryRunTableExists(connection, "symbols");
             var hasSymbolReferences = DryRunTableExists(connection, "symbol_references");
             var hasReferenceLines = DryRunTableExists(connection, "reference_lines");
             var hasFileIssues = DryRunTableExists(connection, "file_issues");
+            var hasChecksum = DryRunColumnExists(
+                connection,
+                "files",
+                "checksum");
+            var hasLanguage = DryRunColumnExists(connection, "files", "lang");
+            var hasSize = DryRunColumnExists(connection, "files", "size");
+            var hasModified = DryRunColumnExists(
+                connection,
+                "files",
+                "modified");
+            var hasLines = DryRunColumnExists(connection, "files", "lines");
+            var hasIssueKind = hasFileIssues
+                && DryRunColumnExists(
+                    connection,
+                    "file_issues",
+                    "kind");
+            var hasIssueOrigin = hasFileIssues
+                && DryRunColumnExists(
+                    connection,
+                    "file_issues",
+                    "origin");
+            var hasIssueSeverity = hasFileIssues
+                && DryRunColumnExists(
+                    connection,
+                    "file_issues",
+                    "severity");
+            var hasCurrentIssueSchema = hasIssueKind
+                && hasIssueOrigin
+                && hasIssueSeverity;
+
+            string IssueExists(string kind) => hasIssueKind
+                ? $"""
+                    EXISTS (
+                        SELECT 1
+                        FROM file_issues i
+                        WHERE i.file_id = f.id
+                          AND i.kind = '{kind}'
+                    )
+                    """
+                : "0";
+            var staleIssueMetadata = hasCurrentIssueSchema
+                ? """
+                    EXISTS (
+                        SELECT 1
+                        FROM file_issues i
+                        WHERE i.file_id = f.id
+                          AND (
+                              (i.kind IN (
+                                  'replacement_char',
+                                  'non_utf8_likely',
+                                  'bom',
+                                  'utf16_bom')
+                               AND (
+                                   i.origin IS NULL
+                                   OR i.severity IS NULL))
+                              OR (
+                                  i.kind = 'bom'
+                                  AND f.path LIKE '%.sln')
+                          )
+                    )
+                    """
+                : "0";
 
             using var command = connection.CreateCommand();
             command.CommandText = $"""
                 SELECT f.path,
-                       f.checksum,
+                       {(hasChecksum ? "f.checksum" : "NULL")} AS checksum,
+                       {(hasLanguage ? "f.lang" : "NULL")} AS lang,
+                       {(hasSize ? "f.size" : "NULL")} AS size,
+                       {(hasModified ? "f.modified" : "NULL")} AS modified,
+                       {(hasLines ? "f.lines" : "NULL")} AS lines,
                        {(hasChunks ? "(SELECT COUNT(*) FROM chunks c WHERE c.file_id = f.id)" : "0")} AS chunks_count,
                        {(hasSymbols ? "(SELECT COUNT(*) FROM symbols s WHERE s.file_id = f.id)" : "0")} AS symbols_count,
                        {(hasSymbolReferences ? "(SELECT COUNT(*) FROM symbol_references r WHERE r.file_id = f.id)" : "0")} AS symbol_references_count,
                        {(hasReferenceLines ? "(SELECT COUNT(*) FROM reference_lines l WHERE l.file_id = f.id)" : "0")} AS reference_lines_count,
-                       {(hasFileIssues ? "(SELECT COUNT(*) FROM file_issues i WHERE i.file_id = f.id)" : "0")} AS file_issues_count
+                       {(hasFileIssues ? "(SELECT COUNT(*) FROM file_issues i WHERE i.file_id = f.id)" : "0")} AS file_issues_count,
+                       {IssueExists(FileIndexer.GeneratedCodeExtractionSkippedIssueKind)} AS generated_suppressed,
+                       {IssueExists("symbol_count_exceeded")} AS symbol_cap_issue,
+                       {IssueExists("reference_count_exceeded")} AS reference_cap_issue,
+                       {IssueExists("file_too_large")} AS file_too_large_issue,
+                       {staleIssueMetadata} AS stale_issue_metadata
                 FROM files f
                 """;
 
@@ -1111,18 +1417,72 @@ public static partial class IndexCommandRunner
             using var reader = command.ExecuteReader();
             while (reader.Read())
             {
+                var language = reader.IsDBNull(2)
+                    ? null
+                    : reader.GetString(2);
+                var size = reader.IsDBNull(3)
+                    || reader.GetValue(3) is not long rawSize
+                    || rawSize < 0
+                        ? null
+                        : (long?)rawSize;
+                var modifiedUtc = reader.GetValue(4) is not string rawModified
+                    || !DateTime.TryParse(
+                        rawModified,
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        System.Globalization.DateTimeStyles.AssumeUniversal
+                            | System.Globalization.DateTimeStyles.AdjustToUniversal,
+                        out var parsedModifiedUtc)
+                            ? null
+                            : (DateTime?)parsedModifiedUtc;
+                var lines = reader.IsDBNull(5)
+                    || reader.GetValue(5) is not long rawLines
+                    || rawLines < 0
+                        ? null
+                        : (long?)rawLines;
+                var symbols = reader.GetInt64(7);
+                var references = reader.GetInt64(8);
+                var generatedSuppressed = reader.GetInt64(11) != 0;
+                var hasSymbolCapIssue = reader.GetInt64(12) != 0;
+                var hasReferenceCapIssue = reader.GetInt64(13) != 0;
+                var hasFileTooLargeIssue = reader.GetInt64(14) != 0;
+                var hasStaleIssueMetadata = reader.GetInt64(15) != 0;
+                var contentReuseEligible = hasLanguage
+                    && hasLines
+                    && hasSymbols
+                    && hasSymbolReferences
+                    && hasCurrentIssueSchema
+                    && symbols <= options.MaxSymbolsPerFile
+                    && references <= options.MaxReferencesPerFile
+                    && !hasSymbolCapIssue
+                    && !hasReferenceCapIssue
+                    && !hasStaleIssueMetadata;
+                var maxFileSize = options.MaxFileSizeBytes
+                    ?? FileIndexer.DefaultMaxFileSizeBytes;
+                var statReuseEligible = contentReuseEligible
+                    && size.HasValue
+                    && size.Value <= maxFileSize
+                    && modifiedUtc.HasValue
+                    && !hasFileTooLargeIssue;
                 files[reader.GetString(0)] = new DryRunExistingFileRows(
                     reader.IsDBNull(1) ? null : reader.GetString(1),
-                    reader.GetInt64(2),
-                    reader.GetInt64(3),
-                    reader.GetInt64(4),
-                    reader.GetInt64(5),
-                    reader.GetInt64(6));
+                    language,
+                    size,
+                    modifiedUtc,
+                    lines,
+                    reader.GetInt64(6),
+                    symbols,
+                    references,
+                    reader.GetInt64(9),
+                    reader.GetInt64(10),
+                    generatedSuppressed,
+                    contentReuseEligible,
+                    statReuseEligible);
             }
 
             return new DryRunDbSnapshot(
                 files,
                 indexedProjectRoot,
+                metadata,
                 hasChunks,
                 hasSymbols,
                 hasSymbolReferences,
@@ -1151,15 +1511,57 @@ public static partial class IndexCommandRunner
         return command.ExecuteScalar() != null;
     }
 
-    private static string? DryRunReadMetaString(SqliteConnection connection, string key)
+    private static bool DryRunColumnExists(
+        SqliteConnection connection,
+        string tableName,
+        string columnName)
     {
-        if (!DryRunTableExists(connection, "codeindex_meta"))
-            return null;
+        using var command = connection.CreateCommand();
+        command.CommandText = $"PRAGMA table_info({tableName})";
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            if (string.Equals(
+                reader.GetString(1),
+                columnName,
+                StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static IReadOnlyDictionary<string, string?>
+        DryRunReadMetadata(SqliteConnection connection)
+    {
+        var metadata = new Dictionary<string, string?>(
+            StringComparer.Ordinal);
+        if (!DryRunTableExists(connection, "codeindex_meta")
+            || !DryRunColumnExists(
+                connection,
+                "codeindex_meta",
+                "key")
+            || !DryRunColumnExists(
+                connection,
+                "codeindex_meta",
+                "value"))
+        {
+            return metadata;
+        }
 
         using var command = connection.CreateCommand();
-        command.CommandText = "SELECT value FROM codeindex_meta WHERE key = @key LIMIT 1";
-        SqliteCommandPolicy.Add(command, "@key", key);
-        return command.ExecuteScalar() as string;
+        command.CommandText = "SELECT key, value FROM codeindex_meta";
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            metadata[reader.GetString(0)] = reader.IsDBNull(1)
+                ? null
+                : reader.GetString(1);
+        }
+
+        return metadata;
     }
 
     private static int WriteDryRunInterrupted(IndexCommandOptions options, JsonSerializerOptions jsonOptions) => WriteCommandError(
@@ -1275,15 +1677,36 @@ public static partial class IndexCommandRunner
     private sealed record DryRunDbSnapshot(
         IReadOnlyDictionary<string, DryRunExistingFileRows> Files,
         string? IndexedProjectRoot,
+        IReadOnlyDictionary<string, string?> Metadata,
         bool ChunksAvailable,
         bool SymbolsAvailable,
         bool SymbolReferencesAvailable,
         bool ReferenceLinesAvailable,
         bool FileIssuesAvailable)
     {
+        internal string? SymbolKindFilterSignature
+            => GetMeta(SymbolKindFilterMetaKey);
+
+        internal bool SymbolsOnlyGraphOmitted => string.Equals(
+            GetMeta(DbContext.SymbolsOnlyGraphOmittedMetaKey),
+            "true",
+            StringComparison.OrdinalIgnoreCase);
+
+        internal bool? CSharpStaticInterfaceSourceEvidence
+            => bool.TryParse(
+                GetMeta(
+                    DbContext.CSharpStaticInterfaceSourceEvidenceMetaKey),
+                out var value)
+                    ? value
+                    : null;
+
+        internal string? GetMeta(string key)
+            => Metadata.TryGetValue(key, out var value) ? value : null;
+
         public static DryRunDbSnapshot Empty { get; } = new(
             new Dictionary<string, DryRunExistingFileRows>(StringComparer.Ordinal),
             null,
+            new Dictionary<string, string?>(StringComparer.Ordinal),
             false,
             false,
             false,
@@ -1293,11 +1716,18 @@ public static partial class IndexCommandRunner
 
     private readonly record struct DryRunExistingFileRows(
         string? Checksum,
+        string? Language,
+        long? Size,
+        DateTime? ModifiedUtc,
+        long? Lines,
         long Chunks,
         long Symbols,
         long SymbolReferences,
         long ReferenceLines,
-        long FileIssues);
+        long FileIssues,
+        bool GeneratedExtractionSuppressed,
+        bool ContentReuseEligible,
+        bool StatReuseEligible);
 
     private readonly record struct DryRunScanMetadata(
         bool HadErrors,
@@ -1341,14 +1771,60 @@ public static partial class IndexCommandRunner
         string? DetectionSource,
         FileIndexer.LanguageDetectionConfidence? DetectionConfidence,
         LoadedFileRecord? Loaded,
-        bool PolicySkipped)
+        bool PolicySkipped,
+        DryRunPolicySkipKind PolicySkipKind,
+        long? Size,
+        DateTime? Modified)
     {
-        public static DryRunFileProbe FromError(string message) => new(false, string.Empty, null, message, Unsupported: false, UnknownExtension: false, null, null, null, PolicySkipped: false);
-        public static DryRunFileProbe FromUnsupported() => new(false, string.Empty, null, null, Unsupported: true, UnknownExtension: false, null, null, null, PolicySkipped: false);
-        public static DryRunFileProbe FromUnknownExtension() => new(false, string.Empty, null, null, Unsupported: false, UnknownExtension: true, null, null, null, PolicySkipped: false);
+        public static DryRunFileProbe FromError(string message) => new(
+            false,
+            string.Empty,
+            null,
+            message,
+            Unsupported: false,
+            UnknownExtension: false,
+            null,
+            null,
+            null,
+            PolicySkipped: false,
+            DryRunPolicySkipKind.None,
+            null,
+            null);
+
+        public static DryRunFileProbe FromUnsupported() => new(
+            false,
+            string.Empty,
+            null,
+            null,
+            Unsupported: true,
+            UnknownExtension: false,
+            null,
+            null,
+            null,
+            PolicySkipped: false,
+            DryRunPolicySkipKind.None,
+            null,
+            null);
+
+        public static DryRunFileProbe FromUnknownExtension() => new(
+            false,
+            string.Empty,
+            null,
+            null,
+            Unsupported: false,
+            UnknownExtension: true,
+            null,
+            null,
+            null,
+            PolicySkipped: false,
+            DryRunPolicySkipKind.None,
+            null,
+            null);
+
         public static DryRunFileProbe FromPolicySkip(
             FileRecord record,
-            string message) => new(
+            string message,
+            DryRunPolicySkipKind policySkipKind) => new(
                 false,
                 record.Lang ?? "unknown",
                 record.Checksum,
@@ -1358,6 +1834,16 @@ public static partial class IndexCommandRunner
                 null,
                 null,
                 null,
-                PolicySkipped: true);
+                PolicySkipped: true,
+                policySkipKind,
+                record.Size,
+                record.Modified);
+    }
+
+    private enum DryRunPolicySkipKind
+    {
+        None,
+        Binary,
+        FileTooLarge,
     }
 }
