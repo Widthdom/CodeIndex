@@ -2640,6 +2640,17 @@ Rows with unsupported references or graph queries include `unsupported_guidance`
 entries with the unsupported capability, an explanatory message, and
 `recommended_commands` for the next safe query.
 
+MCP clients use the `languages` tool against the same canonical catalog and exact
+`language`, `extension`, `alias`, and `capability` matching rules. The default
+page contains at most 20 rows; follow the opaque `next_cursor` with unchanged
+filters, `limit`, and `maxBytes` to enumerate the catalog without gaps.
+`maxBytes` bounds the complete UTF-8 JSON-RPC response envelope from 4,096 to
+1,000,000 bytes. Page metadata reports authoritative filtered totals separately
+from `summary.catalog_language_count` and the symbol/reference capability counts,
+plus whether the item or byte budget caused continuation. A changed filter or
+page control returns a typed cursor mismatch, while a changed catalog generation
+returns a typed stale-cursor error that requires restarting without `cursor`.
+
 | Language family | Symbols | References / graph | Notes and example query |
 |---|---|---|---|
 | C# / Razor / Blazor | namespaces, types, members, properties, imports | calls, constructors, events, attributes, annotations, type references, metadata edges | Modern partial members and metadata targets are indexed. `cdidx inspect Run --lang csharp --exact-name` |
@@ -5873,6 +5884,16 @@ CLI JSON と MCP の `languages` response は同じ catalog snapshot を共有�
 `search` に戻るべき場面を判断するための概要です。
 参照抽出やグラフクエリが未対応の行では、`unsupported_guidance` に未対応の機能、説明メッセージ、
 次に安全に使う `recommended_commands` が入ります。
+
+MCP client では、同じ canonical catalog と完全一致の `language`、`extension`、`alias`、
+`capability` 規則を `languages` tool から利用できます。既定 page は最大 20 行です。
+全 catalog を欠落なく列挙するには、filter、`limit`、`maxBytes` を変えずに不透明な
+`next_cursor` を渡してください。`maxBytes` は UTF-8 JSON-RPC response envelope 全体を
+4,096〜1,000,000 bytes に制限します。page metadata は authoritative な filtered total を
+`summary.catalog_language_count` および symbol/reference capability 件数と分離し、
+item budget と byte budget のどちらが継続理由かも示します。filter または page control を
+変えると typed cursor mismatch、catalog generation が変わると `cursor` なしでの再開を
+要求する typed stale-cursor error を返します。
 
 | 言語ファミリ | Symbols | References / graph | メモと例 |
 |---|---|---|---|
