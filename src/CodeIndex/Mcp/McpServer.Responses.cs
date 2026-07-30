@@ -510,6 +510,7 @@ public partial class McpServer : IDisposable
             ["name"] = name,
             ["description"] = AppendLanguageSupportClause(name, description),
             ["inputSchema"] = inputSchema,
+            ["outputSchema"] = McpToolOutputSchemas.Create(name),
             ["examples"] = BuildToolExamples(name),
         };
         if (annotations != null)
