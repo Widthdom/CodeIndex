@@ -26,9 +26,12 @@ public static partial class DbCommandRunner
     internal const string CheckpointConflictPolicy = "fail_if_destination_exists";
     internal const string CheckpointPlanUncertainty = "source_files_can_change_after_final_validation;execution_replans_and_refuses_detected_drift_before_publish";
     internal const string CheckpointManifestSchema = "checkpoint_manifest_v1";
+    internal const string CheckpointManifestFileName = "manifest.txt";
     internal const string CheckpointSidecarPolicy = "copy_wal_and_shm_if_present";
     internal const string CheckpointCompressionPolicy = "none";
-    internal const string CheckpointMetadataPolicy = "owner_only_files_and_directories";
+    internal const string CheckpointMetadataPolicy = "platform_specific";
+    internal const string CheckpointPosixMetadataPolicy = "owner_only_files_and_directories";
+    internal const string CheckpointWindowsMetadataPolicy = "inherited_windows_acls";
     internal const int RestoreBackupListEntryLimit = 100;
     internal const int RestoreBackupPruneScanLimit = 1_000;
     internal const int DefaultRestoreBackupKeepCount = 10;

@@ -955,7 +955,9 @@ public class DbCommandRunnerTests
             Assert.Contains($"created_at_utc={fixedTime:O}", dryRunJson.GetProperty("manifest_contents").GetString(), StringComparison.Ordinal);
             Assert.Equal("copy_wal_and_shm_if_present", dryRunJson.GetProperty("sidecar_policy").GetString());
             Assert.Equal("none", dryRunJson.GetProperty("compression").GetString());
-            Assert.Equal("owner_only_files_and_directories", dryRunJson.GetProperty("metadata_policy").GetString());
+            Assert.Equal(
+                OperatingSystem.IsWindows() ? "inherited_windows_acls" : "owner_only_files_and_directories",
+                dryRunJson.GetProperty("metadata_policy").GetString());
             Assert.Equal("create_new_directory_atomically", dryRunJson.GetProperty("destination_policy").GetString());
             Assert.Equal("fail_if_destination_exists", dryRunJson.GetProperty("conflict_policy").GetString());
             Assert.Equal(
@@ -996,7 +998,12 @@ public class DbCommandRunnerTests
             Assert.Contains("manifest sha256:", stdout, StringComparison.Ordinal);
             Assert.Contains("conflict policy: fail if destination exists", stdout, StringComparison.Ordinal);
             Assert.Contains("compression: none", stdout, StringComparison.Ordinal);
-            Assert.Contains("metadata policy: owner only files and directories", stdout, StringComparison.Ordinal);
+            Assert.Contains(
+                OperatingSystem.IsWindows()
+                    ? "metadata policy: inherited windows acls"
+                    : "metadata policy: owner only files and directories",
+                stdout,
+                StringComparison.Ordinal);
             Assert.Contains("uncertainty: source files can change after final validation; execution replans and refuses detected drift before publish", stdout, StringComparison.Ordinal);
         }
         finally
@@ -1030,6 +1037,37 @@ public class DbCommandRunnerTests
             Assert.Equal(CommandExitCodes.DatabaseError, writeExit);
             Assert.Equal(CommandErrorCodes.DbError, writeJson.GetProperty("error_code").GetString());
             Assert.Equal("keep", File.ReadAllText(sentinelPath));
+        }
+        finally
+        {
+            DeleteWorkDirectory(root);
+        }
+    }
+
+    [Fact]
+    public void Run_CheckpointPlan_ManifestNameCollisionIsReportedAndExecutionRefuses_Issue4890()
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_checkpoint_manifest_collision_4890");
+        var dbPath = Path.Combine(root, "manifest.txt");
+        try
+        {
+            File.WriteAllText(dbPath, "db");
+
+            var (dryRunExit, dryRunJson) = RunAndCaptureJson(["checkpoint", "collision", "--dry-run", "--db", dbPath, "--json"]);
+            var (writeExit, writeJson) = RunAndCaptureJson(["checkpoint", "collision", "--db", dbPath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, dryRunExit);
+            Assert.False(dryRunJson.GetProperty("ready").GetBoolean());
+            Assert.Equal(
+                ["manifest.txt"],
+                dryRunJson.GetProperty("planned_output_files").EnumerateArray().Select(file => file.GetString()).ToArray());
+            Assert.Contains(
+                dryRunJson.GetProperty("diagnostics").EnumerateArray(),
+                diagnostic => diagnostic.GetProperty("code").GetString() == "checkpoint_output_name_conflict");
+            Assert.Equal(CommandExitCodes.DatabaseError, writeExit);
+            Assert.Equal(CommandErrorCodes.DbError, writeJson.GetProperty("error_code").GetString());
+            Assert.Equal("db", File.ReadAllText(dbPath));
+            Assert.False(Directory.Exists(dbPath + ".checkpoints"));
         }
         finally
         {

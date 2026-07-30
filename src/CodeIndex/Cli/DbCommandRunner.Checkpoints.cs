@@ -38,12 +38,24 @@ public static partial class DbCommandRunner
 
         var sourceCandidatePaths = new[] { fullDbPath, fullDbPath + "-wal", fullDbPath + "-shm" };
         var sourceFiles = ReadCheckpointSourceFiles(sourceCandidatePaths, diagnostics);
-        var ready = destinationReady && !sourceFiles.Truncated;
+        var outputNameComparer = StringComparer.FromComparison(PathCasing.ComparisonFor(checkpointPath));
+        var outputNameConflict = sourceFiles.Files.Any(
+            source => outputNameComparer.Equals(source.OutputName, CheckpointManifestFileName));
+        if (outputNameConflict)
+        {
+            diagnostics.Add(new DbDiagnosticJsonResult(
+                "checkpoint_output_name_conflict",
+                $"A checkpoint source file conflicts with the generated {CheckpointManifestFileName}; execution would overwrite a planned output and is refused.",
+                CheckpointManifestFileName));
+        }
+
+        var ready = destinationReady && !sourceFiles.Truncated && !outputNameConflict;
         var manifestContents = $"format_version=1{Environment.NewLine}name={name}{Environment.NewLine}created_at_utc={GetUtcNow():O}{Environment.NewLine}db_file={Path.GetFileName(fullDbPath)}{Environment.NewLine}";
         var manifestBytes = Encoding.UTF8.GetBytes(manifestContents);
         var plannedOutputFiles = sourceFiles.Files
             .Select(source => source.OutputName)
-            .Append("manifest.txt")
+            .Append(CheckpointManifestFileName)
+            .Distinct(outputNameComparer)
             .Order(StringComparer.Ordinal)
             .ToList();
 
@@ -64,7 +76,9 @@ public static partial class DbCommandRunner
             CheckpointManifestSchema,
             CheckpointSidecarPolicy,
             CheckpointCompressionPolicy,
-            CheckpointMetadataPolicy,
+            OperatingSystem.IsWindows()
+                ? CheckpointWindowsMetadataPolicy
+                : CheckpointPosixMetadataPolicy,
             ready,
             destinationExists,
             sourceFiles.Truncated,
@@ -91,13 +105,13 @@ public static partial class DbCommandRunner
                 ValidateCheckpointOutput(destination, source);
             }
 
-            var manifestPath = Path.Combine(tempPath, "manifest.txt");
+            var manifestPath = Path.Combine(tempPath, CheckpointManifestFileName);
             DataDirectorySecurity.WritePrivateText(manifestPath, plan.ManifestContents);
             ValidateCheckpointOutput(
                 manifestPath,
                 new DbCheckpointSourcePlan(
                     manifestPath,
-                    "manifest.txt",
+                    CheckpointManifestFileName,
                     Encoding.UTF8.GetByteCount(plan.ManifestContents),
                     LastWriteTimeUtcTicks: null,
                     plan.ManifestSha256));
