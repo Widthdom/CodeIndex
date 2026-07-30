@@ -475,6 +475,7 @@ public partial class McpServer : IDisposable
     {
         ClearProjectFilterRootDiagnostics();
         var structuredContent = McpErrorEnvelope.BuildData(category, suggestion, retrySafe, AddCorrelationData(extraData));
+        structuredContent["api_version"] = JsonOutputContract.ApiVersion;
         AddConfiguredSqliteDiagnostics(structuredContent);
         var result = new JsonObject
         {

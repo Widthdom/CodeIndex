@@ -1,6 +1,8 @@
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using CodeIndex.Cli;
+using CodeIndex.Database;
 using CodeIndex.Mcp;
 
 namespace CodeIndex.Tests;
@@ -18,10 +20,15 @@ public partial class McpServerTests
             "src/output-schema-b.cs",
             "csharp",
             "public class OutputSchemaB { public void Issue4898OutputSchemaMarker() { } }");
+        InsertIndexedFile(
+            "src/app.cs",
+            "csharp",
+            "public class App { public void Run() { } }");
 
         var listResponse = _server.HandleMessage(JsonNode.Parse(
             """{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!)!;
-        var schemas = listResponse["result"]!["tools"]!.AsArray()
+        var toolDefinitions = listResponse["result"]!["tools"]!.AsArray();
+        var schemas = toolDefinitions
             .ToDictionary(
                 tool => tool!["name"]!.GetValue<string>(),
                 tool => tool!["outputSchema"]!.AsObject(),
@@ -48,9 +55,111 @@ public partial class McpServerTests
         Assert.True(MatchesSchema(empty, schemas["definition"], schemas["definition"]), empty.ToJsonString());
         Assert.True(MatchesSchema(partial, schemas["search"], schemas["search"]), partial.ToJsonString());
         Assert.True(MatchesSchema(typedError, schemas["search"], schemas["search"]), typedError.ToJsonString());
+
+        foreach (var (toolName, schema) in schemas)
+        {
+            var actualError = CallToolForStructuredContent(
+                toolName,
+                new JsonObject { ["__issue4898_unknown_argument"] = true });
+            Assert.Equal(JsonOutputContract.ApiVersion, actualError["api_version"]!.GetValue<string>());
+            Assert.True(MatchesSchema(actualError, schema, schema), $"{toolName}: {actualError.ToJsonString()}");
+            Assert.False(
+                MatchesSchema(
+                    new JsonObject { ["api_version"] = JsonOutputContract.ApiVersion },
+                    schema,
+                    schema),
+                $"{toolName} accepted an incomplete success payload.");
+        }
+
+        foreach (var tool in toolDefinitions)
+        {
+            var toolName = tool!["name"]!.GetValue<string>();
+            if (toolName == "index")
+                continue; // The shared seeded server is intentionally not authorized to mutate its fixture root.
+            var arguments = toolName switch
+            {
+                "backfill_fold" => new JsonObject { ["dry_run"] = true, ["force"] = false },
+                "suggest_improvement" => new JsonObject
+                {
+                    ["category"] = "output_format",
+                    ["description"] = "The response contract should remain easy for typed clients to consume.",
+                    ["evidencePaths"] = new JsonArray { "src/app.cs" },
+                },
+                _ => tool["examples"]![0]!["request"]!["params"]!["arguments"]!.DeepClone().AsObject(),
+            };
+            var actualResult = CallToolForResult(toolName, arguments);
+            Assert.True(
+                actualResult["isError"]?.GetValue<bool>() != true,
+                $"{toolName} returned an error: {actualResult.ToJsonString()}");
+            var actualSuccess = actualResult["structuredContent"]!.AsObject();
+            Assert.True(
+                MatchesSchema(actualSuccess, schemas[toolName], schemas[toolName]),
+                $"{toolName}: {actualSuccess.ToJsonString()}");
+        }
+
+        var indexRoot = Path.Combine(
+            Environment.CurrentDirectory,
+            "tests",
+            "CodeIndex.Tests",
+            "bin",
+            $"cdidx-output-schema-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(indexRoot);
+        try
+        {
+            File.WriteAllText(Path.Combine(indexRoot, "app.cs"), "public class IndexedApp { }");
+            var indexDbPath = Path.Combine(indexRoot, ".cdidx", "codeindex.db");
+            Directory.CreateDirectory(Path.GetDirectoryName(indexDbPath)!);
+            using var indexServer = new McpServer(
+                indexDbPath,
+                ConsoleUi.LoadVersion(),
+                dbPathExplicit: true);
+            var indexResponse = CallIndex(
+                indexServer,
+                indexRoot,
+                arguments => arguments["dryRun"] = true);
+            Assert.True(
+                indexResponse["result"]?["isError"]?.GetValue<bool>() != true,
+                indexResponse.ToJsonString());
+            var indexSuccess = indexResponse["result"]!["structuredContent"]!.AsObject();
+            Assert.True(
+                MatchesSchema(indexSuccess, schemas["index"], schemas["index"]),
+                indexSuccess.ToJsonString());
+        }
+        finally
+        {
+            Directory.Delete(indexRoot, recursive: true);
+        }
+
+        var versionlessError = typedError.DeepClone().AsObject();
+        versionlessError.Remove("api_version");
+        Assert.False(
+            MatchesSchema(versionlessError, schemas["search"], schemas["search"]),
+            versionlessError.ToJsonString());
+        Assert.False(
+            MatchesSchema(success, schemas["search"], schemas["search"]),
+            "The search schema accepted a ping result.");
+
+        var analyzeProperties = schemas["analyze_symbol"]["$defs"]!["tool_result"]!["properties"]!.AsObject();
+        Assert.NotNull(analyzeProperties["nearby_symbols"]);
+        Assert.NotNull(analyzeProperties["graph_sections"]);
+        Assert.Null(analyzeProperties["nearbySymbols"]);
+        Assert.Null(analyzeProperties["graphSections"]);
+        var batchProperties = schemas["batch_query"]["$defs"]!["tool_result"]!["properties"]!.AsObject();
+        Assert.Null(batchProperties["estimated_response_bytes"]);
+        Assert.NotNull(batchProperties["metadata"]!["properties"]!["estimated_response_bytes"]);
+
+        var sharedDefinitions = schemas["search"]["$defs"]!.AsObject();
+        Assert.Equal(10_000, sharedDefinitions["rows"]!["maxItems"]!.GetValue<int>());
+        Assert.Equal(512, sharedDefinitions["row"]!["maxProperties"]!.GetValue<int>());
+        Assert.Equal(
+            McpServer.MaxConfiguredResponseBytes,
+            sharedDefinitions["row"]!["properties"]!["path"]!["maxLength"]!.GetValue<int>());
     }
 
     private JsonObject CallToolForStructuredContent(string toolName, JsonObject arguments)
+        => CallToolForResult(toolName, arguments)["structuredContent"]!.AsObject();
+
+    private JsonObject CallToolForResult(string toolName, JsonObject arguments)
     {
         var request = new JsonObject
         {
@@ -65,7 +174,7 @@ public partial class McpServerTests
         };
 
         var response = _server.HandleMessage(request)!;
-        return response["result"]!["structuredContent"]!.AsObject();
+        return response["result"]!.AsObject();
     }
 
     private static bool MatchesSchema(JsonNode? instance, JsonObject schema, JsonObject root)
@@ -83,6 +192,12 @@ public partial class McpServerTests
 
         if (schema["oneOf"] is JsonArray alternatives
             && alternatives.Count(alternative => MatchesSchema(instance, alternative!.AsObject(), root)) != 1)
+        {
+            return false;
+        }
+
+        if (schema["anyOf"] is JsonArray choices
+            && !choices.Any(choice => MatchesSchema(instance, choice!.AsObject(), root)))
         {
             return false;
         }
@@ -128,6 +243,36 @@ public partial class McpServerTests
 
         if (schema["items"] is JsonObject items && instance is JsonArray array
             && array.Any(item => !MatchesSchema(item, items, root)))
+        {
+            return false;
+        }
+
+        if (schema["maxItems"] is JsonValue maxItems
+            && (instance is not JsonArray boundedArray
+                || boundedArray.Count > maxItems.GetValue<int>()))
+        {
+            return false;
+        }
+
+        if (schema["maxLength"] is JsonValue maxLength
+            && (instance is not JsonValue boundedString
+                || boundedString.GetValueKind() != JsonValueKind.String
+                || boundedString.GetValue<string>().Length > maxLength.GetValue<int>()))
+        {
+            return false;
+        }
+
+        if (schema["maxProperties"] is JsonValue maxProperties
+            && (instance is not JsonObject boundedObject
+                || boundedObject.Count > maxProperties.GetValue<int>()))
+        {
+            return false;
+        }
+
+        if (schema["propertyNames"] is JsonObject propertyNameSchema
+            && instance is JsonObject namedObject
+            && namedObject.Any(property =>
+                !MatchesSchema(JsonValue.Create(property.Key), propertyNameSchema, root)))
         {
             return false;
         }
