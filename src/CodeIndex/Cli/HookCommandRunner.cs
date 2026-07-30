@@ -627,6 +627,14 @@ public static class HookCommandRunner
             {
                 executable = HookExecutableJsonResult.Unresolved("managed_hook_missing_executable_manifest");
             }
+            else if (!ManagedInvocationMatches(
+                         hookContent,
+                         projectPath,
+                         chainedHookPath,
+                         installedSelection))
+            {
+                executable = HookExecutableJsonResult.Unresolved("managed_hook_executable_manifest_mismatch");
+            }
             else
             {
                 _ = TryResolveCurrentExecutable(appVersion, out var currentSelection, out _);
@@ -1111,10 +1119,11 @@ public static class HookCommandRunner
             return false;
         }
 
+        var launcherIsDotnetHost = IsDotnetHost(processPath);
         if (!TryResolvePinnedPath(processPath, out var resolvedProcessPath, out failureReason))
             return false;
 
-        if (!IsDotnetHost(resolvedProcessPath))
+        if (!launcherIsDotnetHost && !IsDotnetHost(resolvedProcessPath))
         {
             selection = new HookExecutableSelection(
                 "process_path",
@@ -1446,6 +1455,57 @@ public static class HookCommandRunner
         {
             return false;
         }
+    }
+
+    private static bool ManagedInvocationMatches(
+        byte[]? hookContent,
+        string projectPath,
+        string chainedHookPath,
+        HookExecutableSelection selection)
+    {
+        if (hookContent is null)
+            return false;
+
+        string actualText;
+        try
+        {
+            actualText = new UTF8Encoding(
+                encoderShouldEmitUTF8Identifier: false,
+                throwOnInvalidBytes: true).GetString(hookContent);
+        }
+        catch (DecoderFallbackException)
+        {
+            return false;
+        }
+
+        var expectedText = BuildHookScript(chainedHookPath, projectPath, selection);
+        return TryExtractManagedBlock(actualText, out var actualBlock)
+               && TryExtractManagedBlock(expectedText, out var expectedBlock)
+               && string.Equals(actualBlock, expectedBlock, StringComparison.Ordinal);
+    }
+
+    private static bool TryExtractManagedBlock(string text, out string block)
+    {
+        block = string.Empty;
+        if (CountOccurrences(text, BeginMarker) != 1
+            || CountOccurrences(text, EndMarker) != 1)
+        {
+            return false;
+        }
+
+        var beginIndex = text.IndexOf(BeginMarker, StringComparison.Ordinal);
+        var endIndex = text.IndexOf(EndMarker, StringComparison.Ordinal);
+        if (endIndex < beginIndex
+            || !IsMarkerOnlyLine(text, beginIndex, BeginMarker)
+            || !IsMarkerOnlyLine(text, endIndex, EndMarker))
+        {
+            return false;
+        }
+
+        var blockStart = FindLineStart(text, beginIndex);
+        var blockEnd = FindLineEndIncludingTerminator(text, endIndex + EndMarker.Length);
+        block = text[blockStart..blockEnd];
+        return true;
     }
 
     private static void WriteManifestString(BinaryWriter writer, string value)

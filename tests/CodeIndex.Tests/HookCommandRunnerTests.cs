@@ -730,6 +730,29 @@ public class HookCommandRunnerTests
             Assert.Contains("Executable source: process_path", humanStatus.StdOut, StringComparison.Ordinal);
             Assert.Contains($"Executable: {toolPath}", humanStatus.StdOut, StringComparison.Ordinal);
             Assert.Contains("Actual version: 1.2.3", humanStatus.StdOut, StringComparison.Ordinal);
+
+            var pinnedInvocation =
+                $"{QuoteShellForTest(NormalizeExpectedShellPath(toolPath))} index {QuoteShellForTest(projectRoot)} --quiet";
+            var tamperedHook = hook.Replace(
+                pinnedInvocation,
+                $"cdidx index {QuoteShellForTest(projectRoot)} --quiet",
+                StringComparison.Ordinal);
+            Assert.NotEqual(hook, tamperedHook);
+            File.WriteAllText(
+                hookPath,
+                tamperedHook);
+            var tamperedStatus = RunHooksAndCaptureStreams(
+                ["status", "--project", projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, tamperedStatus.ExitCode);
+            using (var document = JsonDocument.Parse(tamperedStatus.StdOut))
+            {
+                var executable = document.RootElement.GetProperty("executable");
+                Assert.Equal("unresolved", executable.GetProperty("status").GetString());
+                Assert.Equal(
+                    "managed_hook_executable_manifest_mismatch",
+                    executable.GetProperty("failure_reason").GetString());
+            }
         }
         finally
         {
@@ -891,9 +914,19 @@ public class HookCommandRunnerTests
             Assert.Equal(Path.GetFullPath(wrapperPath), Assert.Single(wrapperSelection.Argv));
 
             var dotnetPath = Path.Combine(root, OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet");
+            var resolvedDotnetPath = dotnetPath;
             var assemblyPath = Path.Combine(root, "tool version", "cdidx.dll");
             Directory.CreateDirectory(Path.GetDirectoryName(assemblyPath)!);
-            WriteRunnableFile(dotnetPath);
+            if (OperatingSystem.IsWindows())
+            {
+                WriteRunnableFile(dotnetPath);
+            }
+            else
+            {
+                resolvedDotnetPath = Path.Combine(root, "dotnet8");
+                WriteRunnableFile(resolvedDotnetPath);
+                File.CreateSymbolicLink(dotnetPath, resolvedDotnetPath);
+            }
             File.WriteAllText(assemblyPath, "fixture");
             Assert.True(HookCommandRunner.TryCreateExecutableSelection(
                 dotnetPath,
@@ -905,7 +938,7 @@ public class HookCommandRunnerTests
             Assert.Equal("dotnet_host_and_assembly", dotnetSelection.Source);
             Assert.Equal(
                 [
-                    Path.GetFullPath(dotnetPath),
+                    Path.GetFullPath(resolvedDotnetPath),
                     Path.GetFullPath(assemblyPath),
                 ],
                 dotnetSelection.Argv);
