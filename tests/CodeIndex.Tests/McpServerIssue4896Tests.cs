@@ -1,7 +1,7 @@
 using System.Text.Json.Nodes;
-using CodeIndex.Cli;
 using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Mcp;
+using CodeIndex.Models;
 
 namespace CodeIndex.Tests;
 
@@ -60,7 +60,7 @@ public partial class McpServerTests
     [Fact]
     public void Languages_AcceptsEveryCliCapabilityFilter_Issue4896()
     {
-        foreach (var capability in LanguageCatalog.SupportedCapabilities)
+        foreach (var capability in LanguageCapabilityCatalog.SupportedCapabilities)
         {
             var response = CallIssue4896Languages(new JsonObject
             {

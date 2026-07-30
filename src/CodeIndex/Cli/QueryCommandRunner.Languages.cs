@@ -36,25 +36,25 @@ public static partial class QueryCommandRunner
             return WithDb(options, jsonOptions, reader =>
             {
                 var status = reader.GetStatus(includeDatabaseSizeAttribution: false);
-                var catalog = LanguageCatalog.Build(reader.GetIndexedProjectRoot());
-                var indexedLanguageCounts = loadIndexedCounts ? status.Languages : null;
+                var catalog = LanguageCapabilityCatalog.Build(reader.GetIndexedProjectRoot(), GetLanguageAliases);
+                var indexedLanguageCounts = status.Languages;
                 return WriteLanguages(
                     SelectLanguages(catalog.Languages, indexedLanguageCounts),
-                    catalog.Languages.Count,
+                    catalog,
                     indexedLanguageCounts,
                     catalog.Diagnostics);
             });
         }
 
-        var defaultCatalog = LanguageCatalog.Build(workspaceRoot: null);
+        var defaultCatalog = LanguageCapabilityCatalog.Build(workspaceRoot: null, GetLanguageAliases);
         return WriteLanguages(
             SelectLanguages(defaultCatalog.Languages, indexedLanguageCounts: null),
-            defaultCatalog.Languages.Count,
+            defaultCatalog,
             indexedLanguageCounts: null,
             defaultCatalog.Diagnostics);
 
-        IEnumerable<KeyValuePair<string, LanguageCatalogEntry>> SelectLanguages(
-            IEnumerable<KeyValuePair<string, LanguageCatalogEntry>> languages,
+        IEnumerable<KeyValuePair<string, LanguageCatalogSupportInfo>> SelectLanguages(
+            IEnumerable<KeyValuePair<string, LanguageCatalogSupportInfo>> languages,
             IReadOnlyDictionary<string, long>? indexedLanguageCounts)
         {
             var selected = languages;
@@ -66,8 +66,8 @@ public static partial class QueryCommandRunner
         }
 
         int WriteLanguages(
-            IEnumerable<KeyValuePair<string, LanguageCatalogEntry>> languages,
-            int totalLanguageCount,
+            IEnumerable<KeyValuePair<string, LanguageCatalogSupportInfo>> languages,
+            LanguageCapabilityCatalogSnapshot catalog,
             IReadOnlyDictionary<string, long>? indexedLanguageCounts,
             IReadOnlyList<LanguageMapOverrides.Diagnostic> languageMapDiagnostics)
         {
@@ -75,11 +75,15 @@ public static partial class QueryCommandRunner
                 .Where(kv => options.LanguageCapabilities.All(capability => LanguageMatchesCapability(kv.Value, capability)))
                 .OrderBy(kv => kv.Key, StringComparer.Ordinal)
                 .ToList();
+            var scopedCounts = LanguageCapabilityCatalog.Count(
+                catalog.Languages,
+                filtered,
+                indexedLanguageCounts);
             if (json && (options.SummaryOnly || options.CountOnly || options.OutputFormat == OutputFormatCount))
             {
                 var payload = BuildLanguageSummaryPayload(
                     filtered,
-                    totalLanguageCount,
+                    catalog.Languages,
                     indexedLanguageCounts,
                     options,
                     languageMapDiagnostics);
@@ -117,7 +121,7 @@ public static partial class QueryCommandRunner
                     kv.Value.FilenamePrefixPatterns.OrderBy(value => value, StringComparer.Ordinal).ToList(),
                     kv.Value.LegacyPatterns.OrderBy(value => value, StringComparer.Ordinal).ToList(),
                     kv.Value.PatternProvenance
-                        .OrderBy(value => GetLanguagePatternKindName(value.Kind), StringComparer.Ordinal)
+                        .OrderBy(value => value.Kind)
                         .ThenBy(value => value.Pattern, StringComparer.Ordinal)
                         .Select(value => new LanguagePatternProvenanceJsonResult(
                             value.Pattern,
@@ -125,15 +129,18 @@ public static partial class QueryCommandRunner
                             value.Source))
                         .ToList(),
                     kv.Value.Aliases.OrderBy(a => a).ToList(),
+                    kv.Value.Detection,
                     kv.Value.Symbols,
                     kv.Value.References,
+                    kv.Value.Outline,
                     kv.Value.Graph,
-                    kv.Value.CapabilityGaps,
-                    kv.Value.UnsupportedGuidance,
+                    kv.Value.CapabilityGaps.ToList(),
+                    kv.Value.UnsupportedGuidance.ToList(),
                     GetIndexedLanguageCount(indexedLanguageCounts, kv.Key))).ToList();
                 Console.WriteLine(SerializeQueryJson(
                     new LanguagesJsonResult(
                         entries,
+                        scopedCounts.ToJson(),
                         BuildLanguageDetectionPolicy(),
                         BuildLanguageMapDiagnostics(languageMapDiagnostics),
                         ReferenceExtractor.GetSafetyLimits()),
@@ -189,7 +196,7 @@ public static partial class QueryCommandRunner
                             Console.WriteLine($"  Gaps: {string.Join(", ", info.CapabilityGaps)}");
                     }
                 }
-                CommandErrorWriter.WriteStderr($"\n({filtered.Count} languages)");
+                CommandErrorWriter.WriteStderr($"\n({scopedCounts.FormatSummary()})");
             }
 
             return CommandExitCodes.Success;
@@ -254,44 +261,39 @@ public static partial class QueryCommandRunner
         return indexedLanguageCounts.TryGetValue(lang, out var count) ? count : 0;
     }
 
-    private static bool LanguageMatchesLookup(string lang, LanguageCatalogEntry language, QueryCommandOptions options)
-        => options.LanguageLookups.Any(lookup => LanguageCatalog.MatchesLanguage(lang, lookup))
-           || options.LanguageExtensionLookups.Any(lookup => LanguageCatalog.MatchesExtension(language, lookup))
-           || options.LanguageAliasLookups.Any(lookup => LanguageCatalog.MatchesAlias(language, lookup));
+    private static bool LanguageMatchesLookup(string lang, LanguageCatalogSupportInfo language, QueryCommandOptions options)
+        => options.LanguageLookups.Any(lookup => LanguageCapabilityCatalog.MatchesLanguage(lang, lookup))
+           || options.LanguageExtensionLookups.Any(lookup => LanguageCapabilityCatalog.MatchesExtension(language, lookup))
+           || options.LanguageAliasLookups.Any(lookup => LanguageCapabilityCatalog.MatchesAlias(language, lookup));
 
-    private static bool LanguageMatchesCapability(LanguageCatalogEntry language, string capability)
-        => LanguageCatalog.MatchesCapability(language, capability);
+    private static bool LanguageMatchesCapability(LanguageCatalogSupportInfo language, string capability)
+        => LanguageCapabilityCatalog.MatchesCapability(language, capability);
 
     private static bool TryNormalizeLanguageCapability(string value, out string capability)
     {
         capability = value.Trim().ToLowerInvariant();
-        return capability is
-            LanguageCapabilityGraph or
-            LanguageCapabilityReferences or
-            LanguageCapabilitySymbols or
-            LanguageCapabilityAll or
-            LanguageCapabilityNone or
-            LanguageCapabilityMissingAny or
-            LanguageCapabilityMissingGraph or
-            LanguageCapabilityMissingReferences or
-            LanguageCapabilityMissingSymbols or
-            LanguageCapabilitySearchOnly;
+        return LanguageCapabilityCatalog.IsKnownCapability(capability);
     }
 
     private static JsonObject BuildLanguageSummaryPayload(
-        IReadOnlyList<KeyValuePair<string, LanguageCatalogEntry>> languages,
-        int totalLanguageCount,
+        IReadOnlyList<KeyValuePair<string, LanguageCatalogSupportInfo>> languages,
+        IReadOnlyList<KeyValuePair<string, LanguageCatalogSupportInfo>> catalogLanguages,
         IReadOnlyDictionary<string, long>? indexedLanguageCounts,
         QueryCommandOptions options,
         IReadOnlyList<LanguageMapOverrides.Diagnostic> languageMapDiagnostics)
     {
+        var scopedCounts = LanguageCapabilityCatalog.Count(
+            catalogLanguages,
+            languages,
+            indexedLanguageCounts);
         var payload = new JsonObject
         {
             ["api_version"] = JsonOutputContract.ApiVersion,
             ["count"] = languages.Count,
             ["language_count"] = languages.Count,
-            ["total_language_count"] = totalLanguageCount,
+            ["total_language_count"] = catalogLanguages.Count,
             ["capability_counts"] = BuildLanguageCapabilityCounts(languages),
+            ["language_capability_counts"] = scopedCounts.ToJson(),
             ["detection_policy"] = BuildLanguageDetectionPolicyNode(),
             ["language_map_diagnostics"] = BuildLanguageMapDiagnosticNode(languageMapDiagnostics),
         };
@@ -328,13 +330,13 @@ public static partial class QueryCommandRunner
         return payload;
     }
 
-    private static JsonObject BuildLanguageCapabilityCounts(IReadOnlyList<KeyValuePair<string, LanguageCatalogEntry>> languages)
+    private static JsonObject BuildLanguageCapabilityCounts(IReadOnlyList<KeyValuePair<string, LanguageCatalogSupportInfo>> languages)
     {
-        static bool HasAll(LanguageCatalogEntry language)
+        static bool HasAll(LanguageCatalogSupportInfo language)
             => language.Symbols && language.References && language.Graph;
-        static bool HasNone(LanguageCatalogEntry language)
+        static bool HasNone(LanguageCatalogSupportInfo language)
             => !language.Symbols && !language.References && !language.Graph;
-        static bool IsSymbolOnly(LanguageCatalogEntry language)
+        static bool IsSymbolOnly(LanguageCatalogSupportInfo language)
             => language.Symbols && !language.References && !language.Graph;
 
         return new JsonObject
@@ -342,8 +344,10 @@ public static partial class QueryCommandRunner
             ["all"] = languages.Count(kv => HasAll(kv.Value)),
             ["none"] = languages.Count(kv => HasNone(kv.Value)),
             ["search_only"] = languages.Count(kv => HasNone(kv.Value)),
+            ["detection"] = languages.Count(kv => kv.Value.Detection),
             ["symbols"] = languages.Count(kv => kv.Value.Symbols),
             ["references"] = languages.Count(kv => kv.Value.References),
+            ["outline"] = languages.Count(kv => kv.Value.Outline),
             ["graph"] = languages.Count(kv => kv.Value.Graph),
             ["symbol_only"] = languages.Count(kv => IsSymbolOnly(kv.Value)),
             ["missing_any"] = languages.Count(kv => kv.Value.CapabilityGaps.Count > 0),

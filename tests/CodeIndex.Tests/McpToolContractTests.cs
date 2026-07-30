@@ -1,7 +1,7 @@
 using System.Reflection;
 using System.Text.Json.Nodes;
-using CodeIndex.Cli;
 using CodeIndex.Mcp;
+using CodeIndex.Models;
 
 namespace CodeIndex.Tests;
 
@@ -161,8 +161,8 @@ public class McpToolContractTests
             .Select(value => value!.GetValue<string>());
         var arrayCapabilities = capabilitySchemas[1]!["items"]!["enum"]!.AsArray()
             .Select(value => value!.GetValue<string>());
-        Assert.Equal(LanguageCatalog.SupportedCapabilities, scalarCapabilities);
-        Assert.Equal(LanguageCatalog.SupportedCapabilities, arrayCapabilities);
+        Assert.Equal(LanguageCapabilityCatalog.SupportedCapabilities, scalarCapabilities);
+        Assert.Equal(LanguageCapabilityCatalog.SupportedCapabilities, arrayCapabilities);
     }
 
     [Fact]

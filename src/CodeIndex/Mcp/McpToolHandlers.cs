@@ -1346,7 +1346,7 @@ public partial class McpServer
     }
 
     private static bool IsKnownLanguageCapability(string capability) =>
-        LanguageCatalog.IsKnownCapability(capability);
+        LanguageCapabilityCatalog.IsKnownCapability(capability);
 
     private static bool LanguageMatchesCapability(bool symbols, bool references, bool graph, string capability) =>
         capability switch

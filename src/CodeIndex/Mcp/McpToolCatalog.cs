@@ -10,7 +10,7 @@ public partial class McpServer
     private static JsonArray CreateLanguageCapabilityEnum()
     {
         var values = new JsonArray();
-        foreach (var capability in LanguageCatalog.SupportedCapabilities)
+        foreach (var capability in LanguageCapabilityCatalog.SupportedCapabilities)
             values.Add(capability);
         return values;
     }
@@ -417,7 +417,7 @@ public partial class McpServer
                 ReadOnlyAnnotations()),
             CreateToolDefinition(
                 "languages",
-                "List supported languages with exact CLI-compatible language, extension, alias, and capability filters. Results use stable catalog-generation-bound cursor pagination and a JSON-RPC envelope byte budget. / 対応言語一覧を CLI 互換の言語・拡張子・別名・機能の完全一致フィルタで返す。結果はカタログ世代に拘束された安定 cursor pagination と JSON-RPC envelope の byte budget を使用する。",
+                "List supported languages with exact CLI-compatible language, extension, alias, and capability filters, scoped `language_capability_counts`, and unsupported_guidance fallback commands. Counts separate catalog, matched catalog, and indexed workspace scopes. Results use stable catalog-generation-bound cursor pagination and a JSON-RPC envelope byte budget. / 対応言語一覧を CLI 互換の言語・拡張子・別名・機能の完全一致フィルタ、scope 付き `language_capability_counts`、`unsupported_guidance` の代替コマンド付きで返す。件数は catalog、matched catalog、indexed workspace の scope を分離する。結果はカタログ世代に拘束された安定 cursor pagination と JSON-RPC envelope の byte budget を使用する。",
                 new JsonObject
                 {
                     ["type"] = "object",

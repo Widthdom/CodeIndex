@@ -2,7 +2,9 @@ using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using CodeIndex.Cli;
+using CodeIndex.Database;
 using CodeIndex.Indexer;
+using CodeIndex.Models;
 
 namespace CodeIndex.Mcp;
 
@@ -30,7 +32,7 @@ public partial class McpServer
         var normalizedExtension = extensionFilter is null
             ? null
             : extensionFilter.StartsWith(".", StringComparison.Ordinal) ? extensionFilter : "." + extensionFilter;
-        var normalizedAlias = aliasFilter is null ? null : LanguageCatalog.NormalizeLookupKey(aliasFilter);
+        var normalizedAlias = aliasFilter is null ? null : LanguageCapabilityCatalog.NormalizeLookupKey(aliasFilter);
         var limit = ReadLimit(args, QueryCommandRunner.DefaultQueryLimit, adjustments);
 
         foreach (var capability in capabilities)
@@ -39,7 +41,7 @@ public partial class McpServer
             {
                 return CreateToolErrorResponse(
                     id,
-                    $"Invalid language capability '{capability}'. Use one of: {string.Join(", ", LanguageCatalog.SupportedCapabilities)}.");
+                    $"Invalid language capability '{capability}'. Use one of: {string.Join(", ", LanguageCapabilityCatalog.SupportedCapabilities)}.");
             }
         }
 
@@ -77,21 +79,26 @@ public partial class McpServer
         }
 
         JsonNode BuildResponse(
-            HashSet<string>? indexedLanguages,
+            IReadOnlyDictionary<string, long>? indexedLanguageCounts,
             string? workspaceRoot,
             string? stableAt)
         {
-            var catalog = LanguageCatalog.Build(workspaceRoot);
+            var catalog = LanguageCapabilityCatalog.Build(
+                workspaceRoot,
+                QueryCommandRunner.GetLanguageAliases);
             var filtered = catalog.Languages
-                .Where(pair => !indexedOnly || indexedLanguages?.Contains(pair.Key) == true)
-                .Where(pair => capabilities.All(capability => LanguageCatalog.MatchesCapability(pair.Value, capability)))
+                .Where(pair => !indexedOnly
+                               || indexedLanguageCounts?.TryGetValue(pair.Key, out var indexedCount) == true
+                               && indexedCount > 0)
+                .Where(pair => capabilities.All(capability =>
+                    LanguageCapabilityCatalog.MatchesCapability(pair.Value, capability)))
                 .Where(pair => normalizedLanguage is null
-                    || string.Equals(pair.Key, normalizedLanguage, StringComparison.Ordinal))
+                    || LanguageCapabilityCatalog.MatchesLanguage(pair.Key, normalizedLanguage))
                 .Where(pair => normalizedExtension is null
-                    || LanguageCatalog.MatchesExtension(pair.Value, normalizedExtension))
+                    || LanguageCapabilityCatalog.MatchesExtension(pair.Value, normalizedExtension))
                 .Where(pair => aliasFilter is null
-                    || LanguageCatalog.MatchesAlias(pair.Value, aliasFilter)
-                    || LanguageCatalog.MatchesLanguage(pair.Key, aliasFilter))
+                    || LanguageCapabilityCatalog.MatchesAlias(pair.Value, aliasFilter)
+                    || LanguageCapabilityCatalog.MatchesLanguage(pair.Key, aliasFilter))
                 .OrderBy(pair => pair.Key, StringComparer.Ordinal)
                 .ToList();
 
@@ -103,7 +110,7 @@ public partial class McpServer
                     new("alias", normalizedAlias),
                     new("extension", normalizedExtension is null
                         ? null
-                        : LanguageCatalog.NormalizeLookupKey(normalizedExtension)),
+                        : LanguageCapabilityCatalog.NormalizeLookupKey(normalizedExtension)),
                     new("indexed-only", indexedOnly ? "true" : "false"),
                     new("language", normalizedLanguage),
                     new("max-bytes", requestedMaxBytes.ToString(CultureInfo.InvariantCulture)),
@@ -111,7 +118,9 @@ public partial class McpServer
                 ],
                 ("capability", capabilities, PreserveOrder: false));
             var generation = (
-                BuildLanguageCatalogGenerationFingerprint(catalog, indexedOnly ? indexedLanguages : null),
+                BuildLanguageCatalogGenerationFingerprint(
+                    catalog,
+                    indexedLanguageCounts),
                 stableAt);
 
             if (ValidateMcpQueryCursor(
@@ -143,6 +152,7 @@ public partial class McpServer
                     page,
                     filtered,
                     catalog,
+                    indexedLanguageCounts,
                     indexedOnly,
                     capabilities,
                     normalizedLanguage,
@@ -192,20 +202,18 @@ public partial class McpServer
         return WithDbReader(id, args, reader =>
         {
             var status = reader.GetStatus(includeDatabaseSizeAttribution: false);
-            var indexedLanguages = indexedOnly
-                ? new HashSet<string>(status.Languages.Keys, StringComparer.Ordinal)
-                : null;
             return BuildResponse(
-                indexedLanguages,
+                status.Languages,
                 reader.GetIndexedProjectRoot(),
                 reader.GetPaginationGeneration().StableAt);
         });
     }
 
     private JsonObject BuildLanguageCatalogPayload(
-        IReadOnlyList<KeyValuePair<string, LanguageCatalogEntry>> page,
-        IReadOnlyList<KeyValuePair<string, LanguageCatalogEntry>> filtered,
-        LanguageCatalogSnapshot catalog,
+        IReadOnlyList<KeyValuePair<string, LanguageCatalogSupportInfo>> page,
+        IReadOnlyList<KeyValuePair<string, LanguageCatalogSupportInfo>> filtered,
+        LanguageCapabilityCatalogSnapshot catalog,
+        IReadOnlyDictionary<string, long>? indexedLanguageCounts,
         bool indexedOnly,
         IReadOnlyList<string> capabilities,
         string? languageFilter,
@@ -215,9 +223,15 @@ public partial class McpServer
         int effectiveMaxBytes,
         bool byteBudgetReached)
     {
+        var scopedCounts = LanguageCapabilityCatalog.Count(
+            catalog.Languages,
+            filtered,
+            indexedLanguageCounts);
         var payload = new JsonObject
         {
-            ["languages"] = new JsonArray(page.Select(pair => BuildLanguageCatalogEntry(pair.Key, pair.Value)).ToArray()),
+            ["languages"] = new JsonArray(page.Select(pair =>
+                BuildLanguageCatalogEntry(pair.Key, pair.Value, indexedLanguageCounts)).ToArray()),
+            ["language_capability_counts"] = scopedCounts.ToJson(),
             ["detection_policy"] = new JsonObject
             {
                 ["filename_case_policy"] = "filesystem",
@@ -248,9 +262,9 @@ public partial class McpServer
             {
                 ["catalog_language_count"] = catalog.Languages.Count,
                 ["filtered_language_count"] = filtered.Count,
-                ["symbol_extraction_language_count"] = catalog.SymbolLanguageCount,
-                ["reference_extraction_language_count"] = catalog.ReferenceLanguageCount,
-                ["graph_query_language_count"] = catalog.ReferenceLanguageCount,
+                ["symbol_extraction_language_count"] = catalog.Languages.Count(pair => pair.Value.Symbols),
+                ["reference_extraction_language_count"] = catalog.Languages.Count(pair => pair.Value.References),
+                ["graph_query_language_count"] = catalog.Languages.Count(pair => pair.Value.Graph),
             },
             ["response_budget"] = new JsonObject
             {
@@ -286,8 +300,12 @@ public partial class McpServer
         return payload;
     }
 
-    private static JsonObject BuildLanguageCatalogEntry(string language, LanguageCatalogEntry entry)
-        => new()
+    private static JsonObject BuildLanguageCatalogEntry(
+        string language,
+        LanguageCatalogSupportInfo entry,
+        IReadOnlyDictionary<string, long>? indexedLanguageCounts)
+    {
+        var result = new JsonObject
         {
             ["lang"] = language,
             ["extensions"] = BuildLanguageStringArray(entry.Extensions),
@@ -310,8 +328,10 @@ public partial class McpServer
                     ["source"] = pattern.Source,
                 }).ToArray()),
             ["aliases"] = BuildLanguageStringArray(entry.Aliases),
+            ["detection"] = entry.Detection,
             ["symbol_extraction"] = entry.Symbols,
             ["reference_extraction"] = entry.References,
+            ["outline"] = entry.Outline,
             ["graph_queries"] = entry.Graph,
             ["capability_gaps"] = BuildLanguageStringArray(entry.CapabilityGaps),
             ["unsupported_guidance"] = new JsonArray(entry.UnsupportedGuidance.Select(guidance => (JsonNode)new JsonObject
@@ -322,11 +342,19 @@ public partial class McpServer
                     .Select(command => JsonValue.Create(command)).ToArray()),
             }).ToArray()),
         };
+        if (indexedLanguageCounts is not null)
+        {
+            result["indexed_file_count"] = indexedLanguageCounts.TryGetValue(language, out var count)
+                ? count
+                : 0;
+        }
+        return result;
+    }
 
     private static JsonObject BuildLanguageLookup(
         string propertyName,
         string value,
-        IReadOnlyList<KeyValuePair<string, LanguageCatalogEntry>> matches)
+        IReadOnlyList<KeyValuePair<string, LanguageCatalogSupportInfo>> matches)
         => new()
         {
             [propertyName] = value,
@@ -363,14 +391,12 @@ public partial class McpServer
     }
 
     private static string BuildLanguageCatalogGenerationFingerprint(
-        LanguageCatalogSnapshot catalog,
-        IReadOnlySet<string>? indexedLanguages)
+        LanguageCapabilityCatalogSnapshot catalog,
+        IReadOnlyDictionary<string, long>? indexedLanguageCounts)
     {
         var components = new List<string?>
         {
             "mcp-language-catalog-generation:v1",
-            "symbol-language-count:" + catalog.SymbolLanguageCount.ToString(CultureInfo.InvariantCulture),
-            "reference-language-count:" + catalog.ReferenceLanguageCount.ToString(CultureInfo.InvariantCulture),
         };
         foreach (var (language, entry) in catalog.Languages)
         {
@@ -385,8 +411,10 @@ public partial class McpServer
                 .Select(value => "alias:" + value));
             components.AddRange(entry.CapabilityGaps.OrderBy(value => value, StringComparer.Ordinal)
                 .Select(value => "capability-gap:" + value));
+            components.Add("detection:" + entry.Detection);
             components.Add("symbols:" + entry.Symbols);
             components.Add("references:" + entry.References);
+            components.Add("outline:" + entry.Outline);
             components.Add("graph:" + entry.Graph);
             foreach (var pattern in entry.PatternProvenance
                          .OrderBy(value => value.Kind)
@@ -417,12 +445,11 @@ public partial class McpServer
             components.Add("diagnostic-blocks-parent:" + diagnostic.BlocksParentFallback);
         }
 
-        if (indexedLanguages is not null)
+        if (indexedLanguageCounts is not null)
         {
-            components.Add("indexed-only:true");
-            components.AddRange(indexedLanguages
-                .OrderBy(value => value, StringComparer.Ordinal)
-                .Select(value => "indexed-language:" + value));
+            components.AddRange(indexedLanguageCounts
+                .OrderBy(pair => pair.Key, StringComparer.Ordinal)
+                .Select(pair => $"indexed-language:{pair.Key}:{pair.Value.ToString(CultureInfo.InvariantCulture)}"));
         }
 
         return InspectGraphCursorCodec.BuildQueryFingerprint(components);
