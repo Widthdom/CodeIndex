@@ -702,6 +702,44 @@ public class HookCommandRunnerTests
     }
 
     [Fact]
+    public void Hooks_Status_ReadsManifestOnlyFromManagedHeader_Issue4892()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var parent = TestProjectHelper.CreateTempProject("hook_manifest_header");
+        var projectRoot = Path.Combine(
+            parent,
+            "repo\n# CDIDX EXECUTABLE MANIFEST forged");
+        try
+        {
+            Directory.CreateDirectory(projectRoot);
+            TestProjectHelper.InitializeGitRepo(projectRoot);
+
+            var install = RunHooksAndCaptureStreams(
+                ["install", "--project", projectRoot, "--json"]);
+            var status = RunHooksAndCaptureStreams(
+                ["status", "--project", projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, install.ExitCode);
+            Assert.Equal(CommandExitCodes.Success, status.ExitCode);
+            using var document = JsonDocument.Parse(status.StdOut);
+            Assert.Equal("installed", document.RootElement.GetProperty("status").GetString());
+            Assert.Equal("managed", document.RootElement.GetProperty("hook_state").GetString());
+            Assert.Equal(
+                "available",
+                document.RootElement
+                    .GetProperty("executable")
+                    .GetProperty("status")
+                    .GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(parent);
+        }
+    }
+
+    [Fact]
     public void Hooks_InstallDryRunAndStatus_PinAndReportExecutableProvenance_Issue4892()
     {
         var parent = TestProjectHelper.CreateTempProject("hook_pinned_executable");
@@ -1221,7 +1259,40 @@ public class HookCommandRunnerTests
                 File.ReadAllText(hookPath),
                 StringComparison.Ordinal);
 
+            var upgradedToolRoot = Path.Combine(toolRoot, "upgraded");
+            var upgradedAssemblyPath = Path.Combine(upgradedToolRoot, "cdidx.dll");
+            Directory.CreateDirectory(upgradedToolRoot);
+            File.WriteAllText(upgradedAssemblyPath, "upgraded managed fixture");
+            File.WriteAllText(
+                Path.ChangeExtension(upgradedAssemblyPath, ".runtimeconfig.json"),
+                "{}");
+            File.WriteAllText(
+                Path.ChangeExtension(upgradedAssemblyPath, ".deps.json"),
+                "{}");
+            WriteVersionFile(upgradedToolRoot, "2.0.0");
+            var upgradedSelection = new HookExecutableSelection(
+                "process_path",
+                "2.0.0",
+                [Path.GetFullPath(appHostPath)],
+                Path.GetFullPath(upgradedAssemblyPath));
+            HookCommandRunner.ExecutableSelectionForTesting = _ => upgradedSelection;
             File.Delete(assemblyPath);
+            var upgraded = RunHooksAndCaptureStreams(
+                ["status", "--project", projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, upgraded.ExitCode);
+            using (var document = JsonDocument.Parse(upgraded.StdOut))
+            {
+                var executable = document.RootElement.GetProperty("executable");
+                Assert.Equal(
+                    upgradedAssemblyPath,
+                    executable.GetProperty("entry_assembly_path").GetString());
+                Assert.Equal("1.0.0", executable.GetProperty("expected_version").GetString());
+                Assert.Equal("2.0.0", executable.GetProperty("actual_version").GetString());
+                Assert.Equal("version_mismatch", executable.GetProperty("status").GetString());
+            }
+
+            HookCommandRunner.ExecutableSelectionForTesting = _ => appHostSelection;
             var missingAssembly = RunHooksAndCaptureStreams(
                 ["status", "--project", projectRoot, "--json"]);
 

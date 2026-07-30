@@ -1383,9 +1383,14 @@ public static class HookCommandRunner
         HookExecutableSelection installedSelection,
         HookExecutableSelection? currentSelection)
     {
-        var path = installedSelection.Argv.FirstOrDefault();
-        var entryAssemblyPath = GetEntryAssemblyPath(installedSelection);
-        var diagnosticArgv = installedSelection.Argv
+        var currentInvocationMatches = currentSelection != null
+            && ExecutableSelectionsMatch(installedSelection, currentSelection);
+        var inspectedSelection = currentInvocationMatches
+            ? currentSelection!
+            : installedSelection;
+        var path = inspectedSelection.Argv.FirstOrDefault();
+        var entryAssemblyPath = GetEntryAssemblyPath(inspectedSelection);
+        var diagnosticArgv = inspectedSelection.Argv
             .Select(DiagnosticSanitizer.ForSupportSafePath)
             .ToArray();
         HookExecutableJsonResult Result(
@@ -1393,10 +1398,10 @@ public static class HookCommandRunner
             string failureReason,
             string? actualVersion = null)
             => new(
-                installedSelection.Source,
+                inspectedSelection.Source,
                 path,
                 entryAssemblyPath,
-                installedSelection.Argv,
+                inspectedSelection.Argv,
                 path == null ? null : DiagnosticSanitizer.ForSupportSafePath(path),
                 entryAssemblyPath == null ? null : DiagnosticSanitizer.ForSupportSafePath(entryAssemblyPath),
                 diagnosticArgv,
@@ -1405,11 +1410,11 @@ public static class HookCommandRunner
                 status,
                 failureReason);
 
-        var missingPath = installedSelection.Argv.FirstOrDefault(
+        var missingPath = inspectedSelection.Argv.FirstOrDefault(
             static argument => !File.Exists(LongPath.EnsureWindowsPrefix(argument)));
         if (missingPath != null)
             return Result("missing", "pinned_executable_missing");
-        if (!IsRunnableExecutable(installedSelection.Argv[0]))
+        if (!IsRunnableExecutable(inspectedSelection.Argv[0]))
             return Result("not_executable", "pinned_executable_not_runnable");
         if (entryAssemblyPath != null)
         {
@@ -1428,10 +1433,10 @@ public static class HookCommandRunner
         }
 
         string? actualVersion;
-        if (currentSelection != null && ExecutableSelectionsMatch(installedSelection, currentSelection))
-            actualVersion = currentSelection.Version;
+        if (currentInvocationMatches)
+            actualVersion = inspectedSelection.Version;
         else
-            actualVersion = TryReadPinnedVersion(installedSelection);
+            actualVersion = TryReadPinnedVersion(inspectedSelection);
 
         var status = actualVersion == null
             ? "available_unverified"
@@ -1445,10 +1450,10 @@ public static class HookCommandRunner
             _ => null,
         };
         return new HookExecutableJsonResult(
-            installedSelection.Source,
+            inspectedSelection.Source,
             path,
             entryAssemblyPath,
-            installedSelection.Argv,
+            inspectedSelection.Argv,
             path == null ? null : DiagnosticSanitizer.ForSupportSafePath(path),
             entryAssemblyPath == null ? null : DiagnosticSanitizer.ForSupportSafePath(entryAssemblyPath),
             diagnosticArgv,
@@ -1474,6 +1479,11 @@ public static class HookCommandRunner
             if (!string.Equals(left.Argv[index], right.Argv[index], comparison))
                 return false;
         }
+
+        // A process-path hook invokes the apphost or wrapper directly. Its managed
+        // payload may change during an in-place upgrade without changing that argv.
+        if (left.Source == "process_path")
+            return true;
 
         var leftEntryAssemblyPath = GetEntryAssemblyPath(left);
         var rightEntryAssemblyPath = GetEntryAssemblyPath(right);
@@ -1570,14 +1580,27 @@ public static class HookCommandRunner
             return false;
         }
 
-        var manifestLines = text
-            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
-            .Where(static line => line.StartsWith(ExecutableManifestPrefix, StringComparison.Ordinal))
-            .Take(2)
-            .ToArray();
-        if (manifestLines.Length != 1)
+        if (CountMarkerLines(text, BeginMarker, out var beginIndex) != 1)
             return false;
-        var manifestLine = manifestLines[0];
+        var headerOffset = FindLineEndIncludingTerminator(
+            text,
+            beginIndex + BeginMarker.Length);
+        if (!TryReadLine(text, ref headerOffset, out var sourceLine)
+            || !sourceLine.StartsWith(
+                "# CDIDX EXECUTABLE SOURCE: ",
+                StringComparison.Ordinal)
+            || !TryReadLine(text, ref headerOffset, out var versionLine)
+            || !versionLine.StartsWith(
+                "# CDIDX EXECUTABLE VERSION: ",
+                StringComparison.Ordinal)
+            || !TryReadLine(text, ref headerOffset, out var manifestLine)
+            || !manifestLine.StartsWith(
+                ExecutableManifestPrefix,
+                StringComparison.Ordinal))
+        {
+            return false;
+        }
+
         var encoded = manifestLine[ExecutableManifestPrefix.Length..].Trim();
         if (encoded.Length is 0 or > MaxExecutableManifestChars)
             return false;
@@ -1823,6 +1846,21 @@ if [ -x
         }
 
         return false;
+    }
+
+    private static bool TryReadLine(
+        string text,
+        ref int offset,
+        out string line)
+    {
+        line = string.Empty;
+        if (offset < 0 || offset >= text.Length)
+            return false;
+
+        var lineEnd = FindLineEnd(text, offset);
+        line = text[offset..lineEnd];
+        offset = FindLineEndIncludingTerminator(text, lineEnd);
+        return true;
     }
 
     private static bool TryExtractManagedBlock(string text, out string block)
