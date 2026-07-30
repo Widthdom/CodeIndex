@@ -6821,6 +6821,27 @@ public sealed class Caller
             Assert.Contains("checkpoint:         skipped (already complete)", humanOutput, StringComparison.Ordinal);
             Assert.Single(Directory.GetDirectories(checkpointRoot));
 
+            using (var driftedDb = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                using var drift = driftedDb.Connection.CreateCommand();
+                drift.CommandText = "UPDATE symbols SET name_folded = 'definitely_wrong' WHERE name = 'run'";
+                Assert.Equal(1, drift.ExecuteNonQuery());
+            }
+
+            var repaired = RunBackfill();
+            Assert.Equal(CommandExitCodes.Success, repaired.ExitCode);
+            Assert.True(repaired.Json.GetProperty("rewrite_all").GetBoolean());
+            Assert.Equal(1, repaired.Json.GetProperty("symbols").GetInt32());
+            Assert.False(repaired.Json.GetProperty("was_already_complete").GetBoolean());
+            Assert.False(repaired.Json.GetProperty("checkpoint_skipped").GetBoolean());
+            Assert.Equal(2, Directory.GetDirectories(checkpointRoot).Length);
+            using (var repairedDb = new DbContext(DbOpenIntent.QueryOnly, dbPath))
+            {
+                using var folded = repairedDb.Connection.CreateCommand();
+                folded.CommandText = "SELECT name_folded FROM symbols WHERE name = 'run'";
+                Assert.Equal("run", folded.ExecuteScalar());
+            }
+
             using (var pendingDb = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 var pendingWriter = new DbWriter(pendingDb.Connection);
@@ -6833,7 +6854,7 @@ public sealed class Caller
             Assert.Equal(0, resumed.Json.GetProperty("symbol_references").GetInt32());
             Assert.False(resumed.Json.GetProperty("was_already_complete").GetBoolean());
             Assert.False(resumed.Json.GetProperty("checkpoint_skipped").GetBoolean());
-            Assert.Equal(2, Directory.GetDirectories(checkpointRoot).Length);
+            Assert.Equal(3, Directory.GetDirectories(checkpointRoot).Length);
             using var verifyPending = new DbContext(DbOpenIntent.QueryOnly, dbPath);
             Assert.Null(verifyPending.GetMetaString(DbWriter.FoldBackfillGraphRefreshPendingMetaKey));
         }

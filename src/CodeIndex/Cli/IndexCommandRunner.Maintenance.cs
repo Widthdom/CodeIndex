@@ -624,16 +624,32 @@ public static partial class IndexCommandRunner
             var verified = false;
             var userVersionAfter = userVersionBefore;
             var pendingRows = writer.CountBackfillFoldedColumns(rewriteAll);
+            if (!rewriteAll
+                && pendingRows.Symbols == 0
+                && pendingRows.SymbolReferences == 0
+                && !writer.AllFoldedColumnsBackfilled(requireCurrentFoldKeys: true))
+            {
+                // A current metadata stamp plus non-NULL folded values is not sufficient:
+                // verify the persisted values before declaring a no-op. If they drifted,
+                // repair every row under the same checkpoint protection as stale metadata.
+                // current metadata と非 NULL 値だけでは no-op と断定せず実値を検証する。
+                // drift があれば stale metadata と同様に checkpoint 保護下で全行を修復する。
+                rewriteAll = true;
+                pendingRows = writer.CountBackfillFoldedColumns(rewriteAll);
+            }
             var graphRefreshPending = writer.IsFoldBackfillGraphRefreshPending();
+            var symbolExtractorVersionsCurrent = writer.SymbolExtractorVersionsMatchCurrent();
             var mutationRequired = pendingRows.Symbols > 0
                 || pendingRows.SymbolReferences > 0
                 || !foldReadyBefore
                 || csharpSymbolNameContractUpgradeRequired
-                || graphRefreshPending;
+                || graphRefreshPending
+                || !symbolExtractorVersionsCurrent;
             var wasAlreadyComplete = foldReadyBefore
                 && !rewriteAll
                 && !csharpSymbolNameContractUpgradeRequired
                 && !graphRefreshPending
+                && symbolExtractorVersionsCurrent
                 && pendingRows.Symbols == 0
                 && pendingRows.SymbolReferences == 0;
             var checkpointSkippedReason = options.DryRun
