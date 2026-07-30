@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using CodeIndex.Database;
 using CodeIndex.Indexer.Extensibility;
@@ -798,8 +799,10 @@ internal sealed record LanguageEntryJsonResult(
     [property: JsonPropertyName("legacy_patterns")] List<string> LegacyPatterns,
     [property: JsonPropertyName("pattern_provenance")] List<LanguagePatternProvenanceJsonResult> PatternProvenance,
     [property: JsonPropertyName("aliases")] List<string> Aliases,
+    [property: JsonPropertyName("detection")] bool Detection,
     [property: JsonPropertyName("symbol_extraction")] bool SymbolExtraction,
     [property: JsonPropertyName("reference_extraction")] bool ReferenceExtraction,
+    [property: JsonPropertyName("outline")] bool Outline,
     [property: JsonPropertyName("graph_queries")] bool GraphQueries,
     [property: JsonPropertyName("capability_gaps")] List<string> CapabilityGaps,
     [property: JsonPropertyName("unsupported_guidance")] List<LanguageUnsupportedGuidance> UnsupportedGuidance,
@@ -825,6 +828,7 @@ internal sealed record LanguageMapDiagnosticJsonResult(
 
 internal sealed record LanguagesJsonResult(
     [property: JsonPropertyName("languages")] List<LanguageEntryJsonResult> Languages,
+    [property: JsonPropertyName("language_capability_counts")] JsonObject LanguageCapabilityCounts,
     [property: JsonPropertyName("detection_policy")] LanguageDetectionPolicyJsonResult DetectionPolicy,
     [property: JsonPropertyName("language_map_diagnostics")] List<LanguageMapDiagnosticJsonResult> LanguageMapDiagnostics,
     [property: JsonPropertyName("reference_extraction_limits")] ReferenceExtractionSafetyLimits ReferenceExtractionLimits,
@@ -836,6 +840,12 @@ internal sealed record IndexLanguageDetectionJsonResult(
     [property: JsonPropertyName("source")] string Source,
     [property: JsonPropertyName("confidence")] string Confidence);
 
+internal sealed record IndexDryRunEstimateJsonResult(
+    [property: JsonPropertyName("value")] long? Value,
+    [property: JsonPropertyName("source")] string Source,
+    [property: JsonPropertyName("confidence")] string Confidence,
+    [property: JsonPropertyName("unknown_reasons")] List<string> UnknownReasons);
+
 internal sealed class IndexDryRunJsonResult : IVersionedJsonResult
 {
     public string ApiVersion { get; init; } = JsonOutputContract.ApiVersion;
@@ -843,15 +853,23 @@ internal sealed class IndexDryRunJsonResult : IVersionedJsonResult
     public int FilesTotal { get; init; }
     public bool Estimates { get; init; }
     public int ProjectedFileUpdates { get; init; }
+    public int ProjectedFileSkips { get; init; }
+    public int ProjectedPolicySkips { get; init; }
     public int ProjectedFileDeletes { get; init; }
     public int ProjectedFilePurges { get; init; }
+    public int ProjectedSymbolCapHits { get; init; }
+    public int ProjectedReferenceCapHits { get; init; }
     public int UnsupportedTotal { get; init; }
     public int UnknownExtensionTotal { get; init; }
     public int CandidatePathLimit { get; init; }
     public int CandidatePathsProcessed { get; init; }
     public bool CandidatePathsTruncated { get; init; }
     public bool TotalsLowerBound { get; init; }
-    public Dictionary<string, long> EstimatedTableMutations { get; init; } = new();
+    public int ParseEstimateFileLimit { get; init; }
+    public int ParseEstimateFilesProcessed { get; init; }
+    public bool ParseEstimateFilesTruncated { get; init; }
+    public Dictionary<string, long?> EstimatedTableMutations { get; init; } = new();
+    public Dictionary<string, IndexDryRunEstimateJsonResult> EstimatedTableMutationDetails { get; init; } = new();
     public long SymbolsDroppedByKindFilter { get; init; }
     public IndexSymbolKindFilterJsonResult SymbolKindFilter { get; init; } = new();
     public List<string>? FileSamples { get; init; }

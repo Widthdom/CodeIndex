@@ -6558,6 +6558,10 @@ public partial class McpServerTests
                     entry => entry?["lang"]?.GetValue<string>() == "mcpcatalog")!;
                 Assert.True(language["symbol_extraction"]!.GetValue<bool>());
                 Assert.Contains(".mcpcatalog", language["extensions"]!.AsArray().Select(extension => extension!.GetValue<string>()));
+                var scopedCounts = response["result"]!["structuredContent"]!["language_capability_counts"]!;
+                Assert.Equal(
+                    response["result"]!["structuredContent"]!["languages"]!.AsArray().Count,
+                    scopedCounts["catalog"]!["catalog_membership"]!["count"]!.GetValue<int>());
             }
             finally
             {
@@ -6592,6 +6596,66 @@ public partial class McpServerTests
         Assert.Equal(1, structured["extension_lookup"]!["matched"]!.GetValue<int>());
         Assert.Equal("csharp", Assert.Single(structured["extension_lookup"]!["languages"]!.AsArray())!.GetValue<string>());
         Assert.Equal(1, structured["alias_lookup"]!["matched"]!.GetValue<int>());
+        Assert.Equal(
+            1,
+            structured["language_capability_counts"]!["matched_catalog"]!["catalog_membership"]!["count"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsCall_Languages_UsesCanonicalScopedCapabilityCounts_Issue4895()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":4895,"method":"tools/call","params":{"name":"languages","arguments":{}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        var result = response["result"]!;
+        var structured = result["structuredContent"]!;
+        var languages = structured["languages"]!.AsArray();
+        var counts = structured["language_capability_counts"]!;
+        var expectedCatalog = LanguageCapabilityCatalog.Build(
+            _projectRoot,
+            QueryCommandRunner.GetLanguageAliases);
+
+        var catalogMembership = counts["catalog"]!["catalog_membership"]!;
+        Assert.Equal("catalog", catalogMembership["scope"]!.GetValue<string>());
+        Assert.Equal("catalog_membership", catalogMembership["capability"]!.GetValue<string>());
+        Assert.True(catalogMembership["available"]!.GetValue<bool>());
+        Assert.Equal(expectedCatalog.Languages.Count, catalogMembership["count"]!.GetValue<int>());
+        Assert.Equal(languages.Count, catalogMembership["count"]!.GetValue<int>());
+
+        var symbolCount = counts["catalog"]!["symbol_extraction"]!;
+        Assert.Equal("symbol_extraction", symbolCount["capability"]!.GetValue<string>());
+        Assert.Equal(
+            languages.Count(language => language!["symbol_extraction"]!.GetValue<bool>()),
+            symbolCount["count"]!.GetValue<int>());
+        Assert.All(languages, language =>
+        {
+            Assert.NotNull(language!["detection"]);
+            Assert.NotNull(language["outline"]);
+        });
+
+        var indexedMembership = counts["indexed_workspace"]!["catalog_membership"]!;
+        Assert.Equal("indexed_workspace", indexedMembership["scope"]!.GetValue<string>());
+        Assert.Equal(1, indexedMembership["count"]!.GetValue<int>());
+        Assert.Contains(
+            $"{languages.Count} catalog languages",
+            result["content"]![0]!["text"]!.GetValue<string>(),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ToolsCall_Languages_EmptyIndexReportsAvailableZeroIndexedScope_Issue4895()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_mcp_languages_empty_counts_4895");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        using var server = new McpServer(dbPath, ConsoleUi.LoadVersion(), dbPathExplicit: true);
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":4895,"method":"tools/call","params":{"name":"languages","arguments":{}}}""")!;
+
+        var response = server.HandleMessage(request)!;
+
+        var indexedMembership = response["result"]!["structuredContent"]!
+            ["language_capability_counts"]!["indexed_workspace"]!["catalog_membership"]!;
+        Assert.True(indexedMembership["available"]!.GetValue<bool>());
+        Assert.Equal(0, indexedMembership["count"]!.GetValue<int>());
     }
 
     [Fact]

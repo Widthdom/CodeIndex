@@ -227,6 +227,25 @@ stderr. Human mode keeps the corresponding `Error`, `Hint`, and `Usage` lines.
 See the [Developer Guide](DEVELOPER_GUIDE.md#cli-recoverable-error-format) for
 the stable code/category mapping.
 
+## Index Dry-Run Mutation Estimates
+
+`cdidx index <project> --dry-run --json` reports update, unchanged-skip,
+content-policy-skip, delete, purge, symbol-cap, and reference-cap projections
+without creating a database, acquiring the index lock, or changing source or
+index artifacts. The first 100 planned update files receive parse-only
+estimates for `chunks`, `symbols`, `symbol_references`, `reference_lines`, and
+`file_issues`. The nullable
+`estimated_table_mutations` values are paired with
+`estimated_table_mutation_details`, whose `source`, `confidence`, and
+`unknown_reasons` distinguish an estimated or exact zero from unavailable
+work. Candidate-path truncation, the parse-estimate cap, parse failures,
+cross-file C# refresh expansion, an unreadable index snapshot, and missing
+tables in a partial index therefore produce `null` plus a stable reason instead
+of a misleading zero. Reuse projections also honor production extractor/config
+refreshes and hotspot-marker trust. See the
+[Developer Guide](DEVELOPER_GUIDE.md#build--test) for the implementation
+contract and limitations.
+
 ## Status JSON Contract
 
 `cdidx status --json` exposes trust, freshness, compatibility, and remediation
@@ -690,6 +709,23 @@ prose を stderr に混ぜず、envelope を stdout に出力します。human m
 対応する `Error`、`Hint`、`Usage` の各行を維持します。安定した code /
 category 対応は
 [開発者ガイド](DEVELOPER_GUIDE.md#cli-の回復可能エラー形式) を参照してください。
+
+## index dry-run の mutation 推定
+
+`cdidx index <project> --dry-run --json` は database を作成せず、index lock を
+取得せず、source / index artifact を変更せずに、update、未変更 skip、内容に
+対する policy skip、delete、purge、symbol 上限到達、reference 上限到達の予測を
+返します。update 予定 file の先頭100件について `chunks`、`symbols`、
+`symbol_references`、`reference_lines`、`file_issues` を parse-only で推定します。
+nullable な
+`estimated_table_mutations` の各値には `estimated_table_mutation_details` が対応し、
+`source`、`confidence`、`unknown_reasons` により、推定値または正確なゼロと
+計測不能を区別します。そのため candidate path の切り詰め、parse 推定の上限、
+parse failure、C# の cross-file refresh 展開、index snapshot の読み取り不能、
+partial index の table 不足は、誤解を招くゼロではなく安定した理由付きの `null`
+になります。再利用予測には production の extractor / config refresh と hotspot
+marker の trust も反映します。実装上の契約と制限は
+[開発者ガイド](DEVELOPER_GUIDE.md#ビルドテスト) を参照してください。
 
 ## Status JSON 契約
 

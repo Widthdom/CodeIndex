@@ -412,7 +412,7 @@ public partial class McpServer
                 ReadOnlyAnnotations()),
             CreateToolDefinition(
                 "languages",
-                "List supported languages with extensions, aliases, capabilities, and unsupported_guidance fallback commands. Use `indexedOnly`, `capability`, `extension`, or `alias` to match CLI language filters and extension lookup. / 対応言語一覧を拡張子・別名・機能・`unsupported_guidance` の代替コマンド付きで返す。`indexedOnly` / `capability` / `extension` / `alias` で CLI の言語フィルタと拡張子 lookup に合わせて絞り込める。",
+                "List supported languages with extensions, aliases, capabilities, scoped `language_capability_counts`, and unsupported_guidance fallback commands. Counts explicitly separate the catalog, matched catalog, and indexed workspace scopes. Use `indexedOnly`, `capability`, `extension`, or `alias` to match CLI language filters and extension lookup. / 対応言語一覧を拡張子・別名・機能・scope 付き `language_capability_counts`・`unsupported_guidance` の代替コマンド付きで返す。件数は catalog、matched catalog、indexed workspace の scope を明示的に分離する。`indexedOnly` / `capability` / `extension` / `alias` で CLI の言語フィルタと拡張子 lookup に合わせて絞り込める。",
                 new JsonObject
                 {
                     ["type"] = "object",
