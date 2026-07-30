@@ -35,7 +35,7 @@ public partial class McpServer
                 $"maxBytes must be in [1, {MaxClientResponseJsonBytes}].");
         }
 
-        return WithDbReader(id, args, reader =>
+        return WithDbReader(id, args, reader => reader.RunInReadSnapshot(() =>
         {
             QueryCommandRunner.OutlinePageBuildResult BuildPage(int pageLimit)
                 => QueryCommandRunner.BuildOutlinePage(
@@ -134,7 +134,7 @@ public partial class McpServer
                 id,
                 $"Outline: {ConsoleUi.Counted(returnedCount, "symbol")} returned from {ConsoleUi.Counted(page.Outline!.SymbolCount, "symbol")} in {ConsoleUi.Counted(page.Outline.TotalLines, "line")}.",
                 structured);
-        });
+        }));
     }
 
     private static bool TryReadOutlineProjectionFields(
