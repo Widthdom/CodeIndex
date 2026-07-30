@@ -792,6 +792,28 @@ public class HookCommandRunnerTests
                         .GetString());
             }
 
+            var alternateProjectPath = Path.Combine(parent, "relocated repo");
+            var pathDriftHook = hook.Replace(
+                QuoteShellForTest(projectRoot),
+                QuoteShellForTest(alternateProjectPath),
+                StringComparison.Ordinal);
+            Assert.NotEqual(hook, pathDriftHook);
+            File.WriteAllText(hookPath, pathDriftHook);
+            var pathDriftStatus = RunHooksAndCaptureStreams(
+                ["status", "--project", projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, pathDriftStatus.ExitCode);
+            using (var document = JsonDocument.Parse(pathDriftStatus.StdOut))
+            {
+                Assert.Equal(
+                    "project_path_mismatch",
+                    document.RootElement.GetProperty("hook_state").GetString());
+                var executable = document.RootElement.GetProperty("executable");
+                Assert.Equal("available", executable.GetProperty("status").GetString());
+                Assert.Equal(toolPath, executable.GetProperty("path").GetString());
+            }
+            File.WriteAllText(hookPath, hook);
+
             var pinnedInvocation =
                 $"{QuoteShellForTest(NormalizeExpectedShellPath(toolPath))} index {QuoteShellForTest(projectRoot)} --quiet";
             var tamperedHook = hook.Replace(

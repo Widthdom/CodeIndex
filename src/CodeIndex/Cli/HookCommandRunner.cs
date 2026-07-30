@@ -702,18 +702,22 @@ public static class HookCommandRunner
         var installed = hookExists && AnalyzeManagedHook(hookContent).State == "managed";
         var status = installed ? "installed" : hookExists ? "custom" : "absent";
         HookExecutableJsonResult? executable = null;
+        string? hookState = null;
         if (installed)
         {
             if (!TryReadExecutableManifest(hookContent, out var installedSelection))
             {
+                hookState = "executable_manifest_unresolved";
                 executable = HookExecutableJsonResult.Unresolved("managed_hook_missing_executable_manifest");
             }
-            else if (!ManagedInvocationMatches(
+            else if (!TryAnalyzeManagedInvocation(
                          hookContent,
                          projectPath,
                          chainedHookPath,
-                         installedSelection))
+                         installedSelection,
+                         out hookState))
             {
+                hookState = "executable_manifest_unresolved";
                 executable = HookExecutableJsonResult.Unresolved("managed_hook_executable_manifest_mismatch");
             }
             else
@@ -726,6 +730,8 @@ public static class HookCommandRunner
         var message = $"cdidx pre-commit hook is {status}";
         if (executable is { Status: not "available" })
             message += $"; pinned executable is {executable.Status}";
+        if (hookState is not null and not "managed" and not "executable_manifest_unresolved")
+            message += $"; managed hook state is {hookState}";
         return WriteResult(
             options.Json,
             jsonOptions,
@@ -735,6 +741,7 @@ public static class HookCommandRunner
             hookPath,
             File.Exists(ioChainedHookPath) ? chainedHookPath : null,
             CommandExitCodes.Success,
+            hookState: hookState,
             executable: executable);
     }
 
@@ -1559,12 +1566,14 @@ public static class HookCommandRunner
         }
     }
 
-    private static bool ManagedInvocationMatches(
+    private static bool TryAnalyzeManagedInvocation(
         byte[]? hookContent,
         string projectPath,
         string chainedHookPath,
-        HookExecutableSelection selection)
+        HookExecutableSelection selection,
+        out string hookState)
     {
+        hookState = "executable_manifest_unresolved";
         if (hookContent is null)
             return false;
 
@@ -1580,78 +1589,169 @@ public static class HookCommandRunner
             return false;
         }
 
-        if (!TryBuildHookScript(
-                chainedHookPath,
-                projectPath,
-                selection,
-                out var expectedText))
+        if (!TryExtractManagedBlock(actualText, out var actualBlock))
+            return false;
+
+        var invocation = string.Join(
+            ' ',
+            selection.Argv.Select(static argument => QuoteShell(NormalizeShellPath(argument))));
+        var header = $"""
+{BeginMarker}
+# CDIDX EXECUTABLE SOURCE: {FormatManifestComment(selection.Source)}
+# CDIDX EXECUTABLE VERSION: {FormatManifestComment(selection.Version)}
+{ExecutableManifestPrefix}{EncodeExecutableManifest(selection)}
+{invocation} index
+""" + " ";
+        if (!actualBlock.StartsWith(header, StringComparison.Ordinal))
+            return false;
+
+        var offset = header.Length;
+        if (!TryReadQuotedShellValue(actualBlock, ref offset, out var installedProjectPath))
+            return false;
+        const string beforeChainedPath = """
+ --quiet
+cdidx_status=$?
+if [ "$cdidx_status" -ne 0 ]; then
+  echo "cdidx pre-commit index failed; commit aborted. Use git commit --no-verify to bypass hooks." >&2
+  exit "$cdidx_status"
+fi
+if [ -x
+""" + " ";
+        if (!actualBlock.AsSpan(offset).StartsWith(beforeChainedPath, StringComparison.Ordinal))
+            return false;
+        offset += beforeChainedPath.Length;
+        if (!TryReadQuotedShellValue(actualBlock, ref offset, out var installedChainedHookPath))
+            return false;
+        if (!IsCanonicalFullyQualifiedPath(installedProjectPath)
+            || !IsCanonicalFullyQualifiedPath(installedChainedHookPath))
         {
             return false;
         }
-        return TryExtractManagedBlock(actualText, out var actualBlock)
-               && TryExtractManagedBlock(expectedText, out var expectedBlock)
-               && ManagedBlocksMatchRepositoryPaths(
-                   actualBlock,
-                   expectedBlock,
-                   projectPath,
-                   chainedHookPath);
-    }
 
-    private static bool ManagedBlocksMatchRepositoryPaths(
-        string actualBlock,
-        string expectedBlock,
-        string projectPath,
-        string chainedHookPath)
-    {
+        if (!TryBuildHookScript(
+                installedChainedHookPath,
+                installedProjectPath,
+                selection,
+                out var expectedText)
+            || !TryExtractManagedBlock(expectedText, out var expectedBlock)
+            || !string.Equals(actualBlock, expectedBlock, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        bool projectPathMatches;
+        bool chainedHookPathMatches;
         try
         {
-            actualBlock = NormalizeManagedBlockPathToken(
-                actualBlock,
-                projectPath,
-                "\0CDIDX_PROJECT_PATH\0");
-            expectedBlock = NormalizeManagedBlockPathToken(
-                expectedBlock,
-                projectPath,
-                "\0CDIDX_PROJECT_PATH\0");
-            actualBlock = NormalizeManagedBlockPathToken(
-                actualBlock,
+            projectPathMatches = RepositoryPathsEqual(projectPath, installedProjectPath);
+            chainedHookPathMatches = RepositoryPathsEqual(
                 chainedHookPath,
-                "\0CDIDX_CHAINED_HOOK_PATH\0");
-            expectedBlock = NormalizeManagedBlockPathToken(
-                expectedBlock,
-                chainedHookPath,
-                "\0CDIDX_CHAINED_HOOK_PATH\0");
-            return string.Equals(actualBlock, expectedBlock, StringComparison.Ordinal);
+                installedChainedHookPath);
         }
         catch (Exception ex) when (IsHookFileOperationException(ex) || ex is CodeIndexException)
         {
             return false;
         }
+
+        hookState = (projectPathMatches, chainedHookPathMatches) switch
+        {
+            (true, true) => "managed",
+            (false, true) => "project_path_mismatch",
+            (true, false) => "chained_hook_path_mismatch",
+            _ => "repository_path_mismatch",
+        };
+        return true;
     }
 
-    private static string NormalizeManagedBlockPathToken(
-        string block,
-        string path,
-        string replacement)
+    private static bool RepositoryPathsEqual(string currentPath, string installedPath)
     {
-        var token = QuoteShell(path);
-        var comparison = PathCasing.ComparisonFor(path);
-        var firstIndex = block.IndexOf(token, comparison);
-        if (firstIndex < 0)
-            return block;
-
-        var builder = new StringBuilder(block.Length);
-        var offset = 0;
-        while (firstIndex >= 0)
+        if (PathCasing.PathsEqual(currentPath, installedPath))
+            return true;
+        if (OperatingSystem.IsWindows()
+            || !TryResolveRepositoryPathAliases(currentPath, out var resolvedCurrentPath)
+            || !TryResolveRepositoryPathAliases(installedPath, out var resolvedInstalledPath))
         {
-            builder.Append(block, offset, firstIndex - offset);
-            builder.Append(replacement);
-            offset = firstIndex + token.Length;
-            firstIndex = block.IndexOf(token, offset, comparison);
+            return false;
         }
 
-        builder.Append(block, offset, block.Length - offset);
-        return builder.ToString();
+        return PathCasing.PathsEqual(resolvedCurrentPath, resolvedInstalledPath);
+    }
+
+    private static bool TryResolveRepositoryPathAliases(string path, out string resolvedPath)
+    {
+        resolvedPath = string.Empty;
+        var suffix = new Stack<string>();
+        var existingAncestor = Path.GetFullPath(path);
+        while (!File.Exists(LongPath.EnsureWindowsPrefix(existingAncestor))
+               && !Directory.Exists(LongPath.EnsureWindowsPrefix(existingAncestor)))
+        {
+            var name = Path.GetFileName(existingAncestor);
+            var parent = Path.GetDirectoryName(existingAncestor);
+            if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(parent))
+                return false;
+            suffix.Push(name);
+            existingAncestor = parent;
+        }
+
+        IntPtr pointer = IntPtr.Zero;
+        try
+        {
+            pointer = UnixRealPath(existingAncestor, IntPtr.Zero);
+            if (pointer == IntPtr.Zero)
+                return false;
+            var realAncestor = Marshal.PtrToStringUTF8(pointer);
+            if (string.IsNullOrEmpty(realAncestor))
+                return false;
+
+            resolvedPath = suffix.Aggregate(realAncestor, Path.Combine);
+            resolvedPath = Path.GetFullPath(resolvedPath);
+            return true;
+        }
+        catch (Exception ex) when (IsHookFileOperationException(ex)
+                                   || ex is DllNotFoundException
+                                       or EntryPointNotFoundException)
+        {
+            return false;
+        }
+        finally
+        {
+            if (pointer != IntPtr.Zero)
+                UnixFree(pointer);
+        }
+    }
+
+    private static bool TryReadQuotedShellValue(
+        string text,
+        ref int offset,
+        out string value)
+    {
+        value = string.Empty;
+        if (offset >= text.Length || text[offset] != '\'')
+            return false;
+
+        offset++;
+        var builder = new StringBuilder();
+        while (offset < text.Length)
+        {
+            if (text[offset] != '\'')
+            {
+                builder.Append(text[offset++]);
+                continue;
+            }
+
+            if (text.AsSpan(offset).StartsWith("'\"'\"'", StringComparison.Ordinal))
+            {
+                builder.Append('\'');
+                offset += 5;
+                continue;
+            }
+
+            offset++;
+            value = builder.ToString();
+            return true;
+        }
+
+        return false;
     }
 
     private static bool TryExtractManagedBlock(string text, out string block)
@@ -1830,6 +1930,12 @@ public static class HookCommandRunner
 
     [DllImport("libSystem.Native", EntryPoint = "SystemNative_Stat", CharSet = CharSet.Ansi)]
     private static extern int UnixStat(string path, out UnixFileStatus status);
+
+    [DllImport("libc", EntryPoint = "realpath", SetLastError = true)]
+    private static extern IntPtr UnixRealPath(string path, IntPtr resolvedPath);
+
+    [DllImport("libc", EntryPoint = "free")]
+    private static extern void UnixFree(IntPtr pointer);
 
     [StructLayout(LayoutKind.Sequential)]
     private struct UnixFileStatus
