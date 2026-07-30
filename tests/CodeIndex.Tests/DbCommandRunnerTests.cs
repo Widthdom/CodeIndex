@@ -912,6 +912,166 @@ public class DbCommandRunnerTests
     }
 
     [Fact]
+    public void Run_CheckpointPlan_JsonMatchesExecutionForDbAndSidecars_Issue4890()
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_checkpoint_plan_4890");
+        var dbPath = Path.Combine(root, "codeindex.db");
+        var fixedTime = new DateTimeOffset(2026, 7, 30, 1, 2, 3, 456, TimeSpan.Zero);
+        try
+        {
+            File.WriteAllText(dbPath, "db");
+            File.WriteAllText(dbPath + "-wal", "wal");
+            File.WriteAllText(dbPath + "-shm", "shm!");
+            DbCommandRunner.UtcNowForTesting = () => fixedTime;
+
+            var (dryRunExit, dryRunJson) = RunAndCaptureJson(["checkpoint", "planned", "--dry-run", "--db", dbPath, "--json"]);
+            var (writeExit, writeJson) = RunAndCaptureJson(["checkpoint", "planned", "--db", dbPath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, dryRunExit);
+            Assert.Equal(CommandExitCodes.Success, writeExit);
+            Assert.True(dryRunJson.GetProperty("ready").GetBoolean());
+            Assert.False(dryRunJson.GetProperty("destination_exists").GetBoolean());
+            Assert.Equal(9, dryRunJson.GetProperty("source_bytes").GetInt64());
+            Assert.Equal(
+                ["codeindex.db", "codeindex.db-shm", "codeindex.db-wal"],
+                dryRunJson.GetProperty("source_files").EnumerateArray().Select(file => file.GetString()).ToArray());
+            var plannedOutputs = dryRunJson.GetProperty("planned_output_files").EnumerateArray().Select(file => file.GetString()).ToArray();
+            Assert.Equal(["codeindex.db", "codeindex.db-shm", "codeindex.db-wal", "manifest.txt"], plannedOutputs);
+            Assert.Equal(
+                plannedOutputs,
+                writeJson.GetProperty("planned_output_files").EnumerateArray().Select(file => file.GetString()).ToArray());
+            Assert.Equal(
+                dryRunJson.GetProperty("estimated_output_bytes").GetInt64(),
+                writeJson.GetProperty("estimated_output_bytes").GetInt64());
+            Assert.Equal(
+                writeJson.GetProperty("estimated_output_bytes").GetInt64(),
+                writeJson.GetProperty("final_output_bytes").GetInt64());
+            Assert.Equal(
+                dryRunJson.GetProperty("manifest_sha256").GetString(),
+                writeJson.GetProperty("manifest_sha256").GetString());
+            Assert.Equal(64, dryRunJson.GetProperty("manifest_sha256").GetString()!.Length);
+            Assert.Equal("checkpoint_manifest_v1", dryRunJson.GetProperty("manifest_schema").GetString());
+            Assert.Contains("format_version=1", dryRunJson.GetProperty("manifest_contents").GetString(), StringComparison.Ordinal);
+            Assert.Contains($"created_at_utc={fixedTime:O}", dryRunJson.GetProperty("manifest_contents").GetString(), StringComparison.Ordinal);
+            Assert.Equal("copy_wal_and_shm_if_present", dryRunJson.GetProperty("sidecar_policy").GetString());
+            Assert.Equal("none", dryRunJson.GetProperty("compression").GetString());
+            Assert.Equal("owner_only_files_and_directories", dryRunJson.GetProperty("metadata_policy").GetString());
+            Assert.Equal("create_new_directory_atomically", dryRunJson.GetProperty("destination_policy").GetString());
+            Assert.Equal("fail_if_destination_exists", dryRunJson.GetProperty("conflict_policy").GetString());
+            Assert.Equal(
+                "source_files_can_change_after_final_validation;execution_replans_and_refuses_detected_drift_before_publish",
+                dryRunJson.GetProperty("uncertainty").GetString());
+            var checkpointPath = writeJson.GetProperty("checkpoint_path").GetString()!;
+            var actualBytes = Directory.GetFiles(checkpointPath).Sum(path => new FileInfo(path).Length);
+            Assert.Equal(writeJson.GetProperty("final_output_bytes").GetInt64(), actualBytes);
+        }
+        finally
+        {
+            DbCommandRunner.UtcNowForTesting = null;
+            DeleteWorkDirectory(root);
+        }
+    }
+
+    [Fact]
+    public void Run_CheckpointPlan_HumanOutputListsEveryArtifactAndMissingSidecars_Issue4890()
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_checkpoint_human_plan_4890");
+        var dbPath = Path.Combine(root, "codeindex.db");
+        try
+        {
+            File.WriteAllText(dbPath, "db");
+
+            var (exitCode, stdout, _) = RunAndCaptureStreams(["checkpoint", "planned", "--dry-run", "--db", dbPath]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Contains("source files: 1 file", stdout, StringComparison.Ordinal);
+            Assert.Contains("planned outputs: 2 files", stdout, StringComparison.Ordinal);
+            Assert.Contains("codeindex.db (2 bytes)", stdout, StringComparison.Ordinal);
+            Assert.Contains("manifest.txt", stdout, StringComparison.Ordinal);
+            Assert.DoesNotContain("codeindex.db-wal", stdout, StringComparison.Ordinal);
+            Assert.DoesNotContain("codeindex.db-shm", stdout, StringComparison.Ordinal);
+            Assert.Contains("estimated output bytes:", stdout, StringComparison.Ordinal);
+            Assert.Contains("manifest contents:", stdout, StringComparison.Ordinal);
+            Assert.Contains("format_version=1", stdout, StringComparison.Ordinal);
+            Assert.Contains("manifest sha256:", stdout, StringComparison.Ordinal);
+            Assert.Contains("conflict policy: fail if destination exists", stdout, StringComparison.Ordinal);
+            Assert.Contains("compression: none", stdout, StringComparison.Ordinal);
+            Assert.Contains("metadata policy: owner only files and directories", stdout, StringComparison.Ordinal);
+            Assert.Contains("uncertainty: source files can change after final validation; execution replans and refuses detected drift before publish", stdout, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteWorkDirectory(root);
+        }
+    }
+
+    [Fact]
+    public void Run_CheckpointPlan_DestinationConflictIsReportedAndExecutionRefuses_Issue4890()
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_checkpoint_conflict_4890");
+        var dbPath = Path.Combine(root, "codeindex.db");
+        var checkpointPath = Path.Combine(dbPath + ".checkpoints", "conflict");
+        var sentinelPath = Path.Combine(checkpointPath, "sentinel.txt");
+        try
+        {
+            File.WriteAllText(dbPath, "db");
+            Directory.CreateDirectory(checkpointPath);
+            File.WriteAllText(sentinelPath, "keep");
+
+            var (dryRunExit, dryRunJson) = RunAndCaptureJson(["checkpoint", "conflict", "--dry-run", "--db", dbPath, "--json"]);
+            var (writeExit, writeJson) = RunAndCaptureJson(["checkpoint", "conflict", "--db", dbPath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, dryRunExit);
+            Assert.False(dryRunJson.GetProperty("ready").GetBoolean());
+            Assert.True(dryRunJson.GetProperty("destination_exists").GetBoolean());
+            Assert.Contains(
+                dryRunJson.GetProperty("diagnostics").EnumerateArray(),
+                diagnostic => diagnostic.GetProperty("code").GetString() == "checkpoint_already_exists");
+            Assert.Equal(CommandExitCodes.DatabaseError, writeExit);
+            Assert.Equal(CommandErrorCodes.DbError, writeJson.GetProperty("error_code").GetString());
+            Assert.Equal("keep", File.ReadAllText(sentinelPath));
+        }
+        finally
+        {
+            DeleteWorkDirectory(root);
+        }
+    }
+
+    [Theory]
+    [InlineData("source_content")]
+    [InlineData("sidecar_appears")]
+    [InlineData("sidecar_disappears")]
+    public void Run_CheckpointPlan_SourceDriftRefusesPublish_Issue4890(string driftKind)
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_checkpoint_drift_4890");
+        var dbPath = Path.Combine(root, "codeindex.db");
+        try
+        {
+            File.WriteAllText(dbPath, "db");
+            if (driftKind == "sidecar_disappears")
+                File.WriteAllText(dbPath + "-wal", "wal");
+            DbCommandRunner.CheckpointPlanReadyForExecutionForTesting = driftKind switch
+            {
+                "sidecar_appears" => () => File.WriteAllText(dbPath + "-wal", "wal"),
+                "sidecar_disappears" => () => File.Delete(dbPath + "-wal"),
+                _ => () => File.AppendAllText(dbPath, "-changed"),
+            };
+
+            var (exitCode, json) = RunAndCaptureJson(["checkpoint", "drift", "--db", dbPath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            Assert.Equal(CommandErrorCodes.DbError, json.GetProperty("error_code").GetString());
+            Assert.Contains("plan drift detected", json.GetProperty("message").GetString(), StringComparison.Ordinal);
+            Assert.False(Directory.Exists(Path.Combine(dbPath + ".checkpoints", "drift")));
+        }
+        finally
+        {
+            DbCommandRunner.CheckpointPlanReadyForExecutionForTesting = null;
+            DeleteWorkDirectory(root);
+        }
+    }
+
+    [Fact]
     public void Run_CheckpointTraversalName_JsonUsesUsageErrorAndSyntaxHint_Issue4477()
     {
         var root = TestProjectHelper.CreateTempProject("cdidx_db_checkpoint_traversal_4477");
@@ -1005,6 +1165,7 @@ public class DbCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, checkpointExit);
             var manifest = File.ReadAllText(Path.Combine(dbPath + ".checkpoints", "manifest", "manifest.txt"));
+            Assert.Contains("format_version=1", manifest);
             Assert.Contains("db_file=codeindex.db", manifest);
             Assert.DoesNotContain(dbPath, manifest);
             Assert.DoesNotContain(root, manifest);
@@ -1166,7 +1327,8 @@ public class DbCommandRunnerTests
 
             var checkpointRoot = dbPath + ".checkpoints";
             Directory.CreateDirectory(checkpointRoot);
-            File.WriteAllText(Path.Combine(checkpointRoot, "saved"), "checkpoint path blocker");
+            DbCommandRunner.CheckpointPlanReadyForExecutionForTesting = () =>
+                File.WriteAllText(Path.Combine(checkpointRoot, "saved"), "checkpoint path blocker");
             DbCommandRunner.DeleteTemporaryDirectoryForTesting = path =>
             {
                 cleanupPath = path;
@@ -1184,6 +1346,7 @@ public class DbCommandRunnerTests
         }
         finally
         {
+            DbCommandRunner.CheckpointPlanReadyForExecutionForTesting = null;
             DbCommandRunner.DeleteTemporaryDirectoryForTesting = null;
             DeleteWorkDirectory(root);
         }

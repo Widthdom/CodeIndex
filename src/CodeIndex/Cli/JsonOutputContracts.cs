@@ -288,6 +288,22 @@ internal sealed record DbCheckpointJsonResult(
     [property: JsonPropertyName("diagnostics")] List<DbDiagnosticJsonResult>? Diagnostics = null,
     [property: JsonPropertyName("dry_run")] bool DryRun = false,
     [property: JsonPropertyName("bytes")] long Bytes = 0,
+    [property: JsonPropertyName("source_files")] List<string>? SourceFiles = null,
+    [property: JsonPropertyName("source_bytes")] long SourceBytes = 0,
+    [property: JsonPropertyName("planned_output_files")] List<string>? PlannedOutputFiles = null,
+    [property: JsonPropertyName("estimated_output_bytes")] long EstimatedOutputBytes = 0,
+    [property: JsonPropertyName("final_output_bytes")] long? FinalOutputBytes = null,
+    [property: JsonPropertyName("ready")] bool Ready = false,
+    [property: JsonPropertyName("destination_exists")] bool DestinationExists = false,
+    [property: JsonPropertyName("destination_policy")] string DestinationPolicy = DbCommandRunner.CheckpointDestinationPolicy,
+    [property: JsonPropertyName("conflict_policy")] string ConflictPolicy = DbCommandRunner.CheckpointConflictPolicy,
+    [property: JsonPropertyName("uncertainty")] string Uncertainty = DbCommandRunner.CheckpointPlanUncertainty,
+    [property: JsonPropertyName("manifest_schema")] string ManifestSchema = DbCommandRunner.CheckpointManifestSchema,
+    [property: JsonPropertyName("manifest_contents")] string? ManifestContents = null,
+    [property: JsonPropertyName("manifest_sha256")] string? ManifestSha256 = null,
+    [property: JsonPropertyName("sidecar_policy")] string SidecarPolicy = DbCommandRunner.CheckpointSidecarPolicy,
+    [property: JsonPropertyName("compression")] string Compression = DbCommandRunner.CheckpointCompressionPolicy,
+    [property: JsonPropertyName("metadata_policy")] string MetadataPolicy = DbCommandRunner.CheckpointMetadataPolicy,
     [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion) : IVersionedJsonResult;
 
 internal sealed record DbCheckpointListJsonResult(

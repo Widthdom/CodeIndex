@@ -1,4 +1,6 @@
+using System.Security.Cryptography;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using CodeIndex.Database;
@@ -10,75 +12,132 @@ namespace CodeIndex.Cli;
 
 public static partial class DbCommandRunner
 {
-    private static DbCheckpointOperationResult CreateCheckpoint(string fullDbPath, string name)
+    private static DbCheckpointPlan PlanCheckpoint(string fullDbPath, string name)
     {
         ValidateCheckpointName(name);
         var root = GetCheckpointRoot(fullDbPath);
         var checkpointPath = GetCheckpointPath(fullDbPath, name);
-        if (Directory.Exists(checkpointPath))
-            throw new InvalidOperationException($"checkpoint already exists: {FormatCheckpointNameForDiagnostic(name)}");
+        var diagnostics = new List<DbDiagnosticJsonResult>();
+        var destinationStatus = FileSystemBoundary.TryGetAttributes(checkpointPath, out _);
+        var destinationExists = destinationStatus == FileSystemBoundaryProbeStatus.Found;
+        var destinationReady = destinationStatus == FileSystemBoundaryProbeStatus.Missing;
+        if (destinationExists)
+        {
+            diagnostics.Add(new DbDiagnosticJsonResult(
+                "checkpoint_already_exists",
+                "A checkpoint with this name already exists; execution would fail.",
+                ConsoleUi.FormatBoundedValue(checkpointPath)));
+        }
+        else if (!destinationReady)
+        {
+            diagnostics.Add(new DbDiagnosticJsonResult(
+                "checkpoint_destination_probe_failed",
+                "The checkpoint destination could not be inspected; execution would fail.",
+                ConsoleUi.FormatBoundedValue(checkpointPath)));
+        }
 
-        DataDirectorySecurity.CreateSensitiveDirectory(root);
-        var tempPath = Path.Combine(root, ".tmp-" + name + "-" + Guid.NewGuid().ToString("N"));
+        var sourceCandidatePaths = new[] { fullDbPath, fullDbPath + "-wal", fullDbPath + "-shm" };
+        var sourceFiles = ReadCheckpointSourceFiles(sourceCandidatePaths, diagnostics);
+        var ready = destinationReady && !sourceFiles.Truncated;
+        var manifestContents = $"format_version=1{Environment.NewLine}name={name}{Environment.NewLine}created_at_utc={GetUtcNow():O}{Environment.NewLine}db_file={Path.GetFileName(fullDbPath)}{Environment.NewLine}";
+        var manifestBytes = Encoding.UTF8.GetBytes(manifestContents);
+        var plannedOutputFiles = sourceFiles.Files
+            .Select(source => source.OutputName)
+            .Append("manifest.txt")
+            .Order(StringComparer.Ordinal)
+            .ToList();
+
+        return new DbCheckpointPlan(
+            name,
+            root,
+            checkpointPath,
+            Array.AsReadOnly(sourceCandidatePaths),
+            sourceFiles.Files.AsReadOnly(),
+            plannedOutputFiles.AsReadOnly(),
+            sourceFiles.Bytes,
+            checked(sourceFiles.Bytes + manifestBytes.LongLength),
+            manifestContents,
+            ComputeCheckpointSha256(manifestBytes),
+            CheckpointDestinationPolicy,
+            CheckpointConflictPolicy,
+            CheckpointPlanUncertainty,
+            CheckpointManifestSchema,
+            CheckpointSidecarPolicy,
+            CheckpointCompressionPolicy,
+            CheckpointMetadataPolicy,
+            ready,
+            destinationExists,
+            sourceFiles.Truncated,
+            diagnostics.AsReadOnly());
+    }
+
+    private static DbCheckpointOperationResult CreateCheckpoint(DbCheckpointPlan plan)
+    {
+        if (!plan.Ready)
+            throw new InvalidOperationException($"checkpoint plan is not ready: {FormatCheckpointNameForDiagnostic(plan.Name)}");
+
+        CheckpointPlanReadyForExecutionForTesting?.Invoke();
+        ValidateCheckpointPlanSources(plan);
+
+        DataDirectorySecurity.CreateSensitiveDirectory(plan.RootPath);
+        var tempPath = Path.Combine(plan.RootPath, ".tmp-" + plan.Name + "-" + Guid.NewGuid().ToString("N"));
         DataDirectorySecurity.CreateSensitiveDirectory(tempPath);
         try
         {
-            CopyIfExists(fullDbPath, Path.Combine(tempPath, Path.GetFileName(fullDbPath)), privateDestination: true);
-            CopyIfExists(fullDbPath + "-wal", Path.Combine(tempPath, Path.GetFileName(fullDbPath) + "-wal"), privateDestination: true);
-            CopyIfExists(fullDbPath + "-shm", Path.Combine(tempPath, Path.GetFileName(fullDbPath) + "-shm"), privateDestination: true);
-            DataDirectorySecurity.WritePrivateText(Path.Combine(tempPath, "manifest.txt"), $"name={name}{Environment.NewLine}created_at_utc={GetUtcNow():O}{Environment.NewLine}db_file={Path.GetFileName(fullDbPath)}{Environment.NewLine}");
-            AtomicFileWriter.PublishDirectory(tempPath, checkpointPath);
+            foreach (var source in plan.SourceFiles)
+            {
+                var destination = Path.Combine(tempPath, source.OutputName);
+                CopyIfExists(source.SourcePath, destination, privateDestination: true);
+                ValidateCheckpointOutput(destination, source);
+            }
+
+            var manifestPath = Path.Combine(tempPath, "manifest.txt");
+            DataDirectorySecurity.WritePrivateText(manifestPath, plan.ManifestContents);
+            ValidateCheckpointOutput(
+                manifestPath,
+                new DbCheckpointSourcePlan(
+                    manifestPath,
+                    "manifest.txt",
+                    Encoding.UTF8.GetByteCount(plan.ManifestContents),
+                    LastWriteTimeUtcTicks: null,
+                    plan.ManifestSha256));
+            ValidateCheckpointPlanSources(plan);
+            AtomicFileWriter.PublishDirectory(tempPath, plan.CheckpointPath);
         }
         catch
         {
             TryDeleteTemporaryDirectory(
                 tempPath,
                 "checkpoint temporary directory",
-                root,
+                plan.RootPath,
                 ".tmp-");
             throw;
         }
 
-        var diagnostics = new List<DbDiagnosticJsonResult>();
-        var files = EnumerateCheckpointFileNames(checkpointPath, diagnostics);
+        var diagnostics = new List<DbDiagnosticJsonResult>(plan.Diagnostics);
+        var files = EnumerateCheckpointFileNames(plan.CheckpointPath, diagnostics);
         var bytes = files.Truncated
             ? (Bytes: 0L, Truncated: true)
-            : SumCheckpointBytes(checkpointPath, diagnostics);
-        return new DbCheckpointOperationResult(name, checkpointPath, files.Items, files.Truncated || bytes.Truncated, diagnostics, bytes.Bytes);
+            : SumCheckpointBytes(plan.CheckpointPath, diagnostics);
+        return new DbCheckpointOperationResult(plan.Name, plan.CheckpointPath, files.Items, files.Truncated || bytes.Truncated, diagnostics, bytes.Bytes);
     }
 
-    private static DbCheckpointOperationResult PreviewCheckpoint(string fullDbPath, string name)
-    {
-        ValidateCheckpointName(name);
-        var checkpointPath = GetCheckpointPath(fullDbPath, name);
-        var diagnostics = new List<DbDiagnosticJsonResult>();
-        if (Directory.Exists(LongPath.EnsureWindowsPrefix(checkpointPath)))
-        {
-            diagnostics.Add(new DbDiagnosticJsonResult(
-                "checkpoint_already_exists",
-                "A checkpoint with this name already exists; running without --dry-run would fail.",
-                ConsoleUi.FormatBoundedValue(checkpointPath)));
-        }
-
-        var files = ReadCheckpointSourceFiles(fullDbPath, diagnostics);
-        return new DbCheckpointOperationResult(name, checkpointPath, files.Files, files.Truncated, diagnostics, files.Bytes);
-    }
-
-    private static (List<string> Files, long Bytes, bool Truncated) ReadCheckpointSourceFiles(
-        string fullDbPath,
+    private static (List<DbCheckpointSourcePlan> Files, long Bytes, bool Truncated) ReadCheckpointSourceFiles(
+        IReadOnlyList<string> sourceCandidatePaths,
         List<DbDiagnosticJsonResult> diagnostics)
     {
-        var files = new List<string>();
+        var files = new List<DbCheckpointSourcePlan>();
         long bytes = 0;
-        foreach (var source in new[] { fullDbPath, fullDbPath + "-wal", fullDbPath + "-shm" })
+        foreach (var source in sourceCandidatePaths)
         {
             try
             {
                 if (!TryGetRegularExistingFile(source, out var normalizedSource))
                     continue;
 
-                files.Add(Path.GetFileName(source) ?? source);
-                bytes += new FileInfo(normalizedSource).Length;
+                var sourcePlan = CaptureCheckpointSource(normalizedSource, Path.GetFileName(source) ?? source);
+                files.Add(sourcePlan);
+                bytes = checked(bytes + sourcePlan.Bytes);
             }
             catch (Exception ex) when (IsRecoverableFilesystemException(ex))
             {
@@ -90,9 +149,93 @@ public static partial class DbCommandRunner
             }
         }
 
-        files.Sort(StringComparer.Ordinal);
+        files.Sort((left, right) => StringComparer.Ordinal.Compare(left.OutputName, right.OutputName));
         return (files, bytes, Truncated: false);
     }
+
+    private static DbCheckpointSourcePlan CaptureCheckpointSource(string sourcePath, string outputName)
+    {
+        var fileInfo = new FileInfo(sourcePath);
+        fileInfo.Refresh();
+        var length = fileInfo.Length;
+        var lastWriteTimeUtcTicks = fileInfo.LastWriteTimeUtc.Ticks;
+        var sha256 = ComputeCheckpointSha256(sourcePath);
+        fileInfo.Refresh();
+        if (length != fileInfo.Length || lastWriteTimeUtcTicks != fileInfo.LastWriteTimeUtc.Ticks)
+            throw new DbCheckpointPlanDriftException();
+
+        return new DbCheckpointSourcePlan(sourcePath, outputName, length, lastWriteTimeUtcTicks, sha256);
+    }
+
+    private static void ValidateCheckpointPlanSources(DbCheckpointPlan plan)
+    {
+        foreach (var sourceCandidatePath in plan.SourceCandidatePaths)
+        {
+            try
+            {
+                var outputName = Path.GetFileName(sourceCandidatePath) ?? sourceCandidatePath;
+                var expected = plan.SourceFiles.SingleOrDefault(
+                    source => string.Equals(source.OutputName, outputName, StringComparison.Ordinal));
+                var exists = TryGetRegularExistingFile(sourceCandidatePath, out var normalizedSource);
+                if (exists != (expected is not null))
+                    throw new DbCheckpointPlanDriftException();
+                if (expected is null)
+                    continue;
+
+                var current = CaptureCheckpointSource(normalizedSource, expected.OutputName);
+                if (current.Bytes != expected.Bytes
+                    || current.LastWriteTimeUtcTicks != expected.LastWriteTimeUtcTicks
+                    || !string.Equals(current.Sha256, expected.Sha256, StringComparison.Ordinal))
+                {
+                    throw new DbCheckpointPlanDriftException();
+                }
+            }
+            catch (DbCheckpointPlanDriftException)
+            {
+                throw;
+            }
+            catch (Exception ex) when (IsRecoverableFilesystemException(ex))
+            {
+                throw new DbCheckpointPlanDriftException(ex);
+            }
+        }
+    }
+
+    private static void ValidateCheckpointOutput(string destinationPath, DbCheckpointSourcePlan expected)
+    {
+        try
+        {
+            if (!TryGetRegularExistingFile(destinationPath, out var normalizedDestination))
+                throw new DbCheckpointPlanDriftException();
+            var fileInfo = new FileInfo(normalizedDestination);
+            if (fileInfo.Length != expected.Bytes
+                || !string.Equals(ComputeCheckpointSha256(normalizedDestination), expected.Sha256, StringComparison.Ordinal))
+            {
+                throw new DbCheckpointPlanDriftException();
+            }
+        }
+        catch (DbCheckpointPlanDriftException)
+        {
+            throw;
+        }
+        catch (Exception ex) when (IsRecoverableFilesystemException(ex))
+        {
+            throw new DbCheckpointPlanDriftException(ex);
+        }
+    }
+
+    private static string ComputeCheckpointSha256(string path)
+    {
+        using var stream = new FileStream(
+            LongPath.EnsureWindowsPrefix(path),
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete);
+        return Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
+    }
+
+    private static string ComputeCheckpointSha256(byte[] contents)
+        => Convert.ToHexString(SHA256.HashData(contents)).ToLowerInvariant();
 
     private static DbCheckpointListReadResult ListCheckpoints(string fullDbPath, int limit)
     {

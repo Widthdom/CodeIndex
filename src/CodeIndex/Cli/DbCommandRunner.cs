@@ -22,6 +22,13 @@ public static partial class DbCommandRunner
     internal const int CheckpointPruneScanLimit = 1_000;
     internal const int CheckpointFileInspectLimit = 32;
     internal const int CheckpointManifestByteLimit = 16 * 1024;
+    internal const string CheckpointDestinationPolicy = "create_new_directory_atomically";
+    internal const string CheckpointConflictPolicy = "fail_if_destination_exists";
+    internal const string CheckpointPlanUncertainty = "source_files_can_change_after_final_validation;execution_replans_and_refuses_detected_drift_before_publish";
+    internal const string CheckpointManifestSchema = "checkpoint_manifest_v1";
+    internal const string CheckpointSidecarPolicy = "copy_wal_and_shm_if_present";
+    internal const string CheckpointCompressionPolicy = "none";
+    internal const string CheckpointMetadataPolicy = "owner_only_files_and_directories";
     internal const int RestoreBackupListEntryLimit = 100;
     internal const int RestoreBackupPruneScanLimit = 1_000;
     internal const int DefaultRestoreBackupKeepCount = 10;
@@ -38,6 +45,7 @@ public static partial class DbCommandRunner
     internal static Func<string, IEnumerable<string>>? EnumerateCheckpointFilesForTesting { get; set; }
     internal static Func<IEnumerable<string>>? IntegrityCheckRowsForTesting { get; set; }
     internal static Func<string, IEnumerable<string>>? EnumerateCheckpointFileNamesForTesting { get; set; }
+    internal static Action? CheckpointPlanReadyForExecutionForTesting { get; set; }
     private static readonly AsyncLocal<Func<DateTimeOffset>?> ScopedUtcNowForTesting = new();
     private static readonly AsyncLocal<Func<string, long?>?> ScopedAvailableFreeSpaceForTesting = new();
     internal static Func<DateTimeOffset>? UtcNowForTesting
@@ -173,7 +181,7 @@ public static partial class DbCommandRunner
     {
         var fullDbPath = Path.GetFullPath(DbPathResolver.NormalizeDbPath(dbPath));
         var name = AutoCheckpointPrefix + MakeTimestampCheckpointName();
-        return CreateCheckpoint(fullDbPath, name).CheckpointPath;
+        return CreateCheckpoint(PlanCheckpoint(fullDbPath, name)).CheckpointPath;
     }
 
     private static int RunIntegrityCheck(DbCommandOptions options, JsonSerializerOptions jsonOptions, string dbPath, bool isUri, CancellationToken cancellationToken)
@@ -417,6 +425,49 @@ internal sealed class DbCommandOptions
 }
 
 internal sealed record DbCheckpointOperationResult(string Name, string CheckpointPath, List<string> Files, bool FilesTruncated, List<DbDiagnosticJsonResult> Diagnostics, long Bytes);
+
+internal sealed record DbCheckpointPlan(
+    string Name,
+    string RootPath,
+    string CheckpointPath,
+    IReadOnlyList<string> SourceCandidatePaths,
+    IReadOnlyList<DbCheckpointSourcePlan> SourceFiles,
+    IReadOnlyList<string> PlannedOutputFiles,
+    long SourceBytes,
+    long EstimatedOutputBytes,
+    string ManifestContents,
+    string ManifestSha256,
+    string DestinationPolicy,
+    string ConflictPolicy,
+    string Uncertainty,
+    string ManifestSchema,
+    string SidecarPolicy,
+    string CompressionPolicy,
+    string MetadataPolicy,
+    bool Ready,
+    bool DestinationExists,
+    bool SourceFilesTruncated,
+    IReadOnlyList<DbDiagnosticJsonResult> Diagnostics);
+
+internal sealed record DbCheckpointSourcePlan(
+    string SourcePath,
+    string OutputName,
+    long Bytes,
+    long? LastWriteTimeUtcTicks,
+    string Sha256);
+
+internal sealed class DbCheckpointPlanDriftException : IOException
+{
+    internal DbCheckpointPlanDriftException()
+        : base("checkpoint inputs changed after planning")
+    {
+    }
+
+    internal DbCheckpointPlanDriftException(Exception innerException)
+        : base("checkpoint inputs changed after planning", innerException)
+    {
+    }
+}
 
 internal sealed record DbCheckpointListReadResult(
     List<DbCheckpointListEntryJsonResult> Entries,
