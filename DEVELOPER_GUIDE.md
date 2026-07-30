@@ -355,6 +355,14 @@ previews are sanitized and bounded. JSON failures write the envelope to stdout
 and leave stderr empty. Human failures write the matching coded `Error`,
 `Hint`, and `Usage` lines to stderr and leave stdout empty.
 
+Resolve project-config dependency before calling `CdidxConfigFile.Load`.
+Process-static commands (`license`, `--version`, help forms, completions, and
+subcommand help) must not discover or parse project config. `validate-config`
+and `config show` own malformed-config reporting so they retain their
+command-specific contracts while valid settings still reach environment consumers.
+Other commands load config before those consumers run; malformed config in JSON mode uses `E024_CONFIG_INVALID` /
+`configuration` in the shared command-error envelope.
+
 | Failure class | Exit code | Error code | Category |
 |---|---:|---|---|
 | Usage / invalid arguments | 1 or 7 | `E010_USAGE_ERROR` | `usage` |
@@ -3745,6 +3753,14 @@ JSON mode の回復可能な非データベース系失敗も、共通のバー�
 sanitization し、上限を適用してから merge します。JSON の失敗は envelope を stdout に
 出し、stderr を空に保ちます。human の失敗は対応する code 付き `Error`、`Hint`、
 `Usage` を stderr に出し、stdout を空に保ちます。
+
+`CdidxConfigFile.Load` を呼ぶ前に project-config 依存性を解決します。process-static な
+command（`license`、`--version`、help 形式、completion、subcommand help）は project
+config を探索・parse しません。`validate-config` と `config show` は有効な設定を
+environment consumer に適用しつつ、不正な file の reporting を command 固有契約で
+所有します。それ以外の command は environment consumer の実行前に config を load し、
+JSON mode の不正 config は共通の command-error envelope で
+`E024_CONFIG_INVALID` / `configuration` を返します。
 
 | failure class | exit code | error code | category |
 |---|---:|---|---|
