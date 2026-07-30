@@ -6407,11 +6407,11 @@ public partial class McpServerTests
     [Fact]
     public void ToolsCall_Languages_ReturnsCapabilities()
     {
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"languages","arguments":{}}}""")!;
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"languages","arguments":{"limit":200}}}""")!;
         var response = _server.HandleMessage(request)!;
 
         var text = response["result"]!["content"]![0]!["text"]!.GetValue<string>();
-        Assert.Contains("languages supported", text);
+        Assert.Contains("matching languages returned", text);
         var structured = response["result"]!["structuredContent"]!;
         var precedence = structured["detection_policy"]!["precedence"]!.AsArray()
             .Select(value => value!.GetValue<string>())
@@ -6514,7 +6514,7 @@ public partial class McpServerTests
     [Fact]
     public void ToolsCall_Languages_SeparatesFilenamePatternKindsAndKeepsLegacyPatterns_Issue4617()
     {
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"languages","arguments":{}}}""")!;
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"languages","arguments":{"limit":200}}}""")!;
         var response = _server.HandleMessage(request)!;
 
         var languages = response["result"]!["structuredContent"]!["languages"]!.AsArray();
@@ -6550,7 +6550,7 @@ public partial class McpServerTests
                 Assert.Contains("mcpcatalog", SymbolExtractor.GetSupportedLanguages(_projectRoot));
                 Assert.Contains("mcpcatalog", FileIndexer.GetLanguageExtensions(_projectRoot).Values);
 
-                var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"languages","arguments":{}}}""")!;
+                var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"languages","arguments":{"limit":200}}}""")!;
                 var response = _server.HandleMessage(request)!;
 
                 var language = Assert.Single(
@@ -6620,12 +6620,18 @@ public partial class McpServerTests
         Assert.Equal("catalog_membership", catalogMembership["capability"]!.GetValue<string>());
         Assert.True(catalogMembership["available"]!.GetValue<bool>());
         Assert.Equal(expectedCatalog.Languages.Count, catalogMembership["count"]!.GetValue<int>());
-        Assert.Equal(languages.Count, catalogMembership["count"]!.GetValue<int>());
+        Assert.Equal(
+            structured["total_count"]!.GetValue<int>(),
+            catalogMembership["count"]!.GetValue<int>());
+        Assert.Equal(languages.Count, structured["returned_count"]!.GetValue<int>());
+        Assert.Equal(
+            structured["total_count"]!.GetValue<int>(),
+            counts["matched_catalog"]!["catalog_membership"]!["count"]!.GetValue<int>());
 
         var symbolCount = counts["catalog"]!["symbol_extraction"]!;
         Assert.Equal("symbol_extraction", symbolCount["capability"]!.GetValue<string>());
         Assert.Equal(
-            languages.Count(language => language!["symbol_extraction"]!.GetValue<bool>()),
+            expectedCatalog.Languages.Count(language => language.Value.Symbols),
             symbolCount["count"]!.GetValue<int>());
         Assert.All(languages, language =>
         {
@@ -6637,7 +6643,7 @@ public partial class McpServerTests
         Assert.Equal("indexed_workspace", indexedMembership["scope"]!.GetValue<string>());
         Assert.Equal(1, indexedMembership["count"]!.GetValue<int>());
         Assert.Contains(
-            $"{languages.Count} catalog languages",
+            $"{expectedCatalog.Languages.Count} languages are in the catalog",
             result["content"]![0]!["text"]!.GetValue<string>(),
             StringComparison.Ordinal);
     }

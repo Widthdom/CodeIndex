@@ -1,4 +1,6 @@
+using System.Text;
 using System.Text.Json.Nodes;
+using CodeIndex.Database;
 using CodeIndex.Indexer;
 using CodeIndex.Indexer.Extensibility;
 
@@ -85,6 +87,20 @@ internal sealed record LanguageCapabilityCountSnapshot(
 
 internal static class LanguageCapabilityCatalog
 {
+    internal static IReadOnlyList<string> SupportedCapabilities { get; } = Array.AsReadOnly(
+    [
+        "all",
+        "none",
+        "graph",
+        "references",
+        "symbols",
+        "missing-any",
+        "missing-graph",
+        "missing-references",
+        "missing-symbols",
+        "search-only",
+    ]);
+
     public static LanguageCapabilityCatalogSnapshot Build(
         string? workspaceRoot,
         Func<string, IReadOnlyList<string>> getAliases)
@@ -168,6 +184,54 @@ internal static class LanguageCapabilityCatalog
             indexedCatalog is null
                 ? UnavailableScope("indexed_workspace")
                 : CountScope("indexed_workspace", indexedCatalog));
+    }
+
+    internal static bool IsKnownCapability(string capability)
+        => SupportedCapabilities.Contains(capability, StringComparer.Ordinal);
+
+    internal static bool MatchesCapability(LanguageCatalogSupportInfo language, string capability)
+        => capability switch
+        {
+            "all" => language.Symbols && language.References && language.Graph,
+            "none" => !language.Symbols && !language.References && !language.Graph,
+            "symbols" => language.Symbols,
+            "references" => language.References,
+            "graph" => language.Graph,
+            "missing-any" => language.CapabilityGaps.Count > 0,
+            "missing-symbols" => !language.Symbols,
+            "missing-references" => !language.References,
+            "missing-graph" => !language.Graph,
+            "search-only" => !language.Symbols && !language.References && !language.Graph,
+            _ => false,
+        };
+
+    internal static bool MatchesLanguage(string language, string lookup)
+        => string.Equals(DbReader.NormalizeQueryLanguage(lookup), language, StringComparison.Ordinal);
+
+    internal static bool MatchesExtension(LanguageCatalogSupportInfo language, string lookup)
+    {
+        var normalized = NormalizeLookupKey(lookup);
+        return language.Extensions.Any(extension =>
+            string.Equals(NormalizeLookupKey(extension), normalized, StringComparison.Ordinal));
+    }
+
+    internal static bool MatchesAlias(LanguageCatalogSupportInfo language, string lookup)
+    {
+        var normalized = NormalizeLookupKey(lookup);
+        return language.Aliases.Any(alias =>
+            string.Equals(NormalizeLookupKey(alias), normalized, StringComparison.Ordinal));
+    }
+
+    internal static string NormalizeLookupKey(string value)
+    {
+        var builder = new StringBuilder(value.Length);
+        foreach (var character in value.Trim())
+        {
+            if (char.IsWhiteSpace(character) || character is '-' or '_' or '.')
+                continue;
+            builder.Append(char.ToLowerInvariant(character));
+        }
+        return builder.ToString();
     }
 
     private static LanguageCapabilityCountScope CountScope(

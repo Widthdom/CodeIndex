@@ -29,7 +29,7 @@ public partial class McpServer
         "batch_query" => new HashSet<string>(StringComparer.Ordinal) { "queries", "maxResponseBytes", "estimateOnly" },
         "deps" => new HashSet<string>(StringComparer.Ordinal) { "path", "reverse", "format", "cycles", "lang", "limit", "graphBudget", "cursor", "excludePaths", "excludeTests", "includeGenerated", "project", "solution" },
         "impact_analysis" => new HashSet<string>(StringComparer.Ordinal) { "query", "lang", "maxHops", "maxDepth", "limit", "path", "excludePaths", "excludeTests", "includeGenerated", "withPaths", "includeMemberReads", "countOnly", "project", "solution" },
-        "languages" => new HashSet<string>(StringComparer.Ordinal) { "indexedOnly", "capability", "extension", "alias" },
+        "languages" => new HashSet<string>(StringComparer.Ordinal) { "indexedOnly", "capability", "language", "extension", "alias", "limit", "cursor", "maxBytes" },
         "validate" => new HashSet<string>(StringComparer.Ordinal) { "kind", "severity", "limit", "cursor", "path", "excludePaths", "excludeTests", "countOnly", "format", "project", "solution" },
         "unused_symbols" => new HashSet<string>(StringComparer.Ordinal) { "kind", "lang", "limit", "visibility", "excludeVisibility", "path", "excludePaths", "excludeTests", "bucket", "minConfidence", "byBucket", "project", "solution" },
         "symbol_hotspots" => new HashSet<string>(StringComparer.Ordinal) { "kind", "lang", "limit", "visibility", "excludeVisibility", "groupBy", "path", "excludePaths", "excludeTests", "project", "solution" },
