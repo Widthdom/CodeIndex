@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using CodeIndex.Indexer;
 using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Mcp;
 using CodeIndex.Models;
@@ -39,12 +40,32 @@ public partial class McpServerTests
 
         var ambiguousExtension = CallIssue4896Languages(new JsonObject
         {
-            ["extension"] = "m",
+            ["extension"] = ".M",
         }, id: 4);
         Assert.Equal(
             "ambiguous_m",
             Assert.Single(ambiguousExtension["languages"]!.AsArray())!["lang"]!.GetValue<string>());
-        Assert.Equal(1, ambiguousExtension["extension_lookup"]!["matched"]!.GetValue<int>());
+        var ambiguousLookup = ambiguousExtension["extension_lookup"]!;
+        Assert.Equal(1, ambiguousLookup["matched"]!.GetValue<int>());
+        Assert.Equal(".m", ambiguousLookup["normalized_extension"]!.GetValue<string>());
+        Assert.True(ambiguousLookup["ambiguous"]!.GetValue<bool>());
+        Assert.Equal(
+            ["objc", "matlab"],
+            ambiguousLookup["candidates"]!.AsArray()
+                .Select(candidate => candidate!["lang"]!.GetValue<string>()));
+        Assert.Contains(
+            "octave",
+            ambiguousLookup["candidates"]![1]!["aliases"]!.AsArray()
+                .Select(aliasValue => aliasValue!.GetValue<string>()));
+        var shebangRules = ambiguousLookup["detection_rules"]!.AsArray()
+            .Single(rule => rule!["source"]!.GetValue<string>() == "shebang")!["interpreter_rules"]!.AsArray();
+        Assert.Contains(
+            shebangRules,
+            rule => rule!["pattern"]!.GetValue<string>() == "ruby"
+                    && rule["language"]!.GetValue<string>() == "ruby");
+        Assert.Equal(
+            LanguageMapOverrides.WorkspaceFileName,
+            ambiguousLookup["override_guidance"]!["config_file"]!.GetValue<string>());
 
         var emptyUnicodeLookup = CallIssue4896Languages(new JsonObject
         {

@@ -2435,7 +2435,7 @@ public partial class FileIndexerTests
     }
 
     [Theory]
-    [InlineData("Widget.m", "#import <Foundation/Foundation.h>\n@interface Widget : NSObject\n@end\n", "objc")]
+    [InlineData("Widget.M", "#import <Foundation/Foundation.h>\n@interface Widget : NSObject\n@end\n", "objc")]
     [InlineData("add.m", "function result = add(left, right)\nresult = left + right;\nend\n", "matlab")]
     [InlineData("Worker.pl", "use strict;\nuse warnings;\nsub run { return 1; }\n", "perl")]
     [InlineData("family.pl", "ancestor(X, Y) :- parent(X, Y).\n", "prolog")]
@@ -2453,6 +2453,7 @@ public partial class FileIndexerTests
         Assert.Equal(FileIndexer.FileProbeStatus.Supported, detection.Status);
         Assert.Equal(expectedLanguage, detection.Language);
         Assert.Equal("content", detection.DetectionSource);
+        Assert.Equal(FileIndexer.LanguageDetectionConfidence.High, detection.Confidence);
         Assert.Equal(expectedLanguage, scan.FileLanguages[path]);
     }
 
@@ -2469,6 +2470,7 @@ public partial class FileIndexerTests
         Assert.Equal(FileIndexer.FileProbeStatus.Supported, detection.Status);
         Assert.Equal("prolog", detection.Language);
         Assert.Equal("content", detection.DetectionSource);
+        Assert.Equal(FileIndexer.LanguageDetectionConfidence.High, detection.Confidence);
     }
 
     [Fact]
@@ -2510,6 +2512,7 @@ public partial class FileIndexerTests
 
         Assert.Equal(expectedLanguage, detection.Language);
         Assert.Equal("ambiguous", detection.DetectionSource);
+        Assert.Equal(FileIndexer.LanguageDetectionConfidence.Low, detection.Confidence);
     }
 
     [Theory]
@@ -2530,6 +2533,7 @@ public partial class FileIndexerTests
 
         Assert.Equal(expectedLanguage, detection.Language);
         Assert.Equal("project", detection.DetectionSource);
+        Assert.Equal(FileIndexer.LanguageDetectionConfidence.Medium, detection.Confidence);
     }
 
     [Fact]
@@ -2545,6 +2549,54 @@ public partial class FileIndexerTests
 
         Assert.Equal("prolog", detection.Language);
         Assert.Equal("shebang", detection.DetectionSource);
+        Assert.Equal(FileIndexer.LanguageDetectionConfidence.High, detection.Confidence);
+    }
+
+    [Fact]
+    public void DetectLanguage_AmbiguousExtensionOverrideReportsAuthoritativeReason_Issue4901()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_ambiguous_override");
+        LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
+        try
+        {
+            TestProjectHelper.WriteTextFile(
+                project.Root,
+                LanguageMapOverrides.WorkspaceFileName,
+                "entries:\n  - extension: \".m\"\n    language: \"matlab\"\n");
+            var path = TestProjectHelper.WriteTextFile(
+                project.Root,
+                "Widget.M",
+                "#import <Foundation/Foundation.h>\n");
+
+            var detection = FileIndexer.TryDetectLanguage(path);
+
+            Assert.Equal("matlab", detection.Language);
+            Assert.Equal("language_map_override", detection.DetectionSource);
+            Assert.Equal(FileIndexer.LanguageDetectionConfidence.High, detection.Confidence);
+        }
+        finally
+        {
+            LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
+        }
+    }
+
+    [Fact]
+    public void DetectLanguage_EmptyAndBinaryAmbiguousFilesHaveExplicitOutcomes_Issue4901()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_ambiguous_inputs");
+        var emptyPath = TestProjectHelper.WriteTextFile(project.Root, "empty.M", string.Empty);
+        var binaryPath = TestProjectHelper.ProjectPath(project.Root, "binary.m");
+        File.WriteAllBytes(binaryPath, [(byte)'x', 0, (byte)'y']);
+
+        var emptyDetection = FileIndexer.TryDetectLanguage(emptyPath);
+        var binaryDetection = FileIndexer.TryDetectLanguage(binaryPath);
+
+        Assert.Equal(FileIndexer.FileProbeStatus.Supported, emptyDetection.Status);
+        Assert.Equal("ambiguous_m", emptyDetection.Language);
+        Assert.Equal("ambiguous", emptyDetection.DetectionSource);
+        Assert.Equal(FileIndexer.LanguageDetectionConfidence.Low, emptyDetection.Confidence);
+        Assert.Equal(FileIndexer.FileProbeStatus.Unsupported, binaryDetection.Status);
+        Assert.Null(binaryDetection.Language);
     }
 
     [Fact]

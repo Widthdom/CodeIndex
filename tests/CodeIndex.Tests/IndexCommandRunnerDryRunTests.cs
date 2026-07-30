@@ -1040,6 +1040,52 @@ public partial class IndexCommandRunnerTests
         }
     }
 
+    [Theory]
+    [InlineData(
+        "Widget.M",
+        "#import <Foundation/Foundation.h>\n@interface Widget : NSObject\n@end\n",
+        "objc",
+        "content")]
+    [InlineData(
+        "tool.M",
+        "#!/usr/bin/env ruby\nputs 'hi'\n",
+        "ruby",
+        "shebang")]
+    public void Run_DryRun_AmbiguousExtensionReportsSelectedLanguageAndSharedReason_Issue4901(
+        string fileName,
+        string content,
+        string expectedLanguage,
+        string expectedSource)
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, fileName),
+                content);
+
+            var (exitCode, json) = RunAndCaptureJson([
+                projectRoot,
+                "--files",
+                fileName,
+                "--dry-run",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(1, json.GetProperty("language_detections_total").GetInt32());
+            var detection = Assert.Single(json.GetProperty("language_detections").EnumerateArray().ToArray());
+            Assert.Equal(fileName, detection.GetProperty("path").GetString());
+            Assert.Equal(expectedLanguage, detection.GetProperty("language").GetString());
+            Assert.Equal(expectedSource, detection.GetProperty("source").GetString());
+            Assert.Equal("high", detection.GetProperty("confidence").GetString());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
     [Fact]
     public void Run_DryRun_WithFiles_NormalizesUnicodeDbPathForEstimates()
     {

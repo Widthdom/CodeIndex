@@ -935,6 +935,7 @@ public static partial class IndexCommandRunner
             return DryRunFileProbe.FromUnsupported();
 
         string? reusableLanguage = knownLanguage;
+        FileIndexer.LanguageDetectionResult? preLoadDetection = null;
         if (reusableLanguage == null)
         {
             var detection = indexer.TryDetectLanguageForIndexing(absolutePath);
@@ -948,6 +949,7 @@ public static partial class IndexCommandRunner
             reusableLanguage = FileIndexer.CanReuseDetectedLanguageWithoutContent(absolutePath, detection.Language)
                 ? detection.Language
                 : null;
+            preLoadDetection = detection;
         }
 
         try
@@ -957,6 +959,22 @@ public static partial class IndexCommandRunner
                 relativePath,
                 reusableLanguage);
             var record = loaded.Record;
+            var reportDetection = loaded.LanguageDetection;
+            if (reportDetection.DetectionSource is null
+                && preLoadDetection is { DetectionSource: not null } detectedBeforeLoad
+                && string.Equals(detectedBeforeLoad.Language, record.Lang, StringComparison.Ordinal))
+            {
+                reportDetection = detectedBeforeLoad;
+            }
+            else if (reportDetection.DetectionSource is null
+                     && FileIndexer.TryGetAmbiguousLanguageDescriptor(Path.GetExtension(absolutePath), out _))
+            {
+                var detectedFromLoadedContent = indexer.TryDetectLanguageForIndexing(
+                    absolutePath,
+                    loaded.Content);
+                if (string.Equals(detectedFromLoadedContent.Language, record.Lang, StringComparison.Ordinal))
+                    reportDetection = detectedFromLoadedContent;
+            }
             return new DryRunFileProbe(
                 true,
                 record.Lang ?? "unknown",
@@ -964,8 +982,8 @@ public static partial class IndexCommandRunner
                 loaded.Warning,
                 Unsupported: false,
                 UnknownExtension: false,
-                DetectionSource: loaded.LanguageDetection.DetectionSource,
-                DetectionConfidence: loaded.LanguageDetection.Confidence,
+                DetectionSource: reportDetection.DetectionSource,
+                DetectionConfidence: reportDetection.Confidence,
                 Loaded: loaded,
                 PolicySkipped: false,
                 DryRunPolicySkipKind.None,

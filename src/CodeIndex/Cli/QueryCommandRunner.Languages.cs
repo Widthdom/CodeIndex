@@ -79,6 +79,7 @@ public static partial class QueryCommandRunner
                 catalog.Languages,
                 filtered,
                 indexedLanguageCounts);
+            var unpaginatedFiltered = filtered;
             if (json && (options.SummaryOnly || options.CountOnly || options.OutputFormat == OutputFormatCount))
             {
                 var payload = BuildLanguageSummaryPayload(
@@ -143,7 +144,8 @@ public static partial class QueryCommandRunner
                         scopedCounts.ToJson(),
                         BuildLanguageDetectionPolicy(),
                         BuildLanguageMapDiagnostics(languageMapDiagnostics),
-                        ReferenceExtractor.GetSafetyLimits()),
+                        ReferenceExtractor.GetSafetyLimits(),
+                        BuildSingleExtensionLookup(options, unpaginatedFiltered, catalog.Languages)),
                     CliJsonSerializerContextFactory.Create(jsonOptions).LanguagesJsonResult,
                     jsonOptions));
             }
@@ -310,6 +312,8 @@ public static partial class QueryCommandRunner
             payload["language_filters"] = BuildStringArray(options.LanguageLookups);
         if (options.LanguageExtensionLookups.Count > 0)
             payload["extension_filters"] = BuildStringArray(options.LanguageExtensionLookups);
+        if (BuildSingleExtensionLookup(options, languages, catalogLanguages) is { } extensionLookup)
+            payload["extension_lookup"] = extensionLookup;
         if (options.LanguageAliasLookups.Count > 0)
             payload["alias_filters"] = BuildStringArray(options.LanguageAliasLookups);
 
@@ -328,6 +332,24 @@ public static partial class QueryCommandRunner
         }
 
         return payload;
+    }
+
+    private static JsonObject? BuildSingleExtensionLookup(
+        QueryCommandOptions options,
+        IReadOnlyList<KeyValuePair<string, LanguageCatalogSupportInfo>> matches,
+        IReadOnlyList<KeyValuePair<string, LanguageCatalogSupportInfo>> catalog)
+    {
+        if (options.LanguageExtensionLookups.Count != 1)
+            return null;
+
+        var extension = options.LanguageExtensionLookups[0];
+        var extensionMatches = matches
+            .Where(pair => LanguageCapabilityCatalog.MatchesExtension(pair.Value, extension))
+            .ToList();
+        return LanguageCapabilityCatalog.BuildExtensionLookup(
+            extension,
+            extensionMatches,
+            catalog);
     }
 
     private static JsonObject BuildLanguageCapabilityCounts(IReadOnlyList<KeyValuePair<string, LanguageCatalogSupportInfo>> languages)

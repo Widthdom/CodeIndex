@@ -3522,6 +3522,114 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunLanguages_AmbiguousUppercaseExtensionExplainsCandidatesAndOverrides_Issue4901()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() =>
+            QueryCommandRunner.RunLanguages(["--extension", ".M", "--json"], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        Assert.Equal(
+            "ambiguous_m",
+            Assert.Single(document.RootElement.GetProperty("languages").EnumerateArray().ToArray())
+                .GetProperty("lang")
+                .GetString());
+
+        var lookup = document.RootElement.GetProperty("extension_lookup");
+        Assert.Equal(".M", lookup.GetProperty("extension").GetString());
+        Assert.Equal(".m", lookup.GetProperty("normalized_extension").GetString());
+        Assert.Equal("case_insensitive", lookup.GetProperty("extension_case_policy").GetString());
+        Assert.True(lookup.GetProperty("ambiguous").GetBoolean());
+        Assert.Equal("ambiguous_m", lookup.GetProperty("bucket_language").GetString());
+
+        var candidates = lookup.GetProperty("candidates").EnumerateArray().ToArray();
+        Assert.Equal(["objc", "matlab"], candidates.Select(candidate => candidate.GetProperty("lang").GetString()));
+        Assert.Equal(["Objective-C", "MATLAB"], candidates.Select(candidate => candidate.GetProperty("display_name").GetString()));
+        Assert.Empty(candidates[0].GetProperty("aliases").EnumerateArray());
+        Assert.Contains(
+            "octave",
+            candidates[1].GetProperty("aliases").EnumerateArray().Select(alias => alias.GetString()));
+        Assert.Contains(
+            "octave-cli",
+            candidates[1].GetProperty("evidence").GetProperty("shebang_interpreters")
+                .EnumerateArray()
+                .Select(interpreter => interpreter.GetString()));
+        Assert.Contains(
+            "*.xcodeproj",
+            candidates[0].GetProperty("evidence").GetProperty("project_markers")
+                .EnumerateArray()
+                .Select(marker => marker.GetString()));
+        Assert.Contains(
+            "classdef",
+            candidates[1].GetProperty("evidence").GetProperty("content_pattern").GetString());
+
+        var rules = lookup.GetProperty("detection_rules").EnumerateArray()
+            .ToDictionary(rule => rule.GetProperty("source").GetString()!, rule => rule);
+        Assert.False(rules["shebang"].GetProperty("candidate_restricted").GetBoolean());
+        var shebangRules = rules["shebang"].GetProperty("interpreter_rules").EnumerateArray().ToArray();
+        Assert.Contains(
+            shebangRules,
+            rule => rule.GetProperty("match").GetString() == "exact"
+                    && rule.GetProperty("pattern").GetString() == "ruby"
+                    && rule.GetProperty("language").GetString() == "ruby");
+        Assert.Contains(
+            shebangRules,
+            rule => rule.GetProperty("match").GetString() == "prefix"
+                    && rule.GetProperty("pattern").GetString() == "python"
+                    && rule.GetProperty("language").GetString() == "python");
+        Assert.Equal("high", rules["content"].GetProperty("confidence").GetString());
+        Assert.Equal(64 * 1024, rules["content"].GetProperty("probe_byte_limit").GetInt32());
+        Assert.Equal("medium", rules["project"].GetProperty("confidence").GetString());
+        Assert.Equal("low", rules["ambiguous"].GetProperty("confidence").GetString());
+        Assert.Equal(
+            "unsupported",
+            lookup.GetProperty("input_handling").GetProperty("binary_or_invalid_text").GetString());
+
+        var guidance = lookup.GetProperty("override_guidance");
+        Assert.Equal(LanguageMapOverrides.WorkspaceFileName, guidance.GetProperty("config_file").GetString());
+        Assert.Equal(
+            ["objc", "matlab"],
+            guidance.GetProperty("entries").EnumerateArray()
+                .Select(entry => entry.GetProperty("language").GetString()));
+
+        var (combinedExitCode, combinedStdout, combinedStderr) = CaptureConsole(() =>
+            QueryCommandRunner.RunLanguages(
+                ["--extension", ".m", "--language", "csharp", "--json"],
+                _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, combinedExitCode);
+        Assert.Equal(string.Empty, combinedStderr);
+        using var combinedDocument = ParseJsonOutput(combinedStdout);
+        var combinedLookup = combinedDocument.RootElement.GetProperty("extension_lookup");
+        Assert.Equal(1, combinedLookup.GetProperty("matched").GetInt32());
+        Assert.Equal(
+            ["ambiguous_m"],
+            combinedLookup.GetProperty("languages").EnumerateArray()
+                .Select(language => language.GetString()));
+
+        var (pagedExitCode, pagedStdout, pagedStderr) = CaptureConsole(() =>
+            QueryCommandRunner.RunLanguages(
+                ["--extension", ".pl", "--language", "ada", "--limit", "1", "--json"],
+                _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, pagedExitCode);
+        Assert.Equal(string.Empty, pagedStderr);
+        using var pagedDocument = ParseJsonOutput(pagedStdout);
+        Assert.Equal(
+            "ada",
+            Assert.Single(pagedDocument.RootElement.GetProperty("languages").EnumerateArray().ToArray())
+                .GetProperty("lang")
+                .GetString());
+        var pagedLookup = pagedDocument.RootElement.GetProperty("extension_lookup");
+        Assert.Equal(1, pagedLookup.GetProperty("matched").GetInt32());
+        Assert.Equal(
+            ["ambiguous_pl"],
+            pagedLookup.GetProperty("languages").EnumerateArray()
+                .Select(language => language.GetString()));
+    }
+
+    [Fact]
     public void RunLanguages_JsonReportsCythonAndCudaReferences_Issues4737And4738()
     {
         var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages(["--json"], _jsonOptions));
