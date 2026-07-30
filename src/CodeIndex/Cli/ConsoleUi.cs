@@ -233,7 +233,7 @@ public static partial class ConsoleUi
         ("db-schema", "Example: `cdidx db schema --type index --summary-only --json`."),
         ("db-prune", "--dry-run only counts orphan rows; --apply deletes them and may run WAL checkpoint maintenance."),
         ("db-prune", "Example: `cdidx db prune --dry-run --json`."),
-        ("db-checkpoint", "--dry-run separates source DB/WAL/SHM files and bytes from every planned output, including the versioned manifest, its SHA-256, estimated final bytes, destination/conflict policy, and uncertainty; without --dry-run it creates the verified filesystem snapshot."),
+        ("db-checkpoint", "--dry-run separates source DB/WAL/SHM files and bytes from every planned output, including the versioned manifest, its SHA-256, estimated final bytes, destination/conflict policy, and uncertainty; without --dry-run it creates a filesystem snapshot verified against that plan."),
         ("db-checkpoint", "Example: `cdidx db checkpoint before-upgrade --dry-run --json`."),
         ("db-checkpoints", "--list reports checkpoints; --delete and --prune remove snapshots, while --dry-run reports exact deleted/retained paths without mutation."),
         ("db-checkpoints", "Example: `cdidx db checkpoints --prune --keep 3 --dry-run --json`."),
