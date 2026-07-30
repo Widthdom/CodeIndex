@@ -1408,7 +1408,7 @@ public static class HookCommandRunner
             failureReason);
     }
 
-    private static bool ExecutableSelectionsMatch(
+    internal static bool ExecutableSelectionsMatch(
         HookExecutableSelection left,
         HookExecutableSelection right)
     {
@@ -1418,11 +1418,9 @@ public static class HookCommandRunner
             return false;
         }
 
-        var comparison = OperatingSystem.IsWindows()
-            ? StringComparison.OrdinalIgnoreCase
-            : StringComparison.Ordinal;
         for (var index = 0; index < left.Argv.Count; index++)
         {
+            var comparison = PathCasing.ComparisonFor(left.Argv[index]);
             if (!string.Equals(left.Argv[index], right.Argv[index], comparison))
                 return false;
         }

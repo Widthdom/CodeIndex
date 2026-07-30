@@ -1020,6 +1020,38 @@ public class HookCommandRunnerTests
     }
 
     [Fact]
+    public void ExecutableSelectionComparison_FollowsFilesystemCaseSensitivity_Issue4892()
+    {
+        lock (PathCasingTestLock.Gate)
+        {
+            var previousProbe = PathCasing.IgnoreCaseProbeForTesting;
+            var upperPath = Path.Combine(Path.GetTempPath(), "CdidxCase", "Tool.exe");
+            var lowerPath = Path.Combine(Path.GetTempPath(), "cdidxcase", "tool.exe");
+            var upperSelection = new HookExecutableSelection("process_path", "1.0.0", [upperPath]);
+            var lowerSelection = new HookExecutableSelection("process_path", "2.0.0", [lowerPath]);
+            try
+            {
+                PathCasing.ResetCacheForTests();
+                PathCasing.IgnoreCaseProbeForTesting = _ => false;
+                Assert.False(HookCommandRunner.ExecutableSelectionsMatch(
+                    upperSelection,
+                    lowerSelection));
+
+                PathCasing.ResetCacheForTests();
+                PathCasing.IgnoreCaseProbeForTesting = _ => true;
+                Assert.True(HookCommandRunner.ExecutableSelectionsMatch(
+                    upperSelection,
+                    lowerSelection));
+            }
+            finally
+            {
+                PathCasing.IgnoreCaseProbeForTesting = previousProbe;
+                PathCasing.ResetCacheForTests();
+            }
+        }
+    }
+
+    [Fact]
     public void Hooks_Status_ValidatesManagedAssemblyAndRuntimeFiles_Issue4892()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("hook_managed_status");
