@@ -63,16 +63,13 @@ public static partial class ReferenceExtractor
                     allowSingleSegmentQualifiedMatch: parsed.HasLeadingGlobalQualifier))
                 continue;
 
-            if (IsCSharpQualifiedConstantPatternReferenceSite(preparedLine, parsed))
-                continue;
-
             var nextTokenIndex = SkipWhitespace(preparedLine, member.End);
             if (nextTokenIndex < preparedLine.Length && preparedLine[nextTokenIndex] == '(')
                 continue;
 
             var insideCSharpAttributeRange = csharpAttrRangesOnLine != null
                 && IsInsideCSharpAttributeRange(csharpAttrRangesOnLine, member.Start);
-            var referenceKind = TryClassifyMetadataReference("csharp", preparedLine, member.Start, insideCSharpAttributeRange) ?? "call";
+            var referenceKind = TryClassifyMetadataReference("csharp", preparedLine, member.Start, insideCSharpAttributeRange) ?? "member_read";
 
             AddReference(
                 references,

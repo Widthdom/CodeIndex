@@ -74,7 +74,8 @@ public static partial class QueryCommandRunner
                 options.ExcludeTests,
                 options.WithPaths,
                 JsonEnvelopeWrapper.GetBoundedResponseOffset("impact"),
-                JsonEnvelopeWrapper.GetBoundedImpactCollection());
+                JsonEnvelopeWrapper.GetBoundedImpactCollection(),
+                options.IncludeMemberReads);
             if (options.IncludeBody)
                 AttachBodyExcerpts(reader, analysis.Callers, options.SnippetLines, options.MaxLineWidth);
             ApplyBodyRecoveryCommands(analysis.Callers, options.DbPath, options.RedactPaths ?? true);

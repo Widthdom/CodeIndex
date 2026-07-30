@@ -861,6 +861,7 @@ filters remain exact, so `--kind import` does not include local type declaration
 | `instantiate` | Constructor or object creation |
 | `join_condition_reference` | SQL join/merge condition column reference |
 | `lifetime_reference` | Rust/C#-style lifetime or lifetime-like type reference |
+| `member_read` | Non-invoking member/value read, including qualified C# enum constants, constants, static readonly fields, and static properties |
 | `metadata` | Metadata-only reference |
 | `reference` | Generic persisted reference row used by fixtures or extractors without a narrower edge kind |
 | `razor_event_binding` | Razor event binding relationship |
@@ -1281,7 +1282,7 @@ every non-inspect command must reject that cursor family before execution.
 
 ### Reference taxonomy
 
-`symbol_references.reference_kind` stores raw extractor labels. Default call-graph surfaces (`callers`, `callees`, inspect/analyze caller and callee bundles, and their JSON/MCP fields) expose the canonical public vocabulary `call`, `instantiate`, and `subscribe`. The primary `reference_kind`, `reference_kinds`, and `reference_kind_counts` keys use that same vocabulary. Use `--raw-kinds` on `callers` / `callees`, or `references --kind <raw-kind>`, when debugging raw extractor output.
+`symbol_references.reference_kind` stores raw extractor labels. Default call-graph surfaces (`callers`, `callees`, inspect/analyze caller and callee bundles, and their JSON/MCP fields) expose the canonical public vocabulary `call`, `instantiate`, and `subscribe`. Non-invoking value reads use the canonical `member_read` label and stay out of default callers, callees, and impact traversal; opt in with CLI `--include-member-reads` or MCP `includeMemberReads`. The primary `reference_kind`, `reference_kinds`, and `reference_kind_counts` keys use that same vocabulary. Legacy indexes remain readable but stored these reads as `call`, so they retain the historical inclusive behavior until re-indexed. Use `--raw-kinds` on `callers` / `callees`, or `references --kind <raw-kind>`, when debugging raw extractor output.
 
 `ReferenceRecord.SpanLength` and `symbol_references.span_length` persist the physical matched-token width rather than deriving it from the resolved symbol name; this matters for constructor-chain tokens such as `base`, `super`, and `this`. `DbReader.GetCallees` preserves that span while aggregating counts: it selects the smallest `(line, column_number)` among rows with a stored column, exposes that 1-based pair as `first_line` / nullable `first_column`, and carries the same row's nullable width as `first_length`; `reference_count` remains the independent aggregate. When every contributing legacy row has `column_number IS NULL`, the reader retains the minimum line and a null column. A migrated row can also retain a column with a null span length. CLI/MCP location adapters degrade either case without fabricating precision.
 
@@ -1290,6 +1291,7 @@ Reference extraction deduplicates only within the same indexed file and language
 | Raw kind | Logical graph kind | Notes |
 |---|---|---|
 | `call` | `call` | Direct executable invocation edges. |
+| `member_read` | `member_read` | Non-invoking member/value reads; excluded from default invocation graphs and included only by an explicit kind filter or the member-read compatibility option. |
 | `instantiate` | `instantiate` | Constructor / construction edges. |
 | `goroutine_spawn` | `goroutine_spawn` | Go `go f()` async spawn edges; the ordinary `call` edge is also emitted for the invoked function. |
 | `channel_send`, `channel_receive` | raw label | Go channel communication edges for send and receive expressions; excluded from default invocation graphs. |
@@ -4248,6 +4250,7 @@ filter、downstream JSON consumer が同じ値を理解できるようにして�
 | `instantiate` | constructor または object creation |
 | `join_condition_reference` | SQL join / merge condition column reference |
 | `lifetime_reference` | Rust / C# 風 lifetime または lifetime-like type reference |
+| `member_read` | C# の修飾付き enum 定数、定数、static readonly field、static property など、呼び出しを伴わない member / value 読み取り |
 | `metadata` | metadata-only reference |
 | `reference` | より狭い edge kind を持たない fixture / extractor 用の generic persisted reference row |
 | `razor_event_binding` | Razor event binding relationship |
@@ -4703,13 +4706,14 @@ inspect 以外の各 command は実行前にその cursor family を拒否しな
 
 ### 参照 taxonomy
 
-`symbol_references.reference_kind` には extractor が出力した raw label を保存する。既定の call-graph 表示（`callers`、`callees`、inspect/analyze の caller / callee bundle、および JSON/MCP フィールド）は、公開 canonical 語彙 `call`、`instantiate`、`subscribe` を返す。primary `reference_kind`、`reference_kinds`、`reference_kind_counts` の key はすべて同じ語彙を使う。raw extractor 出力を調べる場合は、`callers` / `callees` の `--raw-kinds`、または `references --kind <raw-kind>` を使う。
+`symbol_references.reference_kind` には extractor が出力した raw label を保存する。既定の call-graph 表示（`callers`、`callees`、inspect/analyze の caller / callee bundle、および JSON/MCP フィールド）は、公開 canonical 語彙 `call`、`instantiate`、`subscribe` を返す。呼び出しを伴わない value read は canonical `member_read` を使い、既定の callers / callees / impact traversal から除外する。含める場合は CLI の `--include-member-reads` または MCP の `includeMemberReads` を明示する。primary `reference_kind`、`reference_kinds`、`reference_kind_counts` の key はすべて同じ語彙を使う。legacy index は引き続き読み取れるが、これらの read を `call` として保存しているため、再 index するまでは従来の inclusive な挙動を維持する。raw extractor 出力を調べる場合は、`callers` / `callees` の `--raw-kinds`、または `references --kind <raw-kind>` を使う。
 
 `ReferenceRecord.SpanLength` と `symbol_references.span_length` は、解決後の symbol 名から導出せず、物理的に一致した token 幅を永続化する。これは `base`、`super`、`this` のような constructor-chain token で重要になる。`DbReader.GetCallees` は count を集約しながらその span を保持し、列が保存された row のうち最小の `(line, column_number)` を選び、その 1-based 座標を `first_line` / nullable な `first_column`、同じ row の nullable な幅を `first_length` として公開し、`reference_count` は独立した集約値のままにする。寄与する legacy row がすべて `column_number IS NULL` の場合は最小行と null 列を保持する。移行済み row では列があっても span 長が null の場合がある。CLI/MCP の location adapter はどちらの場合も精度を捏造せず劣化させる。
 
 | Raw kind | Logical graph kind | 備考 |
 |---|---|---|
 | `call` | `call` | 直接実行される呼び出しエッジ。 |
+| `member_read` | `member_read` | 呼び出しを伴わない member / value read。既定の invocation graph から除外し、明示 kind filter または member-read compatibility option のときだけ含める。 |
 | `instantiate` | `instantiate` | constructor / construction エッジ。 |
 | `goroutine_spawn` | `goroutine_spawn` | Go の `go f()` による非同期 spawn edge。呼び出し先には通常の `call` edge も併せて出力する。 |
 | `channel_send`, `channel_receive` | raw label | Go の channel send / receive 式を表す通信エッジ。既定の invocation graph からは除外する。 |

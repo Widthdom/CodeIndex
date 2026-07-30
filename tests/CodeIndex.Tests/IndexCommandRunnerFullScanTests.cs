@@ -4787,7 +4787,78 @@ public partial class IndexCommandRunnerTests
                 SymbolExtractor.CSharpContractVersion.ToString(
                     System.Globalization.CultureInfo.InvariantCulture),
                 versionCmd.ExecuteScalar() as string);
-            Assert.Equal(8, SymbolExtractor.CSharpContractVersion);
+            Assert.Equal(9, SymbolExtractor.CSharpContractVersion);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_ReclassifiesQualifiedValueReadsFromVersion8CSharpIndex_Issue4894()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "Values.cs"),
+                """
+                public static class Values
+                {
+                    public const int Limit = 10;
+                }
+
+                public sealed class Caller
+                {
+                    public int Read() => Values.Limit;
+                }
+                """);
+
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions));
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var conn = OpenNonPoolingConnection(dbPath))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = $"""
+                    UPDATE symbol_references
+                    SET reference_kind = 'call'
+                    WHERE symbol_name = 'Limit';
+                    UPDATE codeindex_meta
+                    SET value = '8'
+                    WHERE key = '{DbContext.GetSymbolExtractorVersionMetaKey("csharp")}';
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("files_skipped").GetInt32());
+
+            using var verify = OpenNonPoolingConnection(dbPath);
+            verify.Open();
+            using var referenceCmd = verify.CreateCommand();
+            referenceCmd.CommandText = """
+                SELECT reference_kind
+                FROM symbol_references
+                WHERE symbol_name = 'Limit'
+                """;
+            Assert.Equal("member_read", referenceCmd.ExecuteScalar() as string);
+
+            using var versionCmd = verify.CreateCommand();
+            versionCmd.CommandText =
+                $"SELECT value FROM codeindex_meta WHERE key = '{DbContext.GetSymbolExtractorVersionMetaKey("csharp")}'";
+            Assert.Equal(
+                SymbolExtractor.CSharpContractVersion.ToString(
+                    System.Globalization.CultureInfo.InvariantCulture),
+                versionCmd.ExecuteScalar() as string);
+            Assert.Equal(9, SymbolExtractor.CSharpContractVersion);
         }
         finally
         {

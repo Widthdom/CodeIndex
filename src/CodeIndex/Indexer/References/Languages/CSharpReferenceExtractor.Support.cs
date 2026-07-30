@@ -570,12 +570,31 @@ public static partial class ReferenceExtractor
             }
 
             if (IsCSharpConstMemberSymbol(symbol))
+            {
                 AddCSharpQualifiedPatternTarget(
                     ref constantPatternMemberLookup,
                     symbol.Name,
                     symbol.ContainerName!,
                     symbol.ContainerQualifiedName,
                     allowShortNameFallback: true);
+                AddCSharpQualifiedEnumMemberTarget(
+                    ref enumMemberLookup,
+                    symbol.Name,
+                    symbol.ContainerName!,
+                    symbol.ContainerQualifiedName,
+                    allowShortNameFallback: true);
+                continue;
+            }
+
+            if (symbol.Kind is "field" or "property" && IsStaticCSharpSymbol(symbol))
+            {
+                AddCSharpQualifiedEnumMemberTarget(
+                    ref enumMemberLookup,
+                    symbol.Name,
+                    symbol.ContainerName!,
+                    symbol.ContainerQualifiedName,
+                    allowShortNameFallback: true);
+            }
         }
 
         return (

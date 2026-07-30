@@ -42,11 +42,12 @@ public partial class McpServer
         var excludePaths = ReadStringList(args, "excludePaths");
         var excludeTests = args?["excludeTests"]?.GetValue<bool>() ?? false;
         var withPaths = args?["withPaths"]?.GetValue<bool>() ?? false;
+        var includeMemberReads = args?["includeMemberReads"]?.GetValue<bool>() ?? false;
         var countOnly = ReadCountOnly(args);
 
         return WithDbReader(id, args, reader =>
         {
-            var analysis = reader.AnalyzeImpact(query, maxDepth, limit, lang, pathPatterns, excludePaths, excludeTests, withPaths);
+            var analysis = reader.AnalyzeImpact(query, maxDepth, limit, lang, pathPatterns, excludePaths, excludeTests, withPaths, includeMemberReads: includeMemberReads);
             var sqlGraphSignal = QueryCommandRunner.NarrowSqlGraphContractSignal(
                 reader.GetSqlGraphContractSignal(lang, pathPatterns, excludePaths, excludeTests),
                 DbReader.IsSqlLanguage(lang)
@@ -84,6 +85,7 @@ public partial class McpServer
                     ["termination_reason"] = analysis.TerminationReason,
                     ["impact_mode"] = analysis.ImpactMode,
                     ["heuristic"] = analysis.Heuristic,
+                    ["includeMemberReads"] = includeMemberReads,
                     ["top_files"] = topFiles,
                     ["results"] = new JsonArray(),
                 };
@@ -120,6 +122,7 @@ public partial class McpServer
                 ["cycle_detected"] = analysis.CycleDetected,
                 ["impact_mode"] = analysis.ImpactMode,
                 ["heuristic"] = analysis.Heuristic,
+                ["includeMemberReads"] = includeMemberReads,
                 ["callers"] = ToJsonArray(analysis.Callers),
                 ["file_impacts"] = ToJsonArray(analysis.FileImpacts),
                 ["definition_count"] = analysis.DefinitionCount,

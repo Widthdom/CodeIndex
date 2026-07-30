@@ -481,6 +481,7 @@ internal static class CliFlagSchema
             new() { Name = "--sort", ValuePlaceholder = "<mode>", Description = "Symbols/outline: order audit output by a ranking signal; outline also accepts source, kind, references, size, complexity, path, and name", PrimaryCommands = Set(SymbolSortCommands) },
             new() { Name = "--raw-kinds", Description = "Show raw reference kinds instead of logical graph kinds", PrimaryCommands = Set(RawKindsCommands) },
             new() { Name = "--include-qualified-common-calls", Description = "Include unresolved receiver/type-qualified C# calls with common member names", PrimaryCommands = Set("references", "callers", "callees") },
+            new() { Name = "--include-member-reads", Description = "Include canonical member/value-read edges in callers, callees, and impact results", PrimaryCommands = Set("callers", "callees", "impact") },
             new() { Name = "--count", Description = "Count only; result limits are ignored by count modes, but scan caps can still mark approximate counts as degraded", PrimaryCommands = Set(CountCommands) },
             new() { Name = "--group-partials", Description = "Definition/Symbols/Inspect: collapse C# partial-type declarations into logical families", PrimaryCommands = Set("definition", "symbols", "inspect") },
             new() { Name = "--strict-not-found", Description = "Return exit code 2 when a valid query has zero rows", PrimaryCommands = Set(StrictNotFoundCommands), Safety = CliOptionSafety.StrictFailure },

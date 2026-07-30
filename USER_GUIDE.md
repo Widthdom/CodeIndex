@@ -777,6 +777,7 @@ they are re-indexed with a current binary.
 cdidx impact Run --max-hops 2 --exclude-tests
 cdidx impact Run --max-hops 0 --json
 cdidx impact FolderDiffService --with-paths --json
+cdidx impact CurrentValue --include-member-reads --json
 ```
 
 `impact` resolves a symbol and walks transitive callers through call-graph edges.
@@ -784,7 +785,12 @@ cdidx impact FolderDiffService --with-paths --json
 chains for converging routes. Metadata-only edges such as attributes,
 annotations, and type-position references are excluded from the symbol-level BFS
 so metadata cycles do not inflate caller counts; single-type queries may still
-return heuristic file-level dependency hints.
+return heuristic file-level dependency hints. Current indexes store non-invoking
+member/value reads as `member_read`, which callers, callees, and impact exclude by
+default. Use `--include-member-reads` (MCP: `includeMemberReads`) when read
+dependencies are intentionally part of the graph. Legacy indexes stored those
+reads as `call`; they remain readable and keep their historical inclusive behavior
+until re-indexed.
 
 On a current index, cycle detection follows the resolved source/target symbol IDs
 on real directed edges. Two distinct methods with the same display name are not a
@@ -4046,6 +4052,7 @@ binary で再 index されるまで互換性のある raw-reference fallback を
 cdidx impact Run --max-hops 2 --exclude-tests
 cdidx impact Run --max-hops 0 --json
 cdidx impact FolderDiffService --with-paths --json
+cdidx impact CurrentValue --include-member-reads --json
 ```
 
 `impact` は symbol を解決し、call-graph edges を通じて transitive callers を探索します。
@@ -4053,7 +4060,12 @@ cdidx impact FolderDiffService --with-paths --json
 call chains を出力します。Attributes、annotations、type-position references のような
 metadata-only edges は symbol-level BFS から除外されるため、metadata cycle で caller
 count が膨らむことはありません。ただし single-type query では heuristic file-level
-dependency hints が返る場合があります。
+dependency hints が返る場合があります。current index は呼び出しを伴わない
+member / value read を `member_read` として保存し、callers / callees / impact は既定で
+除外します。read dependency を graph に含める場合は `--include-member-reads`
+（MCP は `includeMemberReads`）を明示してください。legacy index はこれらの read を
+`call` として保存しているため、引き続き読み取り可能で、再 index するまでは従来の
+inclusive な挙動を維持します。
 
 current index では、cycle 判定は実在する有向辺の解決済み source/target symbol ID を
 辿ります。表示名が同じ別 method は cycle にせず、直接再帰は singleton cycle として
