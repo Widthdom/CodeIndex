@@ -205,16 +205,34 @@ public static class HookCommandRunner
     {
         if (!TryResolveCurrentExecutable(appVersion, out var executableSelection, out var resolutionFailure))
         {
+            var message = $"could not pin the current cdidx executable ({resolutionFailure})";
+            var unresolvedExecutable = HookExecutableJsonResult.Unresolved(resolutionFailure);
+            if (options.DryRun)
+            {
+                var preflightPlan = BuildInstallPreflightFailurePlan(
+                    hookPath,
+                    chainedHookPath,
+                    message);
+                return WriteDryRunResult(
+                    options,
+                    jsonOptions,
+                    projectPath,
+                    hookPath,
+                    chainedHookPath,
+                    preflightPlan,
+                    unresolvedExecutable);
+            }
+
             return WriteResult(
                 options.Json,
                 jsonOptions,
                 "error",
-                $"could not pin the current cdidx executable ({resolutionFailure})",
+                message,
                 projectPath,
                 hookPath,
                 null,
                 CommandExitCodes.InstallError,
-                executable: HookExecutableJsonResult.Unresolved(resolutionFailure));
+                executable: unresolvedExecutable);
         }
 
         var executable = InspectExecutable(executableSelection, executableSelection);
@@ -230,6 +248,7 @@ public static class HookCommandRunner
                 jsonOptions,
                 projectPath,
                 hookPath,
+                chainedHookPath,
                 executable);
         }
         var plan = BuildInstallPlan(options, hookPath, chainedHookPath, hookScript);
@@ -254,6 +273,7 @@ public static class HookCommandRunner
                 jsonOptions,
                 projectPath,
                 hookPath,
+                chainedHookPath,
                 executable);
         }
         plan = BuildInstallPlan(options, hookPath, chainedHookPath, hookScript);
@@ -291,6 +311,7 @@ public static class HookCommandRunner
                         jsonOptions,
                         projectPath,
                         hookPath,
+                        chainedHookPath,
                         executable);
                 }
                 ReplaceCustomHookWithManagedHook(
@@ -324,6 +345,7 @@ public static class HookCommandRunner
                 jsonOptions,
                 projectPath,
                 hookPath,
+                chainedHookPath,
                 executable);
         }
         var status = plan.PlannedAction == "create" ? "installed" : "updated";
@@ -1570,7 +1592,68 @@ public static class HookCommandRunner
         }
         return TryExtractManagedBlock(actualText, out var actualBlock)
                && TryExtractManagedBlock(expectedText, out var expectedBlock)
-               && string.Equals(actualBlock, expectedBlock, StringComparison.Ordinal);
+               && ManagedBlocksMatchRepositoryPaths(
+                   actualBlock,
+                   expectedBlock,
+                   projectPath,
+                   chainedHookPath);
+    }
+
+    private static bool ManagedBlocksMatchRepositoryPaths(
+        string actualBlock,
+        string expectedBlock,
+        string projectPath,
+        string chainedHookPath)
+    {
+        try
+        {
+            actualBlock = NormalizeManagedBlockPathToken(
+                actualBlock,
+                projectPath,
+                "\0CDIDX_PROJECT_PATH\0");
+            expectedBlock = NormalizeManagedBlockPathToken(
+                expectedBlock,
+                projectPath,
+                "\0CDIDX_PROJECT_PATH\0");
+            actualBlock = NormalizeManagedBlockPathToken(
+                actualBlock,
+                chainedHookPath,
+                "\0CDIDX_CHAINED_HOOK_PATH\0");
+            expectedBlock = NormalizeManagedBlockPathToken(
+                expectedBlock,
+                chainedHookPath,
+                "\0CDIDX_CHAINED_HOOK_PATH\0");
+            return string.Equals(actualBlock, expectedBlock, StringComparison.Ordinal);
+        }
+        catch (Exception ex) when (IsHookFileOperationException(ex) || ex is CodeIndexException)
+        {
+            return false;
+        }
+    }
+
+    private static string NormalizeManagedBlockPathToken(
+        string block,
+        string path,
+        string replacement)
+    {
+        var token = QuoteShell(path);
+        var comparison = PathCasing.ComparisonFor(path);
+        var firstIndex = block.IndexOf(token, comparison);
+        if (firstIndex < 0)
+            return block;
+
+        var builder = new StringBuilder(block.Length);
+        var offset = 0;
+        while (firstIndex >= 0)
+        {
+            builder.Append(block, offset, firstIndex - offset);
+            builder.Append(replacement);
+            offset = firstIndex + token.Length;
+            firstIndex = block.IndexOf(token, offset, comparison);
+        }
+
+        builder.Append(block, offset, block.Length - offset);
+        return builder.ToString();
     }
 
     private static bool TryExtractManagedBlock(string text, out string block)
@@ -1903,17 +1986,60 @@ fi
         JsonSerializerOptions jsonOptions,
         string projectPath,
         string hookPath,
+        string chainedHookPath,
         HookExecutableJsonResult executable)
-        => WriteResult(
+    {
+        var message =
+            $"generated cdidx pre-commit hook exceeds the {MaxHookMarkerBytes}-byte management limit";
+        if (options.DryRun)
+        {
+            var plan = BuildInstallPreflightFailurePlan(
+                hookPath,
+                chainedHookPath,
+                message);
+            return WriteDryRunResult(
+                options,
+                jsonOptions,
+                projectPath,
+                hookPath,
+                chainedHookPath,
+                plan,
+                executable);
+        }
+
+        return WriteResult(
             options.Json,
             jsonOptions,
             "error",
-            $"generated cdidx pre-commit hook exceeds the {MaxHookMarkerBytes}-byte management limit",
+            message,
             projectPath,
             hookPath,
             null,
             CommandExitCodes.InstallError,
             executable: executable);
+    }
+
+    private static HookOperationPlan BuildInstallPreflightFailurePlan(
+        string hookPath,
+        string chainedHookPath,
+        string message)
+    {
+        var ioHookPath = LongPath.EnsureWindowsPrefix(hookPath);
+        var hookState = File.Exists(ioHookPath)
+            ? AnalyzeManagedHook(ReadHookBytesWithinLimit(ioHookPath)).State
+            : "absent";
+        var chainedHookState = File.Exists(LongPath.EnsureWindowsPrefix(chainedHookPath))
+            ? "present"
+            : "absent";
+        return new HookOperationPlan(
+            "blocked",
+            message,
+            hookState,
+            chainedHookState,
+            [],
+            Blocked: true,
+            BlockExitCode: CommandExitCodes.InstallError);
+    }
 
     private static int WriteResult(
         bool json,
@@ -1985,7 +2111,7 @@ fi
                         plannedAction,
                         managedHookPreview == null
                             ? null
-                            : DiagnosticRedactor.RedactSensitiveText(managedHookPreview, "[redacted]", redactPaths: true),
+                            : SanitizeManagedHookPreviewForError(managedHookPreview),
                         filesystemMutation,
                         hookState,
                         chainedHookState,
@@ -2127,6 +2253,29 @@ fi
                 ? null
                 : DiagnosticSanitizer.ForMessage(executable.FailureReason),
         };
+
+    private static string SanitizeManagedHookPreviewForError(string managedHookPreview)
+    {
+        var manifestStart = managedHookPreview.IndexOf(
+            ExecutableManifestPrefix,
+            StringComparison.Ordinal);
+        if (manifestStart >= 0)
+        {
+            var payloadStart = manifestStart + ExecutableManifestPrefix.Length;
+            var payloadEnd = managedHookPreview.IndexOfAny(['\r', '\n'], payloadStart);
+            if (payloadEnd < 0)
+                payloadEnd = managedHookPreview.Length;
+            managedHookPreview = string.Concat(
+                managedHookPreview.AsSpan(0, payloadStart),
+                "[redacted]",
+                managedHookPreview.AsSpan(payloadEnd));
+        }
+
+        return DiagnosticRedactor.RedactSensitiveText(
+            managedHookPreview,
+            "[redacted]",
+            redactPaths: true);
+    }
 
     private static void WriteExecutableDetails(HookExecutableJsonResult? executable)
     {

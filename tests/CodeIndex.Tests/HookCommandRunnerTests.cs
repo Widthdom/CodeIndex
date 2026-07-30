@@ -299,6 +299,10 @@ public class HookCommandRunnerTests
                     "BEGIN CDIDX MANAGED PRE-COMMIT",
                     document.RootElement.GetProperty("managed_hook_preview").GetString(),
                     StringComparison.Ordinal);
+                Assert.Contains(
+                    "# CDIDX EXECUTABLE MANIFEST [redacted]",
+                    document.RootElement.GetProperty("managed_hook_preview").GetString(),
+                    StringComparison.Ordinal);
             }
             Assert.Equal(customHook, File.ReadAllText(hookPath));
             Assert.Equal(existingChain, File.ReadAllText(chainedHookPath));
@@ -376,6 +380,45 @@ public class HookCommandRunnerTests
         Assert.Equal(
             "--dry-run is supported only for hooks install or uninstall",
             document.RootElement.GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public void Hooks_InstallDryRun_PreflightFailurePreservesBlockedPlan_Issue4892()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("hook_preflight_failure");
+        try
+        {
+            TestProjectHelper.InitializeGitRepo(projectRoot);
+            HookCommandRunner.ExecutableSelectionForTesting = _ =>
+                new HookExecutableSelection(
+                    "process_path",
+                    "1.0.0",
+                    [Path.Combine(projectRoot, "missing-cdidx")]);
+
+            var preview = RunHooksAndCaptureStreams(
+                ["install", "--project", projectRoot, "--dry-run", "--json"]);
+
+            Assert.Equal(CommandExitCodes.InstallError, preview.ExitCode);
+            using var document = JsonDocument.Parse(preview.StdOut);
+            Assert.Equal("error", document.RootElement.GetProperty("status").GetString());
+            Assert.True(document.RootElement.GetProperty("dry_run").GetBoolean());
+            Assert.False(document.RootElement.GetProperty("filesystem_mutation").GetBoolean());
+            Assert.Equal("blocked", document.RootElement.GetProperty("planned_action").GetString());
+            Assert.Equal("absent", document.RootElement.GetProperty("hook_state").GetString());
+            Assert.Equal("absent", document.RootElement.GetProperty("chained_hook_state").GetString());
+            Assert.Empty(document.RootElement.GetProperty("planned_changes").EnumerateArray());
+            Assert.Equal(
+                "unresolved",
+                document.RootElement
+                    .GetProperty("executable")
+                    .GetProperty("status")
+                    .GetString());
+        }
+        finally
+        {
+            HookCommandRunner.ExecutableSelectionForTesting = null;
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
     }
 
     [Fact]
@@ -731,6 +774,23 @@ public class HookCommandRunnerTests
             Assert.Contains("Executable source: process_path", humanStatus.StdOut, StringComparison.Ordinal);
             Assert.Contains($"Executable: {toolPath}", humanStatus.StdOut, StringComparison.Ordinal);
             Assert.Contains("Actual version: 1.2.3", humanStatus.StdOut, StringComparison.Ordinal);
+
+            if (PathCasing.IsIgnoreCase(projectRoot))
+            {
+                var alternateCasing = projectRoot.ToUpperInvariant();
+                Assert.NotEqual(projectRoot, alternateCasing);
+                var alternateCaseStatus = RunHooksAndCaptureStreams(
+                    ["status", "--project", alternateCasing, "--json"]);
+
+                Assert.Equal(CommandExitCodes.Success, alternateCaseStatus.ExitCode);
+                using var document = JsonDocument.Parse(alternateCaseStatus.StdOut);
+                Assert.Equal(
+                    "available",
+                    document.RootElement
+                        .GetProperty("executable")
+                        .GetProperty("status")
+                        .GetString());
+            }
 
             var pinnedInvocation =
                 $"{QuoteShellForTest(NormalizeExpectedShellPath(toolPath))} index {QuoteShellForTest(projectRoot)} --quiet";
