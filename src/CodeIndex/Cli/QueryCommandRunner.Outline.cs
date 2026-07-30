@@ -11,7 +11,8 @@ public static partial class QueryCommandRunner
         JsonObject? Payload,
         OutlineResult? Outline,
         string? Error,
-        bool NotFound);
+        bool NotFound,
+        IReadOnlyList<OutlineSymbol>? PageSymbols = null);
 
     public static int RunOutline(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
@@ -287,6 +288,8 @@ public static partial class QueryCommandRunner
             return new(null, null, null, NotFound: true);
 
         var displaySymbols = ApplyOutlineSort(outline.Symbols, outlineSortMode, includeDerivedMetadata);
+        var pageOffset = Math.Min(cursorOffset ?? 0, displaySymbols.Count);
+        var pageSymbols = displaySymbols.Skip(pageOffset).Take(limit).ToList();
         var payload = BuildOutlineJsonPayload(
             outline,
             displaySymbols,
@@ -296,7 +299,7 @@ public static partial class QueryCommandRunner
             cursorContext,
             jsonOptions,
             compact: false);
-        return new(payload, outline, null, NotFound: false);
+        return new(payload, outline, null, NotFound: false, pageSymbols);
     }
 
     private static JsonObject ApplyOutlineCompactCaps(OutlineResult outline, int sectionLimit)

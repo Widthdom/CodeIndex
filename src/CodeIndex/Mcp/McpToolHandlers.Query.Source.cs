@@ -52,16 +52,23 @@ public partial class McpServer
             {
                 var structuredContent = page.Payload!;
                 adjustments.ApplyTo(structuredContent);
-                AddNextStepSuggestion(
-                    structuredContent,
-                    "excerpt",
-                    new JsonObject
-                    {
-                        ["path"] = path,
-                        ["startLine"] = 1,
-                        ["endLine"] = Math.Min(page.Outline!.TotalLines, 80)
-                    },
-                    "Use excerpt for only the relevant outline range instead of reading the whole file.");
+                if (page.PageSymbols is { Count: > 0 })
+                {
+                    var firstSymbol = page.PageSymbols[0];
+                    var totalLines = Math.Max(1, page.Outline!.TotalLines);
+                    var startLine = Math.Clamp(
+                        firstSymbol.StartLine > 0 ? firstSymbol.StartLine : firstSymbol.Line,
+                        1,
+                        totalLines);
+                    var endLine = Math.Min(
+                        totalLines,
+                        Math.Min(Math.Max(startLine, firstSymbol.EndLine), startLine + 79));
+                    AddNextStepSuggestion(
+                        structuredContent,
+                        "excerpt",
+                        BuildExcerptArgs(path, startLine, endLine),
+                        "Use excerpt for the first symbol in this returned outline page instead of reading the whole file.");
+                }
                 return structuredContent;
             }
 

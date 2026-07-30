@@ -36,6 +36,10 @@ public sealed class McpServerOutlinePaginationIssue4897Tests
             Assert.Equal(175, structured["total_symbol_count"]!.GetValue<int>());
             Assert.InRange(structured["returned_symbol_count"]!.GetValue<int>(), 1, 37);
             Assert.Equal(identities.Count, structured["cursor_offset"]!.GetValue<int>());
+            var firstSymbol = structured["symbols"]![0]!;
+            var excerptArgs = structured["next_step_suggestion"]!["args"]!;
+            Assert.Equal(firstSymbol["startLine"]!.GetValue<int>(), excerptArgs["startLine"]!.GetValue<int>());
+            Assert.Equal(firstSymbol["endLine"]!.GetValue<int>(), excerptArgs["endLine"]!.GetValue<int>());
 
             foreach (var symbol in structured["symbols"]!.AsArray())
             {
@@ -92,6 +96,7 @@ public sealed class McpServerOutlinePaginationIssue4897Tests
         Assert.Empty(empty["symbols"]!.AsArray());
         Assert.False(empty["has_more"]!.GetValue<bool>());
         Assert.Null(empty["next_cursor"]);
+        Assert.Null(empty["next_step_suggestion"]);
 
         var byteArguments = new JsonObject
         {
