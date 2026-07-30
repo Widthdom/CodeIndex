@@ -753,6 +753,41 @@ public class HookCommandRunnerTests
                     "managed_hook_executable_manifest_mismatch",
                     executable.GetProperty("failure_reason").GetString());
             }
+
+            var originalManifestLine = hook
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                .Single(static line => line.StartsWith(
+                    "# CDIDX EXECUTABLE MANIFEST ",
+                    StringComparison.Ordinal));
+            var malformedManifestLine =
+                "# CDIDX EXECUTABLE MANIFEST "
+                + EncodeExecutableManifestForTest(
+                    "process_path",
+                    "1.2.3",
+                    [toolPath, toolPath]);
+            var malformedHook = hook
+                .Replace(
+                    originalManifestLine,
+                    malformedManifestLine,
+                    StringComparison.Ordinal)
+                .Replace(
+                    pinnedInvocation,
+                    $"{QuoteShellForTest(NormalizeExpectedShellPath(toolPath))} "
+                    + $"{QuoteShellForTest(NormalizeExpectedShellPath(toolPath))} "
+                    + $"index {QuoteShellForTest(projectRoot)} --quiet",
+                    StringComparison.Ordinal);
+            File.WriteAllText(hookPath, malformedHook);
+            var malformedStatus = RunHooksAndCaptureStreams(
+                ["status", "--project", projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, malformedStatus.ExitCode);
+            using (var document = JsonDocument.Parse(malformedStatus.StdOut))
+            {
+                var executable = document.RootElement.GetProperty("executable");
+                Assert.Equal("unresolved", executable.GetProperty("status").GetString());
+                Assert.False(string.IsNullOrWhiteSpace(
+                    executable.GetProperty("failure_reason").GetString()));
+            }
         }
         finally
         {
@@ -797,6 +832,30 @@ public class HookCommandRunnerTests
                 Assert.Equal(v1Path, executable.GetProperty("path").GetString());
                 Assert.Equal("1.0.0", executable.GetProperty("actual_version").GetString());
                 Assert.Equal("available", executable.GetProperty("status").GetString());
+            }
+
+            if (!OperatingSystem.IsWindows())
+            {
+                File.SetUnixFileMode(
+                    v1Path,
+                    UnixFileMode.UserRead
+                    | UnixFileMode.UserWrite
+                    | UnixFileMode.GroupRead
+                    | UnixFileMode.GroupExecute
+                    | UnixFileMode.OtherRead
+                    | UnixFileMode.OtherExecute);
+                var inaccessible = RunHooksAndCaptureStreams(
+                    ["status", "--project", projectRoot, "--json"]);
+
+                using (var document = JsonDocument.Parse(inaccessible.StdOut))
+                {
+                    var executable = document.RootElement.GetProperty("executable");
+                    Assert.Equal("not_executable", executable.GetProperty("status").GetString());
+                    Assert.Equal(
+                        "pinned_executable_not_runnable",
+                        executable.GetProperty("failure_reason").GetString());
+                }
+                WriteRunnableFile(v1Path);
             }
 
             WriteVersionFile(v1Directory, "1.1.0");
@@ -942,6 +1001,21 @@ public class HookCommandRunnerTests
                     Path.GetFullPath(assemblyPath),
                 ],
                 dotnetSelection.Argv);
+
+            Assert.True(HookCommandRunner.TryBuildHookScript(
+                Path.Combine(root, "pre-commit.cdidx-chain"),
+                root,
+                wrapperSelection,
+                out var boundedHook));
+            Assert.True(
+                Encoding.UTF8.GetByteCount(boundedHook)
+                <= HookCommandRunner.MaxHookMarkerBytes);
+            Assert.False(HookCommandRunner.TryBuildHookScript(
+                "/" + new string('x', HookCommandRunner.MaxHookMarkerBytes),
+                root,
+                wrapperSelection,
+                out var oversizedHook));
+            Assert.Equal(string.Empty, oversizedHook);
         }
         finally
         {
@@ -1570,6 +1644,32 @@ public class HookCommandRunnerTests
         => File.WriteAllText(
             Path.Combine(directory, "version.json"),
             $$"""{"version":"{{version}}"}""");
+
+    private static string EncodeExecutableManifestForTest(
+        string source,
+        string version,
+        IReadOnlyList<string> arguments)
+    {
+        using var buffer = new MemoryStream();
+        using (var writer = new BinaryWriter(buffer, Encoding.UTF8, leaveOpen: true))
+        {
+            writer.Write(1);
+            WriteManifestStringForTest(writer, source);
+            WriteManifestStringForTest(writer, version);
+            writer.Write(arguments.Count);
+            foreach (var argument in arguments)
+                WriteManifestStringForTest(writer, argument);
+        }
+
+        return Convert.ToBase64String(buffer.ToArray());
+    }
+
+    private static void WriteManifestStringForTest(BinaryWriter writer, string value)
+    {
+        var bytes = Encoding.UTF8.GetBytes(value);
+        writer.Write(bytes.Length);
+        writer.Write(bytes);
+    }
 
     private static string NormalizeExpectedShellPath(string path)
         => OperatingSystem.IsWindows() ? path.Replace('\\', '/') : path;

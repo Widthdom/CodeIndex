@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -18,6 +19,7 @@ public static class HookCommandRunner
     private const string ExecutableManifestPrefix = "# CDIDX EXECUTABLE MANIFEST ";
     private const int MaxExecutableManifestChars = 32 * 1024;
     private const int MaxExecutableArgumentChars = 8 * 1024;
+    private const int UnixExecuteAccess = 1;
     private static readonly byte[] BeginMarkerBytes = Encoding.ASCII.GetBytes(BeginMarker);
     private static readonly byte[] EndMarkerBytes = Encoding.ASCII.GetBytes(EndMarker);
     private static readonly byte[] HookPreambleBytes = Encoding.ASCII.GetBytes("#!/bin/sh");
@@ -214,7 +216,19 @@ public static class HookCommandRunner
 
         var executable = InspectExecutable(executableSelection, executableSelection);
         var warnings = new List<HookCommandWarningJsonResult>();
-        var hookScript = BuildHookScript(chainedHookPath, projectPath, executableSelection);
+        if (!TryBuildHookScript(
+                chainedHookPath,
+                projectPath,
+                executableSelection,
+                out var hookScript))
+        {
+            return WriteGeneratedHookTooLargeResult(
+                options,
+                jsonOptions,
+                projectPath,
+                hookPath,
+                executable);
+        }
         var plan = BuildInstallPlan(options, hookPath, chainedHookPath, hookScript);
         if (options.DryRun)
             return WriteDryRunResult(options, jsonOptions, projectPath, hookPath, chainedHookPath, plan, executable, hookScript);
@@ -226,7 +240,19 @@ public static class HookCommandRunner
         if (!TryResolveHookWritePaths(gitDir, out hooksDir, out hookPath, out chainedHookPath))
             return WriteResult(options.Json, jsonOptions, "error", "unsafe Git hook file path", projectPath, null, null, CommandExitCodes.InstallError);
 
-        hookScript = BuildHookScript(chainedHookPath, projectPath, executableSelection);
+        if (!TryBuildHookScript(
+                chainedHookPath,
+                projectPath,
+                executableSelection,
+                out hookScript))
+        {
+            return WriteGeneratedHookTooLargeResult(
+                options,
+                jsonOptions,
+                projectPath,
+                hookPath,
+                executable);
+        }
         plan = BuildInstallPlan(options, hookPath, chainedHookPath, hookScript);
         if (plan.Blocked)
             return WriteBlockedPlanResult(options, jsonOptions, projectPath, hookPath, chainedHookPath, plan, executable);
@@ -251,7 +277,25 @@ public static class HookCommandRunner
             {
                 if (!TryResolveHookWritePaths(gitDir, out hooksDir, out hookPath, out chainedHookPath))
                     return WriteResult(options.Json, jsonOptions, "error", "Git hook file path became unsafe before write", projectPath, null, null, CommandExitCodes.InstallError, executable: executable);
-                ReplaceCustomHookWithManagedHook(hooksDir, hookPath, chainedHookPath, projectPath, executableSelection, warnings);
+                if (!TryBuildHookScript(
+                        chainedHookPath,
+                        projectPath,
+                        executableSelection,
+                        out hookScript))
+                {
+                    return WriteGeneratedHookTooLargeResult(
+                        options,
+                        jsonOptions,
+                        projectPath,
+                        hookPath,
+                        executable);
+                }
+                ReplaceCustomHookWithManagedHook(
+                    hooksDir,
+                    hookPath,
+                    chainedHookPath,
+                    hookScript,
+                    warnings);
             }
             catch (Exception ex) when (IsHookFileOperationException(ex))
             {
@@ -266,7 +310,19 @@ public static class HookCommandRunner
         if (!TryResolveHookWritePaths(gitDir, out hooksDir, out hookPath, out chainedHookPath))
             return WriteResult(options.Json, jsonOptions, "error", "Git hook file path became unsafe before write", projectPath, null, null, CommandExitCodes.InstallError, executable: executable);
 
-        hookScript = BuildHookScript(chainedHookPath, projectPath, executableSelection);
+        if (!TryBuildHookScript(
+                chainedHookPath,
+                projectPath,
+                executableSelection,
+                out hookScript))
+        {
+            return WriteGeneratedHookTooLargeResult(
+                options,
+                jsonOptions,
+                projectPath,
+                hookPath,
+                executable);
+        }
         var status = plan.PlannedAction == "create" ? "installed" : "updated";
         var resultMessage = status == "updated"
             ? "cdidx pre-commit hook updated"
@@ -984,8 +1040,7 @@ public static class HookCommandRunner
         string hooksDir,
         string hookPath,
         string chainedHookPath,
-        string projectPath,
-        HookExecutableSelection executableSelection,
+        string hookScript,
         List<HookCommandWarningJsonResult> warnings)
     {
         var stagedHookPath = Path.Combine(hooksDir, $".{HookName}.{Guid.NewGuid():N}.tmp");
@@ -996,7 +1051,7 @@ public static class HookCommandRunner
 
         try
         {
-            WriteStagedHookScript(ioStagedHookPath, chainedHookPath, projectPath, executableSelection);
+            WriteStagedHookScript(ioStagedHookPath, hookScript);
             ReplaceFile(ioStagedHookPath, ioHookPath, ioChainedHookPath);
             stagedHookMoved = true;
             MakeExecutable(ioHookPath);
@@ -1010,9 +1065,7 @@ public static class HookCommandRunner
 
     private static void WriteStagedHookScript(
         string ioStagedHookPath,
-        string chainedHookPath,
-        string projectPath,
-        HookExecutableSelection executableSelection)
+        string hookScript)
     {
         using (var stream = CreateStagedHookFileStream(ioStagedHookPath))
         {
@@ -1022,7 +1075,7 @@ public static class HookCommandRunner
                 bufferSize: 1024,
                 leaveOpen: true))
             {
-                writer.Write(BuildHookScript(chainedHookPath, projectPath, executableSelection));
+                writer.Write(hookScript);
                 writer.Flush();
             }
 
@@ -1186,13 +1239,7 @@ public static class HookCommandRunner
         HookExecutableSelection selection,
         out string failureReason)
     {
-        if (selection.Source is not ("process_path" or "dotnet_host_and_assembly")
-            || string.IsNullOrWhiteSpace(selection.Version)
-            || selection.Version.Length > 128
-            || selection.Version.Any(char.IsControl)
-            || selection.Argv.Count is < 1 or > 2
-            || (selection.Source == "process_path" && selection.Argv.Count != 1)
-            || (selection.Source == "dotnet_host_and_assembly" && selection.Argv.Count != 2))
+        if (!HasValidExecutableSelectionShape(selection))
         {
             failureReason = "current_executable_provenance_invalid";
             return false;
@@ -1200,11 +1247,7 @@ public static class HookCommandRunner
 
         foreach (var argument in selection.Argv)
         {
-            if (string.IsNullOrWhiteSpace(argument)
-                || argument.Length > MaxExecutableArgumentChars
-                || !Path.IsPathRooted(argument)
-                || argument.IndexOfAny(['\0', '\r', '\n']) >= 0
-                || !File.Exists(LongPath.EnsureWindowsPrefix(argument)))
+            if (!File.Exists(LongPath.EnsureWindowsPrefix(argument)))
             {
                 failureReason = "current_executable_path_unusable";
                 return false;
@@ -1224,6 +1267,19 @@ public static class HookCommandRunner
         failureReason = string.Empty;
         return true;
     }
+
+    private static bool HasValidExecutableSelectionShape(HookExecutableSelection selection)
+        => selection.Source is "process_path" or "dotnet_host_and_assembly"
+           && !string.IsNullOrWhiteSpace(selection.Version)
+           && selection.Version.Length <= 128
+           && !selection.Version.Any(char.IsControl)
+           && ((selection.Source == "process_path" && selection.Argv.Count == 1)
+               || (selection.Source == "dotnet_host_and_assembly" && selection.Argv.Count == 2))
+           && selection.Argv.All(static argument =>
+               !string.IsNullOrWhiteSpace(argument)
+               && argument.Length <= MaxExecutableArgumentChars
+               && Path.IsPathRooted(argument)
+               && argument.IndexOfAny(['\0', '\r', '\n']) < 0);
 
     private static HookExecutableJsonResult InspectExecutable(
         HookExecutableSelection installedSelection,
@@ -1439,13 +1495,7 @@ public static class HookCommandRunner
             if (buffer.Position != buffer.Length)
                 return false;
             selection = new HookExecutableSelection(source, version, arguments);
-            return selection.Source is "process_path" or "dotnet_host_and_assembly"
-                   && selection.Version.Length is > 0 and <= 128
-                   && !selection.Version.Any(char.IsControl)
-                   && selection.Argv.All(static argument =>
-                       !string.IsNullOrWhiteSpace(argument)
-                       && Path.IsPathRooted(argument)
-                       && argument.IndexOfAny(['\0', '\r', '\n']) < 0);
+            return HasValidExecutableSelectionShape(selection);
         }
         catch (Exception ex) when (ex is FormatException
                                        or EndOfStreamException
@@ -1478,7 +1528,14 @@ public static class HookCommandRunner
             return false;
         }
 
-        var expectedText = BuildHookScript(chainedHookPath, projectPath, selection);
+        if (!TryBuildHookScript(
+                chainedHookPath,
+                projectPath,
+                selection,
+                out var expectedText))
+        {
+            return false;
+        }
         return TryExtractManagedBlock(actualText, out var actualBlock)
                && TryExtractManagedBlock(expectedText, out var expectedBlock)
                && string.Equals(actualBlock, expectedBlock, StringComparison.Ordinal);
@@ -1548,21 +1605,38 @@ public static class HookCommandRunner
             return File.Exists(LongPath.EnsureWindowsPrefix(path));
         try
         {
-            return (File.GetUnixFileMode(LongPath.EnsureWindowsPrefix(path))
-                    & (UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute))
-                   != UnixFileMode.None;
+            return UnixAccess(LongPath.EnsureWindowsPrefix(path), UnixExecuteAccess) == 0;
         }
-        catch (Exception ex) when (IsHookFileOperationException(ex))
+        catch (Exception ex) when (IsHookFileOperationException(ex)
+                                   || ex is DllNotFoundException
+                                       or EntryPointNotFoundException)
         {
             return false;
         }
     }
+
+    [DllImport("libc", EntryPoint = "access", SetLastError = true)]
+    private static extern int UnixAccess(string path, int mode);
 
     private static bool IsDotnetHost(string processPath)
         => string.Equals(
             Path.GetFileNameWithoutExtension(processPath.Replace('\\', '/')),
             "dotnet",
             StringComparison.OrdinalIgnoreCase);
+
+    internal static bool TryBuildHookScript(
+        string chainedHookPath,
+        string projectPath,
+        HookExecutableSelection executableSelection,
+        out string hookScript)
+    {
+        hookScript = BuildHookScript(chainedHookPath, projectPath, executableSelection);
+        if (Encoding.UTF8.GetByteCount(hookScript) <= MaxHookMarkerBytes)
+            return true;
+
+        hookScript = string.Empty;
+        return false;
+    }
 
     private static string BuildHookScript(
         string chainedHookPath,
@@ -1668,6 +1742,23 @@ fi
             hookPath,
             plan.ChainedHookState == "present" ? chainedHookPath : null,
             plan.BlockExitCode,
+            executable: executable);
+
+    private static int WriteGeneratedHookTooLargeResult(
+        HookCommandOptions options,
+        JsonSerializerOptions jsonOptions,
+        string projectPath,
+        string hookPath,
+        HookExecutableJsonResult executable)
+        => WriteResult(
+            options.Json,
+            jsonOptions,
+            "error",
+            $"generated cdidx pre-commit hook exceeds the {MaxHookMarkerBytes}-byte management limit",
+            projectPath,
+            hookPath,
+            null,
+            CommandExitCodes.InstallError,
             executable: executable);
 
     private static int WriteResult(
