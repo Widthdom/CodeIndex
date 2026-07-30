@@ -1755,6 +1755,19 @@ access.
 | MCP-only session diagnostics | `mcp_session`, `mcp_session.metrics`, `mcp_session.audit_log`, `mcp.rate_limit.bucket_limit`, and `mcp.rate_limit.bucket_limit_rejection_count`. `mcp_session` is session-scoped diagnostics rather than persisted DB state. It contains `log_level`, bounded `roots`, optional `client_info`, bounded optional `client_capabilities`, an always-present `metrics` object, and `audit_log` when audit emission is enabled. When advertised roots are capped, `roots_truncated`, `root_count`, `root_limit`, and `root_uri_length_limit` describe the truncation. When client capabilities are capped, `client_capabilities_truncated`, `client_capabilities_truncation_reason`, `client_capabilities_serialized_bytes`, `client_capabilities_byte_limit`, and `client_capabilities_depth_limit` describe the retained diagnostic subset. `mcp_session.metrics` is `{"enabled":false}` when unconfigured. An enabled metrics sink contains `enabled`, `path`, `max_bytes`, `bytes_written`, `disposed`, `degraded`, `queue_capacity`, `queue_depth`, `queued_event_count`, `written_event_count`, `dropped_event_count`, `queue_full_drop_count`, `serialization_failure_count`, `write_failure_count`, `rotation_failure_count`, `batch_flush_count`, `consecutive_failure_count`, and `recovery_count`, plus optional `next_retry_at`, `last_recovery_at`, and `last_failure`. MCP ping always mirrors the metrics object as `metrics`; metrics degradation is intentionally excluded from its top-level liveness result. The audit status fields and their health semantics are defined in [MCP audit log emission](#mcp-audit-log-emission). `mcp.rate_limit.bucket_limit` is the configured process-local cap across normalized `(partition, caller)` buckets: every direct call uses one fixed caller-wide coarse partition, canonical known tools additionally use secondary per-tool partitions, and unknown `batch_query` slots share one fixed invalid-slot partition per caller. `mcp.rate_limit.bucket_limit_rejection_count` counts calls denied because creating a new bucket would exceed that cap. |
 | Documentation sync | Keep this list synchronized with `README.md` and `AGENT_GUIDE.md`; `DocumentationStatusContractTests` fails when any required field is missing from one of those docs. |
 
+`status --explain` resolves top-level keys through the source-generated
+`StatusResult` `JsonTypeInfo` used by `status --json`; ignored properties are
+excluded, and a coverage test requires every serialized top-level property to
+produce an explanation. Explicit registry metadata supplies useful meaning,
+source, dependencies, interpretation, and repair guidance for major readiness,
+trust, extension, maintenance, and cap-hit sections. Other serialized scalar
+fields receive a bounded contract explanation instead of becoming unknown as
+the DTO evolves. Dotted paths resolve against the same source-generated nested
+metadata (including collection element DTOs), while unknown paths receive
+bounded valid candidates. Explain responses contain static contract metadata
+only, cap known fields and dependencies, sanitize unknown input, and never
+include runtime field values or paths.
+
 `head_freshness` is a compact summary for machine consumers. `state=fresh`
 requires a successful complete `status --check` workspace comparison,
 `state=fresh_but_incomplete` separates matching-workspace freshness from failed-file coverage, and `state=head_current`
@@ -5166,6 +5179,17 @@ help はすべてこのレジストリを参照します。field 名は大文字
 | remediation fields | `degraded_root_cause`, `degraded_reason`, `recommended_action`, `alternative_action`, `readiness_degradations`, `repair_commands`。 |
 | MCP-only session diagnostics | `mcp_session`、`mcp_session.metrics`、`mcp_session.audit_log`、`mcp.rate_limit.bucket_limit`、`mcp.rate_limit.bucket_limit_rejection_count`。`mcp_session` は persisted DB state ではなく session-scoped diagnostics で、`log_level`、上限付きの `roots`、任意の `client_info`、上限付きの任意の `client_capabilities`、常設の `metrics` object、audit 出力が有効な場合の `audit_log` を含みます。advertised root が切り詰められた場合は `roots_truncated`、`root_count`、`root_limit`、`root_uri_length_limit` が切り詰め内容を示します。client capabilities が切り詰められた場合は `client_capabilities_truncated`、`client_capabilities_truncation_reason`、`client_capabilities_serialized_bytes`、`client_capabilities_byte_limit`、`client_capabilities_depth_limit` が保持された診断 subset を示します。未設定時の `mcp_session.metrics` は `{"enabled":false}` です。有効な metrics sink は `enabled`、`path`、`max_bytes`、`bytes_written`、`disposed`、`degraded`、`queue_capacity`、`queue_depth`、`queued_event_count`、`written_event_count`、`dropped_event_count`、`queue_full_drop_count`、`serialization_failure_count`、`write_failure_count`、`rotation_failure_count`、`batch_flush_count`、`consecutive_failure_count`、`recovery_count` に加え、任意の `next_retry_at`、`last_recovery_at`、`last_failure` を追加します。MCP ping は常に metrics object を `metrics` として返し、metrics の degradation は意図的に top-level liveness result へ反映しません。audit status field と health semantics は [MCP 監査ログの出力](#mcp-監査ログの出力) に定義します。`mcp.rate_limit.bucket_limit` は normalized な `(partition, caller)` bucket 全体に対する process-local 上限で、direct call はすべて caller-wide の固定 coarse partition、canonical な既知 tool は追加の secondary per-tool partition、unknown な `batch_query` slot は caller ごとの 1 つの固定 invalid-slot partition を使います。`mcp.rate_limit.bucket_limit_rejection_count` は新規 bucket 作成がその上限を超えるため拒否された呼び出し数です。 |
 | documentation sync | この一覧は `README.md` と `AGENT_GUIDE.md` と同期してください。必須 field がそれらの docs から欠けると `DocumentationStatusContractTests` が失敗します。 |
+
+`status --explain` の top-level key は `status --json` と同じ source-generated
+`StatusResult` `JsonTypeInfo` で解決します。ignored property は除外し、coverage test で
+serialized top-level property がすべて説明を返すことを固定します。主要な readiness、
+trust、extension、maintenance、cap-hit section には、明示的な registry metadata として
+meaning、source、dependencies、interpretation、repair guidance を付けます。それ以外の
+serialized scalar field も、DTO 拡張時に unknown へ戻らず上限付き contract explanation を返します。
+dot 区切り path は collection element DTO を含む同じ source-generated nested metadata で解決し、
+unknown path には上限付きの有効な candidate を返します。explain response は static contract
+metadata だけを含み、known field と dependency の件数を制限し、unknown input を sanitize し、
+runtime field value や path を含めません。
 
 `head_freshness` は machine consumer 向けの compact summary です。
 `state=fresh` は complete な index に対する `status --check` の workspace 比較成功が必要で、

@@ -1899,6 +1899,132 @@ public partial class QueryCommandRunnerTests
         Assert.Contains("immutable-URI", policyDocument.RootElement.GetProperty("ready").GetString(), StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("trust_overrides", "Accepted trust overrides", "environment overrides", "extractors")]
+    [InlineData("extractors", "Extractor registry diagnostics", "extractor plugins", "trust_overrides")]
+    [InlineData("hooks", "Post-extraction hook manifests", "hook manifests", "hook_diagnostics")]
+    [InlineData("maintenance_guidance", "Database maintenance guidance", "WAL and freelist", "db_pragma_settings")]
+    [InlineData("reference_extraction_cap_hits", "Reference extraction cap hits", "safety caps", "reference_extraction_limits")]
+    public void RunStatus_ExplainJson_PrintsStructuredMajorSectionMetadata_Issue4891(
+        string field,
+        string label,
+        string meaningText,
+        string dependency)
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+            ["--explain", field, "--json"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        var json = document.RootElement;
+        Assert.Equal(field, json.GetProperty("field").GetString());
+        Assert.Equal(label, json.GetProperty("label").GetString());
+        Assert.Equal("top_level", json.GetProperty("scope").GetString());
+        Assert.Contains(meaningText, json.GetProperty("meaning").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.False(string.IsNullOrWhiteSpace(json.GetProperty("source").GetString()));
+        Assert.Contains(
+            dependency,
+            json.GetProperty("dependencies").EnumerateArray().Select(item => item.GetString()));
+        Assert.False(string.IsNullOrWhiteSpace(json.GetProperty("interpretation").GetString()));
+        Assert.False(string.IsNullOrWhiteSpace(json.GetProperty("repair_guidance").GetString()));
+        Assert.False(json.GetProperty("redaction").GetProperty("runtime_values_included").GetBoolean());
+        Assert.False(json.GetProperty("redaction").GetProperty("paths_included").GetBoolean());
+    }
+
+    [Theory]
+    [InlineData("maintenance_guidance.recommended_command", "Recommended maintenance command", "single maintenance action", "maintenance_guidance.wal_state")]
+    [InlineData("reference_extraction_cap_hits.files", "Reference cap-hit file sample", "bounded", "reference_extraction_cap_hits.file_limit")]
+    [InlineData("extractors.diagnostics", "Extractor diagnostics", "sanitized diagnostics", "extractors.diagnostic_count")]
+    [InlineData("hooks.callback_budget_ms", "Hook callback budget", "maximum elapsed time", "hook_diagnostics")]
+    [InlineData("trust_overrides.path", "Trust override path", "redacted path context", "trust_overrides.kind")]
+    public void RunStatus_ExplainJson_PrintsNestedMemberMetadataWithoutRuntimeValues_Issue4891(
+        string field,
+        string label,
+        string meaningText,
+        string dependency)
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+            ["--explain", field, "--json"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        var json = document.RootElement;
+        Assert.Equal(field, json.GetProperty("field").GetString());
+        Assert.Equal(label, json.GetProperty("label").GetString());
+        Assert.Equal("member", json.GetProperty("scope").GetString());
+        Assert.Contains(meaningText, json.GetProperty("meaning").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(
+            dependency,
+            json.GetProperty("dependencies").EnumerateArray().Select(item => item.GetString()));
+        Assert.False(json.GetProperty("redaction").GetProperty("runtime_values_included").GetBoolean());
+        Assert.False(json.GetProperty("redaction").GetProperty("paths_included").GetBoolean());
+        Assert.DoesNotContain(Directory.GetCurrentDirectory(), stdout, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RunStatus_Explain_CoversEverySerializedTopLevelFieldFromSerializerRegistry_Issue4891()
+    {
+        var serializedFields = QueryCommandRunner.GetStatusSerializableFieldNames(_jsonOptions);
+
+        Assert.NotEmpty(serializedFields);
+        Assert.DoesNotContain("indexed_follow_symlinks_policy", serializedFields);
+        foreach (var field in serializedFields)
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--explain", field, "--json"],
+                _jsonOptions));
+
+            Assert.True(
+                exitCode == CommandExitCodes.Success,
+                $"Expected serialized status field `{field}` to be explainable, but got exit {exitCode}: {stderr}{stdout}");
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            Assert.Equal(field, document.RootElement.GetProperty("field").GetString());
+        }
+
+        var (_, knownFieldsStdout, _) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+            ["--explain", "files", "--json"],
+            _jsonOptions));
+        using var knownFieldsDocument = ParseJsonOutput(knownFieldsStdout);
+        var knownFields = knownFieldsDocument.RootElement
+            .GetProperty("known_fields")
+            .EnumerateArray()
+            .Select(item => item.GetString())
+            .ToHashSet(StringComparer.Ordinal);
+        Assert.All(serializedFields, field => Assert.Contains(field, knownFields));
+        Assert.False(knownFieldsDocument.RootElement.GetProperty("known_fields_truncated").GetBoolean());
+    }
+
+    [Fact]
+    public void RunStatus_ExplainUnknownNestedJsonReturnsBoundedValidCandidatesAndRedactsInput_Issue4891()
+    {
+        var (nestedExitCode, nestedStdout, nestedStderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+            ["--explain", "maintenance_guidance.nope", "--json"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, nestedExitCode);
+        Assert.Equal(string.Empty, nestedStderr);
+        using var nestedDocument = ParseJsonOutput(nestedStdout);
+        Assert.Contains(
+            "maintenance_guidance.recommended_command",
+            nestedDocument.RootElement.GetProperty("hint").GetString(),
+            StringComparison.Ordinal);
+
+        var sensitiveInput = "/Users/example/.ssh/id_rsa-" + new string('x', 400);
+        var (redactedExitCode, redactedStdout, redactedStderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+            ["--explain", sensitiveInput, "--json"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, redactedExitCode);
+        Assert.Equal(string.Empty, redactedStderr);
+        Assert.DoesNotContain("/Users/example", redactedStdout, StringComparison.Ordinal);
+        Assert.True(redactedStdout.Length < 5000, $"Expected bounded error output, got {redactedStdout.Length} characters.");
+    }
+
     [Fact]
     public void RunStatus_ExplainJson_PrintsIndexMatchesWorkspaceDescription_Issue4317()
     {

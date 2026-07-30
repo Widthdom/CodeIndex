@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization.Metadata;
 using CodeIndex.Database;
 using CodeIndex.Diagnostics;
 using CodeIndex.Indexer;
@@ -94,7 +95,7 @@ public static partial class QueryCommandRunner
             }
             if (options.Json)
                 return WriteStatusReadinessExplanationJson(options.StatusExplainField, jsonOptions);
-            return WriteStatusReadinessExplanation(options.StatusExplainField);
+            return WriteStatusReadinessExplanation(options.StatusExplainField, jsonOptions);
         }
 
         return WithDb(options, jsonOptions, reader =>
@@ -386,17 +387,35 @@ public static partial class QueryCommandRunner
         }, cancellationToken: cancellationToken);
     }
 
-    private static int WriteStatusReadinessExplanation(string fieldName)
+    private const int MaxStatusExplainInputLength = 240;
+    private const int MaxStatusExplainPathDepth = 4;
+    private const int MaxStatusExplainKnownFields = 128;
+    private const int MaxStatusExplainDependencies = 16;
+    private const int MaxStatusExplainTextLength = 1024;
+
+    private sealed record StatusJsonPathResolution(
+        string CanonicalPath,
+        JsonPropertyInfo TopLevelProperty,
+        JsonPropertyInfo LeafProperty);
+
+    private static int WriteStatusReadinessExplanation(string fieldName, JsonSerializerOptions jsonOptions)
     {
-        var field = FindStatusFieldExplanation(fieldName);
+        var field = FindStatusFieldExplanation(fieldName, jsonOptions);
         if (field == null)
         {
-            CommandErrorWriter.WriteStderr($"Error: unknown status field `{fieldName}`.");
-            CommandErrorWriter.WriteStderr($"Hint: use one of: {string.Join(", ", StatusExplainFields.Select(f => f.FieldName))}.");
+            var safeFieldName = SanitizeStatusExplainInput(fieldName);
+            CommandErrorWriter.WriteStderr($"Error: unknown status field `{safeFieldName}`.");
+            CommandErrorWriter.WriteStderr($"Hint: {BuildStatusExplainCandidateHint(fieldName, jsonOptions)}");
             return CommandExitCodes.UsageError;
         }
 
         Console.WriteLine($"{field.Label} ({field.FieldName})");
+        Console.WriteLine();
+        Console.WriteLine($"Meaning: {BoundStatusExplainText(field.EffectiveMeaning)}");
+        Console.WriteLine($"Source: {BoundStatusExplainText(field.EffectiveSource)}");
+        Console.WriteLine($"Dependencies: {FormatStatusExplainDependencies(field.EffectiveDependencies)}");
+        Console.WriteLine($"Interpretation: {BoundStatusExplainText(field.EffectiveInterpretation)}");
+        Console.WriteLine($"Repair guidance: {BoundStatusExplainText(field.Remediation)}");
         Console.WriteLine();
         Console.WriteLine($"Ready: {field.ReadyText}");
         Console.WriteLine($"Degraded: {field.DegradedText}");
@@ -406,39 +425,276 @@ public static partial class QueryCommandRunner
 
     private static int WriteStatusReadinessExplanationJson(string fieldName, JsonSerializerOptions jsonOptions)
     {
-        var field = FindStatusFieldExplanation(fieldName);
+        var field = FindStatusFieldExplanation(fieldName, jsonOptions);
         if (field == null)
+        {
+            var safeFieldName = SanitizeStatusExplainInput(fieldName);
             return CommandErrorWriter.WriteJsonOrHuman(
                 true,
                 jsonOptions,
-                $"unknown status field `{fieldName}`.",
+                $"unknown status field `{safeFieldName}`.",
                 CommandExitCodes.UsageError,
-                $"use one of: {string.Join(", ", StatusExplainFields.Select(f => f.FieldName))}.",
+                BuildStatusExplainCandidateHint(fieldName, jsonOptions),
                 errorCode: CommandErrorCodes.UsageError,
                 category: "usage");
+        }
 
+        var knownFieldNames = GetStatusExplainKnownFieldNames(jsonOptions, out var knownFieldsTruncated);
         var knownFields = new JsonArray();
-        foreach (var knownField in StatusExplainFields)
-            knownFields.Add(knownField.FieldName);
+        foreach (var knownField in knownFieldNames)
+            knownFields.Add(knownField);
+        var dependencies = new JsonArray();
+        foreach (var dependency in field.EffectiveDependencies.Take(MaxStatusExplainDependencies))
+            dependencies.Add(dependency);
 
         var payload = new JsonObject
         {
             ["api_version"] = JsonOutputContract.ApiVersion,
             ["field"] = field.FieldName,
             ["label"] = field.Label,
+            ["scope"] = field.FieldName.Contains('.') ? "member" : "top_level",
+            ["meaning"] = BoundStatusExplainText(field.EffectiveMeaning),
+            ["source"] = BoundStatusExplainText(field.EffectiveSource),
+            ["dependencies"] = dependencies,
+            ["dependencies_truncated"] = field.EffectiveDependencies.Count > MaxStatusExplainDependencies,
+            ["interpretation"] = BoundStatusExplainText(field.EffectiveInterpretation),
+            ["repair_guidance"] = BoundStatusExplainText(field.Remediation),
             ["ready"] = field.ReadyText,
             ["degraded"] = field.DegradedText,
             ["remediation"] = field.Remediation,
+            ["redaction"] = new JsonObject
+            {
+                ["runtime_values_included"] = false,
+                ["paths_included"] = false,
+            },
             ["known_fields"] = knownFields,
+            ["known_field_limit"] = MaxStatusExplainKnownFields,
+            ["known_fields_truncated"] = knownFieldsTruncated,
         };
         CommandOutputWriter.WriteJsonNode(payload, jsonOptions);
         return CommandExitCodes.Success;
     }
 
-    private static StatusFieldExplanation? FindStatusFieldExplanation(string fieldName)
-        => StatusExplainFields.FirstOrDefault(
-            field => string.Equals(field.FieldName, fieldName, StringComparison.OrdinalIgnoreCase)
-                     || string.Equals(field.Label, fieldName, StringComparison.OrdinalIgnoreCase));
+    private static StatusFieldExplanation? FindStatusFieldExplanation(
+        string fieldName,
+        JsonSerializerOptions jsonOptions)
+    {
+        var requestedName = fieldName.Trim();
+        var labelMatch = StatusExplainFields.FirstOrDefault(
+            field => string.Equals(field.Label, requestedName, StringComparison.OrdinalIgnoreCase));
+        if (labelMatch != null)
+            requestedName = labelMatch.FieldName;
+
+        if (!TryResolveStatusJsonPath(requestedName, jsonOptions, out var resolution))
+            return null;
+
+        var explicitMatch = StatusExplainFields.FirstOrDefault(
+            field => string.Equals(field.FieldName, resolution.CanonicalPath, StringComparison.OrdinalIgnoreCase));
+        return explicitMatch ?? BuildGeneratedStatusFieldExplanation(resolution);
+    }
+
+    internal static IReadOnlyList<string> GetStatusSerializableFieldNames(JsonSerializerOptions jsonOptions)
+        => CliJsonSerializerContextFactory.Create(jsonOptions)
+            .StatusResult
+            .Properties
+            .Where(property => property.Get != null)
+            .Select(property => property.Name)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
+    private static IReadOnlyList<string> GetStatusExplainKnownFieldNames(
+        JsonSerializerOptions jsonOptions,
+        out bool truncated)
+    {
+        var serializerFields = GetStatusSerializableFieldNames(jsonOptions);
+        var result = new List<string>(Math.Min(MaxStatusExplainKnownFields, serializerFields.Count));
+        foreach (var fieldName in serializerFields)
+        {
+            if (result.Count == MaxStatusExplainKnownFields)
+                break;
+            result.Add(fieldName);
+        }
+
+        foreach (var field in StatusMemberExplainFields)
+        {
+            if (result.Count == MaxStatusExplainKnownFields)
+                break;
+            if (TryResolveStatusJsonPath(field.FieldName, jsonOptions, out _))
+                result.Add(field.FieldName);
+        }
+
+        var totalResolvableMembers = StatusMemberExplainFields.Count(
+            field => TryResolveStatusJsonPath(field.FieldName, jsonOptions, out _));
+        truncated = serializerFields.Count + totalResolvableMembers > result.Count;
+        return result;
+    }
+
+    private static bool TryResolveStatusJsonPath(
+        string fieldName,
+        JsonSerializerOptions jsonOptions,
+        out StatusJsonPathResolution resolution)
+    {
+        resolution = null!;
+        if (string.IsNullOrWhiteSpace(fieldName) || fieldName.Length > MaxStatusExplainInputLength)
+            return false;
+
+        var segments = fieldName.Split('.', StringSplitOptions.None);
+        if (segments.Length == 0
+            || segments.Length > MaxStatusExplainPathDepth
+            || segments.Any(string.IsNullOrWhiteSpace))
+        {
+            return false;
+        }
+
+        var context = CliJsonSerializerContextFactory.Create(jsonOptions);
+        JsonTypeInfo? typeInfo = context.StatusResult;
+        JsonPropertyInfo? topLevelProperty = null;
+        JsonPropertyInfo? leafProperty = null;
+        var canonicalSegments = new List<string>(segments.Length);
+
+        foreach (var segment in segments)
+        {
+            if (typeInfo == null)
+                return false;
+
+            leafProperty = typeInfo.Properties.FirstOrDefault(
+                property => property.Get != null
+                            && string.Equals(property.Name, segment, StringComparison.OrdinalIgnoreCase));
+            if (leafProperty == null)
+                return false;
+
+            topLevelProperty ??= leafProperty;
+            canonicalSegments.Add(leafProperty.Name);
+            var nestedType = GetStatusExplainNestedType(leafProperty.PropertyType);
+            typeInfo = nestedType == null ? null : context.GetTypeInfo(nestedType);
+        }
+
+        resolution = new StatusJsonPathResolution(
+            string.Join('.', canonicalSegments),
+            topLevelProperty!,
+            leafProperty!);
+        return true;
+    }
+
+    private static Type? GetStatusExplainNestedType(Type propertyType)
+    {
+        var type = Nullable.GetUnderlyingType(propertyType) ?? propertyType;
+        if (type == typeof(string))
+            return null;
+        if (type.IsArray)
+            return type.GetElementType();
+        if (!type.IsGenericType)
+            return type.IsClass ? type : null;
+
+        var genericDefinition = type.GetGenericTypeDefinition();
+        var genericArguments = type.GetGenericArguments();
+        if (genericDefinition == typeof(Dictionary<,>)
+            || genericDefinition == typeof(IReadOnlyDictionary<,>)
+            || genericDefinition == typeof(IDictionary<,>))
+        {
+            return genericArguments[1];
+        }
+
+        if (genericDefinition == typeof(List<>)
+            || genericDefinition == typeof(IReadOnlyList<>)
+            || genericDefinition == typeof(IList<>)
+            || genericDefinition == typeof(IEnumerable<>))
+        {
+            return genericArguments[0];
+        }
+
+        return type.IsClass ? type : null;
+    }
+
+    private static StatusFieldExplanation BuildGeneratedStatusFieldExplanation(
+        StatusJsonPathResolution resolution)
+    {
+        var topLevelName = resolution.TopLevelProperty.Name;
+        var topLevelExplanation = StatusExplainFields.FirstOrDefault(
+            field => string.Equals(field.FieldName, topLevelName, StringComparison.OrdinalIgnoreCase));
+        var isNested = resolution.CanonicalPath.Contains('.');
+        if (!isNested)
+        {
+            var label = FormatStatusExplainLabel(resolution.CanonicalPath);
+            return new StatusFieldExplanation(
+                resolution.CanonicalPath,
+                label,
+                "the field is serialized from the current status snapshot according to its documented JSON type and omission rules.",
+                "an absent nullable field means the value was unavailable, not requested, or unsupported by the current database/platform.",
+                "Inspect related readiness/degradation fields and rerun `cdidx status --check --json` when freshness or repair guidance is needed.",
+                Meaning: $"Top-level `{resolution.CanonicalPath}` field in the source-generated status JSON contract.",
+                Source: "The source-generated `StatusResult` serializer registry and the status reader/runtime enrichers.",
+                Dependencies: [],
+                Interpretation: $"Interpret `{resolution.CanonicalPath}` according to its serialized type and alongside the status summary/readiness fields.");
+        }
+
+        var parent = topLevelExplanation ?? BuildGeneratedStatusFieldExplanation(
+            new StatusJsonPathResolution(
+                topLevelName,
+                resolution.TopLevelProperty,
+                resolution.TopLevelProperty));
+        return new StatusFieldExplanation(
+            resolution.CanonicalPath,
+            $"{parent.Label}: {FormatStatusExplainLabel(resolution.LeafProperty.Name)}",
+            $"the `{resolution.LeafProperty.Name}` member is present in the serialized `{topLevelName}` section.",
+            $"an omitted nullable member is unavailable or not applicable within `{topLevelName}`.",
+            parent.Remediation,
+            Meaning: $"The `{resolution.LeafProperty.Name}` member of the `{topLevelName}` status section.",
+            Source: parent.EffectiveSource,
+            Dependencies: [topLevelName],
+            Interpretation: $"Interpret this member in the context of `{topLevelName}` and its sibling state/count/truncation fields.");
+    }
+
+    private static string FormatStatusExplainLabel(string fieldName)
+    {
+        var words = fieldName.Replace('_', ' ');
+        return words.Length == 0
+            ? "Status field"
+            : char.ToUpperInvariant(words[0]) + words[1..];
+    }
+
+    private static string BuildStatusExplainCandidateHint(
+        string fieldName,
+        JsonSerializerOptions jsonOptions)
+    {
+        var knownFields = GetStatusExplainKnownFieldNames(jsonOptions, out var truncated);
+        var requestedTopLevel = fieldName.Split('.', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+        IReadOnlyList<string> candidates = knownFields;
+        if (requestedTopLevel != null
+            && TryResolveStatusJsonPath(requestedTopLevel, jsonOptions, out _))
+        {
+            var prefix = requestedTopLevel + ".";
+            var memberCandidates = knownFields
+                .Where(candidate => candidate.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+            if (memberCandidates.Length > 0)
+                candidates = memberCandidates;
+        }
+
+        var suffix = truncated ? $" (first {MaxStatusExplainKnownFields} candidates)." : ".";
+        return $"use one of: {string.Join(", ", candidates)}{suffix}";
+    }
+
+    private static string SanitizeStatusExplainInput(string value)
+        => DiagnosticRedactor.RedactSensitiveText(
+            DiagnosticSanitizer.ForMessage(value, MaxStatusExplainInputLength),
+            redactPaths: true);
+
+    private static string BoundStatusExplainText(string value)
+        => value.Length <= MaxStatusExplainTextLength
+            ? value
+            : value[..(MaxStatusExplainTextLength - 3)] + "...";
+
+    private static string FormatStatusExplainDependencies(IReadOnlyList<string> dependencies)
+    {
+        if (dependencies.Count == 0)
+            return "none";
+
+        var suffix = dependencies.Count > MaxStatusExplainDependencies
+            ? $" (first {MaxStatusExplainDependencies})"
+            : string.Empty;
+        return string.Join(", ", dependencies.Take(MaxStatusExplainDependencies)) + suffix;
+    }
 
     private static void WriteStatusReadinessSummary(StatusResult status, QueryCommandOptions options)
     {
