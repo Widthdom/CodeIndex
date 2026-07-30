@@ -156,22 +156,22 @@ internal static partial class ProgramRunner
 
         // Resolve the command's config dependency before discovery. Static metadata
         // commands never parse project config, while validate-config and config show
-        // load it through their own reporting contracts. Config-dependent commands
-        // still load before any environment consumer so log/debug/MCP settings apply.
+        // report malformed files through their own contracts. Commands that can consume
+        // config still load before environment consumers so valid log/debug/MCP settings apply.
         // discovery 前に command の config 依存性を解決する。static metadata command は
-        // project config を parse せず、validate-config / config show は固有の報告契約で
-        // 自ら load する。依存 command は environment consumer より前に load し、
-        // log / debug / MCP 設定を従来どおり反映する。
+        // project config を parse せず、validate-config / config show は不正な file を固有の
+        // 契約で報告する。config を利用できる command は environment consumer より前に
+        // load し、有効な log / debug / MCP 設定を従来どおり反映する。
         var configDependency = ResolveProjectConfigDependency(args);
-        var configResult = configDependency == ProjectConfigDependency.Required
-            ? CdidxConfigFile.Load(configStartDirectory ?? Environment.CurrentDirectory)
-            : new CdidxConfigFile.LoadResult(ConfigPath: null, Error: null);
-        if (configResult.Failed)
+        var configResult = configDependency == ProjectConfigDependency.Independent
+            ? new CdidxConfigFile.LoadResult(ConfigPath: null, Error: null)
+            : CdidxConfigFile.Load(configStartDirectory ?? Environment.CurrentDirectory);
+        if (configDependency == ProjectConfigDependency.Required && configResult.Failed)
         {
             var configCommand = ResolveProjectConfigCommandName(args);
             var usage = ConsoleUi.GetUsageLine(configCommand) ?? "cdidx <command> [options]";
             return CommandErrorWriter.WriteJsonOrHuman(
-                ContainsJsonOutputFlag(args),
+                RequestsProjectConfigJsonError(args),
                 jsonOptions,
                 StripErrorPrefix(configResult.Error ?? "configuration file validation failed."),
                 CommandExitCodes.UsageError,
@@ -330,9 +330,10 @@ internal static partial class ProgramRunner
             return ProjectConfigDependency.Independent;
         if (CliCommandMetadata.ProjectConfigSelfManagedCommands.Contains(command))
             return ProjectConfigDependency.SelfManaged;
+        var nestedCommandIndex = SkipProjectConfigGlobalOptions(args, commandIndex + 1);
         if (command == "config"
-            && commandIndex + 1 < args.Count
-            && string.Equals(args[commandIndex + 1], "show", StringComparison.Ordinal))
+            && nestedCommandIndex < args.Count
+            && string.Equals(args[nestedCommandIndex], "show", StringComparison.Ordinal))
         {
             return ProjectConfigDependency.SelfManaged;
         }
@@ -347,7 +348,12 @@ internal static partial class ProgramRunner
 
     private static int FindProjectConfigCommandIndex(IReadOnlyList<string> args)
     {
-        var commandIndex = 0;
+        return SkipProjectConfigGlobalOptions(args, startIndex: 0);
+    }
+
+    private static int SkipProjectConfigGlobalOptions(IReadOnlyList<string> args, int startIndex)
+    {
+        var commandIndex = startIndex;
         while (commandIndex < args.Count)
         {
             var option = args[commandIndex];
@@ -367,6 +373,43 @@ internal static partial class ProgramRunner
         return commandIndex;
     }
 
+    private static bool RequestsProjectConfigJsonError(string[] args)
+    {
+        for (var i = 0; i < args.Length; i++)
+        {
+            var arg = args[i];
+            if (arg == "--")
+                break;
+            if (GetQueryCommandTokenRole(args, i) == QueryCommandTokenRole.CommandOptionValue)
+                continue;
+
+            if (arg == "--json"
+                || arg.StartsWith("--json=", StringComparison.Ordinal)
+                || arg is "--json-summary" or "--results-only" or "--compact"
+                || arg == JsonEnvelopeWrapper.EnvelopeFlag)
+            {
+                return true;
+            }
+
+            if (arg.StartsWith("--format=", StringComparison.Ordinal)
+                && CliOutputFormatCapabilities.TryGet(arg["--format=".Length..], out var inlineCapability)
+                && inlineCapability.IsJsonContract)
+            {
+                return true;
+            }
+
+            if (arg == "--format"
+                && i + 1 < args.Length
+                && CliOutputFormatCapabilities.TryGet(args[i + 1], out var separatedCapability)
+                && separatedCapability.IsJsonContract)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static string ResolveProjectConfigCommandName(IReadOnlyList<string> args)
     {
         var commandIndex = FindProjectConfigCommandIndex(args);
@@ -374,13 +417,10 @@ internal static partial class ProgramRunner
             return "unknown";
 
         var rawCommand = args[commandIndex];
-        if (IsProjectPathArg(rawCommand))
-            return "index";
+        if (CliCommandCatalog.TryResolvePublicCommand(rawCommand, out var command))
+            return command;
 
-        var command = CliCommandCatalog.NormalizePublicCommandName(rawCommand);
-        return CliCommandMetadata.PublicCommandNames.Contains(command, StringComparer.Ordinal)
-            ? command
-            : "unknown";
+        return IsProjectPathArg(rawCommand) ? "index" : "unknown";
     }
 
 

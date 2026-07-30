@@ -42,11 +42,11 @@ internal static class CliCommandMetadata
         new[] { "recipes", "suggestions" }.ToFrozenSet(StringComparer.Ordinal);
 
     // These commands render process-static metadata and must not discover or parse
-    // project configuration. validate-config owns config loading itself so it can
-    // report malformed files through its command-specific contract.
+    // project configuration. validate-config owns malformed-config reporting so it
+    // can preserve its command-specific contract.
     // これらの command は process-static metadata を描画するため、project config を
-    // 探索・parse しない。validate-config は不正な file を command 固有契約で報告するため、
-    // config loading を自身で所有する。
+    // 探索・parse しない。validate-config は command 固有契約を保つため、不正な config の
+    // reporting を自身で所有する。
     internal static IReadOnlySet<string> ProjectConfigIndependentCommands { get; } =
         new[] { "help", "completions", "license" }.ToFrozenSet(StringComparer.Ordinal);
 
