@@ -153,7 +153,7 @@ public static partial class DbCommandRunner
                 files.Add(sourcePlan);
                 bytes = checked(bytes + sourcePlan.Bytes);
             }
-            catch (Exception ex) when (IsRecoverableFilesystemException(ex))
+            catch (Exception ex) when (IsRecoverableFilesystemException(ex) || ex is InvalidOperationException)
             {
                 diagnostics.Add(CreateCheckpointDiagnostic(
                     "checkpoint_source_file_stat_failed",

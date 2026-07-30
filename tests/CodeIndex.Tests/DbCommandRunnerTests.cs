@@ -55,6 +55,26 @@ public class DbCommandRunnerTests
         TestProjectHelper.DeleteDirectory(root);
     }
 
+    private static void CreateUnixFifo(string path)
+    {
+        var startInfo = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = "mkfifo",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        startInfo.ArgumentList.Add(path);
+
+        using var process = System.Diagnostics.Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Failed to start mkfifo / mkfifo の起動に失敗");
+        var stderr = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        if (process.ExitCode != 0)
+            throw new InvalidOperationException($"mkfifo failed: {stderr.Trim()}");
+    }
+
     [Fact]
     public void ParseArgs_IntegrityCheckFlagSetsFlag()
     {
@@ -1067,6 +1087,37 @@ public class DbCommandRunnerTests
             Assert.Equal(CommandExitCodes.DatabaseError, writeExit);
             Assert.Equal(CommandErrorCodes.DbError, writeJson.GetProperty("error_code").GetString());
             Assert.Equal("db", File.ReadAllText(dbPath));
+            Assert.False(Directory.Exists(dbPath + ".checkpoints"));
+        }
+        finally
+        {
+            DeleteWorkDirectory(root);
+        }
+    }
+
+    [Fact]
+    public void Run_CheckpointPlan_UnixFifoSidecarIsRejectedWithoutHashing_Issue4890()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_checkpoint_fifo_4890");
+        var dbPath = Path.Combine(root, "codeindex.db");
+        try
+        {
+            File.WriteAllText(dbPath, "db");
+            CreateUnixFifo(dbPath + "-wal");
+
+            var (dryRunExit, dryRunJson) = RunAndCaptureJson(["checkpoint", "fifo", "--dry-run", "--db", dbPath, "--json"]);
+            var (writeExit, writeJson) = RunAndCaptureJson(["checkpoint", "fifo", "--db", dbPath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, dryRunExit);
+            Assert.False(dryRunJson.GetProperty("ready").GetBoolean());
+            Assert.Contains(
+                dryRunJson.GetProperty("diagnostics").EnumerateArray(),
+                diagnostic => diagnostic.GetProperty("code").GetString() == "checkpoint_source_file_stat_failed");
+            Assert.Equal(CommandExitCodes.DatabaseError, writeExit);
+            Assert.Equal(CommandErrorCodes.DbError, writeJson.GetProperty("error_code").GetString());
             Assert.False(Directory.Exists(dbPath + ".checkpoints"));
         }
         finally
