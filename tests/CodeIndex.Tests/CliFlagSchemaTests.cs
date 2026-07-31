@@ -172,7 +172,12 @@ public class CliFlagSchemaTests
         var countBy = Assert.Single(completionFlags, flag => flag.Name == "--count-by");
         var unique = Assert.Single(completionFlags, flag => flag.Name == "--unique");
 
-        foreach (var placeholder in new[] { groupBy.ValuePlaceholder, countBy.ValuePlaceholder, unique.ValuePlaceholder })
+        foreach (var placeholder in new[]
+                 {
+                     groupBy.GetValuePlaceholder("audit"),
+                     countBy.GetValuePlaceholder("audit"),
+                     unique.GetValuePlaceholder("audit"),
+                 })
         {
             Assert.Contains("return-type", placeholder, StringComparison.Ordinal);
             Assert.Contains("subsystem", placeholder, StringComparison.Ordinal);
@@ -203,7 +208,7 @@ public class CliFlagSchemaTests
         Assert.Contains("--version", accepted);
 
         var channel = Assert.Single(CliFlagSchema.GetCompletionFlagsForCommand("upgrade"), f => f.Name == "--channel");
-        Assert.Equal("<stable|latest|prerelease>", channel.ValuePlaceholder);
+        Assert.Equal("<stable|latest|prerelease>", channel.GetValuePlaceholder("upgrade"));
         Assert.DoesNotContain("reserved", channel.Description, StringComparison.OrdinalIgnoreCase);
 
         var prerelease = Assert.Single(CliFlagSchema.GetCompletionFlagsForCommand("upgrade"), f => f.Name == "--prerelease");
@@ -472,6 +477,77 @@ public class CliFlagSchemaTests
     }
 
     [Fact]
+    public void CompletionValueKinds_KeepMetavariablesOutOfFiniteChoicesAcrossShells_Issue4902()
+    {
+        Assert.Empty(CliFlagSchema.GetCanonicalValuesForCommand("search", "--project"));
+        Assert.Empty(CliFlagSchema.GetCanonicalValuesForCommand("search", "--recipe"));
+        Assert.Empty(CliFlagSchema.GetCanonicalValuesForCommand("search", "--open-issues"));
+        Assert.Equal(CliOptionValueKind.Project, CliFlagSchema.GetValueKindForCommand("search", "--project"));
+        Assert.Equal(CliOptionValueKind.DirectoryPath, CliFlagSchema.GetValueKindForCommand("hooks", "--project"));
+        Assert.Equal(CliOptionValueKind.FreeText, CliFlagSchema.GetValueKindForCommand("search", "--recipe"));
+        Assert.Equal(CliOptionValueKind.FilePath, CliFlagSchema.GetValueKindForCommand("search", "--open-issues"));
+        Assert.Equal(["github"], CliFlagSchema.GetFlag("search", "--open-issues")!.SupplementalCompletionValues);
+        Assert.Equal(CliOptionValueKind.Repository, CliFlagSchema.GetValueKindForCommand("search", "--repo"));
+        Assert.Equal(CliOptionValueKind.Language, CliFlagSchema.GetValueKindForCommand("languages", "--language"));
+        Assert.Equal(CliOptionValueKind.SymbolKind, CliFlagSchema.GetValueKindForCommand("symbols", "--kind"));
+        Assert.Equal(CliOptionValueKind.FilePath, CliFlagSchema.GetValueKindForCommand("suggestions", "--output"));
+        Assert.Equal(CliOptionValueKind.Finite, CliFlagSchema.GetValueKindForCommand("search", "--issue-state"));
+        Assert.Equal(["open", "closed", "all"], CliFlagSchema.GetCanonicalValuesForCommand("search", "--issue-state"));
+        Assert.False(CliFlagSchema.GetFlag("search", "--json")!.IsValueBearing);
+
+        var displayOnlyAlternatives = CliFlagSchema.All
+            .Where(flag =>
+                flag.ValuePlaceholder?.Contains('|', StringComparison.Ordinal) == true
+                && flag.ValueDomain is null
+                && flag.CommandValueDomains.Count == 0)
+            .Select(flag => flag.Name)
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToArray();
+        Assert.Equal(["--open-issues", "--project", "--recipe"], displayOnlyAlternatives);
+
+        var bash = ConsoleCompletionRenderer.GetCompletionScript("bash");
+        Assert.Contains("--workspace-db|--data-dir|--metrics|--path|--project|--solution|--exclude-path", bash, StringComparison.Ordinal);
+        Assert.Contains("--open-issues) COMPREPLY=($(compgen -W \"github\" -- \"$cur\") $(compgen -f -- \"$cur\"))", bash, StringComparison.Ordinal);
+        Assert.Contains("--evidence-path|--files|--output|-o", bash, StringComparison.Ordinal);
+        Assert.Contains("--lang|--language) COMPREPLY=($(compgen -W", bash, StringComparison.Ordinal);
+        Assert.Contains("--issue-state) COMPREPLY=($(compgen -W \"open closed all\"", bash, StringComparison.Ordinal);
+        Assert.DoesNotContain("--project) COMPREPLY=($(compgen -W \"name path\"", bash, StringComparison.Ordinal);
+        Assert.DoesNotContain("--recipe) COMPREPLY=($(compgen -W \"name name/query\"", bash, StringComparison.Ordinal);
+        Assert.DoesNotContain("path github github:owner/name", bash, StringComparison.Ordinal);
+
+        var zsh = ConsoleCompletionRenderer.GetCompletionScript("zsh");
+        Assert.Contains("--project[Filter to a .sln/.csproj project]:file:_files", zsh, StringComparison.Ordinal);
+        Assert.Contains("--open-issues[Preflight issue drafts against issue JSON or GitHub issues]:value:_alternative \"files:file:_files\" \"values:value:(github)\"", zsh, StringComparison.Ordinal);
+        Assert.Contains("--repo[Issue-drafts: GitHub repository for --open-issues github]:repository", zsh, StringComparison.Ordinal);
+        Assert.Contains("--recipe[Search: run a built-in audit recipe query set, optionally selecting one child query]:value", zsh, StringComparison.Ordinal);
+        Assert.Contains("--language[Suggestions: filter by language; languages: look up one language by canonical name or recognized language spelling]:language:(", zsh, StringComparison.Ordinal);
+        Assert.DoesNotContain(":value:(name name/query)", zsh, StringComparison.Ordinal);
+        Assert.DoesNotContain(":value:(path github github:owner/name)", zsh, StringComparison.Ordinal);
+
+        var fish = ConsoleCompletionRenderer.GetCompletionScript("fish");
+        Assert.Contains("-l project -r -d 'Filter to a .sln/.csproj project'", fish, StringComparison.Ordinal);
+        Assert.Contains("-l open-issues -r -a 'github' -d 'Preflight issue drafts against issue JSON or GitHub issues'", fish, StringComparison.Ordinal);
+        Assert.Contains("-l language -r -a '", fish, StringComparison.Ordinal);
+        Assert.Contains("-l issue-state -r -a 'open closed all'", fish, StringComparison.Ordinal);
+        Assert.Contains("__fish_seen_subcommand_from search' -l group-by -r -a 'file symbol origin return-type subsystem'", fish, StringComparison.Ordinal);
+        Assert.Contains("__fish_seen_subcommand_from audit' -l group-by -r -a 'file symbol origin return-type subsystem'", fish, StringComparison.Ordinal);
+        Assert.Contains("__fish_seen_subcommand_from hotspots' -l group-by -r -a 'symbol file statement'", fish, StringComparison.Ordinal);
+        Assert.DoesNotContain("-l project -r -a 'name path'", fish, StringComparison.Ordinal);
+        Assert.DoesNotContain("-l recipe -r -a 'name name/query'", fish, StringComparison.Ordinal);
+        Assert.DoesNotContain("-a 'path github github:owner/name'", fish, StringComparison.Ordinal);
+
+        var powershell = ConsoleCompletionRenderer.GetCompletionScript("powershell");
+        Assert.Contains("'--workspace-db', '--data-dir', '--metrics', '--path', '--project', '--solution', '--exclude-path', '--evidence-path', '--files', '--output', '-o'", powershell, StringComparison.Ordinal);
+        Assert.Contains("{ $_ -in @('--open-issues') }", powershell, StringComparison.Ordinal);
+        Assert.Contains("@('github') | Where-Object", powershell, StringComparison.Ordinal);
+        Assert.Contains("{ $_ -in @('--lang', '--language') } { $langs", powershell, StringComparison.Ordinal);
+        Assert.Contains("'--issue-state' = @('open', 'closed', 'all')", powershell, StringComparison.Ordinal);
+        Assert.DoesNotContain("'--project' = @('name', 'path')", powershell, StringComparison.Ordinal);
+        Assert.DoesNotContain("'--recipe' = @('name', 'name/query')", powershell, StringComparison.Ordinal);
+        Assert.DoesNotContain("'--open-issues' = @('path', 'github', 'github:owner/name')", powershell, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RegistrySurfacesSafetyAndAcceptedOptionsWithoutAdvertisingRejectedGotoExact_Issue4861()
     {
         var hookFlags = CliFlagSchema.GetAcceptedFlagNamesForCommand("hooks");
@@ -507,7 +583,7 @@ public class CliFlagSchemaTests
         Assert.Contains("for ((i=2; i<COMP_CWORD; i++)); do", bash, StringComparison.Ordinal);
         Assert.Contains("--project) skip_next=1", bash, StringComparison.Ordinal);
         Assert.DoesNotContain("nested=\"${COMP_WORDS[2]}\"", bash, StringComparison.Ordinal);
-        Assert.Contains("--project) if [ \"$cmd\" = \"hooks\" ]; then COMPREPLY=($(compgen -f", bash, StringComparison.Ordinal);
+        Assert.Contains("--project|--solution|--exclude-path", bash, StringComparison.Ordinal);
         Assert.DoesNotContain("--project) COMPREPLY=($(compgen -W \"name path\"", bash, StringComparison.Ordinal);
 
         var zsh = ConsoleCompletionRenderer.GetCompletionScript("zsh");
@@ -531,7 +607,7 @@ public class CliFlagSchemaTests
         Assert.Contains("$subcmd -eq 'hooks' -and $nested -eq 'uninstall'", powershell, StringComparison.Ordinal);
         Assert.Contains("if ($skipNestedValue) { $skipNestedValue = $false; continue }", powershell, StringComparison.Ordinal);
         Assert.Contains("if ($subcommands[$subcmd] -contains $token) { $nested = $token; break }", powershell, StringComparison.Ordinal);
-        Assert.Contains("$_ -eq '--project' -and $subcmd -eq 'hooks'", powershell, StringComparison.Ordinal);
+        Assert.Contains("'--project'", powershell, StringComparison.Ordinal);
         Assert.DoesNotContain("'--project' = @('name', 'path')", powershell, StringComparison.Ordinal);
 
         using var capture = ConsoleCapture.Start(captureOut: true);

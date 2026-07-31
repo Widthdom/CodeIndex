@@ -113,12 +113,23 @@ internal static class ConsoleCompletionRenderer
                 candidates += $" {BuildBashFlagList(command)}";
             sb.Append($"        {command}) COMPREPLY=($(compgen -W \"{candidates}\" -- \"$cur\")); return ;;\n");
         }
-        sb.Append("        --db|--path|--exclude-path|--open-issues|--output|-o|--metrics) COMPREPLY=($(compgen -f -- \"$cur\")) ;;\n");
-        sb.Append("        --project) if [ \"$cmd\" = \"hooks\" ]; then COMPREPLY=($(compgen -f -- \"$cur\")); fi ;;\n");
-        sb.Append($"        --lang) COMPREPLY=($(compgen -W \"{langs}\" -- \"$cur\")) ;;\n");
-        sb.Append($"        --kind) COMPREPLY=($(compgen -W \"{kinds}\" -- \"$cur\")) ;;\n");
+        foreach (var flag in GetValueFlags(IsPathCompletionKind).Where(flag => flag.SupplementalCompletionValues.Count > 0))
+        {
+            sb.Append($"        {BuildBashFlagPattern(flag)}) COMPREPLY=($(compgen -W \"{string.Join(' ', flag.SupplementalCompletionValues)}\" -- \"$cur\") $(compgen -f -- \"$cur\")) ;;\n");
+        }
+        sb.Append($"        {BuildBashValueFlagPattern(IsPathCompletionKind, flag => flag.SupplementalCompletionValues.Count == 0)}) COMPREPLY=($(compgen -f -- \"$cur\")) ;;\n");
+        sb.Append($"        {BuildBashValueFlagPattern(kind => kind == CliOptionValueKind.Language)}) COMPREPLY=($(compgen -W \"{langs}\" -- \"$cur\")) ;;\n");
+        sb.Append($"        {BuildBashValueFlagPattern(kind => kind == CliOptionValueKind.SymbolKind)}) COMPREPLY=($(compgen -W \"{kinds}\" -- \"$cur\")) ;;\n");
         foreach (var (flag, values) in GetEnumValueCompletions().Where(item => item.Flag != "--format"))
             sb.Append($"        {flag}) COMPREPLY=($(compgen -W \"{string.Join(' ', values)}\" -- \"$cur\")) ;;\n");
+        foreach (var flagGroup in GetCommandEnumValueCompletions().GroupBy(item => item.Flag, StringComparer.Ordinal))
+        {
+            sb.Append($"        {flagGroup.Key})\n");
+            sb.Append("            case \"$cmd\" in\n");
+            foreach (var (command, _, values) in flagGroup)
+                sb.Append($"                {command}) COMPREPLY=($(compgen -W \"{string.Join(' ', values)}\" -- \"$cur\")) ;;\n");
+            sb.Append("            esac ;;\n");
+        }
         sb.Append("        --format)\n");
         sb.Append("            case \"$cmd\" in\n");
         foreach (var (command, values) in GetFormatValueCompletions())
@@ -205,6 +216,16 @@ internal static class ConsoleCompletionRenderer
             or "--prefix" or "--exact-substring" or "--token-boundary" or "--integrity-check" or "--check" or "--stale-after"
             or "--start" or "--end" or "--focus-line" or "--focus-column" or "--focus-length"
             or "--before" or "--after" or "--group-by-name";
+
+    private static string BuildBashValueFlagPattern(
+        Func<CliOptionValueKind, bool> predicate,
+        Func<CliFlag, bool>? flagPredicate = null) =>
+        string.Join('|', GetValueFlagNames(predicate, flagPredicate));
+
+    private static string BuildBashFlagPattern(CliFlag flag) =>
+        flag.ShortName is null
+            ? flag.Name
+            : $"{flag.Name}|{flag.ShortName}";
 
     private static string GetZshCompletions()
     {
@@ -360,26 +381,25 @@ internal static class ConsoleCompletionRenderer
         if (!flag.IsValueBearing)
             return $"'{name}[{desc}]'";
 
+        var valueKind = flag.GetValueKind(command ?? string.Empty);
         var valuePlaceholder = flag.GetValuePlaceholder(command ?? string.Empty);
-        var valueSpec = valuePlaceholder switch
+        var valueSpec = valueKind switch
         {
-            "<path>" => "file:_files",
-            "<glob>" => "pattern",
-            "<n>" => "number",
-            "<line>" => "number",
-            "<id>" => "id",
-            "<datetime>" => "datetime",
-            "<lang>" => $"language:({langs})",
-            "<kind>" => $"kind:({kinds})",
-            "<auto|always|never>" => "mode:(auto always never)",
-            "<basic|256|truecolor>" => "palette:(basic 256 truecolor)",
-            "<text|json>" => "format:(text json)",
-            "<query>" => "query",
-            "<name>" => "name",
-            "<host:port>" => "address",
-            "<stdio|http>" => "transport:(stdio http)",
+            _ when IsPathCompletionKind(valueKind) && flag.SupplementalCompletionValues.Count > 0 =>
+                $"value:_alternative \"files:file:_files\" \"values:value:({string.Join(' ', flag.SupplementalCompletionValues)})\"",
+            _ when IsPathCompletionKind(valueKind) => "file:_files",
+            CliOptionValueKind.Language => $"language:({langs})",
+            CliOptionValueKind.SymbolKind => $"kind:({kinds})",
             _ when flag.Name == "--format" && command is not null && GetFormatValues(command) is { } formats => $"value:({string.Join(' ', formats)})",
-            _ when GetEnumValues(flag, command) is { } values => $"value:({string.Join(' ', values)})",
+            CliOptionValueKind.Finite when GetEnumValues(flag, command) is { } values =>
+                $"{flag.GetValueDomain(command ?? string.Empty)?.CompletionLabel ?? "value"}:({string.Join(' ', values)})",
+            CliOptionValueKind.Repository => "repository",
+            _ when valuePlaceholder is "<n>" or "<line>" => "number",
+            _ when valuePlaceholder == "<id>" => "id",
+            _ when valuePlaceholder == "<datetime>" => "datetime",
+            _ when valuePlaceholder == "<query>" => "query",
+            _ when valuePlaceholder == "<name>" => "name",
+            _ when valuePlaceholder == "<host:port>" => "address",
             _ => "value",
         };
         return $"'{name}[{desc}]:{valueSpec}'";
@@ -417,10 +437,13 @@ internal static class ConsoleCompletionRenderer
             var name = flag.Name.TrimStart('-');
             var shortName = flag.ShortName is null ? "" : $" -s {flag.ShortName.TrimStart('-')}";
             var requiresArg = flag.IsValueBearing ? " -r" : "";
-            var valuePlaceholder = flag.GetValuePlaceholder(string.Empty);
-            var argSpec = valuePlaceholder switch
+            var valueKind = flag.GetValueKind(string.Empty);
+            var argSpec = valueKind switch
             {
-                _ when GetEnumValues(flag) is { } values => $" -a '{string.Join(' ', values)}'",
+                CliOptionValueKind.Language => $" -a '{langs}'",
+                CliOptionValueKind.SymbolKind => $" -a '{kinds}'",
+                CliOptionValueKind.Finite when GetEnumValues(flag) is { } values => $" -a '{string.Join(' ', values)}'",
+                _ when flag.SupplementalCompletionValues.Count > 0 => $" -a '{string.Join(' ', flag.SupplementalCompletionValues)}'",
                 _ => "",
             };
             var description = flag.Description.Replace("'", "\\'");
@@ -449,6 +472,8 @@ internal static class ConsoleCompletionRenderer
             var contextualCommands = flag.CompletionSubcommands.Keys
                 .Concat(flag.CommandDescriptions.Keys)
                 .Concat(flag.CommandValuePlaceholders.Keys)
+                .Concat(flag.CommandValueKinds.Keys)
+                .Concat(flag.CommandValueDomains.Keys)
                 .ToHashSet(StringComparer.Ordinal);
             var sharedCommands = flag.PrimaryCommands
                 .Where(command => !contextualCommands.Contains(command))
@@ -509,12 +534,13 @@ internal static class ConsoleCompletionRenderer
             "group-by-name" => "Collapse same-name rows across files",
             _ => flag.GetDescription(command),
         };
-        var valuePlaceholder = flag.GetValuePlaceholder(command);
-        var argSpec = valuePlaceholder switch
+        var valueKind = flag.GetValueKind(command);
+        var argSpec = valueKind switch
         {
-            "<lang>" => $" -a '{langs}'",
-            "<kind>" => $" -a '{kinds}'",
-            _ when GetEnumValues(flag, command) is { } values => $" -a '{string.Join(' ', values)}'",
+            CliOptionValueKind.Language => $" -a '{langs}'",
+            CliOptionValueKind.SymbolKind => $" -a '{kinds}'",
+            CliOptionValueKind.Finite when GetEnumValues(flag, command) is { } values => $" -a '{string.Join(' ', values)}'",
+            _ when flag.SupplementalCompletionValues.Count > 0 => $" -a '{string.Join(' ', flag.SupplementalCompletionValues)}'",
             _ => "",
         };
         description = description.Replace("'", "\\'");
@@ -543,6 +569,10 @@ internal static class ConsoleCompletionRenderer
         foreach (var (command, values) in GetFormatValueCompletions())
             sb.AppendLine($"        '{EscapePowerShellSingleQuoted(command)}' = @({FormatPowerShellArray(values)})");
         sb.AppendLine("    }");
+        sb.AppendLine("    $commandEnumValues = @{");
+        foreach (var (command, flag, values) in GetCommandEnumValueCompletions())
+            sb.AppendLine($"        '{EscapePowerShellSingleQuoted($"{command}|{flag}")}' = @({FormatPowerShellArray(values)})");
+        sb.AppendLine("    }");
         sb.AppendLine($"    $topLevelFlags = @({topLevelFlags})");
         sb.AppendLine("    $subcommands = @{");
         foreach (var (command, subcommands) in CliCommandMetadata.CommandSubcommands)
@@ -566,17 +596,22 @@ internal static class ConsoleCompletionRenderer
         sb.AppendLine("        [System.Management.Automation.CompletionResult]::new($value, $value, $kind, $value)");
         sb.AppendLine("    }");
         sb.AppendLine("    switch ($prev) {");
-        sb.AppendLine("        { $_ -in @('--db', '--path', '--exclude-path', '--open-issues', '--output', '-o', '--metrics') } {");
-        sb.AppendLine("            Get-ChildItem -Name \"$wordToComplete*\" -ErrorAction SilentlyContinue | ForEach-Object { New-CdidxCompletion $_ 'ProviderItem' }");
+        foreach (var flag in GetValueFlags(IsPathCompletionKind).Where(flag => flag.SupplementalCompletionValues.Count > 0))
+        {
+            sb.AppendLine($"        {{ $_ -in @({FormatPowerShellArray(GetFlagNames(flag))}) }} {{");
+            sb.AppendLine($"            @({FormatPowerShellArray(flag.SupplementalCompletionValues)}) | Where-Object {{ $_.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase) }} | ForEach-Object {{ New-CdidxCompletion $_ }}");
+            sb.AppendLine("            [System.Management.Automation.CompletionCompleters]::CompleteFilename($wordToComplete)");
+            sb.AppendLine("            return");
+            sb.AppendLine("        }");
+        }
+        sb.AppendLine($"        {{ $_ -in @({FormatPowerShellArray(GetValueFlagNames(IsPathCompletionKind, flag => flag.SupplementalCompletionValues.Count == 0))}) }} {{");
+        sb.AppendLine("            [System.Management.Automation.CompletionCompleters]::CompleteFilename($wordToComplete)");
         sb.AppendLine("            return");
         sb.AppendLine("        }");
-        sb.AppendLine("        { $_ -eq '--project' -and $subcmd -eq 'hooks' } {");
-        sb.AppendLine("            Get-ChildItem -Name \"$wordToComplete*\" -ErrorAction SilentlyContinue | ForEach-Object { New-CdidxCompletion $_ 'ProviderItem' }");
-        sb.AppendLine("            return");
-        sb.AppendLine("        }");
-        sb.AppendLine("        '--lang' { $langs | Where-Object { $_.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { New-CdidxCompletion $_ }; return }");
-        sb.AppendLine("        '--kind' { $kinds | Where-Object { $_.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { New-CdidxCompletion $_ }; return }");
+        sb.AppendLine($"        {{ $_ -in @({FormatPowerShellArray(GetValueFlagNames(kind => kind == CliOptionValueKind.Language))}) }} {{ $langs | Where-Object {{ $_.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase) }} | ForEach-Object {{ New-CdidxCompletion $_ }}; return }}");
+        sb.AppendLine($"        {{ $_ -in @({FormatPowerShellArray(GetValueFlagNames(kind => kind == CliOptionValueKind.SymbolKind))}) }} {{ $kinds | Where-Object {{ $_.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase) }} | ForEach-Object {{ New-CdidxCompletion $_ }}; return }}");
         sb.AppendLine("        '--format' { if ($formatValues.ContainsKey($subcmd)) { $formatValues[$subcmd] | Where-Object { $_.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { New-CdidxCompletion $_ } }; return }");
+        sb.AppendLine("        { $commandEnumValues.ContainsKey(\"$subcmd|$_\") } { $commandEnumValues[\"$subcmd|$_\"] | Where-Object { $_.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { New-CdidxCompletion $_ }; return }");
         sb.AppendLine("        { $enumValues.ContainsKey($_) } { $enumValues[$_] | Where-Object { $_.StartsWith($wordToComplete, [System.StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { New-CdidxCompletion $_ }; return }");
         sb.AppendLine("    }");
         sb.AppendLine("    if (-not $subcmd -or ($tokens.Count -le 2 -and -not ([string]::IsNullOrEmpty($wordToComplete)) -and -not $afterLastToken)) {");
@@ -691,6 +726,47 @@ internal static class ConsoleCompletionRenderer
         return tokens;
     }
 
+    private static IReadOnlyList<CliFlag> GetValueFlags(Func<CliOptionValueKind, bool> predicate)
+    {
+        var flags = new List<CliFlag>();
+        foreach (var flag in CliFlagSchema.All)
+        {
+            if (!flag.IsValueBearing)
+                continue;
+
+            var kinds = flag.PrimaryCommands
+                .Select(flag.GetValueKind)
+                .Append(flag.GetValueKind(string.Empty))
+                .Concat(flag.CommandValueKinds.Values);
+            if (!kinds.Any(predicate))
+                continue;
+
+            flags.Add(flag);
+        }
+        return flags;
+    }
+
+    private static IReadOnlyList<string> GetValueFlagNames(
+        Func<CliOptionValueKind, bool> predicate,
+        Func<CliFlag, bool>? flagPredicate = null) =>
+        GetValueFlags(predicate)
+            .Where(flag => flagPredicate?.Invoke(flag) ?? true)
+            .SelectMany(GetFlagNames)
+            .ToArray();
+
+    private static IEnumerable<string> GetFlagNames(CliFlag flag)
+    {
+        yield return flag.Name;
+        if (flag.ShortName is not null)
+            yield return flag.ShortName;
+    }
+
+    private static bool IsPathCompletionKind(CliOptionValueKind kind) =>
+        kind is CliOptionValueKind.FilePath
+            or CliOptionValueKind.DirectoryPath
+            or CliOptionValueKind.PathPattern
+            or CliOptionValueKind.Project;
+
     private static string FormatPowerShellArray(IEnumerable<string> values) =>
         string.Join(", ", values.Select(value => $"'{EscapePowerShellSingleQuoted(value)}'"));
 
@@ -705,18 +781,22 @@ internal static class ConsoleCompletionRenderer
 
     private static IEnumerable<(string Flag, string[] Values)> GetEnumValueCompletions() =>
         CliFlagSchema.All
-            .Where(flag => flag.Name != "--format")
+            .Where(flag => flag.Name != "--format" && flag.CommandValueDomains.Count == 0)
             .Select(flag => (
                 Flag: flag.Name,
-                Values: flag.CommandValueDomains.Count == 0
-                    ? GetEnumValues(flag)
-                    : flag.CommandValueDomains.Values
-                        .SelectMany(domain => domain.CanonicalValues)
-                        .Distinct(StringComparer.Ordinal)
-                        .ToArray()))
+                Values: GetEnumValues(flag)))
             .Where(item => item.Values is not null)
             .GroupBy(item => item.Flag, StringComparer.Ordinal)
             .Select(group => (group.Key, group.SelectMany(item => item.Values!).Distinct(StringComparer.Ordinal).ToArray()));
+
+    private static IEnumerable<(string Command, string Flag, string[] Values)> GetCommandEnumValueCompletions()
+    {
+        foreach (var flag in CliFlagSchema.All.Where(flag => flag.Name != "--format"))
+        {
+            foreach (var (command, domain) in flag.CommandValueDomains)
+                yield return (command, flag.Name, domain.CanonicalValues.ToArray());
+        }
+    }
 
     private static IEnumerable<(string Command, string[] Values)> GetFormatValueCompletions()
     {

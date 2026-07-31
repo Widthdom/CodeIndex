@@ -181,6 +181,13 @@ Command-specific `--format` values, search origin filters, and `--result-kind`
 values come from the same registry as command help and runtime validation. For
 example, audit completion includes `sarif`, and search completion includes
 `schema_description` and `unknown`.
+Completion behavior uses canonical value-kind metadata rather than display
+metavariables: finite domains are suggested, while free-form placeholders such
+as `<name|path>` remain help text and are never emitted as literal candidates.
+Path/project options use shell file completion where supported; repository and
+free-text options accept user input without invented placeholder choices.
+Mixed options retain real reserved values—for example, `--open-issues` suggests
+`github` alongside file completion without suggesting `path` or `github:owner/name`.
 
 Install the script in the startup file or completion directory for your shell:
 
@@ -3527,6 +3534,13 @@ read-write で mount してください。read-only query container では、fre
 command 固有の `--format` 値、search origin filter、`--result-kind` 値は command
 help と runtime validation と同じ registry から生成されます。たとえば audit の補完には
 `sarif`、search の補完には `schema_description` と `unknown` が含まれます。
+補完動作は表示用 metavariable ではなく canonical な value kind metadata を使います。
+有限 domain の値だけを提示し、`<name|path>` のような自由入力 placeholder は help 表示
+だけに使われ、literal 候補にはなりません。path / project 系 option は対応 shell で
+file completion を使い、repository / free-text option は架空の placeholder 候補を出さずに
+ユーザー入力を受け付けます。混合型 option は実在する予約値を維持し、たとえば
+`--open-issues` は file completion と併せて `github` を提示しますが、`path` や
+`github:owner/name` は literal 候補にしません。
 
 利用中の shell の startup file または completion directory にスクリプトを
 インストールしてください。
@@ -4418,6 +4432,13 @@ completion を使います。
 command 固有の `--format` 値、search origin filter、`--result-kind` 値は command
 help と runtime validation と同じ registry から生成されます。たとえば audit の補完には
 `sarif`、search の補完には `schema_description` と `unknown` が含まれます。
+補完動作は表示用 metavariable ではなく canonical な value kind metadata を使います。
+有限 domain の値だけを提示し、`<name|path>` のような自由入力 placeholder は help 表示
+だけに使われ、literal 候補にはなりません。path / project 系 option は対応 shell で
+file completion を使い、repository / free-text option は架空の placeholder 候補を出さずに
+ユーザー入力を受け付けます。混合型 option は実在する予約値を維持し、たとえば
+`--open-issues` は file completion と併せて `github` を提示しますが、`path` や
+`github:owner/name` は literal 候補にしません。
 
 使っている shell の startup file または completion directory に保存してください:
 
