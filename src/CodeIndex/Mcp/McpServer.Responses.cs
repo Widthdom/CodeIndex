@@ -329,6 +329,8 @@ public partial class McpServer : IDisposable
     private void EnrichToolStructuredContent(JsonObject structuredContent)
     {
         structuredContent.TryAdd("api_version", JsonOutputContract.ApiVersion);
+        if (_currentToolOutputName.Value is string toolName)
+            structuredContent.TryAdd("tool", toolName);
         AddProjectFilterRootDiagnostics(structuredContent);
         AddConfiguredSqliteDiagnostics(structuredContent);
     }
@@ -475,6 +477,9 @@ public partial class McpServer : IDisposable
     {
         ClearProjectFilterRootDiagnostics();
         var structuredContent = McpErrorEnvelope.BuildData(category, suggestion, retrySafe, AddCorrelationData(extraData));
+        structuredContent["api_version"] = JsonOutputContract.ApiVersion;
+        if (_currentToolOutputName.Value is string toolName)
+            structuredContent["tool"] = toolName;
         AddConfiguredSqliteDiagnostics(structuredContent);
         var result = new JsonObject
         {
@@ -510,6 +515,7 @@ public partial class McpServer : IDisposable
             ["name"] = name,
             ["description"] = AppendLanguageSupportClause(name, description),
             ["inputSchema"] = inputSchema,
+            ["outputSchema"] = McpToolOutputSchemas.Create(name),
             ["examples"] = BuildToolExamples(name),
         };
         if (annotations != null)
@@ -529,6 +535,7 @@ public partial class McpServer : IDisposable
             "symbols" => new JsonObject { ["query"] = "App", ["kind"] = "class" },
             "files" => new JsonObject { ["query"] = "app.cs", ["lang"] = "csharp" },
             "excerpt" => new JsonObject { ["path"] = "src/app.cs", ["startLine"] = 1, ["endLine"] = 5 },
+            "read_resource" => new JsonObject { ["uri"] = "cdidx://file/src/app.cs", ["startLine"] = 1, ["endLine"] = 5 },
             "find_in_file" => new JsonObject { ["path"] = "src/app.cs", ["query"] = "Run", ["before"] = 1, ["after"] = 1 },
             "map" => new JsonObject { ["limit"] = 5, ["excludeTests"] = true },
             "analyze_symbol" => new JsonObject { ["query"] = "Run", ["includeBody"] = true },
@@ -590,7 +597,7 @@ public partial class McpServer : IDisposable
                 => "Language support: Supports indexed file/content filters for every detected language; call `languages` for the full catalog.",
             "find_in_file" or "files" or "map"
                 => $"Language support: Supports indexed file/content filters for every detected language listed by `languages`: {DetectedLanguageList()}. Symbol and graph fields are available only for the languages whose capabilities are advertised by `languages`.",
-            "excerpt" or "status" or "validate"
+            "excerpt" or "read_resource" or "status" or "validate"
                 => $"Language support: Language-agnostic over indexed files and diagnostics for every detected language listed by `languages`: {DetectedLanguageList()}. This tool does not interpret a `lang` filter.",
             "languages"
                 => "Language support: This is the authoritative language catalog for MCP tools; it lists every detected language plus symbol_extraction, reference_extraction, graph_queries, and capability_gaps fields.",

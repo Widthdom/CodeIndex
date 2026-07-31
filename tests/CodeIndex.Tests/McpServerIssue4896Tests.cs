@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using CodeIndex.Indexer;
 using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Mcp;
 using CodeIndex.Models;
@@ -39,12 +40,46 @@ public partial class McpServerTests
 
         var ambiguousExtension = CallIssue4896Languages(new JsonObject
         {
-            ["extension"] = "m",
+            ["extension"] = ".M",
         }, id: 4);
         Assert.Equal(
             "ambiguous_m",
             Assert.Single(ambiguousExtension["languages"]!.AsArray())!["lang"]!.GetValue<string>());
-        Assert.Equal(1, ambiguousExtension["extension_lookup"]!["matched"]!.GetValue<int>());
+        var ambiguousLookup = ambiguousExtension["extension_lookup"]!;
+        Assert.Equal(1, ambiguousLookup["matched"]!.GetValue<int>());
+        Assert.Equal(".m", ambiguousLookup["normalized_extension"]!.GetValue<string>());
+        Assert.True(ambiguousLookup["ambiguous"]!.GetValue<bool>());
+        Assert.Equal(
+            ["objc", "matlab"],
+            ambiguousLookup["candidates"]!.AsArray()
+                .Select(candidate => candidate!["lang"]!.GetValue<string>()));
+        Assert.Contains(
+            "octave",
+            ambiguousLookup["candidates"]![1]!["aliases"]!.AsArray()
+                .Select(aliasValue => aliasValue!.GetValue<string>()));
+        var shebangRule = ambiguousLookup["detection_rules"]!.AsArray()
+            .Single(rule => rule!["source"]!.GetValue<string>() == "shebang")!;
+        Assert.Equal(4, shebangRule["precedence"]!.GetValue<int>());
+        Assert.Equal(FileIndexer.ShebangProbeByteLimit, shebangRule["probe_byte_limit"]!.GetValue<int>());
+        Assert.Equal(
+            "required_before_limit_unless_eof",
+            shebangRule["line_termination_policy"]!.GetValue<string>());
+        Assert.Equal("case_insensitive", shebangRule["interpreter_case_policy"]!.GetValue<string>());
+        var shebangRules = shebangRule["interpreter_rules"]!.AsArray();
+        Assert.Contains(
+            shebangRules,
+            rule => rule!["pattern"]!.GetValue<string>() == "ruby"
+                    && rule["language"]!.GetValue<string>() == "ruby");
+        var filenamePrefixRule = ambiguousLookup["detection_rules"]!.AsArray()
+            .Single(rule => rule!["source"]!.GetValue<string>() == "filename_prefix_pattern")!;
+        Assert.Equal(3, filenamePrefixRule["precedence"]!.GetValue<int>());
+        Assert.Contains(
+            filenamePrefixRule["patterns"]!.AsArray(),
+            rule => rule!["pattern"]!.GetValue<string>() == "Makefile.<suffix>"
+                    && rule["language"]!.GetValue<string>() == "makefile");
+        Assert.Equal(
+            LanguageMapOverrides.WorkspaceFileName,
+            ambiguousLookup["override_guidance"]!["config_file"]!.GetValue<string>());
 
         var emptyUnicodeLookup = CallIssue4896Languages(new JsonObject
         {
@@ -55,6 +90,32 @@ public partial class McpServerTests
         Assert.False(emptyUnicodeLookup["has_more"]!.GetValue<bool>());
         Assert.Null(emptyUnicodeLookup["next_cursor"]);
         Assert.Equal("complete", emptyUnicodeLookup["continuation_reason"]!.GetValue<string>());
+    }
+
+    [Theory]
+    [InlineData("m-", ".m", "ambiguous_m", "objc", "matlab")]
+    [InlineData(".m_", ".m", "ambiguous_m", "objc", "matlab")]
+    [InlineData(".p.l", ".pl", "ambiguous_pl", "perl", "prolog")]
+    public void Languages_SeparatorNormalizedAmbiguousExtensionKeepsDiagnostics_Issue4901(
+        string extension,
+        string normalizedExtension,
+        string bucketLanguage,
+        string firstCandidate,
+        string secondCandidate)
+    {
+        var response = CallIssue4896Languages(new JsonObject
+        {
+            ["extension"] = extension,
+        }, id: 4901);
+
+        var lookup = response["extension_lookup"]!;
+        Assert.Equal(normalizedExtension, lookup["normalized_extension"]!.GetValue<string>());
+        Assert.True(lookup["ambiguous"]!.GetValue<bool>());
+        Assert.Equal(bucketLanguage, lookup["bucket_language"]!.GetValue<string>());
+        Assert.Equal(
+            [firstCandidate, secondCandidate],
+            lookup["candidates"]!.AsArray()
+                .Select(candidate => candidate!["lang"]!.GetValue<string>()));
     }
 
     [Fact]

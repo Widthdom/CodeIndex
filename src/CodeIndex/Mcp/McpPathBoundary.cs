@@ -180,7 +180,12 @@ internal static class McpPathBoundary
         }
     }
 
-    internal static bool TryValidateWorkspaceRelativePath(string value, int maxLength, string propertyName, out string? error)
+    internal static bool TryValidateWorkspaceRelativePath(
+        string value,
+        int maxLength,
+        string propertyName,
+        out string? error,
+        bool backslashIsSeparator = true)
     {
         if (value.Length > maxLength)
         {
@@ -188,7 +193,9 @@ internal static class McpPathBoundary
             return false;
         }
 
-        var normalized = value.Replace("\\", "/", StringComparison.Ordinal);
+        var normalized = backslashIsSeparator
+            ? value.Replace("\\", "/", StringComparison.Ordinal)
+            : value;
         if (value.IndexOf("\0", StringComparison.Ordinal) >= 0
             || normalized.StartsWith("/", StringComparison.Ordinal)
             || PathUriNormalizer.HasWindowsDrivePrefix(normalized)

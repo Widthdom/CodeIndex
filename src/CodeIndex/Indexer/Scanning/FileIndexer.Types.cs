@@ -29,6 +29,13 @@ public partial class FileIndexer
     internal const string HeaderLexicalFallbackDetectionSource = "header_lexical_fallback";
     internal const string HeaderSampledLexicalFallbackDetectionSource = "header_sampled_lexical_fallback";
     internal const string HeaderExtensionFallbackDetectionSource = "header_extension_fallback";
+    internal const string LanguageMapOverrideDetectionSource = "language_map_override";
+    internal const string ExactFilenameDetectionSource = "exact_filename";
+    internal const string FilenamePrefixPatternDetectionSource = "filename_prefix_pattern";
+    internal const string ShebangDetectionSource = "shebang";
+    internal const string AmbiguousContentDetectionSource = "content";
+    internal const string AmbiguousProjectDetectionSource = "project";
+    internal const string AmbiguousFallbackDetectionSource = "ambiguous";
 
     internal readonly record struct LanguageDetectionResult(
         FileProbeStatus Status,

@@ -103,12 +103,19 @@ public partial class McpServerTests
         var response = _server.HandleMessage(request)!;
 
         var tools = response["result"]!["tools"]!.AsArray();
-        Assert.Equal(24, tools.Count);
+        Assert.Equal(McpToolFilter.KnownToolNames.Count, tools.Count);
         foreach (var tool in tools)
         {
             Assert.False(string.IsNullOrWhiteSpace(tool!["name"]!.GetValue<string>()));
             Assert.False(string.IsNullOrWhiteSpace(tool["description"]!.GetValue<string>()));
             Assert.Equal("object", tool["inputSchema"]!["type"]!.GetValue<string>());
+            Assert.Equal(
+                "https://json-schema.org/draft/2020-12/schema",
+                tool["outputSchema"]!["$schema"]!.GetValue<string>());
+            Assert.Equal("object", tool["outputSchema"]!["type"]!.GetValue<string>());
+            Assert.Equal(2, tool["outputSchema"]!["oneOf"]!.AsArray().Count);
+            Assert.NotNull(tool["outputSchema"]!["$defs"]!["success"]);
+            Assert.NotNull(tool["outputSchema"]!["$defs"]!["error"]);
 
             var examples = tool["examples"]!.AsArray();
             Assert.NotEmpty(examples);
@@ -133,7 +140,7 @@ public partial class McpServerTests
         var compactResult = compactResponse["result"]!;
         var compactTools = compactResult["tools"]!.AsArray();
 
-        Assert.Equal(24, compactTools.Count);
+        Assert.Equal(McpToolFilter.KnownToolNames.Count, compactTools.Count);
         Assert.True(
             Encoding.UTF8.GetByteCount(compactResponse.ToJsonString())
             < Encoding.UTF8.GetByteCount(fullResponse.ToJsonString()) / 3);
@@ -143,6 +150,7 @@ public partial class McpServerTests
             Assert.False(string.IsNullOrWhiteSpace(tool["description"]!.GetValue<string>()));
             Assert.Equal("object", tool["inputSchema"]!["type"]!.GetValue<string>());
             Assert.Single(tool["inputSchema"]!.AsObject());
+            Assert.Null(tool["outputSchema"]);
             Assert.Null(tool["examples"]);
             Assert.NotNull(tool["annotations"]);
             Assert.NotNull(tool["x-stability"]);
@@ -170,7 +178,9 @@ public partial class McpServerTests
         Assert.True(tool["inputSchema"]!["additionalProperties"] is not null);
         var meta = response["result"]!["_meta"]!;
         Assert.Equal(1, meta["response_controls"]!["tools_total"]!.GetValue<int>());
-        Assert.Equal(24, meta["response_controls"]!["enabled_tools_total"]!.GetValue<int>());
+        Assert.Equal(
+            McpToolFilter.KnownToolNames.Count,
+            meta["response_controls"]!["enabled_tools_total"]!.GetValue<int>());
         Assert.True(meta["response_controls"]!["names_filtered"]!.GetValue<bool>());
         Assert.Equal("name_filtered", meta["catalog_scope"]!.GetValue<string>());
         Assert.False(meta["discovery_contract"]!["tools_list_is_authoritative"]!.GetValue<bool>());
@@ -253,13 +263,13 @@ public partial class McpServerTests
     }
 
     [Fact]
-    public void ToolsList_Returns23Tools()
+    public void ToolsList_ReturnsAllKnownTools()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
         var response = _server.HandleMessage(request)!;
 
         var tools = response["result"]!["tools"]!.AsArray();
-        Assert.Equal(24, tools.Count);
+        Assert.Equal(McpToolFilter.KnownToolNames.Count, tools.Count);
 
         var names = tools.Select(t => t!["name"]!.GetValue<string>()).ToList();
         Assert.Contains("search", names);
@@ -272,6 +282,7 @@ public partial class McpServerTests
         Assert.Contains("files", names);
         Assert.Contains("find_in_file", names);
         Assert.Contains("excerpt", names);
+        Assert.Contains("read_resource", names);
         Assert.Contains("map", names);
         Assert.Contains("analyze_symbol", names);
         Assert.Contains("status", names);
@@ -356,7 +367,7 @@ public partial class McpServerTests
         Assert.Equal(new[] { "search", "definition", "references" }, firstTools.Select(tool => tool!["name"]!.GetValue<string>()).ToArray());
 
         var controls = firstResult["_meta"]!["response_controls"]!;
-        Assert.Equal(24, controls["tools_total"]!.GetValue<int>());
+        Assert.Equal(McpToolFilter.KnownToolNames.Count, controls["tools_total"]!.GetValue<int>());
         Assert.Equal(3, controls["tools_returned"]!.GetValue<int>());
         Assert.Equal(0, controls["tools_offset"]!.GetValue<int>());
         Assert.Equal(3, controls["tools_page_size"]!.GetValue<int>());

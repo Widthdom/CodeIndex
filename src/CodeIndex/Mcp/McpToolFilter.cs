@@ -50,6 +50,7 @@ public sealed class McpToolFilter
         "files",
         "find_in_file",
         "excerpt",
+        "read_resource",
         "map",
         "analyze_symbol",
         "status",

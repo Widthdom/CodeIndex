@@ -105,7 +105,7 @@ public partial class McpServer
             var queryFingerprint = BuildMcpQueryFingerprint(
                 "languages",
                 limit,
-                "catalog-v1",
+                "catalog-v2",
                 [
                     new("alias", normalizedAlias),
                     new("extension", normalizedExtension is null
@@ -284,10 +284,10 @@ public partial class McpServer
         }
         if (extensionFilter is not null)
         {
-            payload["extension_lookup"] = BuildLanguageLookup(
-                "extension",
+            payload["extension_lookup"] = LanguageCapabilityCatalog.BuildExtensionLookup(
                 extensionFilter,
-                filtered);
+                filtered,
+                catalog.Languages);
         }
         if (aliasFilter is not null)
         {
@@ -396,7 +396,7 @@ public partial class McpServer
     {
         var components = new List<string?>
         {
-            "mcp-language-catalog-generation:v1",
+            "mcp-language-catalog-generation:v2",
         };
         foreach (var (language, entry) in catalog.Languages)
         {

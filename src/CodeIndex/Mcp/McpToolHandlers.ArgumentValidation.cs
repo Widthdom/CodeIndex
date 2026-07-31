@@ -104,6 +104,29 @@ public partial class McpServer
             && maxResponseBytes <= 0)
             return CreateIntegerMinimumArgumentError(toolName, "maxResponseBytes", minimum: 1, actual: maxResponseBytes);
 
+        if (toolName == "read_resource")
+        {
+            if (args["maxBytes"] is JsonValue maxBytesValue
+                && maxBytesValue.TryGetValue<int>(out var maxBytes)
+                && (maxBytes < MinResourceReadMaxBytes || maxBytes > MaxResourceReadMaxBytes))
+                return CreateIntegerRangeArgumentError(
+                    toolName,
+                    "maxBytes",
+                    MinResourceReadMaxBytes,
+                    MaxResourceReadMaxBytes,
+                    maxBytes);
+
+            if (args["startLine"] is JsonValue startLineValue
+                && startLineValue.TryGetValue<int>(out var startLine)
+                && startLine < 1)
+                return CreateIntegerMinimumArgumentError(toolName, "startLine", minimum: 1, actual: startLine);
+
+            if (args["endLine"] is JsonValue endLineValue
+                && endLineValue.TryGetValue<int>(out var endLine)
+                && endLine < 1)
+                return CreateIntegerMinimumArgumentError(toolName, "endLine", minimum: 1, actual: endLine);
+        }
+
         return null;
     }
 
@@ -256,7 +279,7 @@ public partial class McpServer
             "project" or "capability" or "scopes" or "fields" or "visibility" or "excludeVisibility" or "includeSymbolKind" or "excludeSymbolKind" or
                 "commits" or "changedBetween" or "files" or
                 "requireBefore" or "requireAfter" or "rejectBefore" or "rejectAfter" => "string_or_array",
-            "query" or "lang" or "kind" or "format" or "rankBy" or "sort" or "since" or "cursor" or "guardScope" or
+            "query" or "uri" or "lang" or "kind" or "format" or "rankBy" or "sort" or "since" or "cursor" or "guardScope" or
                 "solution" or "symbol" or "groupBy" or "category" or "language" or "severity" or "explain" or "snippetFocus" or
                 "bucket" or "minConfidence" or "extension" or "alias" or "description" or "context" or "toolInvocationContext" or "db" or
                 "followSymlinks" or "recipe" or "auditScope" => "string",

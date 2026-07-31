@@ -1040,6 +1040,135 @@ public partial class IndexCommandRunnerTests
         }
     }
 
+    [Theory]
+    [InlineData(
+        "Widget.M",
+        "#import <Foundation/Foundation.h>\n@interface Widget : NSObject\n@end\n",
+        "objc",
+        "content")]
+    [InlineData(
+        "tool.M",
+        "#!/usr/bin/env ruby\nputs 'hi'\n",
+        "ruby",
+        "shebang")]
+    public void Run_DryRun_AmbiguousExtensionReportsSelectedLanguageAndSharedReason_Issue4901(
+        string fileName,
+        string content,
+        string expectedLanguage,
+        string expectedSource)
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, fileName),
+                content);
+
+            var (exitCode, json) = RunAndCaptureJson([
+                projectRoot,
+                "--files",
+                fileName,
+                "--dry-run",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(1, json.GetProperty("language_detections_total").GetInt32());
+            var detection = Assert.Single(json.GetProperty("language_detections").EnumerateArray().ToArray());
+            Assert.Equal(fileName, detection.GetProperty("path").GetString());
+            Assert.Equal(expectedLanguage, detection.GetProperty("language").GetString());
+            Assert.Equal(expectedSource, detection.GetProperty("source").GetString());
+            Assert.Equal("high", detection.GetProperty("confidence").GetString());
+
+            var (humanExitCode, stdout, stderr) = RunAndCaptureStreams([
+                projectRoot,
+                "--files",
+                fileName,
+                "--dry-run",
+            ]);
+            Assert.Equal(CommandExitCodes.Success, humanExitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Contains(
+                $"language detection {fileName}: {expectedLanguage} ({expectedSource}, confidence high)",
+                stdout,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain("header detection", stdout, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRun_FullScanPreservesBoundedAmbiguousProjectReason_Issue4901()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "App.xcodeproj"), string.Empty);
+            var contentBeyondProbe = new string(' ', FileIndexer.AmbiguousLanguageProbeByteLimit + 1024);
+            File.WriteAllText(
+                Path.Combine(projectRoot, "Widget.M"),
+                contentBeyondProbe + "\n#import <Foundation/Foundation.h>\n");
+            File.WriteAllText(
+                Path.Combine(projectRoot, "late.M"),
+                contentBeyondProbe + "\nfunction result = late()\nend\n");
+
+            var (exitCode, json) = RunAndCaptureJson([
+                projectRoot,
+                "--dry-run",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(2, json.GetProperty("language_detections_total").GetInt32());
+            var detections = json.GetProperty("language_detections").EnumerateArray()
+                .OrderBy(detection => detection.GetProperty("path").GetString(), StringComparer.Ordinal)
+                .ToArray();
+            Assert.Equal(["Widget.M", "late.M"], detections.Select(detection => detection.GetProperty("path").GetString()));
+            Assert.All(detections, detection =>
+            {
+                Assert.Equal("objc", detection.GetProperty("language").GetString());
+                Assert.Equal("project", detection.GetProperty("source").GetString());
+                Assert.Equal("medium", detection.GetProperty("confidence").GetString());
+            });
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRun_TShebangDoesNotGainAmbiguousDescriptorConfidence_Issue4901()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "tool.t"),
+                "#!/usr/bin/env ruby\nputs 1\n");
+
+            var results = new[]
+            {
+                RunAndCaptureJson([projectRoot, "--dry-run", "--json"]),
+                RunAndCaptureJson([projectRoot, "--files", "tool.t", "--dry-run", "--json"]),
+            };
+
+            Assert.All(results, result =>
+            {
+                Assert.Equal(CommandExitCodes.Success, result.ExitCode);
+                Assert.Equal(1, result.Json.GetProperty("languages").GetProperty("ruby").GetInt32());
+                Assert.Equal(0, result.Json.GetProperty("language_detections_total").GetInt32());
+            });
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
     [Fact]
     public void Run_DryRun_WithFiles_NormalizesUnicodeDbPathForEstimates()
     {
