@@ -97,7 +97,10 @@ public partial class DbReader
             return new SearchGuardEvaluation(container.StartLine, container.EndLine, null, rejected);
         }
 
-        var readPath = NormalizeCSharpExpression(RemoveNamedArgumentPrefix(invocation.Arguments[0]));
+        var readPathArgument = FindNamedOrPositionalArgument(invocation.Arguments, "path", 0);
+        if (readPathArgument == null)
+            return new SearchGuardEvaluation(container.StartLine, container.EndLine, null, rejected);
+        var readPath = NormalizeCSharpExpression(RemoveNamedArgumentPrefix(readPathArgument));
         if (!IsSimpleCSharpValueExpression(readPath))
         {
             AddRejectedStructuralEvidence(
@@ -279,7 +282,13 @@ public partial class DbReader
             return new SearchGuardEvaluation(container.StartLine, container.EndLine, null, rejected);
         }
 
-        var optionsExpression = RemoveNamedArgumentPrefix(invocation.Arguments[^1]);
+        var optionsArgument = FindNamedOrPositionalArgument(
+            invocation.Arguments,
+            "enumerationOptions",
+            invocation.Arguments.Count - 1);
+        if (optionsArgument == null)
+            return new SearchGuardEvaluation(container.StartLine, container.EndLine, null, rejected);
+        var optionsExpression = RemoveNamedArgumentPrefix(optionsArgument);
         var normalizedOptions = NormalizeCSharpExpression(optionsExpression);
         if (normalizedOptions.StartsWith("newEnumerationOptions", StringComparison.Ordinal) ||
             normalizedOptions.StartsWith("new()", StringComparison.Ordinal))
@@ -388,7 +397,8 @@ public partial class DbReader
             if (lineNumber >= readLine)
                 break;
 
-            var normalized = NormalizeCSharpExpression(text);
+            var codeLine = GetMaskedCSharpLine(lines, lineNumber);
+            var normalized = NormalizeCSharpExpression(codeLine);
             var marker = "newFileInfo(";
             var markerIndex = normalized.IndexOf(marker, StringComparison.Ordinal);
             if (markerIndex < 0)
@@ -399,6 +409,7 @@ public partial class DbReader
             if (argumentEnd < argumentStart)
                 continue;
             var hasInlineLength = normalized.AsSpan(argumentEnd).StartsWith(").Length", StringComparison.Ordinal);
+            var fileInfoExpression = $"newFileInfo({readPath})";
 
             var candidatePath = normalized[argumentStart..argumentEnd];
             if (!string.Equals(candidatePath, readPath, StringComparison.Ordinal))
@@ -417,16 +428,36 @@ public partial class DbReader
                 continue;
             }
 
-            var assignmentIndex = text.IndexOf('=');
+            var assignmentIndex = normalized.IndexOf('=');
             string? alias = null;
-            if (assignmentIndex >= 0 &&
-                !IsComparisonOperator(text, assignmentIndex))
-                alias = LastIdentifier(text[..assignmentIndex]);
+            if (assignmentIndex >= 0 && !IsComparisonOperator(normalized, assignmentIndex))
+            {
+                var rightHandSide = normalized[(assignmentIndex + 1)..].TrimEnd(';');
+                var expectedRightHandSide = hasInlineLength ? fileInfoExpression + ".Length" : fileInfoExpression;
+                if (!string.Equals(rightHandSide, expectedRightHandSide, StringComparison.Ordinal))
+                {
+                    AddRejectedStructuralEvidence(
+                        rejected,
+                        path,
+                        lineNumber,
+                        text,
+                        filter,
+                        "FileInfo evidence is conditional or not a direct assignment from the read path",
+                        "file_size_source_not_direct",
+                        readPath,
+                        container.Name,
+                        lang);
+                    continue;
+                }
+                var sourceAssignmentIndex = codeLine.IndexOf('=');
+                if (sourceAssignmentIndex >= 0)
+                    alias = LastIdentifier(codeLine[..sourceAssignmentIndex]);
+            }
 
-            if (!hasInlineLength && alias == null)
+            if (alias == null && (!hasInlineLength || FindCSharpKeyword(normalized, "if") < 0))
                 continue;
             var expression = hasInlineLength
-                ? alias ?? $"newFileInfo({readPath}).Length"
+                ? alias ?? fileInfoExpression + ".Length"
                 : alias + ".Length";
             sources.Add(new FileSizeSource(lineNumber, expression, alias));
         }
@@ -490,19 +521,25 @@ public partial class DbReader
             }
 
             var parameters = ParseParameterNames(call.Signature);
-            if (argumentIndex >= parameters.Count)
+            var targetParameter = ResolveInvocationParameterName(invocation.Arguments, argumentIndex, parameters);
+            if (targetParameter == null)
                 continue;
 
-            var targetParameter = parameters[argumentIndex];
             var targetLines = ReadLineWindow(call.Path, call.StartLine, call.EndLine, lineWindowCache);
             foreach (var (lineNumber, text) in targetLines)
             {
                 var codeText = GetMaskedCSharpLine(targetLines, lineNumber);
-                if (!codeText.Contains("Bounded", StringComparison.Ordinal) ||
+                var boundedMarkerIndex = FindContainerBodyMarkerIndex(
+                    codeText,
+                    lineNumber,
+                    call.StartLine,
+                    call.BodyStartLine,
+                    "Bounded");
+                if (boundedMarkerIndex < 0 ||
                     !IsTopLevelContainerStatement(targetLines, call.StartLine, lineNumber, "Bounded"))
                     continue;
 
-                var boundedInvocation = ExtractInvocation(targetLines, lineNumber, "Bounded");
+                var boundedInvocation = ExtractInvocation(targetLines, lineNumber, "Bounded", boundedMarkerIndex);
                 if (boundedInvocation == null)
                     continue;
                 var normalized = NormalizeCSharpExpression(boundedInvocation.Text);
@@ -575,7 +612,8 @@ public partial class DbReader
         var calls = new List<ResolvedStructuralCall>();
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = @"
-            SELECT r.line, r.symbol_name, s.signature, s.return_type, s.start_line, s.end_line, f.path
+            SELECT r.line, r.symbol_name, s.signature, s.return_type,
+                   s.start_line, s.end_line, COALESCE(s.body_start_line, s.start_line), f.path
             FROM symbol_references r
             JOIN symbols s ON s.id = r.target_symbol_id
             JOIN files f ON f.id = s.file_id
@@ -596,7 +634,8 @@ public partial class DbReader
                 reader.IsDBNull(3) ? null : reader.GetString(3),
                 reader.GetInt32(4),
                 reader.GetInt32(5),
-                reader.GetString(6)));
+                reader.GetInt32(6),
+                reader.GetString(7)));
         }
 
         return calls;
@@ -609,6 +648,15 @@ public partial class DbReader
         string name,
         Dictionary<SearchGuardLineWindowKey, SortedDictionary<int, string>> lineWindowCache)
     {
+        var containerLines = ReadLineWindow(path, container.StartLine, Math.Min(container.EndLine, primaryLine), lineWindowCache);
+        var lexicalBinding = FindLexicalEnumerationOptionsBinding(containerLines, primaryLine, name);
+        if (lexicalBinding != null)
+        {
+            return lexicalBinding.IsEnumerationOptions
+                ? new EnumerationOptionsDefinition(lexicalBinding.Line, lexicalBinding.Text, container.Name)
+                : null;
+        }
+
         using var cmd = _conn.CreateCommand();
         cmd.CommandText = @"
             SELECT s.line, s.start_line, s.end_line, s.return_type, s.signature, s.container_name
@@ -643,10 +691,11 @@ public partial class DbReader
                 var signature = reader.IsDBNull(4) ? string.Empty : reader.GetString(4);
                 var definitionLines = ReadLineWindow(path, startLine, endLine, lineWindowCache);
                 var text = definitionLines.GetValueOrDefault(line, signature);
-                var definitionText = string.Join('\n', definitionLines.Values);
-                if (!string.Equals(returnType, "EnumerationOptions", StringComparison.Ordinal) &&
-                    !definitionText.Contains("EnumerationOptions", StringComparison.Ordinal))
-                    continue;
+                var normalizedSignature = NormalizeCSharpExpression(MaskCSharpNonCode(signature));
+                var explicitlyTyped = normalizedSignature.Contains("EnumerationOptions" + name, StringComparison.Ordinal);
+                var inferredType = normalizedSignature.Contains("var" + name + "=newEnumerationOptions", StringComparison.Ordinal);
+                if (!string.Equals(returnType, "EnumerationOptions", StringComparison.Ordinal) && !explicitlyTyped && !inferredType)
+                    return null;
 
                 return new EnumerationOptionsDefinition(
                     line,
@@ -655,43 +704,97 @@ public partial class DbReader
             }
         }
 
-        var containerLines = ReadLineWindow(path, container.StartLine, Math.Min(container.EndLine, primaryLine), lineWindowCache);
-        foreach (var (line, text) in containerLines.Reverse())
+        return null;
+    }
+
+    private static LexicalEnumerationOptionsBinding? FindLexicalEnumerationOptionsBinding(
+        SortedDictionary<int, string> lines,
+        int primaryLine,
+        string name)
+    {
+        var callPath = GetStructuralBracePath(lines, primaryLine, "Directory.Enumerate");
+        foreach (var (line, text) in lines.Reverse())
         {
-            var normalized = NormalizeCSharpExpression(text);
-            var explicitTypeMarker = "EnumerationOptions" + name;
-            var inferredTypeMarker = "var" + name + "=newEnumerationOptions";
-            if (!normalized.Contains(explicitTypeMarker, StringComparison.Ordinal) &&
-                !normalized.Contains(inferredTypeMarker, StringComparison.Ordinal))
-                continue;
+            var code = GetMaskedCSharpLine(lines, line);
+            var searchIndex = code.Length;
+            while (searchIndex > 0)
+            {
+                var nameIndex = code.LastIndexOf(name, searchIndex - 1, StringComparison.Ordinal);
+                if (nameIndex < 0)
+                    break;
+                searchIndex = nameIndex;
+                var afterIndex = nameIndex + name.Length;
+                if ((nameIndex > 0 && IsCSharpIdentifierCharacter(code[nameIndex - 1])) ||
+                    (afterIndex < code.Length && IsCSharpIdentifierCharacter(code[afterIndex])))
+                    continue;
 
-            return new EnumerationOptionsDefinition(line, text, container.Name);
+                var declarationPath = GetStructuralBracePath(lines, line, name);
+                if (declarationPath.Count > callPath.Count ||
+                    !declarationPath.SequenceEqual(callPath.Take(declarationPath.Count)))
+                    continue;
+
+                var typeEnd = nameIndex;
+                while (typeEnd > 0 && char.IsWhiteSpace(code[typeEnd - 1]))
+                    typeEnd--;
+                if (typeEnd > 0 && code[typeEnd - 1] == '?')
+                {
+                    typeEnd--;
+                    while (typeEnd > 0 && char.IsWhiteSpace(code[typeEnd - 1]))
+                        typeEnd--;
+                }
+                var typeStart = typeEnd;
+                while (typeStart > 0 && IsCSharpIdentifierCharacter(code[typeStart - 1]))
+                    typeStart--;
+                if (typeStart == typeEnd)
+                    continue;
+
+                var after = NormalizeCSharpExpression(code[afterIndex..]);
+                if (after.Length == 0 || after[0] is not ('=' or ',' or ')' or ';'))
+                    continue;
+
+                var typeName = code[typeStart..typeEnd];
+                if (string.Equals(typeName, "var", StringComparison.Ordinal))
+                {
+                    if (after[0] != '=')
+                        continue;
+                    return new LexicalEnumerationOptionsBinding(
+                        after.StartsWith("=newEnumerationOptions", StringComparison.Ordinal),
+                        line,
+                        text);
+                }
+
+                return new LexicalEnumerationOptionsBinding(
+                    string.Equals(typeName, "EnumerationOptions", StringComparison.Ordinal),
+                    line,
+                    text);
+            }
         }
-
         return null;
     }
 
     private static InvocationText? ExtractInvocation(
         SortedDictionary<int, string> lines,
         int startLine,
-        string marker)
+        string marker,
+        int minimumMarkerIndex = 0)
     {
         var text = JoinFollowingLines(lines, startLine, MaxStructuralInvocationLines);
-        var markerIndex = text.IndexOf(marker, StringComparison.Ordinal);
+        var code = MaskCSharpNonCode(text);
+        var markerIndex = code.IndexOf(marker, Math.Max(0, minimumMarkerIndex), StringComparison.Ordinal);
         if (markerIndex < 0)
             return null;
 
-        var openParen = text.IndexOf('(', markerIndex + marker.Length);
+        var openParen = code.IndexOf('(', markerIndex + marker.Length);
         if (openParen < 0)
             return null;
 
-        var closeParen = FindMatchingDelimiter(text, openParen, '(', ')');
+        var closeParen = FindMatchingDelimiter(code, openParen, '(', ')');
         if (closeParen < 0)
             return null;
 
         var invocationEnd = closeParen + 1;
         var tailLimit = Math.Min(text.Length, invocationEnd + 160);
-        var tail = text[invocationEnd..tailLimit];
+        var tail = code[invocationEnd..tailLimit];
         var statementEnd = tail.IndexOf(';');
         if (statementEnd >= 0)
             invocationEnd += statementEnd + 1;
@@ -699,6 +802,65 @@ public partial class DbReader
         return new InvocationText(
             text[..Math.Min(text.Length, invocationEnd)],
             SplitTopLevelArguments(text[(openParen + 1)..closeParen]));
+    }
+
+    private static int FindContainerBodyMarkerIndex(
+        string codeLine,
+        int line,
+        int containerStartLine,
+        int bodyStartLine,
+        string marker)
+    {
+        if (line < bodyStartLine)
+            return -1;
+        var searchStart = 0;
+        if (line == containerStartLine || line == bodyStartLine)
+        {
+            var brace = codeLine.IndexOf('{');
+            var arrow = codeLine.IndexOf("=>", StringComparison.Ordinal);
+            var delimiter = brace < 0 ? arrow : arrow < 0 ? brace : Math.Min(brace, arrow);
+            if (delimiter < 0)
+                return -1;
+            searchStart = delimiter + (delimiter == arrow ? 2 : 1);
+        }
+        return codeLine.IndexOf(marker, searchStart, StringComparison.Ordinal);
+    }
+
+    private static string? FindNamedOrPositionalArgument(
+        IReadOnlyList<string> arguments,
+        string parameterName,
+        int positionalIndex)
+    {
+        foreach (var argument in arguments)
+        {
+            if (string.Equals(GetNamedArgumentName(argument), parameterName, StringComparison.Ordinal))
+                return argument;
+        }
+        return positionalIndex >= 0 && positionalIndex < arguments.Count
+            ? arguments[positionalIndex]
+            : null;
+    }
+
+    private static string? ResolveInvocationParameterName(
+        IReadOnlyList<string> arguments,
+        int argumentIndex,
+        IReadOnlyList<string> parameters)
+    {
+        if (argumentIndex < 0 || argumentIndex >= arguments.Count)
+            return null;
+        var namedArgument = GetNamedArgumentName(arguments[argumentIndex]);
+        if (namedArgument != null)
+            return parameters.Contains(namedArgument, StringComparer.Ordinal) ? namedArgument : null;
+        return argumentIndex < parameters.Count ? parameters[argumentIndex] : null;
+    }
+
+    private static string? GetNamedArgumentName(string expression)
+    {
+        var colon = expression.IndexOf(':');
+        if (colon <= 0)
+            return null;
+        var candidate = NormalizeCSharpExpression(expression[..colon]);
+        return IsSimpleCSharpIdentifier(candidate) ? candidate : null;
     }
 
     private static (string Text, int EndLine)? ExtractCondition(
@@ -1022,7 +1184,22 @@ public partial class DbReader
         var callPath = GetStructuralBracePath(lines, callLine, callName);
         var readPath = GetStructuralBracePath(lines, readLine, "ReadAllText");
         return callPath.Count <= readPath.Count &&
-               callPath.SequenceEqual(readPath.Take(callPath.Count));
+               callPath.SequenceEqual(readPath.Take(callPath.Count)) &&
+               FindNearestSwitchSectionLine(lines, callLine) == FindNearestSwitchSectionLine(lines, readLine);
+    }
+
+    private static int? FindNearestSwitchSectionLine(SortedDictionary<int, string> lines, int targetLine)
+    {
+        int? sectionLine = null;
+        foreach (var (line, _) in lines)
+        {
+            if (line > targetLine)
+                break;
+            var code = GetMaskedCSharpLine(lines, line).TrimStart();
+            if (StartsWithCSharpKeyword(code, "case") || code.StartsWith("default:", StringComparison.Ordinal))
+                sectionLine = line;
+        }
+        return sectionLine;
     }
 
     private static bool IsTopLevelContainerStatement(
@@ -1502,9 +1679,12 @@ public partial class DbReader
         string? ReturnType,
         int StartLine,
         int EndLine,
+        int BodyStartLine,
         string Path);
 
     private sealed record EnumerationOptionsDefinition(int Line, string Text, string Container);
+
+    private sealed record LexicalEnumerationOptionsBinding(bool IsEnumerationOptions, int Line, string Text);
 
     private sealed record InvocationText(string Text, List<string> Arguments);
 
