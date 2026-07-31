@@ -314,6 +314,7 @@ public partial class McpServer
                     "files" => ExecuteFiles(null, toolArgs),
                     "find_in_file" => ExecuteFindInFile(null, toolArgs),
                     "excerpt" => ExecuteExcerpt(null, toolArgs),
+                    "read_resource" => ExecuteReadResource(null, toolArgs),
                     "map" => ExecuteMap(null, toolArgs),
                     "analyze_symbol" => ExecuteAnalyzeSymbol(null, toolArgs),
                     "status" => ExecuteStatus(null, toolArgs),

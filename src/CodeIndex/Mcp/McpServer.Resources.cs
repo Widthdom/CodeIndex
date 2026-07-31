@@ -974,6 +974,14 @@ public partial class McpServer : IDisposable
     private JsonNode ExecuteReadResource(JsonNode? id, JsonNode? args)
     {
         var resourceResponse = HandleResourcesRead(id, args, adaptForToolResult: true);
+        if (resourceResponse["result"] is JsonObject existingToolResult
+            && existingToolResult["isError"] is JsonValue existingErrorValue
+            && existingErrorValue.TryGetValue<bool>(out var existingIsError)
+            && existingIsError)
+        {
+            return resourceResponse;
+        }
+
         if (resourceResponse["error"] is JsonObject error)
         {
             var errorData = error["data"] as JsonObject;
@@ -1017,6 +1025,7 @@ public partial class McpServer : IDisposable
         var mimeType = TryReadStringValue(content["mimeType"]) ?? "text/plain";
         var structuredContent = new JsonObject
         {
+            ["api_version"] = JsonOutputContract.ApiVersion,
             ["resource"] = new JsonObject
             {
                 ["uri"] = content["uri"]?.DeepClone(),
@@ -1118,6 +1127,7 @@ public partial class McpServer : IDisposable
                 },
                 ["structuredContent"] = new JsonObject
                 {
+                    ["api_version"] = JsonOutputContract.ApiVersion,
                     ["resource"] = new JsonObject
                     {
                         ["uri"] = resourceUri,

@@ -2316,8 +2316,48 @@ public sealed class Caller
 
         var full = Read(new JsonObject());
         Assert.Equal(expected, full["result"]!["content"]![0]!["text"]!.GetValue<string>());
-        Assert.Equal(uri, full["result"]!["structuredContent"]!["resource"]!["uri"]!.GetValue<string>());
-        Assert.False(full["result"]!["structuredContent"]!["_meta"]!["truncated"]!.GetValue<bool>());
+        var fullStructured = full["result"]!["structuredContent"]!;
+        Assert.Equal(JsonOutputContract.ApiVersion, fullStructured["api_version"]!.GetValue<string>());
+        Assert.Equal(uri, fullStructured["resource"]!["uri"]!.GetValue<string>());
+        Assert.False(fullStructured["_meta"]!["truncated"]!.GetValue<bool>());
+
+        var fileReadingTools = listed["result"]!["_meta"]!["capability_groups"]!["file_reading"]!.AsArray();
+        Assert.Contains(
+            fileReadingTools,
+            name => name!.GetValue<string>() == "read_resource");
+
+        var batched = _server.HandleMessage(new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = nextId++,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "batch_query",
+                ["arguments"] = new JsonObject
+                {
+                    ["queries"] = new JsonArray
+                    {
+                        new JsonObject
+                        {
+                            ["tool"] = "read_resource",
+                            ["arguments"] = new JsonObject
+                            {
+                                ["uri"] = uri,
+                                ["startLine"] = 1,
+                                ["endLine"] = 1,
+                            },
+                        },
+                    },
+                },
+            },
+        })!;
+        var batchSlot = Assert.Single(batched["result"]!["structuredContent"]!["results"]!.AsArray())!;
+        Assert.True(batchSlot["ok"]!.GetValue<bool>());
+        Assert.Equal("first", batchSlot["summary"]!.GetValue<string>());
+        Assert.Equal(
+            JsonOutputContract.ApiVersion,
+            batchSlot["result"]!["api_version"]!.GetValue<string>());
 
         var first = Read(new JsonObject
         {
@@ -2381,6 +2421,28 @@ public sealed class Caller
         Assert.Equal(
             firstMetadata["nextCursor"]!.GetValue<string>(),
             legacy["result"]!["_meta"]!["nextCursor"]!.GetValue<string>());
+
+        var missingDbPath = Path.Combine(Path.GetTempPath(), $"cdidx-missing-{Guid.NewGuid():N}", "codeindex.db");
+        using var missingServer = new McpServer(missingDbPath, "0.1.1");
+        var missing = missingServer.HandleMessage(new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = nextId + 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "read_resource",
+                ["arguments"] = new JsonObject { ["uri"] = uri },
+            },
+        })!;
+        Assert.True(missing["result"]!["isError"]!.GetValue<bool>());
+        Assert.Equal(
+            McpErrorEnvelope.CategoryIndexMissing,
+            missing["result"]!["structuredContent"]!["category"]!.GetValue<string>());
+        Assert.Contains(
+            "Database not found",
+            missing["result"]!["content"]![0]!["text"]!.GetValue<string>(),
+            StringComparison.Ordinal);
     }
 
     [Fact]
