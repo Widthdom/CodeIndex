@@ -955,6 +955,7 @@ public static partial class QueryCommandRunner
             .GroupBy(item => item.RuleId, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
         var querySummaries = new JsonArray();
+        var cursorEligibleQueryNames = new HashSet<string>(StringComparer.Ordinal);
         var truncatedQueryCount = 0;
         foreach (var queryResult in queryResults)
         {
@@ -968,6 +969,8 @@ public static partial class QueryCommandRunner
             var truncated = queryResult.Truncated || omittedByByteBudget > 0;
             if (truncated)
                 truncatedQueryCount++;
+            if (omittedByByteBudget == 0 && !string.IsNullOrWhiteSpace(queryResult.NextCursor))
+                cursorEligibleQueryNames.Add(queryResult.Name);
             var querySummary = new JsonObject
             {
                 ["name"] = queryResult.Name,
@@ -975,7 +978,7 @@ public static partial class QueryCommandRunner
                 ["result_limit"] = queryResult.ResultLimit,
                 ["truncated"] = truncated,
                 ["minimum_omitted_result_count"] = queryResult.MinimumOmittedResultCount + omittedByByteBudget,
-                ["next_cursor"] = queryResult.NextCursor,
+                ["next_cursor"] = omittedByByteBudget == 0 ? queryResult.NextCursor : null,
             };
             if (bounded)
             {
@@ -1016,16 +1019,18 @@ public static partial class QueryCommandRunner
 
         runProperties["source_result_count"] = queryResults.Sum(query => query.SourceTotal);
         runProperties["source_result_count_authoritative"] = queryResults.All(query => query.SourceTotalAuthoritative);
-        runProperties["cursoring_available"] = queryResults.Any(
-            query => query.Truncated && !string.IsNullOrWhiteSpace(query.NextCursor));
+        runProperties["cursoring_available"] = cursorEligibleQueryNames.Count > 0;
+        var recipeSelector = options.RecipeName ?? recipe.Name;
         runProperties["replay_command"] = BuildSearchRecipeSarifReplayCommand(
-            recipe.Name,
+            recipeSelector,
             options,
             minimumCompleteBytes!.Value,
             includeRecipeQuerySelectors: true);
         runProperties["next_commands"] = BuildSearchRecipeSarifNextCommands(
+            recipeSelector,
             recipe.Name,
             queryResults,
+            cursorEligibleQueryNames,
             options,
             minimumCompleteBytes.Value);
         runProperties["byte_budget"] = new JsonObject
@@ -1080,20 +1085,24 @@ public static partial class QueryCommandRunner
     }
 
     private static JsonArray BuildSearchRecipeSarifNextCommands(
+        string recipeSelector,
         string recipeName,
         IReadOnlyList<SearchRecipeQueryResultJsonResult> queryResults,
+        IReadOnlySet<string> cursorEligibleQueryNames,
         QueryCommandOptions options,
         int minimumCompleteBytes)
     {
         var commands = new JsonArray
         {
             BuildSearchRecipeSarifReplayCommand(
-                recipeName,
+                recipeSelector,
                 options,
                 minimumCompleteBytes,
                 includeRecipeQuerySelectors: true),
         };
-        foreach (var query in queryResults.Where(query => query.NextCursor != null).Take(3))
+        foreach (var query in queryResults
+                     .Where(query => cursorEligibleQueryNames.Contains(query.Name))
+                     .Take(3))
         {
             commands.Add(BuildSearchRecipeCompactReplayCommand(
                 $"{recipeName}/{query.Name}",
@@ -1115,6 +1124,8 @@ public static partial class QueryCommandRunner
         options.InvocationContext.AddRecipeCommandPrefix(args, recipeSelector);
         args.Add("--format");
         args.Add(OutputFormatSarif);
+        if (!string.IsNullOrWhiteSpace(options.CursorValue))
+            AddReplayValueOption(args, "--cursor", options.CursorValue);
         AddReplayValueOption(args, "--limit", options.Limit.ToString(CultureInfo.InvariantCulture));
         AddSearchRecipeCompactReplayOptions(
             args,

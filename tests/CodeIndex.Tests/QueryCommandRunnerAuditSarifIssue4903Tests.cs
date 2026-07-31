@@ -166,10 +166,19 @@ public partial class QueryCommandRunnerTests
             var run = document.RootElement.GetProperty("runs")[0];
             Assert.Empty(run.GetProperty("results").EnumerateArray());
             Assert.Empty(run.GetProperty("tool").GetProperty("driver").GetProperty("rules").EnumerateArray());
-            var byteBudget = run.GetProperty("properties").GetProperty("byte_budget");
+            var properties = run.GetProperty("properties");
+            var byteBudget = properties.GetProperty("byte_budget");
             Assert.Equal(0, byteBudget.GetProperty("emitted_result_count").GetInt32());
             Assert.Equal(1, byteBudget.GetProperty("omitted_result_count").GetInt32());
             Assert.True(byteBudget.GetProperty("first_omitted_result_bytes").GetInt32() > 4_000);
+            Assert.Contains(
+                "--recipe risky-code/raw-diagnostic-echo",
+                properties.GetProperty("replay_command").GetString(),
+                StringComparison.Ordinal);
+            Assert.Contains(
+                "--recipe risky-code/raw-diagnostic-echo",
+                properties.GetProperty("next_commands")[0].GetString(),
+                StringComparison.Ordinal);
 
             var tooSmallArgs = args
                 .Take(args.Length - 1)
@@ -182,6 +191,86 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(string.Empty, tooSmallStdout);
             Assert.Contains("minimum schema-valid bounded audit SARIF output requires", tooSmallStderr, StringComparison.Ordinal);
             Assert.Contains("no partial SARIF was written", tooSmallStderr, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_RecipeSarifByteBudgetReplayPreservesSelectorAndActiveCursor_Issue4903()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_audit_sarif_cursor_4903");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            for (var index = 0; index < 6; index++)
+            {
+                TestProjectHelper.InsertIndexedFile(
+                    dbPath,
+                    $"src/Diagnostic{index:D2}.cs",
+                    "csharp",
+                    $$"""
+                    public sealed class Diagnostic{{index:D2}}
+                    {
+                        public void Run(Exception ex) => Console.WriteLine(ex.Message);
+                    }
+                    """);
+            }
+
+            string[] firstPageArgs =
+            [
+                "--recipe", "risky-code/raw-diagnostic-echo",
+                "--db", dbPath,
+                "--format", "sarif",
+                "--origin", "code",
+                "--limit", "2",
+            ];
+            var (firstPageExitCode, firstPageStdout, firstPageStderr) = CaptureConsole(
+                () => QueryCommandRunner.RunSearch(firstPageArgs, _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, firstPageExitCode);
+            Assert.Equal(string.Empty, firstPageStderr);
+            using var firstPageDocument = JsonDocument.Parse(firstPageStdout);
+            var activeCursor = firstPageDocument.RootElement.GetProperty("runs")[0]
+                .GetProperty("properties")
+                .GetProperty("queries")[0]
+                .GetProperty("next_cursor")
+                .GetString();
+            Assert.False(string.IsNullOrWhiteSpace(activeCursor));
+
+            var secondPageArgs = firstPageArgs.Concat(["--cursor", activeCursor!]).ToArray();
+            var (secondPageExitCode, secondPageStdout, secondPageStderr) = CaptureConsole(
+                () => QueryCommandRunner.RunSearch(secondPageArgs, _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, secondPageExitCode);
+            Assert.Equal(string.Empty, secondPageStderr);
+            var boundedBudget = Encoding.UTF8.GetByteCount(secondPageStdout) - 1;
+
+            var boundedArgs = secondPageArgs
+                .Concat(["--max-json-bytes", boundedBudget.ToString()])
+                .ToArray();
+            var (boundedExitCode, boundedStdout, boundedStderr) = CaptureConsole(
+                () => QueryCommandRunner.RunSearch(boundedArgs, _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.PartialResult, boundedExitCode);
+            Assert.Equal(string.Empty, boundedStderr);
+            Assert.InRange(Encoding.UTF8.GetByteCount(boundedStdout), 1, boundedBudget);
+            using var boundedDocument = JsonDocument.Parse(boundedStdout);
+            var properties = boundedDocument.RootElement.GetProperty("runs")[0].GetProperty("properties");
+            var query = properties.GetProperty("queries")[0];
+            var replayCommand = properties.GetProperty("replay_command").GetString();
+            var nextCommands = properties.GetProperty("next_commands").EnumerateArray().ToArray();
+
+            Assert.False(properties.GetProperty("cursoring_available").GetBoolean());
+            Assert.Equal(JsonValueKind.Null, query.GetProperty("next_cursor").ValueKind);
+            Assert.True(query.GetProperty("omitted_by_byte_budget").GetInt32() > 0);
+            Assert.Single(nextCommands);
+            Assert.Contains("--recipe risky-code/raw-diagnostic-echo", replayCommand, StringComparison.Ordinal);
+            Assert.Contains("--cursor", replayCommand, StringComparison.Ordinal);
+            Assert.Contains(activeCursor!, replayCommand, StringComparison.Ordinal);
+            Assert.Equal(replayCommand, nextCommands[0].GetString());
+            Assert.Contains(activeCursor!, query.GetProperty("replay_command").GetString(), StringComparison.Ordinal);
         }
         finally
         {
