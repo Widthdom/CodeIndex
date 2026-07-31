@@ -376,6 +376,16 @@ public partial class McpServerTests
     [Fact]
     public void ToolsCall_UnusedAndHotspotsExposeVisibilityAndBucketOptions_Issue3542()
     {
+        InsertIndexedFile(
+            "src/unused-bucket.cs",
+            "csharp",
+            """
+            public sealed class UnusedBucketFixture
+            {
+                public void UnusedBucketMember() { }
+            }
+            """);
+
         var hotspotsRequest = JsonNode.Parse(
             """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"symbol_hotspots","arguments":{"visibility":"public","excludeVisibility":["private"]}}}""")!;
         var hotspotsResponse = _server.HandleMessage(hotspotsRequest)!;
@@ -389,6 +399,26 @@ public partial class McpServerTests
         var unusedStructured = unusedResponse["result"]!["structuredContent"]!;
         Assert.True(unusedStructured["byBucket"]!.GetValue<bool>());
         Assert.NotNull(unusedStructured["symbols_by_bucket"]);
+        Assert.Equal(
+            "canonical_symbol_index_v1",
+            unusedStructured["symbols_by_bucket_format"]!.GetValue<string>());
+        var symbols = unusedStructured["symbols"]!.AsArray();
+        var memberships = unusedStructured["symbols_by_bucket"]!
+            .AsObject()
+            .SelectMany(bucket => bucket.Value!.AsArray())
+            .Select(row => row!.AsObject())
+            .ToArray();
+        Assert.Equal(symbols.Count, memberships.Length);
+        Assert.Equal(
+            Enumerable.Range(0, symbols.Count),
+            memberships.Select(row => row["symbol_index"]!.GetValue<int>()).Order());
+        Assert.All(memberships, membership =>
+        {
+            var symbol = symbols[membership["symbol_index"]!.GetValue<int>()]!;
+            Assert.Equal(symbol["name"]!.GetValue<string>(), membership["name"]!.GetValue<string>());
+            Assert.Null(membership["unusedReason"]);
+            Assert.Equal(5, membership.Count);
+        });
         Assert.Equal("public", Assert.Single(unusedStructured["visibility"]!.AsArray())!.GetValue<string>());
     }
 

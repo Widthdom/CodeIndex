@@ -72,7 +72,10 @@ public partial class McpServer
             AddVisibilityFilterEcho(payload, visibilityFilters, excludeVisibilityFilters);
             payload["byBucket"] = byBucket;
             if (byBucket)
+            {
                 payload["symbols_by_bucket"] = BuildUnusedSymbolsByBucket(results);
+                payload["symbols_by_bucket_format"] = "canonical_symbol_index_v1";
+            }
             AddSqlGraphContractSignal(payload, sqlGraphSignal);
             AddHdlGraphContractSignal(payload, hdlGraphSignal);
             var summary = results.Count > 0
