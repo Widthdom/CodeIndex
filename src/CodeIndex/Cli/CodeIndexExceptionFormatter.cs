@@ -13,7 +13,11 @@ namespace CodeIndex.Cli;
 /// </summary>
 internal static class CodeIndexExceptionFormatter
 {
-    public static void Write(CodeIndexException ex, string[] args, JsonSerializerOptions jsonOptions)
+    public static void Write(
+        CodeIndexException ex,
+        string[] args,
+        JsonSerializerOptions jsonOptions,
+        int? maxJsonBytes = null)
     {
         var message = CommandErrorWriter.FormatSanitizedExceptionMessage(ex);
         if (HasJsonFlag(args))
@@ -25,10 +29,15 @@ internal static class CodeIndexExceptionFormatter
                 ErrorCode: ex.Code,
                 Path: ex.Path,
                 Category: ex.Category);
-            Console.WriteLine(JsonSerializer.Serialize(
+            var json = JsonSerializer.Serialize(
                 payload,
-                CliJsonSerializerContextFactory.Create(jsonOptions).CommandErrorJsonResult));
-            return;
+                CliJsonSerializerContextFactory.Create(jsonOptions).CommandErrorJsonResult);
+            if (!maxJsonBytes.HasValue
+                || JsonEnvelopeWrapper.JsonFitsResponseBudget(json, maxJsonBytes.Value))
+            {
+                Console.WriteLine(json);
+                return;
+            }
         }
 
         // Keep human output close to the existing `Error [Exxx]: ...` shape that

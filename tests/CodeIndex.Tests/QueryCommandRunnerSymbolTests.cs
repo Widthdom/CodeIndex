@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using CodeIndex.Cli;
 using CodeIndex.Database;
@@ -2192,13 +2193,39 @@ public partial class QueryCommandRunnerTests
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
             var byBucket = json.GetProperty("by_bucket");
+            var symbols = json.GetProperty("symbols").EnumerateArray().ToArray();
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
+            Assert.Equal("canonical_symbol_index_v1", json.GetProperty("by_bucket_format").GetString());
             Assert.Equal("Hidden", byBucket.GetProperty("likely_unused_private")[0].GetProperty("name").GetString());
             Assert.Equal("InternalOnly", byBucket.GetProperty("maybe_unused_nonpublic")[0].GetProperty("name").GetString());
             Assert.Equal(3, byBucket.GetProperty("public_or_exported_no_refs").GetArrayLength());
             Assert.Equal("ConnectionString", byBucket.GetProperty("reflection_or_config_suspect")[0].GetProperty("name").GetString());
+            var membershipRows = byBucket.EnumerateObject()
+                .SelectMany(bucket => bucket.Value.EnumerateArray())
+                .ToArray();
+            Assert.Equal(symbols.Length, membershipRows.Length);
+            Assert.Equal(
+                Enumerable.Range(0, symbols.Length),
+                membershipRows.Select(row => row.GetProperty("symbol_index").GetInt32()).Order());
+            Assert.All(membershipRows, membership =>
+            {
+                var symbol = symbols[membership.GetProperty("symbol_index").GetInt32()];
+                Assert.Equal(symbol.GetProperty("name").GetString(), membership.GetProperty("name").GetString());
+                Assert.Equal(symbol.GetProperty("path").GetString(), membership.GetProperty("path").GetString());
+                Assert.False(membership.TryGetProperty("unused_reason", out _));
+                Assert.Equal(5, membership.EnumerateObject().Count());
+            });
+
+            var (canonicalExitCode, canonicalStdout, canonicalStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--all", "--lang", "csharp"],
+                _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, canonicalExitCode);
+            Assert.Equal(string.Empty, canonicalStderr);
+            Assert.True(
+                Encoding.UTF8.GetByteCount(stdout) < Encoding.UTF8.GetByteCount(canonicalStdout) * 3 / 2,
+                "The by-bucket compatibility projection should stay materially smaller than a second full symbol collection.");
 
             var (compactExitCode, compactStdout, compactStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
                 ["--db", dbPath, "--compact", "--by-bucket", "--lang", "csharp"],
@@ -2217,11 +2244,347 @@ public partial class QueryCommandRunnerTests
 
             Assert.True(compactJson.GetProperty("compact").GetBoolean());
             Assert.False(compactJson.TryGetProperty("symbols", out _));
+            Assert.Equal("summary_v1", compactJson.GetProperty("by_bucket_format").GetString());
             Assert.Equal(JsonValueKind.Object, likelyUnused.ValueKind);
             Assert.Equal(1, likelyUnused.GetProperty("count").GetInt32());
             Assert.Equal("Hidden", likelyUnused.GetProperty("representative").GetProperty("name").GetString());
             Assert.False(likelyUnused.TryGetProperty("symbols", out _));
             Assert.Contains(compactJson.GetProperty("omitted_sections").EnumerateArray(), section => section.GetString() == "by_bucket.symbols");
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void BuildUnusedResultsByBucketJson_UsesCompleteCanonicalMembershipIndexes_Issue4904()
+    {
+        var empty = QueryCommandRunner.BuildUnusedResultsByBucketJson([]);
+        Assert.All(
+            QueryCommandRunner.OrderedUnusedBuckets,
+            bucket => Assert.Empty(empty[bucket]!.AsArray()));
+
+        var results = Enumerable.Range(0, 500)
+            .Select(index => new UnusedSymbolResult
+            {
+                Name = $"Symbol{index}",
+                Kind = "function",
+                Path = $"src/File{index}.cs",
+                Line = index + 1,
+                UnusedBucket = QueryCommandRunner.OrderedUnusedBuckets[index % QueryCommandRunner.OrderedUnusedBuckets.Length],
+                UnusedConfidence = "low",
+                UnusedReason = "fixture",
+            })
+            .ToList();
+
+        var one = QueryCommandRunner.BuildUnusedResultsByBucketJson(results.Take(1));
+        var oneMembership = Assert.Single(one[QueryCommandRunner.OrderedUnusedBuckets[0]]!.AsArray())!.AsObject();
+        Assert.Equal(0, oneMembership["symbol_index"]!.GetValue<int>());
+        Assert.Equal("Symbol0", oneMembership["name"]!.GetValue<string>());
+
+        var byBucket = QueryCommandRunner.BuildUnusedResultsByBucketJson(results);
+        var memberships = byBucket
+            .SelectMany(bucket => bucket.Value!.AsArray())
+            .Select(row => row!.AsObject())
+            .ToArray();
+
+        Assert.Equal(results.Count, memberships.Length);
+        Assert.Equal(
+            Enumerable.Range(0, results.Count),
+            memberships.Select(row => row["symbol_index"]!.GetValue<int>()).Order());
+        Assert.All(memberships, row => Assert.Equal(5, row.Count));
+        Assert.Equal("Symbol0", memberships.Single(row => row["symbol_index"]!.GetValue<int>() == 0)["name"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void RunUnused_MaxJsonBytesPagesCanonicalRowsWithoutGaps_Issue4904()
+    {
+        var (projectRoot, dbPath) = CreateUnusedFixtureDb();
+        try
+        {
+            var (unboundedExitCode, unboundedStdout, unboundedStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--all", "--lang", "csharp", "--by-bucket", "--limit", "100"],
+                _jsonOptions));
+            using var unboundedDocument = ParseJsonOutput(unboundedStdout);
+            var expectedNames = unboundedDocument.RootElement
+                .GetProperty("symbols")
+                .EnumerateArray()
+                .Select(symbol => symbol.GetProperty("name").GetString())
+                .ToArray();
+            Assert.Equal(CommandExitCodes.Success, unboundedExitCode);
+            Assert.Equal(string.Empty, unboundedStderr);
+            Assert.True(expectedNames.Length > 1);
+
+            var byteBudget = Encoding.UTF8.GetByteCount(unboundedStdout) - 1;
+
+            var returnedNames = new List<string?>();
+            string? cursor = null;
+            var sawTruncatedPage = false;
+            do
+            {
+                var args = new List<string>
+                {
+                    "--db", dbPath,
+                    "--json",
+                    "--all",
+                    "--lang", "csharp",
+                    "--by-bucket",
+                    "--limit", "100",
+                    "--max-json-bytes", byteBudget.ToString(),
+                };
+                if (cursor != null)
+                {
+                    args.Add("--cursor");
+                    args.Add(cursor);
+                }
+
+                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                    args.ToArray(),
+                    _jsonOptions));
+                using var document = ParseJsonOutput(stdout);
+                var json = document.RootElement;
+                var pageNames = json.GetProperty("symbols")
+                    .EnumerateArray()
+                    .Select(symbol => symbol.GetProperty("name").GetString())
+                    .ToArray();
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                Assert.NotEmpty(pageNames);
+                Assert.True(Encoding.UTF8.GetByteCount(stdout) <= byteBudget);
+                Assert.Equal(byteBudget, json.GetProperty("output_byte_limit").GetInt32());
+                Assert.Equal(pageNames.Length, json.GetProperty("count").GetInt32());
+                sawTruncatedPage |= json.GetProperty("truncated").GetBoolean();
+                returnedNames.AddRange(pageNames);
+                cursor = json.TryGetProperty("next_cursor", out var cursorElement)
+                    ? cursorElement.GetString()
+                    : null;
+            }
+            while (cursor != null);
+
+            Assert.True(sawTruncatedPage);
+            Assert.Equal(expectedNames, returnedNames);
+
+            var (unboundedCompactExitCode, unboundedCompactStdout, unboundedCompactStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--compact", "--all", "--lang", "csharp", "--by-bucket"],
+                _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, unboundedCompactExitCode);
+            Assert.Equal(string.Empty, unboundedCompactStderr);
+            var compactByteBudget = Encoding.UTF8.GetByteCount(unboundedCompactStdout) + 128;
+            var (compactExitCode, compactStdout, compactStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--compact", "--all", "--lang", "csharp", "--by-bucket", "--max-json-bytes", compactByteBudget.ToString()],
+                _jsonOptions));
+            using var compactDocument = ParseJsonOutput(compactStdout);
+            Assert.Equal(CommandExitCodes.Success, compactExitCode);
+            Assert.Equal(string.Empty, compactStderr);
+            Assert.True(Encoding.UTF8.GetByteCount(compactStdout) <= compactByteBudget);
+            Assert.False(compactDocument.RootElement.TryGetProperty("symbols", out _));
+
+            var (countExitCode, countStdout, countStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--count", "--all", "--max-json-bytes", "65536"],
+                _jsonOptions));
+            using var countDocument = ParseJsonOutput(countStdout);
+            Assert.Equal(CommandExitCodes.Success, countExitCode);
+            Assert.Equal(string.Empty, countStderr);
+            Assert.Equal(65536, countDocument.RootElement.GetProperty("output_byte_limit").GetInt32());
+            Assert.False(countDocument.RootElement.GetProperty("truncated").GetBoolean());
+            Assert.Equal(0, countDocument.RootElement.GetProperty("omitted_count").GetInt32());
+
+            var (emptyExitCode, emptyStdout, emptyStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--lang", "rust", "--max-json-bytes", "65536"],
+                _jsonOptions));
+            using var emptyDocument = ParseJsonOutput(emptyStdout);
+            Assert.Equal(CommandExitCodes.Success, emptyExitCode);
+            Assert.Equal(string.Empty, emptyStderr);
+            Assert.Equal(0, emptyDocument.RootElement.GetProperty("count").GetInt32());
+            Assert.Empty(emptyDocument.RootElement.GetProperty("symbols").EnumerateArray());
+
+            var (smallExitCode, smallStdout, smallStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--all", "--max-json-bytes", "1"],
+                _jsonOptions));
+            Assert.Equal(CommandExitCodes.UsageError, smallExitCode);
+            Assert.Equal(string.Empty, smallStdout);
+            Assert.Contains("one canonical symbol row", smallStderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunUnused_MaxJsonBytesWithoutJsonReturnsUsageError_Issue4904()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+            ["--max-json-bytes", "1000"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("only supported with unused JSON output", stderr);
+    }
+
+    [Theory]
+    [InlineData("--verbose")]
+    [InlineData("--profile")]
+    public void RunUnused_MaxJsonBytesRejectsSeparateJsonDiagnostics_Issue4904(string diagnosticsOption)
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+            ["--json", "--count", "--max-json-bytes", "3000", diagnosticsOption],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("cannot be combined with --profile or --verbose", stderr);
+    }
+
+    [Fact]
+    public void RunUnused_MaxJsonBytesCapsInvalidDatabaseJson_Issue4904()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_issue4904_invalid_db_budget");
+        var dbPath = Path.Combine(project.Root, "empty.db");
+        using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
+        {
+            connection.Open();
+        }
+
+        var (tinyExitCode, tinyStdout, tinyStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+            ["--db", dbPath, "--json", "--max-json-bytes", "1"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.DatabaseError, tinyExitCode);
+        Assert.Equal(string.Empty, tinyStdout);
+        Assert.Contains("does not appear to be a valid CodeIndex database", tinyStderr);
+
+        const int fittingBudget = 1024;
+        var (fittingExitCode, fittingStdout, fittingStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+            ["--db", dbPath, "--json", "--max-json-bytes", "1024"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.DatabaseError, fittingExitCode);
+        Assert.Equal(string.Empty, fittingStderr);
+        Assert.True(Encoding.UTF8.GetByteCount(fittingStdout) <= fittingBudget);
+        using var document = ParseJsonOutput(fittingStdout);
+        Assert.Equal(CommandErrorCodes.DbError, document.RootElement.GetProperty("error_code").GetString());
+    }
+
+    [Fact]
+    public void RunUnused_MaxJsonBytesCapsDatabaseCodeIndexExceptionJson_Issue4904()
+    {
+        var (projectRoot, dbPath) = CreateUnusedFixtureDb();
+        try
+        {
+            using var env = EnvironmentVariableScope.Capture(DatabasePermissionPolicy.EnvironmentVariable);
+            env.Set(DatabasePermissionPolicy.EnvironmentVariable, "invalid");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--all", "--max-json-bytes", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains("Invalid CDIDX_DB_PERMISSION_POLICY value", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void UnusedByteTruncatedFinalWindowRequiresUsableContinuationCursor_Issue4904()
+    {
+        Assert.True(QueryCommandRunner.CanEmitUnusedByteTruncatedPageForTests(
+            QueryCommandRunner.MaxQueryResultLimit,
+            QueryCommandRunner.MaxUnusedPaginationOffset - 1,
+            emittedCount: 1));
+        Assert.False(QueryCommandRunner.CanEmitUnusedByteTruncatedPageForTests(
+            QueryCommandRunner.MaxQueryResultLimit,
+            QueryCommandRunner.MaxUnusedPaginationOffset,
+            emittedCount: 1));
+    }
+
+    [Fact]
+    public void RunUnused_MaxJsonBytesRenarrowsSqlReadinessToEmittedRows_Issue4904()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue4904_sql_page_budget");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/a.cs",
+                "csharp",
+                """
+                public class C
+                {
+                    private void AardvarkUnused() { }
+                    public void Target() { }
+                    public void Caller() { Target(); }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/z.sql",
+                "sql",
+                """
+                CREATE PROCEDURE dbo.SqlCaller
+                AS
+                BEGIN
+                    EXEC dbo.Target;
+                END;
+                GO
+                """);
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.MarkGraphReady();
+                writer.MarkSqlGraphContractReady();
+            }
+            DowngradeMixedSqlGraphContractCountRows(dbPath);
+
+            var (unboundedExitCode, unboundedStdout, unboundedStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--all", "--limit", "100"],
+                _jsonOptions));
+            using var unboundedDocument = ParseJsonOutput(unboundedStdout);
+            var unboundedSymbols = unboundedDocument.RootElement.GetProperty("symbols").EnumerateArray().ToArray();
+
+            Assert.Equal(CommandExitCodes.Success, unboundedExitCode);
+            Assert.Equal(string.Empty, unboundedStderr);
+            Assert.Equal("csharp", unboundedSymbols[0].GetProperty("lang").GetString());
+            Assert.Equal("sql", unboundedSymbols[1].GetProperty("lang").GetString());
+            Assert.False(unboundedDocument.RootElement.GetProperty("sql_graph_contract_ready").GetBoolean());
+
+            var low = 1;
+            var high = Encoding.UTF8.GetByteCount(unboundedStdout);
+            (int ExitCode, string Stdout, string Stderr)? smallestSuccessfulPage = null;
+            while (low <= high)
+            {
+                var budget = low + ((high - low) / 2);
+                var page = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                    ["--db", dbPath, "--json", "--all", "--limit", "100", "--max-json-bytes", budget.ToString()],
+                    _jsonOptions));
+                if (page.Result == CommandExitCodes.Success)
+                {
+                    smallestSuccessfulPage = page;
+                    high = budget - 1;
+                }
+                else
+                {
+                    low = budget + 1;
+                }
+            }
+
+            Assert.NotNull(smallestSuccessfulPage);
+            Assert.Equal(string.Empty, smallestSuccessfulPage.Value.Stderr);
+            using var pageDocument = ParseJsonOutput(smallestSuccessfulPage.Value.Stdout);
+            var pageJson = pageDocument.RootElement;
+            var emitted = Assert.Single(pageJson.GetProperty("symbols").EnumerateArray());
+            Assert.Equal("csharp", emitted.GetProperty("lang").GetString());
+            Assert.True(pageJson.GetProperty("truncated").GetBoolean());
+            Assert.False(pageJson.TryGetProperty("sql_graph_contract_ready", out _));
+            Assert.False(pageJson.TryGetProperty("sql_graph_contract_degraded_reason", out _));
         }
         finally
         {

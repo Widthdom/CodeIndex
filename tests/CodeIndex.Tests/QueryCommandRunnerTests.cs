@@ -8261,7 +8261,7 @@ public partial class QueryCommandRunnerTests
             "WriteDatabaseOpenFailureJsonAware",
             BindingFlags.NonPublic | BindingFlags.Static);
         Assert.NotNull(method);
-        var exitCode = method.Invoke(null, [exception, "/tmp/db-open-failure-test.db", false, _jsonOptions]);
+        var exitCode = method.Invoke(null, [exception, "/tmp/db-open-failure-test.db", false, _jsonOptions, null]);
         Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
     }
 
