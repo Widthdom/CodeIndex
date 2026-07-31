@@ -93,10 +93,14 @@ public static partial class QueryCommandRunner
             blockers.Add("one or more search option values are invalid and cannot be normalized safely");
         if (string.IsNullOrWhiteSpace(options.Query))
             blockers.Add("search did not receive one non-empty query to replay");
+        if (options.Query is { Length: > QueryLimits.MaxQueryLength })
+            blockers.Add($"find query exceeds the maximum {QueryLimits.MaxQueryLength} characters");
         if (options.ExtraNames.Count > 0)
             blockers.Add("extra positional query text cannot be represented as one find query");
         if (options.PathPatterns.Count > 0 && options.All)
             blockers.Add("find accepts either --path filters or --all, not both");
+        if (options.SnippetLinesExplicit && options.SnippetLines <= 0)
+            blockers.Add("find requires --snippet-lines to be a positive integer");
         if (!SearchFindAlternativeOutputFormats.Contains(options.OutputFormat))
             nonEquivalentOptions.Add($"--format {options.OutputFormat}");
         if (options.JsonOutputFormatExplicit
@@ -232,14 +236,18 @@ public static partial class QueryCommandRunner
             AddSearchFindAlternativeOption(argv, "--snippet-lines", options.SnippetLines);
         if (explicitOptionNames.Contains("--max-line-width"))
             AddSearchFindAlternativeOption(argv, "--max-line-width", options.MaxLineWidth);
-        if (options.CountOnly)
+        var structuredCount = options.OutputFormat == OutputFormatCount
+            && explicitOptionNames.Contains("--format");
+        if (options.CountOnly && !structuredCount)
             argv.Add("--count");
         if (options.StrictNotFound)
             argv.Add("--strict-not-found");
         if (options.AllowPartial)
             argv.Add("--allow-partial");
 
-        if (options.OutputFormat is not OutputFormatText and not OutputFormatJson and not OutputFormatCount)
+        if (structuredCount)
+            AddSearchFindAlternativeOption(argv, "--format", OutputFormatCount);
+        else if (options.OutputFormat is not OutputFormatText and not OutputFormatJson and not OutputFormatCount)
             AddSearchFindAlternativeOption(argv, "--format", options.OutputFormat);
         if (options.OutputFormat == OutputFormatJson
             || explicitOptionNames.Contains("--json"))

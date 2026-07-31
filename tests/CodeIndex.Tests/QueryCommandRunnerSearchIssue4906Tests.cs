@@ -114,6 +114,24 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_FormatCountPreservesStructuredFindOutput_Issue4906()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() =>
+            ProgramRunner.Run(
+                ["search", "TODO", "--regex", "--format", "count"],
+                _jsonOptions,
+                "1.0.0-test"));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains(
+            "cdidx find --query TODO --all --regex --format count",
+            stderr,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("--regex --count", stderr, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RunSearch_OptionShapedQueryIsNotReinterpretedInFindAlternative_Issue4906()
     {
         var cases = new[]
@@ -274,6 +292,47 @@ public partial class QueryCommandRunnerTests
         Assert.Equal(string.Empty, stdout);
         Assert.Contains("too small for search recovery error JSON output", stderr, StringComparison.Ordinal);
         Assert.Contains("Increase --max-json-bytes", stderr, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RunSearch_FindAlternativeRejectsFindValidationFailures_Issue4906()
+    {
+        var cases = new[]
+        {
+            new
+            {
+                Args = new[]
+                {
+                    "search", "TODO", "--regex", "--path", "src/**",
+                    "--snippet-lines", "0", "--json",
+                },
+                ExpectedBlocker = "positive integer",
+            },
+            new
+            {
+                Args = new[]
+                {
+                    "search", new string('x', QueryLimits.MaxQueryLength + 1),
+                    "--regex", "--json",
+                },
+                ExpectedBlocker = $"maximum {QueryLimits.MaxQueryLength} characters",
+            },
+        };
+
+        foreach (var testCase in cases)
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() =>
+                ProgramRunner.Run(testCase.Args, _jsonOptions, "1.0.0-test"));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = JsonDocument.Parse(stdout);
+            var root = document.RootElement;
+            Assert.Equal(JsonValueKind.Null, root.GetProperty("alternative_command").ValueKind);
+            Assert.Contains(
+                root.GetProperty("alternative_blockers").EnumerateArray(),
+                item => item.GetString()!.Contains(testCase.ExpectedBlocker, StringComparison.Ordinal));
+        }
     }
 
     private static string ValueAfterIssue4906(IReadOnlyList<string> argv, string option)
