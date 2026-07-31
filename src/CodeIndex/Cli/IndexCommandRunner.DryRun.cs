@@ -578,7 +578,7 @@ public static partial class IndexCommandRunner
             foreach (var detection in languageDetectionSamples)
             {
                 CommandOutputWriter.WriteLine(
-                    $"  header detection {detection.Path}: {detection.Language} ({detection.Source}, confidence {detection.Confidence})");
+                    $"  language detection {detection.Path}: {detection.Language} ({detection.Source}, confidence {detection.Confidence})");
             }
         }
         return CommandExitCodes.Success;
@@ -935,19 +935,29 @@ public static partial class IndexCommandRunner
             return DryRunFileProbe.FromUnsupported();
 
         string? reusableLanguage = knownLanguage;
-        if (reusableLanguage == null)
+        FileIndexer.LanguageDetectionResult? preLoadDetection = null;
+        var isAmbiguousExtension = FileIndexer.TryGetAmbiguousLanguageDescriptor(
+            Path.GetExtension(absolutePath),
+            out _);
+        if (reusableLanguage == null || isAmbiguousExtension)
         {
             var detection = indexer.TryDetectLanguageForIndexing(absolutePath);
-            if (detection.Status == FileIndexer.FileProbeStatus.ProbeFailed)
-                return DryRunFileProbe.FromError("Could not probe file for indexability/language.");
-            if (detection.Status != FileIndexer.FileProbeStatus.Supported)
-                return string.IsNullOrEmpty(Path.GetExtension(absolutePath))
-                    ? DryRunFileProbe.FromUnsupported()
-                    : DryRunFileProbe.FromUnknownExtension();
+            if (reusableLanguage == null)
+            {
+                if (detection.Status == FileIndexer.FileProbeStatus.ProbeFailed)
+                    return DryRunFileProbe.FromError("Could not probe file for indexability/language.");
+                if (detection.Status != FileIndexer.FileProbeStatus.Supported)
+                    return string.IsNullOrEmpty(Path.GetExtension(absolutePath))
+                        ? DryRunFileProbe.FromUnsupported()
+                        : DryRunFileProbe.FromUnknownExtension();
 
-            reusableLanguage = FileIndexer.CanReuseDetectedLanguageWithoutContent(absolutePath, detection.Language)
-                ? detection.Language
-                : null;
+                reusableLanguage = FileIndexer.CanReuseDetectedLanguageWithoutContent(absolutePath, detection.Language)
+                    ? detection.Language
+                    : null;
+            }
+
+            if (detection.Status == FileIndexer.FileProbeStatus.Supported)
+                preLoadDetection = detection;
         }
 
         try
@@ -957,6 +967,13 @@ public static partial class IndexCommandRunner
                 relativePath,
                 reusableLanguage);
             var record = loaded.Record;
+            var reportDetection = loaded.LanguageDetection;
+            if (reportDetection.DetectionSource is null
+                && preLoadDetection is { DetectionSource: not null } detectedBeforeLoad
+                && string.Equals(detectedBeforeLoad.Language, record.Lang, StringComparison.Ordinal))
+            {
+                reportDetection = detectedBeforeLoad;
+            }
             return new DryRunFileProbe(
                 true,
                 record.Lang ?? "unknown",
@@ -964,8 +981,8 @@ public static partial class IndexCommandRunner
                 loaded.Warning,
                 Unsupported: false,
                 UnknownExtension: false,
-                DetectionSource: loaded.LanguageDetection.DetectionSource,
-                DetectionConfidence: loaded.LanguageDetection.Confidence,
+                DetectionSource: reportDetection.DetectionSource,
+                DetectionConfidence: reportDetection.Confidence,
                 Loaded: loaded,
                 PolicySkipped: false,
                 DryRunPolicySkipKind.None,

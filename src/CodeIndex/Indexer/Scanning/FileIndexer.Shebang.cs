@@ -7,10 +7,44 @@ public partial class FileIndexer
     // Shebang detection reads at most the first physical line within this
     // byte cap. NUL bytes or a line that reaches the cap without LF/CR are treated as
     // unsupported so binary executables and minified data are not parsed as scripts.
-    private const int ShebangProbeByteLimit = 256;
+    internal const int ShebangProbeByteLimit = 256;
+    private const string PythonShebangInterpreterPrefix = "python";
     private static readonly UTF8Encoding StrictShebangUtf8Encoding = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
     private static readonly UnicodeEncoding StrictShebangUtf16LittleEndianEncoding = new(bigEndian: false, byteOrderMark: false, throwOnInvalidBytes: true);
     private static readonly UnicodeEncoding StrictShebangUtf16BigEndianEncoding = new(bigEndian: true, byteOrderMark: false, throwOnInvalidBytes: true);
+    private static readonly IReadOnlyDictionary<string, string> ExactShebangInterpreterLanguages =
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["bash"] = "shell",
+            ["sh"] = "shell",
+            ["zsh"] = "shell",
+            ["fish"] = "shell",
+            ["dash"] = "shell",
+            ["ksh"] = "shell",
+            ["ash"] = "shell",
+            ["node"] = "javascript",
+            ["nodejs"] = "javascript",
+            ["ruby"] = "ruby",
+            ["perl"] = "perl",
+            ["tclsh"] = "tcl",
+            ["wish"] = "tcl",
+            ["matlab"] = "matlab",
+            ["octave"] = "matlab",
+            ["octave-cli"] = "matlab",
+            ["prolog"] = "prolog",
+            ["swipl"] = "prolog",
+            ["sicstus"] = "prolog",
+            ["gprolog"] = "prolog",
+            ["php"] = "php",
+            ["lua"] = "lua",
+            ["pwsh"] = "powershell",
+            ["powershell"] = "powershell",
+        };
+
+    internal sealed record ShebangInterpreterRule(
+        string MatchKind,
+        string Pattern,
+        string Language);
 
     /// <summary>
     /// Try to infer a language from a script shebang.
@@ -91,7 +125,7 @@ public partial class FileIndexer
 
             var language = MapShebangInterpreterToLanguage(interpreter);
             return language != null
-                ? new LanguageDetectionResult(FileProbeStatus.Supported, language, DetectionSource: "shebang")
+                ? new LanguageDetectionResult(FileProbeStatus.Supported, language, DetectionSource: ShebangDetectionSource)
                 : new LanguageDetectionResult(FileProbeStatus.Unsupported, null);
         }
         catch (FileNotFoundException)
@@ -321,19 +355,32 @@ public partial class FileIndexer
         return Path.GetFileName(candidate).ToLowerInvariant();
     }
 
-    private static string? MapShebangInterpreterToLanguage(string interpreter) => interpreter switch
+    internal static IReadOnlyList<string> GetShebangInterpretersForLanguage(string language)
+        => ExactShebangInterpreterLanguages
+            .Where(pair => string.Equals(pair.Value, language, StringComparison.Ordinal))
+            .Select(pair => pair.Key)
+            .OrderBy(value => value, StringComparer.Ordinal)
+            .ToArray();
+
+    internal static IReadOnlyList<ShebangInterpreterRule> GetShebangInterpreterRules()
     {
-        "bash" or "sh" or "zsh" or "fish" or "dash" or "ksh" or "ash" => "shell",
-        "node" or "nodejs" => "javascript",
-        "ruby" => "ruby",
-        "perl" => "perl",
-        "tclsh" or "wish" => "tcl",
-        "matlab" or "octave" or "octave-cli" => "matlab",
-        "prolog" or "swipl" or "sicstus" or "gprolog" => "prolog",
-        "php" => "php",
-        "lua" => "lua",
-        "pwsh" or "powershell" => "powershell",
-        _ when interpreter.StartsWith("python", StringComparison.Ordinal) => "python",
-        _ => null,
-    };
+        var rules = ExactShebangInterpreterLanguages
+            .OrderBy(pair => pair.Key, StringComparer.Ordinal)
+            .Select(pair => new ShebangInterpreterRule("exact", pair.Key, pair.Value))
+            .ToList();
+        rules.Add(new ShebangInterpreterRule(
+            "prefix",
+            PythonShebangInterpreterPrefix,
+            "python"));
+        return rules;
+    }
+
+    private static string? MapShebangInterpreterToLanguage(string interpreter)
+    {
+        if (ExactShebangInterpreterLanguages.TryGetValue(interpreter, out var language))
+            return language;
+        return interpreter.StartsWith(PythonShebangInterpreterPrefix, StringComparison.Ordinal)
+            ? "python"
+            : null;
+    }
 }

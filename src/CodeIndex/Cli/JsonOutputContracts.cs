@@ -832,6 +832,7 @@ internal sealed record LanguagesJsonResult(
     [property: JsonPropertyName("detection_policy")] LanguageDetectionPolicyJsonResult DetectionPolicy,
     [property: JsonPropertyName("language_map_diagnostics")] List<LanguageMapDiagnosticJsonResult> LanguageMapDiagnostics,
     [property: JsonPropertyName("reference_extraction_limits")] ReferenceExtractionSafetyLimits ReferenceExtractionLimits,
+    [property: JsonPropertyName("extension_lookup"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] JsonObject? ExtensionLookup = null,
     [property: JsonPropertyName("api_version")] string ApiVersion = JsonOutputContract.ApiVersion) : IVersionedJsonResult;
 
 internal sealed record IndexLanguageDetectionJsonResult(

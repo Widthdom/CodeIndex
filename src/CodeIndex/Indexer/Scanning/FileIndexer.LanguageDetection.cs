@@ -526,7 +526,15 @@ public partial class FileIndexer
         // 信頼済みの明示 suffix override は拡張子、suffix を含む完全一致 special filename、
         // suffix 付き prefix variant のいずれでも最優先する。
         if (TryDetectLanguageOverride(filePath, fileName, languageMapOverrideResolver, out var overrideLang))
-            return new LanguageDetectionResult(FileProbeStatus.Supported, overrideLang);
+        {
+            return TryGetAmbiguousLanguageDescriptor(ext, out _)
+                ? new LanguageDetectionResult(
+                    FileProbeStatus.Supported,
+                    overrideLang,
+                    LanguageMapOverrideDetectionSource,
+                    LanguageDetectionConfidence.High)
+                : new LanguageDetectionResult(FileProbeStatus.Supported, overrideLang);
+        }
 
         // Exact filename matching beats built-in extension lookup so manifest-style filenames
         // like `pyproject.toml` map to a dependency category instead of the generic file type.
@@ -551,7 +559,14 @@ public partial class FileIndexer
                 knownIndexability,
                 openReadForIndexContent);
             if (shebangLanguage.Status == FileProbeStatus.Supported)
-                return shebangLanguage;
+            {
+                return TryGetAmbiguousLanguageDescriptor(ext, out _)
+                    ? shebangLanguage with
+                    {
+                        Confidence = LanguageDetectionConfidence.High,
+                    }
+                    : shebangLanguage;
+            }
             if (knownIndexability.HasValue
                 && shebangLanguage.Status is FileProbeStatus.Missing or FileProbeStatus.ProbeFailed)
             {
