@@ -1072,8 +1072,9 @@ public class ConsoleUiTests
     {
         var output = ConsoleCompletionRenderer.GetCompletionScript("bash");
 
-        Assert.Contains("--db|--path|--exclude-path|--open-issues|--output|-o|--metrics) COMPREPLY=($(compgen -f -- \"$cur\"))", output);
-        Assert.Contains("--lang) COMPREPLY=($(compgen -W \"", output);
+        Assert.Contains("--db|--workspace-db|--data-dir|--metrics|--path|--project|--solution|--exclude-path", output);
+        Assert.Contains("--files|--output|-o) COMPREPLY=($(compgen -f -- \"$cur\"))", output);
+        Assert.Contains("--lang|--language) COMPREPLY=($(compgen -W \"", output);
         Assert.Contains("csharp", output);
         Assert.Contains("python", output);
         Assert.Contains("--kind) COMPREPLY=($(compgen -W \"", output);
@@ -1121,7 +1122,7 @@ public class ConsoleUiTests
     }
 
     [Fact]
-    public void CompletionRenderer_PowerShellRegistersNativeCompleter()
+    public void CompletionRenderer_PowerShellRegistersNativeCompleterAndPreservesNestedPaths_Issue4902()
     {
         var output = ConsoleCompletionRenderer.GetCompletionScript("powershell");
 
@@ -1131,9 +1132,10 @@ public class ConsoleUiTests
         Assert.Contains("$commands = @('index', 'hooks', 'backfill-fold'", output);
         Assert.Contains("'--help', '--version', '--license'", output);
         Assert.Contains("'search' { $flags = @(", output);
-        Assert.Contains("'--lang' { $langs", output);
-        Assert.Contains("'--kind' { $kinds", output);
-        Assert.Contains("Get-ChildItem -Name \"$wordToComplete*\"", output);
+        Assert.Contains("{ $_ -in @('--lang', '--language') } { $langs", output);
+        Assert.Contains("{ $_ -in @('--kind') } { $kinds", output);
+        Assert.Contains("[System.Management.Automation.CompletionCompleters]::CompleteFilename($wordToComplete)", output);
+        Assert.DoesNotContain("Get-ChildItem -Name \"$wordToComplete*\"", output);
         Assert.Contains("CompletionResult", output);
         Assert.Contains("[string]::IsNullOrEmpty($wordToComplete) -and $tokens.Count -ge 1", output);
         Assert.Contains("$afterLastToken = $lastElement -and $cursorPosition -gt $lastElement.Extent.EndOffset", output);
