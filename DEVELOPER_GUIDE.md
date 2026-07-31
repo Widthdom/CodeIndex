@@ -804,7 +804,7 @@ Do not add mutable static caches, shared `StringBuilder` instances, reused `Matc
 | `file_module` | File-scoped module/package declarations | Namespace-like context symbol |
 | `function` | Functions, methods, constructors, delegates, tasks, and callable bindings that do not have a narrower kind | Primary callable definition; participates in callers/callees through reference rows |
 | `generator` | JavaScript/TypeScript generator declarations | Callable definition; participates in callers/callees through reference rows |
-| `heading` | Markdown headings and language section markers such as C# regions, Python module docstrings, and JavaScript/TypeScript `@module` docblocks | Outline symbol; Markdown headings are definition targets for path-scoped fragment references |
+| `heading` | Markdown headings and language section markers such as C# regions, Python module docstrings, and JavaScript/TypeScript `@module` docblocks | Outline symbol; Markdown headings are definition targets for path-scoped fragment references. Their 1-based inclusive ranges stop at the last physical source line, regardless of a trailing LF/CRLF, and omit body ranges when the heading body is empty. |
 | `hook` | JavaScript/TypeScript React custom hook bindings | Callable-like search/filter symbol |
 | `implements` | Razor `@implements` directives | Context/search symbol |
 | `import` | Imports, using directives, aliases, and package includes | Search/filter symbol |
@@ -4218,7 +4218,7 @@ filter、downstream JSON consumer が同じ値を理解できるようにして�
 | `file_module` | file-scoped module / package declaration | Namespace-like context symbol |
 | `function` | 関数、method、constructor、delegate、task、およびより狭い kind がない callable binding | Primary callable definition。reference row 経由で callers/callees に参加 |
 | `generator` | JavaScript / TypeScript generator declaration | Callable definition。reference row 経由で callers/callees に参加 |
-| `heading` | Markdown heading、C# region、Python module docstring、JavaScript / TypeScript `@module` docblock などの language section marker | Outline symbol。Markdown heading は path に限定した fragment reference の定義対象 |
+| `heading` | Markdown heading、C# region、Python module docstring、JavaScript / TypeScript `@module` docblock などの language section marker | Outline symbol。Markdown heading は path に限定した fragment reference の定義対象。1始まりの包含 range は末尾の LF / CRLF の有無にかかわらず実在する最終 source 行で止まり、heading body が空なら body range を省略する |
 | `hook` | JavaScript / TypeScript React custom hook binding | Callable-like search/filter symbol |
 | `implements` | Razor `@implements` directive | Context/search symbol |
 | `import` | import、using directive、alias、package include | Search/filter symbol |
