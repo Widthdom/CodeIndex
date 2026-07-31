@@ -360,14 +360,14 @@ public class McpToolContractTests
     }
 
     [Fact]
-    public void ToolsList_OutlineAndValidateDoNotExposeHiddenNoopArguments_Issue3198()
+    public void ToolsList_OutlineAndValidateExposeOnlyImplementedArguments_Issue3198_Issue4897()
     {
         var advertisedSchemas = GetAdvertisedToolSchemas();
 
-        AssertToolArgumentsExactly(advertisedSchemas, "outline", ["path"]);
+        AssertToolArgumentsExactly(advertisedSchemas, "outline", ["path", "fields", "sort", "limit", "cursor", "maxBytes"]);
         AssertToolArgumentsExactly(advertisedSchemas, "validate", ["kind", "severity", "limit", "cursor", "path", "excludePaths", "excludeTests", "countOnly", "format", "project", "solution"]);
 
-        AssertNoopArgumentsAbsent(advertisedSchemas, "outline", ["limit", "includeImports", "maxLineWidth", "lang"]);
+        AssertNoopArgumentsAbsent(advertisedSchemas, "outline", ["includeImports", "maxLineWidth", "lang"]);
         AssertNoopArgumentsAbsent(advertisedSchemas, "validate", ["includeImports", "maxLineWidth", "lang"]);
 
         static void AssertToolArgumentsExactly(

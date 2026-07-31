@@ -2933,6 +2933,19 @@ Capped MCP result tools report `truncated` and `more_available` in `structuredCo
 
 Graph tools that can page through result sets (`references`, `callers`, and `callees`) also return `offset` and, when truncated, `next_offset`; pass that value back as `offset` to fetch the next page without re-reading earlier rows.
 
+The MCP `outline` tool pages independently with the same canonical symbol rows,
+stable ordering, projection names, and `page:v1` cursor fingerprint as CLI
+`outline`. It returns at most 100 symbols by default (200 maximum) and publishes
+`total_symbol_count`, `returned_symbol_count`, `cursor_offset`, `has_more`, and
+`next_cursor`. Use `fields`, `sort`, `limit`, and `cursor` to enumerate large
+files deterministically. `maxBytes` additionally bounds serialized
+`structuredContent` in UTF-8 bytes by removing only complete trailing symbol
+rows and advancing the cursor by the rows actually returned. Cursors are bound
+to the path, ordering, and index generation; restart without the cursor after a
+stale-generation error. Unprojected rows retain `depth`, `containerName`, and
+symbol `path`; include the corresponding projection fields when a projected
+page must carry hierarchy information.
+
 ```mermaid
 flowchart LR
     tools["Claude Code<br/>Cursor<br/>Windsurf"]
@@ -6156,6 +6169,18 @@ basename candidate だけを確認し、見つからなければ unresolved docu
 上限付きの MCP result tool は、要求した `limit` より多くの行がある場合に `structuredContent` へ `truncated` と `more_available` を返します。これにより、クライアントは上限で切られたページを網羅的な結果として扱わずに済みます。
 
 ページング可能な graph tool（`references`、`callers`、`callees`）は `offset` と、truncated 時には `next_offset` も返すため、その値を次の呼び出しの `offset` に渡すと、既に取得した行を読み直さずに次ページを取得できます。
+
+MCP の `outline` tool は、CLI `outline` と同じ canonical symbol row、安定した
+並び順、projection 名、`page:v1` cursor fingerprint を使って独立にページングします。
+既定では最大 100 symbol、上限は 200 symbol で、`total_symbol_count`、
+`returned_symbol_count`、`cursor_offset`、`has_more`、`next_cursor` を返します。
+大きな file を決定的に列挙するには `fields`、`sort`、`limit`、`cursor` を使います。
+`maxBytes` を指定すると、serialize 済み `structuredContent` の UTF-8 byte 数を上限とし、
+末尾の完全な symbol row だけを除き、実際に返した row 数だけ cursor を進めます。
+cursor は path、並び順、index generation に束縛されるため、stale-generation error の後は
+cursor なしで再開してください。projection なしの row は `depth`、`containerName`、
+symbol `path` を保持します。projection した page に階層情報が必要な場合は、対応する
+projection field を含めてください。
 
 ```mermaid
 flowchart LR
