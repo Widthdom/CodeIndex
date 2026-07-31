@@ -228,7 +228,8 @@ public static partial class QueryCommandRunner
                 return CommandExitCodes.Success;
             }
 
-            var pageOffset = options.UnusedCursorOffset ?? 0;
+            var pageOffset = options.UnusedCursorOffset
+                             ?? JsonEnvelopeWrapper.GetBoundedResponseOffset("unused");
             if (!IsUnusedCursorOffsetWithinFetchCap(options.Limit, pageOffset))
             {
                 WriteUsageError(

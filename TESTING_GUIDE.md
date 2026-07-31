@@ -229,6 +229,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   Unused default-suppression row, JSON count, summary-only, and text count envelopes, including the `--all` count control, share one unused-symbol fixture.
   Unused default-suppressed and `--all` JSON cursor pagination share one unused-symbol fixture.
   Unused full and compact `--by-bucket` JSON envelopes share one taxonomy fixture.
+  Unused bounded JSON coverage shares one Unicode long-signature fixture across full, compact, and `--by-bucket` paging. Assert whole-response UTF-8 limits including the final newline, complete rows, exact cursor continuation without gaps or duplicates, recomputed response-context counts, empty/final pages, minimum-budget typed errors, help/schema exposure, and filter/generation cursor rejection.
   Unused bucket, minimum-confidence, and actionable confidence-alias JSON filters share one unused-symbol fixture.
   Unused full-summary and bucket-filtered JSON counts share one taxonomy fixture.
   Unused limited-page returned counts and bucket diversification share one taxonomy fixture.
@@ -1178,6 +1179,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   unused default-suppressionのrow、JSON count、summary-only、text count envelopeは、`--all` count controlも含めて1つのunused-symbol fixtureを共有してください。
   unusedのdefault-suppressed JSON cursor paginationと`--all` JSON cursor paginationは1つのunused-symbol fixtureを共有してください。
   unusedのfull JSONとcompact `--by-bucket` JSON envelopeは1つのtaxonomy fixtureを共有してください。
+  unused の bounded JSON coverage は、full、compact、`--by-bucket` paging で Unicode の長い signature を持つ1つの fixture を共有してください。最後の改行を含む応答全体の UTF-8 limit、完全な row、欠落や重複のない正確な cursor continuation、再計算された response-context 件数、empty / final page、最小 budget の型付き error、help / schema 公開、filter / generation cursor 拒否を検証してください。
   unusedのbucket、minimum-confidence、actionable confidence-alias JSON filterは1つのunused-symbol fixtureを共有してください。
   unusedのfull-summary JSON countとbucket-filtered JSON countは1つのtaxonomy fixtureを共有してください。
   unusedのlimited-page returned countとbucket diversificationは1つのtaxonomy fixtureを共有してください。

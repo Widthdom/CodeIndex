@@ -704,6 +704,7 @@ cdidx unused --all --json --count
 cdidx unused --compact --bucket likely_unused_private --min-confidence medium
 cdidx unused --json --by-bucket
 cdidx unused --compact --by-bucket
+cdidx unused --json --limit 50 --max-json-bytes 16384
 ```
 
 `unused` compares definitions with indexed references and groups results by
@@ -733,6 +734,13 @@ When `unused` returns `next_cursor`, pass that opaque value back unchanged.
 The cursor is bound to the effective audit scope, filters, ordering, and index
 generation. Changing those inputs or refreshing the index requires restarting
 without `--cursor`; JSON pages also expose `result_stable_at`.
+Use `--max-json-bytes <n>` to place a hard UTF-8 byte cap, including the final
+newline, on the whole JSON response. The bounded envelope returns only complete
+symbol rows, reports the actual returned and omitted counts, and resumes with a
+generation-bound `response:v2` cursor. `--compact` projects smaller rows, while
+`--by-bucket` keeps the bucket view inside the same byte budget. If the metadata
+and one row cannot fit, `unused` returns a typed usage error with empty stdout.
+Without the byte cap, the existing JSON and cursor shapes remain unchanged.
 For C# private members declared in partial types, `unused` aggregates use
 evidence across sibling files by fully qualified logical type name, including
 nested partial types. Same-named types in other namespaces or containing types
@@ -4015,6 +4023,7 @@ cdidx unused --all --json --count
 cdidx unused --compact --bucket likely_unused_private --min-confidence medium
 cdidx unused --json --by-bucket
 cdidx unused --compact --by-bucket
+cdidx unused --json --limit 50 --max-json-bytes 16384
 ```
 
 `unused` は definitions と indexed references を比較し、confidence ごとに結果を
@@ -4040,6 +4049,12 @@ filter context だけが必要な場合は `--compact` を使ってください�
 `unused` が `next_cursor` を返した場合は、その opaque 値を変更せず次の呼び出しへ渡してください。
 cursor は有効な audit scope、filter、ordering、index generation に束縛されます。条件を変更した場合や
 index を更新した場合は `--cursor` なしで再開する必要があり、JSON page は `result_stable_at` も返します。
+`--max-json-bytes <n>` を使うと、最後の改行を含む JSON 応答全体へ UTF-8 byte の
+hard cap を設定できます。bounded envelope は完全な symbol row だけを返し、実際の返却件数と
+省略件数を報告して、generation に束縛された `response:v2` cursor から再開します。
+`--compact` はより小さな row へ projection し、`--by-bucket` の bucket view も同じ
+byte budget 内に収めます。metadata と 1 row が収まらない場合、`unused` は stdout を空にして
+型付き usage error を返します。byte cap を指定しない既存の JSON と cursor shape は変わりません。
 C# の partial type で宣言された private member について、`unused` は nested partial type を含む
 完全修飾された logical type 名を使い、sibling file 全体の使用 evidence を集約します。
 別 namespace または別 containing type にある同名 type とは evidence を共有せず、
