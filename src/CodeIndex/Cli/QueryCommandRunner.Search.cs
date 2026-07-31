@@ -67,6 +67,9 @@ public static partial class QueryCommandRunner
         options.InvocationMachineErrorOutputRequested = ProgramRunner.ContainsJsonOutputFlag(validationArgs);
         using var exactLanguageScope = DbReader.BeginExactQueryLanguageScope(
             options.Lang);
+        if (ReferenceEquals(invocationContext, QueryCommandInvocationContext.Search)
+            && TryWriteSearchFindAlternativeError(validationArgs, options, jsonOptions))
+            return CommandExitCodes.UsageError;
         if (TryWriteUnsupportedOptionError(
             invocationContext,
             validationArgs,
