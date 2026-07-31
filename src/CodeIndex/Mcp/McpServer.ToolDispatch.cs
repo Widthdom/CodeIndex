@@ -18,7 +18,7 @@ namespace CodeIndex.Mcp;
 
 public partial class McpServer : IDisposable
 {
-
+    private readonly AsyncLocal<string?> _currentToolOutputName = new();
 
     // Tool definitions are in McpToolDefinitions.cs / ツール定義は McpToolDefinitions.cs に分離
 
@@ -37,6 +37,10 @@ public partial class McpServer : IDisposable
                 ? parsedToolName
                 : null;
         var observedToolName = toolName ?? "(missing)";
+        var previousToolOutputName = _currentToolOutputName.Value;
+        _currentToolOutputName.Value = toolName is not null && McpToolFilter.IsKnownTool(toolName)
+            ? toolName
+            : null;
 
         Database.DbDebug.ResetContext();
         var metricsStartedAt = _timeProvider.GetUtcNow();
@@ -182,6 +186,7 @@ public partial class McpServer : IDisposable
         }
         finally
         {
+            _currentToolOutputName.Value = previousToolOutputName;
             Database.DbDebug.ResetContext();
             if (MetricsSink.IsActive)
             {

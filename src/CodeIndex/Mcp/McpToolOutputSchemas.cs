@@ -14,6 +14,7 @@ internal static class McpToolOutputSchemas
     private const int MaxSchemaArrayItems = McpServer.MaxMcpPaginationOffset;
     private const int MaxSchemaObjectProperties = 512;
     private const int MaxSchemaStringCharacters = McpServer.MaxConfiguredResponseBytes;
+    private const int MaxOpenValueDepth = 8;
 
     public static JsonObject Create(string toolName)
     {
@@ -46,6 +47,7 @@ internal static class McpToolOutputSchemas
             _ => throw new InvalidOperationException(
                 $"MCP tool '{toolName}' must define a structured output schema."),
         };
+        toolProperties["tool"] = ConstantStringSchema(toolName);
         var toolResult = new JsonObject
         {
             ["type"] = "object",
@@ -57,7 +59,7 @@ internal static class McpToolOutputSchemas
             },
             ["maxProperties"] = MaxSchemaObjectProperties,
             ["propertyNames"] = StringSchema(),
-            ["additionalProperties"] = true,
+            ["additionalProperties"] = Reference("open_value_0"),
         };
         if (RequiredToolPropertyAlternatives(toolName) is JsonArray alternatives)
             toolResult["anyOf"] = alternatives;
@@ -90,7 +92,6 @@ internal static class McpToolOutputSchemas
                 },
                 ["maxProperties"] = MaxSchemaObjectProperties,
                 ["propertyNames"] = StringSchema(),
-                ["additionalProperties"] = true,
             },
             ["result_envelope"] = ResultEnvelopeSchema(),
             ["tool_result"] = toolResult,
@@ -103,7 +104,7 @@ internal static class McpToolOutputSchemas
                     Reference("tool_result"),
                 },
             },
-            ["error_result"] = ErrorSchema(),
+            ["error_result"] = ErrorSchema(toolName),
             ["error"] = new JsonObject
             {
                 ["allOf"] = new JsonArray
@@ -113,6 +114,8 @@ internal static class McpToolOutputSchemas
                 },
             },
         };
+        for (var depth = 0; depth <= MaxOpenValueDepth; depth++)
+            definitions[$"open_value_{depth}"] = OpenValueSchema(depth);
 
         return new JsonObject
         {
@@ -129,11 +132,12 @@ internal static class McpToolOutputSchemas
     }
 
     private static JsonArray RequiredToolProperties(string toolName)
-        => toolName switch
+    {
+        var required = toolName switch
         {
             "search" => StringArray(),
             "definition" or "references" or "callers" or "callees"
-                or "symbols" or "files" or "find_in_file" => StringArray("count"),
+                or "symbols" or "files" or "find_in_file" => StringArray("count", "results"),
             "excerpt" => StringArray("path", "totalLines"),
             "map" => StringArray("fileCount"),
             "analyze_symbol" => StringArray("query", "graph_sections"),
@@ -153,15 +157,27 @@ internal static class McpToolOutputSchemas
             _ => throw new InvalidOperationException(
                 $"MCP tool '{toolName}' must define required structured output fields."),
         };
+        required.Insert(0, "tool");
+        return required;
+    }
 
     private static JsonArray? RequiredToolPropertyAlternatives(string toolName)
-        => toolName == "search"
-            ? new JsonArray
+        => toolName switch
+        {
+            "search" => new JsonArray
             {
                 RequiredSchema("results"),
                 RequiredSchema("recipes"),
-            }
-            : null;
+                RequiredSchema("recipe", "queries"),
+            },
+            "deps" => new JsonArray
+            {
+                RequiredSchema("edges"),
+                RequiredSchema("graph"),
+                RequiredSchema("cycles"),
+            },
+            _ => null,
+        };
 
     private static JsonObject RequiredSchema(params string[] propertyNames)
         => new() { ["required"] = StringArray(propertyNames) };
@@ -189,16 +205,16 @@ internal static class McpToolOutputSchemas
             },
             ["maxProperties"] = MaxSchemaObjectProperties,
             ["propertyNames"] = StringSchema(),
-            ["additionalProperties"] = true,
         };
 
-    private static JsonObject ErrorSchema()
+    private static JsonObject ErrorSchema(string toolName)
         => new()
         {
             ["type"] = "object",
-            ["required"] = StringArray("category", "suggestion", "retry_safe"),
+            ["required"] = StringArray("tool", "category", "suggestion", "retry_safe"),
             ["properties"] = new JsonObject
             {
+                ["tool"] = ConstantStringSchema(toolName),
                 ["category"] = StringSchema(),
                 ["suggestion"] = StringSchema(),
                 ["retry_safe"] = BooleanSchema(),
@@ -216,7 +232,7 @@ internal static class McpToolOutputSchemas
             },
             ["maxProperties"] = MaxSchemaObjectProperties,
             ["propertyNames"] = StringSchema(),
-            ["additionalProperties"] = true,
+            ["additionalProperties"] = Reference("open_value_0"),
         };
 
     private static JsonObject ReadinessSchema()
@@ -233,7 +249,7 @@ internal static class McpToolOutputSchemas
             },
             ["maxProperties"] = MaxSchemaObjectProperties,
             ["propertyNames"] = StringSchema(),
-            ["additionalProperties"] = true,
+            ["additionalProperties"] = Reference("open_value_0"),
         };
 
     private static JsonObject SearchProperties()
@@ -242,6 +258,11 @@ internal static class McpToolOutputSchemas
         properties["query"] = Nullable(StringSchema());
         properties["top_files"] = Reference("rows");
         properties["recipes"] = Reference("rows");
+        properties["recipe"] = ObjectSchema();
+        properties["query_count"] = NonNegativeIntegerSchema();
+        properties["result_count"] = NonNegativeIntegerSchema();
+        properties["limit_per_query"] = NonNegativeIntegerSchema();
+        properties["queries"] = Reference("rows");
         return properties;
     }
 
@@ -265,9 +286,9 @@ internal static class McpToolOutputSchemas
             ["content"] = Nullable(StringSchema()),
             ["requestedStartLine"] = IntegerSchema(),
             ["requestedEndLine"] = IntegerSchema(),
-            ["effectiveStartLine"] = IntegerSchema(),
-            ["effectiveEndLine"] = IntegerSchema(),
-            ["totalLines"] = NonNegativeIntegerSchema(),
+            ["effectiveStartLine"] = Nullable(IntegerSchema()),
+            ["effectiveEndLine"] = Nullable(IntegerSchema()),
+            ["totalLines"] = Nullable(NonNegativeIntegerSchema()),
             ["contentTruncated"] = BooleanSchema(),
         };
 
@@ -330,9 +351,22 @@ internal static class McpToolOutputSchemas
     private static JsonObject DependencyProperties()
         => new()
         {
-            ["results"] = Reference("rows"),
             ["edges"] = Reference("rows"),
             ["cycles"] = Reference("rows"),
+            ["graph"] = new JsonObject
+            {
+                ["type"] = "object",
+                ["required"] = StringArray("nodes", "edges"),
+                ["properties"] = new JsonObject
+                {
+                    ["nodes"] = Reference("rows"),
+                    ["edges"] = Reference("rows"),
+                },
+                ["maxProperties"] = MaxSchemaObjectProperties,
+                ["propertyNames"] = StringSchema(),
+                ["additionalProperties"] = Reference("open_value_0"),
+            },
+            ["format"] = StringSchema(),
         };
 
     private static JsonObject LanguagesProperties()
@@ -371,7 +405,7 @@ internal static class McpToolOutputSchemas
                 },
                 ["maxProperties"] = MaxSchemaObjectProperties,
                 ["propertyNames"] = StringSchema(),
-                ["additionalProperties"] = true,
+                ["additionalProperties"] = Reference("open_value_0"),
             },
             ["success_count"] = NonNegativeIntegerSchema(),
             ["failure_count"] = NonNegativeIntegerSchema(),
@@ -464,7 +498,7 @@ internal static class McpToolOutputSchemas
             ["type"] = "object",
             ["maxProperties"] = MaxSchemaObjectProperties,
             ["propertyNames"] = StringSchema(),
-            ["additionalProperties"] = true,
+            ["additionalProperties"] = Reference("open_value_0"),
         };
 
     private static JsonObject RowSchema()
@@ -487,13 +521,14 @@ internal static class McpToolOutputSchemas
                 ["score"] = NumberSchema(),
                 ["snippet"] = StringSchema(),
                 ["content"] = StringSchema(),
+                ["result"] = ObjectSchema(),
                 ["uri"] = StringSchema(),
                 ["testFile"] = BooleanSchema(),
                 ["generated"] = BooleanSchema(),
             },
             ["maxProperties"] = MaxSchemaObjectProperties,
             ["propertyNames"] = StringSchema(),
-            ["additionalProperties"] = true,
+            ["additionalProperties"] = Reference("open_value_0"),
         };
 
     private static JsonObject StringSchema()
@@ -502,6 +537,38 @@ internal static class McpToolOutputSchemas
             ["type"] = "string",
             ["maxLength"] = MaxSchemaStringCharacters,
         };
+
+    private static JsonObject ConstantStringSchema(string value)
+        => new()
+        {
+            ["type"] = "string",
+            ["const"] = value,
+            ["maxLength"] = MaxSchemaStringCharacters,
+        };
+
+    private static JsonObject OpenValueSchema(int depth)
+    {
+        var alternatives = new JsonArray
+        {
+            NullSchema(),
+            StringSchema(),
+            BooleanSchema(),
+            NumberSchema(),
+        };
+        if (depth < MaxOpenValueDepth)
+        {
+            alternatives.Add(ArraySchema(Reference($"open_value_{depth + 1}")));
+            alternatives.Add(new JsonObject
+            {
+                ["type"] = "object",
+                ["maxProperties"] = MaxSchemaObjectProperties,
+                ["propertyNames"] = StringSchema(),
+                ["additionalProperties"] = Reference($"open_value_{depth + 1}"),
+            });
+        }
+
+        return new JsonObject { ["oneOf"] = alternatives };
+    }
 
     private static JsonObject BooleanSchema()
         => new() { ["type"] = "boolean" };

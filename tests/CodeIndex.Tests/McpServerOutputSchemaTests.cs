@@ -71,6 +71,7 @@ public partial class McpServerTests
                 $"{toolName} accepted an incomplete success payload.");
         }
 
+        var actualSuccesses = new Dictionary<string, JsonObject>(StringComparer.Ordinal);
         foreach (var tool in toolDefinitions)
         {
             var toolName = tool!["name"]!.GetValue<string>();
@@ -93,8 +94,21 @@ public partial class McpServerTests
                 $"{toolName} returned an error: {actualResult.ToJsonString()}");
             var actualSuccess = actualResult["structuredContent"]!.AsObject();
             Assert.True(
+                MatchesSchema(
+                    actualSuccess,
+                    schemas[toolName]["$defs"]!["result_envelope"]!.AsObject(),
+                    schemas[toolName]),
+                $"{toolName} result envelope: {actualSuccess.ToJsonString()}");
+            Assert.True(
+                MatchesSchema(
+                    actualSuccess,
+                    schemas[toolName]["$defs"]!["tool_result"]!.AsObject(),
+                    schemas[toolName]),
+                $"{toolName} tool result: {actualSuccess.ToJsonString()}");
+            Assert.True(
                 MatchesSchema(actualSuccess, schemas[toolName], schemas[toolName]),
                 $"{toolName}: {actualSuccess.ToJsonString()}");
+            actualSuccesses.Add(toolName, actualSuccess.DeepClone().AsObject());
         }
 
         var indexRoot = Path.Combine(
@@ -124,11 +138,81 @@ public partial class McpServerTests
             Assert.True(
                 MatchesSchema(indexSuccess, schemas["index"], schemas["index"]),
                 indexSuccess.ToJsonString());
+            actualSuccesses.Add("index", indexSuccess.DeepClone().AsObject());
         }
         finally
         {
             Directory.Delete(indexRoot, recursive: true);
         }
+
+        var recipeResult = CallToolForResult(
+            "search",
+            new JsonObject { ["recipe"] = "risky-code", ["limit"] = 1 });
+        Assert.True(
+            recipeResult["isError"]?.GetValue<bool>() != true,
+            recipeResult.ToJsonString());
+        var recipeSuccess = recipeResult["structuredContent"]!.AsObject();
+        Assert.True(
+            MatchesSchema(recipeSuccess, schemas["search"], schemas["search"]),
+            recipeSuccess.ToJsonString());
+
+        var emptyExcerptResult = CallToolForResult(
+            "excerpt",
+            new JsonObject
+            {
+                ["path"] = "src/issue4898-missing.cs",
+                ["startLine"] = 1,
+                ["endLine"] = 1,
+            });
+        Assert.True(
+            emptyExcerptResult["isError"]?.GetValue<bool>() != true,
+            emptyExcerptResult.ToJsonString());
+        var emptyExcerpt = emptyExcerptResult["structuredContent"]!.AsObject();
+        Assert.Null(emptyExcerpt["effectiveStartLine"]);
+        Assert.Null(emptyExcerpt["effectiveEndLine"]);
+        Assert.Null(emptyExcerpt["totalLines"]);
+        Assert.True(
+            MatchesSchema(emptyExcerpt, schemas["excerpt"], schemas["excerpt"]),
+            emptyExcerpt.ToJsonString());
+
+        foreach (var (schemaToolName, schema) in schemas)
+        {
+            foreach (var (resultToolName, actualSuccess) in actualSuccesses)
+            {
+                Assert.Equal(
+                    schemaToolName == resultToolName,
+                    MatchesSchema(actualSuccess, schema, schema));
+            }
+        }
+
+        Assert.False(
+            MatchesSchema(
+                new JsonObject
+                {
+                    ["api_version"] = JsonOutputContract.ApiVersion,
+                    ["tool"] = "definition",
+                    ["count"] = 0,
+                },
+                schemas["definition"],
+                schemas["definition"]),
+            "The definition schema accepted a result without its results array.");
+
+        var excessiveDepth = new JsonObject();
+        var depthCursor = excessiveDepth;
+        for (var depth = 0; depth < 10; depth++)
+        {
+            var next = new JsonObject();
+            depthCursor["next"] = next;
+            depthCursor = next;
+        }
+        var excessiveDepthResult = actualSuccesses["definition"].DeepClone().AsObject();
+        excessiveDepthResult["future_contract"] = excessiveDepth;
+        Assert.False(
+            MatchesSchema(
+                excessiveDepthResult,
+                schemas["definition"],
+                schemas["definition"]),
+            "An unknown compatibility field exceeded the advertised finite nesting depth.");
 
         var versionlessError = typedError.DeepClone().AsObject();
         versionlessError.Remove("api_version");
@@ -154,6 +238,8 @@ public partial class McpServerTests
         Assert.Equal(
             McpServer.MaxConfiguredResponseBytes,
             sharedDefinitions["row"]!["properties"]!["path"]!["maxLength"]!.GetValue<int>());
+        Assert.NotNull(sharedDefinitions["open_value_0"]);
+        Assert.NotNull(sharedDefinitions["open_value_8"]);
     }
 
     private JsonObject CallToolForStructuredContent(string toolName, JsonObject arguments)
@@ -235,6 +321,20 @@ public partial class McpServerTests
             {
                 if (instanceObject.TryGetPropertyValue(property.Key, out var value)
                     && !MatchesSchema(value, property.Value!.AsObject(), root))
+                {
+                    return false;
+                }
+            }
+        }
+
+        if (schema["additionalProperties"] is JsonObject additionalPropertySchema
+            && instance is JsonObject openObject)
+        {
+            var declaredProperties = schema["properties"] as JsonObject;
+            foreach (var property in openObject)
+            {
+                if (declaredProperties?.ContainsKey(property.Key) != true
+                    && !MatchesSchema(property.Value, additionalPropertySchema, root))
                 {
                     return false;
                 }

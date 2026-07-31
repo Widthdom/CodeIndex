@@ -216,9 +216,10 @@ versioned surfaces are the `cdidx` CLI, CLI JSON output, and `cdidx mcp`
 JSON-RPC interface. There is no public library / SDK API. See
 [INTEGRATION_POLICY.md](INTEGRATION_POLICY.md#api-surface-and-library-use).
 Full MCP `tools/list` definitions include bounded draft 2020-12 `outputSchema`
-contracts with tool-specific required fields for structured success, partial,
-and versioned typed-error results; compact catalogs point clients to the full
-definitions instead of duplicating those schemas.
+contracts with a required per-tool `tool` discriminator for structured success,
+partial, and versioned typed-error results. Open compatibility values have finite
+nesting plus property, array-item, and string-length bounds; compact catalogs point
+clients to the full definitions instead of duplicating those schemas.
 
 ## CLI JSON Error Contract
 
@@ -701,9 +702,10 @@ commit し、構造化 `file_errors` を返して partial-result 終了コード
 バージョニング契約の対象は、`cdidx` CLI、CLI JSON 出力、`cdidx mcp` の
 JSON-RPC interface です。公開 library / SDK API は提供していません。詳細は
 [INTEGRATION_POLICY.md](INTEGRATION_POLICY.md#api-surface-and-library-use) を参照してください。
-MCP の full `tools/list` definition は、tool 固有の required field を持つ structured success、
-partial、version 付き typed-error result 用の bounded な draft 2020-12 `outputSchema` contract を
-含みます。compact catalog は schema を重複させず、client を full definition へ案内します。
+MCP の full `tools/list` definition は、tool ごとに必須の `tool` discriminator を持つ structured
+success、partial、version 付き typed-error result 用の bounded な draft 2020-12 `outputSchema`
+contract を含みます。open な互換値にも有限の nesting と property 数、array item 数、string 長の
+上限を設け、compact catalog は schema を重複させず client を full definition へ案内します。
 
 ## CLI JSON エラー契約
 

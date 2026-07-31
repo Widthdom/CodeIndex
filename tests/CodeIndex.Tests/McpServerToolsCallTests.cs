@@ -5141,7 +5141,7 @@ public partial class McpServerTests
         var response = _server.HandleMessage(request)!;
 
         var structured = response["result"]!["structuredContent"]!.AsObject();
-        Assert.Equal(new[] { "summary", "readiness", "api_version" }, structured.Select(property => property.Key).ToArray());
+        Assert.Equal(new[] { "summary", "readiness", "api_version", "tool" }, structured.Select(property => property.Key).ToArray());
         Assert.Contains("1 files, 2 symbols, 0 refs", structured["summary"]!.GetValue<string>());
         Assert.True(structured["readiness"]!["issues_table_available"]!.GetValue<bool>());
         Assert.True(Encoding.UTF8.GetByteCount(structured.ToJsonString()) < 1_000);
@@ -5150,14 +5150,14 @@ public partial class McpServerTests
         var fullResponse = _server.HandleMessage(fullRequest)!;
         var fullStructured = fullResponse["result"]!["structuredContent"]!.AsObject();
 
-        Assert.Equal(new[] { "files", "sql_graph_contract_ready", "api_version" }, fullStructured.Select(property => property.Key).ToArray());
+        Assert.Equal(new[] { "files", "sql_graph_contract_ready", "api_version", "tool" }, fullStructured.Select(property => property.Key).ToArray());
         Assert.Equal(1, fullStructured["files"]!.GetValue<long>());
         Assert.True(fullStructured["sql_graph_contract_ready"]!.GetValue<bool>());
 
         var apiVersionRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"status","arguments":{"format":"compact","fields":"api_version"}}}""")!;
         var apiVersionResponse = _server.HandleMessage(apiVersionRequest)!;
         var apiVersionStructured = apiVersionResponse["result"]!["structuredContent"]!.AsObject();
-        Assert.Equal(new[] { "api_version" }, apiVersionStructured.Select(property => property.Key).ToArray());
+        Assert.Equal(new[] { "api_version", "tool" }, apiVersionStructured.Select(property => property.Key).ToArray());
         Assert.Equal(JsonOutputContract.ApiVersion, apiVersionStructured["api_version"]!.GetValue<string>());
 
         using var immutableServer = new McpServer(
@@ -5167,14 +5167,14 @@ public partial class McpServerTests
         var immutableRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"status","arguments":{"format":"compact","fields":"summary"}}}""")!;
         var immutableResponse = immutableServer.HandleMessage(immutableRequest)!;
         var immutableStructured = immutableResponse["result"]!["structuredContent"]!.AsObject();
-        Assert.Equal(new[] { "summary", "api_version" }, immutableStructured.Select(property => property.Key).ToArray());
+        Assert.Equal(new[] { "summary", "api_version", "tool" }, immutableStructured.Select(property => property.Key).ToArray());
         Assert.Null(immutableStructured["wal_stale_snapshot_risk"]);
 
         var diagnosticsRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"status","arguments":{"format":"compact","fields":["wal_stale_snapshot_risk","wal_stale_snapshot_reason"]}}}""")!;
         var diagnosticsResponse = immutableServer.HandleMessage(diagnosticsRequest)!;
         var diagnosticsStructured = diagnosticsResponse["result"]!["structuredContent"]!.AsObject();
         Assert.Equal(
-            new[] { "wal_stale_snapshot_risk", "wal_stale_snapshot_reason", "api_version" },
+            new[] { "wal_stale_snapshot_risk", "wal_stale_snapshot_reason", "api_version", "tool" },
             diagnosticsStructured.Select(property => property.Key).ToArray());
         Assert.True(diagnosticsStructured["wal_stale_snapshot_risk"]!.GetValue<bool>());
         Assert.Equal("explicit_immutable_read_only", diagnosticsStructured["wal_stale_snapshot_reason"]!.GetValue<string>());

@@ -303,30 +303,40 @@ public partial class McpServer
             try
             {
                 // Execute the tool and extract the structured content / ツールを実行し構造化コンテンツを抽出
-                var response = toolName switch
+                var previousToolOutputName = _currentToolOutputName.Value;
+                _currentToolOutputName.Value = toolName;
+                JsonNode? response;
+                try
                 {
-                    "search" => ExecuteSearch(null, toolArgs),
-                    "definition" => ExecuteDefinition(null, toolArgs),
-                    "references" => ExecuteReferences(null, toolArgs),
-                    "callers" => ExecuteCallers(null, toolArgs),
-                    "callees" => ExecuteCallees(null, toolArgs),
-                    "symbols" => ExecuteSymbols(null, toolArgs),
-                    "files" => ExecuteFiles(null, toolArgs),
-                    "find_in_file" => ExecuteFindInFile(null, toolArgs),
-                    "excerpt" => ExecuteExcerpt(null, toolArgs),
-                    "map" => ExecuteMap(null, toolArgs),
-                    "analyze_symbol" => ExecuteAnalyzeSymbol(null, toolArgs),
-                    "status" => ExecuteStatus(null, toolArgs),
-                    "outline" => ExecuteOutline(null, toolArgs),
-                    "deps" => ExecuteDeps(null, toolArgs),
-                    "impact_analysis" => ExecuteImpactAnalysis(null, toolArgs),
-                    "languages" => ExecuteLanguages(null, toolArgs),
-                    "validate" => ExecuteValidate(null, toolArgs),
-                    "unused_symbols" => ExecuteUnusedSymbols(null, toolArgs),
-                    "symbol_hotspots" => ExecuteSymbolHotspots(null, toolArgs),
-                    "ping" => ExecutePing(null),
-                    _ => null,
-                };
+                    response = toolName switch
+                    {
+                        "search" => ExecuteSearch(null, toolArgs),
+                        "definition" => ExecuteDefinition(null, toolArgs),
+                        "references" => ExecuteReferences(null, toolArgs),
+                        "callers" => ExecuteCallers(null, toolArgs),
+                        "callees" => ExecuteCallees(null, toolArgs),
+                        "symbols" => ExecuteSymbols(null, toolArgs),
+                        "files" => ExecuteFiles(null, toolArgs),
+                        "find_in_file" => ExecuteFindInFile(null, toolArgs),
+                        "excerpt" => ExecuteExcerpt(null, toolArgs),
+                        "map" => ExecuteMap(null, toolArgs),
+                        "analyze_symbol" => ExecuteAnalyzeSymbol(null, toolArgs),
+                        "status" => ExecuteStatus(null, toolArgs),
+                        "outline" => ExecuteOutline(null, toolArgs),
+                        "deps" => ExecuteDeps(null, toolArgs),
+                        "impact_analysis" => ExecuteImpactAnalysis(null, toolArgs),
+                        "languages" => ExecuteLanguages(null, toolArgs),
+                        "validate" => ExecuteValidate(null, toolArgs),
+                        "unused_symbols" => ExecuteUnusedSymbols(null, toolArgs),
+                        "symbol_hotspots" => ExecuteSymbolHotspots(null, toolArgs),
+                        "ping" => ExecutePing(null),
+                        _ => null,
+                    };
+                }
+                finally
+                {
+                    _currentToolOutputName.Value = previousToolOutputName;
+                }
 
                 if (response == null)
                 {
