@@ -79,7 +79,12 @@ public static partial class QueryCommandRunner
             {
                 db = new DbContext(DbOpenIntent.QueryOnly, dbPath, cancellationToken);
                 if (!db.TryValidateIsCodeIndexDb(out var validationReason))
-                    return WriteInvalidCodeIndexDbError(dbPath, validationReason, options.Json, jsonOptions);
+                    return WriteInvalidCodeIndexDbError(
+                        dbPath,
+                        validationReason,
+                        options.Json,
+                        jsonOptions,
+                        options.MaxJsonBytes);
                 reader = new DbReader(db);
                 databaseReadyForQueries = true;
             }
@@ -188,7 +193,12 @@ public static partial class QueryCommandRunner
             }
 
             var jsonDatabaseOpenFailure = options.Json && !databaseReadyForQueries;
-            var databaseExitCode = WriteDatabaseOpenFailureJsonAware(ex, dbPath, jsonDatabaseOpenFailure, jsonOptions);
+            var databaseExitCode = WriteDatabaseOpenFailureJsonAware(
+                ex,
+                dbPath,
+                jsonDatabaseOpenFailure,
+                jsonOptions,
+                options.MaxJsonBytes);
             Database.DbDebug.DumpToStderr(ex);
             return databaseExitCode;
         }
@@ -205,14 +215,16 @@ public static partial class QueryCommandRunner
         string dbPath,
         string? validationReason,
         bool json,
-        JsonSerializerOptions jsonOptions)
+        JsonSerializerOptions jsonOptions,
+        int? maxJsonBytes = null)
     {
         return WriteDatabaseCommandError(
             json,
             jsonOptions,
             $"{FormatDbDiagnosticValue(dbPath)} does not appear to be a valid CodeIndex database ({validationReason}).",
             "rebuild with `cdidx index <projectPath> --db <path>` to create a fresh database.",
-            "database");
+            "database",
+            maxJsonBytes);
     }
 
     private static ProjectFilterRootResolution ResolveProjectRootForDbPath(string dbPath, bool dbPathExplicit)
@@ -241,7 +253,8 @@ public static partial class QueryCommandRunner
         Exception ex,
         string dbPath,
         bool json,
-        JsonSerializerOptions jsonOptions)
+        JsonSerializerOptions jsonOptions,
+        int? maxJsonBytes = null)
     {
         GlobalToolLog.Error($"database_open_failed db={FormatLogValue(dbPath)} exception={FormatLogValue(ex.ToString())}");
 
@@ -253,7 +266,8 @@ public static partial class QueryCommandRunner
                 jsonOptions,
                 $"database access denied: {CommandErrorWriter.FormatSanitizedExceptionMessage(unauthorized)}",
                 MacProfileDetector.BuildDatabaseHint(MacProfileDetector.DetectCurrent()),
-                DiagnosticRedactor.ClassifyException(unauthorized));
+                DiagnosticRedactor.ClassifyException(unauthorized),
+                maxJsonBytes);
         }
 
         var io = FindException<IOException>(ex);
@@ -264,7 +278,8 @@ public static partial class QueryCommandRunner
                 jsonOptions,
                 $"database I/O error: {CommandErrorWriter.FormatSanitizedExceptionMessage(io)}",
                 MacProfileDetector.BuildDatabaseHint(MacProfileDetector.DetectCurrent()),
-                DiagnosticRedactor.ClassifyException(io));
+                DiagnosticRedactor.ClassifyException(io),
+                maxJsonBytes);
         }
 
         var sqlite = FindException<SqliteException>(ex);
@@ -277,7 +292,8 @@ public static partial class QueryCommandRunner
                     jsonOptions,
                     $"database access/open denied: {CommandErrorWriter.FormatSanitizedExceptionMessage(sqlite)}",
                     MacProfileDetector.BuildDatabaseHint(MacProfileDetector.DetectCurrent()),
-                    DiagnosticRedactor.ClassifyException(sqlite));
+                    DiagnosticRedactor.ClassifyException(sqlite),
+                    maxJsonBytes);
             }
 
             if (sqlite.SqliteErrorCode == 11)
@@ -287,7 +303,8 @@ public static partial class QueryCommandRunner
                     jsonOptions,
                     $"SQLite reported database corruption: {CommandErrorWriter.FormatSanitizedExceptionMessage(sqlite)}",
                     "rebuild the index with `cdidx index <projectPath> --rebuild`, or delete the broken `.cdidx/codeindex.db*` files and run `cdidx index <projectPath>` again.",
-                    DiagnosticRedactor.ClassifyException(sqlite));
+                    DiagnosticRedactor.ClassifyException(sqlite),
+                    maxJsonBytes);
             }
 
             return WriteDatabaseCommandError(
@@ -297,7 +314,8 @@ public static partial class QueryCommandRunner
                 MacProfileDetector.IsPermissionStyleSqliteError(sqlite)
                     ? MacProfileDetector.BuildDatabaseHint(MacProfileDetector.DetectCurrent())
                     : "check `--db`, verify the index was written by a compatible cdidx version, or rebuild it with `cdidx index <projectPath> --rebuild`.",
-                DiagnosticRedactor.ClassifyException(sqlite));
+                DiagnosticRedactor.ClassifyException(sqlite),
+                maxJsonBytes);
         }
 
         return WriteDatabaseCommandError(
@@ -305,7 +323,8 @@ public static partial class QueryCommandRunner
             jsonOptions,
             $"database error: {CommandErrorWriter.FormatSanitizedExceptionMessage(ex)}",
             "check `--db`, or rebuild the index with `cdidx index <projectPath>` if the DB may be stale or corrupted.",
-            DiagnosticRedactor.ClassifyException(ex));
+            DiagnosticRedactor.ClassifyException(ex),
+            maxJsonBytes);
     }
 
     private static int WriteDatabaseCommandError(
@@ -313,15 +332,44 @@ public static partial class QueryCommandRunner
         JsonSerializerOptions jsonOptions,
         string message,
         string hint,
-        string? category)
-        => CommandErrorWriter.WriteJsonOrHuman(
-            json,
+        string? category,
+        int? maxJsonBytes = null)
+    {
+        var normalizedHint = TrimHintPrefix(hint);
+        if (!json || !maxJsonBytes.HasValue)
+        {
+            return CommandErrorWriter.WriteJsonOrHuman(
+                json,
+                jsonOptions,
+                message,
+                CommandExitCodes.DatabaseError,
+                normalizedHint,
+                errorCode: CommandErrorCodes.DbError,
+                category: category);
+        }
+
+        var payload = CommandErrorWriter.BuildJsonPayload(
             jsonOptions,
             message,
             CommandExitCodes.DatabaseError,
-            TrimHintPrefix(hint),
+            normalizedHint,
             errorCode: CommandErrorCodes.DbError,
             category: category);
+        var payloadJson = payload.ToJsonString(jsonOptions);
+        if (JsonEnvelopeWrapper.JsonFitsResponseBudget(payloadJson, maxJsonBytes.Value))
+        {
+            CommandErrorWriter.WriteStdout(payloadJson);
+        }
+        else
+        {
+            CommandErrorWriter.Write(
+                message,
+                normalizedHint,
+                errorCode: CommandErrorCodes.DbError);
+        }
+
+        return CommandExitCodes.DatabaseError;
+    }
 
     private static string TrimHintPrefix(string hint)
     {

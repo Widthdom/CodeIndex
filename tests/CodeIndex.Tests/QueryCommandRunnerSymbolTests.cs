@@ -2425,6 +2425,137 @@ public partial class QueryCommandRunnerTests
         Assert.Contains("only supported with unused JSON output", stderr);
     }
 
+    [Theory]
+    [InlineData("--verbose")]
+    [InlineData("--profile")]
+    public void RunUnused_MaxJsonBytesRejectsSeparateJsonDiagnostics_Issue4904(string diagnosticsOption)
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+            ["--json", "--count", "--max-json-bytes", "3000", diagnosticsOption],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("cannot be combined with --profile or --verbose", stderr);
+    }
+
+    [Fact]
+    public void RunUnused_MaxJsonBytesCapsInvalidDatabaseJson_Issue4904()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_issue4904_invalid_db_budget");
+        var dbPath = Path.Combine(project.Root, "empty.db");
+        using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
+        {
+            connection.Open();
+        }
+
+        var (tinyExitCode, tinyStdout, tinyStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+            ["--db", dbPath, "--json", "--max-json-bytes", "1"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.DatabaseError, tinyExitCode);
+        Assert.Equal(string.Empty, tinyStdout);
+        Assert.Contains("does not appear to be a valid CodeIndex database", tinyStderr);
+
+        const int fittingBudget = 1024;
+        var (fittingExitCode, fittingStdout, fittingStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+            ["--db", dbPath, "--json", "--max-json-bytes", "1024"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.DatabaseError, fittingExitCode);
+        Assert.Equal(string.Empty, fittingStderr);
+        Assert.True(Encoding.UTF8.GetByteCount(fittingStdout) <= fittingBudget);
+        using var document = ParseJsonOutput(fittingStdout);
+        Assert.Equal(CommandErrorCodes.DbError, document.RootElement.GetProperty("error_code").GetString());
+    }
+
+    [Fact]
+    public void RunUnused_MaxJsonBytesRenarrowsSqlReadinessToEmittedRows_Issue4904()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue4904_sql_page_budget");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/a.cs",
+                "csharp",
+                """
+                public class C
+                {
+                    private void AardvarkUnused() { }
+                    public void Target() { }
+                    public void Caller() { Target(); }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/z.sql",
+                "sql",
+                """
+                CREATE PROCEDURE dbo.SqlCaller
+                AS
+                BEGIN
+                    EXEC dbo.Target;
+                END;
+                GO
+                """);
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.MarkGraphReady();
+                writer.MarkSqlGraphContractReady();
+            }
+            DowngradeMixedSqlGraphContractCountRows(dbPath);
+
+            var (unboundedExitCode, unboundedStdout, unboundedStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--all", "--limit", "100"],
+                _jsonOptions));
+            using var unboundedDocument = ParseJsonOutput(unboundedStdout);
+            var unboundedSymbols = unboundedDocument.RootElement.GetProperty("symbols").EnumerateArray().ToArray();
+
+            Assert.Equal(CommandExitCodes.Success, unboundedExitCode);
+            Assert.Equal(string.Empty, unboundedStderr);
+            Assert.Equal("csharp", unboundedSymbols[0].GetProperty("lang").GetString());
+            Assert.Equal("sql", unboundedSymbols[1].GetProperty("lang").GetString());
+            Assert.False(unboundedDocument.RootElement.GetProperty("sql_graph_contract_ready").GetBoolean());
+
+            var low = 1;
+            var high = Encoding.UTF8.GetByteCount(unboundedStdout);
+            (int ExitCode, string Stdout, string Stderr)? smallestSuccessfulPage = null;
+            while (low <= high)
+            {
+                var budget = low + ((high - low) / 2);
+                var page = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                    ["--db", dbPath, "--json", "--all", "--limit", "100", "--max-json-bytes", budget.ToString()],
+                    _jsonOptions));
+                if (page.Result == CommandExitCodes.Success)
+                {
+                    smallestSuccessfulPage = page;
+                    high = budget - 1;
+                }
+                else
+                {
+                    low = budget + 1;
+                }
+            }
+
+            Assert.NotNull(smallestSuccessfulPage);
+            Assert.Equal(string.Empty, smallestSuccessfulPage.Value.Stderr);
+            using var pageDocument = ParseJsonOutput(smallestSuccessfulPage.Value.Stdout);
+            var pageJson = pageDocument.RootElement;
+            var emitted = Assert.Single(pageJson.GetProperty("symbols").EnumerateArray());
+            Assert.Equal("csharp", emitted.GetProperty("lang").GetString());
+            Assert.True(pageJson.GetProperty("truncated").GetBoolean());
+            Assert.False(pageJson.TryGetProperty("sql_graph_contract_ready", out _));
+            Assert.False(pageJson.TryGetProperty("sql_graph_contract_degraded_reason", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Fact]
     public void RunUnused_CompactJsonOmitsSymbolBodiesAndShowsFilters_Issue3395()
     {

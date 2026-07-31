@@ -83,6 +83,8 @@ public static partial class QueryCommandRunner
                 "Add --json or --compact, or remove --max-json-bytes.");
             return CommandExitCodes.UsageError;
         }
+        if (TryWriteCappedJsonDiagnosticsUsageError("unused", options))
+            return CommandExitCodes.UsageError;
         var unusedScope = BuildUnusedAuditScopeFilters(options);
 
         return WithDb(options, jsonOptions, reader =>
@@ -815,6 +817,12 @@ public static partial class QueryCommandRunner
             var emittedResults = emittedCount == requestedResults.Count
                 ? requestedResults
                 : requestedResults.Take(emittedCount).ToList();
+            var emittedSqlGraphSignal = emittedResults.Count == 0
+                ? sqlGraphSignal
+                : NarrowSqlGraphContractSignalByLanguages(
+                    sqlGraphSignal,
+                    emittedResults.Select(result => result.Lang),
+                    options.Lang);
             var nextOffset = pageOffset + emittedCount;
             var hasMore = emittedCount < requestedResults.Count || hasMoreAfterPage;
             var nextCursor = hasMore
@@ -826,7 +834,7 @@ public static partial class QueryCommandRunner
                 emittedResults,
                 graphSupported,
                 graphSupportReason,
-                sqlGraphSignal,
+                emittedSqlGraphSignal,
                 hdlGraphSignal,
                 hasReferencesTable,
                 jsonOptions,
