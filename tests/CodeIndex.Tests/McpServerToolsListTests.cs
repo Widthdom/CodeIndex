@@ -78,6 +78,25 @@ public partial class McpServerTests
     }
 
     [Fact]
+    public void ToolsList_MemberReadCompatibilityOption_IsScopedToTraversalTools_Issue4894()
+    {
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
+        var response = _server.HandleMessage(request)!;
+        var tools = response["result"]!["tools"]!.AsArray();
+
+        foreach (var toolName in new[] { "callers", "callees", "impact_analysis" })
+        {
+            var tool = tools.First(candidate => candidate!["name"]!.GetValue<string>() == toolName)!;
+            var option = tool["inputSchema"]!["properties"]!["includeMemberReads"]!;
+            Assert.Equal("boolean", option["type"]!.GetValue<string>());
+            Assert.False(option["default"]!.GetValue<bool>());
+        }
+
+        var references = tools.First(candidate => candidate!["name"]!.GetValue<string>() == "references")!;
+        Assert.Null(references["inputSchema"]!["properties"]!["includeMemberReads"]);
+    }
+
+    [Fact]
     public void ToolsList_EachToolPublishesSchemaAndExampleContract()
     {
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;

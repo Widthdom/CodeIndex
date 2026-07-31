@@ -942,6 +942,81 @@ public partial class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void MemberReadEdges_AreOptInWhileLegacyCallRowsRemainReadable_Issue4894()
+    {
+        InsertManualReference(
+            "src/modern.cs",
+            "csharp",
+            "function",
+            "ModernReader",
+            "CurrentValue",
+            "member_read");
+        InsertManualReference(
+            "src/legacy.cs",
+            "csharp",
+            "function",
+            "LegacyReader",
+            "LegacyValue",
+            "call");
+
+        Assert.Empty(_reader.GetCallers("CurrentValue", lang: "csharp", exact: true));
+        Assert.Equal(0, _reader.CountCallers("CurrentValue", lang: "csharp", exact: true));
+        Assert.Equal(0, _reader.CountCallersTotal("CurrentValue", lang: "csharp", exact: true).Count);
+        Assert.Empty(_reader.GetCallees("ModernReader", lang: "csharp", exact: true));
+        Assert.Empty(_reader.GetTransitiveCallers("CurrentValue", maxDepth: 1, lang: "csharp").Results);
+        Assert.Empty(_reader.AnalyzeImpact("CurrentValue", maxDepth: 1, lang: "csharp").Callers);
+
+        var caller = Assert.Single(_reader.GetCallers(
+            "CurrentValue",
+            lang: "csharp",
+            exact: true,
+            includeMemberReads: true));
+        Assert.Equal("ModernReader", caller.CallerName);
+        Assert.Equal("member_read", caller.ReferenceKind);
+        Assert.Single(_reader.GetCallers(
+            "CurrentValue",
+            lang: "csharp",
+            referenceKind: "member_read",
+            exact: true));
+        Assert.Equal(
+            1,
+            _reader.CountCallers(
+                "CurrentValue",
+                lang: "csharp",
+                exact: true,
+                includeMemberReads: true));
+        Assert.Equal(
+            1,
+            _reader.CountCallersTotal(
+                "CurrentValue",
+                lang: "csharp",
+                exact: true,
+                includeMemberReads: true).Count);
+
+        var callee = Assert.Single(_reader.GetCallees(
+            "ModernReader",
+            lang: "csharp",
+            exact: true,
+            includeMemberReads: true));
+        Assert.Equal("CurrentValue", callee.CalleeName);
+        Assert.Equal("member_read", callee.ReferenceKind);
+        Assert.Single(_reader.GetTransitiveCallers(
+            "CurrentValue",
+            maxDepth: 1,
+            lang: "csharp",
+            includeMemberReads: true).Results);
+        Assert.Single(_reader.AnalyzeImpact(
+            "CurrentValue",
+            maxDepth: 1,
+            lang: "csharp",
+            includeMemberReads: true).Callers);
+
+        var legacyCaller = Assert.Single(_reader.GetCallers("LegacyValue", lang: "csharp", exact: true));
+        Assert.Equal("LegacyReader", legacyCaller.CallerName);
+        Assert.Equal("call", legacyCaller.ReferenceKind);
+    }
+
+    [Fact]
     public void GetCallers_RepositoryMetadataAndManifestReferencesParticipateInGraph_Issue4740()
     {
         InsertIndexedFile(

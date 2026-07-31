@@ -21,6 +21,58 @@ namespace CodeIndex.Tests;
 
 public partial class McpServerTests
 {
+    [Fact]
+    public void ToolsCall_MemberReadsAreOptInForGraphTraversal_Issue4894()
+    {
+        InsertIndexedFile(
+            "src/member-read.cs",
+            "csharp",
+            """
+            public static class Values
+            {
+                public const int Limit = 10;
+            }
+
+            public sealed class Reader
+            {
+                public int Read() => Values.Limit;
+            }
+            """);
+
+        JsonNode Call(string tool, bool includeMemberReads)
+        {
+            var request = new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = 4894,
+                ["method"] = "tools/call",
+                ["params"] = new JsonObject
+                {
+                    ["name"] = tool,
+                    ["arguments"] = new JsonObject
+                    {
+                        ["query"] = tool == "callees" ? "Read" : "Limit",
+                        ["lang"] = "csharp",
+                        ["includeMemberReads"] = includeMemberReads,
+                        ["countOnly"] = true,
+                    },
+                },
+            };
+            return _server.HandleMessage(request)!["result"]!["structuredContent"]!;
+        }
+
+        foreach (var tool in new[] { "callers", "callees", "impact_analysis" })
+        {
+            var excluded = Call(tool, includeMemberReads: false);
+            Assert.False(excluded["includeMemberReads"]!.GetValue<bool>());
+            Assert.Equal(0, excluded["count"]!.GetValue<int>());
+
+            var included = Call(tool, includeMemberReads: true);
+            Assert.True(included["includeMemberReads"]!.GetValue<bool>());
+            Assert.Equal(1, included["count"]!.GetValue<int>());
+        }
+    }
+
     [Theory]
     [InlineData("callers", "{\"query\":\"Run\",\"countOnly\":true}")]
     [InlineData("callees", "{\"query\":\"Run\"}")]
@@ -2150,7 +2202,7 @@ public partial class McpServerTests
             }
             """);
 
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"callers","arguments":{"query":"A","lang":"csharp","exact":true}}}""")!;
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"callers","arguments":{"query":"A","lang":"csharp","exact":true,"includeMemberReads":true}}}""")!;
         var response = _server.HandleMessage(request)!;
         var structured = response["result"]!["structuredContent"]!;
 
@@ -2159,6 +2211,7 @@ public partial class McpServerTests
         Assert.True(structured["graph_supported"]!.GetValue<bool>());
         Assert.Null(structured["graphDegraded"]);
         Assert.Null(structured["unsupportedSymbolKind"]);
+        Assert.True(structured["includeMemberReads"]!.GetValue<bool>());
         Assert.Equal("Value", structured["results"]![0]!["callerName"]!.GetValue<string>());
         Assert.Equal("Found 1 caller.", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
     }

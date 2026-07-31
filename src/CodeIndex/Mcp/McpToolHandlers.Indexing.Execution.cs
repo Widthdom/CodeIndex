@@ -718,7 +718,8 @@ public partial class McpServer
                     cancellationToken: requestToken));
             forceFullCSharpRefreshFromInvalidatedNoOp =
                 indexSnapshot.CSharpStaticInterfaceSourceEvidence == true
-                || csharpWorkspace.HasStaticInterfaceContracts;
+                || csharpWorkspace.HasStaticInterfaceContracts
+                || csharpWorkspace.RequiresMemberReadReferenceRefresh;
         }
         if (!csharpWorkspace.SourceContractEvidenceComplete)
         {
@@ -1550,7 +1551,8 @@ public partial class McpServer
                             maxReferenceCount: maxReferencesPerFile + 1,
                             conflictMarkerLine: loaded.ConflictMarkerLine,
                             workspaceRoot: projectPath,
-                            csharpStaticInterfaceMemberLookups: csharpWorkspace.StaticInterfaceMemberLookups);
+                            csharpStaticInterfaceMemberLookups: csharpWorkspace.StaticInterfaceMemberLookups,
+                            csharpQualifiedPatternLookups: csharpWorkspace.QualifiedPatternLookups);
                         references = referenceExtraction.References;
                         regexTimeoutIssue = IndexCommandRunner.BuildRegexTimeoutIssue(record.Path, regexTimeouts);
                     }

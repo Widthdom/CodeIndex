@@ -252,7 +252,9 @@ public static partial class IndexCommandRunner
                 conflictMarkerLine: loaded.ConflictMarkerLine,
                 workspaceRoot: context.ProjectRoot,
                 csharpStaticInterfaceMemberLookups:
-                    context.CSharpWorkspace.StaticInterfaceMemberLookups);
+                    context.CSharpWorkspace.StaticInterfaceMemberLookups,
+                csharpQualifiedPatternLookups:
+                    context.CSharpWorkspace.QualifiedPatternLookups);
             references = referenceExtraction.References;
             referenceRegexTimeoutIssue =
                 BuildRegexTimeoutIssue(record.Path, regexTimeouts);

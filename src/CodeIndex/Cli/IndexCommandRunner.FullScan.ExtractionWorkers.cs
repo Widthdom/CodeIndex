@@ -201,7 +201,8 @@ public static partial class IndexCommandRunner
                                     maxReferenceCount: options.MaxReferencesPerFile + 1,
                                     conflictMarkerLine: loaded.ConflictMarkerLine,
                                     workspaceRoot: projectRoot,
-                                    csharpStaticInterfaceMemberLookups: csharpWorkspace.StaticInterfaceMemberLookups);
+                                    csharpStaticInterfaceMemberLookups: csharpWorkspace.StaticInterfaceMemberLookups,
+                                    csharpQualifiedPatternLookups: csharpWorkspace.QualifiedPatternLookups);
                                 references = referenceExtraction.References;
                                 referenceRegexTimeoutIssue = BuildRegexTimeoutIssue(record.Path, regexTimeouts);
                             }

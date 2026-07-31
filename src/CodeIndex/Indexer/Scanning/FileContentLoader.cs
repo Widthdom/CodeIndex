@@ -107,6 +107,7 @@ internal sealed partial class FileContentLoader(
         string normalizedRelativePath,
         string relativePath,
         bool retryOnMutation,
+        bool includeQualifiedMemberAccessCandidate,
         CancellationToken cancellationToken)
     {
         var readPath = _resolveFileReadPath(absolutePath);
@@ -132,7 +133,10 @@ internal sealed partial class FileContentLoader(
                 stream,
                 initialLength,
                 normalizedRelativePath,
-                probe.AppendAndCheck,
+                includeQualifiedMemberAccessCandidate
+                    ? probe
+                        .AppendAndCheckWorkspaceOrQualifiedMemberAccessCandidate
+                    : probe.AppendAndCheckWorkspaceCandidate,
                 cancellationToken);
             if (rawCandidate)
             {
