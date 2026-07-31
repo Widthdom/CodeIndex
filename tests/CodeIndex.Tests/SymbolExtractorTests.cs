@@ -6044,6 +6044,88 @@ public partial class SymbolExtractorTests
     }
 
     [Fact]
+    public void Extract_Markdown_HeadingRangesUsePhysicalLinesAndEmptyBodiesStayEmpty_Issue4910()
+    {
+        foreach (var newline in new[] { "\n", "\r\n" })
+        {
+            foreach (var terminateFile in new[] { false, true })
+            {
+                var content = string.Join(
+                    newline,
+                    "# Root",
+                    "root body",
+                    "## Nested",
+                    "nested body",
+                    "### Final",
+                    "final body");
+                if (terminateFile)
+                    content += newline;
+
+                var headings = SymbolExtractor.Extract(1, "markdown", content)
+                    .Where(symbol => symbol.Kind == "heading")
+                    .ToList();
+                var root = Assert.Single(headings.Where(symbol => symbol.Name == "Root"));
+                var nested = Assert.Single(headings.Where(symbol => symbol.Name == "Nested"));
+                var final = Assert.Single(headings.Where(symbol => symbol.Name == "Final"));
+
+                Assert.All(headings, heading => Assert.InRange(heading.EndLine, 1, 6));
+                Assert.Equal((1, 6, 2, 6), (root.StartLine, root.EndLine, root.BodyStartLine, root.BodyEndLine));
+                Assert.Equal((3, 6, 4, 6), (nested.StartLine, nested.EndLine, nested.BodyStartLine, nested.BodyEndLine));
+                Assert.Equal((5, 6, 6, 6), (final.StartLine, final.EndLine, final.BodyStartLine, final.BodyEndLine));
+            }
+        }
+
+        Assert.Empty(SymbolExtractor.Extract(1, "markdown", string.Empty));
+        foreach (var content in new[] { "# Only", "# Only\n", "# Only\r\n" })
+        {
+            var only = Assert.Single(SymbolExtractor.Extract(1, "markdown", content));
+            Assert.Equal(1, only.EndLine);
+            Assert.Null(only.BodyStartLine);
+            Assert.Null(only.BodyEndLine);
+        }
+
+        foreach (var content in new[] { "Only\n====", "Only\n====\n", "Only\r\n====\r\n" })
+        {
+            var only = Assert.Single(SymbolExtractor.Extract(1, "markdown", content));
+            Assert.Equal(2, only.EndLine);
+            Assert.Null(only.BodyStartLine);
+            Assert.Null(only.BodyEndLine);
+        }
+
+        var largeContent = "# Large\n" + string.Join('\n', Enumerable.Repeat("body", 12_647)) + "\n";
+        var largeHeading = Assert.Single(SymbolExtractor.Extract(1, "markdown", largeContent));
+        Assert.Equal(12_648, largeHeading.EndLine);
+        Assert.Equal(2, largeHeading.BodyStartLine);
+        Assert.Equal(12_648, largeHeading.BodyEndLine);
+
+        foreach (var newline in new[] { "\n", "\r\n" })
+        {
+            foreach (var terminateFile in new[] { false, true })
+            {
+                var content = string.Join(newline, "# Root", "```csharp", "code");
+                if (terminateFile)
+                    content += newline;
+
+                var symbols = SymbolExtractor.Extract(1, "markdown", content);
+                var heading = Assert.Single(symbols.Where(symbol => symbol.Kind == "heading"));
+                var code = Assert.Single(symbols.Where(symbol => symbol.Kind == "code"));
+
+                Assert.Equal(3, heading.EndLine);
+                Assert.Equal(3, code.EndLine);
+                Assert.Equal(3, code.BodyStartLine);
+                Assert.Equal(3, code.BodyEndLine);
+                Assert.Equal("Root", code.ContainerName);
+            }
+
+            var emptyFenceSymbols = SymbolExtractor.Extract(1, "markdown", $"# Root{newline}```csharp{newline}");
+            var emptyFence = Assert.Single(emptyFenceSymbols.Where(symbol => symbol.Kind == "code"));
+            Assert.Equal(2, emptyFence.EndLine);
+            Assert.Null(emptyFence.BodyStartLine);
+            Assert.Null(emptyFence.BodyEndLine);
+        }
+    }
+
+    [Fact]
     public void Extract_Markdown_LinksAreReferencesNotDefinitionSymbols_Issues4448And4846()
     {
         const string content = """

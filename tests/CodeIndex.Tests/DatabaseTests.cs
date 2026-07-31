@@ -5749,6 +5749,29 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void GetUnchangedFileId_InvalidatesPriorMarkdownHeadingRangeContract_Issue4910()
+    {
+        const string language = "markdown";
+        const int previousContractVersion = 3;
+        var modified = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var file = new FileRecord
+        {
+            Path = "docs/guide.md",
+            Lang = language,
+            Size = 50,
+            Lines = 5,
+            Modified = modified,
+        };
+        _writer.UpsertFile(file);
+        _writer.SetMeta(
+            DbContext.GetSymbolExtractorVersionMetaKey(language),
+            previousContractVersion.ToString(CultureInfo.InvariantCulture));
+
+        Assert.True(SymbolExtractor.MarkdownContractVersion > previousContractVersion);
+        Assert.Null(_writer.GetUnchangedFileId(file.Path, modified, language: language));
+    }
+
+    [Fact]
     public void GetUnchangedFileId_InvalidatesPriorDependencyLockContract_Issue4845()
     {
         const string language = "dependency_lock";

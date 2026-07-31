@@ -3153,6 +3153,72 @@ public class LspServerTests
     }
 
     [Fact]
+    public void HandleMessage_DocumentSymbol_MarkdownRangeEndsOnLastPhysicalLine_Issue4910()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_markdown_range_4910");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var sourcePath = Path.Combine(projectRoot, "guide.md");
+            const string source = "# Root\r\nroot body\r\n## Nested\r\nnested body\r\n### Empty\r\n";
+            File.WriteAllText(sourcePath, source);
+            TestProjectHelper.InsertIndexedFile(dbPath, "guide.md", "markdown", source);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+
+            var response = HandleInitializedMessage(
+                server,
+                CreateTextDocumentRequest("textDocument/documentSymbol", sourcePath, 4910));
+
+            Assert.NotNull(response);
+            var root = Assert.Single(response!["result"]!.AsArray());
+            var nested = Assert.Single(root!["children"]!.AsArray());
+            var empty = Assert.Single(nested!["children"]!.AsArray());
+            foreach (var symbol in new[] { root, nested, empty })
+            {
+                Assert.Equal(4, symbol!["range"]!["end"]!["line"]!.GetValue<int>());
+                Assert.InRange(symbol["selectionRange"]!["end"]!["line"]!.GetValue<int>(), 0, 4);
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void HandleMessage_DocumentSymbol_UnclosedMarkdownFenceStaysNestedAtPhysicalEof_Issue4910()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_markdown_fence_range_4910");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var sourcePath = Path.Combine(projectRoot, "fenced.md");
+            const string source = "# Root\r\n```csharp\r\ncode\r\n";
+            File.WriteAllText(sourcePath, source);
+            TestProjectHelper.InsertIndexedFile(dbPath, "fenced.md", "markdown", source);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+
+            var response = HandleInitializedMessage(
+                server,
+                CreateTextDocumentRequest("textDocument/documentSymbol", sourcePath, 49101));
+
+            Assert.NotNull(response);
+            var root = Assert.Single(response!["result"]!.AsArray());
+            Assert.Equal("Root", root!["name"]!.GetValue<string>());
+            Assert.Equal(2, root["range"]!["end"]!["line"]!.GetValue<int>());
+            var code = Assert.Single(root["children"]!.AsArray());
+            Assert.Equal("csharp", code!["name"]!.GetValue<string>());
+            Assert.Equal(2, code["range"]!["end"]!["line"]!.GetValue<int>());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void HandleMessage_NormalizedCSharpField_UsesLspFieldKinds_Issue4865()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_csharp_field_kind");
