@@ -2470,6 +2470,42 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunUnused_MaxJsonBytesCapsDatabaseCodeIndexExceptionJson_Issue4904()
+    {
+        var (projectRoot, dbPath) = CreateUnusedFixtureDb();
+        try
+        {
+            using var env = EnvironmentVariableScope.Capture(DatabasePermissionPolicy.EnvironmentVariable);
+            env.Set(DatabasePermissionPolicy.EnvironmentVariable, "invalid");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                ["--db", dbPath, "--json", "--all", "--max-json-bytes", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains("Invalid CDIDX_DB_PERMISSION_POLICY value", stderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void UnusedByteTruncatedFinalWindowRequiresUsableContinuationCursor_Issue4904()
+    {
+        Assert.True(QueryCommandRunner.CanEmitUnusedByteTruncatedPageForTests(
+            QueryCommandRunner.MaxQueryResultLimit,
+            QueryCommandRunner.MaxUnusedPaginationOffset - 1,
+            emittedCount: 1));
+        Assert.False(QueryCommandRunner.CanEmitUnusedByteTruncatedPageForTests(
+            QueryCommandRunner.MaxQueryResultLimit,
+            QueryCommandRunner.MaxUnusedPaginationOffset,
+            emittedCount: 1));
+    }
+
+    [Fact]
     public void RunUnused_MaxJsonBytesRenarrowsSqlReadinessToEmittedRows_Issue4904()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue4904_sql_page_budget");

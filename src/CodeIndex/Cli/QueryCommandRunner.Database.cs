@@ -163,7 +163,8 @@ public static partial class QueryCommandRunner
                 CodeIndexExceptionFormatter.Write(
                     codeIndexException,
                     options.Json ? ["--json"] : [],
-                    jsonOptions);
+                    jsonOptions,
+                    options.MaxJsonBytes);
                 Database.DbDebug.DumpToStderr(ex);
                 return ProgramRunner.MapCodeIndexExceptionExitCode(codeIndexException.Code);
             }

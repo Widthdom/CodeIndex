@@ -812,7 +812,7 @@ public static partial class QueryCommandRunner
         PaginationCursorContext cursorContext,
         UnusedDefaultSuppressionResult suppression)
     {
-        string BuildCandidate(int emittedCount, bool byteLimitReached)
+        (string Json, bool HasUsableContinuation) BuildCandidate(int emittedCount, bool byteLimitReached)
         {
             var emittedResults = emittedCount == requestedResults.Count
                 ? requestedResults
@@ -830,30 +830,36 @@ public static partial class QueryCommandRunner
                 && IsUnusedCursorOffsetWithinFetchCap(options.Limit, nextOffset)
                 ? FormatUnusedCursor(nextOffset, cursorContext)
                 : null;
-            return BuildUnusedJsonPayload(
-                emittedResults,
-                graphSupported,
-                graphSupportReason,
-                emittedSqlGraphSignal,
-                hdlGraphSignal,
-                hasReferencesTable,
-                jsonOptions,
-                options,
-                unusedScope,
-                byBucket,
-                nextCursor,
-                cursorContext,
-                suppression,
-                options.MaxJsonBytes,
-                byteLimitReached,
-                requestedResults.Count - emittedCount);
+            return (
+                BuildUnusedJsonPayload(
+                    emittedResults,
+                    graphSupported,
+                    graphSupportReason,
+                    emittedSqlGraphSignal,
+                    hdlGraphSignal,
+                    hasReferencesTable,
+                    jsonOptions,
+                    options,
+                    unusedScope,
+                    byBucket,
+                    nextCursor,
+                    cursorContext,
+                    suppression,
+                    options.MaxJsonBytes,
+                    byteLimitReached,
+                    requestedResults.Count - emittedCount),
+                CanEmitUnusedByteTruncatedPage(
+                    hasMore,
+                    options.Limit,
+                    pageOffset,
+                    emittedCount));
         }
 
-        var fullJson = BuildCandidate(requestedResults.Count, byteLimitReached: false);
+        var fullCandidate = BuildCandidate(requestedResults.Count, byteLimitReached: false);
         if (!options.MaxJsonBytes.HasValue
-            || JsonEnvelopeWrapper.JsonFitsResponseBudget(fullJson, options.MaxJsonBytes.Value))
+            || JsonEnvelopeWrapper.JsonFitsResponseBudget(fullCandidate.Json, options.MaxJsonBytes.Value))
         {
-            Console.WriteLine(fullJson);
+            Console.WriteLine(fullCandidate.Json);
             return true;
         }
 
@@ -867,19 +873,24 @@ public static partial class QueryCommandRunner
         }
 
         string? bestJson = null;
+        var continuationBlocked = false;
         var low = 1;
         var high = requestedResults.Count - 1;
         while (low <= high)
         {
             var count = low + ((high - low) / 2);
-            var candidateJson = BuildCandidate(count, byteLimitReached: true);
-            if (JsonEnvelopeWrapper.JsonFitsResponseBudget(candidateJson, options.MaxJsonBytes.Value))
+            var candidate = BuildCandidate(count, byteLimitReached: true);
+            var fitsBudget = JsonEnvelopeWrapper.JsonFitsResponseBudget(
+                candidate.Json,
+                options.MaxJsonBytes.Value);
+            if (fitsBudget && candidate.HasUsableContinuation)
             {
-                bestJson = candidateJson;
+                bestJson = candidate.Json;
                 low = count + 1;
             }
             else
             {
+                continuationBlocked |= fitsBudget;
                 high = count - 1;
             }
         }
@@ -890,12 +901,40 @@ public static partial class QueryCommandRunner
             return true;
         }
 
+        if (continuationBlocked)
+        {
+            WriteUsageError(
+                $"--max-json-bytes {options.MaxJsonBytes.Value.ToString(CultureInfo.InvariantCulture)} cannot emit a byte-truncated unused page with a continuation cursor inside the pagination safety window.",
+                GetUsageLineOrThrow("unused"),
+                "Reduce --limit and retry the same cursor, or narrow the unused query before restarting pagination.");
+            return false;
+        }
+
         WriteUsageError(
             $"--max-json-bytes {options.MaxJsonBytes.Value.ToString(CultureInfo.InvariantCulture)} is too small for the unused response metadata and one canonical symbol row.",
             GetUsageLineOrThrow("unused"),
             "Increase --max-json-bytes or narrow the unused query before restarting pagination.");
         return false;
     }
+
+    private static bool CanEmitUnusedByteTruncatedPage(
+        bool hasMore,
+        int pageLimit,
+        int pageOffset,
+        int emittedCount)
+        => !hasMore
+           || emittedCount > 0
+           && IsUnusedCursorOffsetWithinFetchCap(pageLimit, pageOffset + emittedCount);
+
+    internal static bool CanEmitUnusedByteTruncatedPageForTests(
+        int pageLimit,
+        int pageOffset,
+        int emittedCount)
+        => CanEmitUnusedByteTruncatedPage(
+            hasMore: true,
+            pageLimit,
+            pageOffset,
+            emittedCount);
 
     private static string BuildUnusedJsonPayload(
         IEnumerable<UnusedSymbolResult> results,
