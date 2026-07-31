@@ -2990,6 +2990,25 @@ public partial class QueryCommandRunnerTests
                 """);
             TestProjectHelper.InsertIndexedFile(
                 dbPath,
+                "src/mixed-boundary-writer.cs",
+                "csharp",
+                """
+                using System.Text.Encodings.Web;
+
+                public static class MixedBoundaryWriter
+                {
+                    public static JavaScriptEncoder Create()
+                    {
+                        // cdidx-audit: json-trust origin=private_local direction=write sensitivity=diagnostic trust=controlled rationale=private_diagnostic
+                        var privateEncoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping;
+                        // cdidx-audit: json-trust origin=public_api direction=write sensitivity=public trust=untrusted rationale=public_response
+                        var publicEncoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping;
+                        return publicEncoder;
+                    }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
                 "src/private-looking-writer.cs",
                 "csharp",
                 """
@@ -3105,13 +3124,36 @@ public partial class QueryCommandRunnerTests
             var (parserExitCode, parserStdout, parserStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 ["--recipe", "json-parse-apis/json-document-parse", "--db", dbPath, "--json", "--limit", "10", "--snippet-lines", "1"],
                 _jsonOptions));
+            var (guardedExitCode, guardedStdout, guardedStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [
+                    "--recipe", "dogfood-risk-patterns/relaxed-json-encoder",
+                    "--db", dbPath,
+                    "--path", "src/private-writer.cs",
+                    "--require-before", "JavaScriptEncoder",
+                    "--guard-scope", "same-line",
+                    "--json",
+                    "--limit", "10",
+                    "--snippet-lines", "1",
+                ],
+                _jsonOptions));
+            var (guardedCountExitCode, guardedCountStdout, guardedCountStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [
+                    "--recipe", "dogfood-risk-patterns/relaxed-json-encoder",
+                    "--db", dbPath,
+                    "--path", "src/private-writer.cs",
+                    "--require-before", "JavaScriptEncoder",
+                    "--guard-scope", "same-line",
+                    "--format", "count",
+                    "--json",
+                ],
+                _jsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, writerExitCode);
             Assert.Equal(string.Empty, writerStderr);
             using (var document = ParseJsonOutput(writerStdout))
             {
                 var query = Assert.Single(document.RootElement.GetProperty("queries").EnumerateArray());
-                Assert.Equal(7, query.GetProperty("count").GetInt32());
+                Assert.Equal(8, query.GetProperty("count").GetInt32());
                 var trustClassifier = Assert.Single(
                     query.GetProperty("classifiers").EnumerateArray(),
                     classifier => classifier.GetProperty("name").GetString() == "json_trust_boundary");
@@ -3125,7 +3167,7 @@ public partial class QueryCommandRunnerTests
                     query,
                     ("controlled_private_writer", 1),
                     ("external_or_public_writer", 1),
-                    ("ambiguous_trust", 5));
+                    ("ambiguous_trust", 6));
 
                 var results = query.GetProperty("results").EnumerateArray().ToArray();
                 AssertJsonTrustClassification(
@@ -3138,6 +3180,11 @@ public partial class QueryCommandRunnerTests
                     "external_or_public_writer",
                     "origin:public_api",
                     "trust:untrusted");
+                AssertJsonTrustClassification(
+                    Assert.Single(results, result => result.GetProperty("path").GetString() == "src/mixed-boundary-writer.cs"),
+                    "ambiguous_trust",
+                    "annotation_status:mixed_boundaries",
+                    "boundary_categories:controlled_private_writer,external_or_public_writer");
                 AssertJsonTrustClassification(
                     Assert.Single(results, result => result.GetProperty("path").GetString() == "src/private-looking-writer.cs"),
                     "ambiguous_trust",
@@ -3161,6 +3208,27 @@ public partial class QueryCommandRunnerTests
                         "origin:unknown",
                         "annotation_status:invalid");
                 }
+            }
+
+            Assert.Equal(CommandExitCodes.Success, guardedExitCode);
+            Assert.Equal(string.Empty, guardedStderr);
+            using (var document = ParseJsonOutput(guardedStdout))
+            {
+                var query = Assert.Single(document.RootElement.GetProperty("queries").EnumerateArray());
+                AssertJsonTrustClassifierCounts(query, ("controlled_private_writer", 1));
+                AssertJsonTrustClassification(
+                    Assert.Single(query.GetProperty("results").EnumerateArray()),
+                    "controlled_private_writer",
+                    "origin:private_local",
+                    "annotation_status:valid");
+            }
+
+            Assert.Equal(CommandExitCodes.Success, guardedCountExitCode);
+            Assert.Equal(string.Empty, guardedCountStderr);
+            using (var document = ParseJsonOutput(guardedCountStdout))
+            {
+                var query = Assert.Single(document.RootElement.GetProperty("queries").EnumerateArray());
+                AssertJsonTrustClassifierCounts(query, ("controlled_private_writer", 1));
             }
 
             Assert.Equal(CommandExitCodes.Success, parserExitCode);
