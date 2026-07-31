@@ -24,6 +24,88 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void BuildSearchRecipeQueryFreshness_SeparatesResultsFromInvalidation_Issue4907()
+    {
+        var expectedQueries = new[]
+        {
+            new QueryCommandRunner.SearchQueryFreshnessExpectedQuery("matched", "query-v1"),
+            new QueryCommandRunner.SearchQueryFreshnessExpectedQuery("zero", "query-v1"),
+        };
+        var cleanContext = new QueryCommandRunner.SearchQueryFreshnessContext(
+            "current",
+            null,
+            "recipe-v1",
+            "recipe-v1",
+            expectedQueries);
+        var cleanObservations = new[]
+        {
+            new QueryCommandRunner.SearchQueryFreshnessObservation("matched", 2, "query-v1", true, null),
+            new QueryCommandRunner.SearchQueryFreshnessObservation("zero", 0, "query-v1", true, null),
+        };
+
+        var clean = QueryCommandRunner.BuildSearchRecipeQueryFreshnessForTests(cleanContext, cleanObservations);
+        Assert.Equal("clean", clean.State);
+        Assert.Equal(2, clean.CleanQueryCount);
+        Assert.Equal(1, clean.MatchedQueryCount);
+        Assert.Equal(1, clean.CleanZeroMatchQueryCount);
+        Assert.Equal(["zero"], clean.CleanZeroMatchQueryNames);
+        Assert.Empty(clean.StaleQueryNames);
+        Assert.Equal(clean.Queries.Count, clean.CleanQueryCount + clean.StaleQueryCount + clean.InvalidQueryCount);
+
+        var missing = QueryCommandRunner.BuildSearchRecipeQueryFreshnessForTests(
+            cleanContext,
+            cleanObservations.Take(1));
+        Assert.Equal("mixed", missing.State);
+        Assert.Equal(["zero"], missing.InvalidQueryNames);
+        Assert.Equal(
+            "missing_query_result",
+            Assert.Single(missing.Queries, query => query.Name == "zero").Reason);
+
+        var changedRecipe = QueryCommandRunner.BuildSearchRecipeQueryFreshnessForTests(
+            cleanContext with { ExecutedRecipeVersion = "recipe-v2" },
+            cleanObservations);
+        Assert.Equal("stale", changedRecipe.State);
+        Assert.Equal(2, changedRecipe.StaleQueryCount);
+        Assert.All(changedRecipe.Queries, query => Assert.Equal("recipe_definition_changed", query.Reason));
+
+        var changedQuery = QueryCommandRunner.BuildSearchRecipeQueryFreshnessForTests(
+            cleanContext,
+            [
+                cleanObservations[0],
+                cleanObservations[1] with { DefinitionVersion = "query-v2" },
+            ]);
+        Assert.Equal("mixed", changedQuery.State);
+        Assert.Equal(["zero"], changedQuery.StaleQueryNames);
+        Assert.Equal(
+            "query_definition_changed",
+            Assert.Single(changedQuery.Queries, query => query.Name == "zero").Reason);
+
+        var staleIndex = QueryCommandRunner.BuildSearchRecipeQueryFreshnessForTests(
+            cleanContext with { IndexState = "stale", IndexReason = "index_head_changed" },
+            cleanObservations);
+        Assert.Equal("stale", staleIndex.State);
+        Assert.Equal(2, staleIndex.StaleQueryCount);
+        Assert.Equal(1, staleIndex.ZeroResultQueryCount);
+        Assert.Equal(0, staleIndex.CleanZeroMatchQueryCount);
+        Assert.All(staleIndex.Queries, query => Assert.Equal("index_head_changed", query.Reason));
+
+        var failedChild = QueryCommandRunner.BuildSearchRecipeQueryFreshnessForTests(
+            cleanContext,
+            [
+                cleanObservations[0],
+                new("zero", null, "query-v1", false, "query_execution_failed"),
+            ]);
+        Assert.Equal("mixed", failedChild.State);
+        Assert.Equal(["zero"], failedChild.InvalidQueryNames);
+        Assert.Equal(
+            "query_execution_failed",
+            Assert.Single(failedChild.Queries, query => query.Name == "zero").Reason);
+        Assert.Equal(
+            failedChild.Queries.Count,
+            failedChild.CleanQueryCount + failedChild.StaleQueryCount + failedChild.InvalidQueryCount);
+    }
+
+    [Fact]
     public void SearchMatchClassifier_McpSchemaDescriptionHasDedicatedOrigin_Issues4416_4864()
     {
         const string schemaLine = "[\"tokenBoundary\"] = new JsonObject { [\"description\"] = \"Use new HttpClient as an example.\" };";
@@ -1094,7 +1176,7 @@ public partial class QueryCommandRunnerTests
                 "Run nuget push after package validation.");
 
             var (countExitCode, countStdout, countStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                ["--named-query=pack=dotnet pack", "--named-query=push=nuget push", "--db", dbPath, "--format", "count", "--json", "--limit", "1"],
+                ["--named-query=pack=dotnet pack", "--named-query=push=nuget push", "--named-query=todo=TODO", "--db", dbPath, "--format", "count", "--json", "--limit", "1"],
                 _jsonOptions));
             var (summaryExitCode, summaryStdout, summaryStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 ["--named-query=pack=dotnet pack", "--named-query=push=nuget push", "--db", dbPath, "--summary-only", "--json", "--limit", "1"],
@@ -1108,7 +1190,7 @@ public partial class QueryCommandRunnerTests
             using var summaryDocument = ParseJsonOutput(summaryStdout);
             var countRoot = countDocument.RootElement;
             var summaryRoot = summaryDocument.RootElement;
-            Assert.Equal(2, countRoot.GetProperty("query_count").GetInt32());
+            Assert.Equal(3, countRoot.GetProperty("query_count").GetInt32());
             Assert.Equal(3, countRoot.GetProperty("result_count").GetInt32());
             Assert.Equal(3, countRoot.GetProperty("file_count").GetInt32());
             Assert.Equal(3, summaryRoot.GetProperty("result_count").GetInt32());
@@ -1118,7 +1200,67 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(2, pack.GetProperty("file_count").GetInt32());
             Assert.False(pack.TryGetProperty("results", out _));
             Assert.Equal(2, countRoot.GetProperty("query_freshness").GetProperty("positive_evidence_query_count").GetInt32());
-            Assert.Equal(0, countRoot.GetProperty("query_freshness").GetProperty("zero_result_query_count").GetInt32());
+            var freshness = countRoot.GetProperty("query_freshness");
+            Assert.Equal(1, freshness.GetProperty("zero_result_query_count").GetInt32());
+            Assert.Equal("clean", freshness.GetProperty("state").GetString());
+            Assert.Equal(3, freshness.GetProperty("clean_query_count").GetInt32());
+            Assert.Equal(2, freshness.GetProperty("matched_query_count").GetInt32());
+            Assert.Equal(1, freshness.GetProperty("clean_zero_match_query_count").GetInt32());
+            Assert.Contains(freshness.GetProperty("clean_zero_match_query_names").EnumerateArray(), name => name.GetString() == "todo");
+            Assert.Empty(freshness.GetProperty("stale_query_names").EnumerateArray());
+            Assert.False(freshness.TryGetProperty("recipe_version", out _));
+            var todo = Assert.Single(
+                freshness.GetProperty("queries").EnumerateArray(),
+                query => query.GetProperty("name").GetString() == "todo");
+            Assert.Equal("clean", todo.GetProperty("freshness_state").GetString());
+            Assert.Equal("zero_match", todo.GetProperty("result_state").GetString());
+
+            var (failedExitCode, failedStdout, failedStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--named-query=good=dotnet pack", "--named-query=bad=(", "--fts", "--db", dbPath, "--format", "count", "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, failedExitCode);
+            Assert.Contains("one or more named queries failed", failedStderr, StringComparison.Ordinal);
+            using var failedDocument = ParseJsonOutput(failedStdout);
+            var failedFreshness = failedDocument.RootElement.GetProperty("query_freshness");
+            Assert.Equal("mixed", failedFreshness.GetProperty("state").GetString());
+            Assert.Equal(1, failedFreshness.GetProperty("clean_query_count").GetInt32());
+            Assert.Equal(1, failedFreshness.GetProperty("invalid_query_count").GetInt32());
+            Assert.Equal(0, failedFreshness.GetProperty("zero_result_query_count").GetInt32());
+            Assert.Contains(failedFreshness.GetProperty("invalid_query_names").EnumerateArray(), name => name.GetString() == "bad");
+            var failedQuery = Assert.Single(
+                failedFreshness.GetProperty("queries").EnumerateArray(),
+                query => query.GetProperty("name").GetString() == "bad");
+            Assert.Equal("invalid", failedQuery.GetProperty("freshness_state").GetString());
+            Assert.Equal("unknown", failedQuery.GetProperty("result_state").GetString());
+            Assert.Equal("query_syntax_invalid", failedQuery.GetProperty("reason").GetString());
+
+            using (var connection = new SqliteConnection($"Data Source={dbPath}"))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText =
+                    "INSERT INTO codeindex_meta(key, value) VALUES ($key, 'incomplete') "
+                    + "ON CONFLICT(key) DO UPDATE SET value = excluded.value";
+                command.Parameters.AddWithValue("$key", DbContext.IndexCompletenessMetaKey);
+                command.ExecuteNonQuery();
+            }
+
+            var (staleExitCode, staleStdout, staleStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--named-query=pack=dotnet pack", "--named-query=push=nuget push", "--named-query=todo=TODO", "--db", dbPath, "--format", "count", "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, staleExitCode);
+            Assert.Equal(string.Empty, staleStderr);
+            using var staleDocument = ParseJsonOutput(staleStdout);
+            var staleFreshness = staleDocument.RootElement.GetProperty("query_freshness");
+            Assert.Equal("stale", staleFreshness.GetProperty("state").GetString());
+            Assert.Equal("stale", staleFreshness.GetProperty("index_state").GetString());
+            Assert.Equal("index_incomplete", staleFreshness.GetProperty("index_reason").GetString());
+            Assert.Equal(3, staleFreshness.GetProperty("stale_query_count").GetInt32());
+            Assert.Equal(1, staleFreshness.GetProperty("zero_result_query_count").GetInt32());
+            Assert.Equal(0, staleFreshness.GetProperty("clean_zero_match_query_count").GetInt32());
+            Assert.Contains(staleFreshness.GetProperty("stale_query_names").EnumerateArray(), name => name.GetString() == "todo");
         }
         finally
         {
@@ -5311,6 +5453,12 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(1, runProperties.GetProperty("query_count").GetInt32());
             Assert.Equal(1, runProperties.GetProperty("result_count").GetInt32());
             Assert.Equal(1, runProperties.GetProperty("limit_per_query").GetInt32());
+            var sarifFreshness = runProperties.GetProperty("query_freshness");
+            Assert.Equal("clean", sarifFreshness.GetProperty("state").GetString());
+            Assert.Equal(1, sarifFreshness.GetProperty("clean_query_count").GetInt32());
+            Assert.Equal(1, sarifFreshness.GetProperty("matched_query_count").GetInt32());
+            Assert.Equal(0, sarifFreshness.GetProperty("clean_zero_match_query_count").GetInt32());
+            Assert.Empty(sarifFreshness.GetProperty("stale_query_names").EnumerateArray());
             Assert.True(runProperties.GetProperty("truncation").GetProperty("truncated").GetBoolean());
             var querySummary = Assert.Single(runProperties.GetProperty("queries").EnumerateArray());
             Assert.Equal("raw-diagnostic-echo", querySummary.GetProperty("name").GetString());
@@ -5330,6 +5478,10 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(2, totalLimitRun.GetProperty("properties").GetProperty("query_count").GetInt32());
             Assert.Equal(1, totalLimitRun.GetProperty("properties").GetProperty("result_count").GetInt32());
             Assert.Equal(1, totalLimitRun.GetProperty("properties").GetProperty("total_limit").GetInt32());
+            var totalLimitFreshness = totalLimitRun.GetProperty("properties").GetProperty("query_freshness");
+            Assert.Equal("clean", totalLimitFreshness.GetProperty("state").GetString());
+            Assert.Equal(2, totalLimitFreshness.GetProperty("clean_query_count").GetInt32());
+            Assert.Equal(2, totalLimitFreshness.GetProperty("matched_query_count").GetInt32());
         }
         finally
         {
@@ -5464,7 +5616,7 @@ public partial class QueryCommandRunnerTests
             var root = document.RootElement;
             var queries = root.GetProperty("queries").EnumerateArray().ToArray();
             var query = Assert.Single(queries, item => item.GetProperty("name").GetString() == "raw-diagnostic-echo");
-            var staleQuery = Assert.Single(queries, item => item.GetProperty("name").GetString() == "unbounded-json-parse");
+            var zeroMatchQuery = Assert.Single(queries, item => item.GetProperty("name").GetString() == "unbounded-json-parse");
             var freshness = root.GetProperty("query_freshness");
 
             Assert.Equal("risky-code", root.GetProperty("recipe").GetString());
@@ -5475,13 +5627,40 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("raw-diagnostic-echo", query.GetProperty("name").GetString());
             Assert.Equal(2, query.GetProperty("count").GetInt32());
             Assert.Equal(2, query.GetProperty("file_count").GetInt32());
-            Assert.Equal(0, staleQuery.GetProperty("count").GetInt32());
-            Assert.Equal(0, staleQuery.GetProperty("file_count").GetInt32());
+            Assert.Equal(0, zeroMatchQuery.GetProperty("count").GetInt32());
+            Assert.Equal(0, zeroMatchQuery.GetProperty("file_count").GetInt32());
             Assert.Equal(1, freshness.GetProperty("positive_evidence_query_count").GetInt32());
             Assert.Equal(1, freshness.GetProperty("zero_result_query_count").GetInt32());
-            Assert.Contains(freshness.GetProperty("stale_query_names").EnumerateArray(), name => name.GetString() == "unbounded-json-parse");
+            Assert.Equal("clean", freshness.GetProperty("state").GetString());
+            Assert.Equal(2, freshness.GetProperty("clean_query_count").GetInt32());
+            Assert.Equal(1, freshness.GetProperty("matched_query_count").GetInt32());
+            Assert.Equal(1, freshness.GetProperty("clean_zero_match_query_count").GetInt32());
+            Assert.Contains(freshness.GetProperty("clean_zero_match_query_names").EnumerateArray(), name => name.GetString() == "unbounded-json-parse");
+            Assert.Equal(0, freshness.GetProperty("stale_query_count").GetInt32());
+            Assert.Equal(0, freshness.GetProperty("invalid_query_count").GetInt32());
+            Assert.Empty(freshness.GetProperty("stale_query_names").EnumerateArray());
+            Assert.Equal("current", freshness.GetProperty("index_state").GetString());
+            Assert.False(freshness.TryGetProperty("index_reason", out _));
+            Assert.Equal(64, freshness.GetProperty("recipe_version").GetString()!.Length);
+            Assert.Equal(2, freshness.GetProperty("queries").GetArrayLength());
+            var zeroMatchFreshness = Assert.Single(
+                freshness.GetProperty("queries").EnumerateArray(),
+                item => item.GetProperty("name").GetString() == "unbounded-json-parse");
+            Assert.Equal("clean", zeroMatchFreshness.GetProperty("freshness_state").GetString());
+            Assert.Equal("zero_match", zeroMatchFreshness.GetProperty("result_state").GetString());
+            Assert.Equal("executed_current_definition", zeroMatchFreshness.GetProperty("reason").GetString());
             Assert.False(query.TryGetProperty("query", out _));
             Assert.False(query.TryGetProperty("top_files", out _));
+
+            var (textExitCode, textStdout, textStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "risky-code/unbounded-json-parse", "--db", dbPath, "--origin", "code", "--limit", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, textExitCode);
+            Assert.Contains("Query freshness: clean", textStdout, StringComparison.Ordinal);
+            Assert.Contains("clean zero-match=1", textStdout, StringComparison.Ordinal);
+            Assert.DoesNotContain("Stale queries:", textStdout, StringComparison.Ordinal);
+            Assert.Contains("0 recipe results across 1 queries", textStderr, StringComparison.Ordinal);
 
             var (capExitCode, capStdout, capStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 ["--recipe", "risky-code/raw-diagnostic-echo", "--db", dbPath, "--format", "count", "--summary-only", "--origin", "code", "--max-json-bytes", "1"],
@@ -9137,7 +9316,11 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(1, root.GetProperty("result_count").GetInt32());
             Assert.Equal(1, freshness.GetProperty("positive_evidence_query_count").GetInt32());
             Assert.Equal(1, freshness.GetProperty("zero_result_query_count").GetInt32());
-            Assert.Contains(freshness.GetProperty("stale_query_names").EnumerateArray(), name => name.GetString() == "unbounded-json-parse");
+            Assert.Equal("clean", freshness.GetProperty("state").GetString());
+            Assert.Equal(2, freshness.GetProperty("clean_query_count").GetInt32());
+            Assert.Equal(1, freshness.GetProperty("clean_zero_match_query_count").GetInt32());
+            Assert.Contains(freshness.GetProperty("clean_zero_match_query_names").EnumerateArray(), name => name.GetString() == "unbounded-json-parse");
+            Assert.Empty(freshness.GetProperty("stale_query_names").EnumerateArray());
             Assert.Equal("raw-diagnostic-echo", source.GetProperty("query_name").GetString());
             Assert.Contains(source.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("raw exception messages", StringComparison.Ordinal));
         }
@@ -9197,6 +9380,9 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(1, root.GetProperty("result_count").GetInt32());
             Assert.Equal(2, freshness.GetProperty("positive_evidence_query_count").GetInt32());
             Assert.Equal(0, freshness.GetProperty("zero_result_query_count").GetInt32());
+            Assert.Equal("clean", freshness.GetProperty("state").GetString());
+            Assert.Equal(2, freshness.GetProperty("clean_query_count").GetInt32());
+            Assert.Equal(0, freshness.GetProperty("clean_zero_match_query_count").GetInt32());
             Assert.Empty(freshness.GetProperty("stale_query_names").EnumerateArray());
         }
         finally

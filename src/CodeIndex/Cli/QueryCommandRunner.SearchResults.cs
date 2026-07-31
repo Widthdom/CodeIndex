@@ -930,29 +930,56 @@ public static partial class QueryCommandRunner
     {
         return WithDb(options, jsonOptions, reader =>
         {
-            var queryCounts = CountSearchNamedBatchQueryResults(reader, options, userExact, out var total, out var fileCount);
+            var freshnessContext = BuildNamedSearchFreshnessContext(
+                reader,
+                options.NamedSearchQueries,
+                options,
+                userExact);
+            var queryCounts = CountSearchNamedBatchQueryResults(
+                reader,
+                options,
+                userExact,
+                freshnessContext,
+                out var total,
+                out var fileCount,
+                out var freshnessObservations,
+                out var hasFailures);
 
             if (options.Json)
             {
+                var freshness = BuildSearchRecipeQueryFreshness(
+                    freshnessContext,
+                    freshnessObservations);
                 var json = JsonSerializer.Serialize(
                     new SearchNamedBatchCountSummaryRunJsonResult(
                         JsonOutputContract.ApiVersion,
                         queryCounts.Count,
                         total,
                         fileCount,
-                        BuildSearchRecipeQueryFreshness(queryCounts.Select(query => (query.Name, query.Count))),
+                        freshness,
                         queryCounts),
                     CliJsonSerializerContextFactory.Create(jsonOptions).SearchNamedBatchCountSummaryRunJsonResult);
-                return WriteJsonObjectWithOptionalByteLimit(
+                var writeExitCode = WriteJsonObjectWithOptionalByteLimit(
                     json,
                     options,
                     "named-query count summary",
                     "Use a larger --max-json-bytes value or narrow the named-query selection.");
+                if (writeExitCode != CommandExitCodes.Success || !hasFailures)
+                    return writeExitCode;
+
+                CommandErrorWriter.WriteStderr(
+                    $"Error [{CommandErrorCodes.UsageError}]: one or more named queries failed; inspect query_freshness.invalid_query_names.");
+                return CommandExitCodes.UsageError;
             }
 
             Console.WriteLine(total.ToString(CultureInfo.InvariantCulture));
             CommandErrorWriter.WriteStderr($"({total} named-query results in {fileCount} files across {queryCounts.Count} queries)");
-            return CommandExitCodes.Success;
+            if (!hasFailures)
+                return CommandExitCodes.Success;
+
+            CommandErrorWriter.WriteStderr(
+                $"Error [{CommandErrorCodes.UsageError}]: one or more named queries failed.");
+            return CommandExitCodes.UsageError;
         });
     }
 
