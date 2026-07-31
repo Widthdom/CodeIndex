@@ -180,6 +180,20 @@ public class CliFlagSchemaTests
     }
 
     [Fact]
+    public void MemberReadCompatibilityFlag_IsScopedToGraphTraversalCommands_Issue4894()
+    {
+        const string flag = "--include-member-reads";
+        foreach (var command in new[] { "callers", "callees", "impact" })
+        {
+            Assert.Contains(flag, CliFlagSchema.GetAcceptedFlagNamesForCommand(command));
+            Assert.Contains(CliFlagSchema.GetCompletionFlagsForCommand(command), option => option.Name == flag);
+        }
+
+        Assert.DoesNotContain(flag, CliFlagSchema.GetAcceptedFlagNamesForCommand("references"));
+        Assert.DoesNotContain(flag, CliFlagSchema.GetAcceptedFlagNamesForCommand("search"));
+    }
+
+    [Fact]
     public void UpgradeFlags_SurfaceImplementedSelectionAndJsonOptions()
     {
         var accepted = CliFlagSchema.GetAcceptedFlagNamesForCommand("upgrade");

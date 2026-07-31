@@ -7,6 +7,13 @@ namespace CodeIndex.Cli;
 
 public static partial class QueryCommandRunner
 {
+    internal sealed record OutlinePageBuildResult(
+        JsonObject? Payload,
+        OutlineResult? Outline,
+        string? Error,
+        bool NotFound,
+        IReadOnlyList<OutlineSymbol>? PageSymbols = null);
+
     public static int RunOutline(string[] cmdArgs, JsonSerializerOptions jsonOptions)
     {
         var wantsJson = cmdArgs.Any(static arg =>
@@ -199,6 +206,100 @@ public static partial class QueryCommandRunner
             }
             return CommandExitCodes.Success;
         });
+    }
+
+    internal static bool TryNormalizeOutlineProjectionFields(
+        string rawValue,
+        out List<string>? fields,
+        out string? error)
+    {
+        var errors = new List<string>();
+        fields = ParseOutlineProjectionFields(rawValue, errors.Add);
+        error = errors.Count == 0
+            ? null
+            : errors[0]
+                .Replace("Error: ", string.Empty, StringComparison.Ordinal)
+                .Replace("--outline-fields", "fields", StringComparison.Ordinal);
+        return error == null;
+    }
+
+    internal static OutlinePageBuildResult BuildOutlinePage(
+        DbReader reader,
+        string filePath,
+        IReadOnlyList<string>? fields,
+        bool fieldsExplicit,
+        string? requestedSort,
+        int limit,
+        string? cursor,
+        JsonSerializerOptions jsonOptions)
+    {
+        var sortExplicit = !string.IsNullOrWhiteSpace(requestedSort);
+        var outlineSortMode = OutlineSortMode.Source;
+        if (sortExplicit && !TryParseOutlineSortMode(requestedSort!, out outlineSortMode))
+        {
+            return new(
+                null,
+                null,
+                "sort must be one of source, name, kind, references, size, complexity, or path.",
+                NotFound: false);
+        }
+
+        int? cursorOffset = null;
+        if (cursor != null)
+        {
+            if (!TryParseScopedOffsetCursor(cursor, out var parsedCursor)
+                || !string.Equals(parsedCursor.Scope, "outline", StringComparison.Ordinal))
+            {
+                return new(
+                    null,
+                    null,
+                    "cursor must be an outline pagination cursor; restart without cursor.",
+                    NotFound: false);
+            }
+            cursorOffset = parsedCursor.Offset;
+        }
+
+        var options = new QueryCommandOptions
+        {
+            Json = true,
+            Limit = limit,
+            LimitExplicit = true,
+            OutlineFields = fields?.ToList(),
+            OutlineFieldsExplicit = fieldsExplicit,
+            SortValue = requestedSort,
+            SortExplicit = sortExplicit,
+            CursorValue = cursor,
+            OutlineCursorOffset = cursorOffset,
+        };
+        var includeReferenceCounts = OutlineNeedsReferenceCounts(options, outlineSortMode);
+        var includeDerivedMetadata = OutlineNeedsDerivedMetadata(options, outlineSortMode);
+        var cursorComponents = new List<string?>
+        {
+            filePath,
+            FormatOutlineSortMode(outlineSortMode),
+        };
+        var cursorContext = BuildPaginationCursorContext(reader, "outline", cursorComponents);
+        var cursorValidationError = ValidateScopedOffsetCursor(options, "outline", cursorContext);
+        if (cursorValidationError != null)
+            return new(null, null, cursorValidationError, NotFound: false);
+
+        var outline = reader.GetOutline(filePath, includeReferenceCounts: includeReferenceCounts);
+        if (outline == null)
+            return new(null, null, null, NotFound: true);
+
+        var displaySymbols = ApplyOutlineSort(outline.Symbols, outlineSortMode, includeDerivedMetadata);
+        var pageOffset = Math.Min(cursorOffset ?? 0, displaySymbols.Count);
+        var pageSymbols = displaySymbols.Skip(pageOffset).Take(limit).ToList();
+        var payload = BuildOutlineJsonPayload(
+            outline,
+            displaySymbols,
+            [],
+            outlineSortMode,
+            options,
+            cursorContext,
+            jsonOptions,
+            compact: false);
+        return new(payload, outline, null, NotFound: false, pageSymbols);
     }
 
     private static JsonObject ApplyOutlineCompactCaps(OutlineResult outline, int sectionLimit)

@@ -1479,12 +1479,12 @@ public partial class ReferenceExtractorTests
 
         var aRefs = references.Where(reference => reference.SymbolName == "A").OrderBy(reference => reference.Line).ToList();
         Assert.Equal(2, aRefs.Count);
-        Assert.All(aRefs, reference => Assert.Equal("call", reference.ReferenceKind));
+        Assert.All(aRefs, reference => Assert.Equal("member_read", reference.ReferenceKind));
         Assert.Contains(aRefs, reference => reference.ContainerKind == "property" && reference.ContainerName == "Value");
         Assert.Contains(aRefs, reference => reference.ContainerKind == "function" && reference.ContainerName == "GetValue");
 
         var noneRef = Assert.Single(references.Where(reference => reference.SymbolName == "None"));
-        Assert.Equal("call", noneRef.ReferenceKind);
+        Assert.Equal("member_read", noneRef.ReferenceKind);
         Assert.Equal("function", noneRef.ContainerKind);
         Assert.Equal("Use", noneRef.ContainerName);
     }
@@ -1525,7 +1525,7 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_CsharpNonEnumQualifiedMemberAccess_DoesNotBecomeEnumMemberReference()
+    public void Extract_CsharpNonEnumQualifiedStaticMemberAccess_BecomesMemberRead_Issue4894()
     {
         const string content = """
             namespace Demo;
@@ -1552,11 +1552,14 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "A" && reference.ReferenceKind == "call");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "A"
+            && reference.ReferenceKind == "member_read"
+            && reference.ContainerName == "Read");
     }
 
     [Fact]
-    public void Extract_CsharpQualifiedEnumMemberAccess_WithConflictingNonEnumType_DoesNotLeakAcrossNamespaces()
+    public void Extract_CsharpQualifiedMemberRead_WithConflictingNonEnumType_UsesNearestType_Issue4894()
     {
         const string content = """
             namespace A;
@@ -1585,7 +1588,10 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
+        var ready = Assert.Single(references.Where(reference =>
+            reference.SymbolName == "Ready"
+            && reference.ReferenceKind == "member_read"));
+        Assert.Equal("Read", ready.ContainerName);
     }
 
     [Fact]
@@ -1632,9 +1638,11 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        var ready = Assert.Single(references.Where(reference => reference.SymbolName == "Ready"));
-        Assert.Equal("call", ready.ReferenceKind);
-        Assert.Equal("ReadEnum", ready.ContainerName);
+        var ready = references.Where(reference =>
+            reference.SymbolName == "Ready"
+            && reference.ReferenceKind == "member_read").ToList();
+        Assert.Equal(2, ready.Count);
+        Assert.Equal(["ReadEnum", "ReadNonEnum"], ready.Select(reference => reference.ContainerName).Order().ToArray());
     }
 
     [Fact]
@@ -1715,10 +1723,9 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
-        var readyRef = Assert.Single(readyRefs);
-        Assert.Equal(35, readyRef.Line);
-        Assert.Equal("Read", readyRef.ContainerName);
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "member_read").ToList();
+        Assert.Equal([22, 35], readyRefs.Select(reference => reference.Line).Order().ToArray());
+        Assert.All(readyRefs, readyRef => Assert.Equal("Read", readyRef.ContainerName));
     }
 
     [Fact]
@@ -1768,10 +1775,9 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
-        var readyRef = Assert.Single(readyRefs);
-        Assert.Equal(22, readyRef.Line);
-        Assert.Equal("Read", readyRef.ContainerName);
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "member_read").ToList();
+        Assert.Equal([22, 35], readyRefs.Select(reference => reference.Line).Order().ToArray());
+        Assert.All(readyRefs, readyRef => Assert.Equal("Read", readyRef.ContainerName));
     }
 
     [Fact]
@@ -1836,7 +1842,7 @@ public partial class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
         var readyRef = Assert.Single(references.Where(reference =>
-            reference.SymbolName == "Ready" && reference.ReferenceKind == "call"));
+            reference.SymbolName == "Ready" && reference.ReferenceKind == "member_read"));
         Assert.Equal("ReadInstanceFromStatic", readyRef.ContainerName);
     }
 
@@ -1950,7 +1956,7 @@ public partial class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
         var readyRefs = references
-            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call")
+            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "member_read")
             .OrderBy(reference => reference.ContainerName)
             .ToArray();
 
@@ -1985,7 +1991,7 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        var redRef = Assert.Single(references.Where(reference => reference.SymbolName == "Red" && reference.ReferenceKind == "call"));
+        var redRef = Assert.Single(references.Where(reference => reference.SymbolName == "Red" && reference.ReferenceKind == "member_read"));
         Assert.Equal(12, redRef.Line);
         Assert.Equal("M", redRef.ContainerName);
     }
@@ -2024,7 +2030,7 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        var redRef = Assert.Single(references.Where(reference => reference.SymbolName == "Red" && reference.ReferenceKind == "call"));
+        var redRef = Assert.Single(references.Where(reference => reference.SymbolName == "Red" && reference.ReferenceKind == "member_read"));
         Assert.Equal(23, redRef.Line);
         Assert.Equal("M", redRef.ContainerName);
     }
@@ -2054,7 +2060,9 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "Red" && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "Red"
+            && reference.ReferenceKind is "call" or "member_read");
     }
 
     [Fact]
@@ -2140,7 +2148,7 @@ public partial class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
         var readyRefs = references
-            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call")
+            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "member_read")
             .Select(reference => reference.ContainerName)
             .OrderBy(name => name)
             .ToArray();
@@ -2207,7 +2215,7 @@ public partial class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
         var readyRefs = references
-            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call")
+            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "member_read")
             .Select(reference => reference.ContainerName)
             .OrderBy(name => name)
             .ToArray();
@@ -2266,7 +2274,7 @@ public partial class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
         var readyRefs = references
-            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call")
+            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "member_read")
             .Select(reference => reference.ContainerName)
             .OrderBy(name => name)
             .ToArray();
@@ -2328,7 +2336,7 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "member_read");
     }
 
     [Fact]
@@ -2373,7 +2381,7 @@ public partial class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
         var readyRefs = references
-            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call")
+            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "member_read")
             .Select(reference => reference.ContainerName)
             .OrderBy(name => name)
             .ToArray();
@@ -2429,7 +2437,7 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "member_read");
     }
 
     [Fact]
@@ -2466,7 +2474,7 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "member_read");
     }
 
     [Fact]
@@ -2519,7 +2527,7 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "member_read");
     }
 
     [Fact]
@@ -2565,7 +2573,7 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "member_read");
     }
 
     [Fact]
@@ -2617,7 +2625,7 @@ public partial class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
         var readyRefs = references
-            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call")
+            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "member_read")
             .Select(reference => reference.ContainerName)
             .OrderBy(name => name)
             .ToArray();
@@ -2667,7 +2675,7 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "member_read");
     }
 
     [Fact]
@@ -2706,7 +2714,7 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "member_read");
     }
 
     [Fact]
@@ -2745,7 +2753,7 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "member_read");
     }
 
     [Fact]
@@ -2799,7 +2807,7 @@ public partial class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
         var readyRefs = references
-            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call")
+            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "member_read")
             .Select(reference => reference.ContainerName)
             .OrderBy(name => name)
             .ToArray();
@@ -2880,7 +2888,7 @@ public partial class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
         var readyRefs = references
-            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call")
+            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "member_read")
             .Select(reference => reference.ContainerName)
             .OrderBy(name => name)
             .ToArray();
@@ -2931,7 +2939,7 @@ public partial class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
         var readyRefs = references
-            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call")
+            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "member_read")
             .Select(reference => reference.ContainerName)
             .OrderBy(name => name)
             .ToArray();
@@ -2973,7 +2981,7 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "member_read").ToList();
         Assert.Equal(2, readyRefs.Count);
         Assert.All(readyRefs, readyRef => Assert.Equal("Read", readyRef.ContainerName));
     }
@@ -3022,7 +3030,7 @@ public partial class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
         var readyRefs = references
-            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call")
+            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "member_read")
             .Select(reference => reference.ContainerName)
             .OrderBy(name => name)
             .ToArray();
@@ -3076,7 +3084,7 @@ public partial class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
         var readyRefs = references
-            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call")
+            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "member_read")
             .Select(reference => reference.ContainerName)
             .OrderBy(name => name)
             .ToArray();
@@ -3133,7 +3141,7 @@ public partial class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
         var readyRef = Assert.Single(references.Where(reference =>
-            reference.SymbolName == "Ready" && reference.ReferenceKind == "call"));
+            reference.SymbolName == "Ready" && reference.ReferenceKind == "member_read"));
         Assert.Equal("ReadTrailing", readyRef.ContainerName);
     }
 
@@ -3187,7 +3195,7 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "member_read");
     }
 
     [Fact]
@@ -3230,7 +3238,7 @@ public partial class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
         var readyRefs = references
-            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call")
+            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "member_read")
             .OrderBy(reference => reference.Line)
             .ToList();
 
@@ -3276,7 +3284,7 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call");
+        Assert.DoesNotContain(references, reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "member_read");
     }
 
     [Fact]
@@ -3331,7 +3339,7 @@ public partial class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
         var readyRef = Assert.Single(references.Where(reference =>
-            reference.SymbolName == "Ready" && reference.ReferenceKind == "call"));
+            reference.SymbolName == "Ready" && reference.ReferenceKind == "member_read"));
         Assert.Equal("ReadLater", readyRef.ContainerName);
         Assert.Contains("Status.Ready", readyRef.Context, StringComparison.Ordinal);
     }
@@ -3375,7 +3383,7 @@ public partial class ReferenceExtractorTests
 
         Assert.Contains(references, reference =>
             reference.SymbolName == "Ready"
-            && reference.ReferenceKind == "call"
+            && reference.ReferenceKind == "member_read"
             && reference.Line == 26
             && reference.Context.Contains("Status.Ready", StringComparison.Ordinal));
     }
@@ -3417,7 +3425,7 @@ public partial class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
         var readyRefs = references
-            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call")
+            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "member_read")
             .ToList();
 
         Assert.Single(readyRefs);
@@ -3463,7 +3471,7 @@ public partial class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
         var readyRefs = references
-            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call")
+            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "member_read")
             .ToList();
 
         Assert.Single(readyRefs);
@@ -3521,7 +3529,7 @@ public partial class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
         var readyRefs = references
-            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call")
+            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "member_read")
             .Select(reference => reference.ContainerName)
             .OrderBy(name => name)
             .ToArray();
@@ -3570,7 +3578,7 @@ public partial class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
         var readyRefs = references
-            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call")
+            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "member_read")
             .GroupBy(reference => reference.ContainerName)
             .ToDictionary(group => group.Key!, group => group.Count());
 
@@ -3635,7 +3643,7 @@ public partial class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
         var readyRefs = references
-            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call")
+            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "member_read")
             .Select(reference => reference.ContainerName)
             .OrderBy(name => name)
             .ToArray();
@@ -3697,7 +3705,7 @@ public partial class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
         var readyRefs = references
-            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call")
+            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "member_read")
             .GroupBy(reference => reference.ContainerName)
             .ToDictionary(group => group.Key!, group => group.Count());
 
@@ -3784,7 +3792,7 @@ public partial class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
         var readyRefs = references
-            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call")
+            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "member_read")
             .Select(reference => reference.ContainerName)
             .OrderBy(name => name)
             .ToArray();
@@ -3860,7 +3868,7 @@ public partial class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
         var readyRefs = references
-            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call")
+            .Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "member_read")
             .GroupBy(reference => reference.ContainerName)
             .ToDictionary(group => group.Key!, group => group.OrderBy(reference => reference.Line).ToArray());
 
@@ -3907,7 +3915,7 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call").ToList();
+        var readyRefs = references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "member_read").ToList();
         var readyRef = Assert.Single(readyRefs);
         Assert.Equal(25, readyRef.Line);
         Assert.Equal("Read", readyRef.ContainerName);
@@ -3943,7 +3951,7 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "csharp", content);
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
-        var ready = Assert.Single(references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "call"));
+        var ready = Assert.Single(references.Where(reference => reference.SymbolName == "Ready" && reference.ReferenceKind == "member_read"));
         Assert.Equal(19, ready.Line);
         Assert.Equal("Read", ready.ContainerName);
     }

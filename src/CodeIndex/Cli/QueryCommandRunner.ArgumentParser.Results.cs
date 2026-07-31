@@ -242,6 +242,9 @@ public static partial class QueryCommandRunner
                 case "--include-qualified-common-calls":
                     includeQualifiedCommonCalls = true;
                     break;
+                case "--include-member-reads":
+                    includeMemberReads = true;
+                    break;
                 case "--verbose":
                     verbose = true;
                     break;

@@ -22,4 +22,5 @@ public sealed record ReferenceExtractionContext(
     int? ConflictMarkerLine = null)
 {
     internal ReferenceExtractor.CSharpStaticInterfaceMemberLookups? CSharpStaticInterfaceMemberLookups { get; init; }
+    internal ReferenceExtractor.CSharpQualifiedPatternLookups? CSharpQualifiedPatternLookups { get; init; }
 }

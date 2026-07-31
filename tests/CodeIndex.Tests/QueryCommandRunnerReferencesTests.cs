@@ -633,7 +633,7 @@ public partial class QueryCommandRunnerTests
             MarkGraphAndFoldReady(dbPath);
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
-                ["Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                ["Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name", "--kind", "member_read"],
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
@@ -643,12 +643,12 @@ public partial class QueryCommandRunnerTests
             Assert.Single(references);
             var reference = references[0];
             Assert.Equal("Red", reference.GetProperty("symbol_name").GetString());
-            Assert.Equal("call", reference.GetProperty("reference_kind").GetString());
+            Assert.Equal("member_read", reference.GetProperty("reference_kind").GetString());
             Assert.Equal("Match", reference.GetProperty("container_name").GetString());
             Assert.Contains("value is Color.Red or Color.Blue;", reference.GetProperty("context").GetString());
 
             var (countExitCode, countStdout, countStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
-                ["Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name", "--count"],
+                ["Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name", "--kind", "member_read", "--count"],
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, countExitCode);
@@ -1518,7 +1518,7 @@ public partial class QueryCommandRunnerTests
             MarkGraphAndFoldReady(dbPath);
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
-                ["Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                ["Red", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name", "--include-member-reads"],
                 _jsonOptions));
 
             using var document = ParseJsonOutput(stdout);
@@ -2409,7 +2409,7 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("src/cases.cs", json.GetProperty("path").GetString());
             Assert.Equal("A", json.GetProperty("symbol_name").GetString());
-            Assert.Equal("call", json.GetProperty("reference_kind").GetString());
+            Assert.Equal("member_read", json.GetProperty("reference_kind").GetString());
             Assert.Equal("function", json.GetProperty("container_kind").GetString());
             Assert.Equal("Use", json.GetProperty("container_name").GetString());
             Assert.True(json.GetProperty("exact_index_available").GetBoolean());
@@ -2582,7 +2582,7 @@ public partial class QueryCommandRunnerTests
             MarkGraphAndFoldReady(dbPath);
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
-                ["A", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                ["A", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name", "--include-member-reads"],
                 _jsonOptions));
 
             using var document = ParseJsonOutput(stdout);
@@ -3103,7 +3103,7 @@ public partial class QueryCommandRunnerTests
             MarkGraphAndFoldReady(dbPath);
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
-                ["Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                ["Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name", "--kind", "member_read"],
                 _jsonOptions));
 
             using var document = ParseJsonOutput(stdout);
@@ -3111,7 +3111,7 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal("call", json.GetProperty("reference_kind").GetString());
+            Assert.Equal("member_read", json.GetProperty("reference_kind").GetString());
             Assert.Equal(35, json.GetProperty("line").GetInt32());
             Assert.Equal("Read", json.GetProperty("container_name").GetString());
         }
@@ -3122,7 +3122,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunReferences_ExactJson_CSharpLaterSiblingAliasRebindingDoesNotStealEarlierEnumScope()
+    public void RunReferences_ExactJson_CSharpSiblingAliasMemberReadsRemainDeterministic_Issue4894()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_enum_member_alias_rebinding");
         try
@@ -3172,7 +3172,7 @@ public partial class QueryCommandRunnerTests
             MarkGraphAndFoldReady(dbPath);
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
-                ["Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name"],
+                ["Ready", "--db", dbPath, "--json", "--lang", "csharp", "--exact-name", "--kind", "member_read"],
                 _jsonOptions));
 
             using var document = ParseJsonOutput(stdout);
@@ -3180,8 +3180,8 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal("call", json.GetProperty("reference_kind").GetString());
-            Assert.Equal(22, json.GetProperty("line").GetInt32());
+            Assert.Equal("member_read", json.GetProperty("reference_kind").GetString());
+            Assert.Equal(35, json.GetProperty("line").GetInt32());
             Assert.Equal("Read", json.GetProperty("container_name").GetString());
         }
         finally
@@ -3232,7 +3232,7 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal("call", json.GetProperty("reference_kind").GetString());
+            Assert.Equal("member_read", json.GetProperty("reference_kind").GetString());
             Assert.Equal(19, json.GetProperty("line").GetInt32());
             Assert.Equal("Read", json.GetProperty("container_name").GetString());
         }
@@ -3287,7 +3287,7 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal("call", json.GetProperty("reference_kind").GetString());
+            Assert.Equal("member_read", json.GetProperty("reference_kind").GetString());
             Assert.Equal("Value", json.GetProperty("container_name").GetString());
             Assert.Equal("property", json.GetProperty("container_kind").GetString());
         }
@@ -3404,7 +3404,7 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal("call", json.GetProperty("reference_kind").GetString());
+            Assert.Equal("member_read", json.GetProperty("reference_kind").GetString());
             Assert.Equal("Read", json.GetProperty("container_name").GetString());
         }
         finally
@@ -3464,7 +3464,7 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal("call", json.GetProperty("reference_kind").GetString());
+            Assert.Equal("member_read", json.GetProperty("reference_kind").GetString());
             Assert.Equal("Read", json.GetProperty("container_name").GetString());
         }
         finally
@@ -3527,7 +3527,7 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal("call", json.GetProperty("reference_kind").GetString());
+            Assert.Equal("member_read", json.GetProperty("reference_kind").GetString());
             Assert.Equal("Read", json.GetProperty("container_name").GetString());
         }
         finally
@@ -6113,7 +6113,7 @@ public partial class QueryCommandRunnerTests
 
                 Assert.Equal(CommandExitCodes.Success, exitCode);
                 Assert.Equal(string.Empty, stderr);
-                Assert.Equal("call", json.GetProperty("reference_kind").GetString());
+                Assert.Equal("member_read", json.GetProperty("reference_kind").GetString());
                 Assert.Equal("Read", json.GetProperty("container_name").GetString());
                 if (expectedLine.HasValue)
                     Assert.Equal(expectedLine.Value, json.GetProperty("line").GetInt32());
@@ -6203,7 +6203,7 @@ public partial class QueryCommandRunnerTests
 
                 Assert.Equal(CommandExitCodes.Success, exitCode);
                 Assert.Equal(string.Empty, stderr);
-                Assert.Equal("call", json.GetProperty("reference_kind").GetString());
+                Assert.Equal("member_read", json.GetProperty("reference_kind").GetString());
                 Assert.Equal("Read", json.GetProperty("container_name").GetString());
                 if (expectedLine.HasValue)
                     Assert.Equal(expectedLine.Value, json.GetProperty("line").GetInt32());
@@ -6317,7 +6317,7 @@ public partial class QueryCommandRunnerTests
 
                 Assert.Equal(CommandExitCodes.Success, exitCode);
                 Assert.Equal(string.Empty, stderr);
-                Assert.Equal("call", json.GetProperty("reference_kind").GetString());
+                Assert.Equal("member_read", json.GetProperty("reference_kind").GetString());
                 Assert.Equal("Read", json.GetProperty("container_name").GetString());
                 if (expectedLine.HasValue)
                     Assert.Equal(expectedLine.Value, json.GetProperty("line").GetInt32());
@@ -6483,7 +6483,7 @@ public partial class QueryCommandRunnerTests
 
                 Assert.Equal(CommandExitCodes.Success, exitCode);
                 Assert.Equal(string.Empty, stderr);
-                Assert.Equal("call", json.GetProperty("reference_kind").GetString());
+                Assert.Equal("member_read", json.GetProperty("reference_kind").GetString());
                 Assert.Equal(expectedLine, json.GetProperty("line").GetInt32());
                 Assert.Equal("Read", json.GetProperty("container_name").GetString());
             }
@@ -6542,7 +6542,7 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal("call", first.RootElement.GetProperty("reference_kind").GetString());
+            Assert.Equal("member_read", first.RootElement.GetProperty("reference_kind").GetString());
             Assert.Equal([19, 22], lines);
         }
         finally
@@ -6599,7 +6599,7 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal("call", first.RootElement.GetProperty("reference_kind").GetString());
+            Assert.Equal("member_read", first.RootElement.GetProperty("reference_kind").GetString());
             Assert.Equal([19, 22], lines);
         }
         finally
@@ -6655,7 +6655,7 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal("call", json.GetProperty("reference_kind").GetString());
+            Assert.Equal("member_read", json.GetProperty("reference_kind").GetString());
             Assert.Equal(24, json.GetProperty("line").GetInt32());
             Assert.Equal("Read", json.GetProperty("container_name").GetString());
         }
@@ -6707,7 +6707,7 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal("call", json.GetProperty("reference_kind").GetString());
+            Assert.Equal("member_read", json.GetProperty("reference_kind").GetString());
             Assert.Equal(19, json.GetProperty("line").GetInt32());
             Assert.Equal("Read", json.GetProperty("container_name").GetString());
         }
@@ -6762,7 +6762,7 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal("call", json.GetProperty("reference_kind").GetString());
+            Assert.Equal("member_read", json.GetProperty("reference_kind").GetString());
             Assert.Equal(22, json.GetProperty("line").GetInt32());
             Assert.Equal("Read", json.GetProperty("container_name").GetString());
         }
@@ -6820,7 +6820,7 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal("call", json.GetProperty("reference_kind").GetString());
+            Assert.Equal("member_read", json.GetProperty("reference_kind").GetString());
             Assert.Equal(25, json.GetProperty("line").GetInt32());
             Assert.Equal("Read", json.GetProperty("container_name").GetString());
         }
@@ -6941,7 +6941,7 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal("call", json.GetProperty("reference_kind").GetString());
+            Assert.Equal("member_read", json.GetProperty("reference_kind").GetString());
             Assert.Equal(28, json.GetProperty("line").GetInt32());
             Assert.Equal("Read", json.GetProperty("container_name").GetString());
         }
@@ -7148,7 +7148,7 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal("call", json.GetProperty("reference_kind").GetString());
+            Assert.Equal("member_read", json.GetProperty("reference_kind").GetString());
             Assert.Equal(28, json.GetProperty("line").GetInt32());
             Assert.Equal("Read", json.GetProperty("container_name").GetString());
         }
@@ -7265,7 +7265,7 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal("call", json.GetProperty("reference_kind").GetString());
+            Assert.Equal("member_read", json.GetProperty("reference_kind").GetString());
             Assert.Equal(24, json.GetProperty("line").GetInt32());
             Assert.Equal("Read", json.GetProperty("container_name").GetString());
         }
@@ -7344,7 +7344,7 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal("call", firstJson.GetProperty("reference_kind").GetString());
+            Assert.Equal("member_read", firstJson.GetProperty("reference_kind").GetString());
             Assert.Equal([83, 30], rowsByContainer["ReadMultiLineComment"]);
             Assert.Equal([64, 30], rowsByContainer["ReadGuard"]);
             Assert.Equal([30], rowsByContainer["ReadRecursive"]);
@@ -7403,7 +7403,7 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal("call", first.RootElement.GetProperty("reference_kind").GetString());
+            Assert.Equal("member_read", first.RootElement.GetProperty("reference_kind").GetString());
             Assert.Equal([19, 22], lines);
         }
         finally
@@ -7460,7 +7460,7 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal("call", json.GetProperty("reference_kind").GetString());
+            Assert.Equal("member_read", json.GetProperty("reference_kind").GetString());
             Assert.Equal(25, json.GetProperty("line").GetInt32());
             Assert.Equal("Read", json.GetProperty("container_name").GetString());
         }
@@ -7512,7 +7512,7 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal("call", json.GetProperty("reference_kind").GetString());
+            Assert.Equal("member_read", json.GetProperty("reference_kind").GetString());
             Assert.Equal(19, json.GetProperty("line").GetInt32());
             Assert.Equal("Read", json.GetProperty("container_name").GetString());
         }
@@ -7557,7 +7557,7 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal("call", json.GetProperty("reference_kind").GetString());
+            Assert.Equal("member_read", json.GetProperty("reference_kind").GetString());
             Assert.Equal(12, json.GetProperty("line").GetInt32());
             Assert.Equal("M", json.GetProperty("container_name").GetString());
         }
@@ -7591,7 +7591,7 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal("call", json.GetProperty("reference_kind").GetString());
+            Assert.Equal("member_read", json.GetProperty("reference_kind").GetString());
             Assert.Equal("function", json.GetProperty("container_kind").GetString());
             Assert.Equal("M", json.GetProperty("container_name").GetString());
         }
@@ -7647,7 +7647,7 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal("call", json.GetProperty("reference_kind").GetString());
+            Assert.Equal("member_read", json.GetProperty("reference_kind").GetString());
             Assert.Equal(23, json.GetProperty("line").GetInt32());
             Assert.Equal("M", json.GetProperty("container_name").GetString());
         }
@@ -8485,7 +8485,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [ProductionRuntimeFact]
-    public void RunReferences_ExactJson_CSharpQualifiedConstantPatternSameFileEnumMemberSitesStaySuppressed()
+    public void RunReferences_ExactJson_CSharpQualifiedConstantPatternSameFileEnumMemberSitesUseMemberRead_Issue4894()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_qualified_constant_pattern_same_file_enum_member_sites_suppressed");
         try
@@ -8519,30 +8519,40 @@ public partial class QueryCommandRunnerTests
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = RunBuiltCli([projectRoot, "--json", "--quiet"]);
-            var (referencesExitCode, referencesStdout, referencesStderr) = RunReferencesInProcess("Red", dbPath, "csharp");
+            var (referencesExitCode, referencesStdout, referencesStderr) = RunReferencesInProcess(
+                "Red", dbPath, "csharp", true, "--kind", "member_read");
             using var referencesDocument = ParseJsonOutput(referencesStdout);
 
             var (countExitCode, countStdout, countStderr) = RunReferencesInProcess(
-                "Red", dbPath, "csharp", true, "--count");
+                "Red", dbPath, "csharp", true, "--kind", "member_read", "--count");
             using var countDocument = ParseJsonOutput(countStdout);
 
             var (callersExitCode, callersStdout, callersStderr) = RunCallersInProcess("Red", dbPath, "csharp");
             using var callersDocument = ParseJsonOutput(callersStdout);
+            var (includedCallersExitCode, includedCallersStdout, includedCallersStderr) = RunCallersInProcess(
+                "Red", dbPath, "csharp", true, "--include-member-reads");
+            using var includedCallersDocument = ParseJsonOutput(includedCallersStdout);
 
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
             Assert.Equal(string.Empty, indexStderr);
 
             Assert.Equal(CommandExitCodes.Success, referencesExitCode);
             Assert.Equal(string.Empty, referencesStderr);
-            Assert.Equal(0, referencesDocument.RootElement.GetProperty("count").GetInt32());
+            Assert.Equal("member_read", referencesDocument.RootElement.GetProperty("reference_kind").GetString());
+            Assert.Equal("Run", referencesDocument.RootElement.GetProperty("container_name").GetString());
 
             Assert.Equal(CommandExitCodes.Success, countExitCode);
             Assert.Equal(string.Empty, countStderr);
-            Assert.Equal(0, countDocument.RootElement.GetProperty("count").GetInt32());
+            Assert.Equal(1, countDocument.RootElement.GetProperty("count").GetInt32());
 
             Assert.Equal(CommandExitCodes.Success, callersExitCode);
             Assert.Equal(string.Empty, callersStderr);
             Assert.Equal(0, callersDocument.RootElement.GetProperty("count").GetInt32());
+
+            Assert.Equal(CommandExitCodes.Success, includedCallersExitCode);
+            Assert.Equal(string.Empty, includedCallersStderr);
+            Assert.Equal("member_read", includedCallersDocument.RootElement.GetProperty("reference_kind").GetString());
+            Assert.Equal("Run", includedCallersDocument.RootElement.GetProperty("caller_name").GetString());
         }
         finally
         {
@@ -8653,7 +8663,7 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, redExitCode);
             Assert.Equal(string.Empty, redStderr);
-            Assert.Equal("call", redJson.GetProperty("reference_kind").GetString());
+            Assert.Equal("member_read", redJson.GetProperty("reference_kind").GetString());
         }
         finally
         {

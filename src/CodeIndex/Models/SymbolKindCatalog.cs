@@ -120,6 +120,7 @@ public static class SymbolKindCatalog
         "instantiate",
         "join_condition_reference",
         "lifetime_reference",
+        "member_read",
         "metadata",
         "project_reference",
         "reference",
