@@ -2403,8 +2403,9 @@ public static partial class QueryCommandRunner
         }
 
         var resolution = reader.GetReferencePositionResolution(path, "Regex", line, regexIndex + 1, maxCandidates: 1);
-        return !resolution.IdentityAvailable
-            || (!resolution.CandidatesTruncated && resolution.Candidates.Count == 0);
+        return resolution.IdentityAvailable
+            && !resolution.CandidatesTruncated
+            && resolution.Candidates.Count == 0;
     }
 
     private static Dictionary<string, RegexBareReceiverContext> BuildRegexBareReceiverContexts(
@@ -2440,41 +2441,55 @@ public static partial class QueryCommandRunner
                 if (!contexts.TryGetValue(result.Path, out var context))
                     continue;
 
-                contexts[result.Path] = new RegexBareReceiverContext(
-                    context.HasSystemNamespaceImport
-                    || result.Content.Contains("using System.Text.RegularExpressions;", StringComparison.Ordinal),
-                    context.HasAliasDeclaration || ContainsRegexAliasDeclaration(result.Content));
+                foreach (var match in GetCodeSemanticMatches(result, "using"))
+                {
+                    var directive = ParseRegexUsingDirective(match.ContinuationText, match.MarkerIndex);
+                    context = new RegexBareReceiverContext(
+                        context.HasSystemNamespaceImport || directive.HasSystemNamespaceImport,
+                        context.HasAliasDeclaration || directive.HasAliasDeclaration);
+                }
+
+                contexts[result.Path] = context;
             }
         }
 
         return contexts;
     }
 
-    private static bool ContainsRegexAliasDeclaration(string content)
+    private static RegexBareReceiverContext ParseRegexUsingDirective(string content, int usingIndex)
     {
-        for (var searchFrom = 0; searchFrom < content.Length;)
+        var cursor = usingIndex + "using".Length;
+        if ((usingIndex > 0 && IsIdentifierCharacter(content[usingIndex - 1]))
+            || (cursor < content.Length && IsIdentifierCharacter(content[cursor])))
         {
-            var usingIndex = content.IndexOf("using", searchFrom, StringComparison.Ordinal);
-            if (usingIndex < 0)
-                return false;
-            searchFrom = usingIndex + "using".Length;
-            if ((usingIndex > 0 && IsIdentifierCharacter(content[usingIndex - 1]))
-                || (searchFrom < content.Length && IsIdentifierCharacter(content[searchFrom])))
-            {
-                continue;
-            }
-
-            var cursor = SkipCSharpTrivia(content, searchFrom);
-            var identifier = ExtractIdentifier(content, cursor);
-            if (!string.Equals(identifier, "Regex", StringComparison.Ordinal))
-                continue;
-
-            cursor = SkipCSharpTrivia(content, cursor + identifier.Length);
-            if (cursor < content.Length && content[cursor] == '=')
-                return true;
+            return new RegexBareReceiverContext(false, false);
         }
 
-        return false;
+        cursor = SkipCSharpTrivia(content, cursor);
+        var firstIdentifier = ExtractIdentifier(content, cursor);
+        if (string.Equals(firstIdentifier, "Regex", StringComparison.Ordinal))
+        {
+            cursor = SkipCSharpTrivia(content, cursor + firstIdentifier.Length);
+            return new RegexBareReceiverContext(false, cursor < content.Length && content[cursor] == '=');
+        }
+
+        foreach (var identifier in new[] { "System", "Text", "RegularExpressions" })
+        {
+            var actual = ExtractIdentifier(content, cursor);
+            if (!string.Equals(actual, identifier, StringComparison.Ordinal))
+                return new RegexBareReceiverContext(false, false);
+            cursor = SkipCSharpTrivia(content, cursor + actual.Length);
+            if (!string.Equals(identifier, "RegularExpressions", StringComparison.Ordinal))
+            {
+                if (cursor >= content.Length || content[cursor] != '.')
+                    return new RegexBareReceiverContext(false, false);
+                cursor = SkipCSharpTrivia(content, cursor + 1);
+            }
+        }
+
+        return new RegexBareReceiverContext(
+            cursor < content.Length && content[cursor] == ';',
+            false);
     }
 
     private static int SkipCSharpTrivia(string text, int start)
@@ -2571,11 +2586,8 @@ public static partial class QueryCommandRunner
             return null;
 
         cursor += value.Length;
-        while (cursor < text.Length && char.IsWhiteSpace(text[cursor]))
-            cursor++;
-        if (cursor == text.Length
-            || text[cursor] is ',' or ';' or '}' or ')' or ']'
-            || (cursor + 1 < text.Length && text[cursor] == '/' && text[cursor + 1] is '/' or '*'))
+        cursor = SkipCSharpTrivia(text, cursor);
+        if (cursor == text.Length || text[cursor] is ',' or ';' or '}' or ')' or ']')
             return value;
         return null;
     }
@@ -2613,6 +2625,34 @@ public static partial class QueryCommandRunner
         }
 
         return matches;
+    }
+
+    private static IEnumerable<SearchRecipeSemanticMatch> GetCodeSemanticMatches(SearchResult result, string marker)
+    {
+        var contentLines = result.Content.Split('\n', StringSplitOptions.None);
+        for (var contentLineIndex = 0; contentLineIndex < contentLines.Length; contentLineIndex++)
+        {
+            var text = contentLines[contentLineIndex].TrimEnd('\r');
+            var continuationText = string.Join('\n', contentLines.Skip(contentLineIndex));
+            for (var searchFrom = 0; searchFrom < text.Length;)
+            {
+                var markerIndex = text.IndexOf(marker, searchFrom, StringComparison.Ordinal);
+                if (markerIndex < 0)
+                    break;
+                searchFrom = markerIndex + marker.Length;
+                var line = result.StartLine + contentLineIndex;
+                var facet = SearchMatchClassifier.Classify(
+                    result.Path,
+                    result.Lang,
+                    line,
+                    text,
+                    markerIndex + 1,
+                    marker.Length,
+                    result.EnclosingSymbolKind);
+                if (string.Equals(facet.Origin, SearchMatchClassifier.Code, StringComparison.Ordinal))
+                    yield return new SearchRecipeSemanticMatch(text, continuationText, line, markerIndex);
+            }
+        }
     }
 
     private sealed record SearchRecipeSemanticEvidence(

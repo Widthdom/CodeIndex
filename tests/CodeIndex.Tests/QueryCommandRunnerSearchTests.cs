@@ -4445,6 +4445,7 @@ public partial class QueryCommandRunnerTests
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_safety_semantics_4911");
         var overfetchProjectRoot = TestProjectHelper.CreateTempProject("cdidx_search_safety_semantics_overfetch_4911");
+        var shadowProjectRoot = TestProjectHelper.CreateTempProject("cdidx_search_safety_semantics_shadow_4911");
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
@@ -4500,18 +4501,15 @@ public partial class QueryCommandRunnerTests
                 """);
             TestProjectHelper.InsertIndexedFile(
                 dbPath,
-                "src/regex-source-shadow.cs",
+                "src/regex-comment-string-alias.cs",
                 "csharp",
                 """
-                namespace Vendor;
+                using System.Text.RegularExpressions;
+                // using Regex = Vendor.Text.Regex;
 
-                public static class Regex
+                public static class RegexCommentStringAlias
                 {
-                    public static string Escape(string input) => input;
-                }
-
-                public static class RegexSourceShadow
-                {
+                    private const string Example = "using Regex = Vendor.Text.Regex;";
                     public static string Escape(string input) => Regex.Escape(input);
                 }
                 """);
@@ -4531,6 +4529,18 @@ public partial class QueryCommandRunnerTests
                 "csharp",
                 """
                 public static class RegexQualifiedRisk
+                {
+                    public static bool Match(string input) => System.Text.RegularExpressions.Regex.IsMatch(input, "token");
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/regex-qualified-risk-with-alias.cs",
+                "csharp",
+                """
+                using Regex = CodeIndex.Indexer.BoundedRegex;
+
+                public static class RegexQualifiedRiskWithAlias
                 {
                     public static bool Match(string input) => System.Text.RegularExpressions.Regex.IsMatch(input, "token");
                 }
@@ -4632,6 +4642,37 @@ public partial class QueryCommandRunnerTests
                     public static ProcessStartInfo Build(bool useShell) => new() { UseShellExecute = useShell };
                 }
                 """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/shell-computed-after-comments.cs",
+                "csharp",
+                """
+                using System.Diagnostics;
+
+                public static class ShellComputedAfterComments
+                {
+                    public static ProcessStartInfo BuildBlock(bool enableShell) => new()
+                    {
+                        UseShellExecute = false /* default */ || enableShell
+                    };
+
+                    public static ProcessStartInfo BuildLine(bool enableShell) => new()
+                    {
+                        UseShellExecute = false // default
+                            || enableShell
+                    };
+                }
+                """);
+
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                db.InitializeSchema();
+                var writer = new DbWriter(db.Connection);
+                writer.MarkGraphReady();
+                writer.SetMeta(
+                    DbContext.ReferenceIdentityContractVersionMetaKey,
+                    DbContext.ReferenceIdentityContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            }
 
             var recipeArgs = new[]
             {
@@ -4659,25 +4700,27 @@ public partial class QueryCommandRunnerTests
                 var qualifiedRegexQuery = Assert.Single(queries, query => query.GetProperty("name").GetString() == "static-regex-api-qualified");
                 var shellQuery = Assert.Single(queries, query => query.GetProperty("name").GetString() == "process-shell-execute");
 
-                Assert.Equal(5, regexQuery.GetProperty("count").GetInt32());
+                Assert.Equal(4, regexQuery.GetProperty("count").GetInt32());
                 Assert.DoesNotContain(regexQuery.GetProperty("results").EnumerateArray(), result => result.GetProperty("path").GetString() == "src/regex-safe.cs");
+                Assert.DoesNotContain(regexQuery.GetProperty("results").EnumerateArray(), result => result.GetProperty("path").GetString() == "src/regex-comment-string-alias.cs");
                 AssertSemanticClassification(regexQuery, "src/regex-risk.cs", "regex_operation_semantics", "regex_pattern_operation", "operation:Regex.IsMatch");
                 AssertSemanticClassification(regexQuery, "src/regex-unresolved.cs", "regex_operation_semantics", "regex_operation_unresolved", "operation:Regex.CustomOperation");
                 AssertSemanticClassification(regexQuery, "src/regex-mixed-chunk.cs", "regex_operation_semantics", "regex_pattern_operation", "operation:Regex.IsMatch");
                 AssertSemanticClassification(regexQuery, "src/regex-alias.cs", "regex_operation_semantics", "regex_operation_unresolved", "operation:Regex.Escape");
-                AssertSemanticClassification(regexQuery, "src/regex-source-shadow.cs", "regex_operation_semantics", "regex_operation_unresolved", "operation:Regex.Escape");
                 AssertClassifierCategories(regexQuery, "regex_operation_semantics", "safe_escape_helper", "regex_pattern_operation", "regex_operation_unresolved");
 
-                Assert.Equal(1, qualifiedRegexQuery.GetProperty("count").GetInt32());
+                Assert.Equal(2, qualifiedRegexQuery.GetProperty("count").GetInt32());
                 Assert.DoesNotContain(qualifiedRegexQuery.GetProperty("results").EnumerateArray(), result => result.GetProperty("path").GetString() == "src/regex-qualified-safe.cs");
                 AssertSemanticClassification(qualifiedRegexQuery, "src/regex-qualified-risk.cs", "regex_operation_semantics", "regex_pattern_operation", "operation:System.Text.RegularExpressions.Regex.IsMatch");
+                AssertSemanticClassification(qualifiedRegexQuery, "src/regex-qualified-risk-with-alias.cs", "regex_operation_semantics", "regex_pattern_operation", "operation:System.Text.RegularExpressions.Regex.IsMatch");
 
-                Assert.Equal(2, shellQuery.GetProperty("count").GetInt32());
+                Assert.Equal(3, shellQuery.GetProperty("count").GetInt32());
                 Assert.DoesNotContain(shellQuery.GetProperty("results").EnumerateArray(), result => result.GetProperty("path").GetString() == "src/shell-disabled.cs");
                 Assert.DoesNotContain(shellQuery.GetProperty("results").EnumerateArray(), result => result.GetProperty("path").GetString() == "src/shell-named-disabled.cs");
                 Assert.DoesNotContain(shellQuery.GetProperty("results").EnumerateArray(), result => result.GetProperty("path").GetString() == "src/shell-multiline-disabled.cs");
                 AssertSemanticClassification(shellQuery, "src/shell-enabled.cs", "shell_execute_polarity", "shell_explicitly_enabled", "value:true");
                 AssertSemanticClassification(shellQuery, "src/shell-propagated.cs", "shell_execute_polarity", "shell_policy_unresolved", "value:unresolved");
+                AssertSemanticClassification(shellQuery, "src/shell-computed-after-comments.cs", "shell_execute_polarity", "shell_policy_unresolved", "value:unresolved");
                 AssertClassifierCategories(shellQuery, "shell_execute_polarity", "shell_explicitly_disabled", "shell_explicitly_enabled", "shell_policy_unresolved");
             }
 
@@ -4686,9 +4729,9 @@ public partial class QueryCommandRunnerTests
             using (var document = ParseJsonOutput(countStdout))
             {
                 var queries = document.RootElement.GetProperty("queries").EnumerateArray().ToArray();
-                Assert.Equal(5, Assert.Single(queries, query => query.GetProperty("name").GetString() == "static-regex-api").GetProperty("count").GetInt32());
-                Assert.Equal(1, Assert.Single(queries, query => query.GetProperty("name").GetString() == "static-regex-api-qualified").GetProperty("count").GetInt32());
-                Assert.Equal(2, Assert.Single(queries, query => query.GetProperty("name").GetString() == "process-shell-execute").GetProperty("count").GetInt32());
+                Assert.Equal(4, Assert.Single(queries, query => query.GetProperty("name").GetString() == "static-regex-api").GetProperty("count").GetInt32());
+                Assert.Equal(2, Assert.Single(queries, query => query.GetProperty("name").GetString() == "static-regex-api-qualified").GetProperty("count").GetInt32());
+                Assert.Equal(3, Assert.Single(queries, query => query.GetProperty("name").GetString() == "process-shell-execute").GetProperty("count").GetInt32());
             }
 
             Assert.Equal(CommandExitCodes.Success, constructionExitCode);
@@ -4699,23 +4742,67 @@ public partial class QueryCommandRunnerTests
                 Assert.Contains(query.GetProperty("results").EnumerateArray(), result => result.GetProperty("path").GetString() == "src/regex-construction.cs");
             }
 
+            var shadowDbPath = TestProjectHelper.CreateProjectDb(shadowProjectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                shadowDbPath,
+                "src/regex-source-shadow.cs",
+                "csharp",
+                """
+                namespace Vendor;
+
+                public static class Regex
+                {
+                    public static string Escape(string input) => input;
+                }
+
+                public static class RegexSourceShadow
+                {
+                    public static string Escape(string input) => Regex.Escape(input);
+                }
+                """);
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, shadowDbPath))
+            {
+                db.InitializeSchema();
+                var writer = new DbWriter(db.Connection);
+                writer.MarkGraphReady();
+                writer.SetMeta(
+                    DbContext.ReferenceIdentityContractVersionMetaKey,
+                    DbContext.ReferenceIdentityContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            }
+            var (shadowExitCode, shadowStdout, shadowStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "dogfood-risk-patterns", "--include-query", "static-regex-api", "--db", shadowDbPath, "--json", "--limit", "20", "--lang", "csharp"],
+                _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, shadowExitCode);
+            Assert.Equal(string.Empty, shadowStderr);
+            using (var document = ParseJsonOutput(shadowStdout))
+            {
+                var query = Assert.Single(document.RootElement.GetProperty("queries").EnumerateArray());
+                Assert.Equal(1, query.GetProperty("count").GetInt32());
+                AssertSemanticClassification(query, "src/regex-source-shadow.cs", "regex_operation_semantics", "regex_operation_unresolved", "operation:Regex.Escape");
+            }
+
             var overfetchDbPath = TestProjectHelper.CreateProjectDb(overfetchProjectRoot);
             TestProjectHelper.InsertIndexedFile(
                 overfetchDbPath,
                 "src/a-risk.cs",
                 "csharp",
-                "using System.Text.RegularExpressions; public static class Risk { public static bool Go(string input) => Regex.IsMatch(input, \"token\"); }");
+                "public static class Risk { public static bool Go(string input) => System.Text.RegularExpressions.Regex.IsMatch(input, \"token\"); }");
             for (var index = 1; index <= 250; index++)
             {
                 TestProjectHelper.InsertIndexedFile(
                     overfetchDbPath,
                     $"src/z-safe-{index:D3}.cs",
                     "csharp",
-                    $"using System.Text.RegularExpressions; public static class Safe{index} {{ public static string Go(string input) => Regex.Escape(input); }}");
+                    $"public static class Safe{index} {{ public static string Go(string input) => System.Text.RegularExpressions.Regex.Escape(input); }}");
             }
+            TestProjectHelper.InsertIndexedFile(
+                overfetchDbPath,
+                "src/legacy-unresolved.cs",
+                "csharp",
+                "using System.Text.RegularExpressions; public static class LegacySafe { public static string Go(string input) => Regex.Escape(input); }");
 
             var (overfetchExitCode, overfetchStdout, overfetchStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                ["--recipe", "dogfood-risk-patterns", "--include-query", "static-regex-api", "--db", overfetchDbPath, "--json", "--limit", "1", "--lang", "csharp"],
+                ["--recipe", "dogfood-risk-patterns", "--include-query", "static-regex-api-qualified", "--db", overfetchDbPath, "--json", "--limit", "1", "--lang", "csharp"],
                 _jsonOptions));
             Assert.Equal(CommandExitCodes.Success, overfetchExitCode);
             Assert.Equal(string.Empty, overfetchStderr);
@@ -4723,13 +4810,26 @@ public partial class QueryCommandRunnerTests
             {
                 var query = Assert.Single(document.RootElement.GetProperty("queries").EnumerateArray());
                 Assert.Equal(1, query.GetProperty("count").GetInt32());
-                AssertSemanticClassification(query, "src/a-risk.cs", "regex_operation_semantics", "regex_pattern_operation", "operation:Regex.IsMatch");
+                AssertSemanticClassification(query, "src/a-risk.cs", "regex_operation_semantics", "regex_pattern_operation", "operation:System.Text.RegularExpressions.Regex.IsMatch");
+            }
+
+            var (legacyExitCode, legacyStdout, legacyStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "dogfood-risk-patterns", "--include-query", "static-regex-api", "--db", overfetchDbPath, "--json", "--limit", "20", "--lang", "csharp"],
+                _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, legacyExitCode);
+            Assert.Equal(string.Empty, legacyStderr);
+            using (var document = ParseJsonOutput(legacyStdout))
+            {
+                var query = Assert.Single(document.RootElement.GetProperty("queries").EnumerateArray());
+                Assert.Equal(1, query.GetProperty("count").GetInt32());
+                AssertSemanticClassification(query, "src/legacy-unresolved.cs", "regex_operation_semantics", "regex_operation_unresolved", "operation:Regex.Escape");
             }
         }
         finally
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
             TestProjectHelper.DeleteDirectory(overfetchProjectRoot);
+            TestProjectHelper.DeleteDirectory(shadowProjectRoot);
         }
 
         static void AssertSemanticClassification(

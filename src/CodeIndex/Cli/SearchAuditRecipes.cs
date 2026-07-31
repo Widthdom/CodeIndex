@@ -503,7 +503,11 @@ internal static class SearchAuditRecipes
             MatchOrigins = ["code"],
         };
 
-    private static SearchAuditRecipeQuery DogfoodStaticRegexApiQuery(string name, string query, string shape) =>
+    private static SearchAuditRecipeQuery DogfoodStaticRegexApiQuery(
+        string name,
+        string query,
+        string shape,
+        bool rejectBoundedRegexAlias = true) =>
         new(
             name,
             query,
@@ -511,10 +515,7 @@ internal static class SearchAuditRecipes
             ["audit", "performance", "security"],
             "Regex.Escape/Unescape are suppressed by matched-member semantics. Review retained execution members and unresolved receiver/member evidence for explicit timeout, generated/precompiled patterns, trusted small inputs, or intentional test behavior.")
         {
-            RejectFileQueries =
-            [
-                BoundedRegexAliasUsing
-            ],
+            RejectFileQueries = rejectBoundedRegexAlias ? [BoundedRegexAliasUsing] : [],
             ExcludePaths = [BoundedRegexPath],
             RiskEvidence =
             [
@@ -1284,7 +1285,8 @@ internal static class SearchAuditRecipes
                 DogfoodStaticRegexApiQuery(
                     "static-regex-api-qualified",
                     "RegularExpressions.Regex.",
-                    "a fully qualified System.Text.RegularExpressions receiver"),
+                    "a fully qualified System.Text.RegularExpressions receiver",
+                    rejectBoundedRegexAlias: false),
                 new(
                     "relaxed-json-encoder",
                     "UnsafeRelaxedJsonEscaping",
