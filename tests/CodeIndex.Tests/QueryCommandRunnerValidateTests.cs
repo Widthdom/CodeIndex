@@ -120,7 +120,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunValidate_FormatCountThenJsonKeepsCountShape_Issue3896()
+    public void RunValidate_FormatCountThenJsonKeepsCompatibleEnvelope_Issues3896And4908()
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_validate_count_json_3896");
         var projectRoot = project.Root;
@@ -143,6 +143,10 @@ public partial class QueryCommandRunnerTests
         var root = document.RootElement;
         Assert.Equal(1, root.GetProperty("count").GetInt32());
         Assert.Equal(1, root.GetProperty("total_estimated").GetInt32());
+        Assert.Equal(JsonOutputContract.ApiVersion, root.GetProperty("api_version").GetString());
+        Assert.Equal("validation_issues", root.GetProperty("count_kind").GetString());
+        Assert.Equal("all_matching_issues_before_limit", root.GetProperty("count_scope").GetString());
+        Assert.True(root.GetProperty("authoritative_count").GetBoolean());
         Assert.False(root.TryGetProperty("issues", out _));
     }
 

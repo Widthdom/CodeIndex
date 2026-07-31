@@ -110,6 +110,7 @@ public partial class DbReader : IDisposable
     internal readonly bool _hasReferenceLinesTable;
     internal readonly bool _canUseReferenceLines;
     private readonly IReadOnlySet<string> _issueColumns;
+    internal bool HasIssueSeverityColumn => _issueColumns.Contains("severity");
     public bool IncludeGenerated { get; set; }
     private static readonly AsyncLocal<bool> IncludeGeneratedScope = new();
     private static readonly AsyncLocal<bool> GeneratedColumnAvailableScope = new();
