@@ -28,6 +28,7 @@ internal static class McpToolOutputSchemas
             "symbols" => QueryRowsProperties(),
             "files" => RowsProperties(),
             "excerpt" => ExcerptProperties(),
+            "read_resource" => ReadResourceProperties(),
             "find_in_file" => QueryRowsProperties(),
             "map" => MapProperties(),
             "analyze_symbol" => AnalyzeSymbolProperties(),
@@ -139,6 +140,7 @@ internal static class McpToolOutputSchemas
             "definition" or "references" or "callers" or "callees"
                 or "symbols" or "files" or "find_in_file" => StringArray("count", "results"),
             "excerpt" => StringArray("path", "totalLines"),
+            "read_resource" => StringArray("resource", "_meta"),
             "map" => StringArray("fileCount"),
             "analyze_symbol" => StringArray("query", "graph_sections"),
             "impact_analysis" => StringArray("query", "impact_mode"),
@@ -290,6 +292,25 @@ internal static class McpToolOutputSchemas
             ["effectiveEndLine"] = Nullable(IntegerSchema()),
             ["totalLines"] = Nullable(NonNegativeIntegerSchema()),
             ["contentTruncated"] = BooleanSchema(),
+        };
+
+    private static JsonObject ReadResourceProperties()
+        => new()
+        {
+            ["resource"] = new JsonObject
+            {
+                ["type"] = "object",
+                ["required"] = StringArray("uri", "mimeType"),
+                ["properties"] = new JsonObject
+                {
+                    ["uri"] = StringSchema(),
+                    ["mimeType"] = StringSchema(),
+                },
+                ["maxProperties"] = 2,
+                ["propertyNames"] = StringSchema(),
+                ["additionalProperties"] = false,
+            },
+            ["_meta"] = ObjectSchema(),
         };
 
     private static JsonObject MapProperties()

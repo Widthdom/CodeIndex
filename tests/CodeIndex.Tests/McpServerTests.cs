@@ -2259,6 +2259,245 @@ public sealed class Caller
     }
 
     [Fact]
+    public void ReadResourceTool_IsTypedDiscoverableAndSharesBoundedReader_Issue4900()
+    {
+        const string uri = "cdidx://file/src/typed-resource.txt";
+        const string expected = "first\nsecond\n🙂🙂🙂\nfourth";
+        InsertIndexedFile("src/typed-resource.txt", "text", expected);
+
+        var listed = _server.HandleMessage(new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 4900,
+            ["method"] = "tools/list",
+            ["params"] = new JsonObject
+            {
+                ["names"] = new JsonArray { "read_resource" },
+                ["format"] = "full",
+            },
+        })!;
+        var tool = Assert.Single(listed["result"]!["tools"]!.AsArray())!;
+        Assert.Equal("read_resource", tool["name"]!.GetValue<string>());
+        Assert.True(tool["annotations"]!["readOnlyHint"]!.GetValue<bool>());
+        var outputSchema = tool["outputSchema"]!;
+        Assert.Equal("object", outputSchema["type"]!.GetValue<string>());
+        Assert.Contains(
+            outputSchema["$defs"]!["tool_result"]!["required"]!.AsArray(),
+            required => required!.GetValue<string>() == "resource");
+        var schema = tool["inputSchema"]!;
+        Assert.False(schema["additionalProperties"]!.GetValue<bool>());
+        Assert.Contains(
+            schema["required"]!.AsArray(),
+            required => required!.GetValue<string>() == "uri");
+        var properties = schema["properties"]!;
+        Assert.Equal("string", properties["uri"]!["type"]!.GetValue<string>());
+        Assert.Equal(McpBoundedText.MaxResourceUriChars, properties["uri"]!["maxLength"]!.GetValue<int>());
+        Assert.Equal(1, properties["startLine"]!["minimum"]!.GetValue<int>());
+        Assert.Contains("1-based inclusive", properties["startLine"]!["description"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.Equal(1, properties["endLine"]!["minimum"]!.GetValue<int>());
+        Assert.Equal(McpServer.MinResourceReadMaxBytes, properties["maxBytes"]!["minimum"]!.GetValue<int>());
+        Assert.Equal(McpServer.MaxResourceReadMaxBytes, properties["maxBytes"]!["maximum"]!.GetValue<int>());
+        Assert.Equal(McpServer.DefaultResourceReadMaxBytes, properties["maxBytes"]!["default"]!.GetValue<int>());
+        Assert.Contains("UTF-8", properties["maxBytes"]!["description"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.Equal(McpServer.MaxResourceReadCursorCharacters, properties["cursor"]!["maxLength"]!.GetValue<int>());
+        Assert.Equal(2, schema["allOf"]!.AsArray().Count);
+
+        var nextId = 4901;
+        JsonNode Read(JsonObject arguments)
+        {
+            arguments["uri"] = uri;
+            return _server.HandleMessage(new JsonObject
+            {
+                ["jsonrpc"] = "2.0",
+                ["id"] = nextId++,
+                ["method"] = "tools/call",
+                ["params"] = new JsonObject
+                {
+                    ["name"] = "read_resource",
+                    ["arguments"] = arguments,
+                },
+            })!;
+        }
+
+        var full = Read(new JsonObject());
+        Assert.Equal(expected, full["result"]!["content"]![0]!["text"]!.GetValue<string>());
+        var fullStructured = full["result"]!["structuredContent"]!;
+        Assert.Equal(JsonOutputContract.ApiVersion, fullStructured["api_version"]!.GetValue<string>());
+        Assert.Equal("read_resource", fullStructured["tool"]!.GetValue<string>());
+        Assert.Equal(uri, fullStructured["resource"]!["uri"]!.GetValue<string>());
+        Assert.False(fullStructured["_meta"]!["truncated"]!.GetValue<bool>());
+
+        var fileReadingTools = listed["result"]!["_meta"]!["capability_groups"]!["file_reading"]!.AsArray();
+        Assert.Contains(
+            fileReadingTools,
+            name => name!.GetValue<string>() == "read_resource");
+
+        var batched = _server.HandleMessage(new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = nextId++,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "batch_query",
+                ["arguments"] = new JsonObject
+                {
+                    ["queries"] = new JsonArray
+                    {
+                        new JsonObject
+                        {
+                            ["tool"] = "read_resource",
+                            ["arguments"] = new JsonObject
+                            {
+                                ["uri"] = uri,
+                                ["startLine"] = 1,
+                                ["endLine"] = 1,
+                            },
+                        },
+                    },
+                },
+            },
+        })!;
+        var batchSlot = Assert.Single(batched["result"]!["structuredContent"]!["results"]!.AsArray())!;
+        Assert.True(batchSlot["ok"]!.GetValue<bool>());
+        Assert.Equal("first", batchSlot["summary"]!.GetValue<string>());
+        Assert.Equal(
+            JsonOutputContract.ApiVersion,
+            batchSlot["result"]!["api_version"]!.GetValue<string>());
+        Assert.Equal("read_resource", batchSlot["result"]!["tool"]!.GetValue<string>());
+
+        var first = Read(new JsonObject
+        {
+            ["startLine"] = 2,
+            ["endLine"] = 4,
+            ["maxBytes"] = 9,
+        });
+        var firstResult = first["result"]!;
+        var firstMetadata = firstResult["structuredContent"]!["_meta"]!;
+        Assert.Equal("second\n", firstResult["content"]![0]!["text"]!.GetValue<string>());
+        Assert.Equal(7, firstMetadata["returnedBytes"]!.GetValue<int>());
+        Assert.True(firstMetadata["truncated"]!.GetValue<bool>());
+        Assert.Equal("maxBytes", firstMetadata["truncationReason"]!.GetValue<string>());
+
+        var second = Read(new JsonObject
+        {
+            ["cursor"] = firstMetadata["nextCursor"]!.GetValue<string>(),
+            ["maxBytes"] = 8,
+        });
+        var secondResult = second["result"]!;
+        var secondMetadata = secondResult["structuredContent"]!["_meta"]!;
+        Assert.Equal("🙂🙂", secondResult["content"]![0]!["text"]!.GetValue<string>());
+        Assert.Equal(8, secondMetadata["returnedBytes"]!.GetValue<int>());
+        Assert.Equal(8, secondMetadata["nextLineByteOffset"]!.GetValue<int>());
+
+        var third = Read(new JsonObject
+        {
+            ["cursor"] = secondMetadata["nextCursor"]!.GetValue<string>(),
+            ["maxBytes"] = 32,
+        });
+        Assert.Equal("🙂\nfourth", third["result"]!["content"]![0]!["text"]!.GetValue<string>());
+        Assert.False(third["result"]!["structuredContent"]!["_meta"]!["truncated"]!.GetValue<bool>());
+
+        var invalid = Read(new JsonObject
+        {
+            ["startLine"] = 4,
+            ["endLine"] = 2,
+        });
+        Assert.True(invalid["result"]!["isError"]!.GetValue<bool>());
+        Assert.Equal(
+            McpErrorEnvelope.CategoryInvalidArgument,
+            invalid["result"]!["structuredContent"]!["category"]!.GetValue<string>());
+        Assert.Equal("read_resource", invalid["result"]!["structuredContent"]!["tool"]!.GetValue<string>());
+        Assert.Equal(-32602, invalid["result"]!["structuredContent"]!["jsonrpc_code"]!.GetValue<int>());
+
+        var legacy = _server.HandleMessage(new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = nextId,
+            ["method"] = "resources/read",
+            ["params"] = new JsonObject
+            {
+                ["uri"] = uri,
+                ["startLine"] = 2,
+                ["endLine"] = 4,
+                ["maxBytes"] = 9,
+            },
+        })!;
+        Assert.Equal(
+            firstResult["content"]![0]!["text"]!.GetValue<string>(),
+            legacy["result"]!["contents"]![0]!["text"]!.GetValue<string>());
+        Assert.Equal(
+            firstMetadata["nextCursor"]!.GetValue<string>(),
+            legacy["result"]!["_meta"]!["nextCursor"]!.GetValue<string>());
+
+        var missingDbPath = Path.Combine(Path.GetTempPath(), $"cdidx-missing-{Guid.NewGuid():N}", "codeindex.db");
+        using var missingServer = new McpServer(missingDbPath, "0.1.1");
+        var missing = missingServer.HandleMessage(new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = nextId + 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "read_resource",
+                ["arguments"] = new JsonObject { ["uri"] = uri },
+            },
+        })!;
+        Assert.True(missing["result"]!["isError"]!.GetValue<bool>());
+        Assert.Equal(
+            McpErrorEnvelope.CategoryIndexMissing,
+            missing["result"]!["structuredContent"]!["category"]!.GetValue<string>());
+        Assert.Equal("read_resource", missing["result"]!["structuredContent"]!["tool"]!.GetValue<string>());
+        Assert.Contains(
+            "Database not found",
+            missing["result"]!["content"]![0]!["text"]!.GetValue<string>(),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ReadResourceTool_AdaptsPageToConfiguredResponseLimit_Issue4900()
+    {
+        const int responseLimit = 4096;
+        using var env = EnvironmentVariableScope.Capture("CDIDX_MCP_RESPONSE_MAX_BYTES");
+        env.Set("CDIDX_MCP_RESPONSE_MAX_BYTES", responseLimit.ToString(CultureInfo.InvariantCulture));
+        InsertIndexedFile("src/typed-response-budget.txt", "text", new string('<', 60_000));
+
+        var response = _server.HandleMessage(new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 4900,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "read_resource",
+                ["arguments"] = new JsonObject
+                {
+                    ["uri"] = "cdidx://file/src/typed-response-budget.txt",
+                    ["maxBytes"] = 30_000,
+                },
+            },
+        })!;
+
+        Assert.NotNull(response["result"]);
+        Assert.True(_server.TrySerializeJsonNodeWithinByteLimitForTests(
+            response,
+            responseLimit,
+            out _,
+            out var responseBytes));
+        Assert.InRange(responseBytes, 1, responseLimit);
+        var metadata = response["result"]!["structuredContent"]!["_meta"]!;
+        Assert.True(metadata["truncated"]!.GetValue<bool>());
+        Assert.Equal("maxResponseBytes", metadata["truncationReason"]!.GetValue<string>());
+        Assert.InRange(
+            metadata["effectiveMaxBytes"]!.GetValue<int>(),
+            McpServer.MinResourceReadMaxBytes,
+            29_999);
+        Assert.Equal(
+            Encoding.UTF8.GetByteCount(response["result"]!["content"]![0]!["text"]!.GetValue<string>()),
+            metadata["returnedBytes"]!.GetValue<int>());
+    }
+
+    [Fact]
     public void ResourcesRead_UsesExactPathWhenSubstringCandidatesSortFirst_Issue4544()
     {
         InsertIndexedFile("a/src/exact-collision.txt.copy", "text", "decoy-a");

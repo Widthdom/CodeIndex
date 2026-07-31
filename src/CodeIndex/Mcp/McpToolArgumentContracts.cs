@@ -5,7 +5,7 @@ public partial class McpServer
     private static bool IsKnownToolName(string toolName) => toolName switch
     {
         "search" or "definition" or "references" or "callers" or "callees" or "symbols" or
-        "files" or "find_in_file" or "excerpt" or "map" or "analyze_symbol" or "status" or
+        "files" or "find_in_file" or "excerpt" or "read_resource" or "map" or "analyze_symbol" or "status" or
         "outline" or "batch_query" or "deps" or "impact_analysis" or "languages" or "validate" or
         "unused_symbols" or "symbol_hotspots" or "ping" or "index" or "backfill_fold" or
         "suggest_improvement" => true,
@@ -22,6 +22,7 @@ public partial class McpServer
         "files" => new HashSet<string>(StringComparer.Ordinal) { "query", "lang", "limit", "cursor", "path", "excludePaths", "excludeTests", "includeGenerated", "since", "orderBySize", "rawBytes", "project", "solution" },
         "find_in_file" => new HashSet<string>(StringComparer.Ordinal) { "query", "path", "limit", "lang", "excludePaths", "excludeTests", "includeGenerated", "before", "after", "snippetLines", "focusLine", "focusColumn", "maxLineWidth", "exact", "regex" },
         "excerpt" => new HashSet<string>(StringComparer.Ordinal) { "path", "startLine", "endLine", "before", "after", "focusLine", "focusColumn", "focusLength", "maxLineWidth", "maxOutputBytes" },
+        "read_resource" => new HashSet<string>(StringComparer.Ordinal) { "uri", "startLine", "endLine", "maxBytes", "cursor", "includeGenerated" },
         "map" => new HashSet<string>(StringComparer.Ordinal) { "limit", "lang", "path", "excludePaths", "excludeTests", "sections", "depth", "minEntrypointConfidence", "project", "solution" },
         "analyze_symbol" => new HashSet<string>(StringComparer.Ordinal) { "query", "lang", "limit", "cursor", "includeBody", "path", "excludePaths", "excludeTests", "includeGenerated", "exactName", "exact", "maxLineWidth", "countOnly", "format", "project", "solution" },
         "status" => new HashSet<string>(StringComparer.Ordinal) { "check", "scopes", "staleAfterSeconds", "explain", "config", "logPath", "updateCheck", "format", "fields" },

@@ -2795,6 +2795,20 @@ parameters and bounds under `_meta.discovery_contract`, so AI clients can discov
 `path`, `lang`, `includeGenerated`, `maxBytes`, and cursor semantics without
 guessing beyond the standard protocol.
 
+Clients that need typed discovery should prefer the `read_resource` tool when
+`tools/list` advertises it. Its `inputSchema` declares the required `uri` plus
+optional 1-based inclusive `startLine` / `endLine`, UTF-8 `maxBytes`,
+`includeGenerated`, and opaque continuation `cursor`, including their ranges and
+mutual-exclusion rules. The file text is returned in `content[0].text`;
+`structuredContent.resource` carries its canonical identity and
+`structuredContent._meta` carries effective ranges, byte counts, truncation, and
+`nextCursor`. `read_resource` and `resources/read` use the same validation and
+bounded database reader. Existing `cdidx://file/...` and
+`cdidx://file-path/...` URIs do not change. Clients should feature-detect
+`read_resource` through `tools/list`; older servers and compatibility-oriented
+clients can continue to use `resources/read`, whose extra range/budget fields
+remain supported even though the standard MCP method only types `uri`.
+
 MCP `resources/read` is bounded too. Pass optional inclusive `startLine` / `endLine` values and `maxBytes` (the UTF-8 resource-text budget); the minimum is 4 bytes, omitted budgets default to 64 KiB, and requests cannot exceed 128 KiB. Each page is also capped at 1,000 logical lines. `result._meta.truncationReason` is `maxLines` when that cap is reached and `maxBytes` when the requested text budget is reached. If the configured MCP or HTTP response ceiling is tighter, `_meta.maxBytes` retains the requested budget, `_meta.effectiveMaxBytes` reports the reduced budget, and truncation uses `maxResponseBytes`. Multiple `resources/read` calls in one JSON-RPC batch share the aggregate frame ceiling, so each item also yields to the space remaining in that batch. A non-pageable item that cannot fit its allocation returns a structured `batch_response_budget_too_small` error while preserving the request ID. When `result._meta.truncated` is true, send the returned `nextCursor` with the same resource URI to continue. Do not combine a cursor with new line boundaries; you may change `maxBytes` for the next page. A cursor becomes stale if the indexed resource changes. Read-only or immutable legacy databases without the dedicated range indexes use the existing `idx_chunks_file` index for a metadata-only compatibility lookup under a SQLite VM-step budget; exceeding that budget returns a structured index-unavailable error instead of performing an unbounded scan.
 
 ### MCP Server (for Claude Code, Cursor, Windsurf, etc.)
@@ -6056,6 +6070,19 @@ protocol 上で直接案内します。各 `resources/list` result も accepted 
 parameter と上限を `_meta.discovery_contract` に公開するため、AI client は標準
 protocol の外側にある `path`、`lang`、`includeGenerated`、`maxBytes`、cursor
 semantics を推測せず発見できます。
+
+型付き discovery が必要な client は、`tools/list` に公開されている場合は
+`read_resource` tool を優先してください。その `inputSchema` は必須の `uri` と、
+任意の 1-based inclusive な `startLine` / `endLine`、UTF-8 `maxBytes`、
+`includeGenerated`、opaque な継続 `cursor` を、範囲・排他規則とともに宣言します。
+file text は `content[0].text`、canonical identity は
+`structuredContent.resource`、有効範囲・byte 数・切り詰め・`nextCursor` は
+`structuredContent._meta` に返ります。`read_resource` と `resources/read` は
+同じ validation と bounded database reader を使用し、既存の
+`cdidx://file/...` / `cdidx://file-path/...` URI は変わりません。client は
+`tools/list` で `read_resource` を feature-detect してください。古い server や
+互換性重視の client は引き続き `resources/read` を使用でき、標準 MCP method が
+`uri` だけを型付けしていても追加の range / budget field は維持されます。
 
 MCP `resources/read` にも上限があります。inclusive な `startLine` / `endLine` と、UTF-8 resource 本文の budget である `maxBytes` を任意指定できます。最小値は 4 byte、budget 省略時は 64 KiB、要求可能な最大値は 128 KiB です。各ページには論理行 1,000 行の上限もあります。この上限に達した場合、`result._meta.truncationReason` は `maxLines`、要求した本文 budget に達した場合は `maxBytes` になります。設定された MCP または HTTP のレスポンス上限の方が小さい場合、`_meta.maxBytes` は要求値を保持し、`_meta.effectiveMaxBytes` が縮小後の budget を示し、切り詰め理由は `maxResponseBytes` になります。1 つの JSON-RPC batch に複数の `resources/read` call がある場合は aggregate frame 上限を共有するため、各 item はその batch の残り領域にも従います。page 化できない item が割当内に収まらない場合は、request ID を保持した構造化 `batch_response_budget_too_small` error を返します。`result._meta.truncated` が true の場合、返された `nextCursor` を同じ resource URI とともに送って継続してください。cursor と新しい行境界は併用できませんが、次ページの `maxBytes` は変更できます。index 済み resource が変わると cursor は stale になります。専用の range index がない read-only または immutable な legacy database では、既存の `idx_chunks_file` index を使い、SQLite VM-step budget 内の metadata-only compatibility lookup を行います。この budget を超えた場合は無制限に scan せず、構造化された index-unavailable error を返します。
 

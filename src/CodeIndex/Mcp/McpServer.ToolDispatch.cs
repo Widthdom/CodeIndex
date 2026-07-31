@@ -255,6 +255,7 @@ public partial class McpServer : IDisposable
             "files" => ExecuteFiles(id, args),
             "find_in_file" => ExecuteFindInFile(id, args),
             "excerpt" => ExecuteExcerpt(id, args),
+            "read_resource" => ExecuteReadResource(id, args),
             "map" => ExecuteMap(id, args),
             "analyze_symbol" => ExecuteAnalyzeSymbol(id, args),
             "status" => ExecuteStatus(id, args),
