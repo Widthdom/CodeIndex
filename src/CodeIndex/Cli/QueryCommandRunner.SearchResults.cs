@@ -886,8 +886,13 @@ public static partial class QueryCommandRunner
     {
         if (!options.Json)
             return false;
-        if (options.OutputFormat is OutputFormatCount or OutputFormatCompact or OutputFormatGrouped or OutputFormatIssueDrafts)
+        if (options.OutputFormat is OutputFormatCount
+            or OutputFormatCompact
+            or OutputFormatGrouped
+            or OutputFormatIssueDrafts)
             return true;
+        if (options.OutputFormat == OutputFormatSarif)
+            return options.RecipeName != null;
         if (options.OutputFormat == OutputFormatJson)
             return options.JsonOutputFormat is JsonOutputFormatNdjson or JsonOutputFormatArray;
         return false;

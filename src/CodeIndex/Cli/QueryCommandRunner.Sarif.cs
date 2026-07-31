@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using CodeIndex.Database;
@@ -94,11 +95,33 @@ public static partial class QueryCommandRunner
         string level = "warning",
         JsonObject? runProperties = null)
     {
-        var writer = Console.Out;
-        var itemOptions = GetCompactJsonOptions(jsonOptions);
         var itemList = items.ToList();
+        WriteSarifDocument(Console.Out, itemList, jsonOptions, level, runProperties);
+        Console.WriteLine();
+    }
+
+    private static string BuildSarifDocument(
+        IReadOnlyList<SarifLocation> items,
+        JsonSerializerOptions jsonOptions,
+        string level = "warning",
+        JsonObject? runProperties = null)
+    {
+        using var writer = new StringWriter(CultureInfo.InvariantCulture);
+        WriteSarifDocument(writer, items, jsonOptions, level, runProperties);
+        return writer.ToString();
+    }
+
+    private static void WriteSarifDocument(
+        TextWriter writer,
+        IReadOnlyList<SarifLocation> itemList,
+        JsonSerializerOptions jsonOptions,
+        string level,
+        JsonObject? runProperties)
+    {
+        var itemOptions = GetCompactJsonOptions(jsonOptions);
         writer.Write("{\"version\":\"2.1.0\",\"runs\":[{\"tool\":{\"driver\":{\"name\":\"cdidx\",\"informationUri\":\"https://github.com/Widthdom/CodeIndex\",\"rules\":");
         WriteJsonArrayInline(
+            writer,
             itemList
                 .Where(item => !string.IsNullOrWhiteSpace(item.RuleId))
                 .GroupBy(item => item.RuleId, StringComparer.Ordinal)
@@ -111,6 +134,7 @@ public static partial class QueryCommandRunner
             separator: ",");
         writer.Write("}},\"results\":");
         WriteJsonArrayInline(
+            writer,
             itemList,
             (resultWriter, item) => WriteSarifResult(resultWriter, item, item.Level ?? level, itemOptions),
             separator: ",");
@@ -121,7 +145,7 @@ public static partial class QueryCommandRunner
         }
         writer.Write("}]");
         WriteActiveSqliteDiagnosticsProperties(writer, itemOptions);
-        writer.WriteLine('}');
+        writer.Write('}');
     }
 
     private static string GetHighestSarifLevel(IEnumerable<string> levels)
@@ -145,9 +169,12 @@ public static partial class QueryCommandRunner
         return highest;
     }
 
-    private static void WriteJsonArrayInline<T>(IEnumerable<T> items, Action<TextWriter, T> writeItem, string separator)
+    private static void WriteJsonArrayInline<T>(
+        TextWriter writer,
+        IEnumerable<T> items,
+        Action<TextWriter, T> writeItem,
+        string separator)
     {
-        var writer = Console.Out;
         writer.Write('[');
         var first = true;
         foreach (var item in items)
@@ -158,6 +185,19 @@ public static partial class QueryCommandRunner
             first = false;
         }
         writer.Write(']');
+    }
+
+    private static int GetUtf8JsonLineByteCount(string json)
+        => checked(Encoding.UTF8.GetByteCount(json) + Encoding.UTF8.GetByteCount(Environment.NewLine));
+
+    private static int GetSarifResultUtf8ByteCount(
+        SarifLocation item,
+        JsonSerializerOptions jsonOptions,
+        string level = "warning")
+    {
+        using var writer = new StringWriter(CultureInfo.InvariantCulture);
+        WriteSarifResult(writer, item, item.Level ?? level, GetCompactJsonOptions(jsonOptions));
+        return Encoding.UTF8.GetByteCount(writer.ToString());
     }
 
     private static void WriteSarifRule(

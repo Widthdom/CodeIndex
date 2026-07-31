@@ -706,10 +706,7 @@ public static partial class QueryCommandRunner
             var queryResults = CollectSearchRecipeQueryResults(reader, selection.Queries, scope, options, userExact, out var total, out _);
 
             if (options.OutputFormat == OutputFormatSarif)
-            {
-                WriteSearchRecipeSarif(recipe, scope, queryResults, total, options, jsonOptions);
-                return CommandExitCodes.Success;
-            }
+                return WriteSearchRecipeSarif(recipe, scope, queryResults, total, options, jsonOptions);
 
             if (options.Json)
             {
@@ -788,7 +785,7 @@ public static partial class QueryCommandRunner
         });
     }
 
-    private static void WriteSearchRecipeSarif(
+    private static int WriteSearchRecipeSarif(
         SearchAuditRecipe recipe,
         SearchRecipeScopeJsonResult scope,
         IReadOnlyList<SearchRecipeQueryResultJsonResult> queryResults,
@@ -796,44 +793,6 @@ public static partial class QueryCommandRunner
         QueryCommandOptions options,
         JsonSerializerOptions jsonOptions)
     {
-        var summary = BuildSearchRecipeRunSummary(
-            queryResults,
-            options.Limit,
-            options.TotalLimit,
-            total,
-            options.InvocationContext);
-        var querySummaries = new JsonArray();
-        foreach (var queryResult in queryResults)
-        {
-            querySummaries.Add(new JsonObject
-            {
-                ["name"] = queryResult.Name,
-                ["result_count"] = queryResult.Count,
-                ["result_limit"] = queryResult.ResultLimit,
-                ["truncated"] = queryResult.Truncated,
-                ["minimum_omitted_result_count"] = queryResult.MinimumOmittedResultCount,
-                ["next_cursor"] = queryResult.NextCursor,
-            });
-        }
-        var runProperties = new JsonObject
-        {
-            ["format"] = "audit-recipe",
-            ["recipe"] = recipe.Name,
-            ["scope"] = JsonSerializer.SerializeToNode(
-                scope,
-                CliJsonSerializerContextFactory.Create(jsonOptions).SearchRecipeScopeJsonResult),
-            ["query_count"] = queryResults.Count,
-            ["result_count"] = total,
-            ["limit_per_query"] = options.Limit,
-            ["total_limit"] = JsonValue.Create(options.TotalLimit),
-            ["queries"] = querySummaries,
-            ["truncation"] = new JsonObject
-            {
-                ["truncated"] = summary.TruncatedQueryCount > 0,
-                ["truncated_query_count"] = summary.TruncatedQueryCount,
-                ["minimum_omitted_result_count"] = summary.MinimumOmittedResultCount,
-            },
-        };
         var items = new List<SarifLocation>(total);
         foreach (var queryResult in queryResults)
         {
@@ -882,7 +841,288 @@ public static partial class QueryCommandRunner
             }
         }
 
-        WriteSarif(items, jsonOptions, runProperties: runProperties);
+        var completeProperties = BuildSearchRecipeSarifRunProperties(
+            recipe,
+            scope,
+            queryResults,
+            options,
+            jsonOptions,
+            items,
+            items.Count);
+        if (!options.MaxJsonBytes.HasValue)
+        {
+            WriteSarif(items, jsonOptions, runProperties: completeProperties);
+            return CommandExitCodes.Success;
+        }
+
+        var completeDocument = BuildSarifDocument(items, jsonOptions, runProperties: completeProperties);
+        var completeDocumentBytes = GetUtf8JsonLineByteCount(completeDocument);
+        var byteLimit = options.MaxJsonBytes.Value;
+        if (completeDocumentBytes <= byteLimit)
+        {
+            Console.WriteLine(completeDocument);
+            return CommandExitCodes.Success;
+        }
+
+        if (items.Count == 0)
+        {
+            WriteUsageError(
+                $"audit SARIF output requires {completeDocumentBytes.ToString(CultureInfo.InvariantCulture)} UTF-8 bytes including the final newline, which exceeds --max-json-bytes {byteLimit.ToString(CultureInfo.InvariantCulture)}.",
+                options,
+                "Increase --max-json-bytes to at least the reported minimum; no partial SARIF was written.");
+            return CommandExitCodes.UsageError;
+        }
+
+        string? boundedDocument = null;
+        var emittedResultCount = -1;
+        var low = 0;
+        var high = items.Count - 1;
+        while (low <= high)
+        {
+            var candidate = low + ((high - low) / 2);
+            var firstOmittedResultBytes = GetSarifResultUtf8ByteCount(items[candidate], jsonOptions);
+            var candidateProperties = BuildSearchRecipeSarifRunProperties(
+                recipe,
+                scope,
+                queryResults,
+                options,
+                jsonOptions,
+                items,
+                candidate,
+                completeDocumentBytes,
+                firstOmittedResultBytes);
+            var candidateDocument = BuildSarifDocument(
+                items.Take(candidate).ToList(),
+                jsonOptions,
+                runProperties: candidateProperties);
+            if (GetUtf8JsonLineByteCount(candidateDocument) <= byteLimit)
+            {
+                emittedResultCount = candidate;
+                boundedDocument = candidateDocument;
+                low = candidate + 1;
+            }
+            else
+            {
+                high = candidate - 1;
+            }
+        }
+
+        if (boundedDocument == null)
+        {
+            var minimumBoundedDocumentBytes = GetMinimumBoundedSearchRecipeSarifBytes(
+                recipe,
+                scope,
+                queryResults,
+                options,
+                jsonOptions,
+                items,
+                completeDocumentBytes,
+                byteLimit);
+            WriteUsageError(
+                $"minimum schema-valid bounded audit SARIF output requires {minimumBoundedDocumentBytes.ToString(CultureInfo.InvariantCulture)} UTF-8 bytes including the final newline, which exceeds --max-json-bytes {byteLimit.ToString(CultureInfo.InvariantCulture)}.",
+                options,
+                "Increase --max-json-bytes to at least the reported minimum; no partial SARIF was written.");
+            return CommandExitCodes.UsageError;
+        }
+
+        Console.WriteLine(boundedDocument);
+        return emittedResultCount < items.Count && !options.AllowPartial
+            ? CommandExitCodes.PartialResult
+            : CommandExitCodes.Success;
+    }
+
+    private static JsonObject BuildSearchRecipeSarifRunProperties(
+        SearchAuditRecipe recipe,
+        SearchRecipeScopeJsonResult scope,
+        IReadOnlyList<SearchRecipeQueryResultJsonResult> queryResults,
+        QueryCommandOptions options,
+        JsonSerializerOptions jsonOptions,
+        IReadOnlyList<SarifLocation> items,
+        int emittedResultCount,
+        int? minimumCompleteBytes = null,
+        int? firstOmittedResultBytes = null,
+        int? byteLimitOverride = null)
+    {
+        var summary = BuildSearchRecipeRunSummary(
+            queryResults,
+            options.Limit,
+            options.TotalLimit,
+            items.Count,
+            options.InvocationContext);
+        var bounded = minimumCompleteBytes.HasValue;
+        var emittedByRule = items
+            .Take(emittedResultCount)
+            .GroupBy(item => item.RuleId, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
+        var querySummaries = new JsonArray();
+        var truncatedQueryCount = 0;
+        foreach (var queryResult in queryResults)
+        {
+            var ruleId = $"{recipe.Name}/{queryResult.Name}";
+            var emittedForQuery = bounded && emittedByRule.TryGetValue(ruleId, out var count)
+                ? count
+                : bounded
+                    ? 0
+                    : queryResult.Count;
+            var omittedByByteBudget = Math.Max(0, queryResult.Count - emittedForQuery);
+            var truncated = queryResult.Truncated || omittedByByteBudget > 0;
+            if (truncated)
+                truncatedQueryCount++;
+            var querySummary = new JsonObject
+            {
+                ["name"] = queryResult.Name,
+                ["result_count"] = emittedForQuery,
+                ["result_limit"] = queryResult.ResultLimit,
+                ["truncated"] = truncated,
+                ["minimum_omitted_result_count"] = queryResult.MinimumOmittedResultCount + omittedByByteBudget,
+                ["next_cursor"] = queryResult.NextCursor,
+            };
+            if (bounded)
+            {
+                querySummary["source_result_count"] = queryResult.SourceTotal;
+                querySummary["source_result_count_authoritative"] = queryResult.SourceTotalAuthoritative;
+                querySummary["omitted_by_byte_budget"] = omittedByByteBudget;
+                querySummary["replay_command"] = BuildSearchRecipeSarifReplayCommand(
+                    ruleId,
+                    options,
+                    minimumCompleteBytes!.Value,
+                    includeRecipeQuerySelectors: false);
+            }
+            querySummaries.Add(querySummary);
+        }
+
+        var omittedByByteBudgetTotal = Math.Max(0, items.Count - emittedResultCount);
+        var runProperties = new JsonObject
+        {
+            ["format"] = "audit-recipe",
+            ["recipe"] = recipe.Name,
+            ["scope"] = JsonSerializer.SerializeToNode(
+                scope,
+                CliJsonSerializerContextFactory.Create(jsonOptions).SearchRecipeScopeJsonResult),
+            ["query_count"] = queryResults.Count,
+            ["result_count"] = emittedResultCount,
+            ["limit_per_query"] = options.Limit,
+            ["total_limit"] = JsonValue.Create(options.TotalLimit),
+            ["queries"] = querySummaries,
+            ["truncation"] = new JsonObject
+            {
+                ["truncated"] = truncatedQueryCount > 0,
+                ["truncated_query_count"] = truncatedQueryCount,
+                ["minimum_omitted_result_count"] = summary.MinimumOmittedResultCount + omittedByByteBudgetTotal,
+            },
+        };
+        if (!bounded)
+            return runProperties;
+
+        runProperties["source_result_count"] = queryResults.Sum(query => query.SourceTotal);
+        runProperties["source_result_count_authoritative"] = queryResults.All(query => query.SourceTotalAuthoritative);
+        runProperties["cursoring_available"] = queryResults.Any(
+            query => query.Truncated && !string.IsNullOrWhiteSpace(query.NextCursor));
+        runProperties["replay_command"] = BuildSearchRecipeSarifReplayCommand(
+            recipe.Name,
+            options,
+            minimumCompleteBytes!.Value,
+            includeRecipeQuerySelectors: true);
+        runProperties["next_commands"] = BuildSearchRecipeSarifNextCommands(
+            recipe.Name,
+            queryResults,
+            options,
+            minimumCompleteBytes.Value);
+        runProperties["byte_budget"] = new JsonObject
+        {
+            ["max_json_bytes"] = byteLimitOverride ?? options.MaxJsonBytes!.Value,
+            ["measurement"] = "utf8_bytes_including_final_newline",
+            ["strategy"] = "omit_whole_results",
+            ["minimum_complete_bytes"] = minimumCompleteBytes.Value,
+            ["emitted_result_count"] = emittedResultCount,
+            ["omitted_result_count"] = omittedByByteBudgetTotal,
+            ["first_omitted_result_bytes"] = firstOmittedResultBytes,
+            ["truncated"] = omittedByByteBudgetTotal > 0,
+        };
+        return runProperties;
+    }
+
+    private static int GetMinimumBoundedSearchRecipeSarifBytes(
+        SearchAuditRecipe recipe,
+        SearchRecipeScopeJsonResult scope,
+        IReadOnlyList<SearchRecipeQueryResultJsonResult> queryResults,
+        QueryCommandOptions options,
+        JsonSerializerOptions jsonOptions,
+        IReadOnlyList<SarifLocation> items,
+        int minimumCompleteBytes,
+        int requestedByteLimit)
+    {
+        var minimum = requestedByteLimit;
+        var firstOmittedResultBytes = GetSarifResultUtf8ByteCount(items[0], jsonOptions);
+        for (var attempt = 0; attempt < 8; attempt++)
+        {
+            var properties = BuildSearchRecipeSarifRunProperties(
+                recipe,
+                scope,
+                queryResults,
+                options,
+                jsonOptions,
+                items,
+                emittedResultCount: 0,
+                minimumCompleteBytes,
+                firstOmittedResultBytes,
+                byteLimitOverride: minimum);
+            var document = BuildSarifDocument(
+                Array.Empty<SarifLocation>(),
+                jsonOptions,
+                runProperties: properties);
+            var required = GetUtf8JsonLineByteCount(document);
+            if (required <= minimum)
+                return minimum;
+            minimum = required;
+        }
+        return minimum;
+    }
+
+    private static JsonArray BuildSearchRecipeSarifNextCommands(
+        string recipeName,
+        IReadOnlyList<SearchRecipeQueryResultJsonResult> queryResults,
+        QueryCommandOptions options,
+        int minimumCompleteBytes)
+    {
+        var commands = new JsonArray
+        {
+            BuildSearchRecipeSarifReplayCommand(
+                recipeName,
+                options,
+                minimumCompleteBytes,
+                includeRecipeQuerySelectors: true),
+        };
+        foreach (var query in queryResults.Where(query => query.NextCursor != null).Take(3))
+        {
+            commands.Add(BuildSearchRecipeCompactReplayCommand(
+                $"{recipeName}/{query.Name}",
+                options,
+                query.NextCursor,
+                resultsOnly: false,
+                includeRecipeQuerySelectors: false));
+        }
+        return commands;
+    }
+
+    private static string BuildSearchRecipeSarifReplayCommand(
+        string recipeSelector,
+        QueryCommandOptions options,
+        int maxJsonBytes,
+        bool includeRecipeQuerySelectors)
+    {
+        var args = new List<string>();
+        options.InvocationContext.AddRecipeCommandPrefix(args, recipeSelector);
+        args.Add("--format");
+        args.Add(OutputFormatSarif);
+        AddReplayValueOption(args, "--limit", options.Limit.ToString(CultureInfo.InvariantCulture));
+        AddSearchRecipeCompactReplayOptions(
+            args,
+            options,
+            includeRecipeQuerySelectors,
+            includeMaxJsonBytes: false);
+        AddReplayValueOption(args, "--max-json-bytes", maxJsonBytes.ToString(CultureInfo.InvariantCulture));
+        return string.Join(" ", args.Select(QuoteReplayShellArg));
     }
 
     private static (int Line, int Column, int? EndColumn) GetSearchRecipeSarifRegion(CompactSearchResult result)
@@ -1097,7 +1337,11 @@ public static partial class QueryCommandRunner
             : command;
     }
 
-    private static void AddSearchRecipeCompactReplayOptions(List<string> args, QueryCommandOptions options, bool includeRecipeQuerySelectors)
+    private static void AddSearchRecipeCompactReplayOptions(
+        List<string> args,
+        QueryCommandOptions options,
+        bool includeRecipeQuerySelectors,
+        bool includeMaxJsonBytes = true)
     {
         if (options.DbPathExplicit)
             AddReplayValueOption(args, "--db", options.DbPath);
@@ -1159,7 +1403,7 @@ public static partial class QueryCommandRunner
         if (options.TotalLimit.HasValue)
             AddReplayValueOption(args, "--total-limit", options.TotalLimit.Value.ToString(CultureInfo.InvariantCulture));
         AddSearchRecipeRowSelectionReplayOptions(args, options);
-        if (options.MaxJsonBytes.HasValue)
+        if (includeMaxJsonBytes && options.MaxJsonBytes.HasValue)
             AddReplayValueOption(args, "--max-json-bytes", options.MaxJsonBytes.Value.ToString(CultureInfo.InvariantCulture));
         if (options.ShowExcluded)
             args.Add("--show-excluded");
