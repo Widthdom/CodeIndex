@@ -155,6 +155,65 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunOutlineAndDefinition_MarkdownHeadingRangesStayWithinFile_Issue4910()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_markdown_heading_ranges_4910");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            const string source = "# Root\r\nroot body\r\n## Nested\r\nnested body\r\n### Empty\r\n";
+            TestProjectHelper.InsertIndexedFile(dbPath, "docs/guide.md", "markdown", source);
+
+            var (outlineExitCode, outlineStdout, outlineStderr) = CaptureConsole(() => QueryCommandRunner.RunOutline(
+                ["docs/guide.md", "--db", dbPath, "--json", "--kind", "heading", "--outline-fields", "name,start_line,end_line,body_start_line,body_end_line"],
+                _jsonOptions));
+            using var outlineDocument = ParseJsonOutput(outlineStdout);
+            var outline = outlineDocument.RootElement;
+            var headings = outline.GetProperty("symbols").EnumerateArray().ToList();
+            var root = Assert.Single(headings.Where(symbol => symbol.GetProperty("name").GetString() == "Root"));
+            var empty = Assert.Single(headings.Where(symbol => symbol.GetProperty("name").GetString() == "Empty"));
+
+            Assert.Equal(CommandExitCodes.Success, outlineExitCode);
+            Assert.Equal(string.Empty, outlineStderr);
+            Assert.Equal(5, outline.GetProperty("total_lines").GetInt32());
+            Assert.All(headings, heading => Assert.InRange(heading.GetProperty("end_line").GetInt32(), 1, 5));
+            Assert.Equal(5, root.GetProperty("end_line").GetInt32());
+            Assert.Equal(5, root.GetProperty("body_end_line").GetInt32());
+            Assert.Equal(JsonValueKind.Null, empty.GetProperty("body_start_line").ValueKind);
+            Assert.Equal(JsonValueKind.Null, empty.GetProperty("body_end_line").ValueKind);
+
+            var (rootExitCode, rootStdout, rootStderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
+                ["Root", "--db", dbPath, "--json", "--body", "--lang", "markdown", "--exact-name"],
+                _jsonOptions));
+            using var rootDocument = ParseJsonOutput(rootStdout);
+            var definition = rootDocument.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, rootExitCode);
+            Assert.Equal(string.Empty, rootStderr);
+            Assert.Equal(5, definition.GetProperty("end_line").GetInt32());
+            Assert.Equal(2, definition.GetProperty("body_requested_start_line").GetInt32());
+            Assert.Equal(5, definition.GetProperty("body_requested_end_line").GetInt32());
+            Assert.Equal(5, definition.GetProperty("body_effective_end_line").GetInt32());
+            Assert.Contains("### Empty", definition.GetProperty("body_content").GetString(), StringComparison.Ordinal);
+
+            var (emptyExitCode, emptyStdout, emptyStderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
+                ["Empty", "--db", dbPath, "--json", "--body", "--lang", "markdown", "--exact-name"],
+                _jsonOptions));
+            using var emptyDocument = ParseJsonOutput(emptyStdout);
+            var emptyDefinition = emptyDocument.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, emptyExitCode);
+            Assert.Equal(string.Empty, emptyStderr);
+            Assert.Equal(5, emptyDefinition.GetProperty("end_line").GetInt32());
+            Assert.False(emptyDefinition.TryGetProperty("body_requested_end_line", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunOutline_CompactJsonAndJsonLinesKeepParentFirstDepth_Issue4874()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_compact_json_depth_4874");
