@@ -59,12 +59,24 @@ public partial class McpServerTests
                 .Select(aliasValue => aliasValue!.GetValue<string>()));
         var shebangRule = ambiguousLookup["detection_rules"]!.AsArray()
             .Single(rule => rule!["source"]!.GetValue<string>() == "shebang")!;
+        Assert.Equal(4, shebangRule["precedence"]!.GetValue<int>());
+        Assert.Equal(FileIndexer.ShebangProbeByteLimit, shebangRule["probe_byte_limit"]!.GetValue<int>());
+        Assert.Equal(
+            "required_before_limit_unless_eof",
+            shebangRule["line_termination_policy"]!.GetValue<string>());
         Assert.Equal("case_insensitive", shebangRule["interpreter_case_policy"]!.GetValue<string>());
         var shebangRules = shebangRule["interpreter_rules"]!.AsArray();
         Assert.Contains(
             shebangRules,
             rule => rule!["pattern"]!.GetValue<string>() == "ruby"
                     && rule["language"]!.GetValue<string>() == "ruby");
+        var filenamePrefixRule = ambiguousLookup["detection_rules"]!.AsArray()
+            .Single(rule => rule!["source"]!.GetValue<string>() == "filename_prefix_pattern")!;
+        Assert.Equal(3, filenamePrefixRule["precedence"]!.GetValue<int>());
+        Assert.Contains(
+            filenamePrefixRule["patterns"]!.AsArray(),
+            rule => rule!["pattern"]!.GetValue<string>() == "Makefile.<suffix>"
+                    && rule["language"]!.GetValue<string>() == "makefile");
         Assert.Equal(
             LanguageMapOverrides.WorkspaceFileName,
             ambiguousLookup["override_guidance"]!["config_file"]!.GetValue<string>());

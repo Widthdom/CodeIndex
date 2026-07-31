@@ -2555,6 +2555,41 @@ public partial class FileIndexerTests
     }
 
     [Fact]
+    public void DetectLanguage_FilenamePrefixPrecedesAmbiguousExtensionShebang_Issue4901()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_ambiguous_filename_precedence");
+        var path = TestProjectHelper.WriteTextFile(
+            project.Root,
+            "Makefile.pl",
+            "#!/usr/bin/env ruby\nputs 1\n");
+
+        var detection = FileIndexer.TryDetectLanguage(path);
+
+        Assert.Equal("makefile", detection.Language);
+        Assert.Null(detection.DetectionSource);
+        Assert.Null(detection.Confidence);
+    }
+
+    [Fact]
+    public void DetectLanguage_AmbiguousShebangRequiresTerminatorBeforeByteLimit_Issue4901()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_ambiguous_shebang_boundary");
+        const string shebang = "#!/usr/bin/env ruby";
+        var path = TestProjectHelper.WriteTextFile(
+            project.Root,
+            "tool.pl",
+            shebang
+            + new string(' ', FileIndexer.ShebangProbeByteLimit - shebang.Length)
+            + "\nputs 1\n");
+
+        var detection = FileIndexer.TryDetectLanguage(path);
+
+        Assert.Equal("ambiguous_pl", detection.Language);
+        Assert.Equal("ambiguous", detection.DetectionSource);
+        Assert.Equal(FileIndexer.LanguageDetectionConfidence.Low, detection.Confidence);
+    }
+
+    [Fact]
     public void DetectLanguage_AmbiguousExtensionOverrideReportsAuthoritativeReason_Issue4901()
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_ambiguous_override");

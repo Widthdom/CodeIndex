@@ -3566,7 +3566,19 @@ public partial class QueryCommandRunnerTests
 
         var rules = lookup.GetProperty("detection_rules").EnumerateArray()
             .ToDictionary(rule => rule.GetProperty("source").GetString()!, rule => rule);
+        Assert.Equal(2, rules["exact_filename"].GetProperty("precedence").GetInt32());
+        Assert.Empty(rules["exact_filename"].GetProperty("applicable_patterns").EnumerateArray());
+        Assert.Equal(3, rules["filename_prefix_pattern"].GetProperty("precedence").GetInt32());
+        Assert.Contains(
+            rules["filename_prefix_pattern"].GetProperty("patterns").EnumerateArray(),
+            rule => rule.GetProperty("pattern").GetString() == "Makefile.<suffix>"
+                    && rule.GetProperty("language").GetString() == "makefile");
+        Assert.Equal(4, rules["shebang"].GetProperty("precedence").GetInt32());
         Assert.False(rules["shebang"].GetProperty("candidate_restricted").GetBoolean());
+        Assert.Equal(256, rules["shebang"].GetProperty("probe_byte_limit").GetInt32());
+        Assert.Equal(
+            "required_before_limit_unless_eof",
+            rules["shebang"].GetProperty("line_termination_policy").GetString());
         Assert.Equal(
             "case_insensitive",
             rules["shebang"].GetProperty("interpreter_case_policy").GetString());

@@ -7,7 +7,7 @@ public partial class FileIndexer
     // Shebang detection reads at most the first physical line within this
     // byte cap. NUL bytes or a line that reaches the cap without LF/CR are treated as
     // unsupported so binary executables and minified data are not parsed as scripts.
-    private const int ShebangProbeByteLimit = 256;
+    internal const int ShebangProbeByteLimit = 256;
     private const string PythonShebangInterpreterPrefix = "python";
     private static readonly UTF8Encoding StrictShebangUtf8Encoding = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
     private static readonly UnicodeEncoding StrictShebangUtf16LittleEndianEncoding = new(bigEndian: false, byteOrderMark: false, throwOnInvalidBytes: true);

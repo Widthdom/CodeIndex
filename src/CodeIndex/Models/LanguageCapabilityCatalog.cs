@@ -270,11 +270,32 @@ internal static class LanguageCapabilityCatalog
                 precedence: 1,
                 selection: "authoritative"),
             BuildDetectionRule(
+                FileIndexer.ExactFilenameDetectionSource,
+                confidence: null,
+                precedence: 2,
+                selection: "authoritative_when_exact_filename_matches",
+                ("case_policy", JsonValue.Create("filesystem")),
+                ("case_policy_source", JsonValue.Create("path_case_sensitive")),
+                ("applicable_patterns", BuildFilenameRuleArray(
+                    FileIndexer.GetExactFilenameLanguageRulesForExtension(normalizedExtension)))),
+            BuildDetectionRule(
+                FileIndexer.FilenamePrefixPatternDetectionSource,
+                confidence: null,
+                precedence: 3,
+                selection: "authoritative_when_non_empty_suffix_matches",
+                ("case_policy", JsonValue.Create("filesystem")),
+                ("case_policy_source", JsonValue.Create("path_case_sensitive")),
+                ("patterns", BuildFilenameRuleArray(
+                    FileIndexer.GetFilenamePrefixLanguageRules()))),
+            BuildDetectionRule(
                 FileIndexer.ShebangDetectionSource,
                 FileIndexer.LanguageDetectionConfidence.High,
-                precedence: 2,
+                precedence: 4,
                 selection: "recognized_interpreter_authoritative",
                 ("candidate_restricted", JsonValue.Create(false)),
+                ("probe_scope", JsonValue.Create("first_physical_line")),
+                ("probe_byte_limit", JsonValue.Create(FileIndexer.ShebangProbeByteLimit)),
+                ("line_termination_policy", JsonValue.Create("required_before_limit_unless_eof")),
                 ("interpreter_case_policy", JsonValue.Create("case_insensitive")),
                 ("interpreter_rules", new JsonArray(
                     FileIndexer.GetShebangInterpreterRules()
@@ -288,20 +309,20 @@ internal static class LanguageCapabilityCatalog
             BuildDetectionRule(
                 FileIndexer.AmbiguousContentDetectionSource,
                 FileIndexer.LanguageDetectionConfidence.High,
-                precedence: 3,
+                precedence: 5,
                 selection: "exactly_one_candidate_matches",
                 ("probe_byte_limit", JsonValue.Create(FileIndexer.AmbiguousLanguageProbeByteLimit))),
             BuildDetectionRule(
                 FileIndexer.AmbiguousProjectDetectionSource,
                 FileIndexer.LanguageDetectionConfidence.Medium,
-                precedence: 4,
+                precedence: 6,
                 selection: "exactly_one_candidate_matches",
                 ("ancestor_directory_limit", JsonValue.Create(FileIndexer.AmbiguousProjectMarkerAncestorLimit)),
                 ("entry_limit_per_directory", JsonValue.Create(FileIndexer.AmbiguousProjectMarkerEntryLimit))),
             BuildDetectionRule(
                 FileIndexer.AmbiguousFallbackDetectionSource,
                 FileIndexer.LanguageDetectionConfidence.Low,
-                precedence: 5,
+                precedence: 7,
                 selection: "zero_or_multiple_candidates_match"));
         result["input_handling"] = new JsonObject
         {
@@ -346,9 +367,19 @@ internal static class LanguageCapabilityCatalog
             .Select(value => JsonValue.Create(value))
             .ToArray());
 
+    private static JsonArray BuildFilenameRuleArray(
+        IEnumerable<FileIndexer.FilenameLanguageRule> rules)
+        => new(rules
+            .Select(rule => (JsonNode)new JsonObject
+            {
+                ["pattern"] = rule.Pattern,
+                ["language"] = rule.Language,
+            })
+            .ToArray());
+
     private static JsonObject BuildDetectionRule(
         string source,
-        FileIndexer.LanguageDetectionConfidence confidence,
+        FileIndexer.LanguageDetectionConfidence? confidence,
         int precedence,
         string selection,
         params (string Name, JsonNode? Value)[] details)
@@ -356,10 +387,14 @@ internal static class LanguageCapabilityCatalog
         var rule = new JsonObject
         {
             ["source"] = source,
-            ["confidence"] = FileIndexer.GetLanguageDetectionConfidenceCode(confidence),
             ["precedence"] = precedence,
             ["selection"] = selection,
         };
+        if (confidence is { } reportedConfidence)
+        {
+            rule["confidence"] =
+                FileIndexer.GetLanguageDetectionConfidenceCode(reportedConfidence);
+        }
         foreach (var (name, value) in details)
             rule[name] = value;
         return rule;
