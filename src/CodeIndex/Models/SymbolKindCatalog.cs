@@ -113,6 +113,7 @@ public static class SymbolKindCatalog
         "extends",
         "from",
         "friend",
+        "generated_column_dependency",
         "generic_type_argument",
         "implement",
         "implicit_implementation",

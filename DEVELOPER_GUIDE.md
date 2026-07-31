@@ -359,6 +359,13 @@ previews are sanitized and bounded. JSON failures write the envelope to stdout
 and leave stderr empty. Human failures write the matching coded `Error`,
 `Hint`, and `Usage` lines to stderr and leave stdout empty.
 
+Unsupported `search --regex` / `search --all` diagnostics add a command-specific,
+display-only `find` recovery contract. Preserve exact normalized argument
+semantics in typed `alternative_command.argv`, render both POSIX-shell and
+PowerShell forms from that argv, mark the command as not executed, and report
+non-equivalent options or blockers instead of emitting a lossy alternative.
+Do not include implicit workspace defaults such as an undisclosed data directory.
+
 Resolve project-config dependency before calling `CdidxConfigFile.Load`.
 Process-static commands (`license`, `--version`, help forms, completions, and
 subcommand help) must not discover or parse project config. `validate-config`
@@ -864,6 +871,7 @@ filters remain exact, so `--kind import` does not include local type declaration
 | `extends` | Inheritance or type-extension relationship |
 | `from` | Dockerfile `FROM <stage>` dependency |
 | `friend` | C++ friend declaration relationship |
+| `generated_column_dependency` | SQL generated/computed-column expression dependency |
 | `generic_type_argument` | Generic type argument attached to an explicit invocation |
 | `implement` | Interface implementation relationship |
 | `implicit_implementation` | C# implicit interface implementation relationship |
@@ -3798,6 +3806,13 @@ sanitization し、上限を適用してから merge します。JSON の失敗�
 出し、stderr を空に保ちます。human の失敗は対応する code 付き `Error`、`Hint`、
 `Usage` を stderr に出し、stdout を空に保ちます。
 
+未対応の `search --regex` / `search --all` diagnostic は、command 固有で表示専用の
+`find` recovery 契約を追加します。正規化した引数の semantics を型付き
+`alternative_command.argv` に正確に保持し、その argv から POSIX shell と PowerShell
+の両形式を生成し、未実行であることを明示してください。不正確な代替 command を出さず、
+対応不能な option または blocker を報告し、未指定の data directory など暗黙の
+workspace default を含めてはいけません。
+
 `CdidxConfigFile.Load` を呼ぶ前に project-config 依存性を解決します。process-static な
 command（`license`、`--version`、help 形式、completion、subcommand help）は project
 config を探索・parse しません。`validate-config` と `config show` は有効な設定を
@@ -4271,6 +4286,7 @@ filter、downstream JSON consumer が同じ値を理解できるようにして�
 | `extends` | inheritance または type-extension relationship |
 | `from` | Dockerfile `FROM <stage>` dependency |
 | `friend` | C++ friend declaration relationship |
+| `generated_column_dependency` | SQL generated / computed column 式の dependency |
 | `generic_type_argument` | explicit invocation に付随する generic type argument |
 | `implement` | interface implementation relationship |
 | `implicit_implementation` | C# implicit interface implementation relationship |
