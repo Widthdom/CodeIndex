@@ -2691,13 +2691,12 @@ public partial class QueryCommandRunnerTests
         Assert.Contains(xmlResolverQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("external entity", StringComparison.Ordinal));
         Assert.Contains(traversalRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "enumerate-files");
         Assert.Equal("Directory.Enumerate", enumerateWithoutOptionsQuery.GetProperty("query").GetString());
-        Assert.Contains(enumerateWithoutOptionsQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("without nearby EnumerationOptions", StringComparison.Ordinal));
+        Assert.Contains(enumerateWithoutOptionsQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("without a resolved EnumerationOptions", StringComparison.Ordinal));
         Assert.Contains(enumerateWithoutOptionsQuery.GetProperty("guard_filters").EnumerateArray(), filter =>
             filter.GetProperty("option").GetString() == "--reject-before" &&
-            filter.GetProperty("query").GetString() == "EnumerationOptions");
-        Assert.Contains(enumerateWithoutOptionsQuery.GetProperty("guard_filters").EnumerateArray(), filter =>
-            filter.GetProperty("option").GetString() == "--reject-after" &&
-            filter.GetProperty("query").GetString() == "EnumerationOptions");
+            filter.GetProperty("query").GetString() == "configured-enumeration-options" &&
+            filter.GetProperty("scope").GetString() == "container" &&
+            filter.GetProperty("evidence_kind").GetString() == "csharp_enumeration_options");
         Assert.Equal("BoundedFile.OpenReadFor", boundedFileOpenHelperQuery.GetProperty("query").GetString());
         Assert.Contains(boundedFileOpenHelperQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("FileShare.ReadWrite", StringComparison.Ordinal));
         Assert.Contains(boundedMemoryAccumulatorQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("max-byte", StringComparison.Ordinal));
@@ -6787,7 +6786,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunSearch_FilesystemTraversalRecipeFiltersNearbyEnumerationOptions_Issue3920()
+    public void RunSearch_FilesystemTraversalRecipeResolvesEnumerationOptionsStructurally_Issue4912()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_recipe_enumeration_options");
         try
@@ -6826,6 +6825,80 @@ public partial class QueryCommandRunnerTests
                     }
                 }
                 """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/distant-options.cs",
+                "csharp",
+                """
+                public static class TraversalPolicy
+                {
+                    private static readonly EnumerationOptions TopOnly = CreateOptions();
+
+                    private static EnumerationOptions CreateOptions() => new()
+                    {
+                        RecurseSubdirectories = false,
+                        IgnoreInaccessible = false,
+                    };
+
+                    public static void Run(string root)
+                    {
+                        Console.WriteLine("policy");
+                        Console.WriteLine("kept structurally distant");
+                        Console.WriteLine("from the options declaration");
+                        Console.WriteLine("without relying on line windows");
+                        foreach (var path in Directory.EnumerateFiles(root, "*", TopOnly))
+                        {
+                            Console.WriteLine(path);
+                        }
+                    }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/unrelated-options.cs",
+                "csharp",
+                """
+                public sealed class UnrelatedOptionsTraversal
+                {
+                    public void Run(string root)
+                    {
+                        var unrelated = new EnumerationOptions { RecurseSubdirectories = false };
+                        Console.WriteLine(unrelated.RecurseSubdirectories);
+                        foreach (var path in Directory.EnumerateFiles(root))
+                        {
+                            Console.WriteLine(path);
+                        }
+                    }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/call-options.cs",
+                "csharp",
+                """
+                public sealed class CallOptionsTraversal
+                {
+                    private static readonly EnumerationOptions SharedOptions = new();
+
+                    public void Inline(string root)
+                    {
+                        foreach (var path in Directory.EnumerateFiles(root, "*", new EnumerationOptions()))
+                            Console.WriteLine(path);
+                    }
+
+                    public void Parameter(string root, EnumerationOptions options)
+                    {
+                        foreach (var path in Directory.EnumerateFiles(root, "*", options))
+                            Console.WriteLine(path);
+                    }
+
+                    public void SameReceiver(string root)
+                    {
+                        foreach (var path in Directory.EnumerateFiles(root, "*", CallOptionsTraversal.SharedOptions))
+                            Console.WriteLine(path);
+                    }
+                }
+                """);
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 ["--recipe", "filesystem-traversal/enumerate-without-options", "--db", dbPath, "--json", "--limit", "10"],
@@ -6836,14 +6909,164 @@ public partial class QueryCommandRunnerTests
             using var document = ParseJsonOutput(stdout);
             var root = document.RootElement;
             var query = Assert.Single(root.GetProperty("queries").EnumerateArray());
-            var result = Assert.Single(query.GetProperty("results").EnumerateArray());
+            var results = query.GetProperty("results").EnumerateArray().ToArray();
 
             Assert.Equal("enumerate-without-options", query.GetProperty("name").GetString());
-            Assert.Equal(1, query.GetProperty("count").GetInt32());
-            Assert.Equal("src/unguarded.cs", result.GetProperty("path").GetString());
+            Assert.True(
+                query.GetProperty("count").GetInt32() == 2,
+                $"Unexpected traversal results: {string.Join(", ", results.Select(result => result.GetProperty("path").GetString()))}");
+            Assert.Contains(results, result => result.GetProperty("path").GetString() == "src/unguarded.cs");
+            Assert.Contains(results, result => result.GetProperty("path").GetString() == "src/unrelated-options.cs");
             Assert.DoesNotContain(query.GetProperty("top_files").EnumerateArray(), item => item.GetProperty("path").GetString() == "src/options.cs");
-            Assert.Contains(query.GetProperty("guard_filters").EnumerateArray(), filter => filter.GetProperty("option").GetString() == "--reject-before");
-            Assert.Contains(query.GetProperty("guard_filters").EnumerateArray(), filter => filter.GetProperty("option").GetString() == "--reject-after");
+            Assert.DoesNotContain(query.GetProperty("top_files").EnumerateArray(), item => item.GetProperty("path").GetString() == "src/distant-options.cs");
+            Assert.DoesNotContain(query.GetProperty("top_files").EnumerateArray(), item => item.GetProperty("path").GetString() == "src/call-options.cs");
+            var guardFilter = Assert.Single(query.GetProperty("guard_filters").EnumerateArray());
+            Assert.Equal("--reject-before", guardFilter.GetProperty("option").GetString());
+            Assert.Equal("container", guardFilter.GetProperty("scope").GetString());
+            Assert.Equal("csharp_enumeration_options", guardFilter.GetProperty("evidence_kind").GetString());
+
+            var unguarded = Assert.Single(results, result => result.GetProperty("path").GetString() == "src/unguarded.cs");
+            var check = Assert.Single(unguarded.GetProperty("guard_checks").EnumerateArray());
+            Assert.False(check.GetProperty("matched").GetBoolean());
+            Assert.True(check.GetProperty("passed").GetBoolean());
+            Assert.Equal("container", check.GetProperty("scope").GetString());
+            var rejectedEvidence = Assert.Single(check.GetProperty("rejected_evidence").EnumerateArray());
+            Assert.Equal("rejected", rejectedEvidence.GetProperty("decision").GetString());
+            Assert.Equal("enumeration_options_argument_missing", rejectedEvidence.GetProperty("relationship").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_ReadAllTextRecipeUsesSamePathAndResolvedHelperEvidence_Issue4912()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_recipe_structural_read_guard");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/reads.cs",
+                "csharp",
+                """
+                public static class Reads
+                {
+                    private const long MaxBytes = 1024;
+
+                    public static string LocalBound(string path)
+                    {
+                        var length = new FileInfo(path).Length;
+                        Console.WriteLine("distance-1");
+                        Console.WriteLine("distance-2");
+                        Console.WriteLine("distance-3");
+                        Console.WriteLine("distance-4");
+                        Console.WriteLine("distance-5");
+                        Console.WriteLine("distance-6");
+                        Console.WriteLine("distance-7");
+                        Console.WriteLine("distance-8");
+                        Console.WriteLine("distance-9");
+                        if (length > MaxBytes)
+                            throw new InvalidDataException();
+                        return File.ReadAllText(path);
+                    }
+
+                    public static string HelperBound(string path)
+                    {
+                        WriteBounded(path);
+                        return File.ReadAllText(path);
+                    }
+
+                    private static void WriteBounded(string path)
+                    {
+                        BoundedFile.WriteAllText(path, MaxBytes);
+                    }
+
+                    public static string FileInfoBound(string path)
+                    {
+                        var info = new FileInfo(path);
+                        if (info.Length > MaxBytes)
+                            throw new InvalidDataException();
+                        return File.ReadAllText(path);
+                    }
+
+                    public static string Unguarded(string path)
+                        => File.ReadAllText(path);
+
+                    public static string Unrelated(string path, string other)
+                    {
+                        var length = new FileInfo(other).Length;
+                        if (length > MaxBytes)
+                            throw new InvalidDataException();
+                        return File.ReadAllText(path);
+                    }
+
+                    public static string Inverted(string path)
+                    {
+                        var length = new FileInfo(path).Length;
+                        if (length < MaxBytes)
+                            throw new InvalidDataException();
+                        return File.ReadAllText(path);
+                    }
+
+                    public static string ConditionalReject(string path, bool extraCondition)
+                    {
+                        var length = new FileInfo(path).Length;
+                        if (length > MaxBytes && extraCondition)
+                            throw new InvalidDataException();
+                        return File.ReadAllText(path);
+                    }
+
+                    public static string Unawaited(string path)
+                    {
+                        WriteBoundedAsync(path);
+                        return File.ReadAllText(path);
+                    }
+
+                    private static Task WriteBoundedAsync(string path)
+                    {
+                        BoundedFile.WriteAllText(path, MaxBytes);
+                        return Task.CompletedTask;
+                    }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "risky-code/file-read-all-text", "--db", dbPath, "--json", "--limit", "20"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var query = Assert.Single(document.RootElement.GetProperty("queries").EnumerateArray());
+            var results = query.GetProperty("results").EnumerateArray().ToArray();
+
+            Assert.True(
+                query.GetProperty("count").GetInt32() == 5,
+                $"Unexpected ReadAllText results: {string.Join(", ", results.Select(result => result.GetProperty("enclosing_symbol_name").GetString()))}");
+            Assert.DoesNotContain(results, result => result.GetProperty("enclosing_symbol_name").GetString() == "LocalBound");
+            Assert.DoesNotContain(results, result => result.GetProperty("enclosing_symbol_name").GetString() == "HelperBound");
+            Assert.DoesNotContain(results, result => result.GetProperty("enclosing_symbol_name").GetString() == "FileInfoBound");
+            Assert.Contains(results, result => result.GetProperty("enclosing_symbol_name").GetString() == "Unguarded");
+            Assert.Contains(results, result => result.GetProperty("enclosing_symbol_name").GetString() == "Unrelated");
+            Assert.Contains(results, result => result.GetProperty("enclosing_symbol_name").GetString() == "Inverted");
+            Assert.Contains(results, result => result.GetProperty("enclosing_symbol_name").GetString() == "ConditionalReject");
+            Assert.Contains(results, result => result.GetProperty("enclosing_symbol_name").GetString() == "Unawaited");
+
+            var guardFilter = Assert.Single(query.GetProperty("guard_filters").EnumerateArray());
+            Assert.Equal("container", guardFilter.GetProperty("scope").GetString());
+            Assert.Equal("csharp_bounded_file_read", guardFilter.GetProperty("evidence_kind").GetString());
+
+            var unrelated = Assert.Single(results, result => result.GetProperty("enclosing_symbol_name").GetString() == "Unrelated");
+            var check = Assert.Single(unrelated.GetProperty("guard_checks").EnumerateArray());
+            Assert.False(check.GetProperty("matched").GetBoolean());
+            Assert.True(check.GetProperty("passed").GetBoolean());
+            Assert.Contains(
+                check.GetProperty("rejected_evidence").EnumerateArray(),
+                evidence => evidence.GetProperty("relationship").GetString() == "different_path_size_source"
+                    && evidence.GetProperty("decision").GetString() == "rejected");
         }
         finally
         {

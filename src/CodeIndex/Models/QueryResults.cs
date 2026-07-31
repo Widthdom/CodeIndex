@@ -130,6 +130,14 @@ public enum SearchGuardScope
 {
     Window,
     SameLine,
+    Container,
+}
+
+public enum SearchGuardEvidenceKind
+{
+    Text,
+    CSharpBoundedFileRead,
+    CSharpEnumerationOptions,
 }
 
 public enum SearchResultRanking
@@ -142,7 +150,8 @@ public sealed record SearchGuardFilter(
     SearchGuardRole Role,
     SearchGuardDirection Direction,
     string Query,
-    SearchGuardScope? Scope = null);
+    SearchGuardScope? Scope = null,
+    SearchGuardEvidenceKind EvidenceKind = SearchGuardEvidenceKind.Text);
 
 public sealed class SearchGuardEvidence
 {
@@ -153,6 +162,15 @@ public sealed class SearchGuardEvidence
     public string Name { get; set; } = string.Empty;
     public string Pattern { get; set; } = string.Empty;
     public string Relationship { get; set; } = string.Empty;
+    public string Decision { get; set; } = "accepted";
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Reason { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? EvidencePath { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Subject { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Container { get; set; }
     public SearchGuardSpan Span { get; set; } = new();
     public int Line { get; set; }
     public int Column { get; set; }
@@ -177,6 +195,8 @@ public sealed class SearchGuardCheck
     public int WindowEndLine { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public SearchGuardEvidence? Evidence { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<SearchGuardEvidence>? RejectedEvidence { get; set; }
 }
 
 public sealed class SearchGuardSpan
