@@ -1079,6 +1079,20 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(expectedLanguage, detection.GetProperty("language").GetString());
             Assert.Equal(expectedSource, detection.GetProperty("source").GetString());
             Assert.Equal("high", detection.GetProperty("confidence").GetString());
+
+            var (humanExitCode, stdout, stderr) = RunAndCaptureStreams([
+                projectRoot,
+                "--files",
+                fileName,
+                "--dry-run",
+            ]);
+            Assert.Equal(CommandExitCodes.Success, humanExitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Contains(
+                $"language detection {fileName}: {expectedLanguage} ({expectedSource}, confidence high)",
+                stdout,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain("header detection", stdout, StringComparison.Ordinal);
         }
         finally
         {

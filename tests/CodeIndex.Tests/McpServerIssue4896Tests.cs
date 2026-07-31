@@ -57,8 +57,10 @@ public partial class McpServerTests
             "octave",
             ambiguousLookup["candidates"]![1]!["aliases"]!.AsArray()
                 .Select(aliasValue => aliasValue!.GetValue<string>()));
-        var shebangRules = ambiguousLookup["detection_rules"]!.AsArray()
-            .Single(rule => rule!["source"]!.GetValue<string>() == "shebang")!["interpreter_rules"]!.AsArray();
+        var shebangRule = ambiguousLookup["detection_rules"]!.AsArray()
+            .Single(rule => rule!["source"]!.GetValue<string>() == "shebang")!;
+        Assert.Equal("case_insensitive", shebangRule["interpreter_case_policy"]!.GetValue<string>());
+        var shebangRules = shebangRule["interpreter_rules"]!.AsArray();
         Assert.Contains(
             shebangRules,
             rule => rule!["pattern"]!.GetValue<string>() == "ruby"

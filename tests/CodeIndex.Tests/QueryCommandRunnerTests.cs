@@ -3567,6 +3567,9 @@ public partial class QueryCommandRunnerTests
         var rules = lookup.GetProperty("detection_rules").EnumerateArray()
             .ToDictionary(rule => rule.GetProperty("source").GetString()!, rule => rule);
         Assert.False(rules["shebang"].GetProperty("candidate_restricted").GetBoolean());
+        Assert.Equal(
+            "case_insensitive",
+            rules["shebang"].GetProperty("interpreter_case_policy").GetString());
         var shebangRules = rules["shebang"].GetProperty("interpreter_rules").EnumerateArray().ToArray();
         Assert.Contains(
             shebangRules,

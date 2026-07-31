@@ -275,6 +275,7 @@ internal static class LanguageCapabilityCatalog
                 precedence: 2,
                 selection: "recognized_interpreter_authoritative",
                 ("candidate_restricted", JsonValue.Create(false)),
+                ("interpreter_case_policy", JsonValue.Create("case_insensitive")),
                 ("interpreter_rules", new JsonArray(
                     FileIndexer.GetShebangInterpreterRules()
                         .Select(rule => (JsonNode)new JsonObject

@@ -578,7 +578,7 @@ public static partial class IndexCommandRunner
             foreach (var detection in languageDetectionSamples)
             {
                 CommandOutputWriter.WriteLine(
-                    $"  header detection {detection.Path}: {detection.Language} ({detection.Source}, confidence {detection.Confidence})");
+                    $"  language detection {detection.Path}: {detection.Language} ({detection.Source}, confidence {detection.Confidence})");
             }
         }
         return CommandExitCodes.Success;
