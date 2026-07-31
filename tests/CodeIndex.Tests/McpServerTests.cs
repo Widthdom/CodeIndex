@@ -3563,7 +3563,7 @@ public sealed class Caller
     }
 
     [Fact]
-    public void PromptsGet_SummarizeFileValidPath_NormalizesSeparatorsAndPreservesUnicode_Issue4899()
+    public void PromptsGet_SummarizeFileValidPath_UsesPlatformAwareSeparatorsAndPreservesUnicode_Issue4899()
     {
         const string path = "src\\日本語 folder\\Sample File.cs";
         var request = new JsonObject
@@ -3584,7 +3584,10 @@ public sealed class Caller
         var response = _server.HandleMessage(request)!;
         var text = response["result"]!["messages"]!.AsArray().Single()!["content"]!["text"]!.GetValue<string>();
 
-        Assert.Contains("src/日本語 folder/Sample File.cs", text, StringComparison.Ordinal);
+        var expectedPath = OperatingSystem.IsWindows()
+            ? "src/日本語 folder/Sample File.cs"
+            : path;
+        Assert.Contains(expectedPath, text, StringComparison.Ordinal);
         Assert.DoesNotContain("<path>", response.ToJsonString(), StringComparison.Ordinal);
     }
 

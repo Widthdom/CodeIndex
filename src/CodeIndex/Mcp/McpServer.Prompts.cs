@@ -122,7 +122,7 @@ public partial class McpServer : IDisposable
                     extraData: new JsonObject { ["parameter"] = key });
             }
 
-            path = rawPath.Replace("\\", "/", StringComparison.Ordinal);
+            path = FileIndexer.NormalizePathSeparators(rawPath);
             return null;
         }
 
