@@ -105,17 +105,22 @@ public partial class QueryCommandRunnerTests
             failedChild.CleanQueryCount + failedChild.StaleQueryCount + failedChild.InvalidQueryCount);
     }
 
-    [Fact]
-    public void RunSearch_NamedQueryFreshnessReportsDirtyWorkspaceIndexAsStale_Issue4907()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void RunSearch_NamedQueryFreshnessReportsDirtyWorkspaceIndexAsStale_Issue4907(bool initializeGit)
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_freshness_dirty_workspace_4907");
         try
         {
             const string indexedContent = "public sealed class App { private const string Value = \"FreshnessNeedle\"; }\n";
-            TestProjectHelper.InitializeGitRepo(projectRoot);
             TestProjectHelper.WriteTextFile(projectRoot, Path.Combine("src", "App.cs"), indexedContent);
-            TestProjectHelper.RunGit(projectRoot, "add", "src/App.cs");
-            TestProjectHelper.RunGit(projectRoot, "commit", "-m", "initial");
+            if (initializeGit)
+            {
+                TestProjectHelper.InitializeGitRepo(projectRoot);
+                TestProjectHelper.RunGit(projectRoot, "add", "src/App.cs");
+                TestProjectHelper.RunGit(projectRoot, "commit", "-m", "initial");
+            }
 
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp", indexedContent);
@@ -128,7 +133,7 @@ public partial class QueryCommandRunnerTests
                 [
                     "--named-query=needle=FreshnessNeedle",
                     "--db", dbPath,
-                    "--format", "count",
+                    "--count",
                     "--json",
                 ],
                 _jsonOptions));
@@ -156,6 +161,53 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_NamedTextCountSkipsWorkspaceFreshnessScan_Issue4907()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_freshness_text_count_4907");
+        try
+        {
+            const string content = "public sealed class App { private const string Value = \"FreshnessNeedle\"; }\n";
+            TestProjectHelper.WriteTextFile(projectRoot, Path.Combine("src", "App.cs"), content);
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp", content);
+            var workspaceCheckCount = 0;
+            QueryCommandRunner.SearchQueryFreshnessWorkspaceCheckForTesting =
+                () => workspaceCheckCount++;
+
+            var (textExitCode, textStdout, textStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [
+                    "--named-query=needle=FreshnessNeedle",
+                    "--db", dbPath,
+                    "--count",
+                ],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, textExitCode);
+            Assert.Equal("1", textStdout.Trim());
+            Assert.Contains("1 named-query results", textStderr, StringComparison.Ordinal);
+            Assert.Equal(0, workspaceCheckCount);
+
+            var (jsonExitCode, _, jsonStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [
+                    "--named-query=needle=FreshnessNeedle",
+                    "--db", dbPath,
+                    "--format", "count",
+                    "--json",
+                ],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, jsonExitCode);
+            Assert.Equal(string.Empty, jsonStderr);
+            Assert.Equal(1, workspaceCheckCount);
+        }
+        finally
+        {
+            QueryCommandRunner.SearchQueryFreshnessWorkspaceCheckForTesting = null;
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_RecipeJsonRetainsClassifiedChildFailureAsInvalid_Issue4907()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_freshness_failed_recipe_child_4907");
@@ -165,11 +217,14 @@ public partial class QueryCommandRunnerTests
             const int minimumGuardedCandidates = 200;
             for (var i = 0; i <= minimumGuardedCandidates; i++)
             {
+                var path = $"src/C{i:D4}.cs";
+                var content = $"public sealed class C{i:D4} {{ private string token = \"value\"; }}\n";
+                TestProjectHelper.WriteTextFile(projectRoot, path, content);
                 TestProjectHelper.InsertIndexedFile(
                     dbPath,
-                    $"src/C{i:D4}.cs",
+                    path,
                     "csharp",
-                    $"public sealed class C{i:D4} {{ private string token = \"value\"; }}\n");
+                    content);
             }
 
             using var env = EnvironmentVariableScope.Capture(SearchAuditRecipes.RecipePathsEnvironmentVariable);

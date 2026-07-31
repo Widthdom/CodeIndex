@@ -12,6 +12,8 @@ namespace CodeIndex.Cli;
 
 public static partial class QueryCommandRunner
 {
+    internal static Action? SearchQueryFreshnessWorkspaceCheckForTesting;
+
     private static int WriteSearchRecipeList(
         QueryCommandOptions options,
         JsonSerializerOptions jsonOptions,
@@ -3069,9 +3071,9 @@ public static partial class QueryCommandRunner
             return "stale";
         }
 
-        if (!string.IsNullOrWhiteSpace(projectRoot)
-            && !string.IsNullOrWhiteSpace(workspaceHead))
+        if (!string.IsNullOrWhiteSpace(projectRoot))
         {
+            SearchQueryFreshnessWorkspaceCheckForTesting?.Invoke();
             var workspaceCheck = IndexFreshnessChecker.Check(
                 reader,
                 projectRoot,
@@ -3327,7 +3329,7 @@ public static partial class QueryCommandRunner
         DbReader reader,
         QueryCommandOptions options,
         bool userExact,
-        SearchQueryFreshnessContext freshnessContext,
+        SearchQueryFreshnessContext? freshnessContext,
         out int total,
         out int fileCount,
         out List<SearchQueryFreshnessObservation> freshnessObservations,
@@ -3370,12 +3372,17 @@ public static partial class QueryCommandRunner
                     namedQuery.Query,
                     count,
                     fileCountForQuery));
-                freshnessObservations.Add(SuccessfulSearchQueryObservation(
-                    freshnessContext,
-                    namedQuery.Name,
-                    count));
+                if (freshnessContext != null)
+                {
+                    freshnessObservations.Add(SuccessfulSearchQueryObservation(
+                        freshnessContext,
+                        namedQuery.Name,
+                        count));
+                }
             }
-            catch (Exception ex) when (TryClassifySearchQueryExecutionFailure(ex, out _))
+            catch (Exception ex) when (
+                freshnessContext != null
+                && TryClassifySearchQueryExecutionFailure(ex, out _))
             {
                 TryClassifySearchQueryExecutionFailure(ex, out var failureReason);
                 hasFailures = true;

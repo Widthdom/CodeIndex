@@ -935,11 +935,13 @@ public static partial class QueryCommandRunner
     {
         return WithDb(options, jsonOptions, reader =>
         {
-            var freshnessContext = BuildNamedSearchFreshnessContext(
-                reader,
-                options.NamedSearchQueries,
-                options,
-                userExact);
+            var freshnessContext = options.Json
+                ? BuildNamedSearchFreshnessContext(
+                    reader,
+                    options.NamedSearchQueries,
+                    options,
+                    userExact)
+                : null;
             var queryCounts = CountSearchNamedBatchQueryResults(
                 reader,
                 options,
@@ -953,7 +955,7 @@ public static partial class QueryCommandRunner
             if (options.Json)
             {
                 var freshness = BuildSearchRecipeQueryFreshness(
-                    freshnessContext,
+                    freshnessContext!,
                     freshnessObservations);
                 var json = JsonSerializer.Serialize(
                     new SearchNamedBatchCountSummaryRunJsonResult(
