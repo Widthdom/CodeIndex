@@ -1228,9 +1228,11 @@ public partial class McpServerTests
         Assert.Contains("optional path, lang, includeGenerated, and maxBytes", instructions);
         Assert.Contains("result.nextCursor", instructions);
         Assert.Contains("unchanged filters", instructions);
+        Assert.Contains("read_resource", instructions);
         Assert.Contains("resources/read", instructions);
         Assert.Contains("startLine/endLine", instructions);
         Assert.Contains("maxBytes", instructions);
+        Assert.Contains("structuredContent._meta.nextCursor", instructions);
         Assert.Contains("result._meta.nextCursor", instructions);
         Assert.Contains("whole-file reads", instructions);
         Assert.Contains("definition", instructions);

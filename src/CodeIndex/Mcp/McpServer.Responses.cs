@@ -529,6 +529,7 @@ public partial class McpServer : IDisposable
             "symbols" => new JsonObject { ["query"] = "App", ["kind"] = "class" },
             "files" => new JsonObject { ["query"] = "app.cs", ["lang"] = "csharp" },
             "excerpt" => new JsonObject { ["path"] = "src/app.cs", ["startLine"] = 1, ["endLine"] = 5 },
+            "read_resource" => new JsonObject { ["uri"] = "cdidx://file/src/app.cs", ["startLine"] = 1, ["endLine"] = 5 },
             "find_in_file" => new JsonObject { ["path"] = "src/app.cs", ["query"] = "Run", ["before"] = 1, ["after"] = 1 },
             "map" => new JsonObject { ["limit"] = 5, ["excludeTests"] = true },
             "analyze_symbol" => new JsonObject { ["query"] = "Run", ["includeBody"] = true },
@@ -590,7 +591,7 @@ public partial class McpServer : IDisposable
                 => "Language support: Supports indexed file/content filters for every detected language; call `languages` for the full catalog.",
             "find_in_file" or "files" or "map"
                 => $"Language support: Supports indexed file/content filters for every detected language listed by `languages`: {DetectedLanguageList()}. Symbol and graph fields are available only for the languages whose capabilities are advertised by `languages`.",
-            "excerpt" or "status" or "validate"
+            "excerpt" or "read_resource" or "status" or "validate"
                 => $"Language support: Language-agnostic over indexed files and diagnostics for every detected language listed by `languages`: {DetectedLanguageList()}. This tool does not interpret a `lang` filter.",
             "languages"
                 => "Language support: This is the authoritative language catalog for MCP tools; it lists every detected language plus symbol_extraction, reference_extraction, graph_queries, and capability_gaps fields.",

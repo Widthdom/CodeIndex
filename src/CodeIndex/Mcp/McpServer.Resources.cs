@@ -730,7 +730,10 @@ public partial class McpServer : IDisposable
         ulong FilterFingerprint,
         bool HasFilterFingerprint);
 
-    private JsonNode HandleResourcesRead(JsonNode? id, JsonNode? readParams)
+    private JsonNode HandleResourcesRead(
+        JsonNode? id,
+        JsonNode? readParams,
+        bool adaptForToolResult = false)
     {
         if (readParams is not null && readParams is not JsonObject)
         {
@@ -869,7 +872,8 @@ public partial class McpServer : IDisposable
                 id,
                 resourceUri,
                 mimeType,
-                maxBytes);
+                maxBytes,
+                adaptForToolResult);
             if (effectiveMaxBytes < MinResourceReadMaxBytes)
                 return CreateErrorResponse(hasId: true, id: id, code: -32603,
                     message: "The configured MCP response limit is too small for a resources/read page.",
@@ -959,6 +963,75 @@ public partial class McpServer : IDisposable
         }));
     }
 
+    /// <summary>
+    /// Adapt the backward-compatible resources/read implementation to a typed tools/call
+    /// result without duplicating file text in structuredContent. Validation, index access,
+    /// UTF-8 paging, and continuation state stay owned by the single resource reader.
+    /// 後方互換の resources/read 実装を型付き tools/call result へ変換し、
+    /// structuredContent には file text を重複させない。validation、index access、
+    /// UTF-8 paging、continuation state は単一の resource reader が引き続き担当する。
+    /// </summary>
+    private JsonNode ExecuteReadResource(JsonNode? id, JsonNode? args)
+    {
+        var resourceResponse = HandleResourcesRead(id, args, adaptForToolResult: true);
+        if (resourceResponse["error"] is JsonObject error)
+        {
+            var errorData = error["data"] as JsonObject;
+            var category = TryReadStringValue(errorData?["category"])
+                ?? McpErrorEnvelope.CategoryInvalidArgument;
+            var suggestion = TryReadStringValue(errorData?["suggestion"])
+                ?? "Inspect the read_resource inputSchema via tools/list and correct the URI, range, budget, or cursor.";
+            var retrySafe = errorData?["retry_safe"] is JsonValue retrySafeValue
+                && retrySafeValue.TryGetValue<bool>(out var parsedRetrySafe)
+                && parsedRetrySafe;
+            var extraData = errorData?.DeepClone().AsObject() ?? new JsonObject();
+            extraData.Remove("category");
+            extraData.Remove("suggestion");
+            extraData.Remove("retry_safe");
+            if (error["code"] is JsonNode errorCode)
+                extraData["jsonrpc_code"] = errorCode.DeepClone();
+
+            return CreateToolErrorResponse(
+                id,
+                TryReadStringValue(error["message"]) ?? "read_resource failed.",
+                category,
+                suggestion,
+                retrySafe,
+                extraData);
+        }
+
+        if (resourceResponse["result"] is not JsonObject resourceResult
+            || resourceResult["contents"] is not JsonArray contents
+            || contents.Count != 1
+            || contents[0] is not JsonObject content)
+        {
+            return CreateToolErrorResponse(
+                id,
+                "read_resource received an invalid internal resource response.",
+                McpErrorEnvelope.CategoryInternalError,
+                "Retry once. If the problem persists, rebuild the index and report the server diagnostics.",
+                retrySafe: true);
+        }
+
+        var text = TryReadStringValue(content["text"]) ?? string.Empty;
+        var mimeType = TryReadStringValue(content["mimeType"]) ?? "text/plain";
+        var structuredContent = new JsonObject
+        {
+            ["resource"] = new JsonObject
+            {
+                ["uri"] = content["uri"]?.DeepClone(),
+                ["mimeType"] = mimeType,
+            },
+            ["_meta"] = resourceResult["_meta"]?.DeepClone(),
+        };
+        return CreateToolResult(
+            id,
+            text,
+            structuredContent,
+            mimeType,
+            enrichStructuredContent: false);
+    }
+
     private JsonObject CreateResourceReadStorageError(
         JsonNode? id,
         BoundedFileReadStatus status,
@@ -1010,7 +1083,8 @@ public partial class McpServer : IDisposable
         JsonNode? id,
         string resourceUri,
         string mimeType,
-        int requestedMaxBytes)
+        int requestedMaxBytes,
+        bool adaptForToolResult)
     {
         var worstCaseMetadata = new JsonObject
         {
@@ -1030,19 +1104,41 @@ public partial class McpServer : IDisposable
             ["nextLineByteOffset"] = int.MaxValue,
             ["nextCursor"] = new string('x', MaxResourceReadCursorCharacters),
         };
-        var worstCaseResponse = CreateSuccessResponse(true, id, new JsonObject
-        {
-            ["contents"] = new JsonArray
+        var worstCaseResponse = adaptForToolResult
+            ? CreateSuccessResponse(true, id, new JsonObject
             {
-                new JsonObject
+                ["content"] = new JsonArray
                 {
-                    ["uri"] = resourceUri,
-                    ["mimeType"] = mimeType,
-                    ["text"] = string.Empty,
+                    new JsonObject
+                    {
+                        ["type"] = "text",
+                        ["mimeType"] = mimeType,
+                        ["text"] = string.Empty,
+                    },
                 },
-            },
-            ["_meta"] = worstCaseMetadata,
-        });
+                ["structuredContent"] = new JsonObject
+                {
+                    ["resource"] = new JsonObject
+                    {
+                        ["uri"] = resourceUri,
+                        ["mimeType"] = mimeType,
+                    },
+                    ["_meta"] = worstCaseMetadata,
+                },
+            })
+            : CreateSuccessResponse(true, id, new JsonObject
+            {
+                ["contents"] = new JsonArray
+                {
+                    new JsonObject
+                    {
+                        ["uri"] = resourceUri,
+                        ["mimeType"] = mimeType,
+                        ["text"] = string.Empty,
+                    },
+                },
+                ["_meta"] = worstCaseMetadata,
+            });
         var envelopeBytes = Encoding.UTF8.GetByteCount(worstCaseResponse.ToJsonString(_jsonOptions));
         var availableEncodedTextBytes = GetEffectiveResourceReadResponseLimit() - envelopeBytes;
         if (availableEncodedTextBytes <= 0)
