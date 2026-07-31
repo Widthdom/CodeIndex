@@ -109,6 +109,13 @@ public partial class McpServerTests
             Assert.False(string.IsNullOrWhiteSpace(tool!["name"]!.GetValue<string>()));
             Assert.False(string.IsNullOrWhiteSpace(tool["description"]!.GetValue<string>()));
             Assert.Equal("object", tool["inputSchema"]!["type"]!.GetValue<string>());
+            Assert.Equal(
+                "https://json-schema.org/draft/2020-12/schema",
+                tool["outputSchema"]!["$schema"]!.GetValue<string>());
+            Assert.Equal("object", tool["outputSchema"]!["type"]!.GetValue<string>());
+            Assert.Equal(2, tool["outputSchema"]!["oneOf"]!.AsArray().Count);
+            Assert.NotNull(tool["outputSchema"]!["$defs"]!["success"]);
+            Assert.NotNull(tool["outputSchema"]!["$defs"]!["error"]);
 
             var examples = tool["examples"]!.AsArray();
             Assert.NotEmpty(examples);
@@ -143,6 +150,7 @@ public partial class McpServerTests
             Assert.False(string.IsNullOrWhiteSpace(tool["description"]!.GetValue<string>()));
             Assert.Equal("object", tool["inputSchema"]!["type"]!.GetValue<string>());
             Assert.Single(tool["inputSchema"]!.AsObject());
+            Assert.Null(tool["outputSchema"]);
             Assert.Null(tool["examples"]);
             Assert.NotNull(tool["annotations"]);
             Assert.NotNull(tool["x-stability"]);

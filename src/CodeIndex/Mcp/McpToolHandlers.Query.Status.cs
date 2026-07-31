@@ -209,6 +209,8 @@ public partial class McpServer
                 }
                 if (!projected.ContainsKey("api_version"))
                     projected["api_version"] = structured["api_version"]!.DeepClone();
+                if (!projected.ContainsKey("tool"))
+                    projected["tool"] = structured["tool"]!.DeepClone();
                 structured = projected;
             }
             return CreateToolResult(
