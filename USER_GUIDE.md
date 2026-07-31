@@ -656,6 +656,7 @@ cdidx validate --kind replacement_char --severity warning --path src/
 cdidx validate --exclude-tests --exclude-path 'fixtures/**'
 cdidx validate --json=array --limit 50 --path legacy/
 cdidx validate --json --limit 50 --path legacy/
+cdidx validate --format count --kind replacement_char --path src/
 cdidx validate --format compact --limit 50
 cdidx validate --format sarif --limit 50
 ```
@@ -678,7 +679,15 @@ The default JSON object and `--format compact` expose authoritative pagination
 metadata as `returned`, `total`, `omitted`, and `truncated`. Their `count` is the
 number of emitted issue rows, while `summary` is computed over all matching
 issues before `--limit` and is grouped by kind, severity, origin, category, and
-actionability. SARIF exposes the same pagination fields under each run's
+actionability. `--format count` emits the common versioned count envelope:
+`count` covers all matching validation issues before `--limit`, while
+`query_context` records filters such as path, kind, and severity. The legacy
+`total_estimated` field remains as a compatibility mirror of `count`.
+`api_version`, freshness fields, `issues_table_available`,
+`file_issues_data_current`, `index_complete`, `degraded`, and
+`authoritative_count` make old databases and incomplete indexes explicit;
+do not treat the count as exact when `authoritative_count` is `false`.
+SARIF exposes the same pagination fields under each run's
 `properties`, together with `issues_table_available` and `degraded` so unavailable
 legacy validation data is not mistaken for an authoritative zero; each result maps `info` to `note`, preserves `warning` / `error`,
 and carries the original `severity`, `origin`, `category`, and `actionable`
@@ -4005,6 +4014,7 @@ cdidx validate --kind replacement_char --severity warning --path src/
 cdidx validate --exclude-tests --exclude-path 'fixtures/**'
 cdidx validate --json=array --limit 50 --path legacy/
 cdidx validate --json --limit 50 --path legacy/
+cdidx validate --format count --kind replacement_char --path src/
 cdidx validate --format compact --limit 50
 cdidx validate --format sarif --limit 50
 ```
@@ -4024,7 +4034,13 @@ validation issue row には `category` と `actionable` も入り、想定済み
 `test_fixture` が付きます。既定の JSON object と `--format compact` には、authoritative な
 pagination metadata として `returned`、`total`、`omitted`、`truncated` が入ります。`count` は
 実際に出力した issue row 数で、`summary` は `--limit` を適用する前の全 matching issue を対象に
-kind、severity、origin、category、actionability ごとに集計します。SARIF では同じ pagination field が
+kind、severity、origin、category、actionability ごとに集計します。`--format count` は共通の
+versioned count envelope を出力します。`count` は `--limit` を適用する前の全 matching validation
+issue を対象とし、`query_context` には path、kind、severity などの filter が記録されます。従来の
+`total_estimated` は `count` の互換 mirror として維持されます。`api_version`、freshness field、
+`issues_table_available`、`file_issues_data_current`、`index_complete`、`degraded`、
+`authoritative_count` によって旧 database や incomplete index を明示するため、
+`authoritative_count` が `false` の count を exact として扱わないでください。SARIF では同じ pagination field が
 各 run の `properties` に入り、`issues_table_available` と `degraded` も併記されるため、利用できない
 legacy validation data が authoritative な 0 件と誤認されることはありません。各 result は `info` を `note` に mapping し、`warning` / `error` は
 維持したうえで、元の `severity`、`origin`、`category`、`actionable` を result properties に保持します。

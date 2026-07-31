@@ -209,6 +209,8 @@ public static partial class QueryCommandRunner
             query["lang"] = options.Lang;
         if (options.Kind != null)
             query["kind"] = options.Kind;
+        if (options.Severity != null)
+            query["severity"] = options.Severity;
         if (options.UnusedBucket != null)
             query["bucket"] = options.UnusedBucket;
         if (options.MinUnusedConfidence != null)
@@ -261,7 +263,7 @@ public static partial class QueryCommandRunner
             query["generated_file_filter_available"] = generatedFileFilterAvailable.Value;
         if (options.Since.HasValue)
             query["since"] = options.Since.Value;
-        if (options.CountOnly)
+        if (options.CountOnly || options.OutputFormat == OutputFormatCount)
             query["count"] = true;
         if (options.FirstPerFile || options.SampleSize.HasValue)
             query["row_selectors"] = BuildSearchRowSelectorContextJson(options);

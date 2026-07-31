@@ -65,12 +65,40 @@ public static partial class QueryCommandRunner
             var issues = issueLimit.HasValue
                 ? allIssues.Take(issueLimit.Value).ToList()
                 : allIssues;
-            var issuesAvailable = reader._hasIssuesTable;
             if (options.CountOnly || options.OutputFormat == OutputFormatCount)
             {
-                WriteFormattedCount(allIssues.Count, jsonOptions);
+                var issuesTableAvailable = reader._hasIssuesPhysicalTable;
+                var fileIssuesDataCurrent = reader._hasIssuesTable;
+                var indexCompletion = reader.GetPersistedIndexCompletion();
+                var payload = BuildCountJsonPayload(
+                    reader,
+                    jsonOptions,
+                    allIssues.Count,
+                    queryOptions: options,
+                    degraded: !issuesTableAvailable
+                        || !fileIssuesDataCurrent
+                        || !indexCompletion.IndexComplete,
+                    extraFields: countPayload =>
+                    {
+                        // Kept for compatibility with the pre-envelope count shape (#4908).
+                        countPayload["total_estimated"] = allIssues.Count;
+                        countPayload["count_kind"] = "validation_issues";
+                        countPayload["count_scope"] = "all_matching_issues_before_limit";
+                        countPayload["issues_table_available"] = issuesTableAvailable;
+                        countPayload["file_issues_data_current"] = fileIssuesDataCurrent;
+                        countPayload["index_complete"] = indexCompletion.IndexComplete;
+                        if (!indexCompletion.IndexComplete)
+                        {
+                            countPayload["index_incomplete_reasons"] = JsonSerializer.SerializeToNode(
+                                indexCompletion.IndexIncompleteReasons.ToList(),
+                                CliJsonSerializerContextFactory.Create(jsonOptions).ListString);
+                        }
+                    });
+                AddActiveSqliteDiagnostics(payload);
+                CommandOutputWriter.WriteJsonNode(payload, jsonOptions);
                 return CommandExitCodes.Success;
             }
+            var issuesAvailable = reader._hasIssuesTable;
             if (issues.Count == 0)
             {
                 if (options.Json)

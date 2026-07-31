@@ -4,6 +4,11 @@ using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Database;
 
+internal sealed record PersistedIndexCompletion(
+    bool IndexComplete,
+    IReadOnlyList<string> IndexIncompleteReasons,
+    bool MigrationInProgress);
+
 internal sealed record PersistedIndexGenerationReadiness(
     bool GraphTableAvailable,
     bool GraphDataCurrent,
@@ -35,30 +40,10 @@ public partial class DbReader
         bool? hdlGraphContractReady = null,
         SqliteTransaction? transaction = null)
     {
-        var indexCompleteness = TryGetMetaStringInternal(DbContext.IndexCompletenessMetaKey);
-        var indexIncompleteReasons = MergeDistinctReasons(
-            ParseMetaStringList(TryGetMetaStringInternal(DbContext.IndexIncompleteReasonsMetaKey)),
-            ReadPersistedIndexOmissionReasons(
-                _conn,
-                _hasIssuesPhysicalTable,
-                ParseMetaBool(TryGetMetaStringInternal(DbContext.SymbolsOnlyGraphOmittedMetaKey)) == true,
-                transaction));
-        var migrationInProgress = string.Equals(
-            TryGetMetaStringInternal(DbContext.BatchInProgressMetaKey),
-            "true",
-            StringComparison.OrdinalIgnoreCase);
-        if (migrationInProgress)
-            AddDistinctReason(indexIncompleteReasons, BatchInProgressIncompleteReason);
-
-        var explicitlyIncomplete = string.Equals(
-            indexCompleteness,
-            "incomplete",
-            StringComparison.OrdinalIgnoreCase);
-        if (explicitlyIncomplete && indexIncompleteReasons.Count == 0)
-            AddDistinctReason(indexIncompleteReasons, DegradationReasonCodes.IndexIncomplete);
-        var indexComplete = !migrationInProgress
-            && !explicitlyIncomplete
-            && indexIncompleteReasons.Count == 0;
+        var indexCompletion = GetPersistedIndexCompletion(transaction);
+        var indexComplete = indexCompletion.IndexComplete;
+        var indexIncompleteReasons = indexCompletion.IndexIncompleteReasons;
+        var migrationInProgress = indexCompletion.MigrationInProgress;
 
         var capHits = referenceExtractionCapHits ?? GetReferenceExtractionCapHits();
         var languages = indexedLanguages ?? GetIndexedLanguageCounts();
@@ -110,6 +95,40 @@ public partial class DbReader
             referenceGraphComplete,
             referenceGraphIncompleteReasons,
             capHits,
+            migrationInProgress);
+    }
+
+    internal PersistedIndexCompletion GetPersistedIndexCompletion(
+        SqliteTransaction? transaction = null)
+    {
+        var indexCompleteness = TryGetMetaStringInternal(DbContext.IndexCompletenessMetaKey);
+        var indexIncompleteReasons = MergeDistinctReasons(
+            ParseMetaStringList(TryGetMetaStringInternal(DbContext.IndexIncompleteReasonsMetaKey)),
+            ReadPersistedIndexOmissionReasons(
+                _conn,
+                _hasIssuesPhysicalTable,
+                ParseMetaBool(TryGetMetaStringInternal(DbContext.SymbolsOnlyGraphOmittedMetaKey)) == true,
+                transaction));
+        var migrationInProgress = string.Equals(
+            TryGetMetaStringInternal(DbContext.BatchInProgressMetaKey),
+            "true",
+            StringComparison.OrdinalIgnoreCase);
+        if (migrationInProgress)
+            AddDistinctReason(indexIncompleteReasons, BatchInProgressIncompleteReason);
+
+        var explicitlyIncomplete = string.Equals(
+            indexCompleteness,
+            "incomplete",
+            StringComparison.OrdinalIgnoreCase);
+        if (explicitlyIncomplete && indexIncompleteReasons.Count == 0)
+            AddDistinctReason(indexIncompleteReasons, DegradationReasonCodes.IndexIncomplete);
+        var indexComplete = !migrationInProgress
+            && !explicitlyIncomplete
+            && indexIncompleteReasons.Count == 0;
+
+        return new PersistedIndexCompletion(
+            indexComplete,
+            indexIncompleteReasons,
             migrationInProgress);
     }
 

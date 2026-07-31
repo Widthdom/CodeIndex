@@ -83,7 +83,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunValidate_CrossFormatMetadataPreservesTotalsActionabilityAndSeverity_Issues4138And4583()
+    public void RunValidate_CrossFormatMetadataPreservesTotalsActionabilityAndSeverity_Issues4138_4583_And4908()
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_validate_summary_4138");
         var projectRoot = project.Root;
@@ -129,6 +129,16 @@ public partial class QueryCommandRunnerTests
         var (countExitCode, countStdout, countStderr) = CaptureConsole(() => QueryCommandRunner.RunValidate(
             ["--db", dbPath, "--format", "count", "--kind", "replacement_char", "--limit", "1"],
             _jsonOptions));
+        var (emptyCountExitCode, emptyCountStdout, emptyCountStderr) = CaptureConsole(() => QueryCommandRunner.RunValidate(
+            ["--db", dbPath, "--format", "count", "--kind", "replacement_char", "--severity", "error"],
+            _jsonOptions));
+        using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+        {
+            new DbWriter(db).MarkIndexIncomplete(["test_incomplete"]);
+        }
+        var (incompleteCountExitCode, incompleteCountStdout, incompleteCountStderr) = CaptureConsole(() => QueryCommandRunner.RunValidate(
+            ["--db", dbPath, "--format", "count", "--kind", "replacement_char"],
+            _jsonOptions));
 
         Assert.Equal(CommandExitCodes.Success, exitCode);
         Assert.Equal(CommandExitCodes.Success, arrayExitCode);
@@ -138,6 +148,8 @@ public partial class QueryCommandRunnerTests
         Assert.Equal(CommandExitCodes.Success, sarifExitCode);
         Assert.Equal(CommandExitCodes.Success, limitedSarifExitCode);
         Assert.Equal(CommandExitCodes.Success, countExitCode);
+        Assert.Equal(CommandExitCodes.Success, emptyCountExitCode);
+        Assert.Equal(CommandExitCodes.Success, incompleteCountExitCode);
         Assert.Equal(string.Empty, stderr);
         Assert.Equal(string.Empty, arrayStderr);
         Assert.Equal(string.Empty, compactStderr);
@@ -146,6 +158,8 @@ public partial class QueryCommandRunnerTests
         Assert.Equal(string.Empty, sarifStderr);
         Assert.Equal(string.Empty, limitedSarifStderr);
         Assert.Equal(string.Empty, countStderr);
+        Assert.Equal(string.Empty, emptyCountStderr);
+        Assert.Equal(string.Empty, incompleteCountStderr);
 
         using var document = ParseJsonOutput(stdout);
         var root = document.RootElement;
@@ -211,11 +225,45 @@ public partial class QueryCommandRunnerTests
         Assert.Equal(1, limitedSarifRun.GetProperty("results").GetArrayLength());
 
         using var countDocument = ParseJsonOutput(countStdout);
-        Assert.Equal(2, countDocument.RootElement.GetProperty("count").GetInt32());
+        var countRoot = countDocument.RootElement;
+        Assert.Equal(summary.GetProperty("total").GetInt32(), countRoot.GetProperty("count").GetInt32());
+        Assert.Equal(2, countRoot.GetProperty("total_estimated").GetInt32());
+        Assert.Equal(JsonOutputContract.ApiVersion, countRoot.GetProperty("api_version").GetString());
+        Assert.Equal("validation_issues", countRoot.GetProperty("count_kind").GetString());
+        Assert.Equal("all_matching_issues_before_limit", countRoot.GetProperty("count_scope").GetString());
+        Assert.True(countRoot.GetProperty("issues_table_available").GetBoolean());
+        Assert.True(countRoot.GetProperty("file_issues_data_current").GetBoolean());
+        Assert.True(countRoot.GetProperty("index_complete").GetBoolean());
+        Assert.True(countRoot.GetProperty("freshness_available").GetBoolean());
+        Assert.False(countRoot.GetProperty("degraded").GetBoolean());
+        Assert.True(countRoot.GetProperty("authoritative_count").GetBoolean());
+        Assert.True(countRoot.GetProperty("query_context").GetProperty("count").GetBoolean());
+        Assert.Equal("replacement_char", countRoot.GetProperty("query_context").GetProperty("kind").GetString());
+        Assert.Equal(1, countRoot.GetProperty("query_context").GetProperty("limit").GetInt32());
+        Assert.False(countRoot.TryGetProperty("issues", out _));
+
+        using var emptyCountDocument = ParseJsonOutput(emptyCountStdout);
+        var emptyCountRoot = emptyCountDocument.RootElement;
+        Assert.Equal(0, emptyCountRoot.GetProperty("count").GetInt32());
+        Assert.Equal(0, emptyCountRoot.GetProperty("total_estimated").GetInt32());
+        Assert.Equal("error", emptyCountRoot.GetProperty("query_context").GetProperty("severity").GetString());
+        Assert.True(emptyCountRoot.GetProperty("authoritative_count").GetBoolean());
+
+        using var incompleteCountDocument = ParseJsonOutput(incompleteCountStdout);
+        var incompleteCountRoot = incompleteCountDocument.RootElement;
+        Assert.Equal(2, incompleteCountRoot.GetProperty("count").GetInt32());
+        Assert.True(incompleteCountRoot.GetProperty("issues_table_available").GetBoolean());
+        Assert.True(incompleteCountRoot.GetProperty("file_issues_data_current").GetBoolean());
+        Assert.False(incompleteCountRoot.GetProperty("index_complete").GetBoolean());
+        Assert.Contains(
+            incompleteCountRoot.GetProperty("index_incomplete_reasons").EnumerateArray(),
+            reason => reason.GetString() == "test_incomplete");
+        Assert.True(incompleteCountRoot.GetProperty("degraded").GetBoolean());
+        Assert.False(incompleteCountRoot.GetProperty("authoritative_count").GetBoolean());
     }
 
     [Fact]
-    public void RunValidate_EmptySarifReportsUnavailableIssueDataAsDegraded_Issue4583()
+    public void RunValidate_EmptySarifAndCountReportUnavailableIssueDataAsDegraded_Issues4583And4908()
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_validate_sarif_degraded_4583");
         var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
@@ -230,9 +278,14 @@ public partial class QueryCommandRunnerTests
         var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunValidate(
             ["--db", dbPath, "--format", "sarif"],
             _jsonOptions));
+        var (countExitCode, countStdout, countStderr) = CaptureConsole(() => QueryCommandRunner.RunValidate(
+            ["--db", dbPath, "--format", "count"],
+            _jsonOptions));
 
         Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(CommandExitCodes.Success, countExitCode);
         Assert.Equal(string.Empty, stderr);
+        Assert.Equal(string.Empty, countStderr);
         using var document = ParseJsonOutput(stdout);
         var run = document.RootElement.GetProperty("runs")[0];
         var properties = run.GetProperty("properties");
@@ -240,6 +293,17 @@ public partial class QueryCommandRunnerTests
         Assert.False(properties.GetProperty("issues_table_available").GetBoolean());
         Assert.True(properties.GetProperty("degraded").GetBoolean());
         Assert.Empty(run.GetProperty("results").EnumerateArray());
+
+        using var countDocument = ParseJsonOutput(countStdout);
+        var countRoot = countDocument.RootElement;
+        Assert.Equal(0, countRoot.GetProperty("count").GetInt32());
+        Assert.Equal(0, countRoot.GetProperty("total_estimated").GetInt32());
+        Assert.False(countRoot.GetProperty("issues_table_available").GetBoolean());
+        Assert.False(countRoot.GetProperty("file_issues_data_current").GetBoolean());
+        Assert.True(countRoot.GetProperty("index_complete").GetBoolean());
+        Assert.False(countRoot.TryGetProperty("index_incomplete_reasons", out _));
+        Assert.True(countRoot.GetProperty("degraded").GetBoolean());
+        Assert.False(countRoot.GetProperty("authoritative_count").GetBoolean());
     }
 
     private static void AssertValidatePageMetadata(
