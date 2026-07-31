@@ -29,7 +29,7 @@ internal static partial class JsonEnvelopeWrapper
 
     private static readonly HashSet<string> AutoWrapByteBudgetCommands = new(StringComparer.Ordinal)
     {
-        "find", "status", "references", "callers", "callees", "languages", "outline",
+        "find", "status", "references", "callers", "callees", "languages", "outline", "unused",
     };
 
     private static readonly HashSet<string> AutoWrapCompactCommands = new(StringComparer.Ordinal)
@@ -46,19 +46,33 @@ internal static partial class JsonEnvelopeWrapper
     private static readonly HashSet<string> PageableResponseCommands = new(StringComparer.Ordinal)
     {
         "search", "definition", "find", "hotspots", "references", "callers", "callees",
-        "symbols", "files", "languages", "impact", "map", "outline",
+        "symbols", "files", "languages", "impact", "map", "outline", "unused",
     };
 
     private static readonly HashSet<string> CountableResponseCommands = new(StringComparer.Ordinal)
     {
         "search", "definition", "find", "hotspots", "references", "callers", "callees",
-        "symbols", "files", "languages", "impact",
+        "symbols", "files", "languages", "impact", "unused",
     };
+
+    private static readonly string[] UnusedCompactResponseFields =
+    [
+        "path",
+        "line",
+        "lang",
+        "kind",
+        "name",
+        "visibility",
+        "container_name",
+        "unused_bucket",
+        "unused_confidence",
+        "unused_contract_domain",
+    ];
 
     internal static bool ShouldAutoWrapBoundedResponse(string command, string[] args)
     {
         if (!BoundedResponseCommands.Contains(command)
-            && !IsOutlineByteBudgetRequest(command, args))
+            && !IsStandaloneWholeRowByteBudgetRequest(command, args))
             return false;
         if (command == "search" && IsSearchAggregateResponseRequest(args))
             return false;
@@ -80,7 +94,7 @@ internal static partial class JsonEnvelopeWrapper
     private static bool IsBoundedResponseRequest(string command, string[] args)
     {
         if (!BoundedResponseCommands.Contains(command)
-            && !IsOutlineByteBudgetRequest(command, args))
+            && !IsStandaloneWholeRowByteBudgetRequest(command, args))
             return false;
         if (command == "search" && IsSearchAggregateResponseRequest(args))
             return false;
@@ -92,12 +106,12 @@ internal static partial class JsonEnvelopeWrapper
                || ShouldAutoWrapBoundedResponse(command, args);
     }
 
-    private static bool IsOutlineByteBudgetRequest(string command, string[] args)
-        => command == "outline"
+    private static bool IsStandaloneWholeRowByteBudgetRequest(string command, string[] args)
+        => command is "outline" or "unused"
            && HasArgument(args, "--max-json-bytes");
 
-    private static bool HasUnsupportedOutlineBoundedControl(string command, string[] args)
-        => command == "outline"
+    private static bool HasUnsupportedStandaloneBoundedControl(string command, string[] args)
+        => command is "outline" or "unused"
            && (HasArgument(args, "--fields")
                || HasArgument(args, "--format")
                || args.Any(arg => arg.StartsWith("--json=", StringComparison.Ordinal)));
@@ -183,8 +197,15 @@ internal static partial class JsonEnvelopeWrapper
     {
         if (!TryParseBoundedResponseControls(command, args, out var controls, out var controlError))
             return WriteBoundedResponseUsageError(controlError!, "Use the command help to pass positive --limit/--max-json-bytes values and a next_cursor returned by the same query.");
-        if (HasUnsupportedOutlineBoundedControl(command, args))
-            return RunOutlineValidationWithinBudget(args, controls.MaxJsonBytes!.Value, runInner);
+        if (HasUnsupportedStandaloneBoundedControl(command, args)
+            || command == "unused" && HasArgument(args, "--summary-only"))
+        {
+            return RunStandaloneValidationWithinBudget(
+                command,
+                args,
+                controls.MaxJsonBytes!.Value,
+                runInner);
+        }
         if (ProjectionFieldRegistry.IsDiscoveryRequest(controls.Fields))
         {
             var discoveryJson = ProjectionFieldRegistry.CreateDiscoveryDocument(command).ToJsonString(jsonOptions);
@@ -373,17 +394,23 @@ internal static partial class JsonEnvelopeWrapper
 
         if (envelope is null)
         {
-            var fieldsOption = command == "outline" ? "--outline-fields" : "--fields";
+            var selectionHint = command switch
+            {
+                "outline" => "choose fewer --outline-fields",
+                "unused" => "add --compact",
+                _ => "choose fewer --fields",
+            };
             return WriteBoundedResponseUsageError(
                 $"--max-json-bytes {controls.MaxJsonBytes} is too small for the bounded response metadata and one projected row.",
-                $"Increase --max-json-bytes or choose fewer {fieldsOption}.");
+                $"Increase --max-json-bytes or {selectionHint}.");
         }
 
         Console.WriteLine(emittedJson);
         return exitCode;
     }
 
-    private static int RunOutlineValidationWithinBudget(
+    private static int RunStandaloneValidationWithinBudget(
+        string command,
         string[] args,
         int maxJsonBytes,
         Func<string[], int> runInner)
@@ -416,8 +443,8 @@ internal static partial class JsonEnvelopeWrapper
         }
 
         return WriteBoundedResponseUsageError(
-            message ?? "outline output-selector validation failed.",
-            $"{hint ?? "Use only options shown in `outline --help`."} Increase --max-json-bytes to receive the structured validation error.");
+            message ?? $"{command} output-selector validation failed or its summary document exceeds the byte budget.",
+            $"{hint ?? $"Use only options shown in `{command} --help`."} Increase --max-json-bytes to receive the structured response.");
     }
 
     private static JsonObject? BuildBoundedEnvelopeWithinBudget(
@@ -545,7 +572,16 @@ internal static partial class JsonEnvelopeWrapper
             if (extraction.PrimaryCollection is not null)
                 metadata["primary_collection"] = extraction.PrimaryCollection;
             if (extraction.Context is { Count: > 0 })
-                metadata["response_context"] = extraction.Context.DeepClone();
+            {
+                metadata["response_context"] = command == "unused"
+                    ? BuildBoundedUnusedResponseContext(extraction.Context, results)
+                    : extraction.Context.DeepClone();
+            }
+            if (command == "unused"
+                && extraction.SourcePayload?["by_bucket"] is JsonObject)
+            {
+                envelope["by_bucket"] = BuildBoundedUnusedBuckets(results);
+            }
             if (controls.Compact
                 && LegacyLocationCompactCommands.Contains(command)
                 && extraction.SourcePayload is not null)
@@ -798,6 +834,8 @@ internal static partial class JsonEnvelopeWrapper
             return ExtractNestedCollection(languagesPayload, "languages");
         if (command == "outline" && rawResults.FirstOrDefault() is JsonObject outlinePayload)
             return ExtractOutlineSymbols(outlinePayload);
+        if (command == "unused" && rawResults.FirstOrDefault() is JsonObject unusedPayload)
+            return ExtractUnusedSymbols(unusedPayload);
         if (command == "impact" && rawResults.FirstOrDefault() is JsonObject impactPayload)
         {
             var requestedCollection = SelectRequestedCollection(controls.Fields, "callers", "file_impacts", "definitions");
@@ -864,6 +902,93 @@ internal static partial class JsonEnvelopeWrapper
             extraction.Context?.Remove(pagingField);
         }
         return extraction;
+    }
+
+    private static ResponseExtraction ExtractUnusedSymbols(JsonObject payload)
+    {
+        var items = payload["symbols"] as JsonArray ?? [];
+        var context = new JsonObject();
+        foreach (var property in payload)
+        {
+            if (property.Key is "symbols" or "by_bucket" or "next_cursor" or "result_stable_at"
+                || property.Value is JsonArray)
+            {
+                continue;
+            }
+            context[property.Key] = property.Value?.DeepClone();
+        }
+        return new ResponseExtraction(
+            new JsonArray(items.Select(item => item?.DeepClone()).ToArray()),
+            "symbols",
+            context,
+            payload);
+    }
+
+    private static JsonObject BuildBoundedUnusedBuckets(JsonArray results)
+    {
+        var byBucket = new JsonObject();
+        foreach (var bucket in QueryCommandRunner.OrderedUnusedBuckets)
+            byBucket[bucket] = new JsonArray();
+        foreach (var result in results.OfType<JsonObject>())
+        {
+            var bucket = ReadString(result, "unused_bucket");
+            if (bucket is null || byBucket[bucket] is not JsonArray rows)
+                continue;
+            rows.Add(result.DeepClone());
+        }
+        return byBucket;
+    }
+
+    private static JsonObject BuildBoundedUnusedResponseContext(JsonObject source, JsonArray results)
+    {
+        var context = (JsonObject)source.DeepClone();
+        context["count"] = results.Count;
+        context["returned_bucket_counts"] = CountResponseRowsByProperty(
+            results,
+            "unused_bucket",
+            QueryCommandRunner.OrderedUnusedBuckets);
+        context["returned_contract_domain_counts"] = CountResponseRowsByProperty(
+            results,
+            "unused_contract_domain");
+        if (context["summary"] is JsonObject summary)
+        {
+            summary["by_bucket"] = CountResponseRowsByProperty(
+                results,
+                "unused_bucket",
+                QueryCommandRunner.OrderedUnusedBuckets);
+            summary["by_confidence"] = CountResponseRowsByProperty(
+                results,
+                "unused_confidence");
+            summary["by_contract_domain"] = CountResponseRowsByProperty(
+                results,
+                "unused_contract_domain");
+        }
+        return context;
+    }
+
+    private static JsonObject CountResponseRowsByProperty(
+        JsonArray results,
+        string propertyName,
+        IReadOnlyList<string>? preferredOrder = null)
+    {
+        var counts = results
+            .OfType<JsonObject>()
+            .Select(row => ReadString(row, propertyName))
+            .Where(value => !string.IsNullOrEmpty(value))
+            .GroupBy(value => value!, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
+        var output = new JsonObject();
+        if (preferredOrder is not null)
+        {
+            foreach (var value in preferredOrder)
+            {
+                if (counts.Remove(value, out var count))
+                    output[value] = count;
+            }
+        }
+        foreach (var entry in counts.OrderBy(entry => entry.Key, StringComparer.Ordinal))
+            output[entry.Key] = entry.Value;
+        return output;
     }
 
     private static ResponseExtraction ExtractDiscoveryRows(string command, JsonArray rawResults)
@@ -1698,6 +1823,9 @@ internal static partial class JsonEnvelopeWrapper
         {
             var preserveFullDiscoveryRows = command is "search" or "languages";
             var selected = Fields
+                           ?? (command == "unused" && Compact
+                               ? UnusedCompactResponseFields
+                               : null)
                            ?? ((!preserveFullDiscoveryRows || Compact)
                                && ProjectionFieldRegistry.GetCompactFields(command) is { } defaults
                                ? defaults

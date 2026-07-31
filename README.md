@@ -77,7 +77,7 @@ cdidx definition UserService
 cdidx references UserService --fields path,line,reference_kind --limit 20 --max-json-bytes 16384
 cdidx inspect QueryCommandRunner --outline-only
 cdidx outline src/CodeIndex/Cli/QueryCommandRunner.cs --json --kind function --limit 50 --max-json-bytes 16384
-cdidx unused --compact --by-bucket
+cdidx unused --compact --by-bucket --max-json-bytes 16384
 cdidx map --compact --max-json-bytes 65536
 cdidx map --format issue-drafts --limit 10
 cdidx search --recipe risky-code --format compact --max-json-bytes 65536
@@ -574,7 +574,7 @@ cdidx definition UserService
 cdidx references UserService --fields path,line,reference_kind --limit 20 --max-json-bytes 16384
 cdidx inspect QueryCommandRunner --outline-only
 cdidx outline src/CodeIndex/Cli/QueryCommandRunner.cs --json --kind function --limit 50 --max-json-bytes 16384
-cdidx unused --compact --by-bucket
+cdidx unused --compact --by-bucket --max-json-bytes 16384
 cdidx map --compact --max-json-bytes 65536
 cdidx map --format issue-drafts --limit 10
 cdidx search --recipe risky-code --format compact --max-json-bytes 65536
