@@ -92,6 +92,32 @@ public partial class McpServerTests
         Assert.Equal("complete", emptyUnicodeLookup["continuation_reason"]!.GetValue<string>());
     }
 
+    [Theory]
+    [InlineData("m-", ".m", "ambiguous_m", "objc", "matlab")]
+    [InlineData(".m_", ".m", "ambiguous_m", "objc", "matlab")]
+    [InlineData(".p.l", ".pl", "ambiguous_pl", "perl", "prolog")]
+    public void Languages_SeparatorNormalizedAmbiguousExtensionKeepsDiagnostics_Issue4901(
+        string extension,
+        string normalizedExtension,
+        string bucketLanguage,
+        string firstCandidate,
+        string secondCandidate)
+    {
+        var response = CallIssue4896Languages(new JsonObject
+        {
+            ["extension"] = extension,
+        }, id: 4901);
+
+        var lookup = response["extension_lookup"]!;
+        Assert.Equal(normalizedExtension, lookup["normalized_extension"]!.GetValue<string>());
+        Assert.True(lookup["ambiguous"]!.GetValue<bool>());
+        Assert.Equal(bucketLanguage, lookup["bucket_language"]!.GetValue<string>());
+        Assert.Equal(
+            [firstCandidate, secondCandidate],
+            lookup["candidates"]!.AsArray()
+                .Select(candidate => candidate!["lang"]!.GetValue<string>()));
+    }
+
     [Fact]
     public void Languages_AcceptsEveryCliCapabilityFilter_Issue4896()
     {

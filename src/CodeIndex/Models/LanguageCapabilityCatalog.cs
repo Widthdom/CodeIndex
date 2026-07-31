@@ -355,11 +355,7 @@ internal static class LanguageCapabilityCatalog
     }
 
     private static string NormalizeExtension(string value)
-    {
-        var trimmed = value.Trim();
-        var withDot = trimmed.StartsWith(".", StringComparison.Ordinal) ? trimmed : "." + trimmed;
-        return withDot.ToLowerInvariant();
-    }
+        => "." + NormalizeLookupKey(value);
 
     private static JsonArray BuildStringArray(IEnumerable<string> values)
         => new(values

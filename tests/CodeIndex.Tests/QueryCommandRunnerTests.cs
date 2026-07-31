@@ -3644,6 +3644,33 @@ public partial class QueryCommandRunnerTests
                 .Select(language => language.GetString()));
     }
 
+    [Theory]
+    [InlineData("m-", ".m", "ambiguous_m", "objc", "matlab")]
+    [InlineData(".m_", ".m", "ambiguous_m", "objc", "matlab")]
+    [InlineData(".p.l", ".pl", "ambiguous_pl", "perl", "prolog")]
+    public void RunLanguages_SeparatorNormalizedAmbiguousExtensionKeepsDiagnostics_Issue4901(
+        string extension,
+        string normalizedExtension,
+        string bucketLanguage,
+        string firstCandidate,
+        string secondCandidate)
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() =>
+            QueryCommandRunner.RunLanguages(["--extension", extension, "--json"], _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        var lookup = document.RootElement.GetProperty("extension_lookup");
+        Assert.Equal(normalizedExtension, lookup.GetProperty("normalized_extension").GetString());
+        Assert.True(lookup.GetProperty("ambiguous").GetBoolean());
+        Assert.Equal(bucketLanguage, lookup.GetProperty("bucket_language").GetString());
+        Assert.Equal(
+            [firstCandidate, secondCandidate],
+            lookup.GetProperty("candidates").EnumerateArray()
+                .Select(candidate => candidate.GetProperty("lang").GetString()));
+    }
+
     [Fact]
     public void RunLanguages_JsonReportsCythonAndCudaReferences_Issues4737And4738()
     {
