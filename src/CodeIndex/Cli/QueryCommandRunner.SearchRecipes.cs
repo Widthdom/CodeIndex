@@ -2140,7 +2140,7 @@ public static partial class QueryCommandRunner
         int resultLimit,
         SearchAuditRecipeQuery? recipeQuery = null)
     {
-        if (recipeQuery?.SemanticFilter != SearchRecipeSemanticFilter.None)
+        if (recipeQuery is { SemanticFilter: not SearchRecipeSemanticFilter.None })
             return int.MaxValue;
 
         var selectionTarget = resultLimit > 0 && options.SampleSize.HasValue
