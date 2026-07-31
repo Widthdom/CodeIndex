@@ -396,6 +396,8 @@ public static partial class SymbolExtractor
             {
                 if (!inFence)
                 {
+                    var bodyStartLine = i + 2;
+                    var hasBodyAtEof = bodyStartLine <= sourceLineCount;
                     var codeSymbol = new SymbolRecord
                     {
                         FileId = fileId,
@@ -403,9 +405,9 @@ public static partial class SymbolExtractor
                         Name = NormalizeMarkdownFenceInfo(fenceInfo),
                         Line = i + 1,
                         StartLine = i + 1,
-                        EndLine = lines.Length,
-                        BodyStartLine = i + 2,
-                        BodyEndLine = lines.Length,
+                        EndLine = sourceLineCount,
+                        BodyStartLine = hasBodyAtEof ? bodyStartLine : null,
+                        BodyEndLine = hasBodyAtEof ? sourceLineCount : null,
                         Signature = lines[i].Trim(),
                     };
 

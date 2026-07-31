@@ -6097,6 +6097,32 @@ public partial class SymbolExtractorTests
         Assert.Equal(12_648, largeHeading.EndLine);
         Assert.Equal(2, largeHeading.BodyStartLine);
         Assert.Equal(12_648, largeHeading.BodyEndLine);
+
+        foreach (var newline in new[] { "\n", "\r\n" })
+        {
+            foreach (var terminateFile in new[] { false, true })
+            {
+                var content = string.Join(newline, "# Root", "```csharp", "code");
+                if (terminateFile)
+                    content += newline;
+
+                var symbols = SymbolExtractor.Extract(1, "markdown", content);
+                var heading = Assert.Single(symbols.Where(symbol => symbol.Kind == "heading"));
+                var code = Assert.Single(symbols.Where(symbol => symbol.Kind == "code"));
+
+                Assert.Equal(3, heading.EndLine);
+                Assert.Equal(3, code.EndLine);
+                Assert.Equal(3, code.BodyStartLine);
+                Assert.Equal(3, code.BodyEndLine);
+                Assert.Equal("Root", code.ContainerName);
+            }
+
+            var emptyFenceSymbols = SymbolExtractor.Extract(1, "markdown", $"# Root{newline}```csharp{newline}");
+            var emptyFence = Assert.Single(emptyFenceSymbols.Where(symbol => symbol.Kind == "code"));
+            Assert.Equal(2, emptyFence.EndLine);
+            Assert.Null(emptyFence.BodyStartLine);
+            Assert.Null(emptyFence.BodyEndLine);
+        }
     }
 
     [Fact]
