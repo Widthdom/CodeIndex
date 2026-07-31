@@ -1410,15 +1410,22 @@ issue-draft export and downstream triage tools can keep the reviewer guidance
 next to the evidence path. For example,
 `classifiers` describe the triage dimensions that downstream tools should use,
 such as `source_origin`, `guard_evidence`, `secret_origin`,
-`parser_guard_evidence`, `process_launch_boundary`, `cancellation_intent`,
-`task_result_intent`, `active_skip_governance`, `broad_catch_boundary`, and
-`diagnostic_redaction`; each classifier lists categories, evidence fields, and
-guidance so noisy audit terms can be separated before filing.
+`parser_guard_evidence`, `process_launch_boundary`, `regex_operation_semantics`,
+`shell_execute_polarity`, `cancellation_intent`, `task_result_intent`,
+`active_skip_governance`, `broad_catch_boundary`, and `diagnostic_redaction`;
+each classifier lists categories, evidence fields, and guidance so noisy audit
+terms can be separated before filing.
 `dogfood-risk-patterns` includes process-launch boundary child queries for
 `ProcessStartInfo`, `Process.Start`, `ArgumentList`, `UseShellExecute`,
 working-directory choices, stdout/stderr redirection, waits, termination, shared
 launch/environment policies, and broad plugin/hook/trust-override discovery
 terms.
+The `static-regex-api*` children inspect the matched `Regex` member: exact
+`Escape` / `Unescape` helpers are suppressed, while matching operations and
+unresolved receiver/member evidence remain findings. `process-shell-execute`
+similarly suppresses only a direct literal `UseShellExecute=false` assignment;
+literal `true` and propagated or otherwise unresolved values remain findings
+with semantic classification evidence.
 `risky-code/broad-exception-catch` includes broad-catch boundary categories and
 expected diagnostic behaviors so users can distinguish intentional top-level,
 cleanup, probe, diagnostic-sanitization, and worker boundaries from catches that
@@ -4801,14 +4808,19 @@ facet の短い一覧です。recipe run の JSON は各 matching result にも�
 issue-draft export や下流の triage tool が evidence path の近くに reviewer guidance を
 保持できます。`classifiers` は下流 tool が使うべき triage の軸を表し、
 `source_origin`、`guard_evidence`、`secret_origin`、`parser_guard_evidence`、
-`process_launch_boundary`、`cancellation_intent`、`task_result_intent`、
-`active_skip_governance`、`broad_catch_boundary`、`diagnostic_redaction` などの
-classifier が category、evidence field、guidance を持つため、ノイズの多い audit term を
-起票前に切り分けられます。
+`process_launch_boundary`、`regex_operation_semantics`、`shell_execute_polarity`、
+`cancellation_intent`、`task_result_intent`、`active_skip_governance`、
+`broad_catch_boundary`、`diagnostic_redaction` などの classifier が category、
+evidence field、guidance を持つため、ノイズの多い audit term を起票前に切り分けられます。
 `dogfood-risk-patterns` は `ProcessStartInfo`、`Process.Start`、`ArgumentList`、
 `UseShellExecute`、working-directory 選択、stdout/stderr redirection、wait、
 termination、共有 launch/environment policy、広めの plugin/hook/trust-override
 discovery 用語を process-launch boundary の child query として含みます。
+`static-regex-api*` child は一致した `Regex` member を判定し、厳密な `Escape` / `Unescape`
+helper を除外する一方、matching operation と receiver/member を解決できない evidence は
+finding として残します。`process-shell-execute` も、直接の literal
+`UseShellExecute=false` 代入だけを除外します。literal `true` と、伝播またはその他の理由で
+解決できない値は、意味論的な分類 evidence を伴う finding として残ります。
 たとえば `risky-code/broad-exception-catch` は
 broad catch の境界カテゴリと期待される diagnostic behavior を含めるため、意図的な
 top-level、cleanup、probe、diagnostic-sanitization、worker 境界と、narrowing または

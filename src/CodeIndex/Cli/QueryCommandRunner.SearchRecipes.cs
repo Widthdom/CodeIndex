@@ -1953,6 +1953,7 @@ public static partial class QueryCommandRunner
                 fetchLimit);
             results = ApplySearchRecipeFileRejectQueries(reader, results, options, recipeQuery);
             var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, rawFtsOverride: false, recipeQuery: recipeQuery);
+            rows = ApplySearchRecipeSemanticFilter(reader, options, recipeQuery, rows);
             var outputSelection = ApplySearchOutputSelection(rows, options, resultLimit, sourceTotalAuthoritative);
             rows = outputSelection.Rows;
             ApplySearchRecipeAuditClassifications(recipeQuery, rows);
@@ -2054,6 +2055,7 @@ public static partial class QueryCommandRunner
                 fetchLimit);
             results = ApplySearchRecipeFileRejectQueries(reader, results, options, recipeQuery);
             var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, recipeQuery: recipeQuery);
+            rows = ApplySearchRecipeSemanticFilter(reader, options, recipeQuery, rows);
             var outputSelection = ApplySearchOutputSelection(rows, options, resultLimit, sourceTotalAuthoritative);
             rows = outputSelection.Rows;
             ApplySearchRecipeAuditClassifications(recipeQuery, rows);
@@ -2129,6 +2131,7 @@ public static partial class QueryCommandRunner
         int fetchLimit)
         => guardFilters.Count == 0
            && recipeQuery.RejectFileQueries.Count == 0
+           && recipeQuery.SemanticFilter == SearchRecipeSemanticFilter.None
            && !HasSearchOriginFilters(BuildSearchDisplayFacetFilters(options, recipeQuery))
            && resultCount < fetchLimit;
 
@@ -2177,6 +2180,7 @@ public static partial class QueryCommandRunner
                 requiredPathPatterns: GetSearchRecipeRequiredPathPatterns(options, recipeQuery));
             results = ApplySearchRecipeFileRejectQueries(reader, results, options, recipeQuery);
             var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, rawFtsOverride: false, recipeQuery: recipeQuery);
+            rows = ApplySearchRecipeSemanticFilter(reader, options, recipeQuery, rows);
             ApplySearchRecipeAuditClassifications(recipeQuery, rows);
             var count = rows.Count;
             var fileCountForQuery = rows.Select(row => row.Result.Path).Distinct(StringComparer.Ordinal).Count();
@@ -2220,6 +2224,299 @@ public static partial class QueryCommandRunner
             row.Compact.AuditClassifications.Add(classification);
         }
     }
+
+    private static List<SearchDisplayRow> ApplySearchRecipeSemanticFilter(
+        DbReader reader,
+        QueryCommandOptions options,
+        SearchAuditRecipeQuery recipeQuery,
+        List<SearchDisplayRow> rows)
+    {
+        if (recipeQuery.SemanticFilter == SearchRecipeSemanticFilter.None)
+            return rows;
+
+        var classifierName = recipeQuery.SemanticFilter switch
+        {
+            SearchRecipeSemanticFilter.RegexStaticMember => "regex_operation_semantics",
+            SearchRecipeSemanticFilter.ShellExecuteAssignment => "shell_execute_polarity",
+            _ => null,
+        };
+        var classifier = classifierName == null
+            ? null
+            : recipeQuery.Classifiers.FirstOrDefault(candidate => string.Equals(candidate.Name, classifierName, StringComparison.Ordinal));
+        if (classifier == null)
+            return rows;
+
+        var retained = new List<SearchDisplayRow>(rows.Count);
+        var regexAliasPaths = new Dictionary<string, bool>(StringComparer.Ordinal);
+        foreach (var row in rows)
+        {
+            var evidence = recipeQuery.SemanticFilter switch
+            {
+                SearchRecipeSemanticFilter.RegexStaticMember => GetRegexOperationEvidence(
+                    row,
+                    HasRegexAliasDeclaration(reader, options, row.Result.Path, regexAliasPaths)),
+                SearchRecipeSemanticFilter.ShellExecuteAssignment => GetShellExecuteAssignmentEvidence(row),
+                _ => null,
+            };
+            if (evidence?.Suppress == true)
+                continue;
+
+            if (evidence != null)
+            {
+                var classification = BuildSearchRecipeSemanticClassification(classifier, evidence, row);
+                if (classification != null)
+                {
+                    row.Compact.AuditClassifications ??= [];
+                    row.Compact.AuditClassifications.Add(classification);
+                }
+            }
+
+            retained.Add(row);
+        }
+
+        return retained;
+    }
+
+    private static SearchAuditClassificationJsonResult? BuildSearchRecipeSemanticClassification(
+        SearchRecipeClassifierJsonResult classifier,
+        SearchRecipeSemanticEvidence evidence,
+        SearchDisplayRow row)
+    {
+        var categoryMetadata = classifier.Categories
+            .FirstOrDefault(category => string.Equals(category.Name, evidence.Category, StringComparison.Ordinal));
+        if (categoryMetadata == null)
+            return null;
+
+        var details = new List<string>
+        {
+            $"reason:{evidence.Reason}",
+        };
+        if (!string.IsNullOrWhiteSpace(evidence.Operation))
+            details.Add($"operation:{evidence.Operation}");
+        if (!string.IsNullOrWhiteSpace(evidence.Value))
+            details.Add($"value:{evidence.Value}");
+        if (evidence.Line.HasValue)
+            details.Add($"line:{evidence.Line.Value.ToString(CultureInfo.InvariantCulture)}");
+        if (!string.IsNullOrWhiteSpace(row.Compact.EnclosingSymbolName))
+            details.Add($"enclosing_symbol_name:{row.Compact.EnclosingSymbolName}");
+        if (!string.IsNullOrWhiteSpace(row.Compact.EnclosingSymbolKind))
+            details.Add($"enclosing_symbol_kind:{row.Compact.EnclosingSymbolKind}");
+
+        return new SearchAuditClassificationJsonResult(
+            classifier.Name,
+            categoryMetadata.Name,
+            categoryMetadata.Description,
+            categoryMetadata.ReviewGuidance,
+            details);
+    }
+
+    private static SearchRecipeSemanticEvidence GetRegexOperationEvidence(SearchDisplayRow row, bool hasRegexAliasDeclaration)
+    {
+        var operations = new List<string>();
+        int? firstLine = null;
+        var foundRiskOperation = false;
+        var foundUnresolvedOperation = false;
+        var foundSafeOperation = false;
+
+        foreach (var (text, line) in GetSemanticEvidenceLines(row, "Regex."))
+        {
+            var searchFrom = 0;
+            while (searchFrom < text.Length)
+            {
+                var regexIndex = text.IndexOf("Regex.", searchFrom, StringComparison.Ordinal);
+                if (regexIndex < 0)
+                    break;
+                searchFrom = regexIndex + "Regex.".Length;
+                firstLine ??= line;
+
+                var receiver = ExtractRegexReceiver(text, regexIndex);
+                var member = ExtractIdentifier(text, searchFrom);
+                operations.Add(string.IsNullOrWhiteSpace(member) ? receiver : $"{receiver}.{member}");
+                if (!IsSystemRegexReceiver(receiver)
+                    || (hasRegexAliasDeclaration && string.Equals(receiver, "Regex", StringComparison.Ordinal))
+                    || string.IsNullOrWhiteSpace(member))
+                {
+                    foundUnresolvedOperation = true;
+                    continue;
+                }
+
+                if (member is "Escape" or "Unescape")
+                {
+                    foundSafeOperation = true;
+                    continue;
+                }
+
+                if (member is "IsMatch" or "Match" or "Matches" or "Replace" or "Split" or "EnumerateMatches" or "Count")
+                    foundRiskOperation = true;
+                else
+                    foundUnresolvedOperation = true;
+            }
+        }
+
+        var operation = string.Join(",", operations.Distinct(StringComparer.Ordinal));
+        if (foundRiskOperation)
+            return new SearchRecipeSemanticEvidence(false, "regex_pattern_operation", "matched_pattern_operation", operation, null, firstLine);
+        if (foundUnresolvedOperation || !foundSafeOperation)
+            return new SearchRecipeSemanticEvidence(false, "regex_operation_unresolved", "receiver_or_member_not_proven_safe", operation, null, firstLine);
+        return new SearchRecipeSemanticEvidence(true, "safe_escape_helper", "escape_helper_does_not_execute_pattern", operation, null, firstLine);
+    }
+
+    private static string ExtractRegexReceiver(string text, int regexIndex)
+    {
+        var start = regexIndex;
+        while (start > 0 && IsQualifiedIdentifierCharacter(text[start - 1]))
+            start--;
+        return text[start..(regexIndex + "Regex".Length)].Trim('.');
+    }
+
+    private static bool IsSystemRegexReceiver(string receiver)
+        => string.Equals(receiver, "Regex", StringComparison.Ordinal)
+            || string.Equals(receiver, "System.Text.RegularExpressions.Regex", StringComparison.Ordinal)
+            || string.Equals(receiver, "global::System.Text.RegularExpressions.Regex", StringComparison.Ordinal);
+
+    private static bool HasRegexAliasDeclaration(
+        DbReader reader,
+        QueryCommandOptions options,
+        string path,
+        Dictionary<string, bool> aliasPaths)
+    {
+        if (aliasPaths.TryGetValue(path, out var hasAlias))
+            return hasAlias;
+
+        hasAlias = new[] { "using Regex =", "using Regex=" }
+            .Any(aliasQuery => reader.Search(
+                aliasQuery,
+                1,
+                options.Lang,
+                rawQuery: false,
+                pathPatterns: [path],
+                excludePathPatterns: null,
+                excludeTests: false,
+                deduplicate: true,
+                since: options.Since,
+                exact: true,
+                prefix: false,
+                visibilityRank: false).Count > 0);
+        aliasPaths[path] = hasAlias;
+        return hasAlias;
+    }
+
+    private static bool IsQualifiedIdentifierCharacter(char value)
+        => char.IsLetterOrDigit(value) || value is '_' or '.' or ':';
+
+    private static string ExtractIdentifier(string text, int start)
+    {
+        var end = start;
+        while (end < text.Length && (char.IsLetterOrDigit(text[end]) || text[end] == '_'))
+            end++;
+        return text[start..end];
+    }
+
+    private static SearchRecipeSemanticEvidence GetShellExecuteAssignmentEvidence(SearchDisplayRow row)
+    {
+        var values = new List<string>();
+        int? firstLine = null;
+        var foundFalse = false;
+        var foundTrue = false;
+        var foundUnresolved = false;
+
+        foreach (var (text, line) in GetSemanticEvidenceLines(row, "UseShellExecute"))
+        {
+            var searchFrom = 0;
+            while (searchFrom < text.Length)
+            {
+                var propertyIndex = text.IndexOf("UseShellExecute", searchFrom, StringComparison.Ordinal);
+                if (propertyIndex < 0)
+                    break;
+                searchFrom = propertyIndex + "UseShellExecute".Length;
+                if ((propertyIndex > 0 && IsIdentifierCharacter(text[propertyIndex - 1]))
+                    || (searchFrom < text.Length && IsIdentifierCharacter(text[searchFrom])))
+                    continue;
+
+                firstLine ??= line;
+                var value = ExtractAssignedBooleanLiteral(text, searchFrom);
+                values.Add(value ?? "unresolved");
+                if (string.Equals(value, "false", StringComparison.Ordinal))
+                    foundFalse = true;
+                else if (string.Equals(value, "true", StringComparison.Ordinal))
+                    foundTrue = true;
+                else
+                    foundUnresolved = true;
+            }
+        }
+
+        var valueEvidence = string.Join(",", values.Distinct(StringComparer.Ordinal));
+        if (foundTrue)
+            return new SearchRecipeSemanticEvidence(false, "shell_explicitly_enabled", "literal_true_enables_shell", "UseShellExecute", valueEvidence, firstLine);
+        if (foundUnresolved || !foundFalse)
+            return new SearchRecipeSemanticEvidence(false, "shell_policy_unresolved", "assigned_value_not_literal_boolean", "UseShellExecute", valueEvidence, firstLine);
+        return new SearchRecipeSemanticEvidence(true, "shell_explicitly_disabled", "literal_false_disables_shell", "UseShellExecute", valueEvidence, firstLine);
+    }
+
+    private static string? ExtractAssignedBooleanLiteral(string text, int start)
+    {
+        var cursor = start;
+        while (cursor < text.Length && char.IsWhiteSpace(text[cursor]))
+            cursor++;
+        if (cursor >= text.Length || (text[cursor] != '=' && text[cursor] != ':'))
+            return null;
+        if (text[cursor] == '=' && cursor + 1 < text.Length && text[cursor + 1] is '=' or '>')
+            return null;
+
+        cursor++;
+        while (cursor < text.Length && char.IsWhiteSpace(text[cursor]))
+            cursor++;
+        var value = ExtractIdentifier(text, cursor);
+        if (value is not ("false" or "true"))
+            return null;
+
+        cursor += value.Length;
+        while (cursor < text.Length && char.IsWhiteSpace(text[cursor]))
+            cursor++;
+        if (cursor == text.Length
+            || text[cursor] is ',' or ';' or '}' or ')' or ']'
+            || (cursor + 1 < text.Length && text[cursor] == '/' && text[cursor + 1] is '/' or '*'))
+            return value;
+        return null;
+    }
+
+    private static bool IsIdentifierCharacter(char value)
+        => char.IsLetterOrDigit(value) || value == '_';
+
+    private static IEnumerable<(string Text, int? Line)> GetSemanticEvidenceLines(SearchDisplayRow row, string marker)
+    {
+        var contentLines = row.Result.Content.Split('\n', StringSplitOptions.None);
+        var matchedContentLines = row.Compact.MatchFacets
+            .Select(facet => facet.Line)
+            .Distinct()
+            .Order()
+            .Where(line => line >= row.Result.StartLine && line - row.Result.StartLine < contentLines.Length)
+            .Select(line => (Text: contentLines[line - row.Result.StartLine].TrimEnd('\r'), Line: (int?)line))
+            .Where(item => item.Text.Contains(marker, StringComparison.Ordinal))
+            .ToList();
+        if (matchedContentLines.Count > 0)
+            return matchedContentLines;
+
+        var highlights = row.Compact.Highlights
+            .Where(highlight => highlight.Text.Contains(marker, StringComparison.Ordinal))
+            .Select(highlight => (highlight.Text, (int?)highlight.Line))
+            .ToList();
+        if (highlights.Count > 0)
+            return highlights;
+
+        return row.Compact.Snippet
+            .Split('\n', StringSplitOptions.None)
+            .Where(line => line.Contains(marker, StringComparison.Ordinal))
+            .Select(line => (line, (int?)null));
+    }
+
+    private sealed record SearchRecipeSemanticEvidence(
+        bool Suppress,
+        string Category,
+        string Reason,
+        string Operation,
+        string? Value,
+        int? Line);
 
     private static SearchAuditClassificationJsonResult? TryClassifyTaskResultIntent(
         SearchRecipeClassifierJsonResult classifier,
@@ -2460,6 +2757,7 @@ public static partial class QueryCommandRunner
                 requiredPathPatterns: GetSearchRecipeRequiredPathPatterns(options, recipeQuery));
             results = ApplySearchRecipeFileRejectQueries(reader, results, options, recipeQuery);
             var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, rawFtsOverride: false, recipeQuery: recipeQuery);
+            rows = ApplySearchRecipeSemanticFilter(reader, options, recipeQuery, rows);
             foreach (var path in rows.Select(row => row.Result.Path))
                 paths.Add(path);
 
