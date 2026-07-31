@@ -691,22 +691,25 @@ public partial class McpServer
         return rows;
     }
 
-    private JsonObject BuildUnusedSymbolsByBucket(IEnumerable<UnusedSymbolResult> results)
+    private static JsonObject BuildUnusedSymbolsByBucket(IEnumerable<UnusedSymbolResult> results)
     {
-        var grouped = results
-            .GroupBy(result => result.UnusedBucket, StringComparer.Ordinal)
-            .ToDictionary(group => group.Key, group => group.ToList(), StringComparer.Ordinal);
+        var resultList = results as IReadOnlyList<UnusedSymbolResult> ?? results.ToList();
         var buckets = new JsonObject();
         foreach (var bucket in QueryCommandRunner.OrderedUnusedBuckets)
+            buckets[bucket] = new JsonArray();
+
+        for (var index = 0; index < resultList.Count; index++)
         {
-            if (grouped.TryGetValue(bucket, out var rows))
-                buckets[bucket] = ToJsonArray(rows);
+            var result = resultList[index];
+            if (!buckets.TryGetPropertyValue(result.UnusedBucket, out var bucketNode)
+                || bucketNode is not JsonArray bucketRows)
+            {
+                bucketRows = new JsonArray();
+                buckets[result.UnusedBucket] = bucketRows;
+            }
+            bucketRows.Add(QueryCommandRunner.BuildUnusedBucketMembershipJson(result, index));
         }
-        foreach (var (bucket, rows) in grouped.OrderBy(kv => kv.Key, StringComparer.Ordinal))
-        {
-            if (!buckets.ContainsKey(bucket))
-                buckets[bucket] = ToJsonArray(rows);
-        }
+
         return buckets;
     }
 
