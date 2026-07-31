@@ -1420,12 +1420,14 @@ terms can be separated before filing.
 working-directory choices, stdout/stderr redirection, waits, termination, shared
 launch/environment policies, and broad plugin/hook/trust-override discovery
 terms.
-The `static-regex-api*` children inspect the matched `Regex` member: exact
-`Escape` / `Unescape` helpers are suppressed, while matching operations and
-unresolved receiver/member evidence remain findings. `process-shell-execute`
-similarly suppresses only a direct literal `UseShellExecute=false` assignment;
+The `static-regex-api*` children inspect the matched code-origin `Regex` member:
+exact `Escape` / `Unescape` helpers on a receiver proven to be the BCL type are
+suppressed, while matching operations and unresolved or source-defined
+receiver/member evidence remain findings. `process-shell-execute` similarly
+suppresses only a matched direct literal `UseShellExecute=false` assignment;
 literal `true` and propagated or otherwise unresolved values remain findings
-with semantic classification evidence.
+with semantic classification evidence. Nearby comments and string literals do
+not change either semantic decision.
 `risky-code/broad-exception-catch` includes broad-catch boundary categories and
 expected diagnostic behaviors so users can distinguish intentional top-level,
 cleanup, probe, diagnostic-sanitization, and worker boundaries from catches that
@@ -4816,11 +4818,13 @@ evidence field、guidance を持つため、ノイズの多い audit term を起
 `UseShellExecute`、working-directory 選択、stdout/stderr redirection、wait、
 termination、共有 launch/environment policy、広めの plugin/hook/trust-override
 discovery 用語を process-launch boundary の child query として含みます。
-`static-regex-api*` child は一致した `Regex` member を判定し、厳密な `Escape` / `Unescape`
-helper を除外する一方、matching operation と receiver/member を解決できない evidence は
-finding として残します。`process-shell-execute` も、直接の literal
-`UseShellExecute=false` 代入だけを除外します。literal `true` と、伝播またはその他の理由で
-解決できない値は、意味論的な分類 evidence を伴う finding として残ります。
+`static-regex-api*` child は一致した code-origin の `Regex` member を判定し、BCL type と
+証明できる receiver 上の厳密な `Escape` / `Unescape` helper を除外する一方、matching
+operation、解決不能または source-defined の receiver/member evidence は finding として
+残します。`process-shell-execute` も、一致した直接の literal `UseShellExecute=false` 代入だけを
+除外します。literal `true` と、伝播またはその他の理由で解決できない値は、意味論的な分類
+evidence を伴う finding として残ります。周辺の comment や string literal は、どちらの意味
+判定も変更しません。
 たとえば `risky-code/broad-exception-catch` は
 broad catch の境界カテゴリと期待される diagnostic behavior を含めるため、意図的な
 top-level、cleanup、probe、diagnostic-sanitization、worker 境界と、narrowing または
