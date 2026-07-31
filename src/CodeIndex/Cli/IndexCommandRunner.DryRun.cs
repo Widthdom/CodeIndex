@@ -936,20 +936,28 @@ public static partial class IndexCommandRunner
 
         string? reusableLanguage = knownLanguage;
         FileIndexer.LanguageDetectionResult? preLoadDetection = null;
-        if (reusableLanguage == null)
+        var isAmbiguousExtension = FileIndexer.TryGetAmbiguousLanguageDescriptor(
+            Path.GetExtension(absolutePath),
+            out _);
+        if (reusableLanguage == null || isAmbiguousExtension)
         {
             var detection = indexer.TryDetectLanguageForIndexing(absolutePath);
-            if (detection.Status == FileIndexer.FileProbeStatus.ProbeFailed)
-                return DryRunFileProbe.FromError("Could not probe file for indexability/language.");
-            if (detection.Status != FileIndexer.FileProbeStatus.Supported)
-                return string.IsNullOrEmpty(Path.GetExtension(absolutePath))
-                    ? DryRunFileProbe.FromUnsupported()
-                    : DryRunFileProbe.FromUnknownExtension();
+            if (reusableLanguage == null)
+            {
+                if (detection.Status == FileIndexer.FileProbeStatus.ProbeFailed)
+                    return DryRunFileProbe.FromError("Could not probe file for indexability/language.");
+                if (detection.Status != FileIndexer.FileProbeStatus.Supported)
+                    return string.IsNullOrEmpty(Path.GetExtension(absolutePath))
+                        ? DryRunFileProbe.FromUnsupported()
+                        : DryRunFileProbe.FromUnknownExtension();
 
-            reusableLanguage = FileIndexer.CanReuseDetectedLanguageWithoutContent(absolutePath, detection.Language)
-                ? detection.Language
-                : null;
-            preLoadDetection = detection;
+                reusableLanguage = FileIndexer.CanReuseDetectedLanguageWithoutContent(absolutePath, detection.Language)
+                    ? detection.Language
+                    : null;
+            }
+
+            if (detection.Status == FileIndexer.FileProbeStatus.Supported)
+                preLoadDetection = detection;
         }
 
         try
@@ -965,15 +973,6 @@ public static partial class IndexCommandRunner
                 && string.Equals(detectedBeforeLoad.Language, record.Lang, StringComparison.Ordinal))
             {
                 reportDetection = detectedBeforeLoad;
-            }
-            else if (reportDetection.DetectionSource is null
-                     && FileIndexer.TryGetAmbiguousLanguageDescriptor(Path.GetExtension(absolutePath), out _))
-            {
-                var detectedFromLoadedContent = indexer.TryDetectLanguageForIndexing(
-                    absolutePath,
-                    loaded.Content);
-                if (string.Equals(detectedFromLoadedContent.Language, record.Lang, StringComparison.Ordinal))
-                    reportDetection = detectedFromLoadedContent;
             }
             return new DryRunFileProbe(
                 true,

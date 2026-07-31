@@ -1087,6 +1087,46 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_DryRun_FullScanPreservesBoundedAmbiguousProjectReason_Issue4901()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "App.xcodeproj"), string.Empty);
+            var contentBeyondProbe = new string(' ', FileIndexer.AmbiguousLanguageProbeByteLimit + 1024);
+            File.WriteAllText(
+                Path.Combine(projectRoot, "Widget.M"),
+                contentBeyondProbe + "\n#import <Foundation/Foundation.h>\n");
+            File.WriteAllText(
+                Path.Combine(projectRoot, "late.M"),
+                contentBeyondProbe + "\nfunction result = late()\nend\n");
+
+            var (exitCode, json) = RunAndCaptureJson([
+                projectRoot,
+                "--dry-run",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(2, json.GetProperty("language_detections_total").GetInt32());
+            var detections = json.GetProperty("language_detections").EnumerateArray()
+                .OrderBy(detection => detection.GetProperty("path").GetString(), StringComparer.Ordinal)
+                .ToArray();
+            Assert.Equal(["Widget.M", "late.M"], detections.Select(detection => detection.GetProperty("path").GetString()));
+            Assert.All(detections, detection =>
+            {
+                Assert.Equal("objc", detection.GetProperty("language").GetString());
+                Assert.Equal("project", detection.GetProperty("source").GetString());
+                Assert.Equal("medium", detection.GetProperty("confidence").GetString());
+            });
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_DryRun_WithFiles_NormalizesUnicodeDbPathForEstimates()
     {
         var projectRoot = CreateTempProject();
