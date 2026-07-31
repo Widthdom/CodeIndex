@@ -20,11 +20,62 @@ public partial class McpServer
     {
         if (!TryReadRequiredPathParameter(args, "path", out var path, out var requiredError))
             return CreateToolErrorResponse(id, requiredError!);
+        if (!TryReadOutlineProjectionFields(args, out var fields, out var fieldsExplicit, out var fieldsError))
+            return CreateToolErrorResponse(id, fieldsError!);
 
-        return WithDbReader(id, args, reader =>
+        var adjustments = new ArgumentAdjustmentCollector();
+        var limit = ReadLimit(args, defaultLimit: 100, adjustments);
+        var sort = args?["sort"]?.GetValue<string>();
+        var cursor = args?["cursor"]?.GetValue<string>();
+        var maxBytes = ReadOptionalIntArgument(args, "maxBytes");
+        if (maxBytes is <= 0 or > MaxClientResponseJsonBytes)
         {
-            var outline = reader.GetOutline(path);
-            if (outline == null)
+            return CreateToolErrorResponse(
+                id,
+                $"maxBytes must be in [1, {MaxClientResponseJsonBytes}].");
+        }
+
+        return WithDbReader(id, args, reader => reader.RunInReadSnapshot(() =>
+        {
+            QueryCommandRunner.OutlinePageBuildResult BuildPage(int pageLimit)
+                => QueryCommandRunner.BuildOutlinePage(
+                    reader,
+                    path,
+                    fields,
+                    fieldsExplicit,
+                    sort,
+                    pageLimit,
+                    cursor,
+                    _jsonOptions);
+
+            JsonObject PrepareStructuredContent(QueryCommandRunner.OutlinePageBuildResult page)
+            {
+                var structuredContent = page.Payload!;
+                adjustments.ApplyTo(structuredContent);
+                if (page.PageSymbols is { Count: > 0 })
+                {
+                    var firstSymbol = page.PageSymbols[0];
+                    var totalLines = Math.Max(1, page.Outline!.TotalLines);
+                    var startLine = Math.Clamp(
+                        firstSymbol.StartLine > 0 ? firstSymbol.StartLine : firstSymbol.Line,
+                        1,
+                        totalLines);
+                    var endLine = Math.Min(
+                        totalLines,
+                        Math.Min(Math.Max(startLine, firstSymbol.EndLine), startLine + 79));
+                    AddNextStepSuggestion(
+                        structuredContent,
+                        "excerpt",
+                        BuildExcerptArgs(path, startLine, endLine),
+                        "Use excerpt for the first symbol in this returned outline page instead of reading the whole file.");
+                }
+                return structuredContent;
+            }
+
+            var page = BuildPage(limit);
+            if (page.Error != null)
+                return CreateToolErrorResponse(id, page.Error);
+            if (page.NotFound)
             {
                 var emptyPayload = new JsonObject
                 {
@@ -35,14 +86,107 @@ public partial class McpServer
                 return CreateToolResult(id, "File not found in index.", emptyPayload);
             }
 
-            var structured = JsonSerializer.SerializeToNode(outline, _jsonOptions)!.AsObject();
-            AddNextStepSuggestion(
-                structured,
-                "excerpt",
-                new JsonObject { ["path"] = path, ["startLine"] = 1, ["endLine"] = Math.Min(outline.TotalLines, 80) },
-                "Use excerpt for only the relevant outline range instead of reading the whole file.");
-            return CreateToolResult(id, $"Outline: {ConsoleUi.Counted(outline.SymbolCount, "symbol")} in {ConsoleUi.Counted(outline.TotalLines, "line")}.", structured);
-        });
+            var structured = PrepareStructuredContent(page);
+            if (maxBytes.HasValue)
+            {
+                EnrichToolStructuredContent(structured);
+                if (!TryMeasureJsonUtf8BytesWithinLimit(structured, _jsonOptions, maxBytes.Value, out _))
+                {
+                    var requestedRows = structured["returned_symbol_count"]?.GetValue<int>() ?? 0;
+                    QueryCommandRunner.OutlinePageBuildResult? bestPage = null;
+                    JsonObject? bestStructured = null;
+                    var low = 1;
+                    var high = requestedRows - 1;
+                    while (low <= high)
+                    {
+                        var candidateLimit = low + ((high - low) / 2);
+                        var candidatePage = BuildPage(candidateLimit);
+                        if (candidatePage.Error != null)
+                            return CreateToolErrorResponse(id, candidatePage.Error);
+
+                        var candidateStructured = PrepareStructuredContent(candidatePage);
+                        EnrichToolStructuredContent(candidateStructured);
+                        if (TryMeasureJsonUtf8BytesWithinLimit(candidateStructured, _jsonOptions, maxBytes.Value, out _))
+                        {
+                            bestPage = candidatePage;
+                            bestStructured = candidateStructured;
+                            low = candidateLimit + 1;
+                        }
+                        else
+                        {
+                            high = candidateLimit - 1;
+                        }
+                    }
+
+                    if (bestPage == null || bestStructured == null)
+                    {
+                        return CreateToolErrorResponse(
+                            id,
+                            "maxBytes is too small for outline metadata and one complete symbol row; increase maxBytes or request fewer fields.");
+                    }
+                    page = bestPage;
+                    structured = bestStructured;
+                }
+
+                var boundedReturnedCount = structured["returned_symbol_count"]?.GetValue<int>() ?? 0;
+                return CreateToolResult(
+                    id,
+                    $"Outline: {ConsoleUi.Counted(boundedReturnedCount, "symbol")} returned from {ConsoleUi.Counted(page.Outline!.SymbolCount, "symbol")} in {ConsoleUi.Counted(page.Outline.TotalLines, "line")}.",
+                    structured,
+                    enrichStructuredContent: false);
+            }
+
+            var returnedCount = structured["returned_symbol_count"]?.GetValue<int>() ?? 0;
+            return CreateToolResult(
+                id,
+                $"Outline: {ConsoleUi.Counted(returnedCount, "symbol")} returned from {ConsoleUi.Counted(page.Outline!.SymbolCount, "symbol")} in {ConsoleUi.Counted(page.Outline.TotalLines, "line")}.",
+                structured);
+        }));
+    }
+
+    private static bool TryReadOutlineProjectionFields(
+        JsonNode? args,
+        out List<string>? fields,
+        out bool fieldsExplicit,
+        out string? error)
+    {
+        fields = null;
+        fieldsExplicit = args is JsonObject argsObject && argsObject.ContainsKey("fields");
+        error = null;
+        if (!fieldsExplicit)
+            return true;
+
+        var node = args!["fields"];
+        if (node is null)
+        {
+            error = "fields must be a non-empty string or string array.";
+            return false;
+        }
+
+        IEnumerable<JsonNode?> values = node is JsonArray array ? array : new JsonNode?[] { node };
+        if (node is JsonArray fieldsArray && (fieldsArray.Count == 0 || fieldsArray.Count > 16))
+        {
+            error = "fields must contain between 1 and 16 entries.";
+            return false;
+        }
+
+        var rawFields = new List<string>();
+        foreach (var value in values)
+        {
+            if (value is not JsonValue jsonValue
+                || !jsonValue.TryGetValue<string>(out var field)
+                || string.IsNullOrWhiteSpace(field))
+            {
+                error = "fields entries must be non-empty strings.";
+                return false;
+            }
+            rawFields.Add(field.Trim());
+        }
+
+        return QueryCommandRunner.TryNormalizeOutlineProjectionFields(
+            string.Join(',', rawFields),
+            out fields,
+            out error);
     }
 
     private JsonNode ExecuteExcerpt(JsonNode? id, JsonNode? args)

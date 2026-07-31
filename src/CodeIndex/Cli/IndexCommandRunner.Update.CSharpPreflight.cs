@@ -130,7 +130,8 @@ public static partial class IndexCommandRunner
             StopIndexJsonPhaseHeartbeat(heartbeat);
         }
 
-        if (state.CSharpWorkspace.HasStaticInterfaceContracts)
+        if (state.CSharpWorkspace.HasStaticInterfaceContracts
+            || state.CSharpWorkspace.RequiresMemberReadReferenceRefresh)
             ExpandUpdateCSharpWorkspace(context, state);
 
         return new UpdateCSharpPreflightResult(
@@ -164,6 +165,23 @@ public static partial class IndexCommandRunner
                     context.PriorCSharpStaticInterfaceSourceEvidence == null
                     || !context.PriorFilterRetainedCSharpContractMembers,
                 cancellationToken);
+        var transitionedPathHadMemberReadTarget =
+            transitionedPaths is { Count: > 0 }
+            && writer.HasCSharpMemberReadTargetSymbolsInPaths(
+                transitionedPaths,
+                cancellationToken);
+        var scopedCleanupHadMemberReadTarget =
+            context.ScopedCleanupPlan.FileIds.Count > 0
+            && writer.HasCSharpMemberReadTargetSymbolsInFileIds(
+                context.ScopedCleanupPlan.FileIds,
+                cancellationToken);
+        var changedCSharpPaths = state.CSharpPrepassTargets
+            .Select(target => target.IndexPath)
+            .ToHashSet(StringComparer.Ordinal);
+        var changedPathHadMemberReadTarget =
+            writer.HasCSharpMemberReadTargetSymbolsInPaths(
+                changedCSharpPaths,
+                cancellationToken);
         state.CSharpTargetAffected = state.CSharpPrepassTargets.Count > 0
             || transitionedPathWasCSharp
             || context.ScopedCleanupHadCSharp;
@@ -176,12 +194,25 @@ public static partial class IndexCommandRunner
             persistedContractEvidence;
 
         if (state.CSharpPrepassTargets.Count == 0
-            && !persistedContractEvidence)
+            && !persistedContractEvidence
+            && !transitionedPathHadMemberReadTarget
+            && !scopedCleanupHadMemberReadTarget
+            && !changedPathHadMemberReadTarget)
         {
             state.CSharpWorkspace =
                 new CSharpStaticInterfaceWorkspaceSymbols(
                     [],
                     transitionedPathHadContract);
+        }
+        else if (transitionedPathHadMemberReadTarget
+                 || scopedCleanupHadMemberReadTarget
+                 || changedPathHadMemberReadTarget)
+        {
+            state.CSharpWorkspace =
+                new CSharpStaticInterfaceWorkspaceSymbols(
+                    [],
+                    false,
+                    RequiresMemberReadReferenceRefresh: true);
         }
         else if (persistedContractEvidence)
         {
@@ -241,7 +272,15 @@ public static partial class IndexCommandRunner
                 context.Writer,
                 context.Indexer,
                 state.CSharpPrepassTargets,
-                includeExistingSymbols: false,
+                includeExistingSymbols: true,
+                excludedExistingFileIds:
+                    context.ScopedCleanupPlan.FileIds,
+                isExistingSymbolPathExcluded: path =>
+                    state
+                        .ExistingCSharpPathsNowUnsupportedOrNonCSharp?
+                        .Contains(path) == true,
+                loadExistingSymbolsOnlyForPendingQualifiedMemberAccess:
+                    true,
                 parallelism: context.Options.Parallelism,
                 cancellationToken: context.CancellationToken);
         if (!CSharpStaticInterfacePrepass.TryValidateFileStatSnapshots(
@@ -426,6 +465,17 @@ public static partial class IndexCommandRunner
         state.CSharpSourceEvidenceForStamp =
             state.CSharpWorkspace.HasSourceStaticInterfaceContracts;
         state.CSharpSourceEvidenceCompleteForStamp = true;
+        if (state.CSharpWorkspace.RequiresMemberReadReferenceRefresh)
+        {
+            // A target-set change requires every C# consumer to be re-extracted
+            // against the new lookup, including otherwise reusable files.
+            // target集合の変更時は、通常なら再利用可能なfileも含め、全C# consumerを
+            // 新しいlookupで再抽出する。
+            state.CSharpWorkspace = state.CSharpWorkspace with
+            {
+                HasStaticInterfaceContracts = true,
+            };
+        }
 
         // Persisted positive/legacy evidence remains conservative until every C# file
         // has been refreshed successfully. Even when the new source snapshot is

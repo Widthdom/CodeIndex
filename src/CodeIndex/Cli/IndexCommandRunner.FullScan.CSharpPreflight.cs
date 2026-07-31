@@ -194,7 +194,9 @@ public static partial class IndexCommandRunner
             forceFullCSharpRefreshFromInvalidatedNoOp =
                 csharpWorkspaceMaterialized
                 && (context.PriorCSharpStaticInterfaceSourceEvidence == true
-                    || csharpWorkspace.HasStaticInterfaceContracts);
+                    || csharpWorkspace.HasStaticInterfaceContracts
+                    || csharpWorkspace
+                        .RequiresMemberReadReferenceRefresh);
         }
 
         if (!options.SymbolsOnly

@@ -55,11 +55,11 @@ public partial class DbReader
     /// Find callers for a referenced symbol.
     /// 指定シンボルを呼び出している呼び出し元を探す。
     /// </summary>
-    public List<CallerResult> GetCallers(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, bool rawKinds = false, ReferenceRankMode rankMode = ReferenceRankMode.Weighted, bool excludeSelfReferences = false, int offset = 0, bool includeQualifiedCommonCalls = false)
-        => GetCallersCore(query, limit, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact, rawKinds, rankMode, excludeSelfReferences, offset, includeQualifiedCommonCalls, targetSymbolId: null);
+    public List<CallerResult> GetCallers(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, bool rawKinds = false, ReferenceRankMode rankMode = ReferenceRankMode.Weighted, bool excludeSelfReferences = false, int offset = 0, bool includeQualifiedCommonCalls = false, bool includeMemberReads = false)
+        => GetCallersCore(query, limit, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact, rawKinds, rankMode, excludeSelfReferences, offset, includeQualifiedCommonCalls, includeMemberReads, targetSymbolId: null);
 
     private List<CallerResult> GetCallersForCandidate(DefinitionResult definition, int limit, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, int offset = 0)
-        => GetCallersCore(definition.Name, limit, definition.Lang, referenceKind: null, pathPatterns, excludePathPatterns, excludeTests, exact: true, rawKinds: false, ReferenceRankMode.Weighted, excludeSelfReferences: false, offset, includeQualifiedCommonCalls: false, targetSymbolId: definition.SymbolId);
+        => GetCallersCore(definition.Name, limit, definition.Lang, referenceKind: null, pathPatterns, excludePathPatterns, excludeTests, exact: true, rawKinds: false, ReferenceRankMode.Weighted, excludeSelfReferences: false, offset, includeQualifiedCommonCalls: false, includeMemberReads: false, targetSymbolId: definition.SymbolId);
 
     private int CountCallersForCandidate(DefinitionResult definition, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
     {
@@ -76,10 +76,11 @@ public partial class DbReader
             exact: true,
             rawKinds: false,
             includeQualifiedCommonCalls: false,
+            includeMemberReads: false,
             symbolId).Count;
     }
 
-    private List<CallerResult> GetCallersCore(string query, int limit, string? lang, string? referenceKind, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, bool exact, bool rawKinds, ReferenceRankMode rankMode, bool excludeSelfReferences, int offset, bool includeQualifiedCommonCalls, long? targetSymbolId)
+    private List<CallerResult> GetCallersCore(string query, int limit, string? lang, string? referenceKind, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, bool exact, bool rawKinds, ReferenceRankMode rankMode, bool excludeSelfReferences, int offset, bool includeQualifiedCommonCalls, bool includeMemberReads, long? targetSymbolId)
     {
         if (string.IsNullOrWhiteSpace(query) || IsBareVerbatimQueryToken(query))
             return new List<CallerResult>();
@@ -114,7 +115,7 @@ public partial class DbReader
                 FROM symbol_references r
                 JOIN files f ON r.file_id = f.id" + referenceLineJoin + @"
                 WHERE " + callerContainerPredicate + @"
-                  AND " + GetCallableReferenceKindPredicateSql("r.reference_kind", referenceKind, "f.lang") + @"
+                  AND " + GetCallableReferenceKindPredicateSql("r.reference_kind", referenceKind, "f.lang", includeMemberReads) + @"
                   AND " + supportedLangPredicate;
         if (targetSymbolId != null && HasTable("symbol_reference_candidates"))
         {
@@ -286,7 +287,7 @@ public partial class DbReader
         return results;
     }
 
-    public int CountCallers(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, bool rawKinds = false, bool includeQualifiedCommonCalls = false)
+    public int CountCallers(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, bool rawKinds = false, bool includeQualifiedCommonCalls = false, bool includeMemberReads = false)
     {
         if (string.IsNullOrWhiteSpace(query) || IsBareVerbatimQueryToken(query))
             return 0;
@@ -306,7 +307,7 @@ public partial class DbReader
             WHERE " + BuildCallerContainerPredicate("f", "r");
         groupedSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
 
-        groupedSql += $" AND {GetCallableReferenceKindPredicateSql("r.reference_kind", referenceKind, "f.lang")}";
+        groupedSql += $" AND {GetCallableReferenceKindPredicateSql("r.reference_kind", referenceKind, "f.lang", includeMemberReads)}";
         var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query);
         var allowCSharpQualifiedContextMatch = SqlNameResolver.HasQualifier(query)
             && !HasQualifiedSymbolDefinition(query, lang, pathPatterns, excludePathPatterns, excludeTests);
@@ -403,7 +404,7 @@ public partial class DbReader
         return raw is long l ? (int)l : Convert.ToInt32(raw);
     }
 
-    public QueryCountResult CountCallersTotal(string query, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, bool rawKinds = false, bool includeQualifiedCommonCalls = false)
+    public QueryCountResult CountCallersTotal(string query, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, bool rawKinds = false, bool includeQualifiedCommonCalls = false, bool includeMemberReads = false)
         => CountCallersTotalCore(
             query,
             lang,
@@ -414,6 +415,7 @@ public partial class DbReader
             exact,
             rawKinds,
             includeQualifiedCommonCalls,
+            includeMemberReads,
             targetSymbolId: null);
 
     private QueryCountResult CountCallersTotalCore(
@@ -426,6 +428,7 @@ public partial class DbReader
         bool exact,
         bool rawKinds,
         bool includeQualifiedCommonCalls,
+        bool includeMemberReads,
         long? targetSymbolId)
     {
         if (!_hasReferencesTable)
@@ -448,7 +451,7 @@ public partial class DbReader
                 WHERE " + BuildCallerContainerPredicate("f", "r");
         groupedSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
 
-        groupedSql += $" AND {GetCallableReferenceKindPredicateSql("r.reference_kind", referenceKind, "f.lang")}";
+        groupedSql += $" AND {GetCallableReferenceKindPredicateSql("r.reference_kind", referenceKind, "f.lang", includeMemberReads)}";
         if (targetSymbolId != null && HasTable("symbol_reference_candidates"))
         {
             groupedSql += _referenceColumns.Contains("resolution_state")
@@ -562,11 +565,11 @@ public partial class DbReader
     /// Find callees used by a caller/container symbol.
     /// 呼び出し元シンボルが使っている呼び出し先を探す。
     /// </summary>
-    public List<CalleeResult> GetCallees(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, bool rawKinds = false, ReferenceRankMode rankMode = ReferenceRankMode.Weighted, int offset = 0, bool includeQualifiedCommonCalls = false)
-        => GetCalleesCore(query, limit, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact, rawKinds, rankMode, offset, includeQualifiedCommonCalls, sourceSymbolId: null);
+    public List<CalleeResult> GetCallees(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, bool rawKinds = false, ReferenceRankMode rankMode = ReferenceRankMode.Weighted, int offset = 0, bool includeQualifiedCommonCalls = false, bool includeMemberReads = false)
+        => GetCalleesCore(query, limit, lang, referenceKind, pathPatterns, excludePathPatterns, excludeTests, exact, rawKinds, rankMode, offset, includeQualifiedCommonCalls, includeMemberReads, sourceSymbolId: null);
 
     private List<CalleeResult> GetCalleesForCandidate(DefinitionResult definition, int limit, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, int offset = 0)
-        => GetCalleesCore(definition.Name, limit, definition.Lang, referenceKind: null, pathPatterns, excludePathPatterns, excludeTests, exact: true, rawKinds: false, ReferenceRankMode.Weighted, offset, includeQualifiedCommonCalls: false, sourceSymbolId: definition.SymbolId);
+        => GetCalleesCore(definition.Name, limit, definition.Lang, referenceKind: null, pathPatterns, excludePathPatterns, excludeTests, exact: true, rawKinds: false, ReferenceRankMode.Weighted, offset, includeQualifiedCommonCalls: false, includeMemberReads: false, sourceSymbolId: definition.SymbolId);
 
     private int CountCalleesForCandidate(DefinitionResult definition, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests)
     {
@@ -583,10 +586,11 @@ public partial class DbReader
             exact: true,
             rawKinds: false,
             includeQualifiedCommonCalls: false,
+            includeMemberReads: false,
             symbolId).Count;
     }
 
-    private List<CalleeResult> GetCalleesCore(string query, int limit, string? lang, string? referenceKind, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, bool exact, bool rawKinds, ReferenceRankMode rankMode, int offset, bool includeQualifiedCommonCalls, long? sourceSymbolId)
+    private List<CalleeResult> GetCalleesCore(string query, int limit, string? lang, string? referenceKind, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, bool exact, bool rawKinds, ReferenceRankMode rankMode, int offset, bool includeQualifiedCommonCalls, bool includeMemberReads, long? sourceSymbolId)
     {
         if (string.IsNullOrWhiteSpace(query) || IsBareVerbatimQueryToken(query))
             return new List<CalleeResult>();
@@ -618,7 +622,7 @@ public partial class DbReader
                 FROM symbol_references r
                 JOIN files f ON r.file_id = f.id
                 WHERE r.container_name IS NOT NULL
-                  AND {GetCallableReferenceKindPredicateSql("r.reference_kind", referenceKind, "f.lang")}
+                  AND {GetCallableReferenceKindPredicateSql("r.reference_kind", referenceKind, "f.lang", includeMemberReads)}
                   AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
         if (sourceSymbolId != null && _referenceColumns.Contains("source_symbol_id"))
             sql += " AND r.source_symbol_id = @sourceSymbolId";
@@ -765,7 +769,7 @@ public partial class DbReader
         return results;
     }
 
-    public int CountCallees(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, bool rawKinds = false, bool includeQualifiedCommonCalls = false)
+    public int CountCallees(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, bool rawKinds = false, bool includeQualifiedCommonCalls = false, bool includeMemberReads = false)
     {
         if (string.IsNullOrWhiteSpace(query) || IsBareVerbatimQueryToken(query))
             return 0;
@@ -784,7 +788,7 @@ public partial class DbReader
             WHERE r.container_name IS NOT NULL";
         groupedSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
 
-        groupedSql += $" AND {GetCallableReferenceKindPredicateSql("r.reference_kind", referenceKind, "f.lang")}";
+        groupedSql += $" AND {GetCallableReferenceKindPredicateSql("r.reference_kind", referenceKind, "f.lang", includeMemberReads)}";
         var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query);
         var allowQualifiedLeafFallback = HasSingleQualifiedSymbolDefinition(query, lang, pathPatterns, excludePathPatterns, excludeTests);
         var useSqlQualifiedContainerMatch = SqlNameResolver.HasQualifier(query);
@@ -870,7 +874,7 @@ public partial class DbReader
         return raw is long l ? (int)l : Convert.ToInt32(raw);
     }
 
-    public QueryCountResult CountCalleesTotal(string query, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, bool rawKinds = false, bool includeQualifiedCommonCalls = false)
+    public QueryCountResult CountCalleesTotal(string query, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, bool rawKinds = false, bool includeQualifiedCommonCalls = false, bool includeMemberReads = false)
         => CountCalleesTotalCore(
             query,
             lang,
@@ -881,6 +885,7 @@ public partial class DbReader
             exact,
             rawKinds,
             includeQualifiedCommonCalls,
+            includeMemberReads,
             sourceSymbolId: null);
 
     private QueryCountResult CountCalleesTotalCore(
@@ -893,6 +898,7 @@ public partial class DbReader
         bool exact,
         bool rawKinds,
         bool includeQualifiedCommonCalls,
+        bool includeMemberReads,
         long? sourceSymbolId)
     {
         lang = NormalizeQueryLanguage(lang);
@@ -911,7 +917,7 @@ public partial class DbReader
                 WHERE r.container_name IS NOT NULL";
         groupedSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
 
-        groupedSql += $" AND {GetCallableReferenceKindPredicateSql("r.reference_kind", referenceKind, "f.lang")}";
+        groupedSql += $" AND {GetCallableReferenceKindPredicateSql("r.reference_kind", referenceKind, "f.lang", includeMemberReads)}";
         if (sourceSymbolId != null && _referenceColumns.Contains("source_symbol_id"))
             groupedSql += " AND r.source_symbol_id = @sourceSymbolId";
         var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query);
@@ -1134,13 +1140,13 @@ public partial class DbReader
     /// SQL 側で要求された LIMIT/OFFSET を適用し、呼び出し側が要求以上の中間ページを
     /// materialize しないようにする。
     /// </summary>
-    private List<CallerResult> GetCallersExact(string symbolName, int limit, int offset = 0, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool includeAmbiguousMSource = false)
-        => GetCallersExactCore(symbolName, limit, offset, lang, pathPatterns, excludePathPatterns, excludeTests, targetSymbolId: null, includeAmbiguousMSource);
+    private List<CallerResult> GetCallersExact(string symbolName, int limit, int offset = 0, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool includeAmbiguousMSource = false, bool includeMemberReads = false)
+        => GetCallersExactCore(symbolName, limit, offset, lang, pathPatterns, excludePathPatterns, excludeTests, targetSymbolId: null, includeAmbiguousMSource, includeMemberReads);
 
-    private List<CallerResult> GetCallersExactForTarget(string symbolName, long targetSymbolId, int limit, int offset, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, bool includeAmbiguousMSource = false)
-        => GetCallersExactCore(symbolName, limit, offset, lang, pathPatterns, excludePathPatterns, excludeTests, targetSymbolId, includeAmbiguousMSource);
+    private List<CallerResult> GetCallersExactForTarget(string symbolName, long targetSymbolId, int limit, int offset, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, bool includeAmbiguousMSource = false, bool includeMemberReads = false)
+        => GetCallersExactCore(symbolName, limit, offset, lang, pathPatterns, excludePathPatterns, excludeTests, targetSymbolId, includeAmbiguousMSource, includeMemberReads);
 
-    private List<CallerResult> GetCallersExactCore(string symbolName, int limit, int offset, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, long? targetSymbolId, bool includeAmbiguousMSource)
+    private List<CallerResult> GetCallersExactCore(string symbolName, int limit, int offset, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, long? targetSymbolId, bool includeAmbiguousMSource, bool includeMemberReads)
     {
         if (!_hasReferencesTable) return new List<CallerResult>();
         using var cmd = _conn.CreateCommand();
@@ -1241,7 +1247,7 @@ public partial class DbReader
                 FROM symbol_references r
                 JOIN files f ON r.file_id = f.id{referenceLineJoin}
                 WHERE {callerContainerPredicate}
-                  AND r.reference_kind IN {CallGraphReferenceKindsSql}
+                  AND (r.reference_kind IN {CallGraphReferenceKindsSql}{(includeMemberReads ? " OR r.reference_kind = 'member_read'" : string.Empty)})
                   AND {supportedLangFilter}
                   {targetCondition}";
         if (lang != null)
@@ -1375,7 +1381,7 @@ public partial class DbReader
     /// <paramref name="withPaths"/> を true にすると、各 caller に対してルートからの推移経路
     /// （ダイヤモンド収束時は複数）を <paramref name="maxPathsPerResult"/> 件まで付与する（issue #1536）。
     /// </summary>
-    public (List<ImpactResult> Results, bool Truncated, string? TruncatedReason, string TerminationReason, List<ImpactCycleResult> Cycles) GetTransitiveCallers(string symbolName, int maxDepth = 5, int limit = 50, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool withPaths = false, int maxPathsPerResult = DefaultImpactPathsPerResult, int resultOffset = 0)
+    public (List<ImpactResult> Results, bool Truncated, string? TruncatedReason, string TerminationReason, List<ImpactCycleResult> Cycles) GetTransitiveCallers(string symbolName, int maxDepth = 5, int limit = 50, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool withPaths = false, int maxPathsPerResult = DefaultImpactPathsPerResult, int resultOffset = 0, bool includeMemberReads = false)
     {
         // Resolve the symbol name through definitions first so case-mismatched queries
         // like "run" find the actual "Run" symbol. Falls back to user input if not found.
@@ -1505,8 +1511,8 @@ public partial class DbReader
             {
                 fetchIterations++;
                 var page = currentSymbolId is long targetSymbolId
-                    ? GetCallersExactForTarget(currentSymbol, targetSymbolId, pageSize, pageOffset, lang, pathPatterns, excludePathPatterns, excludeTests, includeAmbiguousMSource)
-                    : GetCallersExact(currentSymbol, pageSize, pageOffset, lang, pathPatterns, excludePathPatterns, excludeTests, includeAmbiguousMSource);
+                    ? GetCallersExactForTarget(currentSymbol, targetSymbolId, pageSize, pageOffset, lang, pathPatterns, excludePathPatterns, excludeTests, includeAmbiguousMSource, includeMemberReads)
+                    : GetCallersExact(currentSymbol, pageSize, pageOffset, lang, pathPatterns, excludePathPatterns, excludeTests, includeAmbiguousMSource, includeMemberReads);
 
                 if (page.Count == 0)
                     break; // No more callers for this symbol / このシンボルの caller は尽きた
@@ -1672,7 +1678,8 @@ public partial class DbReader
                             pathPatterns,
                             excludePathPatterns,
                             excludeTests,
-                            includeAmbiguousMSource);
+                            includeAmbiguousMSource,
+                            includeMemberReads);
                         maxDepthReached |= boundaryInspection.HasUnvisitedCaller;
                         if (boundaryInspection.ProbeBudgetHit)
                         {
@@ -1845,7 +1852,8 @@ public partial class DbReader
         IReadOnlyList<string>? pathPatterns,
         IReadOnlyList<string>? excludePathPatterns,
         bool excludeTests,
-        bool includeAmbiguousMSource)
+        bool includeAmbiguousMSource,
+        bool includeMemberReads)
     {
         var offset = 0;
         var probes = 0;
@@ -1856,8 +1864,8 @@ public partial class DbReader
 
             var pageSize = Math.Min(ImpactBoundaryCallerProbePageSize, ImpactBoundaryCallerProbeBudget - probes);
             var page = symbolId is long targetSymbolId
-                ? GetCallersExactForTarget(symbolName, targetSymbolId, pageSize, offset, lang, pathPatterns, excludePathPatterns, excludeTests, includeAmbiguousMSource)
-                : GetCallersExact(symbolName, pageSize, offset, lang, pathPatterns, excludePathPatterns, excludeTests, includeAmbiguousMSource);
+                ? GetCallersExactForTarget(symbolName, targetSymbolId, pageSize, offset, lang, pathPatterns, excludePathPatterns, excludeTests, includeAmbiguousMSource, includeMemberReads)
+                : GetCallersExact(symbolName, pageSize, offset, lang, pathPatterns, excludePathPatterns, excludeTests, includeAmbiguousMSource, includeMemberReads);
             if (page.Count == 0)
                 return new ImpactBoundaryInspection(HasUnvisitedCaller: false, ProbeBudgetHit: false);
             probes += page.Count;
@@ -2220,7 +2228,7 @@ public partial class DbReader
     /// file dependency をフォールバックとして返す。<paramref name="maxDepth"/> は inclusive で
     /// N 指定時は depth 1〜N の caller を返し、<c>maxDepth: 0</c> は symbol 解決のみで終了する。
     /// </summary>
-    public ImpactAnalysisResult AnalyzeImpact(string symbolName, int maxDepth = 5, int limit = 50, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool withPaths = false, int offset = 0, string? responseCollection = null)
+    public ImpactAnalysisResult AnalyzeImpact(string symbolName, int maxDepth = 5, int limit = 50, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool withPaths = false, int offset = 0, string? responseCollection = null, bool includeMemberReads = false)
     {
         lang = NormalizeQueryLanguage(lang);
         var resolvedName = ResolveSymbolName(symbolName, lang);
@@ -2288,11 +2296,11 @@ public partial class DbReader
         var callerOffset = responseCollection is null || string.Equals(responseCollection, "callers", StringComparison.Ordinal)
             ? offset
             : 0;
-        var (callers, truncated, truncatedReason, terminationReason, cycles) = GetTransitiveCallers(symbolName, maxDepth, limit, lang, pathPatterns, excludePathPatterns, excludeTests, withPaths, resultOffset: callerOffset);
+        var (callers, truncated, truncatedReason, terminationReason, cycles) = GetTransitiveCallers(symbolName, maxDepth, limit, lang, pathPatterns, excludePathPatterns, excludeTests, withPaths, resultOffset: callerOffset, includeMemberReads: includeMemberReads);
         var callerExistsBeforeOffset = false;
         if (callers.Count == 0 && callerOffset > 0)
         {
-            var callerProbe = GetTransitiveCallers(symbolName, maxDepth, 1, lang, pathPatterns, excludePathPatterns, excludeTests, withPaths: false, resultOffset: 0);
+            var callerProbe = GetTransitiveCallers(symbolName, maxDepth, 1, lang, pathPatterns, excludePathPatterns, excludeTests, withPaths: false, resultOffset: 0, includeMemberReads: includeMemberReads);
             callerExistsBeforeOffset = callerProbe.Results.Count > 0;
         }
 

@@ -1848,6 +1848,7 @@ public partial class FileIndexerTests
 
     [Theory]
     [InlineData("raw-negative", false, false)]
+    [InlineData("workspace-member", true, false)]
     [InlineData("semantic-negative", true, false)]
     [InlineData("contract", true, true)]
     public void LoadCSharpStaticInterfaceCandidateContentForPrepass_ProbeShapesUseOneAuthorizedBoundedSnapshot(
@@ -1859,7 +1860,8 @@ public partial class FileIndexerTests
         var filler = new string('x', 128 * 1024);
         var source = shape switch
         {
-            "raw-negative" => $"public class C {{ static int M() => 0; {filler} }}",
+            "raw-negative" => $"public class C {{ int M() => 0; {filler} }}",
+            "workspace-member" => $"public class C {{ static int M() => 0; {filler} }}",
             "semantic-negative" => $"public class C {{ const string S = \"interface I {{ static abstract int M(); }}\"; {filler} }}",
             "contract" => $"public interface I {{ static abstract int M(); {filler} }}",
             _ => throw new ArgumentOutOfRangeException(nameof(shape), shape, null),

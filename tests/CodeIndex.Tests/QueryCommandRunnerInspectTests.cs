@@ -4456,14 +4456,13 @@ public partial class QueryCommandRunnerTests
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
             var reference = Assert.Single(json.GetProperty("references").EnumerateArray());
-            var caller = Assert.Single(json.GetProperty("callers").EnumerateArray());
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("function", reference.GetProperty("container_kind").GetString());
             Assert.Equal("M", reference.GetProperty("container_name").GetString());
-            Assert.Equal("function", caller.GetProperty("caller_kind").GetString());
-            Assert.Equal("M", caller.GetProperty("caller_name").GetString());
+            Assert.Equal("member_read", reference.GetProperty("reference_kind").GetString());
+            Assert.Empty(json.GetProperty("callers").EnumerateArray());
         }
         finally
         {
@@ -4760,7 +4759,9 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Empty(json.GetProperty("references").EnumerateArray());
+            var reference = Assert.Single(json.GetProperty("references").EnumerateArray());
+            Assert.Equal("member_read", reference.GetProperty("reference_kind").GetString());
+            Assert.Equal("Read", reference.GetProperty("container_name").GetString());
             Assert.Empty(json.GetProperty("callers").EnumerateArray());
             Assert.Equal("csharp", json.GetProperty("graph_language").GetString());
             Assert.True(json.GetProperty("graph_supported").GetBoolean());
@@ -5188,7 +5189,7 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal("call", json.GetProperty("reference_kind").GetString());
+            Assert.Equal("member_read", json.GetProperty("reference_kind").GetString());
             Assert.Equal(23, json.GetProperty("line").GetInt32());
             Assert.Equal("Read", json.GetProperty("container_name").GetString());
         }
@@ -5372,7 +5373,7 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("primary_candidate", json.GetProperty("graph_scope").GetString());
             Assert.Empty(json.GetProperty("references").EnumerateArray());
             Assert.Equal(["ReadComment", "ReadRecursive"], referenceContainers);
-            Assert.Equal([1, 1], callerReferenceCounts);
+            Assert.Empty(callerReferenceCounts);
             Assert.Equal("csharp", json.GetProperty("graph_language").GetString());
             Assert.True(json.GetProperty("graph_supported").GetBoolean());
         }

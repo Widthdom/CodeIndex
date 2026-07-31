@@ -328,7 +328,9 @@ public static partial class IndexCommandRunner
 
         var requiresFullCSharpRefresh =
             context.PriorCSharpStaticInterfaceSourceEvidence == true
-            || state.CSharpWorkspace.HasStaticInterfaceContracts;
+            || state.CSharpWorkspace.HasStaticInterfaceContracts
+            || state.CSharpWorkspace
+                .RequiresMemberReadReferenceRefresh;
         state.ForceFullCSharpRefreshFromInvalidatedNoOp =
             requiresFullCSharpRefresh;
         state.CSharpSourceEvidenceForStamp =

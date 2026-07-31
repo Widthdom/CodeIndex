@@ -216,6 +216,12 @@ versioned surfaces are the `cdidx` CLI, CLI JSON output, and `cdidx mcp`
 JSON-RPC interface. There is no public library / SDK API. See
 [INTEGRATION_POLICY.md](INTEGRATION_POLICY.md#api-surface-and-library-use).
 
+The MCP `outline` tool supports CLI-compatible `fields` and `sort` controls,
+bounded `limit` / `cursor` pages, and a `maxBytes` UTF-8 budget. Its opaque
+continuation is bound to the path, ordering, and index generation so large file
+outlines can be enumerated without gaps or duplicates. See
+[AI Integration](USER_GUIDE.md#ai-integration).
+
 ## CLI JSON Error Contract
 
 Recoverable non-database failures from commands such as `outline`, `hooks`,
@@ -697,6 +703,12 @@ commit し、構造化 `file_errors` を返して partial-result 終了コード
 バージョニング契約の対象は、`cdidx` CLI、CLI JSON 出力、`cdidx mcp` の
 JSON-RPC interface です。公開 library / SDK API は提供していません。詳細は
 [INTEGRATION_POLICY.md](INTEGRATION_POLICY.md#api-surface-and-library-use) を参照してください。
+
+MCP の `outline` tool は、CLI 互換の `fields` / `sort`、上限付きの
+`limit` / `cursor` page、UTF-8 byte 上限の `maxBytes` に対応します。
+opaque な continuation は path、並び順、index generation に束縛されるため、
+大きな file outline も gap や duplicate なしで列挙できます。詳細は
+[AIとの連携](USER_GUIDE.md#aiとの連携) を参照してください。
 
 ## CLI JSON エラー契約
 
