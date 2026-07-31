@@ -1141,6 +1141,35 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_DryRun_TShebangDoesNotGainAmbiguousDescriptorConfidence_Issue4901()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "tool.t"),
+                "#!/usr/bin/env ruby\nputs 1\n");
+
+            var results = new[]
+            {
+                RunAndCaptureJson([projectRoot, "--dry-run", "--json"]),
+                RunAndCaptureJson([projectRoot, "--files", "tool.t", "--dry-run", "--json"]),
+            };
+
+            Assert.All(results, result =>
+            {
+                Assert.Equal(CommandExitCodes.Success, result.ExitCode);
+                Assert.Equal(1, result.Json.GetProperty("languages").GetProperty("ruby").GetInt32());
+                Assert.Equal(0, result.Json.GetProperty("language_detections_total").GetInt32());
+            });
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_DryRun_WithFiles_NormalizesUnicodeDbPathForEstimates()
     {
         var projectRoot = CreateTempProject();

@@ -560,10 +560,12 @@ public partial class FileIndexer
                 openReadForIndexContent);
             if (shebangLanguage.Status == FileProbeStatus.Supported)
             {
-                return shebangLanguage with
-                {
-                    Confidence = LanguageDetectionConfidence.High,
-                };
+                return TryGetAmbiguousLanguageDescriptor(ext, out _)
+                    ? shebangLanguage with
+                    {
+                        Confidence = LanguageDetectionConfidence.High,
+                    }
+                    : shebangLanguage;
             }
             if (knownIndexability.HasValue
                 && shebangLanguage.Status is FileProbeStatus.Missing or FileProbeStatus.ProbeFailed)
