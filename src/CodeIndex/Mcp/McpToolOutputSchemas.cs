@@ -467,6 +467,7 @@ internal static class McpToolOutputSchemas
             ["summary"] = ObjectSchema(),
             ["symbols"] = Reference("rows"),
             ["symbols_by_bucket"] = ObjectSchema(),
+            ["symbols_by_bucket_format"] = StringSchema(),
             ["returned_bucket_counts"] = ObjectSchema(),
             ["returned_contract_domain_counts"] = ObjectSchema(),
             ["bucket_taxonomy"] = ObjectSchema(),

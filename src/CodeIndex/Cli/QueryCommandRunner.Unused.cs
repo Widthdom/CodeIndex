@@ -75,6 +75,14 @@ public static partial class QueryCommandRunner
                 "Use `cdidx unused --json --summary-only` for compact unused totals.");
             return CommandExitCodes.UsageError;
         }
+        if (options.MaxJsonBytes.HasValue && !options.Json)
+        {
+            WriteUsageError(
+                "--max-json-bytes is only supported with unused JSON output.",
+                GetUsageLineOrThrow("unused"),
+                "Add --json or --compact, or remove --max-json-bytes.");
+            return CommandExitCodes.UsageError;
+        }
         var unusedScope = BuildUnusedAuditScopeFilters(options);
 
         return WithDb(options, jsonOptions, reader =>
@@ -196,6 +204,12 @@ public static partial class QueryCommandRunner
                     }
                     if (options.SummaryOnly)
                         payload["summary_only"] = true;
+                    if (options.MaxJsonBytes.HasValue)
+                    {
+                        payload["output_byte_limit"] = options.MaxJsonBytes.Value;
+                        payload["truncated"] = false;
+                        payload["omitted_count"] = 0;
+                    }
                     if (countSuppression is { Applied: true })
                         payload["default_suppression"] = BuildUnusedDefaultCountSuppressionJson(countSuppression, jsonOptions);
                     AddSqlGraphContractJsonFields(payload, effectiveSqlGraphSignal);
@@ -209,7 +223,17 @@ public static partial class QueryCommandRunner
                     if (options.Compact || options.SummaryOnly)
                         payload["omitted_sections"] = omittedSections;
                     AddActiveSqliteDiagnostics(payload);
-                    Console.WriteLine(payload.ToJsonString(jsonOptions));
+                    var json = payload.ToJsonString(jsonOptions);
+                    if (options.MaxJsonBytes.HasValue
+                        && !JsonEnvelopeWrapper.JsonFitsResponseBudget(json, options.MaxJsonBytes.Value))
+                    {
+                        WriteUsageError(
+                            $"--max-json-bytes {options.MaxJsonBytes.Value.ToString(CultureInfo.InvariantCulture)} is too small for the unused count/summary response.",
+                            GetUsageLineOrThrow("unused"),
+                            "Increase --max-json-bytes or remove it and rerun the same query.");
+                        return CommandExitCodes.UsageError;
+                    }
+                    Console.WriteLine(json);
                 }
                 else
                 {
@@ -264,8 +288,9 @@ public static partial class QueryCommandRunner
                 .Skip(pageOffset)
                 .Take(options.Limit)
                 .ToList();
-            var nextOffset = pageOffset + options.Limit;
-            var nextCursor = pageableResults.Count > nextOffset
+            var hasMoreAfterPage = pageableResults.Count > pageOffset + results.Count;
+            var nextOffset = pageOffset + results.Count;
+            var nextCursor = hasMoreAfterPage
                 && IsUnusedCursorOffsetWithinFetchCap(options.Limit, nextOffset)
                 ? FormatUnusedCursor(nextOffset, cursorContext)
                 : null;
@@ -279,8 +304,10 @@ public static partial class QueryCommandRunner
             {
                 if (options.Json)
                 {
-                    Console.WriteLine(BuildUnusedJsonPayload(
-                        Array.Empty<UnusedSymbolResult>(),
+                    if (!TryWriteUnusedJsonPage(
+                        results,
+                        pageOffset,
+                        hasMoreAfterPage,
                         graphSupported,
                         graphSupportReason,
                         sqlGraphSignal,
@@ -289,9 +316,12 @@ public static partial class QueryCommandRunner
                         jsonOptions,
                         options,
                         unusedScope,
-                        nextCursor: nextCursor,
-                        cursorContext: cursorContext,
-                        suppression: suppression));
+                        byBucket,
+                        cursorContext,
+                        suppression))
+                    {
+                        return CommandExitCodes.UsageError;
+                    }
                 }
                 else if (suppression.Applied && GetUnusedSuppressedCount(suppression) > 0)
                 {
@@ -316,7 +346,24 @@ public static partial class QueryCommandRunner
 
             if (options.Json)
             {
-                Console.WriteLine(BuildUnusedJsonPayload(results, graphSupported, graphSupportReason, sqlGraphSignal, hdlGraphSignal, reader._hasReferencesTable, jsonOptions, options, unusedScope, byBucket: byBucket, nextCursor: nextCursor, cursorContext: cursorContext, suppression: suppression));
+                if (!TryWriteUnusedJsonPage(
+                    results,
+                    pageOffset,
+                    hasMoreAfterPage,
+                    graphSupported,
+                    graphSupportReason,
+                    sqlGraphSignal,
+                    hdlGraphSignal,
+                    reader._hasReferencesTable,
+                    jsonOptions,
+                    options,
+                    unusedScope,
+                    byBucket,
+                    cursorContext,
+                    suppression))
+                {
+                    return CommandExitCodes.UsageError;
+                }
             }
             else
             {
@@ -747,7 +794,118 @@ public static partial class QueryCommandRunner
         _ => "Unknown unused-symbol bucket.",
     };
 
-    private static string BuildUnusedJsonPayload(IEnumerable<UnusedSymbolResult> results, bool? graphSupported, string? graphSupportReason, SqlGraphContractSignal sqlGraphSignal, HdlGraphContractSignal hdlGraphSignal, bool hasReferencesTable, JsonSerializerOptions jsonOptions, QueryCommandOptions? queryOptions = null, UnusedAuditScopeFilters? unusedScope = null, bool byBucket = false, string? nextCursor = null, PaginationCursorContext? cursorContext = null, UnusedDefaultSuppressionResult? suppression = null)
+    private static bool TryWriteUnusedJsonPage(
+        List<UnusedSymbolResult> requestedResults,
+        int pageOffset,
+        bool hasMoreAfterPage,
+        bool? graphSupported,
+        string? graphSupportReason,
+        SqlGraphContractSignal sqlGraphSignal,
+        HdlGraphContractSignal hdlGraphSignal,
+        bool hasReferencesTable,
+        JsonSerializerOptions jsonOptions,
+        QueryCommandOptions options,
+        UnusedAuditScopeFilters unusedScope,
+        bool byBucket,
+        PaginationCursorContext cursorContext,
+        UnusedDefaultSuppressionResult suppression)
+    {
+        string BuildCandidate(int emittedCount, bool byteLimitReached)
+        {
+            var emittedResults = emittedCount == requestedResults.Count
+                ? requestedResults
+                : requestedResults.Take(emittedCount).ToList();
+            var nextOffset = pageOffset + emittedCount;
+            var hasMore = emittedCount < requestedResults.Count || hasMoreAfterPage;
+            var nextCursor = hasMore
+                && emittedCount > 0
+                && IsUnusedCursorOffsetWithinFetchCap(options.Limit, nextOffset)
+                ? FormatUnusedCursor(nextOffset, cursorContext)
+                : null;
+            return BuildUnusedJsonPayload(
+                emittedResults,
+                graphSupported,
+                graphSupportReason,
+                sqlGraphSignal,
+                hdlGraphSignal,
+                hasReferencesTable,
+                jsonOptions,
+                options,
+                unusedScope,
+                byBucket,
+                nextCursor,
+                cursorContext,
+                suppression,
+                options.MaxJsonBytes,
+                byteLimitReached,
+                requestedResults.Count - emittedCount);
+        }
+
+        var fullJson = BuildCandidate(requestedResults.Count, byteLimitReached: false);
+        if (!options.MaxJsonBytes.HasValue
+            || JsonEnvelopeWrapper.JsonFitsResponseBudget(fullJson, options.MaxJsonBytes.Value))
+        {
+            Console.WriteLine(fullJson);
+            return true;
+        }
+
+        if (requestedResults.Count == 0)
+        {
+            WriteUsageError(
+                $"--max-json-bytes {options.MaxJsonBytes.Value.ToString(CultureInfo.InvariantCulture)} is too small for the empty unused response metadata.",
+                GetUsageLineOrThrow("unused"),
+                "Increase --max-json-bytes or remove it and rerun the same query.");
+            return false;
+        }
+
+        string? bestJson = null;
+        var low = 1;
+        var high = requestedResults.Count - 1;
+        while (low <= high)
+        {
+            var count = low + ((high - low) / 2);
+            var candidateJson = BuildCandidate(count, byteLimitReached: true);
+            if (JsonEnvelopeWrapper.JsonFitsResponseBudget(candidateJson, options.MaxJsonBytes.Value))
+            {
+                bestJson = candidateJson;
+                low = count + 1;
+            }
+            else
+            {
+                high = count - 1;
+            }
+        }
+
+        if (bestJson != null)
+        {
+            Console.WriteLine(bestJson);
+            return true;
+        }
+
+        WriteUsageError(
+            $"--max-json-bytes {options.MaxJsonBytes.Value.ToString(CultureInfo.InvariantCulture)} is too small for the unused response metadata and one canonical symbol row.",
+            GetUsageLineOrThrow("unused"),
+            "Increase --max-json-bytes or narrow the unused query before restarting pagination.");
+        return false;
+    }
+
+    private static string BuildUnusedJsonPayload(
+        IEnumerable<UnusedSymbolResult> results,
+        bool? graphSupported,
+        string? graphSupportReason,
+        SqlGraphContractSignal sqlGraphSignal,
+        HdlGraphContractSignal hdlGraphSignal,
+        bool hasReferencesTable,
+        JsonSerializerOptions jsonOptions,
+        QueryCommandOptions? queryOptions = null,
+        UnusedAuditScopeFilters? unusedScope = null,
+        bool byBucket = false,
+        string? nextCursor = null,
+        PaginationCursorContext? cursorContext = null,
+        UnusedDefaultSuppressionResult? suppression = null,
+        int? outputByteLimit = null,
+        bool byteLimitReached = false,
+        int omittedCount = 0)
     {
         var resultList = results as List<UnusedSymbolResult> ?? results.ToList();
         var payload = new JsonObject
@@ -760,6 +918,12 @@ public static partial class QueryCommandRunner
             ["summary"] = BuildUnusedSummaryJson(resultList, jsonOptions, suppression),
             ["bucket_taxonomy"] = BuildUnusedBucketTaxonomyJson(),
         };
+        if (outputByteLimit.HasValue)
+        {
+            payload["output_byte_limit"] = outputByteLimit.Value;
+            payload["truncated"] = byteLimitReached;
+            payload["omitted_count"] = omittedCount;
+        }
         if (suppression is { Applied: true })
             payload["default_suppression"] = BuildUnusedDefaultSuppressionJson(suppression, jsonOptions);
         if (nextCursor != null)
@@ -774,6 +938,7 @@ public static partial class QueryCommandRunner
             if (byBucket)
             {
                 payload["by_bucket"] = BuildUnusedBucketSummariesJson(resultList);
+                payload["by_bucket_format"] = "summary_v1";
                 omittedSections.Add("by_bucket.symbols");
             }
             payload["omitted_sections"] = omittedSections;
@@ -782,7 +947,10 @@ public static partial class QueryCommandRunner
         {
             payload["symbols"] = JsonSerializer.SerializeToNode(resultList, CliJsonSerializerContextFactory.Create(jsonOptions).ListUnusedSymbolResult);
             if (byBucket)
-                payload["by_bucket"] = BuildUnusedResultsByBucketJson(resultList, jsonOptions);
+            {
+                payload["by_bucket"] = BuildUnusedResultsByBucketJson(resultList);
+                payload["by_bucket_format"] = "canonical_symbol_index_v1";
+            }
         }
 
         if (!hasReferencesTable)
@@ -872,21 +1040,37 @@ public static partial class QueryCommandRunner
         return query;
     }
 
-    private static JsonObject BuildUnusedResultsByBucketJson(IEnumerable<UnusedSymbolResult> results, JsonSerializerOptions jsonOptions)
+    internal static JsonObject BuildUnusedResultsByBucketJson(IEnumerable<UnusedSymbolResult> results)
     {
-        var grouped = results
-            .GroupBy(result => result.UnusedBucket, StringComparer.Ordinal)
-            .ToDictionary(group => group.Key, group => group.ToList(), StringComparer.Ordinal);
+        var resultList = results as IReadOnlyList<UnusedSymbolResult> ?? results.ToList();
         var byBucket = new JsonObject();
         foreach (var bucket in OrderedUnusedBuckets)
+            byBucket[bucket] = new JsonArray();
+
+        for (var index = 0; index < resultList.Count; index++)
         {
-            if (grouped.TryGetValue(bucket, out var bucketResults))
-                byBucket[bucket] = JsonSerializer.SerializeToNode(bucketResults, CliJsonSerializerContextFactory.Create(jsonOptions).ListUnusedSymbolResult);
-            else
-                byBucket[bucket] = new JsonArray();
+            var result = resultList[index];
+            if (!byBucket.TryGetPropertyValue(result.UnusedBucket, out var bucketNode)
+                || bucketNode is not JsonArray bucketRows)
+            {
+                bucketRows = new JsonArray();
+                byBucket[result.UnusedBucket] = bucketRows;
+            }
+            bucketRows.Add(BuildUnusedBucketMembershipJson(result, index));
         }
+
         return byBucket;
     }
+
+    internal static JsonObject BuildUnusedBucketMembershipJson(UnusedSymbolResult result, int symbolIndex)
+        => new()
+        {
+            ["symbol_index"] = symbolIndex,
+            ["name"] = result.Name,
+            ["kind"] = result.Kind,
+            ["path"] = result.Path,
+            ["line"] = result.Line,
+        };
 
     private static string GetUnusedBucketHeading(string bucket) => bucket switch
     {
