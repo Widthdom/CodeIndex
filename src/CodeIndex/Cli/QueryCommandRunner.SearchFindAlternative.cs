@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
@@ -111,6 +112,8 @@ public static partial class QueryCommandRunner
         {
             blockers.Add($"find --all cannot preserve row output format {options.OutputFormat}");
         }
+        if (options.OutputFormat == OutputFormatCompact && options.SnippetLinesExplicit)
+            blockers.Add("find --format compact cannot be combined with --snippet-lines");
 
         nonEquivalentOptions = nonEquivalentOptions
             .Distinct(StringComparer.Ordinal)
@@ -121,7 +124,7 @@ public static partial class QueryCommandRunner
         List<string>? argv = null;
         if (blockers.Count == 0 && nonEquivalentOptions.Count == 0)
         {
-            argv = BuildSearchFindAlternativeArgv(cmdArgs, options, usesFindAll);
+            argv = BuildSearchFindAlternativeArgv(optionNames, options, usesFindAll);
             if (argv.Any(argument => argument.Any(char.IsControl)))
             {
                 blockers.Add("the query or an option value contains control characters that are unsafe in a one-line replay suggestion");
@@ -144,17 +147,14 @@ public static partial class QueryCommandRunner
             ? $"Run this equivalent find scan (displayed only; not executed): {RenderSearchFindAlternativeForCurrentShell(argv)}"
             : $"Use `find` for literal or regular-expression file scans, but no exact command was generated: {reason}";
 
-        CommandErrorWriter.WriteJsonOrHuman(
+        WriteSearchFindAlternativeError(
             ProgramRunner.ContainsJsonOutputFlag(cmdArgs),
             jsonOptions,
+            options.MaxJsonBytes,
             $"{triggeringOptions} not supported for search.",
-            CommandExitCodes.UsageError,
             hint,
             GetUsageLineOrThrow("search"),
-            CommandErrorCodes.UsageError,
-            category: "usage",
-            command: "search",
-            additionalJsonProperties: additionalProperties);
+            additionalProperties);
         return true;
     }
 
@@ -190,7 +190,7 @@ public static partial class QueryCommandRunner
     }
 
     private static List<string> BuildSearchFindAlternativeArgv(
-        string[] cmdArgs,
+        IReadOnlyCollection<string> explicitOptionNames,
         QueryCommandOptions options,
         bool usesFindAll)
     {
@@ -230,7 +230,7 @@ public static partial class QueryCommandRunner
             AddSearchFindAlternativeOption(argv, "--limit", options.Limit);
         if (options.SnippetLinesExplicit)
             AddSearchFindAlternativeOption(argv, "--snippet-lines", options.SnippetLines);
-        if (HasOption(cmdArgs, "--max-line-width"))
+        if (explicitOptionNames.Contains("--max-line-width"))
             AddSearchFindAlternativeOption(argv, "--max-line-width", options.MaxLineWidth);
         if (options.CountOnly)
             argv.Add("--count");
@@ -242,12 +242,12 @@ public static partial class QueryCommandRunner
         if (options.OutputFormat is not OutputFormatText and not OutputFormatJson and not OutputFormatCount)
             AddSearchFindAlternativeOption(argv, "--format", options.OutputFormat);
         if (options.OutputFormat == OutputFormatJson
-            || ProgramRunner.ContainsJsonOutputFlag(cmdArgs))
+            || explicitOptionNames.Contains("--json"))
             argv.Add("--json");
         if (options.MaxJsonBytes.HasValue)
             AddSearchFindAlternativeOption(argv, "--max-json-bytes", options.MaxJsonBytes.Value);
 
-        if (HasOption(cmdArgs, "--data-dir") && options.DataDir != null)
+        if (explicitOptionNames.Contains("--data-dir") && options.DataDir != null)
             AddSearchFindAlternativeOption(argv, "--data-dir", options.DataDir);
         if (options.DbPathExplicit)
             AddSearchFindAlternativeOption(argv, "--db", options.DbPath);
@@ -259,12 +259,58 @@ public static partial class QueryCommandRunner
             argv.Add("--verbose");
         if (options.SlowQueryMs.HasValue)
             AddSearchFindAlternativeOption(argv, "--slow-query-ms", options.SlowQueryMs.Value);
-        if (HasOption(cmdArgs, "--quiet") || HasOption(cmdArgs, "-q") || HasOption(cmdArgs, "--silent"))
+        if (explicitOptionNames.Contains("--quiet")
+            || explicitOptionNames.Contains("-q")
+            || explicitOptionNames.Contains("--silent"))
             argv.Add("--quiet");
-        if (HasOption(cmdArgs, "--no-progress"))
+        if (explicitOptionNames.Contains("--no-progress"))
             argv.Add("--no-progress");
 
         return argv;
+    }
+
+    private static void WriteSearchFindAlternativeError(
+        bool json,
+        JsonSerializerOptions jsonOptions,
+        int? maxJsonBytes,
+        string message,
+        string hint,
+        string usage,
+        JsonObject additionalProperties)
+    {
+        if (!json)
+        {
+            CommandErrorWriter.Write(
+                message,
+                hint,
+                usage,
+                CommandErrorCodes.UsageError);
+            return;
+        }
+
+        var payload = CommandErrorWriter.BuildJsonPayload(
+            jsonOptions,
+            message,
+            CommandExitCodes.UsageError,
+            hint,
+            usage,
+            CommandErrorCodes.UsageError,
+            category: "usage",
+            command: "search",
+            additionalJsonProperties: additionalProperties);
+        var serialized = payload.ToJsonString(jsonOptions);
+        if (maxJsonBytes.HasValue
+            && Encoding.UTF8.GetByteCount(serialized) + Encoding.UTF8.GetByteCount(Environment.NewLine)
+                > maxJsonBytes.Value)
+        {
+            CommandErrorWriter.Write(
+                $"--max-json-bytes {maxJsonBytes.Value} is too small for search recovery error JSON output.",
+                "Increase --max-json-bytes to receive the structured find alternative.",
+                errorCode: CommandErrorCodes.UsageError);
+            return;
+        }
+
+        CommandErrorWriter.WriteStdout(serialized);
     }
 
     private static void AddSearchFindAlternativeOption(List<string> argv, string name, string value)

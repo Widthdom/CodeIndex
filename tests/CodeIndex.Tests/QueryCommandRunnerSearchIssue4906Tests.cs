@@ -152,6 +152,29 @@ public partial class QueryCommandRunnerTests
             Assert.Contains(testCase.Scope, argv);
             Assert.Equal(testCase.ActualRegex ? 1 : 0, argv.Skip(4).Count(value => value == "--regex"));
         }
+
+        var consumedOptionCases = new[]
+        {
+            new[] { "search", "--query", "--json", "--regex", "--path", "src/**" },
+            new[] { "search", "--query", "--data-dir", "--regex", "--path", "src/**", "--json" },
+        };
+        foreach (var args in consumedOptionCases)
+        {
+            var (exitCode, stdout, stderr) = CaptureConsole(() =>
+                ProgramRunner.Run(args, _jsonOptions, "1.0.0-test"));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = JsonDocument.Parse(stdout);
+            var argv = document.RootElement
+                .GetProperty("alternative_command")
+                .GetProperty("argv")
+                .EnumerateArray()
+                .Select(item => item.GetString()!)
+                .ToArray();
+            Assert.Equal(args[2], argv[3]);
+            Assert.Equal(1, argv.Count(value => value == args[2]));
+        }
     }
 
     [Fact]
@@ -207,6 +230,50 @@ public partial class QueryCommandRunnerTests
                     item => item.GetString()!.Contains(testCase.ExpectedBlocker, StringComparison.Ordinal));
             }
         }
+    }
+
+    [Fact]
+    public void RunSearch_FindAlternativeRejectsIncompatibleCompactSnippetOutput_Issue4906()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() =>
+            ProgramRunner.Run(
+                [
+                    "search", "TODO", "--regex", "--path", "src/**",
+                    "--format", "compact", "--snippet-lines", "3",
+                ],
+                _jsonOptions,
+                "1.0.0-test"));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = JsonDocument.Parse(stdout);
+        var error = document.RootElement.GetProperty("metadata").GetProperty("error");
+        Assert.Equal(JsonValueKind.Null, error.GetProperty("alternative_command").ValueKind);
+        Assert.Contains(
+            error.GetProperty("alternative_blockers").EnumerateArray(),
+            item => item.GetString()!.Contains(
+                "compact cannot be combined with --snippet-lines",
+                StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void RunSearch_FindAlternativeHonorsJsonByteBudget_Issue4906()
+    {
+        const int maxJsonBytes = 200;
+        var (exitCode, stdout, stderr) = CaptureConsole(() =>
+            ProgramRunner.Run(
+                [
+                    "search", "TODO", "--regex", "--path", "src/**",
+                    "--json", "--max-json-bytes", "200",
+                ],
+                _jsonOptions,
+                "1.0.0-test"));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.True(System.Text.Encoding.UTF8.GetByteCount(stdout) <= maxJsonBytes);
+        Assert.Equal(string.Empty, stdout);
+        Assert.Contains("too small for search recovery error JSON output", stderr, StringComparison.Ordinal);
+        Assert.Contains("Increase --max-json-bytes", stderr, StringComparison.Ordinal);
     }
 
     private static string ValueAfterIssue4906(IReadOnlyList<string> argv, string option)
