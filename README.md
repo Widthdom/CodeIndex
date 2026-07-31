@@ -78,6 +78,7 @@ cdidx references UserService --fields path,line,reference_kind --limit 20 --max-
 cdidx inspect QueryCommandRunner --outline-only
 cdidx outline src/CodeIndex/Cli/QueryCommandRunner.cs --json --kind function --limit 50 --max-json-bytes 16384
 cdidx unused --compact --by-bucket --max-json-bytes 16384
+cdidx unused --json --by-bucket --max-json-bytes 16384
 cdidx map --compact --max-json-bytes 65536
 cdidx map --format issue-drafts --limit 10
 cdidx search --recipe risky-code --format compact --max-json-bytes 65536
@@ -92,6 +93,16 @@ cdidx doctor --json --env-inventory=full --env-domain indexing_query --max-json-
 cdidx license --json
 cdidx validate
 ```
+
+For full `unused --json --by-bucket` output, `symbols` is the canonical row
+collection and each `by_bucket` entry is a lightweight compatibility projection
+with a zero-based `symbol_index` into that collection plus common locator
+fields. `by_bucket_format` is `canonical_symbol_index_v1`; compact output uses
+`summary_v1`. `--max-json-bytes` bounds the complete UTF-8 response and, when
+needed, returns a canonical-row prefix with `truncated`, `omitted_count`, and
+`next_cursor` so following pages neither duplicate nor skip symbols.
+The MCP `unused_symbols` equivalent uses `symbols_by_bucket` and
+`symbols_by_bucket_format` for the same indexed projection.
 
 For C# explicit-interface implementations, symbol output and outlines keep the
 short display name (`Run`, `Value`, `Changed`, or `Item`). Qualified exact-name
@@ -577,6 +588,7 @@ cdidx references UserService --fields path,line,reference_kind --limit 20 --max-
 cdidx inspect QueryCommandRunner --outline-only
 cdidx outline src/CodeIndex/Cli/QueryCommandRunner.cs --json --kind function --limit 50 --max-json-bytes 16384
 cdidx unused --compact --by-bucket --max-json-bytes 16384
+cdidx unused --json --by-bucket --max-json-bytes 16384
 cdidx map --compact --max-json-bytes 65536
 cdidx map --format issue-drafts --limit 10
 cdidx search --recipe risky-code --format compact --max-json-bytes 65536
@@ -591,6 +603,15 @@ cdidx doctor --json --env-inventory=full --env-domain indexing_query --max-json-
 cdidx license --json
 cdidx validate
 ```
+
+完全形式の `unused --json --by-bucket` 出力では、`symbols` が正規の行集合で、
+各 `by_bucket` 要素はその集合への 0 始まりの `symbol_index` と共通の位置情報を持つ
+軽量な互換投影です。`by_bucket_format` は `canonical_symbol_index_v1`、compact
+出力では `summary_v1` です。`--max-json-bytes` は UTF-8 応答全体を上限内に収め、
+必要な場合は正規行の prefix と `truncated`、`omitted_count`、`next_cursor` を返すため、
+後続ページで symbol の重複や欠落が発生しません。
+MCP の `unused_symbols` では、同じ index 付き投影を `symbols_by_bucket` と
+`symbols_by_bucket_format` で公開します。
 
 C# の明示的 interface 実装では、symbol 出力と outline は短い表示名
 （`Run`、`Value`、`Changed`、`Item`）を維持します。修飾した exact-name query には
