@@ -69,6 +69,8 @@ public static partial class QueryCommandRunner
             {
                 var issuesTableAvailable = reader._hasIssuesPhysicalTable;
                 var fileIssuesDataCurrent = reader._hasIssuesTable;
+                var severityFilterAvailable = reader.HasIssueSeverityColumn;
+                var requestedFiltersAvailable = options.Severity == null || severityFilterAvailable;
                 var indexCompletion = reader.GetPersistedIndexCompletion();
                 var payload = BuildCountJsonPayload(
                     reader,
@@ -77,6 +79,7 @@ public static partial class QueryCommandRunner
                     queryOptions: options,
                     degraded: !issuesTableAvailable
                         || !fileIssuesDataCurrent
+                        || !requestedFiltersAvailable
                         || !indexCompletion.IndexComplete,
                     extraFields: countPayload =>
                     {
@@ -86,6 +89,15 @@ public static partial class QueryCommandRunner
                         countPayload["count_scope"] = "all_matching_issues_before_limit";
                         countPayload["issues_table_available"] = issuesTableAvailable;
                         countPayload["file_issues_data_current"] = fileIssuesDataCurrent;
+                        countPayload["severity_filter_available"] = severityFilterAvailable;
+                        countPayload["requested_filters_available"] = requestedFiltersAvailable;
+                        if (!requestedFiltersAvailable)
+                        {
+                            countPayload["requested_filter_unavailable_reasons"] = new JsonArray
+                            {
+                                "severity_column_missing",
+                            };
+                        }
                         countPayload["index_complete"] = indexCompletion.IndexComplete;
                         if (!indexCompletion.IndexComplete)
                         {

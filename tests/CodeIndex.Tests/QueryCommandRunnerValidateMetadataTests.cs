@@ -233,6 +233,8 @@ public partial class QueryCommandRunnerTests
         Assert.Equal("all_matching_issues_before_limit", countRoot.GetProperty("count_scope").GetString());
         Assert.True(countRoot.GetProperty("issues_table_available").GetBoolean());
         Assert.True(countRoot.GetProperty("file_issues_data_current").GetBoolean());
+        Assert.True(countRoot.GetProperty("severity_filter_available").GetBoolean());
+        Assert.True(countRoot.GetProperty("requested_filters_available").GetBoolean());
         Assert.True(countRoot.GetProperty("index_complete").GetBoolean());
         Assert.True(countRoot.GetProperty("freshness_available").GetBoolean());
         Assert.False(countRoot.GetProperty("degraded").GetBoolean());
@@ -300,10 +302,67 @@ public partial class QueryCommandRunnerTests
         Assert.Equal(0, countRoot.GetProperty("total_estimated").GetInt32());
         Assert.False(countRoot.GetProperty("issues_table_available").GetBoolean());
         Assert.False(countRoot.GetProperty("file_issues_data_current").GetBoolean());
+        Assert.False(countRoot.GetProperty("severity_filter_available").GetBoolean());
+        Assert.True(countRoot.GetProperty("requested_filters_available").GetBoolean());
         Assert.True(countRoot.GetProperty("index_complete").GetBoolean());
         Assert.False(countRoot.TryGetProperty("index_incomplete_reasons", out _));
         Assert.True(countRoot.GetProperty("degraded").GetBoolean());
         Assert.False(countRoot.GetProperty("authoritative_count").GetBoolean());
+    }
+
+    [Fact]
+    public void RunValidate_CountMarksLegacySeverityFilterAsUnavailable_Issue4908()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_validate_count_legacy_severity_4908");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        WriteUtf8BomFile(project.Root, "src/bom.cs", "class Bom {}\n");
+
+        var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+            [project.Root, "--db", dbPath, "--json", "--quiet"],
+            _jsonOptions));
+        Assert.Equal(CommandExitCodes.Success, indexExitCode);
+        Assert.Equal(string.Empty, indexStderr);
+
+        using (var connection = new SqliteConnection($"Data Source={dbPath}"))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "ALTER TABLE file_issues DROP COLUMN severity";
+            command.ExecuteNonQuery();
+        }
+
+        var (unfilteredExitCode, unfilteredStdout, unfilteredStderr) = CaptureConsole(
+            () => QueryCommandRunner.RunValidate(
+                ["--db", dbPath, "--format", "count"],
+                _jsonOptions));
+        var (filteredExitCode, filteredStdout, filteredStderr) = CaptureConsole(
+            () => QueryCommandRunner.RunValidate(
+                ["--db", dbPath, "--format", "count", "--severity", "warning"],
+                _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, unfilteredExitCode);
+        Assert.Equal(CommandExitCodes.Success, filteredExitCode);
+        Assert.Equal(string.Empty, unfilteredStderr);
+        Assert.Equal(string.Empty, filteredStderr);
+
+        using var unfilteredDocument = ParseJsonOutput(unfilteredStdout);
+        var unfilteredRoot = unfilteredDocument.RootElement;
+        Assert.Equal(1, unfilteredRoot.GetProperty("count").GetInt32());
+        Assert.False(unfilteredRoot.GetProperty("severity_filter_available").GetBoolean());
+        Assert.True(unfilteredRoot.GetProperty("requested_filters_available").GetBoolean());
+        Assert.False(unfilteredRoot.GetProperty("degraded").GetBoolean());
+        Assert.True(unfilteredRoot.GetProperty("authoritative_count").GetBoolean());
+
+        using var filteredDocument = ParseJsonOutput(filteredStdout);
+        var filteredRoot = filteredDocument.RootElement;
+        Assert.Equal(0, filteredRoot.GetProperty("count").GetInt32());
+        Assert.False(filteredRoot.GetProperty("severity_filter_available").GetBoolean());
+        Assert.False(filteredRoot.GetProperty("requested_filters_available").GetBoolean());
+        Assert.Contains(
+            filteredRoot.GetProperty("requested_filter_unavailable_reasons").EnumerateArray(),
+            reason => reason.GetString() == "severity_column_missing");
+        Assert.True(filteredRoot.GetProperty("degraded").GetBoolean());
+        Assert.False(filteredRoot.GetProperty("authoritative_count").GetBoolean());
     }
 
     private static void AssertValidatePageMetadata(

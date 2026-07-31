@@ -684,8 +684,10 @@ actionability. `--format count` emits the common versioned count envelope:
 `query_context` records filters such as path, kind, and severity. The legacy
 `total_estimated` field remains as a compatibility mirror of `count`.
 `api_version`, freshness fields, `issues_table_available`,
-`file_issues_data_current`, `index_complete`, `degraded`, and
-`authoritative_count` make old databases and incomplete indexes explicit;
+`file_issues_data_current`, `severity_filter_available`,
+`requested_filters_available`, `index_complete`, `degraded`, and
+`authoritative_count` make old databases, unavailable requested filters, and
+incomplete indexes explicit;
 do not treat the count as exact when `authoritative_count` is `false`.
 SARIF exposes the same pagination fields under each run's
 `properties`, together with `issues_table_available` and `degraded` so unavailable
@@ -4038,8 +4040,9 @@ kind、severity、origin、category、actionability ごとに集計します。`
 versioned count envelope を出力します。`count` は `--limit` を適用する前の全 matching validation
 issue を対象とし、`query_context` には path、kind、severity などの filter が記録されます。従来の
 `total_estimated` は `count` の互換 mirror として維持されます。`api_version`、freshness field、
-`issues_table_available`、`file_issues_data_current`、`index_complete`、`degraded`、
-`authoritative_count` によって旧 database や incomplete index を明示するため、
+`issues_table_available`、`file_issues_data_current`、`severity_filter_available`、
+`requested_filters_available`、`index_complete`、`degraded`、`authoritative_count` によって
+旧 database、利用できない指定 filter、incomplete index を明示するため、
 `authoritative_count` が `false` の count を exact として扱わないでください。SARIF では同じ pagination field が
 各 run の `properties` に入り、`issues_table_available` と `degraded` も併記されるため、利用できない
 legacy validation data が authoritative な 0 件と誤認されることはありません。各 result は `info` を `note` に mapping し、`warning` / `error` は
