@@ -1475,6 +1475,23 @@ positive evidence, the number that returned zero results, and `stale_query_names
 so broad audit recipes can surface query drift without requiring the full
 recipe catalog JSON. Output-limited recipe runs use matched-count metadata for
 this summary, so queries with known omitted matches are not reported as stale.
+The `relaxed-json-encoder` query and JSON read/write queries also publish the
+`json_trust_boundary` classifier. Place a source-proximate annotation immediately
+before the operation when the trust boundary is known:
+
+```text
+// cdidx-audit: json-trust origin=private_local direction=write sensitivity=diagnostic trust=controlled rationale=operator_only_local_jsonl
+```
+
+`origin` accepts `private_local`, `public_api`, `network`, `file`, `external`, or
+`unknown`; `direction` is `read` or `write`; `sensitivity` accepts `diagnostic`,
+`public`, `untrusted`, `confidential`, or `unknown`; and `trust` accepts
+`controlled`, `untrusted`, or `review_required`. `rationale` is a stable token
+of up to 80 ASCII letters, digits, `_`, `-`, or `.`. A valid annotation can
+classify a controlled private writer, an external/public writer, or an untrusted
+parser. Missing, malformed, or directionally inconsistent evidence remains
+`ambiguous_trust`. The annotation only enriches `audit_classifications`; it never
+suppresses the underlying recipe result, so external parsing remains visible.
 Add `--show-excluded` to a recipe run when you need the effective path scope and
 exclusion diagnostics in JSON output.
 Recipe runs support text output, aggregate JSON with `--json` / `--format json`,
@@ -4839,6 +4856,22 @@ summary、query count、query ごとの count、`truncated` flag、該当する�
 見つかった query 数、結果 0 件の query 数、`stale_query_names` を示します。これにより、
 広範な audit recipe の query drift を full recipe catalog JSON なしで確認できます。出力制限された
 recipe run では matched-count metadata を使うため、省略済みの match がある query は stale として報告されません。
+`relaxed-json-encoder` query と JSON の read / write query は
+`json_trust_boundary` classifier も公開します。trust boundary が判明している場合は、対象操作の
+直前に source-proximate な注釈を置きます。
+
+```text
+// cdidx-audit: json-trust origin=private_local direction=write sensitivity=diagnostic trust=controlled rationale=operator_only_local_jsonl
+```
+
+`origin` は `private_local`、`public_api`、`network`、`file`、`external`、`unknown`、
+`direction` は `read` または `write`、`sensitivity` は `diagnostic`、`public`、
+`untrusted`、`confidential`、`unknown`、`trust` は `controlled`、`untrusted`、
+`review_required` を受け付けます。`rationale` は ASCII の英数字、`_`、`-`、`.` からなる
+80文字以下の安定した token です。有効な注釈は controlled private writer、external / public
+writer、untrusted parser を分類できます。注釈の欠落、不正、read / write の不一致は
+`ambiguous_trust` のままです。この注釈は `audit_classifications` に根拠を追加するだけで、
+元の recipe result を抑制しないため、external parsing は引き続き表示されます。
 `--show-excluded` を recipe と併用すると、有効な path scope と除外診断を出力に含めます。
 recipe run が対応する形式は text output、`--json` / `--format json` の aggregate JSON、
 `--json=ndjson` または `--results-only` の NDJSON row stream、`--format count` の

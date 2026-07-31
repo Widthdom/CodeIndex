@@ -239,6 +239,17 @@ internal static class SearchAuditRecipes
         ],
         ["guard_filters", "guard_evidence", "guard_checks", "risk_evidence", "match_origins"],
         "Parser guard classifiers are triage hints; keep input-size, depth, and cancellation checks close to the parse boundary when possible.");
+    private static readonly SearchRecipeClassifierJsonResult JsonTrustBoundaryClassifier = new(
+        "json_trust_boundary",
+        "Classifies JSON reads and writes by explicit origin, direction, sensitivity, trust, and rationale evidence without suppressing the underlying finding.",
+        [
+            new("controlled_private_writer", "A JSON writer is explicitly scoped to a controlled private-local sink.", "Verify that the sink remains private, local, non-HTML, and non-script, and that the annotation rationale still matches every consumer."),
+            new("external_or_public_writer", "A JSON writer crosses an external, network, file, or public-API boundary instead of a private-local sink.", "Keep the finding prioritized for escaping, content-type, redaction, destination-ownership, and downstream-consumer review."),
+            new("untrusted_parser", "A JSON parser or deserializer consumes explicitly untrusted external, network, file, or public-API input.", "Keep the finding prioritized for byte, depth, item-count, cancellation, and schema validation controls."),
+            new("ambiguous_trust", "The JSON trust boundary is missing, invalid, directionally inconsistent, or still marked review-required.", "Add or correct a source-proximate cdidx-audit json-trust annotation; do not suppress the raw recipe result.")
+        ],
+        ["audit_classifications.evidence", "source_annotation", "recipe_query_direction", "risk_evidence", "match_origins"],
+        "Use `// cdidx-audit: json-trust origin=<private_local|public_api|network|file|external|unknown> direction=<read|write> sensitivity=<diagnostic|public|untrusted|confidential|unknown> trust=<controlled|untrusted|review_required> rationale=<stable-token>` immediately before the operation. Annotations classify but never suppress findings; missing or invalid evidence remains ambiguous.");
     private static readonly SearchRecipeClassifierJsonResult ProcessLaunchClassifier = new(
         "process_launch_boundary",
         "Classifies process-launch hits by shell use, ArgumentList use, working directory, environment forwarding, and shared launch wrappers.",
@@ -1271,6 +1282,8 @@ internal static class SearchAuditRecipes
                         "positive: machine-only payloads with explicit content-type and no HTML/script embedding are lower risk."
                     ],
                     MatchOrigins = ["code"],
+                    Classifiers = [JsonTrustBoundaryClassifier],
+                    JsonTrustDirection = SearchRecipeJsonTrustDirection.Write,
                 },
                 new(
                     "temp-file-name",
@@ -1989,6 +2002,8 @@ internal static class SearchAuditRecipes
                         "risk: JsonDocument.Parse builds a full DOM and should show byte, depth, and item-count limits before user-controlled payloads reach it.",
                         "positive: BoundedJson.ParseDocument or a size-gated structured-data fallback is upstream guard evidence for intentional DOM parsing."
                     ],
+                    Classifiers = [JsonTrustBoundaryClassifier],
+                    JsonTrustDirection = SearchRecipeJsonTrustDirection.Read,
                 },
                 new(
                     "json-node-parse",
@@ -2003,6 +2018,8 @@ internal static class SearchAuditRecipes
                         "risk: JsonNode.Parse materializes a mutable DOM and should be paired with payload and depth bounds for API, config, or protocol inputs.",
                         "positive: BoundedJson.ParseNode, bounded frame readers, or fixed-size local metadata files make the materialization auditable."
                     ],
+                    Classifiers = [JsonTrustBoundaryClassifier],
+                    JsonTrustDirection = SearchRecipeJsonTrustDirection.Read,
                 },
                 new(
                     "json-serializer-deserialize",
@@ -2017,6 +2034,8 @@ internal static class SearchAuditRecipes
                         "risk: JsonSerializer.Deserialize can materialize an entire object graph before callers enforce semantic item limits.",
                         "positive: BoundedJson.Deserialize, MaxDepth options, and fixed protocol frame byte caps show upstream parse bounds."
                     ],
+                    Classifiers = [JsonTrustBoundaryClassifier],
+                    JsonTrustDirection = SearchRecipeJsonTrustDirection.Read,
                 },
                 new(
                     "json-async-deserialize",
@@ -2031,6 +2050,8 @@ internal static class SearchAuditRecipes
                         "risk: streaming deserialization still needs cancellation, per-item limits, and a bounded source stream.",
                         "positive: WithCancellation, explicit record caps, and max-byte snapshot reads show streaming backpressure evidence."
                     ],
+                    Classifiers = [JsonTrustBoundaryClassifier],
+                    JsonTrustDirection = SearchRecipeJsonTrustDirection.Read,
                 },
                 new(
                     "json-serializer-options",
@@ -2073,6 +2094,8 @@ internal static class SearchAuditRecipes
                         "risk: JsonSerializer.Serialize can materialize unbounded output when result sets scale with workspace size.",
                         "positive: bounded result limits, Utf8JsonWriter streaming, output caps, or small fixed DTOs make serialization size explicit."
                     ],
+                    Classifiers = [JsonTrustBoundaryClassifier],
+                    JsonTrustDirection = SearchRecipeJsonTrustDirection.Write,
                 },
                 new(
                     "utf8-json-writer",
@@ -2087,6 +2110,8 @@ internal static class SearchAuditRecipes
                         "risk: streaming writers still need bounded destinations, cancellation or flush ownership, and redaction policy at user-facing boundaries.",
                         "positive: writing directly to a caller-owned stream, LocalJsonlJsonWriterOptions, or fixed-size diagnostic payloads can explain the writer."
                     ],
+                    Classifiers = [JsonTrustBoundaryClassifier],
+                    JsonTrustDirection = SearchRecipeJsonTrustDirection.Write,
                 }
             ], ParserGuardClassifier, GuardEvidenceClassifier)),
         SourceScopedRecipe(
@@ -4321,10 +4346,17 @@ internal sealed record SearchAuditRecipeQuery(
     public List<string> ExcludeOrigins { get; init; } = [];
     public List<string> ResultKinds { get; init; } = [];
     public List<SearchRecipeClassifierJsonResult> Classifiers { get; init; } = [];
+    public SearchRecipeJsonTrustDirection? JsonTrustDirection { get; init; }
     public SearchResultRanking ResultRanking { get; init; }
     public SearchRecipeStringComparisonTaxonomyJsonResult? StringComparisonTaxonomy { get; init; }
     public SearchRecipeBroadCatchTaxonomyJsonResult? BroadCatchTaxonomy { get; init; }
     public SearchRecipeNullableContractTaxonomyJsonResult? NullableContractTaxonomy { get; init; }
+}
+
+internal enum SearchRecipeJsonTrustDirection
+{
+    Read,
+    Write,
 }
 
 internal sealed record SearchRecipeListJsonResult(

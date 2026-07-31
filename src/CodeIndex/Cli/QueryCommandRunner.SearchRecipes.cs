@@ -2207,19 +2207,183 @@ public static partial class QueryCommandRunner
     {
         var taskResultClassifier = recipeQuery.Classifiers
             .FirstOrDefault(classifier => string.Equals(classifier.Name, "task_result_intent", StringComparison.Ordinal));
-        if (taskResultClassifier == null)
+        var jsonTrustBoundaryClassifier = recipeQuery.Classifiers
+            .FirstOrDefault(classifier => string.Equals(classifier.Name, "json_trust_boundary", StringComparison.Ordinal));
+        if (taskResultClassifier == null && jsonTrustBoundaryClassifier == null)
             return;
 
         foreach (var row in rows)
         {
-            var classification = TryClassifyTaskResultIntent(taskResultClassifier, row);
-            if (classification == null)
-                continue;
+            if (taskResultClassifier != null)
+                AddSearchRecipeAuditClassification(row, TryClassifyTaskResultIntent(taskResultClassifier, row));
 
-            row.Compact.AuditClassifications ??= [];
-            row.Compact.AuditClassifications.Add(classification);
+            if (jsonTrustBoundaryClassifier != null && recipeQuery.JsonTrustDirection.HasValue)
+            {
+                AddSearchRecipeAuditClassification(
+                    row,
+                    ClassifyJsonTrustBoundary(
+                        jsonTrustBoundaryClassifier,
+                        recipeQuery.JsonTrustDirection.Value,
+                        row));
+            }
         }
     }
+
+    private static void AddSearchRecipeAuditClassification(
+        SearchDisplayRow row,
+        SearchAuditClassificationJsonResult? classification)
+    {
+        if (classification == null)
+            return;
+
+        row.Compact.AuditClassifications ??= [];
+        row.Compact.AuditClassifications.Add(classification);
+    }
+
+    private static SearchAuditClassificationJsonResult ClassifyJsonTrustBoundary(
+        SearchRecipeClassifierJsonResult classifier,
+        SearchRecipeJsonTrustDirection expectedDirection,
+        SearchDisplayRow row)
+    {
+        var evidence = GetJsonTrustBoundaryEvidence(expectedDirection, row);
+        var categoryName = evidence.AnnotationStatus == "valid"
+            ? ClassifyValidJsonTrustBoundary(evidence)
+            : "ambiguous_trust";
+        var categoryMetadata = classifier.Categories
+            .First(category => string.Equals(category.Name, categoryName, StringComparison.Ordinal));
+        var details = new List<string>
+        {
+            $"origin:{evidence.Origin}",
+            $"direction:{evidence.Direction}",
+            $"sensitivity:{evidence.Sensitivity}",
+            $"trust:{evidence.Trust}",
+            $"rationale:{evidence.Rationale}",
+            $"annotation_status:{evidence.AnnotationStatus}",
+        };
+        if (evidence.AnnotationLine.HasValue)
+            details.Add($"annotation_line:{evidence.AnnotationLine.Value.ToString(CultureInfo.InvariantCulture)}");
+
+        return new SearchAuditClassificationJsonResult(
+            classifier.Name,
+            categoryMetadata.Name,
+            categoryMetadata.Description,
+            categoryMetadata.ReviewGuidance,
+            details);
+    }
+
+    private static string ClassifyValidJsonTrustBoundary(JsonTrustBoundaryEvidence evidence)
+    {
+        var externalOrigin = evidence.Origin is "public_api" or "network" or "file" or "external";
+        if (evidence.Direction == "write" && externalOrigin)
+            return "external_or_public_writer";
+        if (evidence.Direction == "read" && externalOrigin && evidence.Trust == "untrusted")
+            return "untrusted_parser";
+        if (evidence.Direction == "write"
+            && evidence.Origin == "private_local"
+            && evidence.Trust == "controlled"
+            && evidence.Sensitivity is "diagnostic" or "confidential")
+        {
+            return "controlled_private_writer";
+        }
+
+        return "ambiguous_trust";
+    }
+
+    private static JsonTrustBoundaryEvidence GetJsonTrustBoundaryEvidence(
+        SearchRecipeJsonTrustDirection expectedDirection,
+        SearchDisplayRow row)
+    {
+        const string marker = "// cdidx-audit: json-trust ";
+        var expectedDirectionText = expectedDirection == SearchRecipeJsonTrustDirection.Read ? "read" : "write";
+        var focusLine = row.Compact.FocusLine.GetValueOrDefault(row.Result.StartLine);
+        var lines = row.Result.Content.Split('\n', StringSplitOptions.None);
+        var nearestIndex = -1;
+        for (var index = 0; index < lines.Length; index++)
+        {
+            var annotationLine = row.Result.StartLine + index;
+            if (annotationLine > focusLine || focusLine - annotationLine > 3)
+                continue;
+            if (lines[index].TrimStart().StartsWith(marker, StringComparison.Ordinal))
+                nearestIndex = index;
+        }
+
+        if (nearestIndex < 0)
+        {
+            return new JsonTrustBoundaryEvidence(
+                "unknown",
+                expectedDirectionText,
+                "unknown",
+                "review_required",
+                "missing_explicit_trust_annotation",
+                "missing",
+                null);
+        }
+
+        var absoluteLine = row.Result.StartLine + nearestIndex;
+        var annotation = lines[nearestIndex].TrimStart();
+        var payload = annotation[marker.Length..].Trim();
+        if (!TryParseJsonTrustBoundaryAnnotation(payload, out var parsed))
+        {
+            return new JsonTrustBoundaryEvidence(
+                "unknown",
+                expectedDirectionText,
+                "unknown",
+                "review_required",
+                "invalid_explicit_trust_annotation",
+                "invalid",
+                absoluteLine);
+        }
+
+        if (!string.Equals(parsed.Direction, expectedDirectionText, StringComparison.Ordinal))
+            return parsed with { AnnotationStatus = "direction_mismatch", AnnotationLine = absoluteLine };
+
+        return parsed with { AnnotationStatus = "valid", AnnotationLine = absoluteLine };
+    }
+
+    private static bool TryParseJsonTrustBoundaryAnnotation(
+        string payload,
+        out JsonTrustBoundaryEvidence evidence)
+    {
+        evidence = null!;
+        var values = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var token in payload.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var equalsIndex = token.IndexOf('=');
+            if (equalsIndex <= 0 || equalsIndex == token.Length - 1)
+                return false;
+            if (!values.TryAdd(token[..equalsIndex], token[(equalsIndex + 1)..]))
+                return false;
+        }
+
+        if (values.Count != 5
+            || !values.TryGetValue("origin", out var origin)
+            || !values.TryGetValue("direction", out var direction)
+            || !values.TryGetValue("sensitivity", out var sensitivity)
+            || !values.TryGetValue("trust", out var trust)
+            || !values.TryGetValue("rationale", out var rationale)
+            || origin is not ("private_local" or "public_api" or "network" or "file" or "external" or "unknown")
+            || direction is not ("read" or "write")
+            || sensitivity is not ("diagnostic" or "public" or "untrusted" or "confidential" or "unknown")
+            || trust is not ("controlled" or "untrusted" or "review_required")
+            || !IsValidJsonTrustBoundaryRationale(rationale))
+        {
+            return false;
+        }
+
+        evidence = new JsonTrustBoundaryEvidence(
+            origin,
+            direction,
+            sensitivity,
+            trust,
+            rationale,
+            string.Empty,
+            null);
+        return true;
+    }
+
+    private static bool IsValidJsonTrustBoundaryRationale(string value)
+        => value.Length is > 0 and <= 80
+            && value.All(ch => char.IsAsciiLetterOrDigit(ch) || ch is '_' or '-' or '.');
 
     private static SearchAuditClassificationJsonResult? TryClassifyTaskResultIntent(
         SearchRecipeClassifierJsonResult classifier,
@@ -2421,6 +2585,15 @@ public static partial class QueryCommandRunner
         string? Receiver,
         int? Line,
         string Reason);
+
+    private sealed record JsonTrustBoundaryEvidence(
+        string Origin,
+        string Direction,
+        string Sensitivity,
+        string Trust,
+        string Rationale,
+        string AnnotationStatus,
+        int? AnnotationLine);
 
     private static List<SearchRecipeAggregationQueryJsonResult> CollectSearchRecipeAggregationResults(
         DbReader reader,
