@@ -4,7 +4,9 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using CodeIndex.Database;
+using CodeIndex.Indexer;
 using CodeIndex.Models;
+using CodeIndex.Semantics;
 
 namespace CodeIndex.Cli;
 
@@ -1955,7 +1957,7 @@ public static partial class QueryCommandRunner
             var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, rawFtsOverride: false, recipeQuery: recipeQuery);
             var outputSelection = ApplySearchOutputSelection(rows, options, resultLimit, sourceTotalAuthoritative);
             rows = outputSelection.Rows;
-            ApplySearchRecipeAuditClassifications(recipeQuery, rows);
+            ApplySearchRecipeAuditClassifications(reader, recipeQuery, rows);
             var minimumOmitted = Math.Max(0, outputSelection.OriginalCount - rows.Count);
             var selectionReason = GetSearchRecipeSelectionReason(outputSelection);
             total += rows.Count;
@@ -2056,7 +2058,7 @@ public static partial class QueryCommandRunner
             var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, recipeQuery: recipeQuery);
             var outputSelection = ApplySearchOutputSelection(rows, options, resultLimit, sourceTotalAuthoritative);
             rows = outputSelection.Rows;
-            ApplySearchRecipeAuditClassifications(recipeQuery, rows);
+            ApplySearchRecipeAuditClassifications(reader, recipeQuery, rows);
             var minimumOmitted = Math.Max(0, outputSelection.OriginalCount - rows.Count);
             var selectionReason = GetSearchRecipeSelectionReason(outputSelection);
             total += rows.Count;
@@ -2177,7 +2179,7 @@ public static partial class QueryCommandRunner
                 requiredPathPatterns: GetSearchRecipeRequiredPathPatterns(options, recipeQuery));
             results = ApplySearchRecipeFileRejectQueries(reader, results, options, recipeQuery);
             var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, rawFtsOverride: false, recipeQuery: recipeQuery);
-            ApplySearchRecipeAuditClassifications(recipeQuery, rows);
+            ApplySearchRecipeAuditClassifications(reader, recipeQuery, rows);
             var count = rows.Count;
             var fileCountForQuery = rows.Select(row => row.Result.Path).Distinct(StringComparer.Ordinal).Count();
             foreach (var path in rows.Select(row => row.Result.Path))
@@ -2203,7 +2205,10 @@ public static partial class QueryCommandRunner
         return queryCounts;
     }
 
-    private static void ApplySearchRecipeAuditClassifications(SearchAuditRecipeQuery recipeQuery, List<SearchDisplayRow> rows)
+    private static void ApplySearchRecipeAuditClassifications(
+        DbReader reader,
+        SearchAuditRecipeQuery recipeQuery,
+        List<SearchDisplayRow> rows)
     {
         var taskResultClassifier = recipeQuery.Classifiers
             .FirstOrDefault(classifier => string.Equals(classifier.Name, "task_result_intent", StringComparison.Ordinal));
@@ -2212,6 +2217,7 @@ public static partial class QueryCommandRunner
         if (taskResultClassifier == null && jsonTrustBoundaryClassifier == null)
             return;
 
+        var jsonTrustLexicalContexts = new Dictionary<string, string[]?>(StringComparer.Ordinal);
         foreach (var row in rows)
         {
             if (taskResultClassifier != null)
@@ -2224,7 +2230,9 @@ public static partial class QueryCommandRunner
                     ClassifyJsonTrustBoundary(
                         jsonTrustBoundaryClassifier,
                         recipeQuery.JsonTrustDirection.Value,
-                        row));
+                        row,
+                        reader,
+                        jsonTrustLexicalContexts));
             }
         }
     }
@@ -2243,9 +2251,11 @@ public static partial class QueryCommandRunner
     private static SearchAuditClassificationJsonResult ClassifyJsonTrustBoundary(
         SearchRecipeClassifierJsonResult classifier,
         SearchRecipeJsonTrustDirection expectedDirection,
-        SearchDisplayRow row)
+        SearchDisplayRow row,
+        DbReader reader,
+        Dictionary<string, string[]?> lexicalContexts)
     {
-        var evidence = GetJsonTrustBoundaryEvidence(expectedDirection, row);
+        var evidence = GetJsonTrustBoundaryEvidence(expectedDirection, row, reader, lexicalContexts);
         var categoryName = evidence.AnnotationStatus == "valid"
             ? ClassifyValidJsonTrustBoundary(evidence)
             : "ambiguous_trust";
@@ -2291,7 +2301,9 @@ public static partial class QueryCommandRunner
 
     private static JsonTrustBoundaryEvidence GetJsonTrustBoundaryEvidence(
         SearchRecipeJsonTrustDirection expectedDirection,
-        SearchDisplayRow row)
+        SearchDisplayRow row,
+        DbReader reader,
+        Dictionary<string, string[]?> lexicalContexts)
     {
         const string marker = "// cdidx-audit: json-trust ";
         var expectedDirectionText = expectedDirection == SearchRecipeJsonTrustDirection.Read ? "read" : "write";
@@ -2320,6 +2332,18 @@ public static partial class QueryCommandRunner
         }
 
         var absoluteLine = row.Result.StartLine + nearestIndex;
+        if (!IsLexicalJsonTrustBoundaryAnnotation(reader, row, absoluteLine, marker, lexicalContexts))
+        {
+            return new JsonTrustBoundaryEvidence(
+                "unknown",
+                expectedDirectionText,
+                "unknown",
+                "review_required",
+                "invalid_explicit_trust_annotation",
+                "invalid",
+                absoluteLine);
+        }
+
         var annotation = lines[nearestIndex].TrimStart();
         var payload = annotation[marker.Length..].Trim();
         if (!TryParseJsonTrustBoundaryAnnotation(payload, out var parsed))
@@ -2338,6 +2362,42 @@ public static partial class QueryCommandRunner
             return parsed with { AnnotationStatus = "direction_mismatch", AnnotationLine = absoluteLine };
 
         return parsed with { AnnotationStatus = "valid", AnnotationLine = absoluteLine };
+    }
+
+    private static bool IsLexicalJsonTrustBoundaryAnnotation(
+        DbReader reader,
+        SearchDisplayRow row,
+        int annotationLine,
+        string marker,
+        Dictionary<string, string[]?> lexicalContexts)
+    {
+        if (!string.Equals(row.Result.Lang, "csharp", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var focusLine = row.Compact.FocusLine.GetValueOrDefault(row.Result.StartLine);
+        if (focusLine <= 0 || focusLine > CSharpSemanticTokenClassifier.DefaultExcerptSourceLineLimit)
+            return false;
+
+        if (!lexicalContexts.TryGetValue(row.Result.Path, out var maskedLines)
+            || maskedLines == null
+            || maskedLines.Length < focusLine)
+        {
+            var indexedLines = reader.GetIndexedSourceLinesForSemanticTokens(
+                row.Result.Path,
+                focusLine,
+                CSharpSemanticTokenClassifier.DefaultExcerptSourceCharacterLimit);
+            maskedLines = indexedLines.Count >= focusLine
+                ? StructuralLineMasker.MaskLines(
+                    "csharp",
+                    indexedLines.Select(line => line ?? string.Empty).ToArray())
+                : null;
+            lexicalContexts[row.Result.Path] = maskedLines;
+        }
+
+        return maskedLines != null
+            && annotationLine > 0
+            && annotationLine <= maskedLines.Length
+            && maskedLines[annotationLine - 1].TrimStart().StartsWith(marker, StringComparison.Ordinal);
     }
 
     private static bool TryParseJsonTrustBoundaryAnnotation(

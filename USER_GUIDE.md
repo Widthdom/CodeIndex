@@ -1489,7 +1489,9 @@ before the operation when the trust boundary is known:
 `controlled`, `untrusted`, or `review_required`. `rationale` is a stable token
 of up to 80 ASCII letters, digits, `_`, `-`, or `.`. A valid annotation can
 classify a controlled private writer, an external/public writer, or an untrusted
-parser. Missing, malformed, or directionally inconsistent evidence remains
+parser. The marker must be a real C# line comment; annotation-shaped text inside
+regular, verbatim, or raw strings is ignored. Missing, malformed, lexically
+invalid, or directionally inconsistent evidence remains
 `ambiguous_trust`. The annotation only enriches `audit_classifications`; it never
 suppresses the underlying recipe result, so external parsing remains visible.
 Add `--show-excluded` to a recipe run when you need the effective path scope and
@@ -4869,7 +4871,9 @@ recipe run では matched-count metadata を使うため、省略済みの match
 `untrusted`、`confidential`、`unknown`、`trust` は `controlled`、`untrusted`、
 `review_required` を受け付けます。`rationale` は ASCII の英数字、`_`、`-`、`.` からなる
 80文字以下の安定した token です。有効な注釈は controlled private writer、external / public
-writer、untrusted parser を分類できます。注釈の欠落、不正、read / write の不一致は
+writer、untrusted parser を分類できます。marker は実際の C# line comment でなければならず、
+regular / verbatim / raw string 内にある注釈形式の text は無視します。注釈の欠落、不正、
+lexical context 不正、read / write の不一致は
 `ambiguous_trust` のままです。この注釈は `audit_classifications` に根拠を追加するだけで、
 元の recipe result を抑制しないため、external parsing は引き続き表示されます。
 `--show-excluded` を recipe と併用すると、有効な path scope と除外診断を出力に含めます。

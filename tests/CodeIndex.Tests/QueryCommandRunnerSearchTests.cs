@@ -3037,6 +3037,42 @@ public partial class QueryCommandRunnerTests
                     }
                 }
                 """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/raw-string-writer.cs",
+                "csharp",
+                """"
+                using System.Text.Encodings.Web;
+
+                public static class RawStringWriter
+                {
+                    public static JavaScriptEncoder Create()
+                    {
+                        var documentation = """
+                        // cdidx-audit: json-trust origin=private_local direction=write sensitivity=diagnostic trust=controlled rationale=raw_string_is_not_evidence
+                        """;
+                        return JavaScriptEncoder.UnsafeRelaxedJsonEscaping;
+                    }
+                }
+                """");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/verbatim-string-writer.cs",
+                "csharp",
+                """
+                using System.Text.Encodings.Web;
+
+                public static class VerbatimStringWriter
+                {
+                    public static JavaScriptEncoder Create()
+                    {
+                        var documentation = @"
+                        // cdidx-audit: json-trust origin=private_local direction=write sensitivity=diagnostic trust=controlled rationale=verbatim_string_is_not_evidence
+                        ";
+                        return JavaScriptEncoder.UnsafeRelaxedJsonEscaping;
+                    }
+                }
+                """);
 
             foreach (var (path, origin, rationale) in new[]
                      {
@@ -3075,7 +3111,7 @@ public partial class QueryCommandRunnerTests
             using (var document = ParseJsonOutput(writerStdout))
             {
                 var query = Assert.Single(document.RootElement.GetProperty("queries").EnumerateArray());
-                Assert.Equal(5, query.GetProperty("count").GetInt32());
+                Assert.Equal(7, query.GetProperty("count").GetInt32());
                 var trustClassifier = Assert.Single(
                     query.GetProperty("classifiers").EnumerateArray(),
                     classifier => classifier.GetProperty("name").GetString() == "json_trust_boundary");
@@ -3089,7 +3125,7 @@ public partial class QueryCommandRunnerTests
                     query,
                     ("controlled_private_writer", 1),
                     ("external_or_public_writer", 1),
-                    ("ambiguous_trust", 3));
+                    ("ambiguous_trust", 5));
 
                 var results = query.GetProperty("results").EnumerateArray().ToArray();
                 AssertJsonTrustClassification(
@@ -3117,6 +3153,14 @@ public partial class QueryCommandRunnerTests
                     "ambiguous_trust",
                     "origin:unknown",
                     "annotation_status:invalid");
+                foreach (var path in new[] { "src/raw-string-writer.cs", "src/verbatim-string-writer.cs" })
+                {
+                    AssertJsonTrustClassification(
+                        Assert.Single(results, result => result.GetProperty("path").GetString() == path),
+                        "ambiguous_trust",
+                        "origin:unknown",
+                        "annotation_status:invalid");
+                }
             }
 
             Assert.Equal(CommandExitCodes.Success, parserExitCode);
