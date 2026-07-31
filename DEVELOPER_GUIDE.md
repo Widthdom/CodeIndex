@@ -864,6 +864,7 @@ filters remain exact, so `--kind import` does not include local type declaration
 | `extends` | Inheritance or type-extension relationship |
 | `from` | Dockerfile `FROM <stage>` dependency |
 | `friend` | C++ friend declaration relationship |
+| `generated_column_dependency` | SQL generated/computed-column expression dependency |
 | `generic_type_argument` | Generic type argument attached to an explicit invocation |
 | `implement` | Interface implementation relationship |
 | `implicit_implementation` | C# implicit interface implementation relationship |
@@ -4271,6 +4272,7 @@ filter、downstream JSON consumer が同じ値を理解できるようにして�
 | `extends` | inheritance または type-extension relationship |
 | `from` | Dockerfile `FROM <stage>` dependency |
 | `friend` | C++ friend declaration relationship |
+| `generated_column_dependency` | SQL generated / computed column 式の dependency |
 | `generic_type_argument` | explicit invocation に付随する generic type argument |
 | `implement` | interface implementation relationship |
 | `implicit_implementation` | C# implicit interface implementation relationship |
