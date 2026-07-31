@@ -6832,14 +6832,6 @@ public partial class QueryCommandRunnerTests
                 """
                 public static class TraversalPolicy
                 {
-                    private static readonly EnumerationOptions TopOnly = CreateOptions();
-
-                    private static EnumerationOptions CreateOptions() => new()
-                    {
-                        RecurseSubdirectories = false,
-                        IgnoreInaccessible = false,
-                    };
-
                     public static void Run(string root)
                     {
                         Console.WriteLine("policy");
@@ -6851,6 +6843,14 @@ public partial class QueryCommandRunnerTests
                             Console.WriteLine(path);
                         }
                     }
+
+                    private static readonly EnumerationOptions TopOnly = CreateOptions();
+
+                    private static EnumerationOptions CreateOptions() => new()
+                    {
+                        RecurseSubdirectories = false,
+                        IgnoreInaccessible = false,
+                    };
                 }
                 """);
             TestProjectHelper.InsertIndexedFile(
@@ -7025,6 +7025,84 @@ public partial class QueryCommandRunnerTests
                         return File.ReadAllText(path);
                     }
 
+                    public static string AwaitNamedVariable(string path)
+                    {
+                        var awaitedWrite = WriteBoundedAsync(path);
+                        return File.ReadAllText(path);
+                    }
+
+                    public static string ConditionalHelper(string path, bool shouldWrite)
+                    {
+                        if (shouldWrite)
+                            WriteBounded(path);
+                        return File.ReadAllText(path);
+                    }
+
+                    public static string CommentOnlyHelper(string path)
+                    {
+                        Prepare(path);
+                        return File.ReadAllText(path);
+                    }
+
+                    private static void Prepare(string path)
+                    {
+                        // BoundedFile.WriteAllText(path, MaxBytes);
+                        Console.WriteLine(path);
+                    }
+
+                    public static string PathReassigned(string path, string other)
+                    {
+                        var length = new FileInfo(path).Length;
+                        if (length > MaxBytes)
+                            throw new InvalidDataException();
+                        path = other;
+                        return File.ReadAllText(path);
+                    }
+
+                    public static string LaterConditionalThrow(string path, bool fatal)
+                    {
+                        var length = new FileInfo(path).Length;
+                        if (length > MaxBytes)
+                            Console.WriteLine("too large but continuing");
+                        if (fatal)
+                            throw new InvalidOperationException();
+                        return File.ReadAllText(path);
+                    }
+
+                    public static string ElseReadsOversized(string path)
+                    {
+                        var length = new FileInfo(path).Length;
+                        if (length < MaxBytes)
+                        {
+                            return string.Empty;
+                        }
+                        else
+                        {
+                            return File.ReadAllText(path);
+                        }
+                    }
+
+                    public static string NamedArgumentBound(string path)
+                    {
+                        var length = new FileInfo(path).Length;
+                        if (length > MaxBytes)
+                            throw new InvalidDataException();
+                        return File.ReadAllText(path: path);
+                    }
+
+                    public static string InlineThrowBound(string path)
+                    {
+                        var length = new FileInfo(path).Length;
+                        if (length > MaxBytes) throw new InvalidDataException();
+                        return File.ReadAllText(path);
+                    }
+
+                    public static async Task<string> AwaitedHelperBound(string path)
+                    {
+                        await WriteBoundedAsync(path);
+                        return File.ReadAllText(path);
+                    }
+
                     private static Task WriteBoundedAsync(string path)
                     {
                         BoundedFile.WriteAllText(path, MaxBytes);
@@ -7044,16 +7122,25 @@ public partial class QueryCommandRunnerTests
             var results = query.GetProperty("results").EnumerateArray().ToArray();
 
             Assert.True(
-                query.GetProperty("count").GetInt32() == 5,
+                query.GetProperty("count").GetInt32() == 11,
                 $"Unexpected ReadAllText results: {string.Join(", ", results.Select(result => result.GetProperty("enclosing_symbol_name").GetString()))}");
             Assert.DoesNotContain(results, result => result.GetProperty("enclosing_symbol_name").GetString() == "LocalBound");
             Assert.DoesNotContain(results, result => result.GetProperty("enclosing_symbol_name").GetString() == "HelperBound");
             Assert.DoesNotContain(results, result => result.GetProperty("enclosing_symbol_name").GetString() == "FileInfoBound");
+            Assert.DoesNotContain(results, result => result.GetProperty("enclosing_symbol_name").GetString() == "NamedArgumentBound");
+            Assert.DoesNotContain(results, result => result.GetProperty("enclosing_symbol_name").GetString() == "InlineThrowBound");
+            Assert.DoesNotContain(results, result => result.GetProperty("enclosing_symbol_name").GetString() == "AwaitedHelperBound");
             Assert.Contains(results, result => result.GetProperty("enclosing_symbol_name").GetString() == "Unguarded");
             Assert.Contains(results, result => result.GetProperty("enclosing_symbol_name").GetString() == "Unrelated");
             Assert.Contains(results, result => result.GetProperty("enclosing_symbol_name").GetString() == "Inverted");
             Assert.Contains(results, result => result.GetProperty("enclosing_symbol_name").GetString() == "ConditionalReject");
             Assert.Contains(results, result => result.GetProperty("enclosing_symbol_name").GetString() == "Unawaited");
+            Assert.Contains(results, result => result.GetProperty("enclosing_symbol_name").GetString() == "AwaitNamedVariable");
+            Assert.Contains(results, result => result.GetProperty("enclosing_symbol_name").GetString() == "ConditionalHelper");
+            Assert.Contains(results, result => result.GetProperty("enclosing_symbol_name").GetString() == "CommentOnlyHelper");
+            Assert.Contains(results, result => result.GetProperty("enclosing_symbol_name").GetString() == "PathReassigned");
+            Assert.Contains(results, result => result.GetProperty("enclosing_symbol_name").GetString() == "LaterConditionalThrow");
+            Assert.Contains(results, result => result.GetProperty("enclosing_symbol_name").GetString() == "ElseReadsOversized");
 
             var guardFilter = Assert.Single(query.GetProperty("guard_filters").EnumerateArray());
             Assert.Equal("container", guardFilter.GetProperty("scope").GetString());

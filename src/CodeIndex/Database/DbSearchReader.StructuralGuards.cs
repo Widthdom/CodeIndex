@@ -97,7 +97,7 @@ public partial class DbReader
             return new SearchGuardEvaluation(container.StartLine, container.EndLine, null, rejected);
         }
 
-        var readPath = NormalizeCSharpExpression(invocation.Arguments[0]);
+        var readPath = NormalizeCSharpExpression(RemoveNamedArgumentPrefix(invocation.Arguments[0]));
         if (!IsSimpleCSharpValueExpression(readPath))
         {
             AddRejectedStructuralEvidence(
@@ -151,8 +151,24 @@ public partial class DbReader
                     continue;
                 }
 
+                if (HasAssignmentBetween(lines, readPath, source.Line + 1, primaryMatch.LineNumber - 1))
+                {
+                    AddRejectedStructuralEvidence(
+                        rejected,
+                        path,
+                        lineNumber,
+                        text,
+                        filter,
+                        $"read path '{readPath}' is reassigned after the size source and before ReadAllText",
+                        "read_path_reassigned",
+                        readPath,
+                        container.Name,
+                        lang);
+                    continue;
+                }
+
                 if (IsRejectingUpperBound(condition.Value.Text, source.Expression) &&
-                    GuardBranchTerminates(lines, lineNumber, condition.Value.EndLine, primaryMatch.LineNumber))
+                    GuardBranchTerminates(lines, lineNumber, primaryMatch.LineNumber))
                 {
                     return new SearchGuardEvaluation(
                         container.StartLine,
@@ -172,7 +188,7 @@ public partial class DbReader
                 }
 
                 if (IsAcceptingUpperBound(condition.Value.Text, source.Expression) &&
-                    IsLineInsideGuardBranch(lines, lineNumber, condition.Value.EndLine, primaryMatch.LineNumber))
+                    IsLineInsideGuardBranch(lines, lineNumber, primaryMatch.LineNumber))
                 {
                     return new SearchGuardEvaluation(
                         container.StartLine,
@@ -440,9 +456,24 @@ public partial class DbReader
             if (argumentIndex < 0)
                 continue;
 
+            if (!ResolvedCallDominatesRead(callerLines, call.Line, call.Name, primaryMatch.LineNumber))
+            {
+                AddRejectedStructuralEvidence(
+                    rejected,
+                    path,
+                    call.Line,
+                    callerLines.GetValueOrDefault(call.Line, call.Name),
+                    filter,
+                    "the same-path helper call does not dominate the control-flow path to ReadAllText",
+                    "bounded_writer_not_dominating",
+                    readPath,
+                    container.Name,
+                    lang);
+                continue;
+            }
+
             if (IsTaskLike(call.ReturnType) &&
-                !invocation.Text.Contains("await", StringComparison.Ordinal) &&
-                !invocation.Text.Contains("GetResult", StringComparison.Ordinal))
+                !IsAwaitedOrSynchronouslyCompleted(invocation.Text))
             {
                 AddRejectedStructuralEvidence(
                     rejected,
@@ -466,7 +497,9 @@ public partial class DbReader
             var targetLines = ReadLineWindow(call.Path, call.StartLine, call.EndLine, lineWindowCache);
             foreach (var (lineNumber, text) in targetLines)
             {
-                if (!text.Contains("Bounded", StringComparison.Ordinal))
+                var codeText = GetMaskedCSharpLine(targetLines, lineNumber);
+                if (!codeText.Contains("Bounded", StringComparison.Ordinal) ||
+                    !IsTopLevelContainerStatement(targetLines, call.StartLine, lineNumber, "Bounded"))
                     continue;
 
                 var boundedInvocation = ExtractInvocation(targetLines, lineNumber, "Bounded");
@@ -583,9 +616,10 @@ public partial class DbReader
             JOIN files f ON f.id = s.file_id
             WHERE f.path = @path
               AND s.name = @name COLLATE BINARY
-              AND s.start_line <= @primaryLine
               AND (
-                    (s.start_line >= @containerStart AND s.end_line <= @containerEnd)
+                    (s.start_line >= @containerStart
+                     AND s.end_line <= @containerEnd
+                     AND s.start_line <= @primaryLine)
                     OR s.container_name = @typeContainer COLLATE BINARY
                   )
             ORDER BY
@@ -671,8 +705,8 @@ public partial class DbReader
         SortedDictionary<int, string> lines,
         int startLine)
     {
-        var text = JoinFollowingLines(lines, startLine, 12);
-        var ifIndex = text.IndexOf("if", StringComparison.Ordinal);
+        var text = MaskCSharpNonCode(JoinFollowingLines(lines, startLine, 12));
+        var ifIndex = FindCSharpKeyword(text, "if");
         if (ifIndex < 0)
             return null;
         var openParen = text.IndexOf('(', ifIndex + 2);
@@ -906,75 +940,428 @@ public partial class DbReader
     private static bool GuardBranchTerminates(
         SortedDictionary<int, string> lines,
         int ifLine,
-        int conditionEndLine,
         int readLine)
     {
-        var depth = 0;
-        var sawBlock = false;
-        foreach (var (lineNumber, text) in lines)
+        var segment = BuildStructuralSourceSegment(lines, ifLine, Math.Min(readLine - 1, ifLine + 24));
+        var code = MaskCSharpNonCode(segment.Text);
+        var ifIndex = FindCSharpKeyword(code, "if");
+        if (ifIndex < 0)
+            return false;
+        var openParen = code.IndexOf('(', ifIndex + 2);
+        if (openParen < 0)
+            return false;
+        var closeParen = FindMatchingDelimiter(code, openParen, '(', ')');
+        if (closeParen < 0)
+            return false;
+
+        var bodyStart = SkipCSharpWhitespace(code, closeParen + 1);
+        if (bodyStart >= code.Length)
+            return false;
+        if (code[bodyStart] != '{')
         {
-            if (lineNumber < conditionEndLine || lineNumber >= readLine || lineNumber > ifLine + 24)
-                continue;
-
-            var trimmed = text.Trim();
-            if (!sawBlock && lineNumber > conditionEndLine &&
-                (trimmed.StartsWith("return", StringComparison.Ordinal) || trimmed.StartsWith("throw", StringComparison.Ordinal)))
-                return true;
-
-            foreach (var ch in text)
-            {
-                if (ch == '{')
-                {
-                    depth++;
-                    sawBlock = true;
-                }
-                else if (ch == '}')
-                {
-                    depth--;
-                }
-            }
-
-            if (sawBlock && depth == 1 &&
-                (trimmed.StartsWith("return", StringComparison.Ordinal) || trimmed.StartsWith("throw", StringComparison.Ordinal)))
-                return true;
-            if (sawBlock && depth <= 0)
-                return false;
+            var statementEnd = FindTopLevelStatementEnd(code, bodyStart);
+            var statement = code[bodyStart..statementEnd].Trim();
+            return StartsWithCSharpKeyword(statement, "return") || StartsWithCSharpKeyword(statement, "throw");
         }
 
-        return false;
+        var bodyEnd = FindMatchingDelimiter(code, bodyStart, '{', '}');
+        return bodyEnd > bodyStart && ContainsTopLevelTerminatingStatement(code[(bodyStart + 1)..bodyEnd]);
     }
 
     private static bool IsLineInsideGuardBranch(
         SortedDictionary<int, string> lines,
         int ifLine,
-        int conditionEndLine,
         int targetLine)
     {
+        var segment = BuildStructuralSourceSegment(lines, ifLine, targetLine);
+        if (!segment.LineOffsets.TryGetValue(targetLine, out var targetLineOffset))
+            return false;
+        var code = MaskCSharpNonCode(segment.Text);
+        var targetLineText = GetMaskedCSharpLine(lines, targetLine);
+        var readIndex = targetLineText.IndexOf("ReadAllText", StringComparison.Ordinal);
+        if (readIndex < 0)
+            return false;
+        var targetOffset = targetLineOffset + readIndex;
+
+        var ifIndex = FindCSharpKeyword(code, "if");
+        if (ifIndex < 0)
+            return false;
+        var openParen = code.IndexOf('(', ifIndex + 2);
+        if (openParen < 0)
+            return false;
+        var closeParen = FindMatchingDelimiter(code, openParen, '(', ')');
+        if (closeParen < 0)
+            return false;
+
+        var bodyStart = SkipCSharpWhitespace(code, closeParen + 1);
+        if (targetOffset < bodyStart || bodyStart >= code.Length)
+            return false;
+        if (code[bodyStart] != '{')
+            return targetOffset < FindTopLevelStatementEnd(code, bodyStart);
+
         var depth = 0;
-        var sawOpen = false;
-        foreach (var (lineNumber, text) in lines)
+        for (var i = bodyStart; i < Math.Min(targetOffset, code.Length); i++)
         {
-            if (lineNumber < ifLine)
-                continue;
-            if (lineNumber > targetLine)
-                break;
-            foreach (var ch in text)
-            {
-                if (ch == '{')
-                {
-                    depth++;
-                    if (lineNumber >= conditionEndLine)
-                        sawOpen = true;
-                }
-                else if (ch == '}')
-                {
-                    depth--;
-                }
-            }
-            if (sawOpen && depth <= 0 && lineNumber < targetLine)
+            if (code[i] == '{')
+                depth++;
+            else if (code[i] == '}' && --depth == 0)
                 return false;
         }
-        return sawOpen && depth > 0;
+        return depth > 0;
+    }
+
+    private static bool ResolvedCallDominatesRead(
+        SortedDictionary<int, string> lines,
+        int callLine,
+        string callName,
+        int readLine)
+    {
+        if (IsImmediatelyControlledByUnbracedConstruct(lines, callLine, callName))
+            return false;
+
+        var callPath = GetStructuralBracePath(lines, callLine, callName);
+        var readPath = GetStructuralBracePath(lines, readLine, "ReadAllText");
+        return callPath.Count <= readPath.Count &&
+               callPath.SequenceEqual(readPath.Take(callPath.Count));
+    }
+
+    private static bool IsTopLevelContainerStatement(
+        SortedDictionary<int, string> lines,
+        int containerStartLine,
+        int line,
+        string marker)
+    {
+        var scopedLines = new SortedDictionary<int, string>(
+            lines.Where(pair => pair.Key >= containerStartLine)
+                .ToDictionary(pair => pair.Key, pair => pair.Value));
+        return GetStructuralBracePath(scopedLines, line, marker).Count <= 1 &&
+               !IsImmediatelyControlledByUnbracedConstruct(scopedLines, line, marker);
+    }
+
+    private static bool IsAwaitedOrSynchronouslyCompleted(string invocationText)
+    {
+        var code = MaskCSharpNonCode(invocationText);
+        if (FindCSharpKeyword(code, "await") >= 0)
+            return true;
+        var normalized = NormalizeCSharpExpression(code);
+        return normalized.Contains(".GetAwaiter().GetResult(", StringComparison.Ordinal);
+    }
+
+    private static bool IsImmediatelyControlledByUnbracedConstruct(
+        SortedDictionary<int, string> lines,
+        int line,
+        string marker)
+    {
+        var current = GetMaskedCSharpLine(lines, line);
+        var markerIndex = current.IndexOf(marker, StringComparison.Ordinal);
+        if (markerIndex >= 0)
+        {
+            var prefix = current[..markerIndex];
+            if (FindLastControlKeyword(prefix) >= 0 || prefix.Contains('?'))
+                return true;
+        }
+
+        var preceding = BuildStructuralSourceSegment(lines, Math.Max(lines.Keys.FirstOrDefault(), line - 12), line - 1);
+        var code = MaskCSharpNonCode(preceding.Text).TrimEnd();
+        var controlIndex = FindLastControlKeyword(code);
+        if (controlIndex < 0)
+            return false;
+        var openParen = code.IndexOf('(', controlIndex);
+        if (openParen < 0)
+            return false;
+        var closeParen = FindMatchingDelimiter(code, openParen, '(', ')');
+        return closeParen >= 0 && string.IsNullOrWhiteSpace(code[(closeParen + 1)..]);
+    }
+
+    private static List<(int Line, int Column)> GetStructuralBracePath(
+        SortedDictionary<int, string> lines,
+        int targetLine,
+        string marker)
+    {
+        var source = BuildStructuralSourceSegment(lines, lines.Keys.FirstOrDefault(), targetLine);
+        var code = MaskCSharpNonCode(source.Text);
+        if (!source.LineOffsets.TryGetValue(targetLine, out var targetLineOffset))
+            return [];
+        var targetLineText = GetMaskedCSharpLine(lines, targetLine);
+        var markerIndex = targetLineText.IndexOf(marker, StringComparison.Ordinal);
+        var targetOffset = targetLineOffset + Math.Max(0, markerIndex);
+        var path = new List<(int Line, int Column)>();
+        var line = source.LineOffsets.Count == 0 ? 0 : source.LineOffsets.Keys.Min();
+        var column = 0;
+        for (var i = 0; i < Math.Min(targetOffset, code.Length); i++)
+        {
+            if (code[i] == '\n')
+            {
+                line++;
+                column = 0;
+                continue;
+            }
+            column++;
+            if (code[i] == '{')
+                path.Add((line, column));
+            else if (code[i] == '}' && path.Count > 0)
+                path.RemoveAt(path.Count - 1);
+        }
+        return path;
+    }
+
+    private static int FindLastControlKeyword(string code)
+    {
+        var result = -1;
+        foreach (var keyword in new[] { "if", "for", "foreach", "while", "switch", "when" })
+        {
+            var searchIndex = 0;
+            while (searchIndex < code.Length)
+            {
+                var index = FindCSharpKeyword(code, keyword, searchIndex);
+                if (index < 0)
+                    break;
+                result = Math.Max(result, index);
+                searchIndex = index + keyword.Length;
+            }
+        }
+        return result;
+    }
+
+    private static int FindCSharpKeyword(string code, string keyword, int startIndex = 0)
+    {
+        var index = Math.Max(0, startIndex);
+        while (index < code.Length)
+        {
+            index = code.IndexOf(keyword, index, StringComparison.Ordinal);
+            if (index < 0)
+                return -1;
+            var before = index == 0 || !IsCSharpIdentifierCharacter(code[index - 1]);
+            var afterIndex = index + keyword.Length;
+            var after = afterIndex >= code.Length || !IsCSharpIdentifierCharacter(code[afterIndex]);
+            if (before && after)
+                return index;
+            index = afterIndex;
+        }
+        return -1;
+    }
+
+    private static bool StartsWithCSharpKeyword(string code, string keyword)
+        => code.StartsWith(keyword, StringComparison.Ordinal) &&
+           (code.Length == keyword.Length || !IsCSharpIdentifierCharacter(code[keyword.Length]));
+
+    private static bool IsCSharpIdentifierCharacter(char ch)
+        => char.IsLetterOrDigit(ch) || ch == '_';
+
+    private static int SkipCSharpWhitespace(string text, int index)
+    {
+        while (index < text.Length && char.IsWhiteSpace(text[index]))
+            index++;
+        return index;
+    }
+
+    private static int FindTopLevelStatementEnd(string code, int startIndex)
+    {
+        var paren = 0;
+        var bracket = 0;
+        var brace = 0;
+        for (var i = startIndex; i < code.Length; i++)
+        {
+            switch (code[i])
+            {
+                case '(':
+                    paren++;
+                    break;
+                case ')':
+                    paren--;
+                    break;
+                case '[':
+                    bracket++;
+                    break;
+                case ']':
+                    bracket--;
+                    break;
+                case '{':
+                    brace++;
+                    break;
+                case '}':
+                    if (brace == 0)
+                        return i;
+                    brace--;
+                    break;
+                case ';' when paren == 0 && bracket == 0 && brace == 0:
+                    return i + 1;
+            }
+        }
+        return code.Length;
+    }
+
+    private static bool ContainsTopLevelTerminatingStatement(string body)
+    {
+        var statementStart = 0;
+        var depth = 0;
+        for (var i = 0; i < body.Length; i++)
+        {
+            if (body[i] == '{')
+            {
+                if (depth++ == 0)
+                    statementStart = i + 1;
+                continue;
+            }
+            if (body[i] == '}')
+            {
+                if (depth > 0 && --depth == 0)
+                    statementStart = i + 1;
+                continue;
+            }
+            if (body[i] != ';' || depth != 0)
+                continue;
+
+            var statement = body[statementStart..i].Trim();
+            if (StartsWithCSharpKeyword(statement, "return") || StartsWithCSharpKeyword(statement, "throw"))
+                return true;
+            statementStart = i + 1;
+        }
+        return false;
+    }
+
+    private static StructuralSourceSegment BuildStructuralSourceSegment(
+        SortedDictionary<int, string> lines,
+        int startLine,
+        int endLine)
+    {
+        var builder = new StringBuilder();
+        var offsets = new Dictionary<int, int>();
+        foreach (var (line, text) in lines)
+        {
+            if (line < startLine || line > endLine)
+                continue;
+            if (builder.Length > 0)
+                builder.Append('\n');
+            offsets[line] = builder.Length;
+            builder.Append(text);
+        }
+        return new StructuralSourceSegment(builder.ToString(), offsets);
+    }
+
+    private static string GetMaskedCSharpLine(SortedDictionary<int, string> lines, int line)
+    {
+        var source = BuildStructuralSourceSegment(lines, lines.Keys.FirstOrDefault(), line);
+        if (!source.LineOffsets.TryGetValue(line, out var offset))
+            return string.Empty;
+        var masked = MaskCSharpNonCode(source.Text);
+        var end = masked.IndexOf('\n', offset);
+        return end < 0 ? masked[offset..] : masked[offset..end];
+    }
+
+    private static string MaskCSharpNonCode(string text)
+    {
+        var chars = text.ToCharArray();
+        var inLineComment = false;
+        var inBlockComment = false;
+        var inString = false;
+        var delimiter = '\0';
+        var verbatim = false;
+        var rawQuoteCount = 0;
+        for (var i = 0; i < chars.Length; i++)
+        {
+            var ch = chars[i];
+            var next = i + 1 < chars.Length ? chars[i + 1] : '\0';
+            if (inLineComment)
+            {
+                if (ch == '\n')
+                    inLineComment = false;
+                else
+                    chars[i] = ' ';
+                continue;
+            }
+            if (inBlockComment)
+            {
+                if (ch == '*' && next == '/')
+                {
+                    chars[i] = chars[i + 1] = ' ';
+                    i++;
+                    inBlockComment = false;
+                }
+                else if (ch != '\n')
+                {
+                    chars[i] = ' ';
+                }
+                continue;
+            }
+            if (inString)
+            {
+                if (ch == '\n')
+                    continue;
+                if (rawQuoteCount > 0 && ch == '"' && CountRun(text, i, '"') >= rawQuoteCount)
+                {
+                    for (var quote = 0; quote < rawQuoteCount; quote++)
+                        chars[i + quote] = ' ';
+                    i += rawQuoteCount - 1;
+                    inString = false;
+                    rawQuoteCount = 0;
+                    continue;
+                }
+                if (rawQuoteCount == 0 && ch == delimiter)
+                {
+                    if (verbatim && next == delimiter)
+                    {
+                        chars[i] = chars[i + 1] = ' ';
+                        i++;
+                        continue;
+                    }
+                    if (!verbatim && i > 0 && IsEscapedCharacter(text, i))
+                    {
+                        chars[i] = ' ';
+                        continue;
+                    }
+                    chars[i] = ' ';
+                    inString = false;
+                    continue;
+                }
+                chars[i] = ' ';
+                continue;
+            }
+
+            if (ch == '/' && next == '/')
+            {
+                chars[i] = chars[i + 1] = ' ';
+                i++;
+                inLineComment = true;
+                continue;
+            }
+            if (ch == '/' && next == '*')
+            {
+                chars[i] = chars[i + 1] = ' ';
+                i++;
+                inBlockComment = true;
+                continue;
+            }
+            if (ch is '"' or '\'')
+            {
+                var quoteCount = ch == '"' ? CountRun(text, i, '"') : 1;
+                rawQuoteCount = quoteCount >= 3 ? quoteCount : 0;
+                delimiter = ch;
+                verbatim = rawQuoteCount == 0 && ch == '"' && i > 0 && text[i - 1] == '@';
+                inString = true;
+                var maskCount = Math.Max(1, rawQuoteCount);
+                for (var quote = 0; quote < maskCount && i + quote < chars.Length; quote++)
+                    chars[i + quote] = ' ';
+                i += maskCount - 1;
+            }
+        }
+        return new string(chars);
+    }
+
+    private static int CountRun(string text, int start, char value)
+    {
+        var count = 0;
+        while (start + count < text.Length && text[start + count] == value)
+            count++;
+        return count;
+    }
+
+    private static bool IsEscapedCharacter(string text, int index)
+    {
+        var slashCount = 0;
+        for (var i = index - 1; i >= 0 && text[i] == '\\'; i--)
+            slashCount++;
+        return slashCount % 2 != 0;
     }
 
     private static bool HasAssignmentBetween(
@@ -1120,4 +1507,6 @@ public partial class DbReader
     private sealed record EnumerationOptionsDefinition(int Line, string Text, string Container);
 
     private sealed record InvocationText(string Text, List<string> Arguments);
+
+    private sealed record StructuralSourceSegment(string Text, Dictionary<int, int> LineOffsets);
 }
