@@ -117,6 +117,7 @@ public static partial class QueryCommandRunner
         private bool rawBytes;
         private bool rawKinds;
         private bool includeQualifiedCommonCalls;
+        private bool includeMemberReads;
         private bool verbose;
         private bool profile;
         private int? slowQueryMs;
@@ -508,6 +509,7 @@ public static partial class QueryCommandRunner
                 RawBytes = rawBytes,
                 RawKinds = rawKinds,
                 IncludeQualifiedCommonCalls = includeQualifiedCommonCalls,
+                IncludeMemberReads = includeMemberReads,
                 Verbose = verbose,
                 Profile = profile,
                 SlowQueryMs = slowQueryMs,

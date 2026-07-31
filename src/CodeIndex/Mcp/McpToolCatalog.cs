@@ -135,6 +135,7 @@ public partial class McpServer
                         ["kind"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by edge kind. Default results use the canonical call, instantiate, subscribe vocabulary; non-default `friend` remains available explicitly. Metadata and type-only kinds — metadata (attribute, annotation), type-position (type_reference), and JS/TS discriminant narrowing (type_tag) — are rejected here; use `references` with the desired kind instead." },
                         ["rawKinds"] = new JsonObject { ["type"] = "boolean", ["description"] = "Preserve raw reference kinds instead of canonical CLI grouping, matching `--raw-kinds`.", ["default"] = false },
                         ["includeQualifiedCommonCalls"] = new JsonObject { ["type"] = "boolean", ["description"] = "Include unresolved receiver/type-qualified C# calls with common member names. Resolved qualified calls are already included by default.", ["default"] = false },
+                        ["includeMemberReads"] = new JsonObject { ["type"] = "boolean", ["description"] = "Include canonical `member_read` value-read edges. Defaults to false; legacy indexes stored these reads as `call` and cannot separate them.", ["default"] = false },
                         ["rankBy"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray { "weighted", "count", "kind" }, ["description"] = "Primary ranking recipe: weighted score then count (default; instantiate=3.0, call=1.0, subscribe=0.1), raw count, or kind priority then count. Only ties use exact-case/name relevance, production before test before docs path category, then stable path/location/name fields. Responses expose the complete applied precedence in rankingRecipe.", ["default"] = "weighted" },
                         ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language" },
                         ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 20). Responses include `truncated`, `more_available`, and `next_offset` when more rows exist.", ["default"] = QueryCommandRunner.DefaultQueryLimit },
@@ -163,6 +164,7 @@ public partial class McpServer
                         ["kind"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by edge kind. Default results use the canonical call, instantiate, subscribe vocabulary; non-default graph kinds remain available explicitly. Metadata and type-only kinds — metadata (attribute, annotation), type-position (type_reference), and JS/TS discriminant narrowing (type_tag) — are rejected here; use `references` with the desired kind instead." },
                         ["rawKinds"] = new JsonObject { ["type"] = "boolean", ["description"] = "Preserve raw reference kinds instead of canonical CLI grouping, matching `--raw-kinds`.", ["default"] = false },
                         ["includeQualifiedCommonCalls"] = new JsonObject { ["type"] = "boolean", ["description"] = "Include unresolved receiver/type-qualified C# calls with common member names. Resolved qualified calls are already included by default.", ["default"] = false },
+                        ["includeMemberReads"] = new JsonObject { ["type"] = "boolean", ["description"] = "Include canonical `member_read` value-read edges. Defaults to false; legacy indexes stored these reads as `call` and cannot separate them.", ["default"] = false },
                         ["rankBy"] = new JsonObject { ["type"] = "string", ["enum"] = new JsonArray { "weighted", "count", "kind" }, ["description"] = "Primary ranking recipe: weighted score then count (default; instantiate=3.0, call=1.0, subscribe=0.1), raw count, or kind priority then count. Only ties use exact-case/name relevance, production before test before docs path category, then stable path/location/name fields. Responses expose the complete applied precedence in rankingRecipe.", ["default"] = "weighted" },
                         ["lang"] = new JsonObject { ["type"] = "string", ["description"] = "Filter by language" },
                         ["limit"] = new JsonObject { ["type"] = "integer", ["description"] = "Max results (default: 20). Responses include `truncated`, `more_available`, and `next_offset` when more rows exist.", ["default"] = QueryCommandRunner.DefaultQueryLimit },
@@ -411,6 +413,7 @@ public partial class McpServer
                         ["excludeTests"] = new JsonObject { ["type"] = "boolean", ["description"] = "Exclude likely test files", ["default"] = false },
                         ["includeGenerated"] = new JsonObject { ["type"] = "boolean", ["description"] = "Include files detected as generated code", ["default"] = false },
                         ["withPaths"] = new JsonObject { ["type"] = "boolean", ["description"] = "When true, each caller carries a `paths` array of shortest call chains [resolvedRoot, intermediate..., callerName]; diamond convergence surfaces every shortest route (per-row cap; `pathsTruncated` flag indicates overflow).", ["default"] = false },
+                        ["includeMemberReads"] = new JsonObject { ["type"] = "boolean", ["description"] = "Include canonical `member_read` value-read edges in impact traversal. Defaults to false; legacy indexes stored these reads as `call` and cannot separate them.", ["default"] = false },
                         ["countOnly"] = new JsonObject { ["type"] = "boolean", ["description"] = "Return only count metadata and a small top-file histogram; omit caller and file-impact row payloads.", ["default"] = false }
                     },
                     ["required"] = new JsonArray { "query" }
@@ -459,6 +462,56 @@ public partial class McpServer
                     ["properties"] = new JsonObject
                     {
                         ["path"] = new JsonObject { ["type"] = "string", ["description"] = "Indexed file path (e.g. src/app.cs)" },
+                        ["fields"] = new JsonObject
+                        {
+                            ["oneOf"] = new JsonArray
+                            {
+                                new JsonObject { ["type"] = "string", ["minLength"] = 1, ["maxLength"] = 256 },
+                                new JsonObject
+                                {
+                                    ["type"] = "array",
+                                    ["minItems"] = 1,
+                                    ["maxItems"] = 16,
+                                    ["items"] = new JsonObject
+                                    {
+                                        ["type"] = "string",
+                                        ["enum"] = new JsonArray
+                                        {
+                                            "all", "kind", "name", "display_name", "path", "line", "start_line", "end_line",
+                                            "depth", "body_start_line", "body_end_line", "signature", "signature_truncated",
+                                            "signature_original_length", "container_kind", "container_name", "visibility",
+                                            "return_type", "sort_mode", "reference_count", "size_lines", "complexity_score",
+                                            "range", "lines", "body", "body_range", "container", "refs", "references",
+                                            "size", "span", "complexity"
+                                        }
+                                    }
+                                }
+                            },
+                            ["description"] = "CLI-compatible outline projection fields. A string may be comma-separated; aliases expand exactly as `cdidx outline --outline-fields` does."
+                        },
+                        ["sort"] = new JsonObject
+                        {
+                            ["type"] = "string",
+                            ["enum"] = new JsonArray { "source", "name", "kind", "references", "size", "complexity", "path" },
+                            ["description"] = "Deterministic outline ordering shared with `cdidx outline --sort`.",
+                            ["default"] = "source"
+                        },
+                        ["limit"] = new JsonObject
+                        {
+                            ["type"] = "integer",
+                            ["minimum"] = 1,
+                            ["maximum"] = MaxLimit,
+                            ["description"] = "Maximum complete symbol rows to return (default: 100, maximum: 200).",
+                            ["default"] = 100
+                        },
+                        ["cursor"] = new JsonObject { ["type"] = "string", ["description"] = "Opaque `page:v1` continuation returned as `next_cursor`; it is bound to path, ordering, and index generation." },
+                        ["maxBytes"] = new JsonObject
+                        {
+                            ["type"] = "integer",
+                            ["minimum"] = 1,
+                            ["maximum"] = MaxClientResponseJsonBytes,
+                            ["description"] = "Maximum UTF-8 bytes for serialized structured content. Pages shrink only at complete symbol-row boundaries."
+                        },
                     },
                     ["required"] = new JsonArray { "path" }
                 },

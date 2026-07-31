@@ -96,6 +96,13 @@ public static partial class ReferenceExtractor
             var name = language == "csharp" ? NormalizeCSharpIdentifier(rawName) : rawName;
             if (!callableDefinitionNames.Contains(name))
                 continue;
+            if (language == "csharp"
+                && IsCSharpSimpleAssignmentTarget(
+                    preparedLine,
+                    SkipWhitespace(preparedLine, nameGroup.Index + nameGroup.Length)))
+            {
+                continue;
+            }
 
             var container = resolveContainerForColumn(nameGroup.Index);
             AddChainReference(

@@ -4493,6 +4493,17 @@ public class DatabaseTests : IDisposable
             detail.Contains("SCAN f", StringComparison.Ordinal)
             || detail.Contains("SCAN s", StringComparison.Ordinal));
 
+        var memberReadPlan = ReadQueryPlanDetails(
+            _db.Connection,
+            DbWriter.CSharpMemberReadTargetWorkspaceSql);
+        Assert.Contains(memberReadPlan, detail =>
+            detail.Contains("SEARCH f USING INDEX idx_files_lang", StringComparison.Ordinal));
+        Assert.Contains(memberReadPlan, detail =>
+            detail.Contains("SEARCH s USING INDEX idx_symbols_file_kind", StringComparison.Ordinal));
+        Assert.DoesNotContain(memberReadPlan, detail =>
+            detail.Contains("SCAN f", StringComparison.Ordinal)
+            || detail.Contains("SCAN s", StringComparison.Ordinal));
+
         var interfacePlan = ReadQueryPlanDetails(
             _db.Connection,
             DbWriter.BuildCSharpStaticInterfaceDeclarationWorkspaceSql(batchCount: 1),
@@ -4623,6 +4634,87 @@ public class DatabaseTests : IDisposable
         {
             DbWriter.CSharpContractWorkspaceReadStatsForTesting = previousStatsHook;
         }
+    }
+
+    [Fact]
+    public void LoadCSharpWorkspace_IncludesPersistedMemberReadTargets_Issue4894()
+    {
+        var fileId = UpsertTestFile("src/Values.cs", "member-read-targets");
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "enum",
+                Name = "Ready",
+                Line = 2,
+                Signature = "Ready",
+                ContainerKind = "enum",
+                ContainerName = "State",
+                ContainerQualifiedName = "Demo.State",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "field",
+                Name = "Limit",
+                Line = 7,
+                Signature = "public const int Limit = 10;",
+                ContainerKind = "class",
+                ContainerName = "Values",
+                ContainerQualifiedName = "Demo.Values",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "field",
+                Name = "Other",
+                Line = 8,
+                Signature = "public static readonly int Other = 20;",
+                ContainerKind = "class",
+                ContainerName = "Values",
+                ContainerQualifiedName = "Demo.Values",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "Property",
+                Line = 9,
+                Signature = "public static int Property => 30;",
+                ContainerKind = "class",
+                ContainerName = "Values",
+                ContainerQualifiedName = "Demo.Values",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "property",
+                Name = "InterfaceProperty",
+                Line = 10,
+                Signature = "public static int InterfaceProperty => 40;",
+                ContainerKind = "interface",
+                ContainerName = "IValues",
+                ContainerQualifiedName = "Demo.IValues",
+            },
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "field",
+                Name = "Instance",
+                Line = 11,
+                Signature = "public int Instance;",
+                ContainerKind = "class",
+                ContainerName = "Values",
+                ContainerQualifiedName = "Demo.Values",
+            },
+        ]);
+
+        var loaded = _writer.LoadCSharpStaticInterfaceContractSymbols();
+
+        Assert.Equal(
+            ["InterfaceProperty", "Limit", "Other", "Property", "Ready"],
+            loaded.Select(symbol => symbol.Name).Order(StringComparer.Ordinal).ToArray());
     }
 
     [Fact]

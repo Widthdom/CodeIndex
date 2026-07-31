@@ -67,6 +67,24 @@ public partial class DbWriter
             WHERE f.lang = 'csharp'
               AND " + CSharpStaticInterfaceContractMemberPredicateSql;
 
+    private const string CSharpMemberReadTargetPredicateSql = @"
+              (
+                    (s.kind = 'enum' AND s.container_kind = 'enum')
+                    OR (
+                        s.kind IN ('field', 'property')
+                        AND s.container_kind IN ('class', 'struct', 'interface')
+                        AND (s.signature LIKE '%static%' OR s.signature LIKE '%const%')
+                    )
+              )";
+
+    internal const string CSharpMemberReadTargetWorkspaceSql = @"
+            SELECT " + CSharpContractWorkspaceProjectionSql + @"
+            FROM files f INDEXED BY idx_files_lang
+            CROSS JOIN symbols s INDEXED BY idx_symbols_file_kind
+              ON s.file_id = f.id
+            WHERE f.lang = 'csharp'
+              AND " + CSharpMemberReadTargetPredicateSql;
+
     internal bool? GetCSharpStaticInterfaceSourceEvidence()
     {
         var raw = GetMetaString(DbContext.CSharpStaticInterfaceSourceEvidenceMetaKey);
@@ -88,7 +106,8 @@ public partial class DbWriter
             excludedPaths,
             excludedExistingFileIds: null,
             isExistingSymbolPathExcluded: null,
-            out excludedPathsHaveContracts);
+            out excludedPathsHaveContracts,
+            out _);
 
     internal List<SymbolRecord> LoadCSharpStaticInterfaceContractSymbols(
         IReadOnlySet<string>? excludedPaths,
@@ -98,7 +117,8 @@ public partial class DbWriter
             excludedPaths,
             excludedExistingFileIds,
             isExistingSymbolPathExcluded: null,
-            out excludedPathsHaveContracts);
+            out excludedPathsHaveContracts,
+            out _);
 
     internal List<SymbolRecord> LoadCSharpStaticInterfaceContractSymbols(
         IReadOnlySet<string>? excludedPaths,
@@ -106,8 +126,24 @@ public partial class DbWriter
         Func<string, bool>? isExistingSymbolPathExcluded,
         out bool excludedPathsHaveContracts,
         CancellationToken cancellationToken = default)
+        => LoadCSharpStaticInterfaceContractSymbols(
+            excludedPaths,
+            excludedExistingFileIds,
+            isExistingSymbolPathExcluded,
+            out excludedPathsHaveContracts,
+            out _,
+            cancellationToken);
+
+    internal List<SymbolRecord> LoadCSharpStaticInterfaceContractSymbols(
+        IReadOnlySet<string>? excludedPaths,
+        IReadOnlyList<long>? excludedExistingFileIds,
+        Func<string, bool>? isExistingSymbolPathExcluded,
+        out bool excludedPathsHaveContracts,
+        out bool excludedPathsHaveMemberReadTargets,
+        CancellationToken cancellationToken = default)
     {
         excludedPathsHaveContracts = false;
+        excludedPathsHaveMemberReadTargets = false;
         var symbols = new List<SymbolRecord>();
         var retainedContractContainerNames = new HashSet<string>(StringComparer.Ordinal);
         var memberCandidateRowsRead = 0;
@@ -226,6 +262,13 @@ public partial class DbWriter
                 cancellationToken);
         }
 
+        AppendCSharpMemberReadTargetSymbols(
+            symbols,
+            excludedPaths,
+            excludedExistingFileIds,
+            isExistingSymbolPathExcluded,
+            out excludedPathsHaveMemberReadTargets,
+            cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         CSharpContractWorkspaceReadStatsForTesting?.Invoke(
             new CSharpContractWorkspaceReadStats(
@@ -235,6 +278,160 @@ public partial class DbWriter
                 interfaceDeclarationBatchQueries));
 
         return symbols;
+    }
+
+    private void AppendCSharpMemberReadTargetSymbols(
+        List<SymbolRecord> symbols,
+        IReadOnlySet<string>? excludedPaths,
+        IReadOnlyList<long>? excludedExistingFileIds,
+        Func<string, bool>? isExistingSymbolPathExcluded,
+        out bool excludedPathsHaveMemberReadTargets,
+        CancellationToken cancellationToken)
+    {
+        excludedPathsHaveMemberReadTargets = false;
+        cancellationToken.ThrowIfCancellationRequested();
+        var cmd = RentCommand(CSharpMemberReadTargetWorkspaceSql, static _ => { });
+        try
+        {
+            using var cancellationRegistration = RegisterSqliteInterrupt(cancellationToken);
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var symbol = ReadCSharpContractWorkspaceSymbol(reader);
+                if (!ReferenceExtractor.IsCSharpQualifiedMemberReadTargetSymbol(symbol))
+                    continue;
+
+                var fileId = reader.GetInt64(1);
+                if (FilePurgePlan.ContainsSortedFileId(excludedExistingFileIds, fileId))
+                {
+                    excludedPathsHaveMemberReadTargets = true;
+                    continue;
+                }
+
+                var path = reader.GetString(0);
+                if (excludedPaths?.Contains(path) == true
+                    || isExistingSymbolPathExcluded?.Invoke(path) == true)
+                {
+                    excludedPathsHaveMemberReadTargets = true;
+                    continue;
+                }
+
+                symbols.Add(symbol);
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+        catch (SqliteException ex) when (IsSqliteInterruptCancellation(ex, cancellationToken))
+        {
+            throw new OperationCanceledException(
+                "C# member-read target workspace read was interrupted.",
+                ex,
+                cancellationToken);
+        }
+        finally
+        {
+            ReleaseCommand(cmd);
+        }
+    }
+
+    internal bool HasCSharpMemberReadTargetSymbolsInFileIds(
+        IReadOnlyList<long> sortedFileIds,
+        CancellationToken cancellationToken = default)
+    {
+        if (sortedFileIds.Count == 0)
+            return false;
+
+        cancellationToken.ThrowIfCancellationRequested();
+        for (var offset = 0; offset < sortedFileIds.Count; offset += DeleteFilesBatchSize)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var batchCount = Math.Min(DeleteFilesBatchSize, sortedFileIds.Count - offset);
+            SqliteDynamicSql.EnsureParameterBudget(batchCount, "C# member-read target file-id preflight batch");
+            var parameterList = SqliteDynamicSql.BuildParameterList("fileId", batchCount);
+            var sql = @"
+                SELECT " + CSharpContractWorkspaceProjectionSql + @"
+                FROM files f
+                CROSS JOIN symbols s INDEXED BY idx_symbols_file_kind
+                  ON s.file_id = f.id
+                WHERE f.lang = 'csharp'
+                  AND s.file_id IN (" + parameterList + @")
+                  AND " + CSharpMemberReadTargetPredicateSql;
+            using var cmd = _conn.CreateCommand();
+            cmd.Transaction = _activeTransaction;
+            cmd.CommandText = sql;
+            for (var parameterIndex = 0; parameterIndex < batchCount; parameterIndex++)
+            {
+                cmd.Parameters.Add(
+                    SqliteDynamicSql.BuildParameterName("fileId", parameterIndex),
+                    SqliteType.Integer).Value = sortedFileIds[offset + parameterIndex];
+            }
+
+            using var cancellationRegistration = RegisterSqliteInterrupt(cancellationToken);
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (ReferenceExtractor.IsCSharpQualifiedMemberReadTargetSymbol(
+                        ReadCSharpContractWorkspaceSymbol(reader)))
+                {
+                    return true;
+                }
+            }
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        return false;
+    }
+
+    internal bool HasCSharpMemberReadTargetSymbolsInPaths(
+        IReadOnlySet<string> paths,
+        CancellationToken cancellationToken = default)
+    {
+        if (paths.Count == 0)
+            return false;
+
+        cancellationToken.ThrowIfCancellationRequested();
+        var pathArray = paths.ToArray();
+        for (var offset = 0; offset < pathArray.Length; offset += DeleteFilesBatchSize)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var batchCount = Math.Min(DeleteFilesBatchSize, pathArray.Length - offset);
+            SqliteDynamicSql.EnsureParameterBudget(batchCount, "C# member-read target path preflight batch");
+            var parameterList = SqliteDynamicSql.BuildParameterList("path", batchCount);
+            var sql = @"
+                SELECT " + CSharpContractWorkspaceProjectionSql + @"
+                FROM files f
+                CROSS JOIN symbols s INDEXED BY idx_symbols_file_kind
+                  ON s.file_id = f.id
+                WHERE f.path IN (" + parameterList + @")
+                  AND f.lang = 'csharp'
+                  AND " + CSharpMemberReadTargetPredicateSql;
+            using var cmd = _conn.CreateCommand();
+            cmd.Transaction = _activeTransaction;
+            cmd.CommandText = sql;
+            for (var parameterIndex = 0; parameterIndex < batchCount; parameterIndex++)
+            {
+                cmd.Parameters.Add(
+                    SqliteDynamicSql.BuildParameterName("path", parameterIndex),
+                    SqliteType.Text).Value = pathArray[offset + parameterIndex];
+            }
+
+            using var cancellationRegistration = RegisterSqliteInterrupt(cancellationToken);
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (ReferenceExtractor.IsCSharpQualifiedMemberReadTargetSymbol(
+                        ReadCSharpContractWorkspaceSymbol(reader)))
+                {
+                    return true;
+                }
+            }
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        return false;
     }
 
     internal static string BuildCSharpStaticInterfaceDeclarationWorkspaceSql(int batchCount)

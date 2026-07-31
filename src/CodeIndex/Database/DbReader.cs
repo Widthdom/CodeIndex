@@ -364,13 +364,18 @@ public partial class DbReader : IDisposable
     private static string GetCallableReferenceKindPredicateSql(
         string referenceKindSql,
         string? referenceKind,
-        string? sourceLanguageSql = null)
+        string? sourceLanguageSql = null,
+        bool includeMemberReads = false)
         => referenceKind switch
         {
             null when sourceLanguageSql is not null =>
-                $"({referenceKindSql} IN {CallableReferenceKindsSql} OR " +
+                $"({referenceKindSql} IN {CallableReferenceKindsSql}" +
+                (includeMemberReads ? $" OR {referenceKindSql} = 'member_read'" : string.Empty) +
+                " OR " +
                 $"({sourceLanguageSql} = 'dependency_lock' AND {referenceKindSql} = 'dependency'))",
-            null => $"{referenceKindSql} IN {CallableReferenceKindsSql}",
+            null => includeMemberReads
+                ? $"({referenceKindSql} IN {CallableReferenceKindsSql} OR {referenceKindSql} = 'member_read')"
+                : $"{referenceKindSql} IN {CallableReferenceKindsSql}",
             "subscribe" => $"{referenceKindSql} IN {EventReferenceKindsSql}",
             _ => $"{referenceKindSql} = @referenceKind",
         };
