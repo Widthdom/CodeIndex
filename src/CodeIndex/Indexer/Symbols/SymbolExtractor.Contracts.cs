@@ -19,7 +19,7 @@ public static partial class SymbolExtractor
     public const int ScientificNativeGraphContractVersion = 4;
     public const int RepositoryMetadataContractVersion = 2;
     public const int ApplicationManifestContractVersion = 3;
-    public const int MarkdownContractVersion = 3;
+    public const int MarkdownContractVersion = 4;
     public const int DependencyLockContractVersion = 3;
     public const int JsonContractVersion = 3;
     public const int JsonLinesContractVersion = 3;

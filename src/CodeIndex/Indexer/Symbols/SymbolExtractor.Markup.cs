@@ -386,6 +386,9 @@ public static partial class SymbolExtractor
         var fenceLength = 0;
         var fenceSymbolIndex = -1;
         var inHtmlComment = false;
+        var sourceLineCount = lines.Length > 0 && lines[^1].Length == 0
+            ? lines.Length - 1
+            : lines.Length;
 
         for (var i = 0; i < lines.Length; i++)
         {
@@ -393,6 +396,8 @@ public static partial class SymbolExtractor
             {
                 if (!inFence)
                 {
+                    var bodyStartLine = i + 2;
+                    var hasBodyAtEof = bodyStartLine <= sourceLineCount;
                     var codeSymbol = new SymbolRecord
                     {
                         FileId = fileId,
@@ -400,9 +405,9 @@ public static partial class SymbolExtractor
                         Name = NormalizeMarkdownFenceInfo(fenceInfo),
                         Line = i + 1,
                         StartLine = i + 1,
-                        EndLine = lines.Length,
-                        BodyStartLine = i + 2,
-                        BodyEndLine = lines.Length,
+                        EndLine = sourceLineCount,
+                        BodyStartLine = hasBodyAtEof ? bodyStartLine : null,
+                        BodyEndLine = hasBodyAtEof ? sourceLineCount : null,
                         Signature = lines[i].Trim(),
                     };
 
@@ -446,8 +451,7 @@ public static partial class SymbolExtractor
                 while (headingStack is { Count: > 0 } && headingStack.Peek().Level >= setextLevel)
                 {
                     var closedHeading = headingStack.Pop();
-                    symbols![closedHeading.SymbolIndex].EndLine = i;
-                    symbols[closedHeading.SymbolIndex].BodyEndLine = i;
+                    CloseMarkdownHeading(symbols!, closedHeading.SymbolIndex, i);
                 }
 
                 var setextSymbol = new SymbolRecord
@@ -462,7 +466,7 @@ public static partial class SymbolExtractor
                     StartLine = i + 1,
                     EndLine = i + 2,
                     BodyStartLine = i + 3,
-                    BodyEndLine = lines.Length,
+                    BodyEndLine = sourceLineCount,
                     Signature = lines[i].TrimEnd(),
                 };
 
@@ -485,8 +489,7 @@ public static partial class SymbolExtractor
             while (headingStack is { Count: > 0 } && headingStack.Peek().Level >= level)
             {
                 var closedHeading = headingStack.Pop();
-                symbols![closedHeading.SymbolIndex].EndLine = i;
-                symbols[closedHeading.SymbolIndex].BodyEndLine = i;
+                CloseMarkdownHeading(symbols!, closedHeading.SymbolIndex, i);
             }
 
             var symbol = new SymbolRecord
@@ -501,7 +504,7 @@ public static partial class SymbolExtractor
                 StartLine = i + 1,
                 EndLine = i + 1,
                 BodyStartLine = i + 2,
-                BodyEndLine = lines.Length,
+                BodyEndLine = sourceLineCount,
                 Signature = lines[i].Trim(),
             };
 
@@ -519,11 +522,24 @@ public static partial class SymbolExtractor
         while (headingStack is { Count: > 0 })
         {
             var closedHeading = headingStack.Pop();
-            symbols![closedHeading.SymbolIndex].EndLine = lines.Length;
-            symbols[closedHeading.SymbolIndex].BodyEndLine = lines.Length;
+            CloseMarkdownHeading(symbols!, closedHeading.SymbolIndex, sourceLineCount);
         }
 
         return symbols ?? [];
+    }
+
+    private static void CloseMarkdownHeading(List<SymbolRecord> symbols, int symbolIndex, int endLine)
+    {
+        var symbol = symbols[symbolIndex];
+        symbol.EndLine = endLine;
+        if (symbol.BodyStartLine is int bodyStartLine && bodyStartLine <= endLine)
+        {
+            symbol.BodyEndLine = endLine;
+            return;
+        }
+
+        symbol.BodyStartLine = null;
+        symbol.BodyEndLine = null;
     }
 
     private static void AddMarkdownExplicitAnchorSymbols(
