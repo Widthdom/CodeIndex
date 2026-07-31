@@ -1026,6 +1026,7 @@ public partial class McpServer : IDisposable
         var structuredContent = new JsonObject
         {
             ["api_version"] = JsonOutputContract.ApiVersion,
+            ["tool"] = "read_resource",
             ["resource"] = new JsonObject
             {
                 ["uri"] = content["uri"]?.DeepClone(),
@@ -1128,6 +1129,7 @@ public partial class McpServer : IDisposable
                 ["structuredContent"] = new JsonObject
                 {
                     ["api_version"] = JsonOutputContract.ApiVersion,
+                    ["tool"] = "read_resource",
                     ["resource"] = new JsonObject
                     {
                         ["uri"] = resourceUri,

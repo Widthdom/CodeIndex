@@ -329,6 +329,8 @@ public partial class McpServer : IDisposable
     private void EnrichToolStructuredContent(JsonObject structuredContent)
     {
         structuredContent.TryAdd("api_version", JsonOutputContract.ApiVersion);
+        if (_currentToolOutputName.Value is string toolName)
+            structuredContent.TryAdd("tool", toolName);
         AddProjectFilterRootDiagnostics(structuredContent);
         AddConfiguredSqliteDiagnostics(structuredContent);
     }
@@ -475,6 +477,9 @@ public partial class McpServer : IDisposable
     {
         ClearProjectFilterRootDiagnostics();
         var structuredContent = McpErrorEnvelope.BuildData(category, suggestion, retrySafe, AddCorrelationData(extraData));
+        structuredContent["api_version"] = JsonOutputContract.ApiVersion;
+        if (_currentToolOutputName.Value is string toolName)
+            structuredContent["tool"] = toolName;
         AddConfiguredSqliteDiagnostics(structuredContent);
         var result = new JsonObject
         {
@@ -510,6 +515,7 @@ public partial class McpServer : IDisposable
             ["name"] = name,
             ["description"] = AppendLanguageSupportClause(name, description),
             ["inputSchema"] = inputSchema,
+            ["outputSchema"] = McpToolOutputSchemas.Create(name),
             ["examples"] = BuildToolExamples(name),
         };
         if (annotations != null)

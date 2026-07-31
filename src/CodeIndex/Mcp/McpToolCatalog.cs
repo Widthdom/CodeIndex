@@ -448,7 +448,7 @@ public partial class McpServer
                                     ["items"] = new JsonObject { ["type"] = "string", ["minLength"] = 1, ["maxLength"] = MaxStatusProjectionFieldCharacters }
                                 }
                             },
-                            ["description"] = "Return only these exact top-level structured-content fields after applying `format`, plus the standard `api_version`. Accepts one field or an array; nested paths are not supported."
+                            ["description"] = "Return only these exact top-level structured-content fields after applying `format`, plus the standard `api_version` and `tool` discriminators. Accepts one field or an array; nested paths are not supported."
                         }
                     }
                 },
