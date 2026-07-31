@@ -104,11 +104,24 @@ public static partial class QueryCommandRunner
         IReadOnlyList<SarifLocation> items,
         JsonSerializerOptions jsonOptions,
         string level = "warning",
-        JsonObject? runProperties = null)
+        JsonObject? runProperties = null,
+        int? resultCount = null)
     {
         using var writer = new StringWriter(CultureInfo.InvariantCulture);
-        WriteSarifDocument(writer, items, jsonOptions, level, runProperties);
+        WriteSarifDocument(writer, items, jsonOptions, level, runProperties, resultCount);
         return writer.ToString();
+    }
+
+    private static int GetSarifDocumentUtf8LineByteCount(
+        IReadOnlyList<SarifLocation> items,
+        JsonSerializerOptions jsonOptions,
+        string level = "warning",
+        JsonObject? runProperties = null,
+        int? resultCount = null)
+    {
+        using var writer = new Utf8ByteCountingTextWriter();
+        WriteSarifDocument(writer, items, jsonOptions, level, runProperties, resultCount);
+        return checked(writer.ByteCount + Encoding.UTF8.GetByteCount(Environment.NewLine));
     }
 
     private static void WriteSarifDocument(
@@ -116,13 +129,17 @@ public static partial class QueryCommandRunner
         IReadOnlyList<SarifLocation> itemList,
         JsonSerializerOptions jsonOptions,
         string level,
-        JsonObject? runProperties)
+        JsonObject? runProperties,
+        int? resultCount = null)
     {
         var itemOptions = GetCompactJsonOptions(jsonOptions);
+        var visibleItems = resultCount.HasValue
+            ? itemList.Take(resultCount.Value)
+            : itemList;
         writer.Write("{\"version\":\"2.1.0\",\"runs\":[{\"tool\":{\"driver\":{\"name\":\"cdidx\",\"informationUri\":\"https://github.com/Widthdom/CodeIndex\",\"rules\":");
         WriteJsonArrayInline(
             writer,
-            itemList
+            visibleItems
                 .Where(item => !string.IsNullOrWhiteSpace(item.RuleId))
                 .GroupBy(item => item.RuleId, StringComparer.Ordinal)
                 .Select(group => (
@@ -135,7 +152,7 @@ public static partial class QueryCommandRunner
         writer.Write("}},\"results\":");
         WriteJsonArrayInline(
             writer,
-            itemList,
+            visibleItems,
             (resultWriter, item) => WriteSarifResult(resultWriter, item, item.Level ?? level, itemOptions),
             separator: ",");
         if (runProperties is { Count: > 0 })
@@ -187,17 +204,14 @@ public static partial class QueryCommandRunner
         writer.Write(']');
     }
 
-    private static int GetUtf8JsonLineByteCount(string json)
-        => checked(Encoding.UTF8.GetByteCount(json) + Encoding.UTF8.GetByteCount(Environment.NewLine));
-
     private static int GetSarifResultUtf8ByteCount(
         SarifLocation item,
         JsonSerializerOptions jsonOptions,
         string level = "warning")
     {
-        using var writer = new StringWriter(CultureInfo.InvariantCulture);
+        using var writer = new Utf8ByteCountingTextWriter();
         WriteSarifResult(writer, item, item.Level ?? level, GetCompactJsonOptions(jsonOptions));
-        return Encoding.UTF8.GetByteCount(writer.ToString());
+        return writer.ByteCount;
     }
 
     private static void WriteSarifRule(
@@ -290,4 +304,24 @@ public static partial class QueryCommandRunner
         string FullDescription,
         string Help,
         IReadOnlyList<string> Tags);
+
+    private sealed class Utf8ByteCountingTextWriter : TextWriter
+    {
+        public override Encoding Encoding => Encoding.UTF8;
+
+        public int ByteCount { get; private set; }
+
+        public override void Write(char value)
+        {
+            Span<char> buffer = stackalloc char[1];
+            buffer[0] = value;
+            ByteCount = checked(ByteCount + Encoding.UTF8.GetByteCount(buffer));
+        }
+
+        public override void Write(string? value)
+        {
+            if (value != null)
+                ByteCount = checked(ByteCount + Encoding.UTF8.GetByteCount(value));
+        }
+    }
 }

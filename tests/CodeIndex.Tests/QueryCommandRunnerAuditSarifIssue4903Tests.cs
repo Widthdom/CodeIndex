@@ -179,6 +179,17 @@ public partial class QueryCommandRunnerTests
                 "--recipe risky-code/raw-diagnostic-echo",
                 properties.GetProperty("next_commands")[0].GetString(),
                 StringComparison.Ordinal);
+            var replayOptions = QueryCommandRunner.ParseArgs(args, jsonDefault: false);
+            var maximumSupportedReplay = QueryCommandRunner.BuildSearchRecipeSarifReplayCommandForTests(
+                "risky-code/raw-diagnostic-echo",
+                replayOptions,
+                16 * 1024 * 1024);
+            var aboveMaximumReplay = QueryCommandRunner.BuildSearchRecipeSarifReplayCommandForTests(
+                "risky-code/raw-diagnostic-echo",
+                replayOptions,
+                (16 * 1024 * 1024) + 1);
+            Assert.Contains("--max-json-bytes 16777216", maximumSupportedReplay, StringComparison.Ordinal);
+            Assert.DoesNotContain("--max-json-bytes", aboveMaximumReplay, StringComparison.Ordinal);
 
             var tooSmallArgs = args
                 .Take(args.Length - 1)
@@ -191,6 +202,26 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(string.Empty, tooSmallStdout);
             Assert.Contains("minimum schema-valid bounded audit SARIF output requires", tooSmallStderr, StringComparison.Ordinal);
             Assert.Contains("no partial SARIF was written", tooSmallStderr, StringComparison.Ordinal);
+
+            var (explicitJsonExitCode, explicitJsonStdout, explicitJsonStderr) = CaptureConsole(
+                () => ProgramRunner.Run(
+                    [
+                        "audit", "risky-code/raw-diagnostic-echo",
+                        "--db", dbPath,
+                        "--format", "sarif",
+                        "--json",
+                        "--origin", "code",
+                        "--limit", "10",
+                        "--max-json-bytes", "1000",
+                    ],
+                    appVersion: "1.10.0"));
+
+            Assert.Equal(CommandExitCodes.UsageError, explicitJsonExitCode);
+            Assert.Equal(string.Empty, explicitJsonStderr);
+            Assert.InRange(Encoding.UTF8.GetByteCount(explicitJsonStdout), 1, 1_000);
+            using var explicitJsonDocument = JsonDocument.Parse(explicitJsonStdout);
+            Assert.Equal("E010_USAGE_ERROR", explicitJsonDocument.RootElement.GetProperty("error_code").GetString());
+            Assert.Equal("audit", explicitJsonDocument.RootElement.GetProperty("command").GetString());
         }
         finally
         {

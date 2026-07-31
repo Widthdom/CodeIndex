@@ -855,12 +855,15 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.Success;
         }
 
-        var completeDocument = BuildSarifDocument(items, jsonOptions, runProperties: completeProperties);
-        var completeDocumentBytes = GetUtf8JsonLineByteCount(completeDocument);
+        var completeDocumentBytes = GetSarifDocumentUtf8LineByteCount(
+            items,
+            jsonOptions,
+            runProperties: completeProperties);
         var byteLimit = options.MaxJsonBytes.Value;
         if (completeDocumentBytes <= byteLimit)
         {
-            Console.WriteLine(completeDocument);
+            WriteSarifDocument(Console.Out, items, jsonOptions, "warning", completeProperties);
+            Console.WriteLine();
             return CommandExitCodes.Success;
         }
 
@@ -873,7 +876,7 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.UsageError;
         }
 
-        string? boundedDocument = null;
+        JsonObject? boundedProperties = null;
         var emittedResultCount = -1;
         var low = 0;
         var high = items.Count - 1;
@@ -891,14 +894,15 @@ public static partial class QueryCommandRunner
                 candidate,
                 completeDocumentBytes,
                 firstOmittedResultBytes);
-            var candidateDocument = BuildSarifDocument(
-                items.Take(candidate).ToList(),
+            var candidateDocumentBytes = GetSarifDocumentUtf8LineByteCount(
+                items,
                 jsonOptions,
-                runProperties: candidateProperties);
-            if (GetUtf8JsonLineByteCount(candidateDocument) <= byteLimit)
+                runProperties: candidateProperties,
+                resultCount: candidate);
+            if (candidateDocumentBytes <= byteLimit)
             {
                 emittedResultCount = candidate;
-                boundedDocument = candidateDocument;
+                boundedProperties = candidateProperties;
                 low = candidate + 1;
             }
             else
@@ -907,7 +911,7 @@ public static partial class QueryCommandRunner
             }
         }
 
-        if (boundedDocument == null)
+        if (boundedProperties == null)
         {
             var minimumBoundedDocumentBytes = GetMinimumBoundedSearchRecipeSarifBytes(
                 recipe,
@@ -925,7 +929,12 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.UsageError;
         }
 
-        Console.WriteLine(boundedDocument);
+        Console.WriteLine(
+            BuildSarifDocument(
+                items,
+                jsonOptions,
+                runProperties: boundedProperties,
+                resultCount: emittedResultCount));
         return emittedResultCount < items.Count && !options.AllowPartial
             ? CommandExitCodes.PartialResult
             : CommandExitCodes.Success;
@@ -1036,9 +1045,11 @@ public static partial class QueryCommandRunner
         runProperties["byte_budget"] = new JsonObject
         {
             ["max_json_bytes"] = byteLimitOverride ?? options.MaxJsonBytes!.Value,
+            ["max_supported_json_bytes"] = MaxSearchJsonByteLimit,
             ["measurement"] = "utf8_bytes_including_final_newline",
             ["strategy"] = "omit_whole_results",
             ["minimum_complete_bytes"] = minimumCompleteBytes.Value,
+            ["complete_output_exceeds_max_json_bytes"] = minimumCompleteBytes.Value > MaxSearchJsonByteLimit,
             ["emitted_result_count"] = emittedResultCount,
             ["omitted_result_count"] = omittedByByteBudgetTotal,
             ["first_omitted_result_bytes"] = firstOmittedResultBytes,
@@ -1072,11 +1083,11 @@ public static partial class QueryCommandRunner
                 minimumCompleteBytes,
                 firstOmittedResultBytes,
                 byteLimitOverride: minimum);
-            var document = BuildSarifDocument(
-                Array.Empty<SarifLocation>(),
+            var required = GetSarifDocumentUtf8LineByteCount(
+                items,
                 jsonOptions,
-                runProperties: properties);
-            var required = GetUtf8JsonLineByteCount(document);
+                runProperties: properties,
+                resultCount: 0);
             if (required <= minimum)
                 return minimum;
             minimum = required;
@@ -1132,9 +1143,20 @@ public static partial class QueryCommandRunner
             options,
             includeRecipeQuerySelectors,
             includeMaxJsonBytes: false);
-        AddReplayValueOption(args, "--max-json-bytes", maxJsonBytes.ToString(CultureInfo.InvariantCulture));
+        if (maxJsonBytes <= MaxSearchJsonByteLimit)
+            AddReplayValueOption(args, "--max-json-bytes", maxJsonBytes.ToString(CultureInfo.InvariantCulture));
         return string.Join(" ", args.Select(QuoteReplayShellArg));
     }
+
+    internal static string BuildSearchRecipeSarifReplayCommandForTests(
+        string recipeSelector,
+        QueryCommandOptions options,
+        int maxJsonBytes)
+        => BuildSearchRecipeSarifReplayCommand(
+            recipeSelector,
+            options,
+            maxJsonBytes,
+            includeRecipeQuerySelectors: true);
 
     private static (int Line, int Column, int? EndColumn) GetSearchRecipeSarifRegion(CompactSearchResult result)
     {
