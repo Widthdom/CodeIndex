@@ -8739,6 +8739,11 @@ public partial class ReferenceExtractorTests
         Assert.DoesNotContain(references, r => r.SymbolName == "GENERATED" && r.ReferenceKind == "generated_column_dependency");
         Assert.DoesNotContain(references, r => r.SymbolName == "DEFAULT" && r.ReferenceKind == "generated_column_dependency");
         Assert.DoesNotContain(references, r => r.SymbolName == "CURRENT_TIMESTAMP" && r.ReferenceKind == "generated_column_dependency");
+        Assert.All(
+            references,
+            reference => Assert.True(
+                SymbolKindCatalog.IsValidReferenceKind(reference.ReferenceKind),
+                $"SQL extractor emitted unregistered reference kind '{reference.ReferenceKind}'."));
     }
 
     [Fact]
