@@ -106,6 +106,156 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_NamedQueryFreshnessReportsDirtyWorkspaceIndexAsStale_Issue4907()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_freshness_dirty_workspace_4907");
+        try
+        {
+            const string indexedContent = "public sealed class App { private const string Value = \"FreshnessNeedle\"; }\n";
+            TestProjectHelper.InitializeGitRepo(projectRoot);
+            TestProjectHelper.WriteTextFile(projectRoot, Path.Combine("src", "App.cs"), indexedContent);
+            TestProjectHelper.RunGit(projectRoot, "add", "src/App.cs");
+            TestProjectHelper.RunGit(projectRoot, "commit", "-m", "initial");
+
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp", indexedContent);
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                Path.Combine("src", "App.cs"),
+                "public sealed class App { }\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [
+                    "--named-query=needle=FreshnessNeedle",
+                    "--db", dbPath,
+                    "--format", "count",
+                    "--json",
+                ],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var freshness = document.RootElement.GetProperty("query_freshness");
+            Assert.Equal("stale", freshness.GetProperty("state").GetString());
+            Assert.Equal("stale", freshness.GetProperty("index_state").GetString());
+            Assert.Equal("index_workspace_changed", freshness.GetProperty("index_reason").GetString());
+            Assert.Contains(
+                freshness.GetProperty("stale_query_names").EnumerateArray(),
+                name => name.GetString() == "needle");
+            Assert.Equal(
+                "index_workspace_changed",
+                Assert.Single(freshness.GetProperty("queries").EnumerateArray())
+                    .GetProperty("reason")
+                    .GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_RecipeJsonRetainsClassifiedChildFailureAsInvalid_Issue4907()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_freshness_failed_recipe_child_4907");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            const int minimumGuardedCandidates = 200;
+            for (var i = 0; i <= minimumGuardedCandidates; i++)
+            {
+                TestProjectHelper.InsertIndexedFile(
+                    dbPath,
+                    $"src/C{i:D4}.cs",
+                    "csharp",
+                    $"public sealed class C{i:D4} {{ private string token = \"value\"; }}\n");
+            }
+
+            using var env = EnvironmentVariableScope.Capture(SearchAuditRecipes.RecipePathsEnvironmentVariable);
+            env.Set(SearchAuditRecipes.RecipePathsEnvironmentVariable, null);
+            string[] BuildArgs(params string[] outputArgs) =>
+            [
+                "--recipe", "broad-token-audit",
+                "--include-query", "token-term-broad",
+                "--include-query", "auth-token",
+                "--db", dbPath,
+                "--limit", "1",
+                "--total-limit", "0",
+                "--require-before", "CDIDX_REVIEW_NO_SUCH_GUARD",
+                "--guard-window", "1",
+                .. outputArgs,
+            ];
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                BuildArgs("--json"),
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("one or more recipe queries failed", stderr, StringComparison.Ordinal);
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            var freshness = root.GetProperty("summary").GetProperty("query_freshness");
+            Assert.Equal(2, root.GetProperty("query_count").GetInt32());
+            Assert.Equal("mixed", freshness.GetProperty("state").GetString());
+            Assert.Contains(
+                freshness.GetProperty("invalid_query_names").EnumerateArray(),
+                name => name.GetString() == "token-term-broad");
+            var failedQuery = Assert.Single(
+                freshness.GetProperty("queries").EnumerateArray(),
+                query => query.GetProperty("name").GetString() == "token-term-broad");
+            Assert.Equal("invalid", failedQuery.GetProperty("freshness_state").GetString());
+            Assert.Equal("query_guard_limit_exceeded", failedQuery.GetProperty("reason").GetString());
+            var successfulQuery = Assert.Single(
+                freshness.GetProperty("queries").EnumerateArray(),
+                query => query.GetProperty("name").GetString() == "auth-token");
+            Assert.Equal("clean", successfulQuery.GetProperty("freshness_state").GetString());
+            Assert.Equal("zero_match", successfulQuery.GetProperty("result_state").GetString());
+
+            var (sarifExitCode, sarifStdout, sarifStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                BuildArgs("--format", "sarif"),
+                _jsonOptions));
+            Assert.Equal(CommandExitCodes.UsageError, sarifExitCode);
+            Assert.Contains("one or more recipe queries failed", sarifStderr, StringComparison.Ordinal);
+            using (var sarifDocument = ParseJsonOutput(sarifStdout))
+            {
+                var sarifFreshness = sarifDocument.RootElement
+                    .GetProperty("runs")[0]
+                    .GetProperty("properties")
+                    .GetProperty("query_freshness");
+                Assert.Contains(
+                    sarifFreshness.GetProperty("invalid_query_names").EnumerateArray(),
+                    name => name.GetString() == "token-term-broad");
+            }
+
+            var (draftExitCode, draftStdout, draftStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                BuildArgs("--format", "issue-drafts"),
+                _jsonOptions));
+            Assert.Equal(CommandExitCodes.UsageError, draftExitCode);
+            Assert.Contains("one or more recipe queries failed", draftStderr, StringComparison.Ordinal);
+            using (var draftDocument = ParseJsonOutput(draftStdout))
+            {
+                Assert.Contains(
+                    draftDocument.RootElement
+                        .GetProperty("query_freshness")
+                        .GetProperty("invalid_query_names")
+                        .EnumerateArray(),
+                    name => name.GetString() == "token-term-broad");
+            }
+
+            var (textExitCode, textStdout, textStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                BuildArgs(),
+                _jsonOptions));
+            Assert.Equal(CommandExitCodes.UsageError, textExitCode);
+            Assert.Contains("Invalid queries: token-term-broad", textStdout, StringComparison.Ordinal);
+            Assert.Contains("one or more recipe queries failed", textStderr, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void SearchMatchClassifier_McpSchemaDescriptionHasDedicatedOrigin_Issues4416_4864()
     {
         const string schemaLine = "[\"tokenBoundary\"] = new JsonObject { [\"description\"] = \"Use new HttpClient as an example.\" };";
