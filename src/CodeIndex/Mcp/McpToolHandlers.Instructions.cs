@@ -47,16 +47,22 @@ public partial class McpServer
             parts.Add("Use 'definition' for symbol lookup.");
 
         var guidedFlowTools = new List<string>();
-        foreach (var name in new[] { "search", "definition", "references", "callers", "callees", "outline", "map", "excerpt" })
+        foreach (var name in new[] { "search", "definition", "references", "callers", "callees", "outline", "map", "excerpt", "read_resource" })
             if (On(name)) guidedFlowTools.Add(name);
         if (guidedFlowTools.Count > 0)
         {
             parts.Add("Investigation flow: search broadly, use definition for declarations, references for usage sites, callers/callees for call graph impact, outline/map for structure, then excerpt or resources/read for focused line ranges. Prefer pagination, path/lang filters, exactName/exactSubstring, and prefix over dumping large files. 調査順序: まず広く search し、宣言は definition、利用箇所は references、呼び出し影響は callers/callees、構造把握は outline/map、その後に excerpt または resources/read で必要な行範囲だけを読んでください。大きなファイルを丸ごと読む前に pagination、path/lang filter、exactName/exactSubstring、prefix で絞り込んでください。");
         }
 
-        parts.Add("For an exact known repository-relative path, expand the cdidx://file-path/{path} template from resources/templates/list and pass that URI to resources/read. 正確なリポジトリ相対 path が分かっている場合は、resources/templates/list の cdidx://file-path/{path} template を展開し、その URI を resources/read に渡してください。");
+        if (On("read_resource"))
+            parts.Add("For an exact known repository-relative path, expand the cdidx://file-path/{path} template from resources/templates/list and pass that URI to the typed `read_resource` tool. The legacy resources/read method remains available. 正確なリポジトリ相対 path が分かっている場合は、resources/templates/list の cdidx://file-path/{path} template を展開し、その URI を型付き `read_resource` tool に渡してください。従来の resources/read method も引き続き利用できます。");
+        else
+            parts.Add("For an exact known repository-relative path, expand the cdidx://file-path/{path} template from resources/templates/list and pass that URI to resources/read. 正確なリポジトリ相対 path が分かっている場合は、resources/templates/list の cdidx://file-path/{path} template を展開し、その URI を resources/read に渡してください。");
         parts.Add("For browsing, call resources/list with optional path, lang, includeGenerated, and maxBytes; continue with result.nextCursor and unchanged filters. Generated files are excluded by default. browse する場合は resources/list に任意の path、lang、includeGenerated、maxBytes を渡し、同じ filter のまま result.nextCursor で継続してください。generated file は既定で除外されます。");
-        parts.Add("For resources/read, use startLine/endLine and maxBytes, then continue truncated reads with result._meta.nextCursor. resources/read では startLine/endLine と maxBytes を使い、切り詰められた場合は result._meta.nextCursor で継続してください。");
+        if (On("read_resource"))
+            parts.Add("For typed `read_resource`, use 1-based inclusive startLine/endLine and a UTF-8 maxBytes budget, then continue truncated reads with structuredContent._meta.nextCursor. Legacy resources/read exposes the same continuation as result._meta.nextCursor. 型付き `read_resource` では 1-based inclusive の startLine/endLine と UTF-8 maxBytes budget を使い、切り詰められた場合は structuredContent._meta.nextCursor で継続してください。従来の resources/read は同じ継続情報を result._meta.nextCursor に返します。");
+        else
+            parts.Add("For resources/read, use startLine/endLine and maxBytes, then continue truncated reads with result._meta.nextCursor. resources/read では startLine/endLine と maxBytes を使い、切り詰められた場合は result._meta.nextCursor で継続してください。");
 
         if (On("analyze_symbol"))
             parts.Add("Use 'analyze_symbol' to get definition, callers, callees, and references in one call instead of chaining separate tools.");

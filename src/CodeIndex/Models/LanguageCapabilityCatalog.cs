@@ -222,6 +222,126 @@ internal static class LanguageCapabilityCatalog
             string.Equals(NormalizeLookupKey(alias), normalized, StringComparison.Ordinal));
     }
 
+    internal static JsonObject BuildExtensionLookup(
+        string value,
+        IReadOnlyList<KeyValuePair<string, LanguageCatalogSupportInfo>> matches,
+        IReadOnlyList<KeyValuePair<string, LanguageCatalogSupportInfo>> catalog)
+    {
+        var normalizedExtension = NormalizeExtension(value);
+        var result = new JsonObject
+        {
+            ["extension"] = value,
+            ["normalized_extension"] = normalizedExtension,
+            ["matched"] = matches.Count,
+            ["languages"] = BuildStringArray(matches.Select(pair => pair.Key)),
+            ["extension_case_policy"] = "case_insensitive",
+            ["ambiguous"] = false,
+        };
+
+        if (!FileIndexer.TryGetAmbiguousLanguageDescriptor(normalizedExtension, out var descriptor))
+            return result;
+
+        result["ambiguous"] = true;
+        result["bucket_language"] = descriptor.BucketLanguage;
+        result["candidates"] = new JsonArray(descriptor.Candidates.Select(candidate =>
+        {
+            var support = catalog.FirstOrDefault(pair =>
+                string.Equals(pair.Key, candidate.Language, StringComparison.Ordinal)).Value;
+            return (JsonNode)new JsonObject
+            {
+                ["lang"] = candidate.Language,
+                ["display_name"] = candidate.DisplayName,
+                ["aliases"] = BuildStringArray(support?.Aliases ?? []),
+                ["evidence"] = new JsonObject
+                {
+                    ["shebang_interpreters"] = BuildStringArray(
+                        FileIndexer.GetShebangInterpretersForLanguage(candidate.Language)),
+                    ["content_pattern"] = candidate.ContentPattern,
+                    ["content_case_policy"] = "case_sensitive",
+                    ["project_markers"] = BuildStringArray(candidate.ProjectMarkerPatterns),
+                    ["project_marker_case_policy"] = "case_insensitive",
+                },
+            };
+        }).ToArray());
+        result["detection_rules"] = new JsonArray(
+            BuildDetectionRule(
+                FileIndexer.LanguageMapOverrideDetectionSource,
+                FileIndexer.LanguageDetectionConfidence.High,
+                precedence: 1,
+                selection: "authoritative"),
+            BuildDetectionRule(
+                FileIndexer.ExactFilenameDetectionSource,
+                confidence: null,
+                precedence: 2,
+                selection: "authoritative_when_exact_filename_matches",
+                ("case_policy", JsonValue.Create("filesystem")),
+                ("case_policy_source", JsonValue.Create("path_case_sensitive")),
+                ("applicable_patterns", BuildFilenameRuleArray(
+                    FileIndexer.GetExactFilenameLanguageRulesForExtension(normalizedExtension)))),
+            BuildDetectionRule(
+                FileIndexer.FilenamePrefixPatternDetectionSource,
+                confidence: null,
+                precedence: 3,
+                selection: "authoritative_when_non_empty_suffix_matches",
+                ("case_policy", JsonValue.Create("filesystem")),
+                ("case_policy_source", JsonValue.Create("path_case_sensitive")),
+                ("patterns", BuildFilenameRuleArray(
+                    FileIndexer.GetFilenamePrefixLanguageRules()))),
+            BuildDetectionRule(
+                FileIndexer.ShebangDetectionSource,
+                FileIndexer.LanguageDetectionConfidence.High,
+                precedence: 4,
+                selection: "recognized_interpreter_authoritative",
+                ("candidate_restricted", JsonValue.Create(false)),
+                ("probe_scope", JsonValue.Create("first_physical_line")),
+                ("probe_byte_limit", JsonValue.Create(FileIndexer.ShebangProbeByteLimit)),
+                ("line_termination_policy", JsonValue.Create("required_before_limit_unless_eof")),
+                ("interpreter_case_policy", JsonValue.Create("case_insensitive")),
+                ("interpreter_rules", new JsonArray(
+                    FileIndexer.GetShebangInterpreterRules()
+                        .Select(rule => (JsonNode)new JsonObject
+                        {
+                            ["match"] = rule.MatchKind,
+                            ["pattern"] = rule.Pattern,
+                            ["language"] = rule.Language,
+                        })
+                        .ToArray()))),
+            BuildDetectionRule(
+                FileIndexer.AmbiguousContentDetectionSource,
+                FileIndexer.LanguageDetectionConfidence.High,
+                precedence: 5,
+                selection: "exactly_one_candidate_matches",
+                ("probe_byte_limit", JsonValue.Create(FileIndexer.AmbiguousLanguageProbeByteLimit))),
+            BuildDetectionRule(
+                FileIndexer.AmbiguousProjectDetectionSource,
+                FileIndexer.LanguageDetectionConfidence.Medium,
+                precedence: 6,
+                selection: "exactly_one_candidate_matches",
+                ("ancestor_directory_limit", JsonValue.Create(FileIndexer.AmbiguousProjectMarkerAncestorLimit)),
+                ("entry_limit_per_directory", JsonValue.Create(FileIndexer.AmbiguousProjectMarkerEntryLimit))),
+            BuildDetectionRule(
+                FileIndexer.AmbiguousFallbackDetectionSource,
+                FileIndexer.LanguageDetectionConfidence.Low,
+                precedence: 7,
+                selection: "zero_or_multiple_candidates_match"));
+        result["input_handling"] = new JsonObject
+        {
+            ["empty_text"] = "project_then_ambiguous",
+            ["binary_or_invalid_text"] = "unsupported",
+            ["missing_without_indexability_context"] = "ambiguous",
+        };
+        result["override_guidance"] = new JsonObject
+        {
+            ["config_file"] = LanguageMapOverrides.WorkspaceFileName,
+            ["entries"] = new JsonArray(descriptor.Candidates.Select(candidate => (JsonNode)new JsonObject
+            {
+                ["extension"] = descriptor.Extension,
+                ["language"] = candidate.Language,
+            }).ToArray()),
+        };
+        return result;
+    }
+
     internal static string NormalizeLookupKey(string value)
     {
         var builder = new StringBuilder(value.Length);
@@ -232,6 +352,48 @@ internal static class LanguageCapabilityCatalog
             builder.Append(char.ToLowerInvariant(character));
         }
         return builder.ToString();
+    }
+
+    private static string NormalizeExtension(string value)
+        => "." + NormalizeLookupKey(value);
+
+    private static JsonArray BuildStringArray(IEnumerable<string> values)
+        => new(values
+            .OrderBy(value => value, StringComparer.Ordinal)
+            .Select(value => JsonValue.Create(value))
+            .ToArray());
+
+    private static JsonArray BuildFilenameRuleArray(
+        IEnumerable<FileIndexer.FilenameLanguageRule> rules)
+        => new(rules
+            .Select(rule => (JsonNode)new JsonObject
+            {
+                ["pattern"] = rule.Pattern,
+                ["language"] = rule.Language,
+            })
+            .ToArray());
+
+    private static JsonObject BuildDetectionRule(
+        string source,
+        FileIndexer.LanguageDetectionConfidence? confidence,
+        int precedence,
+        string selection,
+        params (string Name, JsonNode? Value)[] details)
+    {
+        var rule = new JsonObject
+        {
+            ["source"] = source,
+            ["precedence"] = precedence,
+            ["selection"] = selection,
+        };
+        if (confidence is { } reportedConfidence)
+        {
+            rule["confidence"] =
+                FileIndexer.GetLanguageDetectionConfidenceCode(reportedConfidence);
+        }
+        foreach (var (name, value) in details)
+            rule[name] = value;
+        return rule;
     }
 
     private static LanguageCapabilityCountScope CountScope(

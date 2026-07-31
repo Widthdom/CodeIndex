@@ -6,21 +6,74 @@ namespace CodeIndex.Indexer;
 
 public partial class FileIndexer
 {
-    private const int AmbiguousLanguageProbeByteLimit = 64 * 1024;
-    private const int AmbiguousProjectMarkerEntryLimit = 256;
+    internal const int AmbiguousLanguageProbeByteLimit = 64 * 1024;
+    internal const int AmbiguousProjectMarkerEntryLimit = 256;
+    internal const int AmbiguousProjectMarkerAncestorLimit = 32;
 
-    private static readonly Regex ObjectiveCContentMarker = new(
-        @"^\s*(?:#\s*import\b|@(?:interface|implementation|protocol)\b)",
-        RegexOptions.Compiled | RegexOptions.Multiline | RegexOptions.CultureInvariant);
-    private static readonly Regex MatlabContentMarker = new(
-        @"^\s*(?:function\b|classdef\b)",
-        RegexOptions.Compiled | RegexOptions.Multiline | RegexOptions.CultureInvariant);
-    private static readonly Regex PerlContentMarker = new(
-        @"^\s*(?:use\s+(?:strict|warnings)\s*;|package\s+[A-Za-z_]\w*(?:::\w+)*\s*;|(?:my|our|state)\s+[$@%][A-Za-z_]\w*|sub\s+[A-Za-z_]\w*)",
-        RegexOptions.Compiled | RegexOptions.Multiline | RegexOptions.CultureInvariant);
-    private static readonly Regex PrologContentMarker = new(
-        @"^\s*(?::-\s*(?:module|use_module|dynamic|multifile|discontiguous|initialization)\b|\?-\s*|[a-z][A-Za-z0-9_]*(?:\s*\([^\r\n.]*\))?\s*(?::-|-->))",
-        RegexOptions.Compiled | RegexOptions.Multiline | RegexOptions.CultureInvariant);
+    internal sealed record AmbiguousLanguageCandidate(
+        string Language,
+        string DisplayName,
+        string ContentPattern,
+        IReadOnlyList<string> ProjectMarkerPatterns)
+    {
+        internal Regex ContentMarker { get; } = new(
+            ContentPattern,
+            RegexOptions.Compiled | RegexOptions.Multiline | RegexOptions.CultureInvariant);
+
+        internal bool MatchesProjectMarker(string name)
+            => ProjectMarkerPatterns.Any(pattern =>
+                pattern.StartsWith('*')
+                    ? name.EndsWith(pattern[1..], StringComparison.OrdinalIgnoreCase)
+                    : string.Equals(name, pattern, StringComparison.OrdinalIgnoreCase));
+    }
+
+    internal sealed record AmbiguousLanguageDescriptor(
+        string Extension,
+        string BucketLanguage,
+        IReadOnlyList<AmbiguousLanguageCandidate> Candidates);
+
+    private static readonly AmbiguousLanguageDescriptor[] AmbiguousLanguageDescriptors =
+    [
+        new(
+            ".m",
+            "ambiguous_m",
+            [
+                new(
+                    "objc",
+                    "Objective-C",
+                    @"^\s*(?:#\s*import\b|@(?:interface|implementation|protocol)\b)",
+                    ["*.xcodeproj", "*.xcworkspace", "project.pbxproj"]),
+                new(
+                    "matlab",
+                    "MATLAB",
+                    @"^\s*(?:function\b|classdef\b)",
+                    ["*.prj", "*.slx", "*.mlx"]),
+            ]),
+        new(
+            ".pl",
+            "ambiguous_pl",
+            [
+                new(
+                    "perl",
+                    "Perl",
+                    @"^\s*(?:use\s+(?:strict|warnings)\s*;|package\s+[A-Za-z_]\w*(?:::\w+)*\s*;|(?:my|our|state)\s+[$@%][A-Za-z_]\w*|sub\s+[A-Za-z_]\w*)",
+                    ["Makefile.PL", "Build.PL", "cpanfile"]),
+                new(
+                    "prolog",
+                    "Prolog",
+                    @"^\s*(?::-\s*(?:module|use_module|dynamic|multifile|discontiguous|initialization)\b|\?-\s*|[a-z][A-Za-z0-9_]*(?:\s*\([^\r\n.]*\))?\s*(?::-|-->))",
+                    ["*.pro", "*.prolog", "pack.pl"]),
+            ]),
+    ];
+
+    internal static bool TryGetAmbiguousLanguageDescriptor(
+        string extension,
+        out AmbiguousLanguageDescriptor descriptor)
+    {
+        descriptor = AmbiguousLanguageDescriptors.FirstOrDefault(candidate =>
+            string.Equals(candidate.Extension, extension, StringComparison.OrdinalIgnoreCase))!;
+        return descriptor is not null;
+    }
 
     private static LanguageDetectionResult TryDetectAmbiguousExtensionLanguage(
         string filePath,
@@ -31,9 +84,8 @@ public partial class FileIndexer
         Func<string, FileStream>? openReadForIndexContent,
         Func<string, IEnumerable<string>>? enumerateFileSystemEntries)
     {
-        var ambiguityBucket = string.Equals(extension, ".m", StringComparison.OrdinalIgnoreCase)
-            ? "ambiguous_m"
-            : "ambiguous_pl";
+        if (!TryGetAmbiguousLanguageDescriptor(extension, out var descriptor))
+            throw new ArgumentOutOfRangeException(nameof(extension), extension, "Expected an ambiguous language extension.");
 
         if (content == null)
         {
@@ -45,49 +97,59 @@ public partial class FileIndexer
             if (readResult != FileProbeStatus.Supported)
             {
                 if (!knownIndexability.HasValue && readResult == FileProbeStatus.Missing)
-                    return new LanguageDetectionResult(FileProbeStatus.Supported, ambiguityBucket, "ambiguous");
+                {
+                    return new LanguageDetectionResult(
+                        FileProbeStatus.Supported,
+                        descriptor.BucketLanguage,
+                        AmbiguousFallbackDetectionSource,
+                        LanguageDetectionConfidence.Low);
+                }
                 return new LanguageDetectionResult(readResult, null);
             }
         }
 
-        var firstFamily = string.Equals(extension, ".m", StringComparison.OrdinalIgnoreCase)
-            ? "objc"
-            : "perl";
-        var secondFamily = string.Equals(extension, ".m", StringComparison.OrdinalIgnoreCase)
-            ? "matlab"
-            : "prolog";
-        var firstContentMarker = string.Equals(extension, ".m", StringComparison.OrdinalIgnoreCase)
-            ? ObjectiveCContentMarker.IsMatch(content)
-            : PerlContentMarker.IsMatch(content);
-        var secondContentMarker = string.Equals(extension, ".m", StringComparison.OrdinalIgnoreCase)
-            ? MatlabContentMarker.IsMatch(content)
-            : PrologContentMarker.IsMatch(content);
+        var firstCandidate = descriptor.Candidates[0];
+        var secondCandidate = descriptor.Candidates[1];
+        var firstContentMarker = firstCandidate.ContentMarker.IsMatch(content);
+        var secondContentMarker = secondCandidate.ContentMarker.IsMatch(content);
 
         if (firstContentMarker != secondContentMarker)
         {
             return new LanguageDetectionResult(
                 FileProbeStatus.Supported,
-                firstContentMarker ? firstFamily : secondFamily,
-                "content");
+                firstContentMarker ? firstCandidate.Language : secondCandidate.Language,
+                AmbiguousContentDetectionSource,
+                LanguageDetectionConfidence.High);
         }
 
         if (firstContentMarker)
-            return new LanguageDetectionResult(FileProbeStatus.Supported, ambiguityBucket, "ambiguous");
+        {
+            return new LanguageDetectionResult(
+                FileProbeStatus.Supported,
+                descriptor.BucketLanguage,
+                AmbiguousFallbackDetectionSource,
+                LanguageDetectionConfidence.Low);
+        }
 
         var (firstProjectMarker, secondProjectMarker) = ProbeAmbiguousLanguageProjectMarkers(
             filePath,
             projectRoot,
-            string.Equals(extension, ".m", StringComparison.OrdinalIgnoreCase),
+            descriptor,
             enumerateFileSystemEntries);
         if (firstProjectMarker != secondProjectMarker)
         {
             return new LanguageDetectionResult(
                 FileProbeStatus.Supported,
-                firstProjectMarker ? firstFamily : secondFamily,
-                "project");
+                firstProjectMarker ? firstCandidate.Language : secondCandidate.Language,
+                AmbiguousProjectDetectionSource,
+                LanguageDetectionConfidence.Medium);
         }
 
-        return new LanguageDetectionResult(FileProbeStatus.Supported, ambiguityBucket, "ambiguous");
+        return new LanguageDetectionResult(
+            FileProbeStatus.Supported,
+            descriptor.BucketLanguage,
+            AmbiguousFallbackDetectionSource,
+            LanguageDetectionConfidence.Low);
     }
 
     private static FileProbeStatus TryReadAmbiguousLanguagePrefix(
@@ -163,7 +225,7 @@ public partial class FileIndexer
     private static (bool FirstFamily, bool SecondFamily) ProbeAmbiguousLanguageProjectMarkers(
         string filePath,
         string? projectRoot,
-        bool isMExtension,
+        AmbiguousLanguageDescriptor descriptor,
         Func<string, IEnumerable<string>>? enumerateFileSystemEntries)
     {
         string? directory;
@@ -185,7 +247,7 @@ public partial class FileIndexer
 
         var firstFamily = false;
         var secondFamily = false;
-        for (var depth = 0; depth < 32 && !string.IsNullOrEmpty(directory); depth++)
+        for (var depth = 0; depth < AmbiguousProjectMarkerAncestorLimit && !string.IsNullOrEmpty(directory); depth++)
         {
             try
             {
@@ -198,9 +260,8 @@ public partial class FileIndexer
                         break;
 
                     var name = Path.GetFileName(entry);
-                    var markerFamilies = GetAmbiguousLanguageProjectMarkerFamilies(name, isMExtension);
-                    firstFamily |= markerFamilies.FirstFamily;
-                    secondFamily |= markerFamilies.SecondFamily;
+                    firstFamily |= descriptor.Candidates[0].MatchesProjectMarker(name);
+                    secondFamily |= descriptor.Candidates[1].MatchesProjectMarker(name);
                 }
             }
             catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or NotSupportedException or System.Security.SecurityException)
@@ -226,33 +287,7 @@ public partial class FileIndexer
     internal static bool IsAmbiguousLanguageProjectMarkerPath(string path)
     {
         var name = Path.GetFileName(Path.TrimEndingDirectorySeparator(path));
-        var mFamilies = GetAmbiguousLanguageProjectMarkerFamilies(name, isMExtension: true);
-        var plFamilies = GetAmbiguousLanguageProjectMarkerFamilies(name, isMExtension: false);
-        return mFamilies.FirstFamily || mFamilies.SecondFamily
-            || plFamilies.FirstFamily || plFamilies.SecondFamily;
-    }
-
-    private static (bool FirstFamily, bool SecondFamily) GetAmbiguousLanguageProjectMarkerFamilies(
-        string name,
-        bool isMExtension)
-    {
-        if (isMExtension)
-        {
-            return (
-                name.EndsWith(".xcodeproj", StringComparison.OrdinalIgnoreCase)
-                    || name.EndsWith(".xcworkspace", StringComparison.OrdinalIgnoreCase)
-                    || string.Equals(name, "project.pbxproj", StringComparison.OrdinalIgnoreCase),
-                name.EndsWith(".prj", StringComparison.OrdinalIgnoreCase)
-                    || name.EndsWith(".slx", StringComparison.OrdinalIgnoreCase)
-                    || name.EndsWith(".mlx", StringComparison.OrdinalIgnoreCase));
-        }
-
-        return (
-            string.Equals(name, "Makefile.PL", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(name, "Build.PL", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(name, "cpanfile", StringComparison.OrdinalIgnoreCase),
-            name.EndsWith(".pro", StringComparison.OrdinalIgnoreCase)
-                || name.EndsWith(".prolog", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(name, "pack.pl", StringComparison.OrdinalIgnoreCase));
+        return AmbiguousLanguageDescriptors.Any(descriptor =>
+            descriptor.Candidates.Any(candidate => candidate.MatchesProjectMarker(name)));
     }
 }

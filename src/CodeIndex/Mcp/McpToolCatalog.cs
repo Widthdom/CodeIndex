@@ -254,6 +254,76 @@ public partial class McpServer
                 },
                 ReadOnlyAnnotations()),
             CreateToolDefinition(
+                "read_resource",
+                "Use this typed tool when an exact `cdidx://file/...` or `cdidx://file-path/...` URI is known and a bounded full or ranged file read is needed. The file text is returned in `content[0].text`; `structuredContent.resource` identifies it and `structuredContent._meta` reports the effective range, UTF-8 byte count, truncation, and opaque `nextCursor`. Continue with `cursor` and optional `maxBytes`, without line boundaries. This tool and `resources/read` share the same validated bounded reader; the protocol method remains available for compatibility. / 正確な `cdidx://file/...` または `cdidx://file-path/...` URI が分かっており、ファイル全体または行範囲を上限付きで読む場合に使う型付き tool。テキストは `content[0].text`、resource identity は `structuredContent.resource`、有効範囲・UTF-8 byte 数・切り詰め・opaque `nextCursor` は `structuredContent._meta` に返る。継続時は行境界を付けず、`cursor` と任意の `maxBytes` を渡す。この tool と `resources/read` は同じ検証済み bounded reader を共有し、protocol method も互換性のため維持される。",
+                new JsonObject
+                {
+                    ["type"] = "object",
+                    ["properties"] = new JsonObject
+                    {
+                        ["uri"] = new JsonObject
+                        {
+                            ["type"] = "string",
+                            ["minLength"] = 1,
+                            ["maxLength"] = McpBoundedText.MaxResourceUriChars,
+                            ["pattern"] = "^cdidx://(?:file|file-path)/.+$",
+                            ["description"] = "Exact resource URI returned by resources/list or expanded from resources/templates/list."
+                        },
+                        ["startLine"] = new JsonObject
+                        {
+                            ["type"] = "integer",
+                            ["minimum"] = 1,
+                            ["description"] = "Optional 1-based inclusive start line. Omit to begin at line 1."
+                        },
+                        ["endLine"] = new JsonObject
+                        {
+                            ["type"] = "integer",
+                            ["minimum"] = 1,
+                            ["description"] = "Optional 1-based inclusive end line. Must be greater than or equal to startLine; omit to read through the resource."
+                        },
+                        ["maxBytes"] = new JsonObject
+                        {
+                            ["type"] = "integer",
+                            ["minimum"] = MinResourceReadMaxBytes,
+                            ["maximum"] = MaxResourceReadMaxBytes,
+                            ["default"] = DefaultResourceReadMaxBytes,
+                            ["description"] = "Maximum UTF-8 bytes of file text in this page, not the JSON-RPC envelope."
+                        },
+                        ["cursor"] = new JsonObject
+                        {
+                            ["type"] = "string",
+                            ["minLength"] = 1,
+                            ["maxLength"] = MaxResourceReadCursorCharacters,
+                            ["description"] = "Opaque nextCursor from structuredContent._meta. Mutually exclusive with startLine and endLine; maxBytes may be changed."
+                        },
+                        ["includeGenerated"] = new JsonObject
+                        {
+                            ["type"] = "boolean",
+                            ["default"] = false,
+                            ["description"] = "Allow reading generated resources; false keeps generated files excluded."
+                        }
+                    },
+                    ["required"] = new JsonArray { "uri" },
+                    ["allOf"] = new JsonArray
+                    {
+                        new JsonObject
+                        {
+                            ["not"] = new JsonObject
+                            {
+                                ["required"] = new JsonArray { "cursor", "startLine" }
+                            }
+                        },
+                        new JsonObject
+                        {
+                            ["not"] = new JsonObject
+                            {
+                                ["required"] = new JsonArray { "cursor", "endLine" }
+                            }
+                        }
+                    }
+                },
+                ReadOnlyAnnotations()),
+            CreateToolDefinition(
                 "find_in_file",
                 "Use this when the target file is already known and you need literal or regex navigation inside it. Prefer `excerpt` on returned lines as the next step. Find literal substring matches inside one known indexed file or a small explicit file list, with line numbers and short surrounding context. / 対象ファイルが既に分かっていて、その中を literal または regex で移動したいときに使う。次は返された行の `excerpt` を優先する。既知のインデックス済みファイル1件または少数の明示ファイル群の中で、行番号と短い前後文脈付きの一致を探す。",
                 new JsonObject
@@ -479,7 +549,7 @@ public partial class McpServer
                         ["indexedOnly"] = new JsonObject { ["type"] = "boolean", ["description"] = "Return only languages currently present in the index. Requires the configured database.", ["default"] = false },
                         ["capability"] = new JsonObject { ["oneOf"] = new JsonArray { new JsonObject { ["type"] = "string", ["enum"] = CreateLanguageCapabilityEnum() }, new JsonObject { ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string", ["enum"] = CreateLanguageCapabilityEnum() } } }, ["description"] = "Filter by the same capability or capability-gap values as CLI `languages --capability`. Accepts a single value or an array; all requested capabilities must match." },
                         ["language"] = new JsonObject { ["type"] = "string", ["description"] = "Look up one canonical language using the same exact normalization as CLI `languages --language`, e.g. `csharp` or `cs`." },
-                        ["extension"] = new JsonObject { ["type"] = "string", ["description"] = "Look up languages by file extension. Accepts `cs` or `.cs` style values." },
+                        ["extension"] = new JsonObject { ["type"] = "string", ["description"] = "Look up languages by file extension. Accepts `cs` or `.cs` style values; ambiguous extensions also return ordered candidates, detector evidence/rules, and override guidance in extension_lookup." },
                         ["alias"] = new JsonObject { ["type"] = "string", ["description"] = "Look up languages by exact CLI language alias; canonical language names remain accepted for backward compatibility." },
                         ["limit"] = new JsonObject { ["type"] = "integer", ["minimum"] = 1, ["maximum"] = MaxLimit, ["description"] = "Maximum catalog entries to return per page.", ["default"] = QueryCommandRunner.DefaultQueryLimit },
                         ["cursor"] = new JsonObject { ["type"] = "string", ["maxLength"] = MaxMcpQueryCursorCharacters, ["description"] = "Opaque next_cursor from the previous languages page. Keep every filter, limit, and maxBytes unchanged." },

@@ -78,4 +78,27 @@ public partial class FileIndexer
         ("Makefile.",    "makefile"),
         ("GNUmakefile.", "makefile"),
     ];
+
+    internal sealed record FilenameLanguageRule(
+        string Pattern,
+        string Language);
+
+    internal static IReadOnlyList<FilenameLanguageRule> GetExactFilenameLanguageRulesForExtension(
+        string extension)
+        => FileNameMap
+            .Where(pair => string.Equals(
+                Path.GetExtension(pair.Key),
+                extension,
+                StringComparison.OrdinalIgnoreCase))
+            .OrderBy(pair => pair.Key, StringComparer.Ordinal)
+            .Select(pair => new FilenameLanguageRule(pair.Key, pair.Value))
+            .ToArray();
+
+    internal static IReadOnlyList<FilenameLanguageRule> GetFilenamePrefixLanguageRules()
+        => FileNamePrefixMap
+            .OrderBy(rule => rule.Prefix, StringComparer.Ordinal)
+            .Select(rule => new FilenameLanguageRule(
+                rule.Prefix + "<suffix>",
+                rule.Language))
+            .ToArray();
 }
