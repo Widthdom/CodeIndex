@@ -109,11 +109,21 @@ public partial class McpServer : IDisposable
                     suggestion: "Shorten prompt arguments before calling prompts/get; long source or path context should be fetched with tools instead.");
             }
 
+            if (rawPath.Any(static character => char.IsControl(character)))
+            {
+                return CreateErrorResponse(hasId: true, id: id, code: -32602, message: $"Prompt argument '{key}' must not contain control characters",
+                    category: McpErrorEnvelope.CategoryInvalidArgument,
+                    suggestion: $"Pass a workspace-relative indexed file path without control characters in `params.arguments.{key}`.",
+                    retrySafe: false,
+                    extraData: new JsonObject { ["parameter"] = key });
+            }
+
             if (!McpPathBoundary.TryValidateWorkspaceRelativePath(
                     rawPath,
                     McpBoundedText.MaxPromptArgumentChars,
                     key,
-                    out var validationError))
+                    out var validationError,
+                    backslashIsSeparator: OperatingSystem.IsWindows()))
             {
                 return CreateErrorResponse(hasId: true, id: id, code: -32602, message: validationError!,
                     category: McpErrorEnvelope.CategoryInvalidArgument,
