@@ -2495,7 +2495,33 @@ public static partial class QueryCommandRunner
         {
             var operationText = lexicalContext.MaskedLines[operationLine - 1];
             var prefixLength = Math.Clamp(operationColumn.Value - 1, 0, operationText.Length);
-            if (operationText.AsSpan(0, prefixLength).Contains(';'))
+            if (HasPriorJsonTrustOperationOnLine(operationText.AsSpan(0, prefixLength)))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool HasPriorJsonTrustOperationOnLine(ReadOnlySpan<char> prefix)
+    {
+        for (var index = 0; index < prefix.Length; index++)
+        {
+            var current = prefix[index];
+            if (current is ';' or ',' or '{' or '}' or ')' or ']' or '?')
+                return true;
+
+            if (current == ':'
+                && (index == 0 || prefix[index - 1] != ':')
+                && (index + 1 >= prefix.Length || prefix[index + 1] != ':'))
+            {
+                return true;
+            }
+
+            if (index + 1 >= prefix.Length)
+                continue;
+
+            var next = prefix[index + 1];
+            if ((current, next) is ('+', '+') or ('-', '-') or ('&', '&') or ('|', '|') or ('=', '>'))
                 return true;
         }
 

@@ -3059,6 +3059,38 @@ public partial class QueryCommandRunnerTests
                 """);
             TestProjectHelper.InsertIndexedFile(
                 dbPath,
+                "src/same-line-block-intervening-writer.cs",
+                "csharp",
+                """
+                using System.Text.Encodings.Web;
+
+                public static class SameLineBlockInterveningWriter
+                {
+                    public static JavaScriptEncoder Create(bool skip)
+                    {
+                        // cdidx-audit: json-trust origin=private_local direction=write sensitivity=diagnostic trust=controlled rationale=next_operation_only
+                        if (skip) { } return JavaScriptEncoder.UnsafeRelaxedJsonEscaping;
+                    }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/same-line-multiple-writer.cs",
+                "csharp",
+                """
+                using System.Text.Encodings.Web;
+
+                public static class SameLineMultipleWriter
+                {
+                    public static object Create()
+                    {
+                        // cdidx-audit: json-trust origin=private_local direction=write sensitivity=diagnostic trust=controlled rationale=first_operation_only
+                        return (JavaScriptEncoder.UnsafeRelaxedJsonEscaping, JavaScriptEncoder.UnsafeRelaxedJsonEscaping);
+                    }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
                 "src/private-looking-writer.cs",
                 "csharp",
                 """
@@ -3224,7 +3256,7 @@ public partial class QueryCommandRunnerTests
             using (var document = ParseJsonOutput(writerStdout))
             {
                 var query = Assert.Single(document.RootElement.GetProperty("queries").EnumerateArray());
-                Assert.Equal(11, query.GetProperty("count").GetInt32());
+                Assert.Equal(13, query.GetProperty("count").GetInt32());
                 var trustClassifier = Assert.Single(
                     query.GetProperty("classifiers").EnumerateArray(),
                     classifier => classifier.GetProperty("name").GetString() == "json_trust_boundary");
@@ -3238,7 +3270,7 @@ public partial class QueryCommandRunnerTests
                     query,
                     ("controlled_private_writer", 1),
                     ("external_or_public_writer", 1),
-                    ("ambiguous_trust", 9));
+                    ("ambiguous_trust", 11));
 
                 var results = query.GetProperty("results").EnumerateArray().ToArray();
                 AssertJsonTrustClassification(
@@ -3271,6 +3303,16 @@ public partial class QueryCommandRunnerTests
                     "ambiguous_trust",
                     "rationale:annotation_not_bound_to_operation",
                     "annotation_status:not_adjacent");
+                AssertJsonTrustClassification(
+                    Assert.Single(results, result => result.GetProperty("path").GetString() == "src/same-line-block-intervening-writer.cs"),
+                    "ambiguous_trust",
+                    "rationale:annotation_not_bound_to_operation",
+                    "annotation_status:not_adjacent");
+                AssertJsonTrustClassification(
+                    Assert.Single(results, result => result.GetProperty("path").GetString() == "src/same-line-multiple-writer.cs"),
+                    "ambiguous_trust",
+                    "annotation_status:mixed_boundaries",
+                    "boundary_categories:ambiguous_trust,controlled_private_writer");
                 AssertJsonTrustClassification(
                     Assert.Single(results, result => result.GetProperty("path").GetString() == "src/private-looking-writer.cs"),
                     "ambiguous_trust",
