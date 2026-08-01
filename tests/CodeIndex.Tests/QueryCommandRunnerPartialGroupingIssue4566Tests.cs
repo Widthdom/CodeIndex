@@ -1,5 +1,6 @@
 using CodeIndex.Cli;
 using CodeIndex.Database;
+using CodeIndex.Indexer;
 using Microsoft.Data.Sqlite;
 using System.Text.Json;
 
@@ -423,7 +424,7 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void PartialCanonicalRepresentative_UsesSemanticRulesAndExposesFamilyNavigation_Issue4914()
     {
-        Assert.Equal(3, DbContext.HotspotFamilyVersion);
+        Assert.Equal(4, DbContext.HotspotFamilyVersion);
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_canonical_issue4914");
         try
         {
@@ -951,6 +952,7 @@ public partial class QueryCommandRunnerTests
                 namespace Demo;
                 public partial class Equal { }
                 """);
+            MarkGraphAndFoldReady(rebuildDbPath);
             var rebuiltEqual = RunGroupedSymbol(rebuildDbPath, "Equal", "class");
             Assert.Equal("src/A.Equal.cs", rebuiltEqual.GetProperty("path").GetString());
             Assert.Equal(equal.GetProperty("partial_family_id").GetString(), rebuiltEqual.GetProperty("partial_family_id").GetString());
@@ -1017,6 +1019,236 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(2, allLocations.Count);
             Assert.Contains(allLocations, location => new Uri(location.GetProperty("uri").GetString()!).AbsolutePath.EndsWith("/src/A.Widget.Split.cs", StringComparison.Ordinal));
             Assert.Contains(allLocations, location => new Uri(location.GetProperty("uri").GetString()!).AbsolutePath.EndsWith("/src/Z.Widget.cs", StringComparison.Ordinal));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PartialCanonicalRepresentative_PersistsSplitModifierAndLeadingSemanticEvidence_Issue4914()
+    {
+        const string source =
+            """
+            namespace Demo;
+            public partial class Container
+            {
+                /// <summary>Primary declaration.</summary>
+                [System.Obsolete]
+                partial
+                void OnReady(
+                    int value)
+                {
+                }
+            }
+            """;
+        var symbols = SymbolExtractor.Extract(
+            1,
+            "csharp",
+            source);
+
+        var method = Assert.Single(symbols.Where(symbol => symbol.Kind == "function" && symbol.Name == "OnReady"));
+        Assert.True(method.IsPartialDeclaration);
+        Assert.Equal(3, method.DeclarationSemanticScore);
+        Assert.DoesNotContain("partial", method.Signature, StringComparison.Ordinal);
+
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_worker_metadata_issue4914");
+        try
+        {
+            var request = new SymbolExtractionWorker.WorkerRequest(
+                1,
+                "csharp",
+                source,
+                Path.Combine(projectRoot, "Container.cs"),
+                projectRoot);
+            using var input = new StringReader(
+                JsonSerializer.Serialize(request, SymbolExtractionWorker.JsonOptions) + "\n");
+            using var output = new StringWriter();
+            using var error = new StringWriter();
+
+            var handled = SymbolExtractionWorker.TryRunCommand(
+                [SymbolExtractionWorker.CommandName],
+                input,
+                output,
+                error,
+                out var exitCode);
+            var response = JsonSerializer.Deserialize<SymbolExtractionWorker.WorkerResponse>(
+                output.ToString(),
+                SymbolExtractionWorker.JsonOptions);
+            var transportedMethod = Assert.Single(
+                response!.Symbols!.Where(symbol => symbol.Kind == "function" && symbol.Name == "OnReady"));
+
+            Assert.True(handled);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, error.ToString());
+            Assert.True(transportedMethod.IsPartialDeclaration);
+            Assert.Equal(3, transportedMethod.DeclarationSemanticScore);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PartialCanonicalRepresentative_GroupsSplitModifierAndRanksLeadingEvidence_Issue4914()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_leading_evidence_issue4914");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.Split.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class SplitHost
+                {
+                    partial
+                    void OnSplit(int first, string second);
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Z.Split.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class SplitHost
+                {
+                    partial
+                    void OnSplit(int value, string text) { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.Documented.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class Documented { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Z.Documented.cs",
+                "csharp",
+                """
+                namespace Demo;
+                /// <summary>Primary declaration.</summary>
+                public partial class Documented { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.Attributed.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class Attributed { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Z.Attributed.cs",
+                "csharp",
+                """
+                namespace Demo;
+                [System.Obsolete]
+                public partial class Attributed { }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var split = RunGroupedSymbol(dbPath, "OnSplit", "function");
+            Assert.Equal(2, split.GetProperty("definition_sites").GetInt32());
+            Assert.Contains(
+                split.GetProperty("family_members").EnumerateArray(),
+                member => member.GetProperty("path").GetString() == "src/A.Split.cs");
+            Assert.Contains(
+                split.GetProperty("family_members").EnumerateArray(),
+                member => member.GetProperty("path").GetString() == "src/Z.Split.cs");
+
+            var documented = RunGroupedSymbol(dbPath, "Documented", "class");
+            Assert.Equal("src/Z.Documented.cs", documented.GetProperty("path").GetString());
+            Assert.Equal("semantic_declaration", documented.GetProperty("representative_reason").GetString());
+
+            var attributed = RunGroupedSymbol(dbPath, "Attributed", "class");
+            Assert.Equal("src/Z.Attributed.cs", attributed.GetProperty("path").GetString());
+            Assert.Equal("semantic_declaration", attributed.GetProperty("representative_reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void GroupPartials_DegradesSafelyWhenCSharpFamilyContractIsStale_Issue4914()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_stale_family_contract_issue4914");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            foreach (var path in new[] { "src/A.Hosts.cs", "src/Z.Hosts.cs" })
+            {
+                TestProjectHelper.InsertIndexedFile(
+                    dbPath,
+                    path,
+                    "csharp",
+                    """
+                    namespace Demo;
+                    public partial class Host<T>
+                    {
+                        partial void OnReady();
+                    }
+                    public partial class Host<T, U>
+                    {
+                        partial void OnReady();
+                    }
+                    """);
+            }
+            MarkGraphAndFoldReady(dbPath);
+
+            using (var connection = new SqliteConnection($"Data Source={dbPath}"))
+            {
+                connection.Open();
+                using (var staleFamilyKeys = connection.CreateCommand())
+                {
+                    staleFamilyKeys.CommandText =
+                        """
+                        UPDATE symbols
+                        SET family_key = REPLACE(REPLACE(family_key, 'Host`1', 'Host'), 'Host`2', 'Host')
+                        WHERE name = 'OnReady'
+                        """;
+                    Assert.Equal(4, staleFamilyKeys.ExecuteNonQuery());
+                }
+
+                using var staleContract = connection.CreateCommand();
+                staleContract.CommandText =
+                    """
+                    INSERT INTO codeindex_meta(key, value)
+                    VALUES ($key, $value)
+                    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                    """;
+                staleContract.Parameters.AddWithValue(
+                    "$key",
+                    DbContext.GetHotspotFamilyVersionMetaKey("csharp"));
+                staleContract.Parameters.AddWithValue(
+                    "$value",
+                    (DbContext.HotspotFamilyVersion - 1).ToString(System.Globalization.CultureInfo.InvariantCulture));
+                Assert.Equal(1, staleContract.ExecuteNonQuery());
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["OnReady", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "function", "--group-partials", "--include-generated", "--limit", "10"],
+                _jsonOptions));
+            using var document = ParseJsonOutput(stdout);
+            var rows = document.RootElement.EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(4, rows.Count);
+            Assert.All(rows, row => Assert.False(row.TryGetProperty("definition_sites", out _)));
+            Assert.All(rows, row => Assert.False(row.TryGetProperty("partial_family_id", out _)));
         }
         finally
         {

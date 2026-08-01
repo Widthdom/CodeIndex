@@ -611,5 +611,6 @@ public sealed class JsonEnvelopeWrapperIssue4585Tests
         writer.MarkGraphReady();
         writer.MarkFoldReady();
         writer.MarkCSharpSymbolNameContractReady();
+        writer.MarkHotspotFamilyReady("csharp", "test-fixture-csharp-family");
     }
 }

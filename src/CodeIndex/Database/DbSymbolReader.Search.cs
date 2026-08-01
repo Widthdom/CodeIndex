@@ -413,7 +413,9 @@ public partial class DbReader
             GetSymbolColumnSql("container_name"),
             GetSymbolColumnSql("container_qualified_name"),
             GetSymbolColumnSql("family_key"),
-            GetSymbolColumnSql("return_type"));
+            GetSymbolColumnSql("return_type"),
+            GetSymbolColumnSql("is_partial_declaration"),
+            _hotspotFamilyReadyLanguages.Contains("csharp"));
         var countSql = groupPartials
             ? $"COUNT(DISTINCT ({logicalPartialKeySql}))"
             : "COUNT(*)";
@@ -692,7 +694,9 @@ public partial class DbReader
             containerNameSql,
             containerQualifiedNameSql,
             familyKeySql,
-            returnTypeSql);
+            returnTypeSql,
+            GetSymbolColumnSql("is_partial_declaration"),
+            _hotspotFamilyReadyLanguages.Contains("csharp"));
         var generatedSql = _fileColumns.Contains("generated")
             ? "CASE WHEN COALESCE(f.generated, 0) <> 0 OR codeindex_generated_file_name(f.path) THEN 1 ELSE 0 END"
             : "CASE WHEN codeindex_generated_file_name(f.path) THEN 1 ELSE 0 END";
@@ -702,7 +706,8 @@ public partial class DbReader
             bodyEndLineSql);
         var canonicalSemanticScoreSql = LogicalPartialSymbolGrouper.BuildSqlSemanticScoreExpression(
             signatureSql,
-            "s.kind");
+            "s.kind",
+            GetSymbolColumnSql("declaration_semantic_score"));
         var fallbackCanonicalDeclarationIdentitySql = BuildCanonicalDeclarationIdentitySql(signatureSql);
         var canonicalDeclarationIdentitySql = $"CASE WHEN s.kind = 'function' THEN COALESCE(csharp_partial_callable_identity({signatureSql}, s.name, {returnTypeSql}), {fallbackCanonicalDeclarationIdentitySql}) ELSE {fallbackCanonicalDeclarationIdentitySql} END";
         var exactNameOrderSql = "CASE " +

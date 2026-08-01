@@ -53,20 +53,29 @@ internal static class LogicalPartialSymbolGrouper
         string containerNameSql,
         string containerQualifiedNameSql,
         string familyKeySql,
-        string? returnTypeSql = null)
+        string? returnTypeSql = null,
+        string? isPartialDeclarationSql = null,
+        bool csharpFamilyContractReady = true)
     {
+        if (!csharpFamilyContractReady)
+            return $"'symbol:' || {symbolIdSql}";
+
         var persistedFamilySql = $"NULLIF(TRIM({familyKeySql}), '')";
         var fallbackContainerSql = $"COALESCE(NULLIF(TRIM({containerQualifiedNameSql}), ''), NULLIF(TRIM({containerNameSql}), ''), '')";
         var normalizedSignatureSql = $"REPLACE(REPLACE(REPLACE(LOWER(COALESCE({signatureSql}, '')), CHAR(9), ' '), CHAR(10), ' '), CHAR(13), ' ')";
-        var partialDeclarationSql = $"INSTR(' ' || {normalizedSignatureSql} || ' ', ' partial ') > 0";
+        var signaturePartialDeclarationSql = $"INSTR(' ' || {normalizedSignatureSql} || ' ', ' partial ') > 0";
+        var partialDeclarationSql = isPartialDeclarationSql == null
+            ? signaturePartialDeclarationSql
+            : $"COALESCE({isPartialDeclarationSql}, CASE WHEN {signaturePartialDeclarationSql} THEN 1 ELSE 0 END) <> 0";
         var projectPrefixSql = $"CASE WHEN INSTR(COALESCE({persistedFamilySql}, ''), '|') > 0 THEN SUBSTR({persistedFamilySql}, 1, INSTR({persistedFamilySql}, '|')) ELSE '' END";
         var typeAritySql = $"COALESCE(csharp_definition_type_arity({signatureSql}, {nameSql}, {kindSql}), 0)";
         var typeIdentitySql = $"{nameSql} || CASE WHEN {typeAritySql} > 0 THEN '`' || {typeAritySql} ELSE '' END";
         var reconstructedSelfFamilySql = $"{projectPrefixSql} || CASE WHEN {fallbackContainerSql} = '' THEN {typeIdentitySql} ELSE {fallbackContainerSql} || '.' || {typeIdentitySql} END";
         var selfFamilySql = $"COALESCE({persistedFamilySql}, {reconstructedSelfFamilySql})";
+        var callableSignatureSql = $"CASE WHEN {signaturePartialDeclarationSql} THEN {signatureSql} WHEN {partialDeclarationSql} THEN 'partial ' || COALESCE({signatureSql}, '') ELSE {signatureSql} END";
         var callableIdentitySql = returnTypeSql == null
             ? "NULL"
-            : $"csharp_partial_callable_identity({signatureSql}, {nameSql}, {returnTypeSql})";
+            : $"csharp_partial_callable_identity({callableSignatureSql}, {nameSql}, {returnTypeSql})";
         var callableContainerSql = $"COALESCE({persistedFamilySql}, NULLIF({fallbackContainerSql}, ''))";
         return $@"CASE
             WHEN {languageSql} = 'csharp'
@@ -90,8 +99,16 @@ internal static class LogicalPartialSymbolGrouper
         string bodyEndLineSql)
         => $"CASE WHEN {kindSql} = 'function' AND ({bodyStartLineSql} IS NULL OR {bodyEndLineSql} IS NULL) THEN 1 ELSE 0 END";
 
-    internal static string BuildSqlSemanticScoreExpression(string signatureSql, string kindSql)
-        => $"csharp_partial_semantic_score({signatureSql}, {kindSql})";
+    internal static string BuildSqlSemanticScoreExpression(
+        string signatureSql,
+        string kindSql,
+        string? declarationSemanticScoreSql = null)
+    {
+        var signatureScoreSql = $"csharp_partial_semantic_score({signatureSql}, {kindSql})";
+        return declarationSemanticScoreSql == null
+            ? signatureScoreSql
+            : $"COALESCE({declarationSemanticScoreSql}, {signatureScoreSql})";
+    }
 
     public static List<T> Group<T>(IReadOnlyList<T> symbols)
         where T : SymbolResult

@@ -188,7 +188,9 @@ public partial class DbReader
             GetSymbolColumnSql("container_name"),
             GetSymbolColumnSql("container_qualified_name"),
             GetSymbolColumnSql("family_key"),
-            GetSymbolColumnSql("return_type"));
+            GetSymbolColumnSql("return_type"),
+            GetSymbolColumnSql("is_partial_declaration"),
+            _hotspotFamilyReadyLanguages.Contains("csharp"));
         cmd.CommandText = $@"
             SELECT target_file.path,
                    target_file.lang,

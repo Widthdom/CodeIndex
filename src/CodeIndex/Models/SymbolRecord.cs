@@ -71,6 +71,20 @@ public class SymbolRecord
     public string? ReturnType { get; set; }
 
     /// <summary>
+    /// Extraction-owned C# declaration facts used by logical partial-family grouping.
+    /// These values cross the extraction-worker boundary and are persisted, but are
+    /// intentionally omitted from public symbol-query JSON.
+    /// logical partial-family grouping が使う extraction-owned な C# 宣言情報。
+    /// extraction worker 境界を越えて DB には保存するが、public な symbol query
+    /// JSON には公開しない。
+    /// </summary>
+    [JsonInclude]
+    internal bool? IsPartialDeclaration { get; set; }
+
+    [JsonInclude]
+    internal int? DeclarationSemanticScore { get; set; }
+
+    /// <summary>
     /// Authoritative metadata-target flag (e.g. C# attribute class derived from System.Attribute).
     /// Persisted in `symbols.is_metadata_target` after a per-language resolver pass and gated by
     /// `metadata_target_version_<lang>` in `codeindex_meta`. NULL on legacy DBs and on languages

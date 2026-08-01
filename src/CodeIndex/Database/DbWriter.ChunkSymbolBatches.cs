@@ -240,6 +240,10 @@ public partial class DbWriter
                 cmd.Parameters[parameterIndex++].Value = (object?)symbol.FamilyKey ?? DBNull.Value;
                 cmd.Parameters[parameterIndex++].Value = (object?)symbol.Visibility ?? DBNull.Value;
                 cmd.Parameters[parameterIndex++].Value = (object?)symbol.ReturnType ?? DBNull.Value;
+                cmd.Parameters[parameterIndex++].Value = symbol.IsPartialDeclaration.HasValue
+                    ? (symbol.IsPartialDeclaration.Value ? 1 : 0)
+                    : (object)DBNull.Value;
+                cmd.Parameters[parameterIndex++].Value = (object?)symbol.DeclarationSemanticScore ?? DBNull.Value;
                 cmd.Parameters[parameterIndex++].Value = symbol.IsMetadataTarget.HasValue
                     ? (symbol.IsMetadataTarget.Value ? 1 : 0)
                     : (object)DBNull.Value;
@@ -296,6 +300,7 @@ public partial class DbWriter
                     body_start_line, body_end_line, signature,
                     container_kind, container_name, container_qualified_name, family_key,
                     visibility, return_type,
+                    is_partial_declaration, declaration_semantic_score,
                     is_metadata_target, metadata_target_source,
                     name_folded, display_name_folded
                 )
@@ -305,7 +310,7 @@ public partial class DbWriter
         {
             if (row > 0)
                 sql.Append(", ");
-            AppendBatchParameterTuple(sql, ref parameterIndex, columnCount: 21);
+            AppendBatchParameterTuple(sql, ref parameterIndex, columnCount: 23);
         }
         return sql.ToString();
     }
@@ -332,6 +337,8 @@ public partial class DbWriter
             AddBatchParameter(cmd, ref parameterIndex, SqliteType.Text);
             AddBatchParameter(cmd, ref parameterIndex, SqliteType.Text);
             AddBatchParameter(cmd, ref parameterIndex, SqliteType.Text);
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Integer);
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Integer);
             AddBatchParameter(cmd, ref parameterIndex, SqliteType.Integer);
             AddBatchParameter(cmd, ref parameterIndex, SqliteType.Text);
             AddBatchParameter(cmd, ref parameterIndex, SqliteType.Text);

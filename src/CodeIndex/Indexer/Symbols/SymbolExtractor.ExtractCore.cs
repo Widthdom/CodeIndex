@@ -1273,6 +1273,8 @@ public static partial class SymbolExtractor
             extractionState,
             getCSharpLineStartStates,
             pendingRecordPrimaryComponents);
+        if (lang == "csharp")
+            PopulateCSharpPartialDeclarationMetadata(lines, symbols);
         return symbols;
     }
 
