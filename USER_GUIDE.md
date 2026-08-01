@@ -1299,6 +1299,8 @@ Here, drift refusal means drift detected through the final pre-publication valid
 
 `cdidx optimize --dry-run --json` previews FTS5 maintenance without acquiring the index lock or changing the source DB/WAL/SHM files. The result includes DB/core-table/FTS sizes, page and freelist indicators, the incremental-write recommendation, current lock and readiness state, a previous-duration estimate when available, and the operations a real optimize would perform, including its repair-mode schema initialization or migration check. `object_sizes_measurement` distinguishes exact `dbstat` page bytes from the logical-payload fallback used when SQLite does not provide `dbstat`.
 
+`status --check --json` returns structured `repair_commands` for failed checks. Each entry identifies its `action`, `args`, `mutation_class`, `safety_class`, and `safety_notes`; `reason` remains the first trigger for compatibility, while `reasons` contains every trigger in deterministic check order. Identical structured actions are emitted once, but commands with different targets, options, actions, or safety semantics stay separate. Human check output applies the same rule, preserves platform-aware shell quoting, and visibly escapes control characters so each `[repair]` command remains one diagnostic line; structured JSON `args` retain their original values. Writable repair arguments use normalized local paths rather than preserving read-only `file:` URI options.
+
 ### Search code
 
 ```bash
@@ -1486,12 +1488,19 @@ include `classifier_counts` when classified rows are present. For example,
 `phrase-risk-patterns/task-result-property-review` separates DTO/result-wrapper
 `.Result` properties from Task/ValueTask blocking waits. Recipe JSON and
 compact output also return `next_cursor` when a single selected recipe query is
-truncated. Recipe run summaries and
-count summaries include `query_freshness` with the number of queries that found
-positive evidence, the number that returned zero results, and `stale_query_names`
-so broad audit recipes can surface query drift without requiring the full
-recipe catalog JSON. Output-limited recipe runs use matched-count metadata for
-this summary, so queries with known omitted matches are not reported as stale.
+truncated. Recipe run summaries and count summaries include `query_freshness`.
+The compatibility fields `positive_evidence_query_count` and
+`zero_result_query_count` still describe result cardinality, while
+`clean_query_count`, `matched_query_count`, `clean_zero_match_query_count`, and
+per-query `freshness_state` / `result_state` keep successful zero-match queries
+separate from real freshness invalidation. `stale_query_names` is now reserved
+for stale index or changed recipe/query definition versions; failed or missing
+child executions are listed under `invalid_query_names`. Recipe definition and
+query definition versions make cached consumers able to detect drift without
+inferring freshness from match counts. Text recipe output summarizes the same
+states, and SARIF recipe runs expose the same `query_freshness` object in run
+properties. Output-limited recipe runs use matched-count metadata for this
+summary, so queries with known omitted matches are not reported as zero-match.
 Add `--show-excluded` to a recipe run when you need the effective path scope and
 exclusion diagnostics in JSON output.
 Recipe runs support text output, aggregate JSON with `--json` / `--format json`,
@@ -4686,7 +4695,7 @@ DB を read-only で開いて SQLite の `PRAGMA integrity_check` を実行し�
 
 DB / WAL の肥大や空き page を確認したい場合は `status --json` の `maintenance_guidance` を見ます。既定では WAL が 64 MiB 以上で `checkpoint_recommended`、`freelist_count / page_count` が 0.20 以上で `vacuum_recommended` になり、`recommended_command` と `post_maintenance_follow_up` が返ります。しきい値は `CDIDX_MAINTENANCE_WAL_WARN_BYTES` と `CDIDX_MAINTENANCE_FREELIST_WARN_RATIO` で調整できます。
 
-`status --check --json` は failed check ごとに `repair_commands` を返します。各 entry は `name`、`args`、`reason`、`safety_notes` を持つため、自動化は `recommended_action` の文章を分解せずに修復コマンドを組み立てられます。前回の index が中断・失敗した情報が DB に残っている場合は、`last_failed_or_partial_index_run` に bounded metadata だけを返し、例外本文や file path は含めません。
+`status --check --json` は failed check に対する構造化 `repair_commands` を返します。各 entry は `action`、`args`、`mutation_class`、`safety_class`、`safety_notes` を持ち、互換用の `reason` は最初の trigger、`reasons` は deterministic な check 順序ですべての trigger を保持します。同一の構造化 action は1件だけ返しますが、target、option、action、安全性 semantics が異なる command は別々に維持します。human check output にも同じ規則を適用し、platform-aware な shell quote と control character の可視 escape により、各 `[repair]` command を1行に維持します。構造化 JSON の `args` は原値を保持します。書き込み用の修復 argument には read-only の `file:` URI option を残さず、正規化済み local path を使います。前回の index が中断・失敗した情報が DB に残っている場合は、`last_failed_or_partial_index_run` に bounded metadata だけを返し、例外本文や file path は含めません。
 
 ```bash
 cdidx vacuum --dry-run --json   # 回収見積もりと maintenance guidance だけを確認
@@ -4868,10 +4877,16 @@ DTO / result-wrapper の `.Result` property と Task / ValueTask の blocking wa
 recipe の JSON / compact output は、単一の recipe query が truncated された場合に `next_cursor`
 も返します。`--format compact` は
 summary、query count、query ごとの count、`truncated` flag、該当する場合の `next_cursor`
-を返します。recipe run summary と count summary は `query_freshness` も返し、肯定的な根拠が
-見つかった query 数、結果 0 件の query 数、`stale_query_names` を示します。これにより、
-広範な audit recipe の query drift を full recipe catalog JSON なしで確認できます。出力制限された
-recipe run では matched-count metadata を使うため、省略済みの match がある query は stale として報告されません。
+を返します。recipe run summary と count summary は `query_freshness` も返します。
+互換フィールドの `positive_evidence_query_count` と `zero_result_query_count` は引き続き結果件数を
+表し、`clean_query_count`、`matched_query_count`、`clean_zero_match_query_count` と query ごとの
+`freshness_state` / `result_state` により、正常に実行された 0 件の query を実際の freshness
+無効化と分離します。`stale_query_names` は stale index または recipe / query definition version
+変更だけに使い、失敗または欠落した child execution は `invalid_query_names` に示します。
+recipe definition と query definition の version により、cache consumer は match 数から freshness
+を推測せず drift を検出できます。text の recipe output も同じ状態を要約し、SARIF recipe run は
+run properties の `query_freshness` に同じ object を出力します。出力制限された recipe run では
+matched-count metadata を使うため、省略済みの match がある query は zero-match として報告されません。
 `--show-excluded` を recipe と併用すると、有効な path scope と除外診断を出力に含めます。
 recipe run が対応する形式は text output、`--json` / `--format json` の aggregate JSON、
 `--json=ndjson` または `--results-only` の NDJSON row stream、`--format count` の

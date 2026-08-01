@@ -303,6 +303,17 @@ internal static class TestProjectHelper
         }
     }
 
+    internal static void InsertFreshIndexedFile(
+        string projectRoot,
+        string dbPath,
+        string path,
+        string lang,
+        string content)
+    {
+        WriteTextFile(projectRoot, path, content);
+        InsertIndexedFile(dbPath, path, lang, content);
+    }
+
     internal static void DeleteSqliteDatabaseFiles(string dbPath)
     {
         DeleteFile(dbPath);
