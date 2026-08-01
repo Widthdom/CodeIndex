@@ -1348,7 +1348,11 @@ public partial class DbReader
             .ToArray();
     }
 
-    private sealed record SearchGuardEvaluation(int WindowStartLine, int WindowEndLine, SearchGuardEvidence? Evidence);
+    private sealed record SearchGuardEvaluation(
+        int WindowStartLine,
+        int WindowEndLine,
+        SearchGuardEvidence? Evidence,
+        List<SearchGuardEvidence>? RejectedEvidence = null);
 
     private SearchGuardEvaluation FindGuardEvidence(
         string path,
@@ -1359,6 +1363,9 @@ public partial class DbReader
         string? lang,
         Dictionary<SearchGuardLineWindowKey, SortedDictionary<int, string>> lineWindowCache)
     {
+        if (filter.EvidenceKind != SearchGuardEvidenceKind.Text)
+            return FindStructuralGuardEvidence(path, primaryMatch, filter, lang, lineWindowCache);
+
         if (guardScope == SearchGuardScope.SameLine)
             return FindSameLineGuardEvidence(path, primaryMatch, filter, lang);
 
@@ -1523,6 +1530,7 @@ public partial class DbReader
             WindowStartLine = evaluation.WindowStartLine,
             WindowEndLine = evaluation.WindowEndLine,
             Evidence = evaluation.Evidence,
+            RejectedEvidence = evaluation.RejectedEvidence,
         };
     }
 
@@ -1549,7 +1557,12 @@ public partial class DbReader
     }
 
     private static string FormatSearchGuardScope(SearchGuardScope scope)
-        => scope == SearchGuardScope.SameLine ? "same_line" : "window";
+        => scope switch
+        {
+            SearchGuardScope.SameLine => "same_line",
+            SearchGuardScope.Container => "container",
+            _ => "window",
+        };
 
     private SortedDictionary<int, string> ReadLineWindow(
         string path,

@@ -4338,7 +4338,19 @@ public static partial class QueryCommandRunner
                 filter.Direction == SearchGuardDirection.Before ? "before" : "after",
                 filter.Query,
                 BuildSearchGuardReplayOptionName(filter),
-                FormatSearchGuardFilterScope(filter)))
+                filter.Scope switch
+                {
+                    SearchGuardScope.Window => "window",
+                    SearchGuardScope.SameLine => "same_line",
+                    SearchGuardScope.Container => "container",
+                    _ => null,
+                },
+                filter.EvidenceKind switch
+                {
+                    SearchGuardEvidenceKind.CSharpBoundedFileRead => "csharp_bounded_file_read",
+                    SearchGuardEvidenceKind.CSharpEnumerationOptions => "csharp_enumeration_options",
+                    _ => null,
+                }))
             .ToList();
 
 }
