@@ -1495,7 +1495,9 @@ invalid, or directionally inconsistent evidence remains
 `ambiguous_trust`. Every match line is checked from indexed source even when
 guard filtering projects the result to one line. If one result contains matches
 with distinct trust evidence, it is conservatively reported as
-`ambiguous_trust` with `annotation_status:mixed_boundaries`. The annotation only enriches `audit_classifications`; it never
+`ambiguous_trust` with `annotation_status:mixed_boundaries`. An annotation binds
+only to the next operation: intervening executable code leaves the later match
+`ambiguous_trust` with `annotation_status:not_adjacent`. The annotation only enriches `audit_classifications`; it never
 suppresses the underlying recipe result, so external parsing remains visible.
 Add `--show-excluded` to a recipe run when you need the effective path scope and
 exclusion diagnostics in JSON output.
@@ -4880,6 +4882,8 @@ lexical context 不正、read / write の不一致は
 `ambiguous_trust` のままです。guard filter により result が1行へ投影される場合も、各 match line を
 indexed source から検査します。1つの result に異なる trust evidence を持つ match が含まれる場合は、
 `annotation_status:mixed_boundaries` を伴う `ambiguous_trust` として保守的に報告します。
+注釈は次の操作1件だけに束縛され、途中に実行コードがある後続 match は
+`annotation_status:not_adjacent` を伴う `ambiguous_trust` のままです。
 この注釈は `audit_classifications` に根拠を追加するだけで、
 元の recipe result を抑制しないため、external parsing は引き続き表示されます。
 `--show-excluded` を recipe と併用すると、有効な path scope と除外診断を出力に含めます。

@@ -673,6 +673,7 @@ public static partial class QueryCommandRunner
                     scope,
                     options,
                     userExact,
+                    true,
                     out _,
                     out var rowMinimumMatchedTotal);
                 var stream = WriteRecipeSearchResultRows(
@@ -705,7 +706,15 @@ public static partial class QueryCommandRunner
                     $"Reduce --limit or --total-limit, select one child query with {options.InvocationContext.RecipeCursorSelectorSyntax}, stream rows with --json=ndjson, or increase --max-json-bytes.");
             }
 
-            var queryResults = CollectSearchRecipeQueryResults(reader, selection.Queries, scope, options, userExact, out var total, out _);
+            var queryResults = CollectSearchRecipeQueryResults(
+                reader,
+                selection.Queries,
+                scope,
+                options,
+                userExact,
+                options.Json && options.OutputFormat != OutputFormatSarif,
+                out var total,
+                out _);
 
             if (options.OutputFormat == OutputFormatSarif)
                 return WriteSearchRecipeSarif(recipe, scope, queryResults, total, options, jsonOptions);
@@ -1643,7 +1652,15 @@ public static partial class QueryCommandRunner
 
         return WithDb(options, jsonOptions, reader =>
         {
-            var queryResults = CollectSearchRecipeQueryResults(reader, selection.Queries, scope, options, userExact, out var total, out _);
+            var queryResults = CollectSearchRecipeQueryResults(
+                reader,
+                selection.Queries,
+                scope,
+                options,
+                userExact,
+                false,
+                out var total,
+                out _);
             var drafts = queryResults
                 .Where(queryResult => queryResult.Count > 0)
                 .Select(queryResult => ToSearchIssueDraft(recipe, queryResult, preflight, options))
@@ -1915,6 +1932,7 @@ public static partial class QueryCommandRunner
         SearchRecipeScopeJsonResult scope,
         QueryCommandOptions options,
         bool userExact,
+        bool includeAuditClassifications,
         out int total,
         out int minimumMatchedTotal)
     {
@@ -1957,7 +1975,8 @@ public static partial class QueryCommandRunner
             var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, rawFtsOverride: false, recipeQuery: recipeQuery);
             var outputSelection = ApplySearchOutputSelection(rows, options, resultLimit, sourceTotalAuthoritative);
             rows = outputSelection.Rows;
-            ApplySearchRecipeAuditClassifications(reader, recipeQuery, rows);
+            if (includeAuditClassifications)
+                ApplySearchRecipeAuditClassifications(reader, recipeQuery, rows);
             var minimumOmitted = Math.Max(0, outputSelection.OriginalCount - rows.Count);
             var selectionReason = GetSearchRecipeSelectionReason(outputSelection);
             total += rows.Count;
@@ -2179,7 +2198,7 @@ public static partial class QueryCommandRunner
                 requiredPathPatterns: GetSearchRecipeRequiredPathPatterns(options, recipeQuery));
             results = ApplySearchRecipeFileRejectQueries(reader, results, options, recipeQuery);
             var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, rawFtsOverride: false, recipeQuery: recipeQuery);
-            if (!options.SummaryOnly)
+            if (options.Json && !options.SummaryOnly)
                 ApplySearchRecipeAuditClassifications(reader, recipeQuery, rows);
             var count = rows.Count;
             var fileCountForQuery = rows.Select(row => row.Result.Path).Distinct(StringComparer.Ordinal).Count();
@@ -2395,6 +2414,18 @@ public static partial class QueryCommandRunner
                 nearestLine);
         }
 
+        if (HasInterveningJsonTrustExecutableLine(lexicalContext, nearestLine, focusLine))
+        {
+            return new JsonTrustBoundaryEvidence(
+                "unknown",
+                expectedDirectionText,
+                "unknown",
+                "review_required",
+                "annotation_not_bound_to_operation",
+                "not_adjacent",
+                nearestLine);
+        }
+
         var annotation = lexicalContext.SourceLines[nearestLine - 1].TrimStart();
         var payload = annotation[marker.Length..].Trim();
         if (!TryParseJsonTrustBoundaryAnnotation(payload, out var parsed))
@@ -2413,6 +2444,23 @@ public static partial class QueryCommandRunner
             return parsed with { AnnotationStatus = "direction_mismatch", AnnotationLine = nearestLine };
 
         return parsed with { AnnotationStatus = "valid", AnnotationLine = nearestLine };
+    }
+
+    private static bool HasInterveningJsonTrustExecutableLine(
+        JsonTrustLexicalContext lexicalContext,
+        int annotationLine,
+        int operationLine)
+    {
+        for (var line = annotationLine + 1; line < operationLine; line++)
+        {
+            var maskedLine = lexicalContext.MaskedLines[line - 1].TrimStart();
+            if (maskedLine.Length == 0 || maskedLine.StartsWith("//", StringComparison.Ordinal))
+                continue;
+
+            return true;
+        }
+
+        return false;
     }
 
     private static JsonTrustLexicalContext? GetJsonTrustLexicalContext(
