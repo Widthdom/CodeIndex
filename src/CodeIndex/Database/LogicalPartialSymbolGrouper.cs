@@ -82,7 +82,7 @@ internal static class LogicalPartialSymbolGrouper
         var callableSignatureSql = $"CASE WHEN {signaturePartialDeclarationSql} THEN {signatureSql} WHEN {partialDeclarationSql} THEN 'partial ' || COALESCE({signatureSql}, '') ELSE {signatureSql} END";
         var callableIdentitySql = returnTypeSql == null
             ? "NULL"
-            : $"csharp_partial_callable_identity({callableSignatureSql}, {nameSql}, {returnTypeSql})";
+            : $"csharp_partial_callable_identity({callableSignatureSql}, {nameSql}, {returnTypeSql}, {fallbackContainerSql})";
         var callableContainerSql = $"COALESCE({scopedPersistedFamilySql}, NULLIF({fallbackContainerSql}, ''))";
         return $@"CASE
             WHEN {languageSql} = 'csharp'
@@ -265,7 +265,12 @@ internal static class LogicalPartialSymbolGrouper
         return true;
     }
 
-    internal static string? BuildCallableIdentity(string? signature, string? name, string? returnType)
+    internal static string? BuildCallableIdentity(
+        string? signature,
+        string? name,
+        string? returnType,
+        string? containerQualifiedName = null,
+        CSharpCallableTypeKindLookup? typeKinds = null)
     {
         if (string.IsNullOrWhiteSpace(signature)
             || string.IsNullOrWhiteSpace(name)
@@ -305,11 +310,17 @@ internal static class LogicalPartialSymbolGrouper
 
         var parameterIdentity = BuildCallableParameterIdentity(
             signature[(cursor + 1)..closeParenthesis],
-            genericParameterNames);
+            genericParameterNames,
+            containerQualifiedName,
+            typeKinds);
         return string.Join(
             KeySeparator,
             normalizedName,
-            NormalizeCallableTypeIdentity(returnType, genericParameterNames),
+            NormalizeCallableTypeIdentity(
+                returnType,
+                genericParameterNames,
+                containerQualifiedName,
+                typeKinds),
             genericArity.ToString(System.Globalization.CultureInfo.InvariantCulture),
             parameterIdentity);
     }
@@ -438,7 +449,9 @@ internal static class LogicalPartialSymbolGrouper
 
     private static string BuildCallableParameterIdentity(
         string parameters,
-        IReadOnlyList<string> genericParameterNames)
+        IReadOnlyList<string> genericParameterNames,
+        string? containerQualifiedName,
+        CSharpCallableTypeKindLookup? typeKinds)
     {
         if (string.IsNullOrWhiteSpace(parameters))
             return string.Empty;
@@ -450,12 +463,18 @@ internal static class LogicalPartialSymbolGrouper
                 .Select(RemoveCSharpComments)
                 .Select(RemoveLeadingParameterAttributes)
                 .Select(RemoveTrailingParameterName)
-                .Select(parameter => BuildParameterTypeAndRefIdentity(parameter, genericParameterNames)));
+                .Select(parameter => BuildParameterTypeAndRefIdentity(
+                    parameter,
+                    genericParameterNames,
+                    containerQualifiedName,
+                    typeKinds)));
     }
 
     private static string BuildParameterTypeAndRefIdentity(
         string parameter,
-        IReadOnlyList<string> genericParameterNames)
+        IReadOnlyList<string> genericParameterNames,
+        string? containerQualifiedName,
+        CSharpCallableTypeKindLookup? typeKinds)
     {
         var remaining = parameter.TrimStart();
         var refKind = string.Empty;
@@ -481,7 +500,11 @@ internal static class LogicalPartialSymbolGrouper
             }
             break;
         }
-        return $"{refKind}:{NormalizeCallableTypeIdentity(remaining, genericParameterNames)}";
+        return $"{refKind}:{NormalizeCallableTypeIdentity(
+            remaining,
+            genericParameterNames,
+            containerQualifiedName,
+            typeKinds)}";
     }
 
     private static bool TryReadLeadingIdentifier(
@@ -518,7 +541,9 @@ internal static class LogicalPartialSymbolGrouper
 
     private static string NormalizeCallableTypeIdentity(
         string? value,
-        IReadOnlyList<string> genericParameterNames)
+        IReadOnlyList<string> genericParameterNames,
+        string? containerQualifiedName = null,
+        CSharpCallableTypeKindLookup? typeKinds = null)
     {
         if (string.IsNullOrWhiteSpace(value))
             return string.Empty;
@@ -573,6 +598,21 @@ internal static class LogicalPartialSymbolGrouper
                 offset++;
                 continue;
             }
+            if (token == "?"
+                && typeKinds?.Resolve(
+                    ReadCustomNullableSourceIdentity(tokens, offset),
+                    containerQualifiedName) == CSharpCallableTypeKindLookup.TypeKind.Reference)
+            {
+                // Nullable reference annotations do not participate in a C# callable
+                // signature. Remove one only when the indexed source type facts resolve
+                // the annotated custom type as a reference type; unknown and value types
+                // retain `?` so overloads such as M(S) / M(S?) remain distinct.
+                // nullable reference annotation は C# callable signature の一部ではない。
+                // indexed source type 情報で custom type が reference type と確定した場合
+                // だけ除去し、unknown / value type の `?` は保持する。
+                offset++;
+                continue;
+            }
             if (!IsIdentifierCharacter(token[0]))
             {
                 builder.Append(token);
@@ -622,6 +662,50 @@ internal static class LogicalPartialSymbolGrouper
             offset++;
         }
         return builder.ToString();
+    }
+
+    private static string ReadCustomNullableSourceIdentity(
+        IReadOnlyList<string> tokens,
+        int nullableOffset)
+    {
+        var nameEnd = nullableOffset - 1;
+        if (nameEnd < 0)
+            return string.Empty;
+
+        if (tokens[nameEnd] == ">")
+        {
+            var depth = 0;
+            while (nameEnd >= 0)
+            {
+                if (tokens[nameEnd] == ">")
+                    depth++;
+                else if (tokens[nameEnd] == "<" && --depth == 0)
+                    break;
+                nameEnd--;
+            }
+            nameEnd--;
+        }
+
+        if (nameEnd < 0 || !IsIdentifierCharacter(tokens[nameEnd][0]))
+            return string.Empty;
+
+        var nameStart = nameEnd;
+        while (nameStart >= 2
+               && tokens[nameStart - 1] == "."
+               && IsIdentifierCharacter(tokens[nameStart - 2][0]))
+        {
+            nameStart -= 2;
+        }
+
+        if (nameStart >= 3
+            && tokens[nameStart - 1] == ":"
+            && tokens[nameStart - 2] == ":"
+            && tokens[nameStart - 3] == "global")
+        {
+            nameStart -= 3;
+        }
+
+        return string.Concat(tokens.Skip(nameStart).Take(nameEnd - nameStart + 1));
     }
 
     private static bool TryReadFrameworkNullableTypeIdentity(

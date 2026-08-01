@@ -595,6 +595,7 @@ public partial class DbReader : IDisposable
         _fileColumns = LoadColumns("files");
         GeneratedColumnAvailableScope.Value = _fileColumns.Contains("generated");
         _symbolColumns = LoadColumns("symbols");
+        DbContext.RefreshCSharpCallableTypeKinds(_conn, _fileColumns, _symbolColumns);
         _referenceColumns = LoadColumns("symbol_references");
         _chunkIndexes = LoadIndexes("chunks");
         _symbolIndexes = LoadIndexes("symbols");

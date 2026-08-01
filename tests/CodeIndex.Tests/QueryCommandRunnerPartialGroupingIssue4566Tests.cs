@@ -2142,6 +2142,81 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void PartialCanonicalRepresentative_UsesIndexedTypeFactsForCustomNullability_Issue4914()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_custom_nullability_issue4914");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.Declarations.cs",
+                "csharp",
+                """
+                #nullable enable
+                namespace Demo;
+                public class Node { }
+                public struct Token { }
+                public partial class Container
+                {
+                    partial void Reference(Node? value);
+                    partial void Value(Token value);
+                    partial void Value(Token? value);
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Z.Implementations.cs",
+                "csharp",
+                """
+                #nullable enable
+                namespace Demo;
+                public partial class Container
+                {
+                    partial void Reference(Node value) { }
+                    partial void Value(Token value) { }
+                    partial void Value(Token? value) { }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var reference = RunGroupedSymbol(dbPath, "Reference", "function");
+            Assert.Equal(2, reference.GetProperty("definition_sites").GetInt32());
+            Assert.Equal("src/Z.Implementations.cs", reference.GetProperty("path").GetString());
+            Assert.Equal("implementation_body", reference.GetProperty("representative_reason").GetString());
+
+            var (valueExitCode, valueStdout, valueStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["Value", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "function", "--group-partials", "--limit", "10"],
+                _jsonOptions));
+            using var valueDocument = ParseJsonOutput(valueStdout);
+            var valueFamilies = valueDocument.RootElement.EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, valueExitCode);
+            Assert.Equal(string.Empty, valueStderr);
+            Assert.Equal(2, valueFamilies.Count);
+            Assert.All(valueFamilies, family => Assert.Equal(2, family.GetProperty("definition_sites").GetInt32()));
+            Assert.Contains(valueFamilies, family => family.GetProperty("signature").GetString()!.Contains("Token value", StringComparison.Ordinal));
+            Assert.Contains(valueFamilies, family => family.GetProperty("signature").GetString()!.Contains("Token? value", StringComparison.Ordinal));
+
+            var (gotoExitCode, gotoStdout, gotoStderr) = CaptureConsole(() => QueryCommandRunner.RunGoto(
+                ["Reference", "--db", dbPath, "--exact-name", "--lang", "csharp", "--kind", "function"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, gotoExitCode);
+            Assert.Equal(string.Empty, gotoStderr);
+            using var gotoDocument = JsonDocument.Parse(gotoStdout);
+            Assert.EndsWith(
+                "/src/Z.Implementations.cs",
+                new Uri(gotoDocument.RootElement.GetProperty("uri").GetString()!).AbsolutePath,
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void PartialCanonicalRepresentative_DistinguishesNestedTypeNamesAndArities_Issue4914()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_nested_identity_issue4914");

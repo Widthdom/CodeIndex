@@ -4,6 +4,7 @@ using CodeIndex.Indexer;
 using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using System.Runtime.ExceptionServices;
 using System.Text.Json;
 
@@ -11,6 +12,9 @@ namespace CodeIndex.Database;
 
 public partial class DbContext : IDisposable
 {
+    private static readonly ConditionalWeakTable<SqliteConnection, CSharpCallableTypeKindLookup>
+        CSharpCallableTypeKindLookups = new();
+
     private static SqliteConnection OpenArtifactPreservingQueryOnly(string dbPath)
     {
         var connection = CreateArtifactPreservingQueryOnlyConnection(
@@ -105,11 +109,27 @@ public partial class DbContext : IDisposable
             "csharp_constructor_parameter_count",
             (string? signature, string? identifier, string? symbolKind) =>
                 CSharpTypeReferenceArity.GetConstructorParameterCount(signature, identifier, symbolKind));
+        var csharpCallableTypeKinds = CSharpCallableTypeKindLookups.GetValue(
+            connection,
+            static _ => new CSharpCallableTypeKindLookup());
         connection.CreateFunction(
             "csharp_partial_callable_identity",
             (string? signature, string? identifier, string? returnType) =>
-                LogicalPartialSymbolGrouper.BuildCallableIdentity(signature, identifier, returnType),
-            isDeterministic: true);
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    signature,
+                    identifier,
+                    returnType,
+                    containerQualifiedName: null,
+                    typeKinds: csharpCallableTypeKinds));
+        connection.CreateFunction(
+            "csharp_partial_callable_identity",
+            (string? signature, string? identifier, string? returnType, string? containerQualifiedName) =>
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    signature,
+                    identifier,
+                    returnType,
+                    containerQualifiedName,
+                    csharpCallableTypeKinds));
         connection.CreateFunction(
             "csharp_partial_semantic_score",
             (string? signature, string? symbolKind) =>
@@ -227,6 +247,17 @@ public partial class DbContext : IDisposable
             "sql_allow_leaf_fallback_at",
             (string? symbolName, string? context, string? containerName, long? columnNumber) =>
                 SqlNameResolver.AllowLeafFallbackAtColumn(symbolName, context, containerName, ToNullableInt(columnNumber)) ? 1 : 0);
+    }
+
+    internal static void RefreshCSharpCallableTypeKinds(
+        SqliteConnection connection,
+        IReadOnlySet<string> fileColumns,
+        IReadOnlySet<string> symbolColumns)
+    {
+        var lookup = CSharpCallableTypeKindLookups.GetValue(
+            connection,
+            static _ => new CSharpCallableTypeKindLookup());
+        lookup.RefreshIfChanged(connection, fileColumns, symbolColumns);
     }
 
     internal static int CountCSharpIdentifierOccurrences(string? text, string? identifier)
