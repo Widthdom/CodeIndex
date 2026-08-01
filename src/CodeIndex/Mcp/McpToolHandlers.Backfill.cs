@@ -69,6 +69,14 @@ public partial class McpServer
             var force = args?["force"]?.GetValue<bool>() ?? false;
             var rewriteAll = writer.ResolveFoldBackfillRewriteAll(
                 force || !foldMetadataCurrentBefore);
+            if (!rewriteAll && !writer.AllPresentFoldedColumnValuesMatchCurrentFold())
+            {
+                // Keep MCP aligned with the CLI: mixed missing and non-current folded
+                // values require one full repair rather than a partial pass that cannot verify.
+                // CLI と同様に、missing と non-current の folded 値が混在する場合は
+                // 検証不能な partial pass ではなく1回の全行修復へ昇格する。
+                rewriteAll = true;
+            }
             var symbols = 0;
             var symbolReferences = 0;
             var totalSymbols = 0;

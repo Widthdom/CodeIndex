@@ -6485,6 +6485,105 @@ public sealed class Caller
     }
 
     [Fact]
+    public void RunBackfillFold_MixedMissingAndNonCurrentRows_RewritesAll_Issue4946()
+    {
+        var dbPath = CreateTempDbPath("cdidx_backfill_fold_mixed_4946");
+        try
+        {
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                db.InitializeSchema();
+                var writer = new DbWriter(db.Connection);
+                var csharpFileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = "src/App.cs",
+                    Lang = "csharp",
+                    Size = 64,
+                    Lines = 2,
+                    Modified = new DateTime(2026, 8, 1, 0, 0, 0, DateTimeKind.Utc),
+                });
+                var markdownFileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = "changelog.d/unreleased/4946.fixed.md",
+                    Lang = "markdown",
+                    Size = 64,
+                    Lines = 2,
+                    Modified = new DateTime(2026, 8, 1, 0, 0, 0, DateTimeKind.Utc),
+                });
+                writer.InsertSymbols([
+                    new SymbolRecord { FileId = csharpFileId, Kind = "function", Name = "MissingMember", Line = 1, StartLine = 1, EndLine = 1 },
+                    new SymbolRecord { FileId = markdownFileId, Kind = "heading", Name = "Current heading", Line = 1, StartLine = 1, EndLine = 2 },
+                ]);
+                writer.InsertReferences([
+                    new ReferenceRecord
+                    {
+                        FileId = csharpFileId,
+                        SymbolName = "MissingMember",
+                        ReferenceKind = "call",
+                        Line = 2,
+                        Column = 5,
+                        Context = "MissingMember()",
+                        ContainerKind = "function",
+                        ContainerName = "CurrentContainer",
+                    },
+                ]);
+                writer.BackfillFoldedColumns(rewriteAll: true);
+                Assert.True(writer.MarkFoldReady());
+                writer.MarkCSharpSymbolNameContractReady();
+
+                using var corrupt = db.Connection.CreateCommand();
+                corrupt.CommandText = """
+                    UPDATE symbols
+                    SET name_folded = CASE
+                        WHEN name = 'MissingMember' THEN NULL
+                        ELSE 'stale-non-current-fold'
+                    END;
+                    UPDATE symbol_references
+                    SET symbol_name_folded = NULL,
+                        container_name_folded = 'stale-non-current-fold';
+                    """;
+                corrupt.ExecuteNonQuery();
+            }
+
+            JsonElement json;
+            int exitCode;
+            lock (TestConsoleLock.Gate)
+            {
+                var originalOut = Console.Out;
+                using var output = new StringWriter();
+                try
+                {
+                    Console.SetOut(output);
+                    exitCode = IndexCommandRunner.RunBackfillFold(["--db", dbPath, "--json"], _jsonOptions);
+                    using var document = JsonDocument.Parse(output.ToString());
+                    json = document.RootElement.Clone();
+                }
+                finally
+                {
+                    Console.SetOut(originalOut);
+                }
+            }
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(2, json.GetProperty("symbols").GetInt32());
+            Assert.Equal(1, json.GetProperty("symbol_references").GetInt32());
+            Assert.True(json.GetProperty("rewrite_all").GetBoolean());
+            Assert.True(json.GetProperty("verified").GetBoolean());
+            Assert.True(json.GetProperty("fold_ready").GetBoolean());
+
+            using var verifyDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            var verifyWriter = new DbWriter(verifyDb.Connection);
+            Assert.True(verifyWriter.AllFoldedColumnsBackfilled(requireCurrentFoldKeys: true));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteFile(dbPath);
+            TestProjectHelper.DeleteDirectory(dbPath + ".checkpoints");
+        }
+    }
+
+    [Fact]
     public void RunBackfillFold_DryRunReportsRowsWithoutWriting()
     {
         var dbPath = CreateTempDbPath("cdidx_backfill_fold_dry");

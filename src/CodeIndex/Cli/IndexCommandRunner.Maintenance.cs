@@ -640,6 +640,16 @@ public static partial class IndexCommandRunner
             // fold metadata 未記録 / 不一致時は全行再計算して version/runtime skew を解消する。
             var rewriteAll = writer.ResolveFoldBackfillRewriteAll(!foldMetadataCurrentBefore);
 
+            if (!rewriteAll && !writer.AllPresentFoldedColumnValuesMatchCurrentFold())
+            {
+                // Missing folded values can use the targeted backfill, but any non-NULL
+                // drift must promote the same invocation to a full refresh. This avoids a
+                // partial pass failing verification when both states coexist.
+                // NULL の folded 値は対象行だけ修復できるが、非 NULL の drift も混在する場合は
+                // 同じ invocation を全行 refresh に昇格し、partial pass 後の検証失敗を防ぐ。
+                rewriteAll = true;
+            }
+
             var symbols = 0;
             var symbolReferences = 0;
             var verified = false;

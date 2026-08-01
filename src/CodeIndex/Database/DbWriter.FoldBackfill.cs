@@ -127,6 +127,12 @@ public partial class DbWriter
     }
 
     public bool AllFoldedColumnValuesMatchCurrentFold()
+        => AllFoldedColumnValuesMatchCurrentFoldCore(allowMissingValues: false);
+
+    internal bool AllPresentFoldedColumnValuesMatchCurrentFold()
+        => AllFoldedColumnValuesMatchCurrentFoldCore(allowMissingValues: true);
+
+    private bool AllFoldedColumnValuesMatchCurrentFoldCore(bool allowMissingValues)
     {
         var markdownSymbolIdentityFolds = BuildMarkdownSymbolIdentityFoldMap();
         var hasDisplayNameFolded =
@@ -156,7 +162,7 @@ public partial class DbWriter
                     reader.IsDBNull(6) ? null : reader.GetString(6),
                     markdownSymbolIdentityFolds);
                 var actual = reader.IsDBNull(2) ? null : reader.GetString(2);
-                if (!string.Equals(actual, expected, StringComparison.Ordinal))
+                if (!FoldedValueMatches(actual, expected, allowMissingValues))
                     return false;
                 var foldedDisplay = DbReader.FoldNameForLanguage(
                     reader.GetString(1),
@@ -170,7 +176,7 @@ public partial class DbWriter
                         ? foldedDisplay
                         : null;
                 var actualDisplay = reader.IsDBNull(3) ? null : reader.GetString(3);
-                if (!string.Equals(actualDisplay, expectedDisplay, StringComparison.Ordinal))
+                if (!FoldedValueMatches(actualDisplay, expectedDisplay, allowMissingValues))
                     return false;
             }
         }
@@ -200,7 +206,7 @@ public partial class DbWriter
                         reader.IsDBNull(4) ? null : reader.GetString(4),
                         reader.GetString(5));
                     var actual = reader.IsDBNull(1) ? null : reader.GetString(1);
-                    if (!string.Equals(actual, expected, StringComparison.Ordinal))
+                    if (!FoldedValueMatches(actual, expected, allowMissingValues))
                         return false;
                 }
 
@@ -210,7 +216,7 @@ public partial class DbWriter
                         reader.GetString(2),
                         reader.IsDBNull(4) ? null : reader.GetString(4));
                     var actual = reader.IsDBNull(3) ? null : reader.GetString(3);
-                    if (!string.Equals(actual, expected, StringComparison.Ordinal))
+                    if (!FoldedValueMatches(actual, expected, allowMissingValues))
                         return false;
                 }
             }
@@ -222,6 +228,10 @@ public partial class DbWriter
 
         return true;
     }
+
+    private static bool FoldedValueMatches(string? actual, string? expected, bool allowMissingValues)
+        => (allowMissingValues && actual == null)
+            || string.Equals(actual, expected, StringComparison.Ordinal);
 
     public bool AllFoldedColumnsBackfilled(IReadOnlyCollection<string> requireCurrentSymbolExtractorLanguages)
     {
