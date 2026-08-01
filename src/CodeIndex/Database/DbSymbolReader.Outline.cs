@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.RegularExpressions;
 using CodeIndex.Indexer;
 using Microsoft.Data.Sqlite;
@@ -218,25 +219,43 @@ public partial class DbReader
         if (string.IsNullOrWhiteSpace(signature))
             return null;
 
-        var openParen = FindCallableParameterOpenParen(signature, name);
+        var normalizedSignature = lang == "csharp"
+            ? ExactSourceSearchNormalizer.NormalizeCSharpUnicodeEscapes(signature, out _)
+            : signature;
+        var openParen = FindCallableParameterOpenParen(
+            normalizedSignature,
+            name,
+            lang,
+            out var csharpTypeParameters);
         if (openParen < 0)
             return null;
 
-        var closeParen = FindMatchingParen(signature, openParen);
+        var closeParen = FindMatchingParen(normalizedSignature, openParen);
         if (closeParen < 0)
             return null;
 
-        var parameters = signature.Substring(openParen + 1, closeParen - openParen - 1);
+        var parameters = normalizedSignature.Substring(openParen + 1, closeParen - openParen - 1);
+        var normalizedTypeParameters = BuildNormalizedCSharpTypeParameterMap(csharpTypeParameters);
         var parameterLabels = SplitTopLevelParameters(parameters)
-            .Select(parameter => SimplifyParameterForOutline(parameter, lang))
+            .Select(parameter => normalizedTypeParameters == null
+                ? SimplifyParameterForOutline(parameter, lang)
+                : SimplifyCSharpGenericParameterForOutline(parameter, normalizedTypeParameters))
             .Where(parameter => !string.IsNullOrWhiteSpace(parameter))
             .ToList();
 
-        return $"{name}({string.Join(", ", parameterLabels)})";
+        var displayName = normalizedTypeParameters == null
+            ? name
+            : name + BuildNormalizedCSharpTypeParameterSuffix(csharpTypeParameters!.Count);
+        return $"{displayName}({string.Join(", ", parameterLabels)})";
     }
 
-    private static int FindCallableParameterOpenParen(string signature, string name)
+    private static int FindCallableParameterOpenParen(
+        string signature,
+        string name,
+        string? lang,
+        out IReadOnlyList<string>? csharpTypeParameters)
     {
+        csharpTypeParameters = null;
         var searchStart = 0;
         while (searchStart < signature.Length)
         {
@@ -245,6 +264,18 @@ public partial class DbReader
                 return -1;
 
             var afterName = nameIndex + name.Length;
+            var tokenStart = nameIndex > 0 && signature[nameIndex - 1] == '@'
+                ? nameIndex - 1
+                : nameIndex;
+            var hasIdentifierBoundary =
+                (tokenStart == 0 || !IsCSharpIdentifierPart(signature[tokenStart - 1]))
+                && (afterName >= signature.Length || !IsCSharpIdentifierPart(signature[afterName]));
+            if (!hasIdentifierBoundary)
+            {
+                searchStart = afterName;
+                continue;
+            }
+
             var cursor = afterName;
             while (cursor < signature.Length && char.IsWhiteSpace(signature[cursor]))
                 cursor++;
@@ -252,10 +283,223 @@ public partial class DbReader
             if (cursor < signature.Length && signature[cursor] == '(')
                 return cursor;
 
+            if (lang == "csharp" && cursor < signature.Length && signature[cursor] == '<')
+            {
+                var closeAngle = FindMatchingAngleBracket(signature, cursor);
+                if (closeAngle > cursor
+                    && TryReadCSharpTypeParameterNames(
+                        signature[(cursor + 1)..closeAngle],
+                        out var typeParameters))
+                {
+                    var parameterOpen = closeAngle + 1;
+                    while (parameterOpen < signature.Length && char.IsWhiteSpace(signature[parameterOpen]))
+                        parameterOpen++;
+
+                    if (parameterOpen < signature.Length && signature[parameterOpen] == '(')
+                    {
+                        csharpTypeParameters = typeParameters;
+                        return parameterOpen;
+                    }
+                }
+            }
+
             searchStart = afterName;
         }
 
         return -1;
+    }
+
+    private static int FindMatchingAngleBracket(string value, int openAngle)
+    {
+        var depth = 0;
+        for (var i = openAngle; i < value.Length; i++)
+        {
+            if (value[i] == '<')
+            {
+                depth++;
+            }
+            else if (value[i] == '>')
+            {
+                depth--;
+                if (depth == 0)
+                    return i;
+            }
+        }
+
+        return -1;
+    }
+
+    private static bool TryReadCSharpTypeParameterNames(
+        string typeParameterList,
+        out IReadOnlyList<string> typeParameters)
+    {
+        var parsed = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var parameter in SplitTopLevelParameters(typeParameterList))
+        {
+            var name = ReadTrailingCSharpIdentifier(parameter);
+            if (name == null || !seen.Add(name))
+            {
+                typeParameters = Array.Empty<string>();
+                return false;
+            }
+
+            parsed.Add(name);
+        }
+
+        typeParameters = parsed;
+        return parsed.Count > 0;
+    }
+
+    private static string? ReadTrailingCSharpIdentifier(string value)
+    {
+        var end = value.Length;
+        while (end > 0 && char.IsWhiteSpace(value[end - 1]))
+            end--;
+
+        var start = end;
+        while (start > 0 && IsCSharpIdentifierPart(value[start - 1]))
+            start--;
+        if (start > 0 && value[start - 1] == '@')
+            start--;
+        if (start == end)
+            return null;
+
+        var identifier = value[start..end];
+        if (identifier[0] == '@')
+            identifier = identifier[1..];
+        return identifier.Length > 0 && IsCSharpIdentifierStart(identifier[0])
+            ? identifier
+            : null;
+    }
+
+    private static Dictionary<string, string>? BuildNormalizedCSharpTypeParameterMap(
+        IReadOnlyList<string>? typeParameters)
+    {
+        if (typeParameters == null || typeParameters.Count == 0)
+            return null;
+
+        var normalized = new Dictionary<string, string>(typeParameters.Count, StringComparer.Ordinal);
+        for (var i = 0; i < typeParameters.Count; i++)
+        {
+            normalized[typeParameters[i]] = typeParameters.Count == 1
+                ? "T"
+                : $"T{i + 1}";
+        }
+
+        return normalized;
+    }
+
+    private static string BuildNormalizedCSharpTypeParameterSuffix(int arity)
+    {
+        if (arity == 1)
+            return "<T>";
+
+        return $"<{string.Join(", ", Enumerable.Range(1, arity).Select(index => $"T{index}"))}>";
+    }
+
+    private static string SimplifyCSharpGenericParameterForOutline(
+        string parameter,
+        IReadOnlyDictionary<string, string> typeParameters)
+    {
+        var cleaned = Regex.Replace(parameter, @"\s*=\s*.*$", "").Trim();
+        cleaned = Regex.Replace(cleaned, @"^\[[^\]]+\]\s*", "").Trim();
+        if (cleaned.Length == 0)
+            return string.Empty;
+
+        var overloadModifiers = new List<string>(2);
+        while (TryReadLeadingWord(cleaned, out var modifier, out var remainder))
+        {
+            if (modifier is "ref" or "out" or "in")
+            {
+                overloadModifiers.Add(modifier);
+            }
+            else if (modifier == "readonly"
+                     && overloadModifiers.Count > 0
+                     && overloadModifiers[^1] == "ref")
+            {
+                overloadModifiers.Add(modifier);
+            }
+            else if (modifier is not ("this" or "params" or "scoped"))
+            {
+                break;
+            }
+
+            cleaned = remainder.TrimStart();
+        }
+
+        var typeName = SimplifyParameterForOutline(cleaned, "csharp");
+        if (typeName.Length == 0)
+            return string.Empty;
+
+        typeName = ReplaceCSharpTypeParameterTokens(typeName, typeParameters);
+        return overloadModifiers.Count == 0
+            ? typeName
+            : $"{string.Join(" ", overloadModifiers)} {typeName}";
+    }
+
+    private static bool TryReadLeadingWord(string value, out string word, out string remainder)
+    {
+        var end = 0;
+        while (end < value.Length && IsCSharpIdentifierPart(value[end]))
+            end++;
+
+        if (end == 0 || (end < value.Length && !char.IsWhiteSpace(value[end])))
+        {
+            word = string.Empty;
+            remainder = value;
+            return false;
+        }
+
+        word = value[..end];
+        remainder = value[end..];
+        return true;
+    }
+
+    private static string ReplaceCSharpTypeParameterTokens(
+        string typeName,
+        IReadOnlyDictionary<string, string> typeParameters)
+    {
+        var builder = new StringBuilder(typeName.Length);
+        for (var i = 0; i < typeName.Length;)
+        {
+            var tokenStart = i;
+            if (typeName[i] == '@'
+                && i + 1 < typeName.Length
+                && IsCSharpIdentifierStart(typeName[i + 1]))
+            {
+                i++;
+            }
+
+            if (!IsCSharpIdentifierStart(typeName[i]))
+            {
+                builder.Append(typeName[tokenStart]);
+                i = tokenStart + 1;
+                continue;
+            }
+
+            i++;
+            while (i < typeName.Length && IsCSharpIdentifierPart(typeName[i]))
+                i++;
+
+            var token = typeName[tokenStart..i];
+            var lookup = token[0] == '@' ? token[1..] : token;
+            builder.Append(typeParameters.TryGetValue(lookup, out var normalized)
+                ? normalized
+                : token);
+        }
+
+        return builder.ToString();
+    }
+
+    private static bool IsCSharpIdentifierStart(char value)
+    {
+        return value == '_' || char.IsLetter(value);
+    }
+
+    private static bool IsCSharpIdentifierPart(char value)
+    {
+        return IsCSharpIdentifierStart(value) || char.IsDigit(value);
     }
 
     private static int FindMatchingParen(string value, int openParen)
