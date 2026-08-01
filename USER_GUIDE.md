@@ -1377,8 +1377,16 @@ limit before/after checks to the same source line and the primary match column
 ordering instead of nearby lines. JSON search results include
 `guard_evidence` for matched guards and `guard_checks` for each guard evaluated
 on a returned match. Guard evidence includes the guard name, pattern,
-before/after relationship, scope (`window` or `same_line`), 1-based span,
-origin category, and source line.
+before/after relationship, scope (`window`, `same_line`, or the recipe-only
+`container` scope), 1-based span, origin category, and source line. Built-in
+whole-file-read and filesystem-traversal recipes use bounded C# structural
+checks instead of line proximity: they correlate the same path through a
+size/control guard or resolved bounded writer, and resolve the
+`EnumerationOptions` value actually passed to `Directory.Enumerate*`.
+Structural `guard_evidence` also reports `decision`, `reason`, `subject`,
+`container`, and `evidence_path`; `guard_checks[].rejected_evidence` explains
+why unrelated paths, inverted checks, unawaited helpers, or missing/unrelated
+options were not accepted as guards.
 Each `guard_checks[]` entry includes a compact pass/fail summary.
 Guarded searches inspect a bounded candidate set before pagination; if a guarded
 query is too broad to satisfy the requested page within that budget, CLI and MCP
@@ -1410,15 +1418,24 @@ issue-draft export and downstream triage tools can keep the reviewer guidance
 next to the evidence path. For example,
 `classifiers` describe the triage dimensions that downstream tools should use,
 such as `source_origin`, `guard_evidence`, `secret_origin`,
-`parser_guard_evidence`, `process_launch_boundary`, `cancellation_intent`,
-`task_result_intent`, `active_skip_governance`, `broad_catch_boundary`, and
-`diagnostic_redaction`; each classifier lists categories, evidence fields, and
-guidance so noisy audit terms can be separated before filing.
+`parser_guard_evidence`, `process_launch_boundary`, `regex_operation_semantics`,
+`shell_execute_polarity`, `cancellation_intent`, `task_result_intent`,
+`active_skip_governance`, `broad_catch_boundary`, and `diagnostic_redaction`;
+each classifier lists categories, evidence fields, and guidance so noisy audit
+terms can be separated before filing.
 `dogfood-risk-patterns` includes process-launch boundary child queries for
 `ProcessStartInfo`, `Process.Start`, `ArgumentList`, `UseShellExecute`,
 working-directory choices, stdout/stderr redirection, waits, termination, shared
 launch/environment policies, and broad plugin/hook/trust-override discovery
 terms.
+The `static-regex-api*` children inspect the matched code-origin `Regex` member:
+exact `Escape` / `Unescape` helpers on a receiver proven to be the BCL type are
+suppressed, while matching operations and unresolved or source-defined
+receiver/member evidence remain findings. `process-shell-execute` similarly
+suppresses only a matched direct literal `UseShellExecute=false` assignment;
+literal `true` and propagated or otherwise unresolved values remain findings
+with semantic classification evidence. Nearby comments and string literals do
+not change either semantic decision.
 `risky-code/broad-exception-catch` includes broad-catch boundary categories and
 expected diagnostic behaviors so users can distinguish intentional top-level,
 cleanup, probe, diagnostic-sanitization, and worker boundaries from catches that
@@ -4752,7 +4769,14 @@ guard-aware search は primary の `search` 一致を近傍の literal guard で
 before / after を評価します。JSON の検索結果には
 一致した guard の `guard_evidence` と、返却された一致に対して評価した各 guard の
 `guard_checks` が含まれます。guard evidence には guard 名、pattern、before/after の関係、
-scope（`window` または `same_line`）、1-based span、origin category、ソース行、簡潔な pass/fail summary が入ります。
+scope（`window`、`same_line`、または recipe 専用の `container`）、1-based span、
+origin category、ソース行、簡潔な pass/fail summary が入ります。組み込みの whole-file-read と
+filesystem-traversal recipe は行の近接性ではなく、上限付きの C# 構造判定を使います。同じ path の
+size / control guard または解決済み bounded writer を関連付け、`Directory.Enumerate*` に実際に
+渡された `EnumerationOptions` 値を解決します。構造的な `guard_evidence` はさらに
+`decision`、`reason`、`subject`、`container`、`evidence_path` を返し、
+`guard_checks[].rejected_evidence` は無関係な path、反転した条件、await されない helper、
+未指定または無関係な options が guard として採用されなかった理由を説明します。
 guard filter を使う検索は pagination 前に上限付きの候補集合だけを調べます。その budget 内で
 要求ページを満たせないほど query が広い場合、CLI/MCP は validation error を返します。
 このエラーには guard budget、sampled candidate files / languages、`--count` / `--count-by`
@@ -4803,14 +4827,21 @@ facet の短い一覧です。recipe run の JSON は各 matching result にも�
 issue-draft export や下流の triage tool が evidence path の近くに reviewer guidance を
 保持できます。`classifiers` は下流 tool が使うべき triage の軸を表し、
 `source_origin`、`guard_evidence`、`secret_origin`、`parser_guard_evidence`、
-`process_launch_boundary`、`cancellation_intent`、`task_result_intent`、
-`active_skip_governance`、`broad_catch_boundary`、`diagnostic_redaction` などの
-classifier が category、evidence field、guidance を持つため、ノイズの多い audit term を
-起票前に切り分けられます。
+`process_launch_boundary`、`regex_operation_semantics`、`shell_execute_polarity`、
+`cancellation_intent`、`task_result_intent`、`active_skip_governance`、
+`broad_catch_boundary`、`diagnostic_redaction` などの classifier が category、
+evidence field、guidance を持つため、ノイズの多い audit term を起票前に切り分けられます。
 `dogfood-risk-patterns` は `ProcessStartInfo`、`Process.Start`、`ArgumentList`、
 `UseShellExecute`、working-directory 選択、stdout/stderr redirection、wait、
 termination、共有 launch/environment policy、広めの plugin/hook/trust-override
 discovery 用語を process-launch boundary の child query として含みます。
+`static-regex-api*` child は一致した code-origin の `Regex` member を判定し、BCL type と
+証明できる receiver 上の厳密な `Escape` / `Unescape` helper を除外する一方、matching
+operation、解決不能または source-defined の receiver/member evidence は finding として
+残します。`process-shell-execute` も、一致した直接の literal `UseShellExecute=false` 代入だけを
+除外します。literal `true` と、伝播またはその他の理由で解決できない値は、意味論的な分類
+evidence を伴う finding として残ります。周辺の comment や string literal は、どちらの意味
+判定も変更しません。
 たとえば `risky-code/broad-exception-catch` は
 broad catch の境界カテゴリと期待される diagnostic behavior を含めるため、意図的な
 top-level、cleanup、probe、diagnostic-sanitization、worker 境界と、narrowing または

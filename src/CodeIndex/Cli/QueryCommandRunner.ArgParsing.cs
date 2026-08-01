@@ -41,7 +41,12 @@ public static partial class QueryCommandRunner
     }
 
     private static string FormatSearchGuardScope(SearchGuardScope scope)
-        => scope == SearchGuardScope.SameLine ? "same-line" : "window";
+        => scope switch
+        {
+            SearchGuardScope.SameLine => "same-line",
+            SearchGuardScope.Container => "container",
+            _ => "window",
+        };
 
     public static QueryCommandOptions ParseArgs(
         string[] args,

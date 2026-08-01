@@ -1925,7 +1925,7 @@ public static partial class QueryCommandRunner
             var queryScope = BuildSearchRecipeQueryScope(scope, recipeQuery);
             var resultLimit = GetSearchRecipeEffectiveResultLimit(options, total);
             var guardFilters = BuildSearchRecipeGuardFilters(options, recipeQuery);
-            var fetchLimit = GetSearchRecipeFetchLimit(options, resultLimit);
+            var fetchLimit = GetSearchRecipeFetchLimit(options, resultLimit, recipeQuery);
             var results = reader.Search(
                 recipeQuery.Query,
                 fetchLimit,
@@ -1953,6 +1953,7 @@ public static partial class QueryCommandRunner
                 fetchLimit);
             results = ApplySearchRecipeFileRejectQueries(reader, results, options, recipeQuery);
             var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, rawFtsOverride: false, recipeQuery: recipeQuery);
+            rows = ApplySearchRecipeSemanticFilter(reader, options, recipeQuery, rows);
             var outputSelection = ApplySearchOutputSelection(rows, options, resultLimit, sourceTotalAuthoritative);
             rows = outputSelection.Rows;
             ApplySearchRecipeAuditClassifications(recipeQuery, rows);
@@ -2026,7 +2027,7 @@ public static partial class QueryCommandRunner
             var queryScope = BuildSearchRecipeQueryScope(scope, recipeQuery);
             var resultLimit = GetSearchRecipeEffectiveResultLimit(options, total);
             var guardFilters = BuildSearchRecipeGuardFilters(options, recipeQuery);
-            var fetchLimit = GetSearchRecipeFetchLimit(options, resultLimit);
+            var fetchLimit = GetSearchRecipeFetchLimit(options, resultLimit, recipeQuery);
             var results = reader.Search(
                 recipeQuery.Query,
                 fetchLimit,
@@ -2054,6 +2055,7 @@ public static partial class QueryCommandRunner
                 fetchLimit);
             results = ApplySearchRecipeFileRejectQueries(reader, results, options, recipeQuery);
             var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, recipeQuery: recipeQuery);
+            rows = ApplySearchRecipeSemanticFilter(reader, options, recipeQuery, rows);
             var outputSelection = ApplySearchOutputSelection(rows, options, resultLimit, sourceTotalAuthoritative);
             rows = outputSelection.Rows;
             ApplySearchRecipeAuditClassifications(recipeQuery, rows);
@@ -2129,11 +2131,18 @@ public static partial class QueryCommandRunner
         int fetchLimit)
         => guardFilters.Count == 0
            && recipeQuery.RejectFileQueries.Count == 0
+           && recipeQuery.SemanticFilter == SearchRecipeSemanticFilter.None
            && !HasSearchOriginFilters(BuildSearchDisplayFacetFilters(options, recipeQuery))
            && resultCount < fetchLimit;
 
-    private static int GetSearchRecipeFetchLimit(QueryCommandOptions options, int resultLimit)
+    private static int GetSearchRecipeFetchLimit(
+        QueryCommandOptions options,
+        int resultLimit,
+        SearchAuditRecipeQuery? recipeQuery = null)
     {
+        if (recipeQuery is { SemanticFilter: not SearchRecipeSemanticFilter.None })
+            return int.MaxValue;
+
         var selectionTarget = resultLimit > 0 && options.SampleSize.HasValue
             ? Math.Max(resultLimit, options.SampleSize.Value)
             : resultLimit;
@@ -2177,6 +2186,7 @@ public static partial class QueryCommandRunner
                 requiredPathPatterns: GetSearchRecipeRequiredPathPatterns(options, recipeQuery));
             results = ApplySearchRecipeFileRejectQueries(reader, results, options, recipeQuery);
             var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, rawFtsOverride: false, recipeQuery: recipeQuery);
+            rows = ApplySearchRecipeSemanticFilter(reader, options, recipeQuery, rows);
             ApplySearchRecipeAuditClassifications(recipeQuery, rows);
             var count = rows.Count;
             var fileCountForQuery = rows.Select(row => row.Result.Path).Distinct(StringComparer.Ordinal).Count();
@@ -2220,6 +2230,442 @@ public static partial class QueryCommandRunner
             row.Compact.AuditClassifications.Add(classification);
         }
     }
+
+    private static List<SearchDisplayRow> ApplySearchRecipeSemanticFilter(
+        DbReader reader,
+        QueryCommandOptions options,
+        SearchAuditRecipeQuery recipeQuery,
+        List<SearchDisplayRow> rows)
+    {
+        if (recipeQuery.SemanticFilter == SearchRecipeSemanticFilter.None)
+            return rows;
+
+        var classifierName = recipeQuery.SemanticFilter switch
+        {
+            SearchRecipeSemanticFilter.RegexStaticMember => "regex_operation_semantics",
+            SearchRecipeSemanticFilter.ShellExecuteAssignment => "shell_execute_polarity",
+            _ => null,
+        };
+        var classifier = classifierName == null
+            ? null
+            : recipeQuery.Classifiers.FirstOrDefault(candidate => string.Equals(candidate.Name, classifierName, StringComparison.Ordinal));
+        if (classifier == null)
+            return rows;
+
+        var retained = new List<SearchDisplayRow>(rows.Count);
+        var regexBindingPaths = recipeQuery.SemanticFilter == SearchRecipeSemanticFilter.RegexStaticMember
+            ? BuildRegexBareReceiverContexts(reader, options, rows)
+            : new Dictionary<string, RegexBareReceiverContext>(StringComparer.Ordinal);
+        foreach (var row in rows)
+        {
+            var evidence = recipeQuery.SemanticFilter switch
+            {
+                SearchRecipeSemanticFilter.RegexStaticMember => GetRegexOperationEvidence(
+                    reader,
+                    row,
+                    regexBindingPaths),
+                SearchRecipeSemanticFilter.ShellExecuteAssignment => GetShellExecuteAssignmentEvidence(row),
+                _ => null,
+            };
+            if (evidence?.Suppress == true)
+                continue;
+
+            if (evidence != null)
+            {
+                var classification = BuildSearchRecipeSemanticClassification(classifier, evidence, row);
+                if (classification != null)
+                {
+                    row.Compact.AuditClassifications ??= [];
+                    row.Compact.AuditClassifications.Add(classification);
+                }
+            }
+
+            retained.Add(row);
+        }
+
+        return retained;
+    }
+
+    private static SearchAuditClassificationJsonResult? BuildSearchRecipeSemanticClassification(
+        SearchRecipeClassifierJsonResult classifier,
+        SearchRecipeSemanticEvidence evidence,
+        SearchDisplayRow row)
+    {
+        var categoryMetadata = classifier.Categories
+            .FirstOrDefault(category => string.Equals(category.Name, evidence.Category, StringComparison.Ordinal));
+        if (categoryMetadata == null)
+            return null;
+
+        var details = new List<string>
+        {
+            $"reason:{evidence.Reason}",
+        };
+        if (!string.IsNullOrWhiteSpace(evidence.Operation))
+            details.Add($"operation:{evidence.Operation}");
+        if (!string.IsNullOrWhiteSpace(evidence.Value))
+            details.Add($"value:{evidence.Value}");
+        if (evidence.Line.HasValue)
+            details.Add($"line:{evidence.Line.Value.ToString(CultureInfo.InvariantCulture)}");
+        if (!string.IsNullOrWhiteSpace(row.Compact.EnclosingSymbolName))
+            details.Add($"enclosing_symbol_name:{row.Compact.EnclosingSymbolName}");
+        if (!string.IsNullOrWhiteSpace(row.Compact.EnclosingSymbolKind))
+            details.Add($"enclosing_symbol_kind:{row.Compact.EnclosingSymbolKind}");
+
+        return new SearchAuditClassificationJsonResult(
+            classifier.Name,
+            categoryMetadata.Name,
+            categoryMetadata.Description,
+            categoryMetadata.ReviewGuidance,
+            details);
+    }
+
+    private static SearchRecipeSemanticEvidence GetRegexOperationEvidence(
+        DbReader reader,
+        SearchDisplayRow row,
+        Dictionary<string, RegexBareReceiverContext> bindingPaths)
+    {
+        var operations = new List<string>();
+        int? firstLine = null;
+        var foundRiskOperation = false;
+        var foundUnresolvedOperation = false;
+        var foundSafeOperation = false;
+
+        foreach (var match in GetSemanticEvidenceMatches(row, "Regex."))
+        {
+            var searchFrom = match.MarkerIndex + "Regex.".Length;
+            firstLine ??= match.Line;
+
+            var receiver = ExtractRegexReceiver(match.Text, match.MarkerIndex);
+            var member = ExtractIdentifier(match.Text, searchFrom);
+            operations.Add(string.IsNullOrWhiteSpace(member) ? receiver : $"{receiver}.{member}");
+            if (!IsProvenSystemRegexReceiver(
+                    reader,
+                    row.Result.Path,
+                    receiver,
+                    match.Line,
+                    match.MarkerIndex,
+                    bindingPaths)
+                || string.IsNullOrWhiteSpace(member))
+            {
+                foundUnresolvedOperation = true;
+                continue;
+            }
+
+            if (member is "Escape" or "Unescape")
+            {
+                foundSafeOperation = true;
+                continue;
+            }
+
+            if (member is "IsMatch" or "Match" or "Matches" or "Replace" or "Split" or "EnumerateMatches" or "Count")
+                foundRiskOperation = true;
+            else
+                foundUnresolvedOperation = true;
+        }
+
+        var operation = string.Join(",", operations.Distinct(StringComparer.Ordinal));
+        if (foundRiskOperation)
+            return new SearchRecipeSemanticEvidence(false, "regex_pattern_operation", "matched_pattern_operation", operation, null, firstLine);
+        if (foundUnresolvedOperation || !foundSafeOperation)
+            return new SearchRecipeSemanticEvidence(false, "regex_operation_unresolved", "receiver_or_member_not_proven_safe", operation, null, firstLine);
+        return new SearchRecipeSemanticEvidence(true, "safe_escape_helper", "escape_helper_does_not_execute_pattern", operation, null, firstLine);
+    }
+
+    private static string ExtractRegexReceiver(string text, int regexIndex)
+    {
+        var start = regexIndex;
+        while (start > 0 && IsQualifiedIdentifierCharacter(text[start - 1]))
+            start--;
+        return text[start..(regexIndex + "Regex".Length)].Trim('.');
+    }
+
+    private static bool IsProvenSystemRegexReceiver(
+        DbReader reader,
+        string path,
+        string receiver,
+        int line,
+        int regexIndex,
+        Dictionary<string, RegexBareReceiverContext> bindingPaths)
+    {
+        if (string.Equals(receiver, "System.Text.RegularExpressions.Regex", StringComparison.Ordinal)
+            || string.Equals(receiver, "global::System.Text.RegularExpressions.Regex", StringComparison.Ordinal))
+        {
+            return true;
+        }
+        if (!string.Equals(receiver, "Regex", StringComparison.Ordinal))
+            return false;
+
+        if (!bindingPaths.TryGetValue(path, out var binding)
+            || !binding.HasSystemNamespaceImport
+            || binding.HasAliasDeclaration)
+        {
+            return false;
+        }
+
+        var resolution = reader.GetReferencePositionResolution(path, "Regex", line, regexIndex + 1, maxCandidates: 1);
+        return resolution.IdentityAvailable
+            && !resolution.CandidatesTruncated
+            && resolution.Candidates.Count == 0;
+    }
+
+    private static Dictionary<string, RegexBareReceiverContext> BuildRegexBareReceiverContexts(
+        DbReader reader,
+        QueryCommandOptions options,
+        IReadOnlyCollection<SearchDisplayRow> rows)
+    {
+        var paths = rows
+            .Select(row => row.Result.Path)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        var contexts = paths.ToDictionary(
+            path => path,
+            _ => new RegexBareReceiverContext(false, false),
+            StringComparer.Ordinal);
+        foreach (var pathBatch in paths.Chunk(100))
+        {
+            var usingResults = reader.Search(
+                "using",
+                int.MaxValue,
+                options.Lang,
+                rawQuery: false,
+                pathPatterns: pathBatch,
+                excludePathPatterns: null,
+                excludeTests: false,
+                deduplicate: false,
+                since: options.Since,
+                exact: true,
+                prefix: false,
+                visibilityRank: false);
+            foreach (var result in usingResults)
+            {
+                if (!contexts.TryGetValue(result.Path, out var context))
+                    continue;
+
+                foreach (var match in GetCodeSemanticMatches(result, "using"))
+                {
+                    var directive = ParseRegexUsingDirective(match.ContinuationText, match.MarkerIndex);
+                    context = new RegexBareReceiverContext(
+                        context.HasSystemNamespaceImport || directive.HasSystemNamespaceImport,
+                        context.HasAliasDeclaration || directive.HasAliasDeclaration);
+                }
+
+                contexts[result.Path] = context;
+            }
+        }
+
+        return contexts;
+    }
+
+    private static RegexBareReceiverContext ParseRegexUsingDirective(string content, int usingIndex)
+    {
+        var cursor = usingIndex + "using".Length;
+        if ((usingIndex > 0 && IsIdentifierCharacter(content[usingIndex - 1]))
+            || (cursor < content.Length && IsIdentifierCharacter(content[cursor])))
+        {
+            return new RegexBareReceiverContext(false, false);
+        }
+
+        cursor = SkipCSharpTrivia(content, cursor);
+        var firstIdentifier = ExtractIdentifier(content, cursor);
+        if (string.Equals(firstIdentifier, "Regex", StringComparison.Ordinal))
+        {
+            cursor = SkipCSharpTrivia(content, cursor + firstIdentifier.Length);
+            return new RegexBareReceiverContext(false, cursor < content.Length && content[cursor] == '=');
+        }
+
+        foreach (var identifier in new[] { "System", "Text", "RegularExpressions" })
+        {
+            var actual = ExtractIdentifier(content, cursor);
+            if (!string.Equals(actual, identifier, StringComparison.Ordinal))
+                return new RegexBareReceiverContext(false, false);
+            cursor = SkipCSharpTrivia(content, cursor + actual.Length);
+            if (!string.Equals(identifier, "RegularExpressions", StringComparison.Ordinal))
+            {
+                if (cursor >= content.Length || content[cursor] != '.')
+                    return new RegexBareReceiverContext(false, false);
+                cursor = SkipCSharpTrivia(content, cursor + 1);
+            }
+        }
+
+        return new RegexBareReceiverContext(
+            cursor < content.Length && content[cursor] == ';',
+            false);
+    }
+
+    private static int SkipCSharpTrivia(string text, int start)
+    {
+        var cursor = start;
+        while (cursor < text.Length)
+        {
+            if (char.IsWhiteSpace(text[cursor]))
+            {
+                cursor++;
+                continue;
+            }
+            if (cursor + 1 < text.Length && text[cursor] == '/' && text[cursor + 1] == '/')
+            {
+                cursor += 2;
+                while (cursor < text.Length && text[cursor] is not '\r' and not '\n')
+                    cursor++;
+                continue;
+            }
+            if (cursor + 1 < text.Length && text[cursor] == '/' && text[cursor + 1] == '*')
+            {
+                var commentEnd = text.IndexOf("*/", cursor + 2, StringComparison.Ordinal);
+                if (commentEnd < 0)
+                    return text.Length;
+                cursor = commentEnd + 2;
+                continue;
+            }
+
+            break;
+        }
+
+        return cursor;
+    }
+
+    private static bool IsIdentifierCharacter(char value)
+        => char.IsLetterOrDigit(value) || value == '_';
+
+    private static bool IsQualifiedIdentifierCharacter(char value)
+        => char.IsLetterOrDigit(value) || value is '_' or '.' or ':';
+
+    private static string ExtractIdentifier(string text, int start)
+    {
+        var end = start;
+        while (end < text.Length && (char.IsLetterOrDigit(text[end]) || text[end] == '_'))
+            end++;
+        return text[start..end];
+    }
+
+    private static SearchRecipeSemanticEvidence GetShellExecuteAssignmentEvidence(SearchDisplayRow row)
+    {
+        var values = new List<string>();
+        int? firstLine = null;
+        var foundFalse = false;
+        var foundTrue = false;
+        var foundUnresolved = false;
+
+        foreach (var match in GetSemanticEvidenceMatches(row, "UseShellExecute"))
+        {
+            var searchFrom = match.MarkerIndex + "UseShellExecute".Length;
+            firstLine ??= match.Line;
+            var value = ExtractAssignedBooleanLiteral(match.ContinuationText, searchFrom);
+            values.Add(value ?? "unresolved");
+            if (string.Equals(value, "false", StringComparison.Ordinal))
+                foundFalse = true;
+            else if (string.Equals(value, "true", StringComparison.Ordinal))
+                foundTrue = true;
+            else
+                foundUnresolved = true;
+        }
+
+        var valueEvidence = string.Join(",", values.Distinct(StringComparer.Ordinal));
+        if (foundTrue)
+            return new SearchRecipeSemanticEvidence(false, "shell_explicitly_enabled", "literal_true_enables_shell", "UseShellExecute", valueEvidence, firstLine);
+        if (foundUnresolved || !foundFalse)
+            return new SearchRecipeSemanticEvidence(false, "shell_policy_unresolved", "assigned_value_not_literal_boolean", "UseShellExecute", valueEvidence, firstLine);
+        return new SearchRecipeSemanticEvidence(true, "shell_explicitly_disabled", "literal_false_disables_shell", "UseShellExecute", valueEvidence, firstLine);
+    }
+
+    private static string? ExtractAssignedBooleanLiteral(string text, int start)
+    {
+        var cursor = start;
+        while (cursor < text.Length && char.IsWhiteSpace(text[cursor]))
+            cursor++;
+        if (cursor >= text.Length || (text[cursor] != '=' && text[cursor] != ':'))
+            return null;
+        if (text[cursor] == '=' && cursor + 1 < text.Length && text[cursor + 1] is '=' or '>')
+            return null;
+
+        cursor++;
+        while (cursor < text.Length && char.IsWhiteSpace(text[cursor]))
+            cursor++;
+        var value = ExtractIdentifier(text, cursor);
+        if (value is not ("false" or "true"))
+            return null;
+
+        cursor += value.Length;
+        cursor = SkipCSharpTrivia(text, cursor);
+        if (cursor == text.Length || text[cursor] is ',' or ';' or '}' or ')' or ']')
+            return value;
+        return null;
+    }
+
+    private static IEnumerable<SearchRecipeSemanticMatch> GetSemanticEvidenceMatches(SearchDisplayRow row, string marker)
+    {
+        var contentLines = row.Result.Content.Split('\n', StringSplitOptions.None);
+        var matches = new List<SearchRecipeSemanticMatch>();
+        var seen = new HashSet<(int Line, int MarkerIndex)>();
+        foreach (var facet in row.Compact.MatchFacets
+                     .Where(facet => string.Equals(facet.Origin, SearchMatchClassifier.Code, StringComparison.Ordinal))
+                     .OrderBy(facet => facet.Line)
+                     .ThenBy(facet => facet.Column))
+        {
+            if (facet.Line < row.Result.StartLine || facet.Line - row.Result.StartLine >= contentLines.Length)
+                continue;
+
+            var contentLineIndex = facet.Line - row.Result.StartLine;
+            var text = contentLines[contentLineIndex].TrimEnd('\r');
+            var continuationText = string.Join('\n', contentLines.Skip(contentLineIndex));
+            var facetStart = Math.Max(0, facet.Column - 1);
+            var facetEnd = facetStart + Math.Max(1, facet.Length);
+            for (var searchFrom = 0; searchFrom < text.Length;)
+            {
+                var markerIndex = text.IndexOf(marker, searchFrom, StringComparison.Ordinal);
+                if (markerIndex < 0)
+                    break;
+                searchFrom = markerIndex + marker.Length;
+                var markerEnd = markerIndex + marker.Length;
+                if (markerIndex >= facetEnd || facetStart >= markerEnd || !seen.Add((facet.Line, markerIndex)))
+                    continue;
+
+                matches.Add(new SearchRecipeSemanticMatch(text, continuationText, facet.Line, markerIndex));
+            }
+        }
+
+        return matches;
+    }
+
+    private static IEnumerable<SearchRecipeSemanticMatch> GetCodeSemanticMatches(SearchResult result, string marker)
+    {
+        var contentLines = result.Content.Split('\n', StringSplitOptions.None);
+        for (var contentLineIndex = 0; contentLineIndex < contentLines.Length; contentLineIndex++)
+        {
+            var text = contentLines[contentLineIndex].TrimEnd('\r');
+            var continuationText = string.Join('\n', contentLines.Skip(contentLineIndex));
+            for (var searchFrom = 0; searchFrom < text.Length;)
+            {
+                var markerIndex = text.IndexOf(marker, searchFrom, StringComparison.Ordinal);
+                if (markerIndex < 0)
+                    break;
+                searchFrom = markerIndex + marker.Length;
+                var line = result.StartLine + contentLineIndex;
+                var facet = SearchMatchClassifier.Classify(
+                    result.Path,
+                    result.Lang,
+                    line,
+                    text,
+                    markerIndex + 1,
+                    marker.Length,
+                    result.EnclosingSymbolKind);
+                if (string.Equals(facet.Origin, SearchMatchClassifier.Code, StringComparison.Ordinal))
+                    yield return new SearchRecipeSemanticMatch(text, continuationText, line, markerIndex);
+            }
+        }
+    }
+
+    private sealed record SearchRecipeSemanticEvidence(
+        bool Suppress,
+        string Category,
+        string Reason,
+        string Operation,
+        string? Value,
+        int? Line);
+
+    private sealed record RegexBareReceiverContext(bool HasSystemNamespaceImport, bool HasAliasDeclaration);
+
+    private sealed record SearchRecipeSemanticMatch(string Text, string ContinuationText, int Line, int MarkerIndex);
 
     private static SearchAuditClassificationJsonResult? TryClassifyTaskResultIntent(
         SearchRecipeClassifierJsonResult classifier,
@@ -2460,6 +2906,7 @@ public static partial class QueryCommandRunner
                 requiredPathPatterns: GetSearchRecipeRequiredPathPatterns(options, recipeQuery));
             results = ApplySearchRecipeFileRejectQueries(reader, results, options, recipeQuery);
             var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, rawFtsOverride: false, recipeQuery: recipeQuery);
+            rows = ApplySearchRecipeSemanticFilter(reader, options, recipeQuery, rows);
             foreach (var path in rows.Select(row => row.Result.Path))
                 paths.Add(path);
 
@@ -3891,7 +4338,19 @@ public static partial class QueryCommandRunner
                 filter.Direction == SearchGuardDirection.Before ? "before" : "after",
                 filter.Query,
                 BuildSearchGuardReplayOptionName(filter),
-                FormatSearchGuardFilterScope(filter)))
+                filter.Scope switch
+                {
+                    SearchGuardScope.Window => "window",
+                    SearchGuardScope.SameLine => "same_line",
+                    SearchGuardScope.Container => "container",
+                    _ => null,
+                },
+                filter.EvidenceKind switch
+                {
+                    SearchGuardEvidenceKind.CSharpBoundedFileRead => "csharp_bounded_file_read",
+                    SearchGuardEvidenceKind.CSharpEnumerationOptions => "csharp_enumeration_options",
+                    _ => null,
+                }))
             .ToList();
 
 }

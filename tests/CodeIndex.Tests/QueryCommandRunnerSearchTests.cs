@@ -2644,10 +2644,11 @@ public partial class QueryCommandRunnerTests
         Assert.Contains(dogfoodTrustOverridesQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("sanitized", StringComparison.Ordinal));
         Assert.Equal(" Regex.", dogfoodRegexQuery.GetProperty("query").GetString());
         Assert.Contains(dogfoodRegexQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("raw System.Text.RegularExpressions.Regex static APIs", StringComparison.Ordinal));
-        Assert.Contains(dogfoodRegexQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("BoundedRegex aliases and instance names ending in Regex are filtered out", StringComparison.Ordinal));
+        Assert.Contains(dogfoodRegexQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("suppressed by matched-member semantics", StringComparison.Ordinal));
         AssertRegexBoundedGuardFilters(dogfoodRegexQuery);
         Assert.Contains(dogfoodRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "static-regex-api-negated");
         Assert.Contains(dogfoodRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "static-regex-api-parenthesized");
+        Assert.Contains(dogfoodRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "static-regex-api-qualified");
         Assert.Contains(dogfoodSqlQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("identifier", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(sqlitePolicyCommandTextQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("SqliteCommandPolicy", StringComparison.Ordinal));
         Assert.Contains(sqlitePolicyPragmaQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("cannot bind every pragma value", StringComparison.Ordinal));
@@ -2691,13 +2692,12 @@ public partial class QueryCommandRunnerTests
         Assert.Contains(xmlResolverQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("external entity", StringComparison.Ordinal));
         Assert.Contains(traversalRecipe.GetProperty("queries").EnumerateArray(), item => item.GetProperty("name").GetString() == "enumerate-files");
         Assert.Equal("Directory.Enumerate", enumerateWithoutOptionsQuery.GetProperty("query").GetString());
-        Assert.Contains(enumerateWithoutOptionsQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("without nearby EnumerationOptions", StringComparison.Ordinal));
+        Assert.Contains(enumerateWithoutOptionsQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("without a resolved EnumerationOptions", StringComparison.Ordinal));
         Assert.Contains(enumerateWithoutOptionsQuery.GetProperty("guard_filters").EnumerateArray(), filter =>
             filter.GetProperty("option").GetString() == "--reject-before" &&
-            filter.GetProperty("query").GetString() == "EnumerationOptions");
-        Assert.Contains(enumerateWithoutOptionsQuery.GetProperty("guard_filters").EnumerateArray(), filter =>
-            filter.GetProperty("option").GetString() == "--reject-after" &&
-            filter.GetProperty("query").GetString() == "EnumerationOptions");
+            filter.GetProperty("query").GetString() == "configured-enumeration-options" &&
+            filter.GetProperty("scope").GetString() == "container" &&
+            filter.GetProperty("evidence_kind").GetString() == "csharp_enumeration_options");
         Assert.Equal("BoundedFile.OpenReadFor", boundedFileOpenHelperQuery.GetProperty("query").GetString());
         Assert.Contains(boundedFileOpenHelperQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("FileShare.ReadWrite", StringComparison.Ordinal));
         Assert.Contains(boundedMemoryAccumulatorQuery.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("max-byte", StringComparison.Ordinal));
@@ -3394,6 +3394,7 @@ public partial class QueryCommandRunnerTests
                 "static-regex-api",
                 "static-regex-api-negated",
                 "static-regex-api-parenthesized",
+                "static-regex-api-qualified",
                 "relaxed-json-encoder",
                 "temp-file-name",
                 "overwrite-file-move",
@@ -4435,6 +4436,425 @@ public partial class QueryCommandRunnerTests
         finally
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_SafetyRecipesApplyOperationAndPolaritySemantics_Issue4911()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_safety_semantics_4911");
+        var overfetchProjectRoot = TestProjectHelper.CreateTempProject("cdidx_search_safety_semantics_overfetch_4911");
+        var shadowProjectRoot = TestProjectHelper.CreateTempProject("cdidx_search_safety_semantics_shadow_4911");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/regex-safe.cs",
+                "csharp",
+                """
+                using System.Text.RegularExpressions;
+
+                public static class RegexSafeHelpers
+                {
+                    public static string Escape(string input) => Regex.Escape(input); // Regex.IsMatch is deliberately not called.
+                    public static string Unescape(string input) => Regex.Unescape(input);
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/regex-risk.cs",
+                "csharp",
+                """
+                using System.Text.RegularExpressions;
+
+                public static class RegexRisk
+                {
+                    public static bool Match(string input) => Regex.IsMatch(input, "token");
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/regex-unresolved.cs",
+                "csharp",
+                """
+                using System.Text.RegularExpressions;
+
+                public static class RegexUnresolved
+                {
+                    public static object Inspect(string input) => Regex.CustomOperation(input);
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/regex-alias.cs",
+                "csharp",
+                """
+                using System.Text.RegularExpressions;
+                using Regex	= Vendor.Text.Regex;
+
+                public static class RegexAlias
+                {
+                    public static string Escape(string input) => Regex.Escape(input);
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/regex-comment-string-alias.cs",
+                "csharp",
+                """
+                using System.Text.RegularExpressions;
+                // using Regex = Vendor.Text.Regex;
+
+                public static class RegexCommentStringAlias
+                {
+                    private const string Example = "using Regex = Vendor.Text.Regex;";
+                    public static string Escape(string input) => Regex.Escape(input);
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/regex-qualified-safe.cs",
+                "csharp",
+                """
+                public static class RegexQualifiedSafe
+                {
+                    public static string Escape(string input) => global::System.Text.RegularExpressions.Regex.Escape(input);
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/regex-qualified-risk.cs",
+                "csharp",
+                """
+                public static class RegexQualifiedRisk
+                {
+                    public static bool Match(string input) => System.Text.RegularExpressions.Regex.IsMatch(input, "token");
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/regex-qualified-risk-with-alias.cs",
+                "csharp",
+                """
+                using Regex = CodeIndex.Indexer.BoundedRegex;
+
+                public static class RegexQualifiedRiskWithAlias
+                {
+                    public static bool Match(string input) => System.Text.RegularExpressions.Regex.IsMatch(input, "token");
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/regex-mixed-chunk.cs",
+                "csharp",
+                """
+                using System.Text.RegularExpressions;
+
+                public static class RegexMixedChunk
+                {
+                    public static bool Match(string input)
+                    {
+                        var escaped1 = Regex.Escape(input);
+                        var escaped2 = Regex.Escape(escaped1);
+                        var escaped3 = Regex.Escape(escaped2);
+                        var escaped4 = Regex.Escape(escaped3);
+                        var escaped5 = Regex.Escape(escaped4);
+                        var escaped6 = Regex.Escape(escaped5);
+                        var escaped7 = Regex.Escape(escaped6);
+                        var escaped8 = Regex.Escape(escaped7);
+                        return Regex.IsMatch(escaped8, "token");
+                    }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/regex-construction.cs",
+                "csharp",
+                """
+                using System.Text.RegularExpressions;
+
+                public static class RegexConstruction
+                {
+                    public static Regex Build(string input) => new Regex("^" + Regex.Escape(input));
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/shell-disabled.cs",
+                "csharp",
+                """
+                using System.Diagnostics;
+
+                public static class ShellDisabled
+                {
+                    public static ProcessStartInfo Build() => new() { UseShellExecute = false }; // UseShellExecute must stay false.
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/shell-named-disabled.cs",
+                "csharp",
+                """
+                public static class ShellNamedDisabled
+                {
+                    public static object Build() => Launch(UseShellExecute: false);
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/shell-multiline-disabled.cs",
+                "csharp",
+                """
+                using System.Diagnostics;
+
+                public static class ShellMultilineDisabled
+                {
+                    public static ProcessStartInfo Build() => new()
+                    {
+                        UseShellExecute =
+                            false
+                    };
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/shell-enabled.cs",
+                "csharp",
+                """
+                using System.Diagnostics;
+
+                public static class ShellEnabled
+                {
+                    public static ProcessStartInfo Build() => new() { UseShellExecute = true };
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/shell-propagated.cs",
+                "csharp",
+                """
+                using System.Diagnostics;
+
+                public static class ShellPropagated
+                {
+                    public static ProcessStartInfo Build(bool useShell) => new() { UseShellExecute = useShell };
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/shell-computed-after-comments.cs",
+                "csharp",
+                """
+                using System.Diagnostics;
+
+                public static class ShellComputedAfterComments
+                {
+                    public static ProcessStartInfo BuildBlock(bool enableShell) => new()
+                    {
+                        UseShellExecute = false /* default */ || enableShell
+                    };
+
+                    public static ProcessStartInfo BuildLine(bool enableShell) => new()
+                    {
+                        UseShellExecute = false // default
+                            || enableShell
+                    };
+                }
+                """);
+
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                db.InitializeSchema();
+                var writer = new DbWriter(db.Connection);
+                writer.MarkGraphReady();
+                writer.SetMeta(
+                    DbContext.ReferenceIdentityContractVersionMetaKey,
+                    DbContext.ReferenceIdentityContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            }
+
+            var recipeArgs = new[]
+            {
+                "--recipe", "dogfood-risk-patterns",
+                "--include-query", "static-regex-api,static-regex-api-qualified,process-shell-execute",
+                "--db", dbPath,
+                "--json",
+                "--limit", "20",
+                "--lang", "csharp"
+            };
+            var (runExitCode, runStdout, runStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(recipeArgs, _jsonOptions));
+            var (countExitCode, countStdout, countStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [.. recipeArgs, "--format", "count"],
+                _jsonOptions));
+            var (constructionExitCode, constructionStdout, constructionStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "dotnet-risk-patterns/regex-construction", "--db", dbPath, "--json", "--limit", "20", "--lang", "csharp"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, runExitCode);
+            Assert.Equal(string.Empty, runStderr);
+            using (var document = ParseJsonOutput(runStdout))
+            {
+                var queries = document.RootElement.GetProperty("queries").EnumerateArray().ToArray();
+                var regexQuery = Assert.Single(queries, query => query.GetProperty("name").GetString() == "static-regex-api");
+                var qualifiedRegexQuery = Assert.Single(queries, query => query.GetProperty("name").GetString() == "static-regex-api-qualified");
+                var shellQuery = Assert.Single(queries, query => query.GetProperty("name").GetString() == "process-shell-execute");
+
+                Assert.Equal(4, regexQuery.GetProperty("count").GetInt32());
+                Assert.DoesNotContain(regexQuery.GetProperty("results").EnumerateArray(), result => result.GetProperty("path").GetString() == "src/regex-safe.cs");
+                Assert.DoesNotContain(regexQuery.GetProperty("results").EnumerateArray(), result => result.GetProperty("path").GetString() == "src/regex-comment-string-alias.cs");
+                AssertSemanticClassification(regexQuery, "src/regex-risk.cs", "regex_operation_semantics", "regex_pattern_operation", "operation:Regex.IsMatch");
+                AssertSemanticClassification(regexQuery, "src/regex-unresolved.cs", "regex_operation_semantics", "regex_operation_unresolved", "operation:Regex.CustomOperation");
+                AssertSemanticClassification(regexQuery, "src/regex-mixed-chunk.cs", "regex_operation_semantics", "regex_pattern_operation", "operation:Regex.IsMatch");
+                AssertSemanticClassification(regexQuery, "src/regex-alias.cs", "regex_operation_semantics", "regex_operation_unresolved", "operation:Regex.Escape");
+                AssertClassifierCategories(regexQuery, "regex_operation_semantics", "safe_escape_helper", "regex_pattern_operation", "regex_operation_unresolved");
+
+                Assert.Equal(2, qualifiedRegexQuery.GetProperty("count").GetInt32());
+                Assert.DoesNotContain(qualifiedRegexQuery.GetProperty("results").EnumerateArray(), result => result.GetProperty("path").GetString() == "src/regex-qualified-safe.cs");
+                AssertSemanticClassification(qualifiedRegexQuery, "src/regex-qualified-risk.cs", "regex_operation_semantics", "regex_pattern_operation", "operation:System.Text.RegularExpressions.Regex.IsMatch");
+                AssertSemanticClassification(qualifiedRegexQuery, "src/regex-qualified-risk-with-alias.cs", "regex_operation_semantics", "regex_pattern_operation", "operation:System.Text.RegularExpressions.Regex.IsMatch");
+
+                Assert.Equal(3, shellQuery.GetProperty("count").GetInt32());
+                Assert.DoesNotContain(shellQuery.GetProperty("results").EnumerateArray(), result => result.GetProperty("path").GetString() == "src/shell-disabled.cs");
+                Assert.DoesNotContain(shellQuery.GetProperty("results").EnumerateArray(), result => result.GetProperty("path").GetString() == "src/shell-named-disabled.cs");
+                Assert.DoesNotContain(shellQuery.GetProperty("results").EnumerateArray(), result => result.GetProperty("path").GetString() == "src/shell-multiline-disabled.cs");
+                AssertSemanticClassification(shellQuery, "src/shell-enabled.cs", "shell_execute_polarity", "shell_explicitly_enabled", "value:true");
+                AssertSemanticClassification(shellQuery, "src/shell-propagated.cs", "shell_execute_polarity", "shell_policy_unresolved", "value:unresolved");
+                AssertSemanticClassification(shellQuery, "src/shell-computed-after-comments.cs", "shell_execute_polarity", "shell_policy_unresolved", "value:unresolved");
+                AssertClassifierCategories(shellQuery, "shell_execute_polarity", "shell_explicitly_disabled", "shell_explicitly_enabled", "shell_policy_unresolved");
+            }
+
+            Assert.Equal(CommandExitCodes.Success, countExitCode);
+            Assert.Equal(string.Empty, countStderr);
+            using (var document = ParseJsonOutput(countStdout))
+            {
+                var queries = document.RootElement.GetProperty("queries").EnumerateArray().ToArray();
+                Assert.Equal(4, Assert.Single(queries, query => query.GetProperty("name").GetString() == "static-regex-api").GetProperty("count").GetInt32());
+                Assert.Equal(2, Assert.Single(queries, query => query.GetProperty("name").GetString() == "static-regex-api-qualified").GetProperty("count").GetInt32());
+                Assert.Equal(3, Assert.Single(queries, query => query.GetProperty("name").GetString() == "process-shell-execute").GetProperty("count").GetInt32());
+            }
+
+            Assert.Equal(CommandExitCodes.Success, constructionExitCode);
+            Assert.Equal(string.Empty, constructionStderr);
+            using (var document = ParseJsonOutput(constructionStdout))
+            {
+                var query = Assert.Single(document.RootElement.GetProperty("queries").EnumerateArray());
+                Assert.Contains(query.GetProperty("results").EnumerateArray(), result => result.GetProperty("path").GetString() == "src/regex-construction.cs");
+            }
+
+            var shadowDbPath = TestProjectHelper.CreateProjectDb(shadowProjectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                shadowDbPath,
+                "src/regex-source-shadow.cs",
+                "csharp",
+                """
+                namespace Vendor;
+
+                public static class Regex
+                {
+                    public static string Escape(string input) => input;
+                }
+
+                public static class RegexSourceShadow
+                {
+                    public static string Escape(string input) => Regex.Escape(input);
+                }
+                """);
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, shadowDbPath))
+            {
+                db.InitializeSchema();
+                var writer = new DbWriter(db.Connection);
+                writer.MarkGraphReady();
+                writer.SetMeta(
+                    DbContext.ReferenceIdentityContractVersionMetaKey,
+                    DbContext.ReferenceIdentityContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            }
+            var (shadowExitCode, shadowStdout, shadowStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "dogfood-risk-patterns", "--include-query", "static-regex-api", "--db", shadowDbPath, "--json", "--limit", "20", "--lang", "csharp"],
+                _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, shadowExitCode);
+            Assert.Equal(string.Empty, shadowStderr);
+            using (var document = ParseJsonOutput(shadowStdout))
+            {
+                var query = Assert.Single(document.RootElement.GetProperty("queries").EnumerateArray());
+                Assert.Equal(1, query.GetProperty("count").GetInt32());
+                AssertSemanticClassification(query, "src/regex-source-shadow.cs", "regex_operation_semantics", "regex_operation_unresolved", "operation:Regex.Escape");
+            }
+
+            var overfetchDbPath = TestProjectHelper.CreateProjectDb(overfetchProjectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                overfetchDbPath,
+                "src/a-risk.cs",
+                "csharp",
+                "public static class Risk { public static bool Go(string input) => System.Text.RegularExpressions.Regex.IsMatch(input, \"token\"); }");
+            for (var index = 1; index <= 250; index++)
+            {
+                TestProjectHelper.InsertIndexedFile(
+                    overfetchDbPath,
+                    $"src/z-safe-{index:D3}.cs",
+                    "csharp",
+                    $"public static class Safe{index} {{ public static string Go(string input) => System.Text.RegularExpressions.Regex.Escape(input); }}");
+            }
+            TestProjectHelper.InsertIndexedFile(
+                overfetchDbPath,
+                "src/legacy-unresolved.cs",
+                "csharp",
+                "using System.Text.RegularExpressions; public static class LegacySafe { public static string Go(string input) => Regex.Escape(input); }");
+
+            var (overfetchExitCode, overfetchStdout, overfetchStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "dogfood-risk-patterns", "--include-query", "static-regex-api-qualified", "--db", overfetchDbPath, "--json", "--limit", "1", "--lang", "csharp"],
+                _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, overfetchExitCode);
+            Assert.Equal(string.Empty, overfetchStderr);
+            using (var document = ParseJsonOutput(overfetchStdout))
+            {
+                var query = Assert.Single(document.RootElement.GetProperty("queries").EnumerateArray());
+                Assert.Equal(1, query.GetProperty("count").GetInt32());
+                AssertSemanticClassification(query, "src/a-risk.cs", "regex_operation_semantics", "regex_pattern_operation", "operation:System.Text.RegularExpressions.Regex.IsMatch");
+            }
+
+            var (legacyExitCode, legacyStdout, legacyStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "dogfood-risk-patterns", "--include-query", "static-regex-api", "--db", overfetchDbPath, "--json", "--limit", "20", "--lang", "csharp"],
+                _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, legacyExitCode);
+            Assert.Equal(string.Empty, legacyStderr);
+            using (var document = ParseJsonOutput(legacyStdout))
+            {
+                var query = Assert.Single(document.RootElement.GetProperty("queries").EnumerateArray());
+                Assert.Equal(1, query.GetProperty("count").GetInt32());
+                AssertSemanticClassification(query, "src/legacy-unresolved.cs", "regex_operation_semantics", "regex_operation_unresolved", "operation:Regex.Escape");
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+            TestProjectHelper.DeleteDirectory(overfetchProjectRoot);
+            TestProjectHelper.DeleteDirectory(shadowProjectRoot);
+        }
+
+        static void AssertSemanticClassification(
+            JsonElement query,
+            string path,
+            string expectedClassifier,
+            string expectedCategory,
+            string expectedEvidence)
+        {
+            var result = Assert.Single(query.GetProperty("results").EnumerateArray(), item => item.GetProperty("path").GetString() == path);
+            var classification = Assert.Single(result.GetProperty("audit_classifications").EnumerateArray());
+            Assert.Equal(expectedClassifier, classification.GetProperty("classifier").GetString());
+            Assert.Equal(expectedCategory, classification.GetProperty("category").GetString());
+            Assert.Contains(classification.GetProperty("evidence").EnumerateArray(), evidence => evidence.GetString() == expectedEvidence);
+        }
+
+        static void AssertClassifierCategories(JsonElement query, string name, params string[] expectedCategories)
+        {
+            var classifier = Assert.Single(
+                query.GetProperty("classifiers").EnumerateArray(),
+                item => item.GetProperty("name").GetString() == name);
+            var categories = classifier.GetProperty("categories").EnumerateArray()
+                .Select(category => category.GetProperty("name").GetString())
+                .ToArray();
+            foreach (var expectedCategory in expectedCategories)
+                Assert.Contains(expectedCategory, categories);
         }
     }
 
@@ -6787,7 +7207,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunSearch_FilesystemTraversalRecipeFiltersNearbyEnumerationOptions_Issue3920()
+    public void RunSearch_FilesystemTraversalRecipeResolvesEnumerationOptionsStructurally_Issue4912()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_recipe_enumeration_options");
         try
@@ -6826,6 +7246,114 @@ public partial class QueryCommandRunnerTests
                     }
                 }
                 """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/distant-options.cs",
+                "csharp",
+                """
+                public static class TraversalPolicy
+                {
+                    public static void Run(string root)
+                    {
+                        Console.WriteLine("policy");
+                        Console.WriteLine("kept structurally distant");
+                        Console.WriteLine("from the options declaration");
+                        Console.WriteLine("without relying on line windows");
+                        foreach (var path in Directory.EnumerateFiles(root, "*", TopOnly))
+                        {
+                            Console.WriteLine(path);
+                        }
+                    }
+
+                    private static readonly EnumerationOptions TopOnly = CreateOptions();
+
+                    private static EnumerationOptions CreateOptions() => new()
+                    {
+                        RecurseSubdirectories = false,
+                        IgnoreInaccessible = false,
+                    };
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/unrelated-options.cs",
+                "csharp",
+                """
+                public sealed class UnrelatedOptionsTraversal
+                {
+                    public void Run(string root)
+                    {
+                        var unrelated = new EnumerationOptions { RecurseSubdirectories = false };
+                        Console.WriteLine(unrelated.RecurseSubdirectories);
+                        foreach (var path in Directory.EnumerateFiles(root))
+                        {
+                            Console.WriteLine(path);
+                        }
+                    }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/call-options.cs",
+                "csharp",
+                """
+                public sealed class CallOptionsTraversal
+                {
+                    private static readonly EnumerationOptions SharedOptions = new();
+
+                    public void Inline(string root)
+                    {
+                        foreach (var path in Directory.EnumerateFiles(root, "*", new EnumerationOptions()))
+                            Console.WriteLine(path);
+                    }
+
+                    public void Parameter(string root, EnumerationOptions options)
+                    {
+                        foreach (var path in Directory.EnumerateFiles(root, "*", options))
+                            Console.WriteLine(path);
+                    }
+
+                    public void SameReceiver(string root)
+                    {
+                        foreach (var path in Directory.EnumerateFiles(root, "*", CallOptionsTraversal.SharedOptions))
+                            Console.WriteLine(path);
+                    }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/named-options.cs",
+                "csharp",
+                """
+                public sealed class NamedOptionsTraversal
+                {
+                    public void Run(string root)
+                    {
+                        var localOptions = new EnumerationOptions();
+                        foreach (var path in Directory.EnumerateFiles(
+                            enumerationOptions: localOptions,
+                            searchPattern: "*",
+                            path: root))
+                            Console.WriteLine(path);
+                    }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/shadowed-options.cs",
+                "csharp",
+                """
+                public sealed class ShadowedOptionsTraversal
+                {
+                    private static readonly EnumerationOptions options = new();
+
+                    public void Run(string root, SearchOption options)
+                    {
+                        foreach (var path in Directory.EnumerateFiles(root, "*", options))
+                            Console.WriteLine(path);
+                    }
+                }
+                """);
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 ["--recipe", "filesystem-traversal/enumerate-without-options", "--db", dbPath, "--json", "--limit", "10"],
@@ -6836,14 +7364,318 @@ public partial class QueryCommandRunnerTests
             using var document = ParseJsonOutput(stdout);
             var root = document.RootElement;
             var query = Assert.Single(root.GetProperty("queries").EnumerateArray());
-            var result = Assert.Single(query.GetProperty("results").EnumerateArray());
+            var results = query.GetProperty("results").EnumerateArray().ToArray();
 
             Assert.Equal("enumerate-without-options", query.GetProperty("name").GetString());
-            Assert.Equal(1, query.GetProperty("count").GetInt32());
-            Assert.Equal("src/unguarded.cs", result.GetProperty("path").GetString());
+            Assert.True(
+                query.GetProperty("count").GetInt32() == 3,
+                $"Unexpected traversal results: {string.Join(", ", results.Select(result => result.GetProperty("path").GetString()))}");
+            Assert.Contains(results, result => result.GetProperty("path").GetString() == "src/unguarded.cs");
+            Assert.Contains(results, result => result.GetProperty("path").GetString() == "src/unrelated-options.cs");
+            Assert.Contains(results, result => result.GetProperty("path").GetString() == "src/shadowed-options.cs");
             Assert.DoesNotContain(query.GetProperty("top_files").EnumerateArray(), item => item.GetProperty("path").GetString() == "src/options.cs");
-            Assert.Contains(query.GetProperty("guard_filters").EnumerateArray(), filter => filter.GetProperty("option").GetString() == "--reject-before");
-            Assert.Contains(query.GetProperty("guard_filters").EnumerateArray(), filter => filter.GetProperty("option").GetString() == "--reject-after");
+            Assert.DoesNotContain(query.GetProperty("top_files").EnumerateArray(), item => item.GetProperty("path").GetString() == "src/distant-options.cs");
+            Assert.DoesNotContain(query.GetProperty("top_files").EnumerateArray(), item => item.GetProperty("path").GetString() == "src/call-options.cs");
+            Assert.DoesNotContain(query.GetProperty("top_files").EnumerateArray(), item => item.GetProperty("path").GetString() == "src/named-options.cs");
+            var guardFilter = Assert.Single(query.GetProperty("guard_filters").EnumerateArray());
+            Assert.Equal("--reject-before", guardFilter.GetProperty("option").GetString());
+            Assert.Equal("container", guardFilter.GetProperty("scope").GetString());
+            Assert.Equal("csharp_enumeration_options", guardFilter.GetProperty("evidence_kind").GetString());
+
+            var unguarded = Assert.Single(results, result => result.GetProperty("path").GetString() == "src/unguarded.cs");
+            var check = Assert.Single(unguarded.GetProperty("guard_checks").EnumerateArray());
+            Assert.False(check.GetProperty("matched").GetBoolean());
+            Assert.True(check.GetProperty("passed").GetBoolean());
+            Assert.Equal("container", check.GetProperty("scope").GetString());
+            var rejectedEvidence = Assert.Single(check.GetProperty("rejected_evidence").EnumerateArray());
+            Assert.Equal("rejected", rejectedEvidence.GetProperty("decision").GetString());
+            Assert.Equal("enumeration_options_argument_missing", rejectedEvidence.GetProperty("relationship").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_ReadAllTextRecipeUsesSamePathAndResolvedHelperEvidence_Issue4912()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_recipe_structural_read_guard");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/reads.cs",
+                "csharp",
+                """
+                public static class Reads
+                {
+                    private const long MaxBytes = 1024;
+
+                    public static string LocalBound(string path)
+                    {
+                        var length = new FileInfo(path).Length;
+                        Console.WriteLine("distance-1");
+                        Console.WriteLine("distance-2");
+                        Console.WriteLine("distance-3");
+                        Console.WriteLine("distance-4");
+                        Console.WriteLine("distance-5");
+                        Console.WriteLine("distance-6");
+                        Console.WriteLine("distance-7");
+                        Console.WriteLine("distance-8");
+                        Console.WriteLine("distance-9");
+                        if (length > MaxBytes)
+                            throw new InvalidDataException();
+                        return File.ReadAllText(path);
+                    }
+
+                    public static string HelperBound(string path)
+                    {
+                        WriteBounded(path);
+                        return File.ReadAllText(path);
+                    }
+
+                    private static void WriteBounded(string path)
+                    {
+                        BoundedFile.WriteAllText(path, MaxBytes);
+                    }
+
+                    public static string FileInfoBound(string path)
+                    {
+                        var info = new FileInfo(path);
+                        if (info.Length > MaxBytes)
+                            throw new InvalidDataException();
+                        return File.ReadAllText(path);
+                    }
+
+                    public static string Unguarded(string path)
+                        => File.ReadAllText(path);
+
+                    public static string Unrelated(string path, string other)
+                    {
+                        var length = new FileInfo(other).Length;
+                        if (length > MaxBytes)
+                            throw new InvalidDataException();
+                        return File.ReadAllText(path);
+                    }
+
+                    public static string Inverted(string path)
+                    {
+                        var length = new FileInfo(path).Length;
+                        if (length < MaxBytes)
+                            throw new InvalidDataException();
+                        return File.ReadAllText(path);
+                    }
+
+                    public static string ConditionalReject(string path, bool extraCondition)
+                    {
+                        var length = new FileInfo(path).Length;
+                        if (length > MaxBytes && extraCondition)
+                            throw new InvalidDataException();
+                        return File.ReadAllText(path);
+                    }
+
+                    public static string Unawaited(string path)
+                    {
+                        WriteBoundedAsync(path);
+                        return File.ReadAllText(path);
+                    }
+
+                    public static string AwaitNamedVariable(string path)
+                    {
+                        var awaitedWrite = WriteBoundedAsync(path);
+                        return File.ReadAllText(path);
+                    }
+
+                    public static string ConditionalHelper(string path, bool shouldWrite)
+                    {
+                        if (shouldWrite)
+                            WriteBounded(path);
+                        return File.ReadAllText(path);
+                    }
+
+                    public static string CommentOnlyHelper(string path)
+                    {
+                        Prepare(path);
+                        return File.ReadAllText(path);
+                    }
+
+                    private static void Prepare(string path)
+                    {
+                        // BoundedFile.WriteAllText(path, MaxBytes);
+                        Console.WriteLine(path);
+                    }
+
+                    public static string PathReassigned(string path, string other)
+                    {
+                        var length = new FileInfo(path).Length;
+                        if (length > MaxBytes)
+                            throw new InvalidDataException();
+                        path = other;
+                        return File.ReadAllText(path);
+                    }
+
+                    public static string LaterConditionalThrow(string path, bool fatal)
+                    {
+                        var length = new FileInfo(path).Length;
+                        if (length > MaxBytes)
+                            Console.WriteLine("too large but continuing");
+                        if (fatal)
+                            throw new InvalidOperationException();
+                        return File.ReadAllText(path);
+                    }
+
+                    public static string ElseReadsOversized(string path)
+                    {
+                        var length = new FileInfo(path).Length;
+                        if (length < MaxBytes)
+                        {
+                            return string.Empty;
+                        }
+                        else
+                        {
+                            return File.ReadAllText(path);
+                        }
+                    }
+
+                    public static string NamedArgumentBound(string path)
+                    {
+                        var length = new FileInfo(path).Length;
+                        if (length > MaxBytes)
+                            throw new InvalidDataException();
+                        return File.ReadAllText(path: path);
+                    }
+
+                    public static string InlineThrowBound(string path)
+                    {
+                        var length = new FileInfo(path).Length;
+                        if (length > MaxBytes) throw new InvalidDataException();
+                        return File.ReadAllText(path);
+                    }
+
+                    public static async Task<string> AwaitedHelperBound(string path)
+                    {
+                        await WriteBoundedAsync(path);
+                        return File.ReadAllText(path);
+                    }
+
+                    public static string NameOnlyHelper(string path)
+                    {
+                        MisleadingBounded(path);
+                        return File.ReadAllText(path);
+                    }
+
+                    private static void MisleadingBounded(string path)
+                        => Console.WriteLine(path, MaxBytes);
+
+                    public static string NamedHelperMismatch(string path, string cache)
+                    {
+                        PrepareNamed(target: path, other: cache);
+                        return File.ReadAllText(path);
+                    }
+
+                    private static void PrepareNamed(string other, string target)
+                    {
+                        BoundedFile.WriteAllText(other, MaxBytes);
+                    }
+
+                    public static string SwitchSections(string path, int kind)
+                    {
+                        switch (kind)
+                        {
+                            case 0:
+                                WriteBounded(path);
+                                break;
+                            case 1:
+                                return File.ReadAllText(path);
+                            default:
+                                return string.Empty;
+                        }
+                    }
+
+                    public static string ConditionalSizeSource(string path, bool inspectFile)
+                    {
+                        var length = inspectFile ? new FileInfo(path).Length : 0;
+                        if (length > MaxBytes)
+                            throw new InvalidDataException();
+                        return File.ReadAllText(path);
+                    }
+
+                    public static string CommentSizeSource(string path, Stream other)
+                    {
+                        var length = other.Length;
+                        // length = new FileInfo(path).Length;
+                        if (length > MaxBytes)
+                            throw new InvalidDataException();
+                        return File.ReadAllText(path);
+                    }
+
+                    public static string ReorderedNamedRead(string path)
+                    {
+                        var length = new FileInfo(path).Length;
+                        if (length > MaxBytes)
+                            throw new InvalidDataException();
+                        return File.ReadAllText(encoding: Encoding.UTF8, path: path);
+                    }
+
+                    private static Task WriteBoundedAsync(string path)
+                    {
+                        BoundedFile.WriteAllText(path, MaxBytes);
+                        return Task.CompletedTask;
+                    }
+                }
+                """);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "risky-code/file-read-all-text", "--db", dbPath, "--json", "--limit", "20"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var query = Assert.Single(document.RootElement.GetProperty("queries").EnumerateArray());
+            var results = query.GetProperty("results").EnumerateArray().ToArray();
+
+            Assert.True(
+                query.GetProperty("count").GetInt32() == 16,
+                $"Unexpected ReadAllText results: {string.Join(", ", results.Select(result => result.GetProperty("enclosing_symbol_name").GetString()))}");
+            Assert.DoesNotContain(results, result => result.GetProperty("enclosing_symbol_name").GetString() == "LocalBound");
+            Assert.DoesNotContain(results, result => result.GetProperty("enclosing_symbol_name").GetString() == "HelperBound");
+            Assert.DoesNotContain(results, result => result.GetProperty("enclosing_symbol_name").GetString() == "FileInfoBound");
+            Assert.DoesNotContain(results, result => result.GetProperty("enclosing_symbol_name").GetString() == "NamedArgumentBound");
+            Assert.DoesNotContain(results, result => result.GetProperty("enclosing_symbol_name").GetString() == "InlineThrowBound");
+            Assert.DoesNotContain(results, result => result.GetProperty("enclosing_symbol_name").GetString() == "AwaitedHelperBound");
+            Assert.DoesNotContain(results, result => result.GetProperty("enclosing_symbol_name").GetString() == "ReorderedNamedRead");
+            Assert.Contains(results, result => result.GetProperty("enclosing_symbol_name").GetString() == "Unguarded");
+            Assert.Contains(results, result => result.GetProperty("enclosing_symbol_name").GetString() == "Unrelated");
+            Assert.Contains(results, result => result.GetProperty("enclosing_symbol_name").GetString() == "Inverted");
+            Assert.Contains(results, result => result.GetProperty("enclosing_symbol_name").GetString() == "ConditionalReject");
+            Assert.Contains(results, result => result.GetProperty("enclosing_symbol_name").GetString() == "Unawaited");
+            Assert.Contains(results, result => result.GetProperty("enclosing_symbol_name").GetString() == "AwaitNamedVariable");
+            Assert.Contains(results, result => result.GetProperty("enclosing_symbol_name").GetString() == "ConditionalHelper");
+            Assert.Contains(results, result => result.GetProperty("enclosing_symbol_name").GetString() == "CommentOnlyHelper");
+            Assert.Contains(results, result => result.GetProperty("enclosing_symbol_name").GetString() == "PathReassigned");
+            Assert.Contains(results, result => result.GetProperty("enclosing_symbol_name").GetString() == "LaterConditionalThrow");
+            Assert.Contains(results, result => result.GetProperty("enclosing_symbol_name").GetString() == "ElseReadsOversized");
+            Assert.Contains(results, result => result.GetProperty("enclosing_symbol_name").GetString() == "NameOnlyHelper");
+            Assert.Contains(results, result => result.GetProperty("enclosing_symbol_name").GetString() == "NamedHelperMismatch");
+            Assert.Contains(results, result => result.GetProperty("enclosing_symbol_name").GetString() == "SwitchSections");
+            Assert.Contains(results, result => result.GetProperty("enclosing_symbol_name").GetString() == "ConditionalSizeSource");
+            Assert.Contains(results, result => result.GetProperty("enclosing_symbol_name").GetString() == "CommentSizeSource");
+
+            var guardFilter = Assert.Single(query.GetProperty("guard_filters").EnumerateArray());
+            Assert.Equal("container", guardFilter.GetProperty("scope").GetString());
+            Assert.Equal("csharp_bounded_file_read", guardFilter.GetProperty("evidence_kind").GetString());
+
+            var unrelated = Assert.Single(results, result => result.GetProperty("enclosing_symbol_name").GetString() == "Unrelated");
+            var check = Assert.Single(unrelated.GetProperty("guard_checks").EnumerateArray());
+            Assert.False(check.GetProperty("matched").GetBoolean());
+            Assert.True(check.GetProperty("passed").GetBoolean());
+            Assert.Contains(
+                check.GetProperty("rejected_evidence").EnumerateArray(),
+                evidence => evidence.GetProperty("relationship").GetString() == "different_path_size_source"
+                    && evidence.GetProperty("decision").GetString() == "rejected");
         }
         finally
         {
@@ -7166,7 +7998,7 @@ public partial class QueryCommandRunnerTests
                             redirectStandardError: true);
                         SubprocessEnvironmentPolicy.ApplyGitEnvironment(startInfo);
                         startInfo.ArgumentList.Add("--info");
-                        startInfo.UseShellExecute = false;
+                        startInfo.UseShellExecute = true;
                         startInfo.WorkingDirectory = Environment.CurrentDirectory;
                         startInfo.RedirectStandardOutput = true;
                         startInfo.RedirectStandardError = true;
