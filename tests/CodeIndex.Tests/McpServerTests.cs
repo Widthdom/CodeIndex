@@ -7490,8 +7490,9 @@ public sealed class Caller
         {
             RequestTimeout = TimeSpan.FromMilliseconds(100),
         };
-        Assert.NotNull(await server.ProcessFrameAsync(
-            """{"jsonrpc":"2.0","id":"issue-4536-batch-timeout-init","method":"initialize","params":{}}"""));
+        var initializeResponse = Assert.IsType<JsonObject>(server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":"issue-4536-batch-timeout-init","method":"initialize","params":{}}""")!));
+        Assert.IsType<JsonObject>(initializeResponse["result"]);
 
         var firstStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var firstTimedOut = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -7517,7 +7518,7 @@ public sealed class Caller
         };
 
         var batchResponseTask = server.ProcessFrameAsync(
-            """[{"jsonrpc":"2.0","id":453653,"method":"ping"},{"jsonrpc":"2.0","id":453654,"method":"ping"}]""");
+            """[{"jsonrpc":"2.0","id":453653,"method":"ping"},{"jsonrpc":"2.0","id":453654,"method":"prompts/list"}]""");
         await Task.WhenAll(firstStarted.Task, secondRegistered.Task).WaitAsync(TestDeterminism.DefaultTimeout);
         Assert.False(secondStarted.Task.IsCompleted);
         Assert.Equal(0, server.AvailableConcurrencySlotsForTests);
@@ -7536,9 +7537,7 @@ public sealed class Caller
             Assert.IsAssignableFrom<JsonValue>(firstError["message"]).GetValue<string>());
         var secondResponse = Assert.IsType<JsonObject>(responses[1]);
         var secondResult = Assert.IsType<JsonObject>(secondResponse["result"]);
-        Assert.Equal(
-            "ok",
-            Assert.IsAssignableFrom<JsonValue>(secondResult["status"]).GetValue<string>());
+        Assert.IsType<JsonArray>(secondResult["prompts"]);
         Assert.Equal(1, server.AvailableConcurrencySlotsForTests);
     }
 
