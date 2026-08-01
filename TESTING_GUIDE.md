@@ -390,7 +390,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
 - `IndexCommandRunnerTests.SymbolExtractionWorker_LegacyEnvironmentHooksAreIgnored_Issue3398`
   launches the isolated symbol worker to prove legacy worker environment variables are ignored. Its callback budget includes process startup and is intentionally wider than ordinary in-process checks so local process load does not turn the legacy-env regression check into a timeout flake (#3863).
 - `IndexCommandRunnerTests.SymbolExtractionWorker_Utf8RequestsPreserveUnicodeAcrossLanguages`
-  reuses one isolated worker for C#, Java, TypeScript, Python, Go, and Rust requests whose content and paths contain Japanese text. It keeps direct UTF-8 request framing language-neutral and protects Unicode fidelity without creating a large fixture.
+  reuses one isolated worker for C#, Java, TypeScript, Python, Go, and Rust requests whose content and paths contain Japanese text. It first sends an ASCII warm-up with the wider test-only startup budget so parallel net8.0/net9.0 process-startup contention is separated from callback timing, then keeps every Unicode request on the ordinary five-second callback budget. This preserves language-neutral direct UTF-8 request framing and Unicode fidelity without weakening the production worker timeout contract or creating a large fixture (#4937).
 - `IndexCommandRunnerTests.SymbolExtractionWorker_StreamResponseWritesBomlessUtf8Frame`
   exercises the production stream-response overload with a Japanese C# symbol and verifies one BOM-less, newline-terminated UTF-8 JSON frame. Keep the `StringWriter` protocol tests as the in-process diagnostic path while this test protects process stdout framing.
 - `BoundedLineReaderTests.ReadUtf8LineAsync_BuffersFramesWithoutDecoding`, `ReadUtf8LineAsync_EnforcesByteLimitBeforeGrowth`, and `ReadUtf8LineAsync_HandlesCrLfAcrossBufferBoundary`
@@ -1349,7 +1349,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - `IndexCommandRunnerTests.SymbolExtractionWorker_LegacyEnvironmentHooksAreIgnored_Issue3398`
   isolated symbol worker を起動し、legacy worker 環境変数が無視されることを検証します。この callback budget はプロセス起動時間も含むため、通常の in-process チェックより意図的に広く取り、ローカル負荷で legacy-env 回帰テストが timeout flake にならないようにします（#3863）。
 - `IndexCommandRunnerTests.SymbolExtractionWorker_Utf8RequestsPreserveUnicodeAcrossLanguages`
-  1つの isolated worker を再利用し、日本語の content と path を含む C#、Java、TypeScript、Python、Go、Rust の request を順に送ります。大規模 fixture を作らず、direct UTF-8 request framing の言語非依存性と Unicode fidelity を固定します。
+  1つの isolated worker を再利用し、日本語の content と path を含む C#、Java、TypeScript、Python、Go、Rust の request を順に送ります。最初に test 専用の広い startup budget で ASCII warm-up を行い、net8.0/net9.0 の並列 process 起動競合と callback の計測を分離したうえで、すべての Unicode request を通常の5秒 callback budget で検証します。production worker の timeout 契約を緩めず、大規模 fixture を作ることなく direct UTF-8 request framing の言語非依存性と Unicode fidelity を固定します（#4937）。
 - `IndexCommandRunnerTests.SymbolExtractionWorker_StreamResponseWritesBomlessUtf8Frame`
   日本語の C# symbol で本番用 stream-response overload を実行し、BOM なし・改行終端の UTF-8 JSON frame が1件出ることを検証します。`StringWriter` の protocol tests は in-process diagnostic 経路として維持し、このテストで process stdout framing を固定します。
 - `BoundedLineReaderTests.ReadUtf8LineAsync_BuffersFramesWithoutDecoding`、`ReadUtf8LineAsync_EnforcesByteLimitBeforeGrowth`、`ReadUtf8LineAsync_HandlesCrLfAcrossBufferBoundary`
