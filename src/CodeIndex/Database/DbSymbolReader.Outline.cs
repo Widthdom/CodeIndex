@@ -335,8 +335,15 @@ public partial class DbReader
             }
 
             var cursor = afterName;
-            while (cursor < signature.Length && char.IsWhiteSpace(signature[cursor]))
-                cursor++;
+            if (lang == "csharp")
+            {
+                cursor = SkipCSharpWhitespaceAndComments(signature, cursor);
+            }
+            else
+            {
+                while (cursor < signature.Length && char.IsWhiteSpace(signature[cursor]))
+                    cursor++;
+            }
 
             if (cursor < signature.Length && signature[cursor] == '(')
                 return cursor;
@@ -349,9 +356,7 @@ public partial class DbReader
                         signature[(cursor + 1)..closeAngle],
                         out var typeParameters))
                 {
-                    var parameterOpen = closeAngle + 1;
-                    while (parameterOpen < signature.Length && char.IsWhiteSpace(signature[parameterOpen]))
-                        parameterOpen++;
+                    var parameterOpen = SkipCSharpWhitespaceAndComments(signature, closeAngle + 1);
 
                     if (parameterOpen < signature.Length && signature[parameterOpen] == '(')
                     {
@@ -367,6 +372,28 @@ public partial class DbReader
         return -1;
     }
 
+    private static int SkipCSharpWhitespaceAndComments(string value, int start)
+    {
+        var cursor = start;
+        while (cursor < value.Length)
+        {
+            while (cursor < value.Length && char.IsWhiteSpace(value[cursor]))
+                cursor++;
+
+            if (cursor + 1 >= value.Length
+                || value[cursor] != '/'
+                || value[cursor + 1] is not ('/' or '*')
+                || !TryGetCSharpLexicalRegionEnd(value, cursor, out var commentEnd))
+            {
+                break;
+            }
+
+            cursor = commentEnd;
+        }
+
+        return cursor;
+    }
+
     private static int FindMatchingCSharpDelimiter(
         string value,
         int openIndex,
@@ -374,12 +401,31 @@ public partial class DbReader
         char closeDelimiter)
     {
         var depth = 0;
+        var squareBracketDepth = 0;
         for (var i = openIndex; i < value.Length; i++)
         {
             if (TryGetCSharpLexicalRegionEnd(value, i, out var regionEnd))
             {
                 i = regionEnd - 1;
                 continue;
+            }
+
+            if (openDelimiter == '<')
+            {
+                if (value[i] == '[')
+                {
+                    squareBracketDepth++;
+                    continue;
+                }
+
+                if (value[i] == ']' && squareBracketDepth > 0)
+                {
+                    squareBracketDepth--;
+                    continue;
+                }
+
+                if (squareBracketDepth > 0)
+                    continue;
             }
 
             if (value[i] == openDelimiter)
@@ -425,6 +471,7 @@ public partial class DbReader
 
         var quoteStart = -1;
         var verbatim = false;
+        var interpolated = false;
         if (value[start] == '"')
         {
             quoteStart = start;
@@ -436,6 +483,7 @@ public partial class DbReader
         }
         else if (value[start] == '$')
         {
+            interpolated = true;
             var cursor = start;
             while (cursor < value.Length && value[cursor] == '$')
                 cursor++;
@@ -455,6 +503,7 @@ public partial class DbReader
         {
             quoteStart = start + 2;
             verbatim = true;
+            interpolated = true;
         }
 
         if (quoteStart < 0)
@@ -465,8 +514,69 @@ public partial class DbReader
             quoteCount++;
         end = quoteCount >= 3
             ? FindCSharpRawStringEnd(value, quoteStart, quoteCount)
-            : FindCSharpQuotedLiteralEnd(value, quoteStart, '"', verbatim);
+            : interpolated
+                ? FindCSharpInterpolatedStringEnd(value, quoteStart, verbatim)
+                : FindCSharpQuotedLiteralEnd(value, quoteStart, '"', verbatim);
         return true;
+    }
+
+    private static int FindCSharpInterpolatedStringEnd(
+        string value,
+        int quoteStart,
+        bool verbatim)
+    {
+        var interpolationDepth = 0;
+        for (var i = quoteStart + 1; i < value.Length; i++)
+        {
+            if (interpolationDepth > 0
+                && TryGetCSharpLexicalRegionEnd(value, i, out var regionEnd))
+            {
+                i = regionEnd - 1;
+                continue;
+            }
+
+            if (interpolationDepth == 0)
+            {
+                if (verbatim && value[i] == '"' && i + 1 < value.Length && value[i + 1] == '"')
+                {
+                    i++;
+                    continue;
+                }
+
+                if (!verbatim && value[i] == '\\')
+                {
+                    i++;
+                    continue;
+                }
+
+                if (value[i] == '"')
+                    return i + 1;
+
+                if (value[i] == '{')
+                {
+                    if (i + 1 < value.Length && value[i + 1] == '{')
+                    {
+                        i++;
+                        continue;
+                    }
+
+                    interpolationDepth = 1;
+                }
+
+                continue;
+            }
+
+            if (value[i] == '{')
+            {
+                interpolationDepth++;
+            }
+            else if (value[i] == '}')
+            {
+                interpolationDepth--;
+            }
+        }
+
+        return value.Length;
     }
 
     private static int FindCSharpQuotedLiteralEnd(
@@ -725,10 +835,10 @@ public partial class DbReader
 
             switch (parameter[i])
             {
-                case '<':
+                case '<' when bracketDepth == 0:
                     angleDepth++;
                     break;
-                case '>':
+                case '>' when bracketDepth == 0:
                     if (angleDepth > 0) angleDepth--;
                     break;
                 case '(':
@@ -986,10 +1096,10 @@ public partial class DbReader
 
             switch (parameters[i])
             {
-                case '<' when !inDefaultValue:
+                case '<' when !inDefaultValue && bracketDepth == 0:
                     angleDepth++;
                     break;
-                case '>' when !inDefaultValue:
+                case '>' when !inDefaultValue && bracketDepth == 0:
                     if (angleDepth > 0) angleDepth--;
                     break;
                 case '(':

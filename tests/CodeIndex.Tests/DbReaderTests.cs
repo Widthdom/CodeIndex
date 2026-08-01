@@ -7194,6 +7194,7 @@ public partial class DbReaderTests : IDisposable
             public sealed class MarkerAttribute : Attribute
             {
                 public MarkerAttribute(string text) { }
+                public MarkerAttribute(bool value) { }
             }
 
             public sealed class T { }
@@ -7251,7 +7252,15 @@ public partial class DbReaderTests : IDisposable
 
                 public void RawDefault<T>(string value = """a,b)""", T other = default!) { }
 
+                public void InterpolatedDefault<T>(string value = $"{"a,b)"}", T other = default!) { }
+
                 public void AttributeParam<T>([Marker("x]")] T value, int count) { }
+
+                public void AttributeExpression<T>([Marker(1 < 2)] T value, int count) { }
+
+                public void CommentedName /* between name and type parameters */ <T>(T value) { }
+
+                public void CommentedParameters<T> /* before parameters */ (T value) { }
 
                 public void Escaped<\u0055>(\u0055 value) { }
 
@@ -7335,8 +7344,20 @@ public partial class DbReaderTests : IDisposable
             symbol.Name == "RawDefault"
             && symbol.DisplayName == "RawDefault<T>(string, T)");
         Assert.Contains(beforeCallables, symbol =>
+            symbol.Name == "InterpolatedDefault"
+            && symbol.DisplayName == "InterpolatedDefault<T>(string, T)");
+        Assert.Contains(beforeCallables, symbol =>
             symbol.Name == "AttributeParam"
             && symbol.DisplayName == "AttributeParam<T>(T, int)");
+        Assert.Contains(beforeCallables, symbol =>
+            symbol.Name == "AttributeExpression"
+            && symbol.DisplayName == "AttributeExpression<T>(T, int)");
+        Assert.Contains(beforeCallables, symbol =>
+            symbol.Name == "CommentedName"
+            && symbol.DisplayName == "CommentedName<T>(T)");
+        Assert.Contains(beforeCallables, symbol =>
+            symbol.Name == "CommentedParameters"
+            && symbol.DisplayName == "CommentedParameters<T>(T)");
         Assert.Contains(beforeCallables, symbol =>
             symbol.Name == "Escaped"
             && symbol.DisplayName == "Escaped<T>(T)");
