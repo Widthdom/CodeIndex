@@ -102,8 +102,8 @@ internal static partial class JsonEnvelopeWrapper
 
         return HasArgument(args, "--fields")
                || HasArgument(args, "--cursor")
-               || (command == "search" && HasEnvelopeFlag(args) && HasJsonArrayOutputSelection(args))
-               || (command != "search" && HasEnvelopeFlag(args) && HasArgument(args, "--max-json-bytes"))
+               || (command == "search" && HasEnvelopeFlag(command, args) && HasJsonArrayOutputSelection(args))
+               || (command != "search" && HasEnvelopeFlag(command, args) && HasArgument(args, "--max-json-bytes"))
                || ShouldAutoWrapBoundedResponse(command, args);
     }
 
@@ -123,7 +123,7 @@ internal static partial class JsonEnvelopeWrapper
            && !HasArgument(args, "--fields")
            && !HasArgument(args, "--max-json-bytes")
            && !HasCompactOutputSelection(args)
-           && !HasEnvelopeFlag(args);
+           && !HasEnvelopeFlag("find", args);
 
     private static bool IsFindCountResponseRequest(string[] args)
     {
@@ -265,7 +265,7 @@ internal static partial class JsonEnvelopeWrapper
         if (command == "map" && ValidateMapProjectionControls(args, controls.Fields) is { } mapProjectionError)
             return WriteBoundedResponseUsageError(mapProjectionError, "Remove the conflicting map filter, or select a collection enabled by --sections.");
 
-        var queryNormalized = ExtractQueryArg(args);
+        var queryNormalized = ExtractQueryArg(command, args);
         var (resolvedDbPath, dbPathExplicit) = ResolveQueryDbPath(args);
         var queryFingerprint = BuildResponseFingerprint(command, args);
         var suppressRuntimeMetadata = IsStaticStatusExplainRequest(command, args);

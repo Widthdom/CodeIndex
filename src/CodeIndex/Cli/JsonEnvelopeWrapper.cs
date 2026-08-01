@@ -44,15 +44,18 @@ internal static partial class JsonEnvelopeWrapper
     {
         command = CanonicalizeCommandName(command);
         return WrappableCommands.Contains(command)
-               && (HasEnvelopeFlag(args) || ShouldAutoWrapBoundedResponse(command, args));
+               && (HasEnvelopeFlag(command, args) || ShouldAutoWrapBoundedResponse(command, args));
     }
 
-    internal static bool HasEnvelopeFlag(string[] args)
+    internal static bool HasEnvelopeFlag(string command, string[] args)
     {
-        for (var i = 0; i < args.Length; i++)
+        foreach (var token in ClassifyArgumentTokens(command, args))
         {
-            if (string.Equals(args[i], EnvelopeFlag, StringComparison.Ordinal))
+            if (token.IsOption
+                && string.Equals(token.Value, EnvelopeFlag, StringComparison.Ordinal))
+            {
                 return true;
+            }
         }
         return false;
     }
@@ -63,22 +66,76 @@ internal static partial class JsonEnvelopeWrapper
     /// 内側のコマンドランナーは <c>--json</c> しか知らないため、
     /// <c>--json-envelope</c> を取り除き、<c>--json</c> を付与する。
     /// </summary>
-    internal static string[] PrepareInnerArgs(string[] args)
+    internal static string[] PrepareInnerArgs(string command, string[] args)
     {
         var stripped = new List<string>(args.Length);
         var sawJson = false;
-        foreach (var arg in args)
+        int? endOfOptionsIndex = null;
+        foreach (var token in ClassifyArgumentTokens(command, args))
         {
-            if (string.Equals(arg, EnvelopeFlag, StringComparison.Ordinal))
+            if (token.IsOption
+                && string.Equals(token.Value, EnvelopeFlag, StringComparison.Ordinal))
+            {
                 continue;
-            if (string.Equals(arg, "--json", StringComparison.Ordinal))
+            }
+            if (token.IsOption && string.Equals(token.Value, "--json", StringComparison.Ordinal))
                 sawJson = true;
-            stripped.Add(arg);
+            if (token.IsOption
+                && string.Equals(token.Value, "--", StringComparison.Ordinal))
+            {
+                endOfOptionsIndex = stripped.Count;
+            }
+            stripped.Add(token.Value);
         }
 
         if (!sawJson)
-            stripped.Add("--json");
+        {
+            if (endOfOptionsIndex.HasValue)
+                stripped.Insert(endOfOptionsIndex.Value, "--json");
+            else
+                stripped.Add("--json");
+        }
         return [.. stripped];
+    }
+
+    private static IEnumerable<ArgumentToken> ClassifyArgumentTokens(string command, string[] args)
+    {
+        var afterEndOfOptions = false;
+        var nextTokenIsValue = false;
+        foreach (var arg in args)
+        {
+            var isOption = !afterEndOfOptions && !nextTokenIsValue;
+            yield return new ArgumentToken(arg, isOption);
+
+            if (nextTokenIsValue)
+            {
+                nextTokenIsValue = false;
+                continue;
+            }
+            if (afterEndOfOptions)
+                continue;
+            if (string.Equals(arg, "--", StringComparison.Ordinal))
+            {
+                afterEndOfOptions = true;
+                continue;
+            }
+            nextTokenIsValue = IsValueConsumingOption(command, arg);
+        }
+    }
+
+    private static bool IsValueConsumingOption(string command, string arg)
+    {
+        foreach (var flag in CliFlagSchema.All)
+        {
+            if (flag.IsValueBearing
+                && flag.IsAcceptedBy(command)
+                && (string.Equals(flag.Name, arg, StringComparison.Ordinal)
+                    || string.Equals(flag.ShortName, arg, StringComparison.Ordinal)))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     internal static int RunWrapped(
@@ -99,8 +156,8 @@ internal static partial class JsonEnvelopeWrapper
             return CommandExitCodes.UsageError;
         }
 
-        var innerArgs = PrepareInnerArgs(args);
-        var queryNormalized = ExtractQueryArg(args);
+        var innerArgs = PrepareInnerArgs(command, args);
+        var queryNormalized = ExtractQueryArg(command, args);
         var (resolvedDbPath, dbPathExplicit) = ResolveQueryDbPath(args);
         var responseSnapshot = SafeReadResponseSnapshot(resolvedDbPath, dbPathExplicit, appVersion);
 
@@ -532,23 +589,7 @@ internal static partial class JsonEnvelopeWrapper
            && node is JsonObject obj
            && obj.TryGetPropertyValue("count", out _);
 
-    // Mirrors the value-taking options in QueryCommandRunner.ParseArgs so we can locate the
-    // first positional (= query) without being fooled by `--db <path>`-style values.
-    // QueryCommandRunner.ParseArgs と同じ value-taking option を認識し、`--db <path>` の値を
-    // positional 引数（= query）と取り違えないようにする。
-    private static readonly HashSet<string> ValueConsumingOptions = new(StringComparer.Ordinal)
-    {
-        "--db", "--data-dir", "--limit", "--top", "--lang", "--kind", "--since",
-        "--start", "--end", "--before", "--after", "--name",
-        "--snippet-lines", "--snippet-focus", "--path", "--exclude-path", "--max-hops", "--depth",
-        "--focus-line", "--focus-column", "--focus-length",
-        "--max-line-width", "--fields", "--cursor", "--max-json-bytes", "--format",
-        "--sections", "--rank-by", "--visibility", "--exclude-visibility", "--group-by",
-        "--stale-after", "--explain", "--context", "--line-scan-limit", "--min-entrypoint-confidence",
-        "--project", "--solution",
-    };
-
-    private static string? ExtractQueryArg(string[] args)
+    private static string? ExtractQueryArg(string command, string[] args)
     {
         string? firstPositional = null;
         for (var i = 0; i < args.Length; i++)
@@ -560,7 +601,7 @@ internal static partial class JsonEnvelopeWrapper
                 return arg["--query=".Length..];
             if (string.Equals(arg, "--", StringComparison.Ordinal) && i + 1 < args.Length)
                 return args[i + 1];
-            if (ValueConsumingOptions.Contains(arg) && i + 1 < args.Length)
+            if (IsValueConsumingOption(command, arg) && i + 1 < args.Length)
             {
                 i++;
                 continue;
@@ -667,4 +708,6 @@ internal static partial class JsonEnvelopeWrapper
         public string JsonPropertyName { get; } = jsonPropertyName;
         public int MaxValue { get; } = maxValue;
     }
+
+    private readonly record struct ArgumentToken(string Value, bool IsOption);
 }
