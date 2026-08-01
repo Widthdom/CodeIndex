@@ -6687,6 +6687,97 @@ public sealed class Caller
     }
 
     [Fact]
+    public void RunBackfillFold_ClearsCompletedRewriteCheckpointBeforeLaterScopedRepair_Issue4946Review2()
+    {
+        var dbPath = CreateTempDbPath("cdidx_backfill_fold_completed_checkpoint_4946");
+        try
+        {
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                db.InitializeSchema();
+                var writer = new DbWriter(db.Connection);
+                var fileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = "src/app.py",
+                    Lang = "python",
+                    Size = 64,
+                    Lines = 2,
+                    Modified = new DateTime(2026, 8, 1, 0, 0, 0, DateTimeKind.Utc),
+                });
+                writer.InsertSymbols([
+                    new SymbolRecord { FileId = fileId, Kind = "function", Name = "first", Line = 1, StartLine = 1, EndLine = 1 },
+                    new SymbolRecord { FileId = fileId, Kind = "function", Name = "second", Line = 2, StartLine = 2, EndLine = 2 },
+                ]);
+                writer.BackfillFoldedColumns(rewriteAll: true);
+                Assert.True(writer.MarkFoldReady());
+
+                // Model cancellation after the graph refresh but before the completed
+                // full-rewrite checkpoint is cleared.
+                writer.SetMeta("fold_backfill_phase", "references");
+                writer.SetMeta("fold_backfill_last_symbol_id", long.MaxValue.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                writer.SetMeta("fold_backfill_last_reference_id", long.MaxValue.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                Assert.True(writer.HasFoldBackfillRewriteCheckpoint());
+            }
+
+            var cleanup = RunBackfill();
+            Assert.Equal(CommandExitCodes.Success, cleanup.ExitCode);
+            Assert.Equal(0, cleanup.Json.GetProperty("symbols").GetInt32());
+            Assert.Equal(0, cleanup.Json.GetProperty("symbol_references").GetInt32());
+            Assert.True(cleanup.Json.GetProperty("rewrite_all").GetBoolean());
+            Assert.False(cleanup.Json.GetProperty("was_already_complete").GetBoolean());
+            Assert.True(cleanup.Json.GetProperty("verified").GetBoolean());
+
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                Assert.False(writer.HasFoldBackfillRewriteCheckpoint());
+                using var scopedUpdate = db.Connection.CreateCommand();
+                scopedUpdate.CommandText = "UPDATE symbols SET name_folded = NULL WHERE name = 'first'";
+                Assert.Equal(1, scopedUpdate.ExecuteNonQuery());
+            }
+
+            var repair = RunBackfill();
+            Assert.Equal(CommandExitCodes.Success, repair.ExitCode);
+            Assert.Equal(1, repair.Json.GetProperty("symbols").GetInt32());
+            Assert.False(repair.Json.GetProperty("rewrite_all").GetBoolean());
+            Assert.True(repair.Json.GetProperty("verified").GetBoolean());
+
+            using var verifyDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            var verifyWriter = new DbWriter(verifyDb.Connection);
+            Assert.False(verifyWriter.HasFoldBackfillRewriteCheckpoint());
+            Assert.True(verifyWriter.AllFoldedColumnsBackfilled(requireCurrentFoldKeys: true));
+
+            (int ExitCode, JsonElement Json) RunBackfill()
+            {
+                lock (TestConsoleLock.Gate)
+                {
+                    var originalOut = Console.Out;
+                    using var output = new StringWriter();
+                    try
+                    {
+                        Console.SetOut(output);
+                        var exitCode = IndexCommandRunner.RunBackfillFold(
+                            ["--db", dbPath, "--json", "--no-checkpoint"],
+                            _jsonOptions);
+                        using var document = JsonDocument.Parse(output.ToString());
+                        return (exitCode, document.RootElement.Clone());
+                    }
+                    finally
+                    {
+                        Console.SetOut(originalOut);
+                    }
+                }
+            }
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteFile(dbPath);
+            TestProjectHelper.DeleteDirectory(dbPath + ".checkpoints");
+        }
+    }
+
+    [Fact]
     public void RunBackfillFold_DryRunReportsRowsWithoutWriting()
     {
         var dbPath = CreateTempDbPath("cdidx_backfill_fold_dry");

@@ -638,8 +638,9 @@ public static partial class IndexCommandRunner
             // Missing or mismatched fold metadata means persisted keys may have been generated
             // by a different fold algorithm/runtime, so refresh every row from source names.
             // fold metadata 未記録 / 不一致時は全行再計算して version/runtime skew を解消する。
+            var hasRewriteCheckpoint = writer.HasFoldBackfillRewriteCheckpoint();
             var rewriteAll = writer.ResolveFoldBackfillRewriteAll(
-                !foldMetadataCurrentBefore || writer.HasFoldBackfillRewriteCheckpoint());
+                !foldMetadataCurrentBefore || hasRewriteCheckpoint);
 
             var symbols = 0;
             var symbolReferences = 0;
@@ -675,6 +676,11 @@ public static partial class IndexCommandRunner
             var symbolExtractorVersionsCurrent = writer.SymbolExtractorVersionsMatchCurrent();
             var mutationRequired = pendingRows.Symbols > 0
                 || pendingRows.SymbolReferences > 0
+                // Even when its cursors have reached the end, a persisted rewrite checkpoint
+                // must run through BackfillFoldedColumns so it is cleared before exact verification.
+                // cursor が末尾でも、永続化済み rewrite checkpoint は BackfillFoldedColumns を
+                // 通して消去してから厳密検証する必要がある。
+                || hasRewriteCheckpoint
                 || !foldReadyBefore
                 || csharpSymbolNameContractUpgradeRequired
                 || graphRefreshPending
