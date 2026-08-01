@@ -671,11 +671,11 @@ public static partial class QueryCommandRunner
                     reader,
                     selection.Queries,
                     scope,
-                    options,
-                    userExact,
-                    true,
-                    out _,
-                    out var rowMinimumMatchedTotal);
+                options,
+                userExact,
+                options.SearchFields == null,
+                out _,
+                out var rowMinimumMatchedTotal);
                 var stream = WriteRecipeSearchResultRows(
                     reader,
                     recipe.Name,
@@ -2346,6 +2346,9 @@ public static partial class QueryCommandRunner
 
     private static string ClassifyValidJsonTrustBoundary(JsonTrustBoundaryEvidence evidence)
     {
+        if (evidence.Trust == "review_required")
+            return "ambiguous_trust";
+
         var externalOrigin = evidence.Origin is "public_api" or "network" or "file" or "external";
         if (evidence.Direction == "write" && externalOrigin)
             return "external_or_public_writer";
@@ -2486,7 +2489,7 @@ public static partial class QueryCommandRunner
             requiredLine,
             CSharpSemanticTokenClassifier.DefaultExcerptSourceCharacterLimit);
         JsonTrustLexicalContext? context = null;
-        if (indexedLines.Count >= requiredLine)
+        if (indexedLines.Count > 0)
         {
             var sourceLines = indexedLines.Select(line => line ?? string.Empty).ToArray();
             context = new JsonTrustLexicalContext(
@@ -2496,7 +2499,7 @@ public static partial class QueryCommandRunner
 
         // Retain only one bounded source prefix so count-mode memory does not grow with file count.
         cache.Path = row.Result.Path;
-        cache.LoadedThroughLine = requiredLine;
+        cache.LoadedThroughLine = indexedLines.Count;
         cache.Context = context;
         return context;
     }

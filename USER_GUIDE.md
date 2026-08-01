@@ -1491,7 +1491,7 @@ of up to 80 ASCII letters, digits, `_`, `-`, or `.`. A valid annotation can
 classify a controlled private writer, an external/public writer, or an untrusted
 parser. The marker must be a real C# line comment; annotation-shaped text inside
 regular, verbatim, or raw strings is ignored. Missing, malformed, lexically
-invalid, or directionally inconsistent evidence remains
+invalid, directionally inconsistent, or `review_required` evidence remains
 `ambiguous_trust`. Every match line is checked from indexed source even when
 guard filtering projects the result to one line. If one result contains matches
 with distinct trust evidence, it is conservatively reported as
@@ -1511,7 +1511,9 @@ recipe discovery, use `cdidx recipes --names --json` for a deterministic name
 list or `cdidx recipes --summary-only --json` for compact metadata. Recipe row
 streams can be projected with `--search-fields` including `query_name` and
 `recipe`, bounded across child queries with `--total-limit`, and byte-bounded
-with `--max-json-bytes` for NDJSON. Recipe count output can use
+with `--max-json-bytes` for NDJSON. Because the projection whitelist does not
+include classification fields, `--search-fields` skips source-backed classification.
+Recipe count output can use
 `--format count --summary-only --max-json-bytes <n>` to emit only recipe/scope
 names, aggregate counts, per-query counts, and query freshness. Recipe count
 aggregations support `--count-by path|file|symbol|origin|return-type|subsystem`,
@@ -4878,7 +4880,7 @@ recipe run では matched-count metadata を使うため、省略済みの match
 80文字以下の安定した token です。有効な注釈は controlled private writer、external / public
 writer、untrusted parser を分類できます。marker は実際の C# line comment でなければならず、
 regular / verbatim / raw string 内にある注釈形式の text は無視します。注釈の欠落、不正、
-lexical context 不正、read / write の不一致は
+lexical context 不正、read / write の不一致、または `review_required` の evidence は
 `ambiguous_trust` のままです。guard filter により result が1行へ投影される場合も、各 match line を
 indexed source から検査します。1つの result に異なる trust evidence を持つ match が含まれる場合は、
 `annotation_status:mixed_boundaries` を伴う `ambiguous_trust` として保守的に報告します。
@@ -4896,6 +4898,8 @@ automation 向けの recipe 発見では、決定的な名前一覧だけなら 
 compact metadata が必要なら `cdidx recipes --summary-only --json` を使います。recipe row stream は
 `query_name` と `recipe` を含む `--search-fields` で投影でき、`--total-limit` で
 child query 全体の emitted row 数を制限でき、NDJSON では `--max-json-bytes` で byte 数を制限できます。
+projection の allowlist は classification field を含まないため、`--search-fields` は
+source-backed 分類を実行しません。
 recipe count output は `--format count --summary-only --max-json-bytes <n>` により、recipe / scope 名、
 aggregate count、query ごとの count、query freshness だけを出力できます。recipe の count aggregation は `--count-by path|file|symbol|origin|return-type|subsystem`、
 `--group-by file|symbol|origin|return-type|subsystem --count`、`--unique path|file|symbol|origin|return-type|subsystem` に対応します。
