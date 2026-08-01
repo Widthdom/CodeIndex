@@ -213,6 +213,83 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void Search_StructuralRequireReturnsAcceptedEvidence_Issue4912()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_structural_require_evidence");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/app.cs",
+                "csharp",
+                """
+                public static class App
+                {
+                    private const long MaxBytes = 1024;
+
+                    public static string LocalBound(string path)
+                    {
+                        var length = new FileInfo(path).Length;
+                        if (length > MaxBytes)
+                            throw new InvalidDataException();
+                        return File.ReadAllText(path);
+                    }
+
+                    public static string HelperBound(string path)
+                    {
+                        WriteBounded(path);
+                        return File.ReadAllText(path);
+                    }
+
+                    private static void WriteBounded(string path)
+                    {
+                        BoundedFile.WriteAllText(path, MaxBytes);
+                    }
+
+                    public static string Unguarded(string path)
+                        => File.ReadAllText(path);
+                }
+                """);
+
+            using var db = new DbContext(DbOpenIntent.QueryOnly, dbPath);
+            var reader = new DbReader(db);
+            var results = reader.Search(
+                "File.ReadAllText",
+                limit: 10,
+                lang: "csharp",
+                exact: true,
+                guardFilters:
+                [
+                    new(
+                        SearchGuardRole.Require,
+                        SearchGuardDirection.Before,
+                        "bounded-file-read",
+                        SearchGuardScope.Container,
+                        SearchGuardEvidenceKind.CSharpBoundedFileRead)
+                ],
+                guardScope: SearchGuardScope.Container);
+
+            Assert.True(
+                results.Count == 2,
+                $"Expected both accepted structural relationships, got: {string.Join(", ", results.SelectMany(result => result.GuardEvidence ?? []).Select(item => item.Relationship))}");
+            var evidence = results.Select(result => Assert.Single(result.GuardEvidence!)).ToArray();
+            Assert.All(evidence, item =>
+            {
+                Assert.Equal("accepted", item.Decision);
+                Assert.Equal("container", item.Scope);
+                Assert.Equal("src/app.cs", item.EvidencePath);
+            });
+            Assert.Contains(evidence, item => item.Relationship == "same_path_size_guard");
+            Assert.Contains(evidence, item => item.Relationship == "same_path_resolved_bounded_writer");
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_GuardScopeSameLineUsesPrimaryMatchColumns_Issue3730()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_guard_same_line_scope");
