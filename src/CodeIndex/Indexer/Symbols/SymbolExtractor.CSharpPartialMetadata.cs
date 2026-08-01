@@ -126,21 +126,24 @@ public static partial class SymbolExtractor
             if (raw.IsEmpty)
                 break;
 
-            if (raw.StartsWith("///", StringComparison.Ordinal))
+            var lineStartState = lineStartStates != null && lineIndex < lineStartStates.Count
+                ? lineStartStates[lineIndex]
+                : new CSharpLexState();
+            var startsInDeclarationCode = lineStartState.Mode == CSharpLexMode.Code
+                && lineStartState.InterpolationBraceDepth == 0;
+            if (startsInDeclarationCode && raw.StartsWith("///", StringComparison.Ordinal))
             {
                 hasDocumentation = true;
                 continue;
             }
 
-            if (raw.StartsWith("/**", StringComparison.Ordinal))
+            if (startsInDeclarationCode && raw.StartsWith("/**", StringComparison.Ordinal))
             {
                 hasDocumentation = true;
                 continue;
             }
 
-            var sanitizedLine = lineStartStates != null && lineIndex < lineStartStates.Count
-                ? LexCSharpLine(lines[lineIndex], lineStartStates[lineIndex]).SanitizedLine
-                : LexCSharpLine(lines[lineIndex], new CSharpLexState()).SanitizedLine;
+            var sanitizedLine = LexCSharpLine(lines[lineIndex], lineStartState).SanitizedLine;
             var trimmed = sanitizedLine.AsSpan().Trim();
             if (trimmed.IsEmpty)
                 continue;

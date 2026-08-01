@@ -99,6 +99,9 @@ public class PostExtractionHookContractTests
                 Kind = "class",
                 Name = "Original",
                 IdentityNameFolded = "original-key",
+                IsPartialDeclaration = true,
+                DeclarationSemanticScore = 7,
+                IdentifierStartColumn = 13,
                 Line = 1,
                 StartLine = 1,
                 EndLine = 1,
@@ -111,6 +114,9 @@ public class PostExtractionHookContractTests
         Assert.True(inputTruncated);
         var clonedSymbol = Assert.Single(cloned);
         Assert.Equal("original-key", clonedSymbol.IdentityNameFolded);
+        Assert.True(clonedSymbol.IsPartialDeclaration);
+        Assert.Equal(7, clonedSymbol.DeclarationSemanticScore);
+        Assert.Equal(13, clonedSymbol.IdentifierStartColumn);
         clonedSymbol.Name = "ChangedByHook";
         Assert.Equal("Original", symbols[0].Name);
 

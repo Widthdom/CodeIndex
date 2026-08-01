@@ -38,6 +38,11 @@ internal static class LogicalPartialSymbolGrouper
                 value => value["System.".Length..],
                 value => value,
                 StringComparer.Ordinal);
+    private static readonly HashSet<string> CSharpFrameworkReferenceTypeIdentities =
+    [
+        "global::System.Object",
+        "global::System.String",
+    ];
     internal const int FamilyMemberLimit = 50;
     internal const string ImplementationBodyReason = "implementation_body";
     internal const string NonGeneratedSourceReason = "non_generated_source";
@@ -494,14 +499,52 @@ internal static class LogicalPartialSymbolGrouper
         var builder = new StringBuilder(value.Length);
         for (var offset = 0; offset < tokens.Count;)
         {
+            if (TryReadFrameworkNullableTypeIdentity(tokens, offset, out var nullableConsumedTokens))
+            {
+                builder.Append("global::System.Nullable");
+                offset += nullableConsumedTokens;
+                continue;
+            }
+
             if (TryReadFrameworkTypeIdentity(tokens, offset, out var frameworkIdentity, out var consumedTokens))
             {
+                var nullableSuffixOffset = offset + consumedTokens;
+                if (nullableSuffixOffset < tokens.Count && tokens[nullableSuffixOffset] == "?")
+                {
+                    if (CSharpFrameworkReferenceTypeIdentities.Contains(frameworkIdentity))
+                    {
+                        builder.Append(frameworkIdentity);
+                    }
+                    else if (frameworkIdentity != "global::System.Void")
+                    {
+                        builder.Append("global::System.Nullable<");
+                        builder.Append(frameworkIdentity);
+                        builder.Append('>');
+                    }
+                    else
+                    {
+                        builder.Append(frameworkIdentity);
+                        builder.Append('?');
+                    }
+                    offset = nullableSuffixOffset + 1;
+                    continue;
+                }
+
                 builder.Append(frameworkIdentity);
-                offset += consumedTokens;
+                offset = nullableSuffixOffset;
                 continue;
             }
 
             var token = tokens[offset];
+            if (token == "?" && offset > 0 && tokens[offset - 1] == "]")
+            {
+                // Arrays are reference types; their nullable annotation does not
+                // participate in CLR callable identity.
+                // array は reference type なので nullable annotation を CLR callable
+                // identity に含めない。
+                offset++;
+                continue;
+            }
             if (!IsIdentifierCharacter(token[0]))
             {
                 builder.Append(token);
@@ -534,6 +577,27 @@ internal static class LogicalPartialSymbolGrouper
             offset++;
         }
         return builder.ToString();
+    }
+
+    private static bool TryReadFrameworkNullableTypeIdentity(
+        IReadOnlyList<string> tokens,
+        int offset,
+        out int consumedTokens)
+    {
+        consumedTokens = 0;
+        if (offset + 5 >= tokens.Count
+            || tokens[offset] != "global"
+            || tokens[offset + 1] != ":"
+            || tokens[offset + 2] != ":"
+            || tokens[offset + 3].TrimStart('@') != "System"
+            || tokens[offset + 4] != "."
+            || tokens[offset + 5].TrimStart('@') != "Nullable")
+        {
+            return false;
+        }
+
+        consumedTokens = 6;
+        return true;
     }
 
     private static List<string> TokenizeCallableType(string value)

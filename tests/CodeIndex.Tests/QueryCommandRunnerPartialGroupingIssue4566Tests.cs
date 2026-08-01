@@ -424,7 +424,7 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void PartialCanonicalRepresentative_UsesSemanticRulesAndExposesFamilyNavigation_Issue4914()
     {
-        Assert.Equal(5, DbContext.HotspotFamilyVersion);
+        Assert.Equal(6, DbContext.HotspotFamilyVersion);
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_canonical_issue4914");
         try
         {
@@ -500,6 +500,8 @@ public partial class QueryCommandRunnerTests
                     partial void Rooted(global::Item declarationValue);
                     partial void Shadowed(System.Int32 declarationValue);
                     partial void Shadowed(int declarationValue);
+                    partial void ReferenceNullable(string? declarationValue);
+                    partial void ValueNullable(int? declarationValue);
                     private partial Result<int> Result();
                 }
                 """);
@@ -534,6 +536,8 @@ public partial class QueryCommandRunnerTests
                     partial void Rooted(global::Item implementationValue) { }
                     partial void Shadowed(System.Int32 implementationValue) { }
                     partial void Shadowed(int implementationValue) { }
+                    partial void ReferenceNullable(string implementationValue) { }
+                    partial void ValueNullable(global::System.Nullable<int> implementationValue) { }
                     private partial Result<global::@System.@Int32> Result() => new();
                 }
                 """);
@@ -746,6 +750,33 @@ public partial class QueryCommandRunnerTests
                     "partial void Alias(System.Int32 value) { }",
                     "Alias",
                     "void"));
+            Assert.Equal(
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void ReferenceNullable(string? value);",
+                    "ReferenceNullable",
+                    "void"),
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void ReferenceNullable(string value) { }",
+                    "ReferenceNullable",
+                    "void"));
+            Assert.Equal(
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void ValueNullable(int? value);",
+                    "ValueNullable",
+                    "void"),
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void ValueNullable(global::System.Nullable<int> value) { }",
+                    "ValueNullable",
+                    "void"));
+            Assert.NotEqual(
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void ValueNullable(int value);",
+                    "ValueNullable",
+                    "void"),
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void ValueNullable(int? value) { }",
+                    "ValueNullable",
+                    "void"));
             Assert.NotEqual(
                 LogicalPartialSymbolGrouper.BuildCallableIdentity(
                     "partial void Global(global::System.Uri declarationValue);",
@@ -917,6 +948,12 @@ public partial class QueryCommandRunnerTests
 
             var attrString = RunGroupedSymbol(dbPath, "AttrString", "function");
             Assert.Equal(2, attrString.GetProperty("definition_sites").GetInt32());
+
+            var referenceNullable = RunGroupedSymbol(dbPath, "ReferenceNullable", "function");
+            Assert.Equal(2, referenceNullable.GetProperty("definition_sites").GetInt32());
+
+            var valueNullable = RunGroupedSymbol(dbPath, "ValueNullable", "function");
+            Assert.Equal(2, valueNullable.GetProperty("definition_sites").GetInt32());
 
             var (rootedExitCode, rootedStdout, rootedStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
                 ["Rooted", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "function", "--group-partials", "--include-generated", "--limit", "10"],
@@ -1257,6 +1294,25 @@ public partial class QueryCommandRunnerTests
                 """);
             TestProjectHelper.InsertIndexedFile(
                 dbPath,
+                "src/A.CommentDecoy.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class CommentDecoy { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Z.CommentDecoy.cs",
+                "csharp",
+                """
+                namespace Demo;
+                /*
+                /// <summary>Not documentation.</summary>
+                */
+                public partial class CommentDecoy { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
                 "src/A.Attributed.cs",
                 "csharp",
                 """
@@ -1289,6 +1345,10 @@ public partial class QueryCommandRunnerTests
             var documented = RunGroupedSymbol(dbPath, "Documented", "class");
             Assert.Equal("src/Z.Documented.cs", documented.GetProperty("path").GetString());
             Assert.Equal("semantic_declaration", documented.GetProperty("representative_reason").GetString());
+
+            var commentDecoy = RunGroupedSymbol(dbPath, "CommentDecoy", "class");
+            Assert.Equal("src/A.CommentDecoy.cs", commentDecoy.GetProperty("path").GetString());
+            Assert.Equal("stable_path_and_position", commentDecoy.GetProperty("representative_reason").GetString());
 
             var attributed = RunGroupedSymbol(dbPath, "Attributed", "class");
             Assert.Equal("src/Z.Attributed.cs", attributed.GetProperty("path").GetString());
