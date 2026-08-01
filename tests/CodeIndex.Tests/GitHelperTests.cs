@@ -733,6 +733,7 @@ public class GitHelperTests : IDisposable
         var fakeGitDir = Path.Combine(_tempDir, "fake-git-timeout");
         Directory.CreateDirectory(fakeGitDir);
         WriteFakeGitThatHangsOnDiffTree(fakeGitDir);
+        var fakeGitPidPath = Path.Combine(fakeGitDir, "diff-tree.pid");
 
         var oldGitExecutablePath = GitHelper.GitExecutablePathOverride;
         var oldTimeout = GitHelper.GitCommandTimeout;
@@ -740,10 +741,22 @@ public class GitHelperTests : IDisposable
         GitHelper.GitCommandTimeout = TimeSpan.FromMilliseconds(500);
         try
         {
+            var stopwatch = Stopwatch.StartNew();
             var ex = Assert.Throws<InvalidOperationException>(
                 () => GitHelper.GetChangedFilesFromCommit(repoDir, commitId));
+            stopwatch.Stop();
 
+            Assert.True(File.Exists(fakeGitPidPath), "Fake git did not reach diff-tree.");
+            var fakeGitPid = int.Parse(
+                File.ReadAllText(fakeGitPidPath),
+                System.Globalization.CultureInfo.InvariantCulture);
+            Assert.False(
+                IsProcessRunning(fakeGitPid),
+                $"Timed-out fake git process {fakeGitPid} was not reaped.");
             Assert.Contains("timed out", ex.Message);
+            Assert.True(
+                stopwatch.Elapsed < GitCancellationWallClockLimit,
+                $"Commit-diff timeout took {stopwatch.Elapsed}, expected less than {GitCancellationWallClockLimit} before the {FakeGitHangSeconds}-second fake git sleep completed.");
         }
         finally
         {
@@ -1971,7 +1984,7 @@ exit 0
     private static void WriteFakeGitThatHangsOnDiffTree(string directory)
     {
         var script = Path.Combine(directory, "git");
-        File.WriteAllText(script, """
+        File.WriteAllText(script, $$"""
 #!/bin/sh
 if [ "$1" = "rev-parse" ]; then
   if [ "$2" = "--symbolic-full-name" ]; then
@@ -1983,13 +1996,27 @@ if [ "$1" = "rev-parse" ]; then
   fi
 fi
 if [ "$1" = "diff-tree" ]; then
-  sleep 5
+  printf '%s\n' "$$" > "$(dirname "$0")/diff-tree.pid"
+  sleep {{FakeGitHangSeconds}}
   exit 0
 fi
 exit 1
 """);
         if (!OperatingSystem.IsWindows())
             File.SetUnixFileMode(script, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+    }
+
+    private static bool IsProcessRunning(int processId)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            return !process.HasExited;
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+        {
+            return false;
+        }
     }
 
     private static void WriteFakeGitThatFailsWithLongSensitiveStderr(string directory)
