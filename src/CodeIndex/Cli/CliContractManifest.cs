@@ -64,6 +64,7 @@ internal static class CliContractManifest
         new(nameof(CommandErrorCodes.HookOperationFailed), CommandErrorCodes.HookOperationFailed, null),
         new(nameof(CommandErrorCodes.NotGitRepository), CommandErrorCodes.NotGitRepository, null),
         new(nameof(CommandErrorCodes.DbNotDatabase), CommandErrorCodes.DbNotDatabase, CommandExitCodes.DatabaseError),
+        new(nameof(CommandErrorCodes.ResponseBudgetTooSmall), CommandErrorCodes.ResponseBudgetTooSmall, null),
     ];
 
     public static IReadOnlyList<Type> CliJsonRootTypes { get; } = LoadCliJsonRootTypes();

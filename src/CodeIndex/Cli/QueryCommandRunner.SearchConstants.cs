@@ -8,7 +8,7 @@ public static partial class QueryCommandRunner
     private const int DefaultSearchGroupedPerFileLimit = 3;
     private const int MaxSearchGroupedPerFileLimit = 20;
     private const int MaxSearchNextStepLimit = 10;
-    private const int MaxSearchJsonByteLimit = 16 * 1024 * 1024;
+    internal const int MaxSearchJsonByteLimit = 16 * 1024 * 1024;
     private const int MaxIssueDraftEvidenceItems = 5;
     private const int MaxIssueDraftEvidenceSnippetLength = 512;
     private const string BareTokenAuthAuditHint = "Bare `token` searches are intentionally broad. For credential/auth-token review, run `cdidx search --recipe auth-token-audit`; use `cdidx search --recipe broad-token-audit` only when parser, LSP, or cancellation token domains are intentional.";

@@ -6,6 +6,8 @@ namespace CodeIndex.Cli;
 
 public static partial class QueryCommandRunner
 {
+    private const int NdjsonResponseBudgetRetryHeadroomBytes = 1024;
+
     private sealed record NdjsonOutputRecord(string Line, bool CountsAsResult = true);
 
     private sealed record NdjsonStreamWriteResult(
@@ -51,7 +53,7 @@ public static partial class QueryCommandRunner
         List<SearchRowSelectorJsonResult>? selectors = null)
     {
         if (options.ResultsOnly)
-            return WriteResultOnlyNdjson(records, options);
+            return WriteResultOnlyNdjson(records, options, jsonOptions, commandName);
 
         var emittedRecords = records.Count;
         string? terminalLine = null;
@@ -154,12 +156,16 @@ public static partial class QueryCommandRunner
                         "Increase --max-json-bytes so the bounded NDJSON terminal record fits before streaming begins.",
                         includeSelectionAccounting: false);
                 }
-                WriteUsageError(
-                    $"{commandName} NDJSON terminal record is {JsonLineBytes(requiredTerminal)} bytes and exceeds --max-json-bytes {options.MaxJsonBytes.Value}.",
+                var requiredTerminalBytes = JsonLineBytes(requiredTerminal);
+                var budgetExitCode = WriteNdjsonResponseBudgetError(
                     options,
+                    jsonOptions,
                     commandName,
-                    "Increase --max-json-bytes; the hard cap includes both result records and the terminal record.");
-                return new(0, false, null, null, CommandExitCodes.UsageError);
+                    $"{commandName} NDJSON terminal record is {requiredTerminalBytes} bytes and exceeds --max-json-bytes {options.MaxJsonBytes.Value}.",
+                    "Increase --max-json-bytes; the hard cap includes both result records and the terminal record.",
+                    requiredTerminalBytes,
+                    minimumUncertain: true);
+                return new(0, false, null, null, budgetExitCode);
             }
         }
         else
@@ -194,8 +200,27 @@ public static partial class QueryCommandRunner
 
     private static NdjsonStreamWriteResult WriteResultOnlyNdjson(
         IReadOnlyList<NdjsonOutputRecord> records,
-        QueryCommandOptions options)
+        QueryCommandOptions options,
+        JsonSerializerOptions jsonOptions,
+        string commandName)
     {
+        if (options.MaxJsonBytes.HasValue && records.Count > 0)
+        {
+            var firstRecordBytes = JsonLineBytes(records[0].Line);
+            if (firstRecordBytes > options.MaxJsonBytes.Value)
+            {
+                var exitCode = WriteNdjsonResponseBudgetError(
+                    options,
+                    jsonOptions,
+                    commandName,
+                    $"{commandName} first complete NDJSON result record is {firstRecordBytes} bytes and exceeds --max-json-bytes {options.MaxJsonBytes.Value}.",
+                    "Reduce projected fields or increase --max-json-bytes before streaming begins.",
+                    firstRecordBytes,
+                    minimumUncertain: false);
+                return new(0, false, firstRecordBytes, null, exitCode);
+            }
+        }
+
         var emittedRecords = 0;
         var bytesWritten = 0;
         foreach (var record in records)
@@ -215,6 +240,42 @@ public static partial class QueryCommandRunner
             interrupted ? JsonLineBytes(records[emittedRecords].Line) : null,
             TerminalLine: null,
             interrupted && !options.AllowPartial ? CommandExitCodes.PartialResult : CommandExitCodes.Success);
+    }
+
+    private static int WriteNdjsonResponseBudgetError(
+        QueryCommandOptions options,
+        JsonSerializerOptions jsonOptions,
+        string commandName,
+        string message,
+        string hint,
+        long minimumRequiredBytes,
+        bool minimumUncertain)
+    {
+        var uncertainRecommendedBytes = minimumRequiredBytes + NdjsonResponseBudgetRetryHeadroomBytes;
+        var retryByIncreasingBudget = minimumRequiredBytes <= MaxSearchJsonByteLimit
+                                      && (!minimumUncertain
+                                          || uncertainRecommendedBytes <= MaxSearchJsonByteLimit);
+        var effectiveHint = retryByIncreasingBudget
+            ? hint
+            : $"{hint} The response minimum exceeds the usable maximum effective --max-json-bytes budget; reduce the response size before retrying.";
+        return CommandErrorWriter.WriteResponseBudgetError(
+            json: true,
+            jsonOptions,
+            commandName,
+            message,
+            effectiveHint,
+            requestedBytes: options.RequestedMaxJsonBytes ?? options.MaxJsonBytes,
+            effectiveBytes: options.MaxJsonBytes,
+            minimumRequiredBytes,
+            minimumRequiredBytesUncertaintyReason: minimumUncertain
+                ? CommandErrorWriter.MinimumResponseBytesUncertainRuntimeEnvelope
+                : null,
+            recommendedBytes: retryByIncreasingBudget
+                ? minimumUncertain ? uncertainRecommendedBytes : minimumRequiredBytes
+                : null,
+            usage: GetUsageLineOrThrow(commandName),
+            retryByIncreasingBudget: retryByIncreasingBudget,
+            maximumEffectiveBytes: MaxSearchJsonByteLimit);
     }
 
     private static int CountResults(IReadOnlyList<NdjsonOutputRecord> records, int count)

@@ -467,7 +467,7 @@ public sealed class JsonEnvelopeWrapperIssue4585Tests
     }
 
     [Fact]
-    public void BoundedParserFailure_RespectsHardByteCapByLeavingStdoutEmpty_Issue4585()
+    public void BoundedParserFailure_EmitsResponseBudgetError_Issues4585_4909()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("bounded_parser_cap_4585");
         try
@@ -482,8 +482,19 @@ public sealed class JsonEnvelopeWrapperIssue4585Tests
                 "1.0.0-test"));
 
             Assert.Equal(CommandExitCodes.InvalidArgument, exitCode);
-            Assert.Equal(string.Empty, stdout);
-            Assert.Contains("raw JSON node count exceeded", stderr, StringComparison.Ordinal);
+            Assert.Equal(string.Empty, stderr);
+            using var document = JsonDocument.Parse(stdout);
+            var error = document.RootElement;
+            Assert.Equal("E028_RESPONSE_BUDGET_TOO_SMALL", error.GetProperty("error_code").GetString());
+            Assert.Equal("response_budget", error.GetProperty("category").GetString());
+            Assert.Equal("find", error.GetProperty("command").GetString());
+            Assert.Equal(128, error.GetProperty("requested_bytes").GetInt64());
+            Assert.Equal(128, error.GetProperty("effective_bytes").GetInt64());
+            Assert.True(error.GetProperty("minimum_required_bytes_known").GetBoolean());
+            Assert.True(error.GetProperty("minimum_required_bytes_uncertain").GetBoolean());
+            Assert.True(
+                error.GetProperty("retry").GetProperty("recommended_bytes").GetInt64()
+                > error.GetProperty("minimum_required_bytes").GetInt64());
         }
         finally
         {
@@ -594,6 +605,209 @@ public sealed class JsonEnvelopeWrapperIssue4585Tests
                 var control = Assert.Single(metadata.GetProperty("stream_control_records").EnumerateArray());
                 Assert.True(control.TryGetProperty(diagnosticFlag == "--profile" ? "profile" : "_debug", out _));
             }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void BoundedResponse_BudgetPreflightIsParseableForEmptyAndEscapedNonEmptyRows_Issue4909()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("bounded_response_budget_4909");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/日本語/Quote\"Target.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public sealed class Target
+                {
+                    public void Run() { }
+                }
+                """);
+
+            var zeroArgs = new[]
+            {
+                "definition", "Target", "--db", dbPath, "--format", "compact",
+                "--max-json-bytes", "0",
+            };
+            var (zeroExitCode, zeroStdout, zeroStderr) = CaptureConsole(() => ProgramRunner.Run(
+                zeroArgs,
+                _jsonOptions,
+                "1.0.0-test"));
+
+            Assert.Equal(CommandExitCodes.UsageError, zeroExitCode);
+            Assert.Equal(string.Empty, zeroStderr);
+            using var zeroDocument = JsonDocument.Parse(zeroStdout);
+            var zeroError = zeroDocument.RootElement;
+            Assert.Equal("E028_RESPONSE_BUDGET_TOO_SMALL", zeroError.GetProperty("error_code").GetString());
+            Assert.Equal("response_budget", zeroError.GetProperty("category").GetString());
+            Assert.Equal("definition", zeroError.GetProperty("command").GetString());
+            Assert.Equal(0, zeroError.GetProperty("requested_bytes").GetInt64());
+            Assert.Equal(JsonValueKind.Null, zeroError.GetProperty("effective_bytes").ValueKind);
+            Assert.False(zeroError.GetProperty("minimum_required_bytes_known").GetBoolean());
+            Assert.Equal(
+                "normal_payload_not_materialized",
+                zeroError.GetProperty("minimum_required_bytes_unavailable_reason").GetString());
+
+            var (duplicateExitCode, duplicateStdout, duplicateStderr) = CaptureConsole(() => ProgramRunner.Run(
+                [
+                    "definition", "Target", "--db", dbPath, "--format", "compact",
+                    "--max-json-bytes", "10", "--max-json-bytes", "0",
+                ],
+                _jsonOptions,
+                "1.0.0-test"));
+
+            Assert.Equal(CommandExitCodes.UsageError, duplicateExitCode);
+            Assert.Equal(string.Empty, duplicateStderr);
+            using var duplicateDocument = JsonDocument.Parse(duplicateStdout);
+            var duplicateError = duplicateDocument.RootElement;
+            Assert.Equal(
+                CommandErrorCodes.ResponseBudgetTooSmall,
+                duplicateError.GetProperty("error_code").GetString());
+            Assert.Equal(0, duplicateError.GetProperty("requested_bytes").GetInt64());
+
+            foreach (var orderedArgs in new[]
+                     {
+                         new[]
+                         {
+                             "definition", "Target", "--db", dbPath, "--format", "compact",
+                             "--limit", "0", "--max-json-bytes", "0",
+                         },
+                         new[]
+                         {
+                             "definition", "Target", "--db", dbPath, "--format", "compact",
+                             "--max-json-bytes", "0", "--limit", "0",
+                         },
+                     })
+            {
+                var (orderedExitCode, orderedStdout, orderedStderr) = CaptureConsole(() =>
+                    ProgramRunner.Run(
+                        orderedArgs,
+                        _jsonOptions,
+                        "1.0.0-test"));
+
+                Assert.Equal(CommandExitCodes.UsageError, orderedExitCode);
+                Assert.Equal(string.Empty, orderedStderr);
+                using var orderedDocument = JsonDocument.Parse(orderedStdout);
+                Assert.Equal(
+                    CommandErrorCodes.ResponseBudgetTooSmall,
+                    orderedDocument.RootElement.GetProperty("error_code").GetString());
+                Assert.Equal(0, orderedDocument.RootElement.GetProperty("requested_bytes").GetInt64());
+            }
+
+            var tinyArgs = new[]
+            {
+                "definition", "Target", "--db", dbPath, "--format", "compact",
+                "--max-json-bytes", "1",
+            };
+            var (tinyExitCode, tinyStdout, tinyStderr) = CaptureConsole(() => ProgramRunner.Run(
+                tinyArgs,
+                _jsonOptions,
+                "1.0.0-test"));
+
+            Assert.Equal(CommandExitCodes.UsageError, tinyExitCode);
+            Assert.Equal(string.Empty, tinyStderr);
+            using var tinyDocument = JsonDocument.Parse(tinyStdout);
+            var tinyError = tinyDocument.RootElement;
+            Assert.Equal("E028_RESPONSE_BUDGET_TOO_SMALL", tinyError.GetProperty("error_code").GetString());
+            Assert.Equal("definition", tinyError.GetProperty("command").GetString());
+            Assert.StartsWith(
+                "cdidx definition ",
+                tinyError.GetProperty("usage").GetString(),
+                StringComparison.Ordinal);
+            Assert.Equal(1, tinyError.GetProperty("requested_bytes").GetInt64());
+            Assert.Equal(1, tinyError.GetProperty("effective_bytes").GetInt64());
+            Assert.True(tinyError.GetProperty("minimum_required_bytes_known").GetBoolean());
+            Assert.True(tinyError.GetProperty("minimum_required_bytes_uncertain").GetBoolean());
+            Assert.Equal(
+                "runtime_metadata_or_embedded_budget_varies_between_invocations",
+                tinyError.GetProperty("minimum_required_bytes_uncertainty_reason").GetString());
+            var minimumRequiredBytes = tinyError.GetProperty("minimum_required_bytes").GetInt64();
+            var recommendedBytes = tinyError.GetProperty("retry").GetProperty("recommended_bytes").GetInt64();
+            Assert.True(recommendedBytes > minimumRequiredBytes);
+
+            var retryArgs = tinyArgs.ToArray();
+            retryArgs[^1] = recommendedBytes.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            var (retryExitCode, retryStdout, retryStderr) = CaptureConsole(() => ProgramRunner.Run(
+                retryArgs,
+                _jsonOptions,
+                "1.0.0-test"));
+
+            Assert.Equal(CommandExitCodes.Success, retryExitCode);
+            Assert.Equal(string.Empty, retryStderr);
+            Assert.True(Encoding.UTF8.GetByteCount(retryStdout) <= recommendedBytes);
+            using var retryDocument = JsonDocument.Parse(retryStdout);
+            var retryResult = Assert.Single(retryDocument.RootElement.GetProperty("results").EnumerateArray());
+            Assert.Equal("src/日本語/Quote\"Target.cs", retryResult.GetProperty("file").GetString());
+
+            var (emptyExitCode, emptyStdout, emptyStderr) = CaptureConsole(() => ProgramRunner.Run(
+                [
+                    "definition", "MissingSymbol", "--db", dbPath, "--format", "compact",
+                    "--max-json-bytes", "1",
+                ],
+                _jsonOptions,
+                "1.0.0-test"));
+
+            Assert.Equal(CommandExitCodes.UsageError, emptyExitCode);
+            Assert.Equal(string.Empty, emptyStderr);
+            using var emptyDocument = JsonDocument.Parse(emptyStdout);
+            var emptyError = emptyDocument.RootElement;
+            Assert.Equal("E028_RESPONSE_BUDGET_TOO_SMALL", emptyError.GetProperty("error_code").GetString());
+            Assert.Contains(
+                "complete empty bounded response envelope",
+                emptyError.GetProperty("message").GetString(),
+                StringComparison.Ordinal);
+            Assert.True(emptyError.GetProperty("minimum_required_bytes_known").GetBoolean());
+
+            var findArgs = new[]
+            {
+                "find", "Target", "--db", dbPath, "--json", "--max-json-bytes", "1",
+            };
+            var (findExitCode, findStdout, findStderr) = CaptureConsole(() => ProgramRunner.Run(
+                findArgs,
+                _jsonOptions,
+                "1.0.0-test"));
+
+            Assert.Equal(CommandExitCodes.UsageError, findExitCode);
+            Assert.Equal(string.Empty, findStderr);
+            using var findDocument = JsonDocument.Parse(findStdout);
+            var findError = findDocument.RootElement;
+            Assert.Equal(
+                CommandErrorCodes.ResponseBudgetTooSmall,
+                findError.GetProperty("error_code").GetString());
+            Assert.Contains(
+                "complete bounded error envelope",
+                findError.GetProperty("message").GetString(),
+                StringComparison.Ordinal);
+
+            var findRetryArgs = findArgs.ToArray();
+            findRetryArgs[^1] = findError
+                .GetProperty("retry")
+                .GetProperty("recommended_bytes")
+                .GetInt64()
+                .ToString(System.Globalization.CultureInfo.InvariantCulture);
+            var (findRetryExitCode, findRetryStdout, findRetryStderr) = CaptureConsole(() =>
+                ProgramRunner.Run(
+                    findRetryArgs,
+                    _jsonOptions,
+                    "1.0.0-test"));
+
+            Assert.Equal(CommandExitCodes.UsageError, findRetryExitCode);
+            Assert.Equal(string.Empty, findRetryStderr);
+            using var findRetryDocument = JsonDocument.Parse(findRetryStdout);
+            Assert.Equal(
+                CommandErrorCodes.UsageError,
+                findRetryDocument.RootElement
+                    .GetProperty("metadata")
+                    .GetProperty("error")
+                    .GetProperty("error_code")
+                    .GetString());
         }
         finally
         {

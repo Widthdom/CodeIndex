@@ -18,6 +18,7 @@ namespace CodeIndex.Cli;
 internal static partial class JsonEnvelopeWrapper
 {
     private const int DefaultPageLimit = 20;
+    private const int ResponseBudgetRetryHeadroomBytes = 1024;
     private const int MaxPageWindow = MaxRawJsonItems;
     private const string LegacyResponseCursorPrefix = "response:v1:";
     private const string ResponseCursorPrefix = "response:v2:";
@@ -195,8 +196,27 @@ internal static partial class JsonEnvelopeWrapper
         JsonSerializerOptions jsonOptions,
         Func<string[], int> runInner)
     {
+        if (TryReadRequestedMaxJsonBytes(args, out var requestedBytes)
+            && requestedBytes <= 0)
+        {
+            return CommandErrorWriter.WriteResponseBudgetError(
+                json: true,
+                jsonOptions,
+                command,
+                "--max-json-bytes requires a positive integer.",
+                "Use a positive --max-json-bytes value; retry with at least 1 byte to begin response sizing.",
+                requestedBytes,
+                effectiveBytes: null,
+                minimumRequiredBytes: null,
+                minimumRequiredBytesUnavailableReason:
+                    CommandErrorWriter.MinimumResponseBytesUnavailableBeforeMaterialization,
+                usage: GetBoundedResponseUsage(command));
+        }
+
         if (!TryParseBoundedResponseControls(command, args, out var controls, out var controlError))
+        {
             return WriteBoundedResponseUsageError(controlError!, "Use the command help to pass positive --limit/--max-json-bytes values and a next_cursor returned by the same query.");
+        }
         if (HasUnsupportedStandaloneBoundedControl(command, args)
             || command == "unused" && HasArgument(args, "--summary-only"))
         {
@@ -204,15 +224,18 @@ internal static partial class JsonEnvelopeWrapper
                 command,
                 args,
                 controls.MaxJsonBytes!.Value,
+                jsonOptions,
                 runInner);
         }
         if (ProjectionFieldRegistry.IsDiscoveryRequest(controls.Fields))
         {
             var discoveryJson = ProjectionFieldRegistry.CreateDiscoveryDocument(command).ToJsonString(jsonOptions);
             return WriteProjectionRegistryResponse(
+                command,
                 discoveryJson,
                 CommandExitCodes.Success,
-                controls.MaxJsonBytes);
+                controls.MaxJsonBytes,
+                jsonOptions);
         }
         if (!ProjectionFieldRegistry.TryValidate(command, controls.Fields, out var fieldError))
         {
@@ -225,9 +248,11 @@ internal static partial class JsonEnvelopeWrapper
                     Category: "usage"),
                 CliJsonSerializerContextFactory.Create(jsonOptions).CommandErrorJsonResult);
             return WriteProjectionRegistryResponse(
+                command,
                 errorJson,
                 CommandExitCodes.UsageError,
-                controls.MaxJsonBytes);
+                controls.MaxJsonBytes,
+                jsonOptions);
         }
         var bodyProjected = HasExplicitBodyProjection(controls.Fields);
         var bodyOutputHidden = !bodyProjected
@@ -270,6 +295,7 @@ internal static partial class JsonEnvelopeWrapper
 
         var innerArgs = PrepareBoundedInnerArgs(command, args, controls);
         using var captured = new BoundedStringWriter(MaxCapturedOutputChars);
+        using var capturedError = new BoundedStringWriter(MaxCapturedOutputChars);
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         int exitCode;
         JsonEnvelopeCaptureLimitExceededException? captureLimitExceeded = null;
@@ -277,6 +303,7 @@ internal static partial class JsonEnvelopeWrapper
         try
         {
             using var outputScope = ScopedConsoleOutput.Redirect(captured);
+            using var errorScope = ScopedConsoleError.Redirect(capturedError);
             executionContext = new BoundedExecutionContext(
                 command,
                 controls.Offset,
@@ -335,7 +362,14 @@ internal static partial class JsonEnvelopeWrapper
             return WriteBoundedParseError(command, queryNormalized, resolvedDbPath, dbPathExplicit, appVersion, stopwatch.Elapsed.TotalMilliseconds, jsonOptions, $"Bounded response raw JSON {ex.BudgetName} exceeded {ex.MaxValue}.", "Reduce --limit or narrow the query.", ex.JsonPropertyName, ex.MaxValue, controls.MaxJsonBytes, suppressRuntimeMetadata);
         }
 
+        var capturedErrorText = capturedError.ToString();
         var commandError = TakeCommandError(rawResults, exitCode);
+        if (commandError is null
+            && exitCode != CommandExitCodes.Success
+            && !string.IsNullOrWhiteSpace(capturedErrorText))
+        {
+            commandError = BuildCapturedCommandError(command, capturedErrorText, exitCode);
+        }
         PromoteEmptyLegacyCompactPayload(command, controls, rawResults, streamControlRecords);
         var extraction = ExtractResponseItems(command, rawResults, controls);
         var availableItems = extraction.Items;
@@ -390,7 +424,8 @@ internal static partial class JsonEnvelopeWrapper
             suppressRuntimeMetadata,
             jsonOptions,
             out var emittedJson,
-            out var emittedCount);
+            out var emittedCount,
+            out var minimumRequiredBytes);
 
         if (envelope is null)
         {
@@ -400,11 +435,28 @@ internal static partial class JsonEnvelopeWrapper
                 "unused" => "add --compact",
                 _ => "choose fewer --fields",
             };
-            return WriteBoundedResponseUsageError(
-                $"--max-json-bytes {controls.MaxJsonBytes} is too small for the bounded response metadata and one projected row.",
-                $"Increase --max-json-bytes or {selectionHint}.");
+            var minimumDescription = commandError is not null
+                ? "the complete bounded error envelope"
+                : pageItems.Count > 0
+                    ? "bounded response metadata and one projected row"
+                    : "the complete empty bounded response envelope";
+            return CommandErrorWriter.WriteResponseBudgetError(
+                json: true,
+                jsonOptions,
+                command,
+                $"--max-json-bytes {controls.MaxJsonBytes} is too small for {minimumDescription}.",
+                $"Increase --max-json-bytes or {selectionHint}.",
+                requestedBytes: controls.MaxJsonBytes,
+                effectiveBytes: controls.MaxJsonBytes,
+                minimumRequiredBytes: minimumRequiredBytes,
+                minimumRequiredBytesUncertaintyReason:
+                    CommandErrorWriter.MinimumResponseBytesUncertainRuntimeEnvelope,
+                recommendedBytes: minimumRequiredBytes + ResponseBudgetRetryHeadroomBytes,
+                usage: GetBoundedResponseUsage(command));
         }
 
+        if (exitCode == CommandExitCodes.Success && capturedErrorText.Length > 0)
+            Console.Error.Write(capturedErrorText);
         Console.WriteLine(emittedJson);
         return exitCode;
     }
@@ -413,6 +465,7 @@ internal static partial class JsonEnvelopeWrapper
         string command,
         string[] args,
         int maxJsonBytes,
+        JsonSerializerOptions jsonOptions,
         Func<string[], int> runInner)
     {
         using var captured = new BoundedStringWriter(MaxCapturedOutputChars);
@@ -442,9 +495,19 @@ internal static partial class JsonEnvelopeWrapper
             // Fall back to a bounded generic diagnostic if validation emitted malformed JSON.
         }
 
-        return WriteBoundedResponseUsageError(
+        return CommandErrorWriter.WriteResponseBudgetError(
+            json: true,
+            jsonOptions,
+            command,
             message ?? $"{command} output-selector validation failed or its summary document exceeds the byte budget.",
-            $"{hint ?? $"Use only options shown in `{command} --help`."} Increase --max-json-bytes to receive the structured response.");
+            $"{hint ?? $"Use only options shown in `{command} --help`."} Increase --max-json-bytes to receive the structured response.",
+                requestedBytes: maxJsonBytes,
+                effectiveBytes: maxJsonBytes,
+                minimumRequiredBytes: Encoding.UTF8.GetByteCount(output),
+                minimumRequiredBytesUncertaintyReason:
+                    CommandErrorWriter.MinimumResponseBytesUncertainCapturedValidation,
+                recommendedBytes: (long)Encoding.UTF8.GetByteCount(output) + ResponseBudgetRetryHeadroomBytes,
+                usage: GetBoundedResponseUsage(command));
     }
 
     private static JsonObject? BuildBoundedEnvelopeWithinBudget(
@@ -468,7 +531,8 @@ internal static partial class JsonEnvelopeWrapper
         bool suppressRuntimeMetadata,
         JsonSerializerOptions jsonOptions,
         out string emittedJson,
-        out int emittedCount)
+        out int emittedCount,
+        out long minimumRequiredBytes)
     {
         emittedJson = string.Empty;
         emittedCount = 0;
@@ -613,6 +677,9 @@ internal static partial class JsonEnvelopeWrapper
         }
 
         var requestedCount = pageItems.Count;
+        var minimumCandidate = BuildCandidate(requestedCount > 0 ? 1 : 0);
+        var minimumJson = SerializeBoundedEnvelope(minimumCandidate, jsonOptions);
+        minimumRequiredBytes = GetJsonResponseByteCount(minimumJson);
         var candidate = BuildCandidate(requestedCount);
         var candidateJson = SerializeBoundedEnvelope(candidate, jsonOptions);
         if (!controls.MaxJsonBytes.HasValue || JsonFitsResponseBudget(candidateJson, controls.MaxJsonBytes.Value))
@@ -666,18 +733,30 @@ internal static partial class JsonEnvelopeWrapper
     }
 
     internal static bool JsonFitsResponseBudget(string json, int maxJsonBytes)
-        => Encoding.UTF8.GetByteCount(json) + Encoding.UTF8.GetByteCount(Environment.NewLine) <= maxJsonBytes;
+        => GetJsonResponseByteCount(json) <= maxJsonBytes;
+
+    private static long GetJsonResponseByteCount(string json)
+        => (long)Encoding.UTF8.GetByteCount(json) + Encoding.UTF8.GetByteCount(Environment.NewLine);
 
     private static int WriteProjectionRegistryResponse(
+        string command,
         string json,
         int exitCode,
-        int? maxJsonBytes)
+        int? maxJsonBytes,
+        JsonSerializerOptions jsonOptions)
     {
         if (maxJsonBytes.HasValue && !JsonFitsResponseBudget(json, maxJsonBytes.Value))
         {
-            return WriteBoundedResponseUsageError(
+            return CommandErrorWriter.WriteResponseBudgetError(
+                json: true,
+                jsonOptions,
+                command,
                 $"--max-json-bytes {maxJsonBytes.Value} is too small for the projection-field response.",
-                "Increase --max-json-bytes and rerun the same --fields request.");
+                "Increase --max-json-bytes and rerun the same --fields request.",
+                requestedBytes: maxJsonBytes.Value,
+                effectiveBytes: maxJsonBytes.Value,
+                minimumRequiredBytes: GetJsonResponseByteCount(json),
+                usage: GetBoundedResponseUsage(command));
         }
 
         Console.WriteLine(json);
@@ -702,6 +781,46 @@ internal static partial class JsonEnvelopeWrapper
         error.Remove("api_version");
         rawResults.Clear();
         return error;
+    }
+
+    private static JsonObject BuildCapturedCommandError(
+        string command,
+        string stderr,
+        int exitCode)
+    {
+        var lines = stderr
+            .ReplaceLineEndings("\n")
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var firstLine = lines.FirstOrDefault() ?? "Command validation failed.";
+        var (errorCode, category) = CommandErrorWriter.ResolveMachineContract(exitCode);
+        string message;
+        if (firstLine.StartsWith("Error [", StringComparison.Ordinal)
+            && firstLine.IndexOf("]: ", StringComparison.Ordinal) is var separator
+            && separator > "Error [".Length)
+        {
+            errorCode = firstLine["Error [".Length..separator];
+            message = firstLine[(separator + 3)..];
+        }
+        else if (firstLine.StartsWith("Error: ", StringComparison.Ordinal))
+        {
+            message = firstLine["Error: ".Length..];
+        }
+        else
+        {
+            message = firstLine;
+        }
+
+        var hint = lines
+            .FirstOrDefault(line => line.StartsWith("Hint: ", StringComparison.Ordinal));
+        return new JsonObject
+        {
+            ["message"] = message,
+            ["hint"] = hint is null ? null : hint["Hint: ".Length..],
+            ["error_code"] = errorCode,
+            ["category"] = category,
+            ["command"] = command,
+            ["usage"] = GetBoundedResponseUsage(command),
+        };
     }
 
     private static void PromoteEmptyLegacyCompactPayload(
@@ -1543,6 +1662,37 @@ internal static partial class JsonEnvelopeWrapper
         return true;
     }
 
+    private static bool TryReadRequestedMaxJsonBytes(string[] args, out long requestedBytes)
+    {
+        requestedBytes = 0;
+        for (var i = 0; i < args.Length; i++)
+        {
+            const string option = "--max-json-bytes";
+            var arg = args[i];
+            string? raw = null;
+            if (arg.StartsWith(option + "=", StringComparison.Ordinal))
+                raw = arg[(option.Length + 1)..];
+            else if (string.Equals(arg, option, StringComparison.Ordinal) && i + 1 < args.Length)
+                raw = args[i + 1];
+            if (raw is null)
+                continue;
+            if (!long.TryParse(
+                    raw,
+                    NumberStyles.Integer,
+                    CultureInfo.InvariantCulture,
+                    out requestedBytes))
+            {
+                return false;
+            }
+            if (requestedBytes <= 0)
+                return true;
+            if (requestedBytes > int.MaxValue)
+                return false;
+        }
+
+        return false;
+    }
+
     private static string BuildResponseFingerprint(string command, string[] args)
     {
         var scanMode = command == "find"
@@ -1731,6 +1881,9 @@ internal static partial class JsonEnvelopeWrapper
         return CommandExitCodes.UsageError;
     }
 
+    private static string GetBoundedResponseUsage(string command)
+        => ConsoleUi.GetUsageLine(command) ?? $"cdidx {command} --help";
+
     private static int WriteBoundedCaptureError(
         string command,
         string? queryNormalized,
@@ -1778,8 +1931,6 @@ internal static partial class JsonEnvelopeWrapper
         int? maxJsonBytes,
         bool suppressRuntimeMetadata)
     {
-        CommandErrorWriter.WriteStderr($"Error [{CommandErrorCodes.UsageError}]: {message}");
-        CommandErrorWriter.WriteStderr($"Hint: {hint}");
         var error = new JsonObject
         {
             ["message"] = message,
@@ -1800,8 +1951,25 @@ internal static partial class JsonEnvelopeWrapper
             error,
             suppressRuntimeMetadata: suppressRuntimeMetadata);
         var json = envelope.ToJsonString(jsonOptions);
-        if (!maxJsonBytes.HasValue || JsonFitsResponseBudget(json, maxJsonBytes.Value))
-            Console.WriteLine(json);
+        if (maxJsonBytes.HasValue && !JsonFitsResponseBudget(json, maxJsonBytes.Value))
+        {
+            return CommandErrorWriter.WriteResponseBudgetError(
+                json: true,
+                jsonOptions,
+                command,
+                $"--max-json-bytes {maxJsonBytes.Value} is too small for the complete error envelope.",
+                "Increase --max-json-bytes and retry the same command.",
+                requestedBytes: maxJsonBytes.Value,
+                effectiveBytes: maxJsonBytes.Value,
+                minimumRequiredBytes: GetJsonResponseByteCount(json),
+                minimumRequiredBytesUncertaintyReason:
+                    CommandErrorWriter.MinimumResponseBytesUncertainRuntimeEnvelope,
+                recommendedBytes: GetJsonResponseByteCount(json) + ResponseBudgetRetryHeadroomBytes,
+                usage: GetBoundedResponseUsage(command),
+                exitCode: exitCode);
+        }
+
+        Console.WriteLine(json);
         return exitCode;
     }
 
