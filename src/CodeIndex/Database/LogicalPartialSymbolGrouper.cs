@@ -584,28 +584,38 @@ internal static class LogicalPartialSymbolGrouper
         var token = tokens[offset];
         if (CSharpPredefinedTypeIdentities.TryGetValue(token, out var predefinedIdentity))
         {
-            identity = predefinedIdentity;
+            identity = $"global::{predefinedIdentity}";
             consumedTokens = 1;
             return true;
         }
 
-        var systemOffset = offset;
-        if (offset + 3 < tokens.Count
-            && token == "global"
-            && tokens[offset + 1] == ":"
-            && tokens[offset + 2] == ":")
-        {
-            systemOffset += 3;
-        }
-        if (systemOffset + 2 >= tokens.Count
-            || tokens[systemOffset] != "System"
-            || tokens[systemOffset + 1] != "."
-            || !CSharpFrameworkTypeIdentities.TryGetValue(tokens[systemOffset + 2], out var frameworkIdentity))
+        // Only an explicit global alias proves that System refers to the framework
+        // namespace. An unrooted System.Int32 can bind to an enclosing namespace or
+        // using alias and must retain its source identity. Verbatim escapes on the
+        // namespace/type segments do not change the explicitly rooted identity.
+        // explicit global alias だけが System を framework namespace と確定できる。
+        // unrooted System.Int32 は外側 namespace / using alias に bind し得るため
+        // source identity を保持し、rooted segment の verbatim escape だけを外す。
+        if (offset + 5 >= tokens.Count
+            || token != "global"
+            || tokens[offset + 1] != ":"
+            || tokens[offset + 2] != ":")
         {
             return false;
         }
 
-        identity = frameworkIdentity;
+        var systemOffset = offset + 3;
+        if (systemOffset + 2 >= tokens.Count
+            || tokens[systemOffset].TrimStart('@') != "System"
+            || tokens[systemOffset + 1] != "."
+            || !CSharpFrameworkTypeIdentities.TryGetValue(
+                tokens[systemOffset + 2].TrimStart('@'),
+                out var frameworkIdentity))
+        {
+            return false;
+        }
+
+        identity = $"global::{frameworkIdentity}";
         consumedTokens = systemOffset - offset + 3;
         return true;
     }

@@ -498,6 +498,8 @@ public partial class QueryCommandRunnerTests
                     partial void Run(item declarationValue);
                     partial void Rooted(Item declarationValue);
                     partial void Rooted(global::Item declarationValue);
+                    partial void Shadowed(System.Int32 declarationValue);
+                    partial void Shadowed(int declarationValue);
                     private partial Result<int> Result();
                 }
                 """);
@@ -518,7 +520,7 @@ public partial class QueryCommandRunnerTests
                     {
                     }
 
-                    partial void Alias(System.Int32 implementationValue) { }
+                    partial void Alias(global::@System.@Int32 implementationValue) { }
                     partial void Defaults(bool flag, int count) { }
                     partial void Quoted(string text, int count) { }
                     partial void Escaped(Item implementationValue) { }
@@ -530,8 +532,18 @@ public partial class QueryCommandRunnerTests
                     partial void Run(item implementationValue) { }
                     partial void Rooted(Item implementationValue) { }
                     partial void Rooted(global::Item implementationValue) { }
-                    private partial Result<System.Int32> Result() => new();
+                    partial void Shadowed(System.Int32 implementationValue) { }
+                    partial void Shadowed(int implementationValue) { }
+                    private partial Result<global::@System.@Int32> Result() => new();
                 }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Demo.System.Int32.cs",
+                "csharp",
+                """
+                namespace Demo.System;
+                public class Int32 { }
                 """);
             TestProjectHelper.InsertIndexedFile(
                 dbPath,
@@ -722,9 +734,18 @@ public partial class QueryCommandRunnerTests
                     "Alias",
                     "void"),
                 LogicalPartialSymbolGrouper.BuildCallableIdentity(
-                    "partial void Alias(global::System.Int32 value) { }",
+                    "partial void Alias(global::@System.@Int32 value) { }",
                     "Alias",
-                    "System.Void"));
+                    "global::@System.@Void"));
+            Assert.NotEqual(
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void Alias(int value);",
+                    "Alias",
+                    "void"),
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void Alias(System.Int32 value) { }",
+                    "Alias",
+                    "void"));
             Assert.NotEqual(
                 LogicalPartialSymbolGrouper.BuildCallableIdentity(
                     "partial void Global(global::System.Uri declarationValue);",
@@ -743,6 +764,22 @@ public partial class QueryCommandRunnerTests
                     "partial void Rooted(global::Item implementationValue) { }",
                     "Rooted",
                     "void"));
+            var (shadowedExitCode, shadowedStdout, shadowedStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["Shadowed", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "function", "--group-partials", "--include-generated", "--limit", "10"],
+                _jsonOptions));
+            using var shadowedDocument = ParseJsonOutput(shadowedStdout);
+            var shadowedFamilies = shadowedDocument.RootElement.EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, shadowedExitCode);
+            Assert.Equal(string.Empty, shadowedStderr);
+            Assert.Equal(2, shadowedFamilies.Count);
+            Assert.All(shadowedFamilies, family => Assert.Equal(2, family.GetProperty("definition_sites").GetInt32()));
+            Assert.Equal(
+                2,
+                shadowedFamilies
+                    .Select(family => family.GetProperty("partial_family_id").GetString())
+                    .Distinct(StringComparer.Ordinal)
+                    .Count());
             Assert.Equal(
                 LogicalPartialSymbolGrouper.BuildCallableIdentity(
                     "partial void Defaults(bool flag = 1 < 2, int count = 0);",
@@ -951,7 +988,7 @@ public partial class QueryCommandRunnerTests
             Assert.Contains(
                 resultFactoryMembers,
                 member => member.GetProperty("path").GetString() == "src/Z.Controller.cs"
-                    && member.GetProperty("start_column").GetInt32() == 41);
+                    && member.GetProperty("start_column").GetInt32() == 51);
 
             var (caseExitCode, caseStdout, caseStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
                 ["Run", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "function", "--group-partials", "--include-generated", "--limit", "10"],
