@@ -1835,6 +1835,8 @@ public class IndexWatchRunnerTests
 
             using var cts = new CancellationTokenSource();
             var handoffInvoked = false;
+            var afterHandoffAtReady = false;
+            var beforeHandoffAtReady = true;
             string capturedOut;
             int exitCode;
 
@@ -1846,6 +1848,12 @@ public class IndexWatchRunnerTests
                 Console.SetOut(stdout);
                 try
                 {
+                    IndexWatchRunner.WatchReadyForTesting = _ =>
+                    {
+                        afterHandoffAtReady = HasIndexedSymbol(dbPath, "AfterHandoff");
+                        beforeHandoffAtReady = HasIndexedSymbol(dbPath, "BeforeHandoff");
+                        cts.Cancel();
+                    };
                     loopTask = IndexWatchRunner.RunCoreAsync(
                         options,
                         _jsonOptions,
@@ -1858,7 +1866,6 @@ public class IndexWatchRunnerTests
                             File.WriteAllText(sourcePath, "public sealed class AfterHandoff { }\n");
                             enqueue(sourcePath);
                         });
-                    cts.Cancel();
 #pragma warning disable xUnit1031 // Console redirection lock requires synchronous bounded drain.
                     exitCode = loopTask.WaitAsync(TimeSpan.FromSeconds(30)).GetAwaiter().GetResult();
 #pragma warning restore xUnit1031
@@ -1875,16 +1882,19 @@ public class IndexWatchRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.True(HasIndexedSymbol(dbPath, "AfterHandoff"));
             Assert.False(HasIndexedSymbol(dbPath, "BeforeHandoff"));
+            Assert.True(afterHandoffAtReady);
+            Assert.False(beforeHandoffAtReady);
 
             var startupRescan = capturedOut.IndexOf("\"status\":\"rescanned\",\"phase\":\"startup\"", StringComparison.Ordinal);
             var startupDrain = capturedOut.IndexOf("\"status\":\"updated\",\"phase\":\"startup\"", StringComparison.Ordinal);
             var ready = capturedOut.IndexOf("\"status\":\"watching\"", StringComparison.Ordinal);
             Assert.True(startupRescan >= 0, capturedOut);
-            Assert.True(startupDrain > startupRescan, capturedOut);
-            Assert.True(ready > startupDrain, capturedOut);
+            Assert.True(startupDrain < 0 || startupDrain > startupRescan, capturedOut);
+            Assert.True(ready > (startupDrain >= 0 ? startupDrain : startupRescan), capturedOut);
         }
         finally
         {
+            IndexWatchRunner.WatchReadyForTesting = null;
             DeleteDirectory(projectRoot);
         }
     }
