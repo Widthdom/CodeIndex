@@ -22,9 +22,6 @@ internal static class ShaderReferenceExtractor
     private static readonly Regex IncludeDirectiveRegex = new(
         @"^\s*#\s*include\b",
         SharedRegexOptions);
-    private static readonly Regex QuotedIncludeRegex = new(
-        @"^\s*#\s*include\s*""(?<path>[^""\r\n]+)""",
-        SharedRegexOptions);
     private static readonly Regex CudaKernelLaunchRegex = new(
         @"(?<![\w:])(?<name>(?:[A-Za-z_]\w*::)*[A-Za-z_]\w*)(?:\s*<[^<>\r\n]{1,512}>)?\s*<<<",
         SharedRegexOptions);
