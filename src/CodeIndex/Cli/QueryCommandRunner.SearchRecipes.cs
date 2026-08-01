@@ -2443,17 +2443,10 @@ public static partial class QueryCommandRunner
 
         var line = lexicalContext.MaskedLines[site.Line - 1];
         var index = Math.Clamp(site.Column.Value - 1 + site.Length.Value, 0, line.Length);
-        SkipJsonTrustWhitespace(line, ref index);
-        if (index < line.Length && line[index] == '?')
-        {
-            index++;
-            SkipJsonTrustWhitespace(line, ref index);
-        }
-        while (index + 1 < line.Length && line[index] == '[' && line[index + 1] == ']')
-        {
-            index += 2;
-            SkipJsonTrustWhitespace(line, ref index);
-        }
+        SkipJsonTrustDeclarationTypeSuffix(
+            line,
+            Math.Clamp(site.Column.Value - 1, 0, line.Length),
+            ref index);
 
         if (index >= line.Length || !(char.IsLetter(line[index]) || line[index] is '_' or '@'))
             return false;
@@ -2465,6 +2458,58 @@ public static partial class QueryCommandRunner
         return index >= line.Length
             || line[index] is '=' or ';' or ',' or ')'
             || IsJsonTrustMethodDeclarationSuffix(line, index);
+    }
+
+    private static void SkipJsonTrustDeclarationTypeSuffix(
+        string line,
+        int typeStartIndex,
+        ref int index)
+    {
+        var mayCloseGenericWrapper = HasJsonTrustUnclosedGenericBefore(line, typeStartIndex);
+        while (true)
+        {
+            SkipJsonTrustWhitespace(line, ref index);
+            if (index < line.Length && line[index] == '?')
+            {
+                index++;
+                continue;
+            }
+            if (index + 1 < line.Length && line[index] == '[' && line[index + 1] == ']')
+            {
+                index += 2;
+                continue;
+            }
+            if (mayCloseGenericWrapper && index < line.Length && line[index] == '>')
+            {
+                index++;
+                continue;
+            }
+
+            return;
+        }
+    }
+
+    private static bool HasJsonTrustUnclosedGenericBefore(string line, int typeStartIndex)
+    {
+        var closingDepth = 0;
+        for (var index = typeStartIndex - 1; index >= 0; index--)
+        {
+            switch (line[index])
+            {
+                case '>':
+                    closingDepth++;
+                    break;
+                case '<' when closingDepth > 0:
+                    closingDepth--;
+                    break;
+                case '<':
+                    return true;
+                case ';' or '=' or '{' or '}':
+                    return false;
+            }
+        }
+
+        return false;
     }
 
     private static bool IsJsonTrustMethodDeclarationSuffix(string line, int index)
@@ -2622,13 +2667,22 @@ public static partial class QueryCommandRunner
         int? operationColumn,
         IReadOnlyList<string> selectedJsonTrustQueries)
     {
+        var statementPrefix = new StringBuilder();
         for (var line = annotationLine + 1; line < operationLine; line++)
         {
-            var maskedLine = lexicalContext.MaskedLines[line - 1].TrimStart();
-            if (maskedLine.Length == 0 || maskedLine.StartsWith("//", StringComparison.Ordinal))
+            var maskedLine = GetJsonTrustCodeBeforeLineComment(lexicalContext.MaskedLines[line - 1]);
+            if (string.IsNullOrWhiteSpace(maskedLine))
                 continue;
 
-            return true;
+            statementPrefix.Append(maskedLine).Append(' ');
+            if (HasPriorSelectedJsonTrustMatchOnLine(
+                    lexicalContext,
+                    line,
+                    maskedLine.Length + 1,
+                    selectedJsonTrustQueries))
+            {
+                return true;
+            }
         }
 
         if (operationColumn.HasValue
@@ -2637,8 +2691,8 @@ public static partial class QueryCommandRunner
         {
             var operationText = lexicalContext.MaskedLines[operationLine - 1];
             var prefixLength = Math.Clamp(operationColumn.Value - 1, 0, operationText.Length);
-            if (HasPriorJsonTrustOperationOnLine(operationText.AsSpan(0, prefixLength))
-                || HasPriorSelectedJsonTrustMatchOnLine(
+            statementPrefix.Append(operationText.AsSpan(0, prefixLength));
+            if (HasPriorSelectedJsonTrustMatchOnLine(
                     lexicalContext,
                     operationLine,
                     operationColumn.Value,
@@ -2646,7 +2700,13 @@ public static partial class QueryCommandRunner
                 return true;
         }
 
-        return false;
+        return HasPriorJsonTrustOperationOnLine(statementPrefix.ToString().AsSpan());
+    }
+
+    private static string GetJsonTrustCodeBeforeLineComment(string maskedLine)
+    {
+        var commentIndex = maskedLine.IndexOf("//", StringComparison.Ordinal);
+        return commentIndex >= 0 ? maskedLine[..commentIndex] : maskedLine;
     }
 
     private static bool HasPriorSelectedJsonTrustMatchOnLine(

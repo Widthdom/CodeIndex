@@ -3370,6 +3370,24 @@ public partial class QueryCommandRunnerTests
                 """);
             TestProjectHelper.InsertIndexedFile(
                 dbPath,
+                "src/multiline-serializer-writer.cs",
+                "csharp",
+                """
+                using System.Text.Json;
+
+                public static class MultilineSerializerWriter
+                {
+                    public static string Create(object payload)
+                    {
+                        // cdidx-audit: json-trust origin=private_local direction=write sensitivity=diagnostic trust=controlled rationale=continued_assignment_prefix
+                        var json =
+                            JsonSerializer.Serialize(payload);
+                        return json;
+                    }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
                 "src/explicit-utf8-writer.cs",
                 "csharp",
                 """
@@ -3397,6 +3415,21 @@ public partial class QueryCommandRunnerTests
                 {
                     // cdidx-audit: json-trust origin=private_local direction=write sensitivity=diagnostic trust=controlled rationale=expression_bodied_private_writer
                     public static Utf8JsonWriter Create<T>(Stream stream) => new Utf8JsonWriter(stream);
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/generic-return-utf8-writer.cs",
+                "csharp",
+                """
+                using System.IO;
+                using System.Text.Json;
+                using System.Threading.Tasks;
+
+                public static class GenericReturnUtf8Writer
+                {
+                    // cdidx-audit: json-trust origin=private_local direction=write sensitivity=diagnostic trust=controlled rationale=generic_return_private_writer
+                    public static Task<Utf8JsonWriter> Create(Stream stream) => Task.FromResult(new Utf8JsonWriter(stream));
                 }
                 """);
             TestProjectHelper.InsertIndexedFile(
@@ -3449,10 +3482,10 @@ public partial class QueryCommandRunnerTests
                 ["--recipe", "json-parse-apis/json-document-parse", "--db", dbPath, "--json", "--limit", "10", "--snippet-lines", "1"],
                 _jsonOptions));
             var (nestedExitCode, nestedStdout, nestedStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                ["--recipe", "json-parse-apis/json-serializer-serialize", "--db", dbPath, "--path", "src/nested-serializer-writer.cs", "--path", "src/cast-serializer-writer.cs", "--json", "--limit", "10", "--snippet-lines", "1"],
+                ["--recipe", "json-parse-apis/json-serializer-serialize", "--db", dbPath, "--path", "src/nested-serializer-writer.cs", "--path", "src/cast-serializer-writer.cs", "--path", "src/multiline-serializer-writer.cs", "--json", "--limit", "10", "--snippet-lines", "1"],
                 _jsonOptions));
             var (utf8ExitCode, utf8Stdout, utf8Stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                ["--recipe", "json-parse-apis/utf8-json-writer", "--db", dbPath, "--path", "src/explicit-utf8-writer.cs", "--path", "src/expression-bodied-utf8-writer.cs", "--json", "--limit", "10", "--snippet-lines", "1"],
+                ["--recipe", "json-parse-apis/utf8-json-writer", "--db", dbPath, "--path", "src/explicit-utf8-writer.cs", "--path", "src/expression-bodied-utf8-writer.cs", "--path", "src/generic-return-utf8-writer.cs", "--json", "--limit", "10", "--snippet-lines", "1"],
                 _jsonOptions));
             var (crossQueryExitCode, crossQueryStdout, crossQueryStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 [
@@ -3719,7 +3752,7 @@ public partial class QueryCommandRunnerTests
                 AssertJsonTrustClassifierCounts(
                     query,
                     ("ambiguous_trust", 1),
-                    ("controlled_private_writer", 1));
+                    ("controlled_private_writer", 2));
                 var results = query.GetProperty("results").EnumerateArray().ToArray();
                 AssertJsonTrustClassification(
                     Assert.Single(results, result => result.GetProperty("path").GetString() == "src/nested-serializer-writer.cs"),
@@ -3733,6 +3766,11 @@ public partial class QueryCommandRunnerTests
                     "controlled_private_writer",
                     "rationale:cast_applies_after_serialization",
                     "annotation_status:valid");
+                AssertJsonTrustClassification(
+                    Assert.Single(results, result => result.GetProperty("path").GetString() == "src/multiline-serializer-writer.cs"),
+                    "controlled_private_writer",
+                    "rationale:continued_assignment_prefix",
+                    "annotation_status:valid");
             }
 
             Assert.Equal(CommandExitCodes.Success, utf8ExitCode);
@@ -3740,7 +3778,7 @@ public partial class QueryCommandRunnerTests
             using (var document = ParseJsonOutput(utf8Stdout))
             {
                 var query = Assert.Single(document.RootElement.GetProperty("queries").EnumerateArray());
-                AssertJsonTrustClassifierCounts(query, ("controlled_private_writer", 2));
+                AssertJsonTrustClassifierCounts(query, ("controlled_private_writer", 3));
                 var results = query.GetProperty("results").EnumerateArray().ToArray();
                 AssertJsonTrustClassification(
                     Assert.Single(results, result => result.GetProperty("path").GetString() == "src/explicit-utf8-writer.cs"),
@@ -3751,6 +3789,11 @@ public partial class QueryCommandRunnerTests
                     Assert.Single(results, result => result.GetProperty("path").GetString() == "src/expression-bodied-utf8-writer.cs"),
                     "controlled_private_writer",
                     "rationale:expression_bodied_private_writer",
+                    "annotation_status:valid");
+                AssertJsonTrustClassification(
+                    Assert.Single(results, result => result.GetProperty("path").GetString() == "src/generic-return-utf8-writer.cs"),
+                    "controlled_private_writer",
+                    "rationale:generic_return_private_writer",
                     "annotation_status:valid");
             }
 
