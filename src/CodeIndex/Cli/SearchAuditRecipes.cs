@@ -4573,7 +4573,33 @@ internal sealed record SearchRecipeRunSummaryJsonResult(
 internal sealed record SearchRecipeQueryFreshnessJsonResult(
     [property: JsonPropertyName("positive_evidence_query_count")] int PositiveEvidenceQueryCount,
     [property: JsonPropertyName("zero_result_query_count")] int ZeroResultQueryCount,
-    [property: JsonPropertyName("stale_query_names")] List<string> StaleQueryNames);
+    [property: JsonPropertyName("stale_query_names")] List<string> StaleQueryNames,
+    [property: JsonPropertyName("state")] string State,
+    [property: JsonPropertyName("clean_query_count")] int CleanQueryCount,
+    [property: JsonPropertyName("matched_query_count")] int MatchedQueryCount,
+    [property: JsonPropertyName("clean_zero_match_query_count")] int CleanZeroMatchQueryCount,
+    [property: JsonPropertyName("clean_zero_match_query_names")] List<string> CleanZeroMatchQueryNames,
+    [property: JsonPropertyName("stale_query_count")] int StaleQueryCount,
+    [property: JsonPropertyName("invalid_query_count")] int InvalidQueryCount,
+    [property: JsonPropertyName("invalid_query_names")] List<string> InvalidQueryNames,
+    [property: JsonPropertyName("index_state")] string IndexState,
+    [property: JsonPropertyName("index_reason")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? IndexReason,
+    [property: JsonPropertyName("recipe_version")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? RecipeVersion,
+    [property: JsonPropertyName("queries")] List<SearchRecipeQueryFreshnessStateJsonResult> Queries);
+
+internal sealed record SearchRecipeQueryFreshnessStateJsonResult(
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("freshness_state")] string FreshnessState,
+    [property: JsonPropertyName("result_state")] string ResultState,
+    [property: JsonPropertyName("match_count")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    int? MatchCount,
+    [property: JsonPropertyName("reason")] string Reason,
+    [property: JsonPropertyName("definition_version")] string DefinitionVersion);
 
 internal sealed record SearchRowSelectorJsonResult(
     [property: JsonPropertyName("mode")] string Mode,

@@ -308,6 +308,17 @@ optimization recommendation used by status and optimize.
 | Remediation fields | `degraded_root_cause`, `degraded_reason`, `recommended_action`, `alternative_action`, `readiness_degradations`, `repair_commands`. |
 | MCP-only session diagnostics | `mcp_session`, `mcp_session.metrics`, `mcp_session.audit_log`, `mcp.rate_limit.bucket_limit`, `mcp.rate_limit.bucket_limit_rejection_count`. |
 
+When check mode fails, each `repair_commands[]` entry includes `name`, `action`,
+`args`, `mutation_class`, `safety_class`, `safety_notes`, the compatibility
+`reason` (the first trigger), and the complete ordered `reasons` list. Commands
+with the same structured action, arguments, mutation class, and safety semantics
+are emitted once with their reasons aggregated in check priority order. Different
+targets, options, actions, or safety semantics remain separate even if their
+rendered command text looks similar. Human check output follows the same
+deduplication and preserves platform-aware shell quoting in one `[repair]` line per
+structured action. Control characters are visibly escaped in human output so they
+cannot forge additional lines; structured JSON `args` retain their original values.
+
 Supplying `status --stale-after <duration>` implies the workspace freshness check.
 Check-mode JSON includes `query_context.check_mode` (`explicit` or
 `implied_by_stale_after`) and the effective `query_context.stale_after_seconds`;
@@ -810,6 +821,16 @@ FTS optimization recommendation を説明します。
 | database size attribution | `database_size_attribution` は main DB / WAL / SHM の file byte を分離し、論理 page を table、index、freelist、internal / leaf / overflow page、payload、unused space、structural overhead、`unexplained_residual_bytes` に再照合します。object 名は伏字・切り詰めを適用して最大20件だけ返します。`available=false` と `unavailable_reason` がある場合は page attribution を計測できなかったことを示し、省略された object-byte field をゼロとして解釈してはいけません。 |
 | remediation fields | `degraded_root_cause`, `degraded_reason`, `recommended_action`, `alternative_action`, `readiness_degradations`, `repair_commands`。 |
 | MCP-only session diagnostics | `mcp_session`, `mcp_session.metrics`, `mcp_session.audit_log`, `mcp.rate_limit.bucket_limit`, `mcp.rate_limit.bucket_limit_rejection_count`。 |
+
+check mode が失敗した場合、各 `repair_commands[]` entry は `name`、`action`、
+`args`、`mutation_class`、`safety_class`、`safety_notes`、互換用の `reason`
+（最初の trigger）、および順序付きの全 `reasons` list を含みます。同じ構造化
+action、argument、mutation class、安全性 semantics を持つ command は1件だけ返し、
+reason は check の優先順で集約します。target、option、action、安全性 semantics が
+異なる command は、表示上の command text が似ていても別々に維持します。human
+check output も同じ deduplication を使い、platform-aware な shell quote を維持した
+`[repair]` line を構造化 action ごとに1件だけ表示します。human output では control
+character を可視 escape して偽の行を防ぎ、構造化 JSON の `args` は原値を維持します。
 
 `status --stale-after <duration>` を指定すると workspace freshness check を暗黙に有効化します。
 check mode の JSON は `query_context.check_mode`（`explicit` または
