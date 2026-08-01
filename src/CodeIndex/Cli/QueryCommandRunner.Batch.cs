@@ -896,6 +896,7 @@ public static partial class QueryCommandRunner
         using var stdout = new BatchBoundedStringWriter(BatchMaxCapturedOutputChars, "stdout");
         using var stderr = new BatchBoundedStringWriter(BatchMaxCapturedOutputChars, "stderr");
         using var stdoutRouterRegistration = ScopedConsoleOutput.Register(stdoutRouter);
+        using var stderrRouterRegistration = ScopedConsoleError.Register(stderrRouter);
         using var stdoutScope = stdoutRouter.Push(stdout);
         using var stderrScope = stderrRouter.Push(stderr);
         var exitCode = CommandExitCodes.DatabaseError;

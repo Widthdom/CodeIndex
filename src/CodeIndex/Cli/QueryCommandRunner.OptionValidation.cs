@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using CodeIndex.Indexer;
 
 namespace CodeIndex.Cli;
@@ -54,10 +55,17 @@ public static partial class QueryCommandRunner
             : primaryError == inspectCursorScopeError && options.ParseError == null && dbPathError == null
                 ? "Pass this cursor back to the unchanged `cdidx inspect` query that returned it."
                 : "fix the invalid or missing option value, then rerun with the command shape below.";
-        var machineErrorOutput = options.Json
-            && jsonOptions != null
-            && (!invocationContext.StructuredMachineUsageErrors
-                || options.InvocationMachineErrorOutputRequested);
+        var responseBudgetMachineError = options.Json
+            && TryExtractNonPositiveMaxJsonBytes(
+                primaryError,
+                out _,
+                out _,
+                out _);
+        var machineErrorOutput = responseBudgetMachineError
+            || options.Json
+               && jsonOptions != null
+               && (!invocationContext.StructuredMachineUsageErrors
+                   || options.InvocationMachineErrorOutputRequested);
         WriteParseError(primaryError, primaryHint, invocationContext, options, jsonOptions);
         if (options.ParseError != null
             && dbPathError != null
@@ -137,6 +145,29 @@ public static partial class QueryCommandRunner
         JsonSerializerOptions? jsonOptions)
     {
         if (options.Json
+            && TryExtractNonPositiveMaxJsonBytes(
+                error,
+                out var requestedBytes,
+                out var responseBudgetError,
+                out var additionalJsonProperties))
+        {
+            CommandErrorWriter.WriteResponseBudgetError(
+                json: true,
+                jsonOptions ?? options.InvocationJsonOptions ?? ProgramRunner.CreateDefaultJsonOptions(),
+                invocationContext.CommandName,
+                StripInlineHint(StripErrorPrefix(responseBudgetError)),
+                "Use a positive --max-json-bytes value; retry with at least 1 byte to begin response sizing.",
+                requestedBytes,
+                effectiveBytes: null,
+                minimumRequiredBytes: null,
+                minimumRequiredBytesUnavailableReason:
+                    CommandErrorWriter.MinimumResponseBytesUnavailableBeforeMaterialization,
+                usage: invocationContext.UsageLine,
+                additionalJsonProperties: additionalJsonProperties);
+            return;
+        }
+
+        if (options.Json
             && jsonOptions != null
             && (!invocationContext.StructuredMachineUsageErrors
                 || options.InvocationMachineErrorOutputRequested))
@@ -172,6 +203,66 @@ public static partial class QueryCommandRunner
                 ?? (string.Equals(invocationContext.CommandName, "outline", StringComparison.Ordinal)
                     ? CommandErrorCodes.UsageError
                     : null));
+    }
+
+    private static bool TryExtractNonPositiveMaxJsonBytes(
+        string error,
+        out long requestedBytes,
+        out string matchingError,
+        out JsonObject? additionalJsonProperties)
+    {
+        requestedBytes = 0;
+        matchingError = string.Empty;
+        additionalJsonProperties = null;
+        const string marker = "--max-json-bytes requires a positive integer, got '";
+        var errors = error
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => line.TrimEnd('\r'))
+            .ToArray();
+        for (var index = 0; index < errors.Length; index++)
+        {
+            var candidate = errors[index];
+            var valueStart = candidate.IndexOf(marker, StringComparison.Ordinal);
+            if (valueStart < 0)
+                continue;
+            valueStart += marker.Length;
+            var valueEnd = candidate.IndexOf('\'', valueStart);
+            if (valueEnd <= valueStart
+                || !long.TryParse(
+                    candidate.AsSpan(valueStart, valueEnd - valueStart),
+                    NumberStyles.Integer,
+                    CultureInfo.InvariantCulture,
+                    out requestedBytes)
+                || requestedBytes > 0)
+            {
+                continue;
+            }
+
+            matchingError = candidate;
+            var otherErrors = new JsonArray();
+            for (var otherIndex = 0; otherIndex < errors.Length; otherIndex++)
+            {
+                if (otherIndex == index)
+                    continue;
+                otherErrors.Add(StripInlineHint(StripErrorPrefix(errors[otherIndex])));
+            }
+            if (otherErrors.Count > 0)
+            {
+                additionalJsonProperties = new JsonObject
+                {
+                    ["other_validation_errors"] = otherErrors,
+                };
+            }
+            return true;
+        }
+
+        return false;
+    }
+
+    private static string StripInlineHint(string message)
+    {
+        var hintStart = message.IndexOf(" Hint:", StringComparison.Ordinal);
+        return hintStart < 0 ? message : message[..hintStart].TrimEnd();
     }
 
     private static string? BuildExplicitDbPathParseError(QueryCommandOptions options)

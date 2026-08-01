@@ -65,8 +65,42 @@ public static partial class QueryCommandRunner
         if (!fullPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
             fullPath = Path.GetFullPath(fullPath);
 
-        return fullPath.IndexOfAny([' ', '\t', '"']) >= 0
-            ? $"\"{fullPath.Replace("\"", "\\\"", StringComparison.Ordinal)}\""
-            : fullPath;
+        return QuoteCommandToken(fullPath);
+    }
+
+    internal static string RenderStatusRepairCommand(StatusRepairCommand command)
+        => ExcerptRecoveryCommandFormatter.RenderDisplayCommand(
+            new[] { command.Name }.Concat(command.Args).Select(EscapeStatusRepairControlCharacters).ToArray(),
+            OperatingSystem.IsWindows() ? RecoveryCommandShell.PowerShell : RecoveryCommandShell.PosixSh);
+
+    private static string EscapeStatusRepairControlCharacters(string value)
+    {
+        if (!value.Any(char.IsControl))
+            return value;
+
+        var escaped = new System.Text.StringBuilder(value.Length);
+        foreach (var character in value)
+        {
+            escaped.Append(character switch
+            {
+                '\r' => "\\r",
+                '\n' => "\\n",
+                '\t' => "\\t",
+                _ when char.IsControl(character) => $"\\u{(int)character:X4}",
+                _ => character.ToString(),
+            });
+        }
+
+        return escaped.ToString();
+    }
+
+    private static string QuoteCommandToken(string value)
+    {
+        if (value.Length >= 2 && value[0] == '<' && value[^1] == '>')
+            return value;
+
+        return value.IndexOfAny([' ', '\t', '"']) >= 0
+            ? $"\"{value.Replace("\"", "\\\"", StringComparison.Ordinal)}\""
+            : value;
     }
 }

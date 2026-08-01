@@ -387,9 +387,13 @@ public partial class QueryCommandRunnerTests
             _jsonOptions));
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
-        Assert.Equal(string.Empty, stdout);
-        Assert.Contains("symbols count JSON output", stderr);
-        Assert.Contains("exceeds --max-json-bytes 1", stderr);
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        var error = document.RootElement;
+        Assert.Equal(CommandErrorCodes.ResponseBudgetTooSmall, error.GetProperty("error_code").GetString());
+        Assert.Equal("response_budget", error.GetProperty("category").GetString());
+        Assert.Equal("symbols", error.GetProperty("command").GetString());
+        Assert.Equal(1, error.GetProperty("requested_bytes").GetInt64());
     }
 
     [Fact]
@@ -599,9 +603,13 @@ public partial class QueryCommandRunnerTests
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Equal(string.Empty, stdout);
-            Assert.Contains("definition JSON output", stderr);
-            Assert.Contains("--max-json-bytes 20", stderr);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var error = document.RootElement;
+            Assert.Equal(CommandErrorCodes.ResponseBudgetTooSmall, error.GetProperty("error_code").GetString());
+            Assert.Equal("response_budget", error.GetProperty("category").GetString());
+            Assert.Equal("definition", error.GetProperty("command").GetString());
+            Assert.Equal(20, error.GetProperty("requested_bytes").GetInt64());
         }
         finally
         {
@@ -7131,8 +7139,15 @@ public partial class QueryCommandRunnerTests
                     _jsonOptions));
 
             Assert.Equal(CommandExitCodes.UsageError, boundedExitCode);
-            Assert.Equal(string.Empty, boundedStdout);
-            Assert.Contains("exceeds --max-json-bytes 20", boundedStderr);
+            Assert.Equal(string.Empty, boundedStderr);
+            using var boundedDocument = ParseJsonOutput(boundedStdout);
+            var boundedError = boundedDocument.RootElement;
+            Assert.Equal(
+                CommandErrorCodes.ResponseBudgetTooSmall,
+                boundedError.GetProperty("error_code").GetString());
+            Assert.Equal("response_budget", boundedError.GetProperty("category").GetString());
+            Assert.Equal("definition", boundedError.GetProperty("command").GetString());
+            Assert.Equal(20, boundedError.GetProperty("requested_bytes").GetInt64());
         }
         finally
         {

@@ -123,10 +123,17 @@ public sealed class QueryCommandRunnerOutlineIssue4880Tests
                     "1.0.0-test"));
 
             Assert.Equal(CommandExitCodes.UsageError, smallExitCode);
-            Assert.Equal(string.Empty, smallStdout);
-            Assert.Contains($"Error [{CommandErrorCodes.UsageError}]", smallStderr, StringComparison.Ordinal);
-            Assert.Contains("bounded response metadata and one projected row", smallStderr, StringComparison.Ordinal);
-            Assert.Contains("--outline-fields", smallStderr, StringComparison.Ordinal);
+            Assert.Equal(string.Empty, smallStderr);
+            using var smallDocument = JsonDocument.Parse(smallStdout);
+            var smallError = smallDocument.RootElement;
+            Assert.Equal(CommandErrorCodes.ResponseBudgetTooSmall, smallError.GetProperty("error_code").GetString());
+            Assert.Equal("response_budget", smallError.GetProperty("category").GetString());
+            Assert.Equal("outline", smallError.GetProperty("command").GetString());
+            Assert.Contains(
+                "bounded response metadata and one projected row",
+                smallError.GetProperty("message").GetString(),
+                StringComparison.Ordinal);
+            Assert.True(smallError.GetProperty("minimum_required_bytes_known").GetBoolean());
         }
         finally
         {
@@ -264,9 +271,15 @@ public sealed class QueryCommandRunnerOutlineIssue4880Tests
                         "1.0.0-test"));
 
                 Assert.Equal(CommandExitCodes.UsageError, cappedExitCode);
-                Assert.Equal(string.Empty, cappedStdout);
-                Assert.Contains($"Error [{CommandErrorCodes.UsageError}]", cappedStderr, StringComparison.Ordinal);
-                Assert.Contains("is not supported", cappedStderr, StringComparison.Ordinal);
+                Assert.Equal(string.Empty, cappedStderr);
+                using var cappedDocument = JsonDocument.Parse(cappedStdout);
+                var cappedError = cappedDocument.RootElement;
+                Assert.Equal(
+                    CommandErrorCodes.ResponseBudgetTooSmall,
+                    cappedError.GetProperty("error_code").GetString());
+                Assert.Equal("response_budget", cappedError.GetProperty("category").GetString());
+                Assert.Equal("outline", cappedError.GetProperty("command").GetString());
+                Assert.True(cappedError.GetProperty("minimum_required_bytes_known").GetBoolean());
             }
         }
         finally

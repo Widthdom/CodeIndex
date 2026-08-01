@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Reflection;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -21,6 +22,293 @@ public partial class QueryCommandRunnerTests
         Assert.Equal(
             SearchResultRanking.Default,
             QueryCommandRunner.GetSearchRecipeResultRanking(SearchResultRanking.CredentialContext, resultLimit: 0));
+    }
+
+    [Fact]
+    public void BuildSearchRecipeQueryFreshness_SeparatesResultsFromInvalidation_Issue4907()
+    {
+        var expectedQueries = new[]
+        {
+            new QueryCommandRunner.SearchQueryFreshnessExpectedQuery("matched", "query-v1"),
+            new QueryCommandRunner.SearchQueryFreshnessExpectedQuery("zero", "query-v1"),
+        };
+        var cleanContext = new QueryCommandRunner.SearchQueryFreshnessContext(
+            "current",
+            null,
+            "recipe-v1",
+            "recipe-v1",
+            expectedQueries);
+        var cleanObservations = new[]
+        {
+            new QueryCommandRunner.SearchQueryFreshnessObservation("matched", 2, "query-v1", true, null),
+            new QueryCommandRunner.SearchQueryFreshnessObservation("zero", 0, "query-v1", true, null),
+        };
+
+        var clean = QueryCommandRunner.BuildSearchRecipeQueryFreshnessForTests(cleanContext, cleanObservations);
+        Assert.Equal("clean", clean.State);
+        Assert.Equal(2, clean.CleanQueryCount);
+        Assert.Equal(1, clean.MatchedQueryCount);
+        Assert.Equal(1, clean.CleanZeroMatchQueryCount);
+        Assert.Equal(["zero"], clean.CleanZeroMatchQueryNames);
+        Assert.Empty(clean.StaleQueryNames);
+        Assert.Equal(clean.Queries.Count, clean.CleanQueryCount + clean.StaleQueryCount + clean.InvalidQueryCount);
+
+        var missing = QueryCommandRunner.BuildSearchRecipeQueryFreshnessForTests(
+            cleanContext,
+            cleanObservations.Take(1));
+        Assert.Equal("mixed", missing.State);
+        Assert.Equal(["zero"], missing.InvalidQueryNames);
+        Assert.Equal(
+            "missing_query_result",
+            Assert.Single(missing.Queries, query => query.Name == "zero").Reason);
+
+        var changedRecipe = QueryCommandRunner.BuildSearchRecipeQueryFreshnessForTests(
+            cleanContext with { ExecutedRecipeVersion = "recipe-v2" },
+            cleanObservations);
+        Assert.Equal("stale", changedRecipe.State);
+        Assert.Equal(2, changedRecipe.StaleQueryCount);
+        Assert.All(changedRecipe.Queries, query => Assert.Equal("recipe_definition_changed", query.Reason));
+
+        var changedQuery = QueryCommandRunner.BuildSearchRecipeQueryFreshnessForTests(
+            cleanContext,
+            [
+                cleanObservations[0],
+                cleanObservations[1] with { DefinitionVersion = "query-v2" },
+            ]);
+        Assert.Equal("mixed", changedQuery.State);
+        Assert.Equal(["zero"], changedQuery.StaleQueryNames);
+        Assert.Equal(
+            "query_definition_changed",
+            Assert.Single(changedQuery.Queries, query => query.Name == "zero").Reason);
+
+        var staleIndex = QueryCommandRunner.BuildSearchRecipeQueryFreshnessForTests(
+            cleanContext with { IndexState = "stale", IndexReason = "index_head_changed" },
+            cleanObservations);
+        Assert.Equal("stale", staleIndex.State);
+        Assert.Equal(2, staleIndex.StaleQueryCount);
+        Assert.Equal(1, staleIndex.ZeroResultQueryCount);
+        Assert.Equal(0, staleIndex.CleanZeroMatchQueryCount);
+        Assert.All(staleIndex.Queries, query => Assert.Equal("index_head_changed", query.Reason));
+
+        var failedChild = QueryCommandRunner.BuildSearchRecipeQueryFreshnessForTests(
+            cleanContext,
+            [
+                cleanObservations[0],
+                new("zero", null, "query-v1", false, "query_execution_failed"),
+            ]);
+        Assert.Equal("mixed", failedChild.State);
+        Assert.Equal(["zero"], failedChild.InvalidQueryNames);
+        Assert.Equal(
+            "query_execution_failed",
+            Assert.Single(failedChild.Queries, query => query.Name == "zero").Reason);
+        Assert.Equal(
+            failedChild.Queries.Count,
+            failedChild.CleanQueryCount + failedChild.StaleQueryCount + failedChild.InvalidQueryCount);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void RunSearch_NamedQueryFreshnessReportsDirtyWorkspaceIndexAsStale_Issue4907(bool initializeGit)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_freshness_dirty_workspace_4907");
+        try
+        {
+            const string indexedContent = "public sealed class App { private const string Value = \"FreshnessNeedle\"; }\n";
+            TestProjectHelper.WriteTextFile(projectRoot, Path.Combine("src", "App.cs"), indexedContent);
+            if (initializeGit)
+            {
+                TestProjectHelper.InitializeGitRepo(projectRoot);
+                TestProjectHelper.RunGit(projectRoot, "add", "src/App.cs");
+                TestProjectHelper.RunGit(projectRoot, "commit", "-m", "initial");
+            }
+
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp", indexedContent);
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                Path.Combine("src", "App.cs"),
+                "public sealed class App { }\n");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [
+                    "--named-query=needle=FreshnessNeedle",
+                    "--db", dbPath,
+                    "--count",
+                    "--json",
+                ],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var freshness = document.RootElement.GetProperty("query_freshness");
+            Assert.Equal("stale", freshness.GetProperty("state").GetString());
+            Assert.Equal("stale", freshness.GetProperty("index_state").GetString());
+            Assert.Equal("index_workspace_changed", freshness.GetProperty("index_reason").GetString());
+            Assert.Contains(
+                freshness.GetProperty("stale_query_names").EnumerateArray(),
+                name => name.GetString() == "needle");
+            Assert.Equal(
+                "index_workspace_changed",
+                Assert.Single(freshness.GetProperty("queries").EnumerateArray())
+                    .GetProperty("reason")
+                    .GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_NamedTextCountSkipsWorkspaceFreshnessScan_Issue4907()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_freshness_text_count_4907");
+        try
+        {
+            const string content = "public sealed class App { private const string Value = \"FreshnessNeedle\"; }\n";
+            TestProjectHelper.WriteTextFile(projectRoot, Path.Combine("src", "App.cs"), content);
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/App.cs", "csharp", content);
+            var workspaceCheckCount = 0;
+            QueryCommandRunner.SearchQueryFreshnessWorkspaceCheckForTesting =
+                () => workspaceCheckCount++;
+
+            var (textExitCode, textStdout, textStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [
+                    "--named-query=needle=FreshnessNeedle",
+                    "--db", dbPath,
+                    "--count",
+                ],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, textExitCode);
+            Assert.Equal("1", textStdout.Trim());
+            Assert.Contains("1 named-query results", textStderr, StringComparison.Ordinal);
+            Assert.Equal(0, workspaceCheckCount);
+
+            var (jsonExitCode, _, jsonStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [
+                    "--named-query=needle=FreshnessNeedle",
+                    "--db", dbPath,
+                    "--format", "count",
+                    "--json",
+                ],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, jsonExitCode);
+            Assert.Equal(string.Empty, jsonStderr);
+            Assert.Equal(1, workspaceCheckCount);
+        }
+        finally
+        {
+            QueryCommandRunner.SearchQueryFreshnessWorkspaceCheckForTesting = null;
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_RecipeJsonRetainsClassifiedChildFailureAsInvalid_Issue4907()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_freshness_failed_recipe_child_4907");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            const int minimumGuardedCandidates = 200;
+            for (var i = 0; i <= minimumGuardedCandidates; i++)
+            {
+                var path = $"src/C{i:D4}.cs";
+                var content = $"public sealed class C{i:D4} {{ private string token = \"value\"; }}\n";
+                TestProjectHelper.WriteTextFile(projectRoot, path, content);
+                TestProjectHelper.InsertIndexedFile(
+                    dbPath,
+                    path,
+                    "csharp",
+                    content);
+            }
+
+            using var env = EnvironmentVariableScope.Capture(SearchAuditRecipes.RecipePathsEnvironmentVariable);
+            env.Set(SearchAuditRecipes.RecipePathsEnvironmentVariable, null);
+            string[] BuildArgs(params string[] outputArgs) =>
+            [
+                "--recipe", "broad-token-audit",
+                "--include-query", "token-term-broad",
+                "--include-query", "auth-token",
+                "--db", dbPath,
+                "--limit", "1",
+                "--total-limit", "0",
+                "--require-before", "CDIDX_REVIEW_NO_SUCH_GUARD",
+                "--guard-window", "1",
+                .. outputArgs,
+            ];
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                BuildArgs("--json"),
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("one or more recipe queries failed", stderr, StringComparison.Ordinal);
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            var freshness = root.GetProperty("summary").GetProperty("query_freshness");
+            Assert.Equal(2, root.GetProperty("query_count").GetInt32());
+            Assert.Equal("mixed", freshness.GetProperty("state").GetString());
+            Assert.Contains(
+                freshness.GetProperty("invalid_query_names").EnumerateArray(),
+                name => name.GetString() == "token-term-broad");
+            var failedQuery = Assert.Single(
+                freshness.GetProperty("queries").EnumerateArray(),
+                query => query.GetProperty("name").GetString() == "token-term-broad");
+            Assert.Equal("invalid", failedQuery.GetProperty("freshness_state").GetString());
+            Assert.Equal("query_guard_limit_exceeded", failedQuery.GetProperty("reason").GetString());
+            var successfulQuery = Assert.Single(
+                freshness.GetProperty("queries").EnumerateArray(),
+                query => query.GetProperty("name").GetString() == "auth-token");
+            Assert.Equal("clean", successfulQuery.GetProperty("freshness_state").GetString());
+            Assert.Equal("zero_match", successfulQuery.GetProperty("result_state").GetString());
+
+            var (sarifExitCode, sarifStdout, sarifStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                BuildArgs("--format", "sarif"),
+                _jsonOptions));
+            Assert.Equal(CommandExitCodes.UsageError, sarifExitCode);
+            Assert.Contains("one or more recipe queries failed", sarifStderr, StringComparison.Ordinal);
+            using (var sarifDocument = ParseJsonOutput(sarifStdout))
+            {
+                var sarifFreshness = sarifDocument.RootElement
+                    .GetProperty("runs")[0]
+                    .GetProperty("properties")
+                    .GetProperty("query_freshness");
+                Assert.Contains(
+                    sarifFreshness.GetProperty("invalid_query_names").EnumerateArray(),
+                    name => name.GetString() == "token-term-broad");
+            }
+
+            var (draftExitCode, draftStdout, draftStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                BuildArgs("--format", "issue-drafts"),
+                _jsonOptions));
+            Assert.Equal(CommandExitCodes.UsageError, draftExitCode);
+            Assert.Contains("one or more recipe queries failed", draftStderr, StringComparison.Ordinal);
+            using (var draftDocument = ParseJsonOutput(draftStdout))
+            {
+                Assert.Contains(
+                    draftDocument.RootElement
+                        .GetProperty("query_freshness")
+                        .GetProperty("invalid_query_names")
+                        .EnumerateArray(),
+                    name => name.GetString() == "token-term-broad");
+            }
+
+            var (textExitCode, textStdout, textStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                BuildArgs(),
+                _jsonOptions));
+            Assert.Equal(CommandExitCodes.UsageError, textExitCode);
+            Assert.Contains("Invalid queries: token-term-broad", textStdout, StringComparison.Ordinal);
+            Assert.Contains("one or more recipe queries failed", textStderr, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
     }
 
     [Fact]
@@ -1061,8 +1349,12 @@ public partial class QueryCommandRunnerTests
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.UsageError, capExitCode);
-            Assert.Equal(string.Empty, capStdout);
-            Assert.Contains("named-query search JSON output", capStderr, StringComparison.Ordinal);
+            Assert.Equal(string.Empty, capStderr);
+            using var capDocument = ParseJsonOutput(capStdout);
+            Assert.Equal(
+                CommandErrorCodes.ResponseBudgetTooSmall,
+                capDocument.RootElement.GetProperty("error_code").GetString());
+            Assert.Equal("search", capDocument.RootElement.GetProperty("command").GetString());
         }
         finally
         {
@@ -1077,24 +1369,27 @@ public partial class QueryCommandRunnerTests
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(
+            TestProjectHelper.InsertFreshIndexedFile(
+                projectRoot,
                 dbPath,
                 "release/pack.md",
                 "markdown",
                 "Run dotnet pack before publishing.");
-            TestProjectHelper.InsertIndexedFile(
+            TestProjectHelper.InsertFreshIndexedFile(
+                projectRoot,
                 dbPath,
                 "release/pack-extra.md",
                 "markdown",
                 "Run dotnet pack after signing.");
-            TestProjectHelper.InsertIndexedFile(
+            TestProjectHelper.InsertFreshIndexedFile(
+                projectRoot,
                 dbPath,
                 "release/push.md",
                 "markdown",
                 "Run nuget push after package validation.");
 
             var (countExitCode, countStdout, countStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                ["--named-query=pack=dotnet pack", "--named-query=push=nuget push", "--db", dbPath, "--format", "count", "--json", "--limit", "1"],
+                ["--named-query=pack=dotnet pack", "--named-query=push=nuget push", "--named-query=todo=TODO", "--db", dbPath, "--format", "count", "--json", "--limit", "1"],
                 _jsonOptions));
             var (summaryExitCode, summaryStdout, summaryStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 ["--named-query=pack=dotnet pack", "--named-query=push=nuget push", "--db", dbPath, "--summary-only", "--json", "--limit", "1"],
@@ -1108,7 +1403,7 @@ public partial class QueryCommandRunnerTests
             using var summaryDocument = ParseJsonOutput(summaryStdout);
             var countRoot = countDocument.RootElement;
             var summaryRoot = summaryDocument.RootElement;
-            Assert.Equal(2, countRoot.GetProperty("query_count").GetInt32());
+            Assert.Equal(3, countRoot.GetProperty("query_count").GetInt32());
             Assert.Equal(3, countRoot.GetProperty("result_count").GetInt32());
             Assert.Equal(3, countRoot.GetProperty("file_count").GetInt32());
             Assert.Equal(3, summaryRoot.GetProperty("result_count").GetInt32());
@@ -1118,7 +1413,67 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(2, pack.GetProperty("file_count").GetInt32());
             Assert.False(pack.TryGetProperty("results", out _));
             Assert.Equal(2, countRoot.GetProperty("query_freshness").GetProperty("positive_evidence_query_count").GetInt32());
-            Assert.Equal(0, countRoot.GetProperty("query_freshness").GetProperty("zero_result_query_count").GetInt32());
+            var freshness = countRoot.GetProperty("query_freshness");
+            Assert.Equal(1, freshness.GetProperty("zero_result_query_count").GetInt32());
+            Assert.Equal("clean", freshness.GetProperty("state").GetString());
+            Assert.Equal(3, freshness.GetProperty("clean_query_count").GetInt32());
+            Assert.Equal(2, freshness.GetProperty("matched_query_count").GetInt32());
+            Assert.Equal(1, freshness.GetProperty("clean_zero_match_query_count").GetInt32());
+            Assert.Contains(freshness.GetProperty("clean_zero_match_query_names").EnumerateArray(), name => name.GetString() == "todo");
+            Assert.Empty(freshness.GetProperty("stale_query_names").EnumerateArray());
+            Assert.False(freshness.TryGetProperty("recipe_version", out _));
+            var todo = Assert.Single(
+                freshness.GetProperty("queries").EnumerateArray(),
+                query => query.GetProperty("name").GetString() == "todo");
+            Assert.Equal("clean", todo.GetProperty("freshness_state").GetString());
+            Assert.Equal("zero_match", todo.GetProperty("result_state").GetString());
+
+            var (failedExitCode, failedStdout, failedStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--named-query=good=dotnet pack", "--named-query=bad=(", "--fts", "--db", dbPath, "--format", "count", "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, failedExitCode);
+            Assert.Contains("one or more named queries failed", failedStderr, StringComparison.Ordinal);
+            using var failedDocument = ParseJsonOutput(failedStdout);
+            var failedFreshness = failedDocument.RootElement.GetProperty("query_freshness");
+            Assert.Equal("mixed", failedFreshness.GetProperty("state").GetString());
+            Assert.Equal(1, failedFreshness.GetProperty("clean_query_count").GetInt32());
+            Assert.Equal(1, failedFreshness.GetProperty("invalid_query_count").GetInt32());
+            Assert.Equal(0, failedFreshness.GetProperty("zero_result_query_count").GetInt32());
+            Assert.Contains(failedFreshness.GetProperty("invalid_query_names").EnumerateArray(), name => name.GetString() == "bad");
+            var failedQuery = Assert.Single(
+                failedFreshness.GetProperty("queries").EnumerateArray(),
+                query => query.GetProperty("name").GetString() == "bad");
+            Assert.Equal("invalid", failedQuery.GetProperty("freshness_state").GetString());
+            Assert.Equal("unknown", failedQuery.GetProperty("result_state").GetString());
+            Assert.Equal("query_syntax_invalid", failedQuery.GetProperty("reason").GetString());
+
+            using (var connection = new SqliteConnection($"Data Source={dbPath}"))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText =
+                    "INSERT INTO codeindex_meta(key, value) VALUES ($key, 'incomplete') "
+                    + "ON CONFLICT(key) DO UPDATE SET value = excluded.value";
+                command.Parameters.AddWithValue("$key", DbContext.IndexCompletenessMetaKey);
+                command.ExecuteNonQuery();
+            }
+
+            var (staleExitCode, staleStdout, staleStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--named-query=pack=dotnet pack", "--named-query=push=nuget push", "--named-query=todo=TODO", "--db", dbPath, "--format", "count", "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, staleExitCode);
+            Assert.Equal(string.Empty, staleStderr);
+            using var staleDocument = ParseJsonOutput(staleStdout);
+            var staleFreshness = staleDocument.RootElement.GetProperty("query_freshness");
+            Assert.Equal("stale", staleFreshness.GetProperty("state").GetString());
+            Assert.Equal("stale", staleFreshness.GetProperty("index_state").GetString());
+            Assert.Equal("index_incomplete", staleFreshness.GetProperty("index_reason").GetString());
+            Assert.Equal(3, staleFreshness.GetProperty("stale_query_count").GetInt32());
+            Assert.Equal(1, staleFreshness.GetProperty("zero_result_query_count").GetInt32());
+            Assert.Equal(0, staleFreshness.GetProperty("clean_zero_match_query_count").GetInt32());
+            Assert.Contains(staleFreshness.GetProperty("stale_query_names").EnumerateArray(), name => name.GetString() == "todo");
         }
         finally
         {
@@ -3092,8 +3447,12 @@ public partial class QueryCommandRunnerTests
             _jsonOptions));
 
         Assert.Equal(CommandExitCodes.UsageError, capExitCode);
-        Assert.Equal(string.Empty, capStdout);
-        Assert.Contains("recipe-name list JSON output", capStderr, StringComparison.Ordinal);
+        Assert.Equal(string.Empty, capStderr);
+        using var capDocument = ParseJsonOutput(capStdout);
+        Assert.Equal(
+            "E028_RESPONSE_BUDGET_TOO_SMALL",
+            capDocument.RootElement.GetProperty("error_code").GetString());
+        Assert.Equal("search", capDocument.RootElement.GetProperty("command").GetString());
 
         var (textCapExitCode, textCapStdout, textCapStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
             ["--list-recipes", "--names", "--max-json-bytes", "1"],
@@ -3108,8 +3467,66 @@ public partial class QueryCommandRunnerTests
             _jsonOptions));
 
         Assert.Equal(CommandExitCodes.UsageError, compactNamesCapExitCode);
-        Assert.Equal(string.Empty, compactNamesCapStdout);
-        Assert.Contains("recipe-name list JSON output", compactNamesCapStderr, StringComparison.Ordinal);
+        Assert.Equal(string.Empty, compactNamesCapStderr);
+        using var compactCapDocument = ParseJsonOutput(compactNamesCapStdout);
+        Assert.Equal(
+            "E028_RESPONSE_BUDGET_TOO_SMALL",
+            compactCapDocument.RootElement.GetProperty("error_code").GetString());
+    }
+
+    [Fact]
+    public void RunRecipeList_ResponseBudgetFailuresAreJsonAndExactMinimumIsRetryable_Issue4909()
+    {
+        var (capExitCode, capStdout, capStderr) = CaptureConsole(() => QueryCommandRunner.RunRecipeList(
+            ["--names", "--json", "--max-json-bytes", "1"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, capExitCode);
+        Assert.Equal(string.Empty, capStderr);
+        using var capDocument = ParseJsonOutput(capStdout);
+        var capError = capDocument.RootElement;
+        Assert.Equal("E028_RESPONSE_BUDGET_TOO_SMALL", capError.GetProperty("error_code").GetString());
+        Assert.Equal("response_budget", capError.GetProperty("category").GetString());
+        Assert.Equal("recipes", capError.GetProperty("command").GetString());
+        Assert.StartsWith("cdidx recipes ", capError.GetProperty("usage").GetString(), StringComparison.Ordinal);
+        Assert.Equal(1, capError.GetProperty("requested_bytes").GetInt64());
+        Assert.Equal(1, capError.GetProperty("effective_bytes").GetInt64());
+        Assert.True(capError.GetProperty("minimum_required_bytes_known").GetBoolean());
+        Assert.False(capError.GetProperty("minimum_required_bytes_uncertain").GetBoolean());
+        var minimumRequiredBytes = capError.GetProperty("minimum_required_bytes").GetInt64();
+        Assert.True(minimumRequiredBytes > 1);
+
+        var (exactExitCode, exactStdout, exactStderr) = CaptureConsole(() => QueryCommandRunner.RunRecipeList(
+            [
+                "--names", "--json", "--max-json-bytes",
+                minimumRequiredBytes.ToString(CultureInfo.InvariantCulture),
+            ],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exactExitCode);
+        Assert.Equal(string.Empty, exactStderr);
+        Assert.Equal(minimumRequiredBytes, Encoding.UTF8.GetByteCount(exactStdout));
+        using var exactDocument = ParseJsonOutput(exactStdout);
+        Assert.Contains(
+            exactDocument.RootElement.GetProperty("names").EnumerateArray(),
+            name => name.GetString() == "risky-code");
+
+        var (zeroExitCode, zeroStdout, zeroStderr) = CaptureConsole(() => QueryCommandRunner.RunRecipeList(
+            ["--names", "--json", "--max-json-bytes", "0"],
+            _jsonOptions));
+
+        Assert.Equal(CommandExitCodes.UsageError, zeroExitCode);
+        Assert.Equal(string.Empty, zeroStderr);
+        using var zeroDocument = ParseJsonOutput(zeroStdout);
+        var zeroError = zeroDocument.RootElement;
+        Assert.Equal("E028_RESPONSE_BUDGET_TOO_SMALL", zeroError.GetProperty("error_code").GetString());
+        Assert.Equal("recipes", zeroError.GetProperty("command").GetString());
+        Assert.Equal(0, zeroError.GetProperty("requested_bytes").GetInt64());
+        Assert.Equal(JsonValueKind.Null, zeroError.GetProperty("effective_bytes").ValueKind);
+        Assert.False(zeroError.GetProperty("minimum_required_bytes_known").GetBoolean());
+        Assert.Equal(
+            "normal_payload_not_materialized",
+            zeroError.GetProperty("minimum_required_bytes_unavailable_reason").GetString());
     }
 
     [Fact]
@@ -5645,12 +6062,14 @@ public partial class QueryCommandRunnerTests
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(
+            TestProjectHelper.InsertFreshIndexedFile(
+                projectRoot,
                 dbPath,
                 "src/a.cs",
                 "csharp",
                 "public sealed class A { void Run(Exception ex) { JsonDocument.Parse(\"{}\"); Console.WriteLine(ex.Message); } }");
-            TestProjectHelper.InsertIndexedFile(
+            TestProjectHelper.InsertFreshIndexedFile(
+                projectRoot,
                 dbPath,
                 "src/b.cs",
                 "csharp",
@@ -5731,6 +6150,12 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(1, runProperties.GetProperty("query_count").GetInt32());
             Assert.Equal(1, runProperties.GetProperty("result_count").GetInt32());
             Assert.Equal(1, runProperties.GetProperty("limit_per_query").GetInt32());
+            var sarifFreshness = runProperties.GetProperty("query_freshness");
+            Assert.Equal("clean", sarifFreshness.GetProperty("state").GetString());
+            Assert.Equal(1, sarifFreshness.GetProperty("clean_query_count").GetInt32());
+            Assert.Equal(1, sarifFreshness.GetProperty("matched_query_count").GetInt32());
+            Assert.Equal(0, sarifFreshness.GetProperty("clean_zero_match_query_count").GetInt32());
+            Assert.Empty(sarifFreshness.GetProperty("stale_query_names").EnumerateArray());
             Assert.True(runProperties.GetProperty("truncation").GetProperty("truncated").GetBoolean());
             var querySummary = Assert.Single(runProperties.GetProperty("queries").EnumerateArray());
             Assert.Equal("raw-diagnostic-echo", querySummary.GetProperty("name").GetString());
@@ -5750,6 +6175,10 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(2, totalLimitRun.GetProperty("properties").GetProperty("query_count").GetInt32());
             Assert.Equal(1, totalLimitRun.GetProperty("properties").GetProperty("result_count").GetInt32());
             Assert.Equal(1, totalLimitRun.GetProperty("properties").GetProperty("total_limit").GetInt32());
+            var totalLimitFreshness = totalLimitRun.GetProperty("properties").GetProperty("query_freshness");
+            Assert.Equal("clean", totalLimitFreshness.GetProperty("state").GetString());
+            Assert.Equal(2, totalLimitFreshness.GetProperty("clean_query_count").GetInt32());
+            Assert.Equal(2, totalLimitFreshness.GetProperty("matched_query_count").GetInt32());
         }
         finally
         {
@@ -5839,7 +6268,8 @@ public partial class QueryCommandRunnerTests
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(
+            TestProjectHelper.InsertFreshIndexedFile(
+                projectRoot,
                 dbPath,
                 "src/a.cs",
                 "csharp",
@@ -5852,7 +6282,8 @@ public partial class QueryCommandRunnerTests
                     }
                 }
                 """);
-            TestProjectHelper.InsertIndexedFile(
+            TestProjectHelper.InsertFreshIndexedFile(
+                projectRoot,
                 dbPath,
                 "src/b.cs",
                 "csharp",
@@ -5884,7 +6315,7 @@ public partial class QueryCommandRunnerTests
             var root = document.RootElement;
             var queries = root.GetProperty("queries").EnumerateArray().ToArray();
             var query = Assert.Single(queries, item => item.GetProperty("name").GetString() == "raw-diagnostic-echo");
-            var staleQuery = Assert.Single(queries, item => item.GetProperty("name").GetString() == "unbounded-json-parse");
+            var zeroMatchQuery = Assert.Single(queries, item => item.GetProperty("name").GetString() == "unbounded-json-parse");
             var freshness = root.GetProperty("query_freshness");
 
             Assert.Equal("risky-code", root.GetProperty("recipe").GetString());
@@ -5895,29 +6326,64 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("raw-diagnostic-echo", query.GetProperty("name").GetString());
             Assert.Equal(2, query.GetProperty("count").GetInt32());
             Assert.Equal(2, query.GetProperty("file_count").GetInt32());
-            Assert.Equal(0, staleQuery.GetProperty("count").GetInt32());
-            Assert.Equal(0, staleQuery.GetProperty("file_count").GetInt32());
+            Assert.Equal(0, zeroMatchQuery.GetProperty("count").GetInt32());
+            Assert.Equal(0, zeroMatchQuery.GetProperty("file_count").GetInt32());
             Assert.Equal(1, freshness.GetProperty("positive_evidence_query_count").GetInt32());
             Assert.Equal(1, freshness.GetProperty("zero_result_query_count").GetInt32());
-            Assert.Contains(freshness.GetProperty("stale_query_names").EnumerateArray(), name => name.GetString() == "unbounded-json-parse");
+            Assert.Equal("clean", freshness.GetProperty("state").GetString());
+            Assert.Equal(2, freshness.GetProperty("clean_query_count").GetInt32());
+            Assert.Equal(1, freshness.GetProperty("matched_query_count").GetInt32());
+            Assert.Equal(1, freshness.GetProperty("clean_zero_match_query_count").GetInt32());
+            Assert.Contains(freshness.GetProperty("clean_zero_match_query_names").EnumerateArray(), name => name.GetString() == "unbounded-json-parse");
+            Assert.Equal(0, freshness.GetProperty("stale_query_count").GetInt32());
+            Assert.Equal(0, freshness.GetProperty("invalid_query_count").GetInt32());
+            Assert.Empty(freshness.GetProperty("stale_query_names").EnumerateArray());
+            Assert.Equal("current", freshness.GetProperty("index_state").GetString());
+            Assert.False(freshness.TryGetProperty("index_reason", out _));
+            Assert.Equal(64, freshness.GetProperty("recipe_version").GetString()!.Length);
+            Assert.Equal(2, freshness.GetProperty("queries").GetArrayLength());
+            var zeroMatchFreshness = Assert.Single(
+                freshness.GetProperty("queries").EnumerateArray(),
+                item => item.GetProperty("name").GetString() == "unbounded-json-parse");
+            Assert.Equal("clean", zeroMatchFreshness.GetProperty("freshness_state").GetString());
+            Assert.Equal("zero_match", zeroMatchFreshness.GetProperty("result_state").GetString());
+            Assert.Equal("executed_current_definition", zeroMatchFreshness.GetProperty("reason").GetString());
             Assert.False(query.TryGetProperty("query", out _));
             Assert.False(query.TryGetProperty("top_files", out _));
+
+            var (textExitCode, textStdout, textStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["--recipe", "risky-code/unbounded-json-parse", "--db", dbPath, "--origin", "code", "--limit", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, textExitCode);
+            Assert.Contains("Query freshness: clean", textStdout, StringComparison.Ordinal);
+            Assert.Contains("clean zero-match=1", textStdout, StringComparison.Ordinal);
+            Assert.DoesNotContain("Stale queries:", textStdout, StringComparison.Ordinal);
+            Assert.Contains("0 recipe results across 1 queries", textStderr, StringComparison.Ordinal);
 
             var (capExitCode, capStdout, capStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 ["--recipe", "risky-code/raw-diagnostic-echo", "--db", dbPath, "--format", "count", "--summary-only", "--origin", "code", "--max-json-bytes", "1"],
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.UsageError, capExitCode);
-            Assert.Equal(string.Empty, capStdout);
-            Assert.Contains("recipe count summary JSON output", capStderr, StringComparison.Ordinal);
+            Assert.Equal(string.Empty, capStderr);
+            using var capDocument = ParseJsonOutput(capStdout);
+            Assert.Equal(
+                CommandErrorCodes.ResponseBudgetTooSmall,
+                capDocument.RootElement.GetProperty("error_code").GetString());
+            Assert.Equal("search", capDocument.RootElement.GetProperty("command").GetString());
 
             var (aggregationCapExitCode, aggregationCapStdout, aggregationCapStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 ["--recipe", "risky-code/raw-diagnostic-echo", "--db", dbPath, "--format", "count", "--summary-only", "--group-by", "file", "--origin", "code", "--max-json-bytes", "1"],
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.UsageError, aggregationCapExitCode);
-            Assert.Equal(string.Empty, aggregationCapStdout);
-            Assert.Contains("recipe aggregation JSON output", aggregationCapStderr, StringComparison.Ordinal);
+            Assert.Equal(string.Empty, aggregationCapStderr);
+            using var aggregationCapDocument = ParseJsonOutput(aggregationCapStdout);
+            Assert.Equal(
+                CommandErrorCodes.ResponseBudgetTooSmall,
+                aggregationCapDocument.RootElement.GetProperty("error_code").GetString());
+            Assert.Equal("search", aggregationCapDocument.RootElement.GetProperty("command").GetString());
         }
         finally
         {
@@ -5977,8 +6443,12 @@ public partial class QueryCommandRunnerTests
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.UsageError, capExitCode);
-            Assert.Equal(string.Empty, capStdout);
-            Assert.Contains("recipe compact JSON output", capStderr, StringComparison.Ordinal);
+            Assert.Equal(string.Empty, capStderr);
+            using var capDocument = ParseJsonOutput(capStdout);
+            Assert.Equal(
+                "E028_RESPONSE_BUDGET_TOO_SMALL",
+                capDocument.RootElement.GetProperty("error_code").GetString());
+            Assert.Equal("search", capDocument.RootElement.GetProperty("command").GetString());
         }
         finally
         {
@@ -6186,16 +6656,24 @@ public partial class QueryCommandRunnerTests
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.UsageError, zeroExitCode);
-            Assert.Equal(string.Empty, zeroStdout);
-            Assert.Contains("compact search results JSON output", zeroStderr, StringComparison.Ordinal);
+            Assert.Equal(string.Empty, zeroStderr);
+            using var zeroDocument = ParseJsonOutput(zeroStdout);
+            Assert.Equal(
+                CommandErrorCodes.ResponseBudgetTooSmall,
+                zeroDocument.RootElement.GetProperty("error_code").GetString());
+            Assert.Equal("search", zeroDocument.RootElement.GetProperty("command").GetString());
 
             var (groupedZeroExitCode, groupedZeroStdout, groupedZeroStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 ["MissingToken", "--db", dbPath, "--format", "grouped", "--max-json-bytes", "1"],
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.UsageError, groupedZeroExitCode);
-            Assert.Equal(string.Empty, groupedZeroStdout);
-            Assert.Contains("grouped search results JSON output", groupedZeroStderr, StringComparison.Ordinal);
+            Assert.Equal(string.Empty, groupedZeroStderr);
+            using var groupedZeroDocument = ParseJsonOutput(groupedZeroStdout);
+            Assert.Equal(
+                CommandErrorCodes.ResponseBudgetTooSmall,
+                groupedZeroDocument.RootElement.GetProperty("error_code").GetString());
+            Assert.Equal("search", groupedZeroDocument.RootElement.GetProperty("command").GetString());
         }
         finally
         {
@@ -6234,8 +6712,134 @@ public partial class QueryCommandRunnerTests
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.UsageError, zeroExitCode);
-            Assert.Equal(string.Empty, zeroStdout);
-            Assert.Contains("terminal record", zeroStderr, StringComparison.Ordinal);
+            Assert.Equal(string.Empty, zeroStderr);
+            using var zeroDocument = ParseJsonOutput(zeroStdout);
+            var zeroError = zeroDocument.RootElement;
+            Assert.Equal(CommandErrorCodes.ResponseBudgetTooSmall, zeroError.GetProperty("error_code").GetString());
+            Assert.Equal("search", zeroError.GetProperty("command").GetString());
+            Assert.Equal(1, zeroError.GetProperty("requested_bytes").GetInt64());
+            Assert.True(zeroError.GetProperty("minimum_required_bytes_known").GetBoolean());
+            Assert.True(zeroError.GetProperty("minimum_required_bytes_uncertain").GetBoolean());
+
+            var (resultsOnlyExitCode, resultsOnlyStdout, resultsOnlyStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["token", "--db", dbPath, "--json=ndjson", "--results-only", "--max-json-bytes", "1"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, resultsOnlyExitCode);
+            Assert.Equal(string.Empty, resultsOnlyStderr);
+            using var resultsOnlyDocument = ParseJsonOutput(resultsOnlyStdout);
+            var resultsOnlyError = resultsOnlyDocument.RootElement;
+            Assert.Equal(
+                CommandErrorCodes.ResponseBudgetTooSmall,
+                resultsOnlyError.GetProperty("error_code").GetString());
+            Assert.Equal("search", resultsOnlyError.GetProperty("command").GetString());
+            Assert.True(resultsOnlyError.GetProperty("minimum_required_bytes_known").GetBoolean());
+            Assert.False(resultsOnlyError.GetProperty("minimum_required_bytes_uncertain").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData(1, 1)]
+    [InlineData(20_000_000, 16 * 1024 * 1024)]
+    public void WriteJsonObject_ResponseAboveEffectiveMaximumRequiresSizeReduction_Issue4909(
+        int requestedMaxJsonBytes,
+        int expectedEffectiveBytes)
+    {
+        var options = QueryCommandRunner.ParseArgs(
+            [
+                "needle",
+                "--json=array",
+                "--max-json-bytes",
+                requestedMaxJsonBytes.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ],
+            jsonDefault: false);
+        Assert.Equal(requestedMaxJsonBytes, options.RequestedMaxJsonBytes);
+        Assert.Equal(expectedEffectiveBytes, options.MaxJsonBytes);
+        var oversizedJson = JsonSerializer.Serialize(new
+        {
+            payload = new string('x', QueryCommandRunner.MaxSearchJsonByteLimit + 1),
+        });
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() =>
+            QueryCommandRunner.WriteJsonObjectWithOptionalByteLimit(
+                oversizedJson,
+                options,
+                "oversized test payload",
+                "Reduce the test payload.",
+                _jsonOptions,
+                "search"));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        var error = document.RootElement;
+        Assert.Equal(requestedMaxJsonBytes, error.GetProperty("requested_bytes").GetInt64());
+        Assert.Equal(expectedEffectiveBytes, error.GetProperty("effective_bytes").GetInt64());
+        Assert.True(
+            error.GetProperty("minimum_required_bytes").GetInt64()
+            > QueryCommandRunner.MaxSearchJsonByteLimit);
+        var retry = error.GetProperty("retry");
+        Assert.Equal("reduce_response_size", retry.GetProperty("action").GetString());
+        Assert.Equal(JsonValueKind.Null, retry.GetProperty("option").ValueKind);
+        Assert.Equal(JsonValueKind.Null, retry.GetProperty("recommended_bytes").ValueKind);
+        Assert.Equal(
+            QueryCommandRunner.MaxSearchJsonByteLimit,
+            retry.GetProperty("maximum_effective_bytes").GetInt64());
+    }
+
+    [Fact]
+    public void RunSearch_PrettyIssueDraftBudgetRecommendationIsRetryable_Issue4909()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_pretty_issue_draft_budget_4909");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/pretty.cs",
+                "csharp",
+                "public sealed class PrettyIssue4909Needle { }\n");
+            var prettyJsonOptions = new JsonSerializerOptions(_jsonOptions)
+            {
+                WriteIndented = true,
+            };
+            var args = new[]
+            {
+                "PrettyIssue4909Needle",
+                "--db", dbPath,
+                "--format", "issue-drafts",
+                "--exact-substring",
+                "--limit", "1",
+                "--snippet-lines", "0",
+                "--max-json-bytes", "1",
+            };
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunSearch(args, prettyJsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var errorDocument = JsonDocument.Parse(stdout);
+            var recommendedBytes = errorDocument.RootElement
+                .GetProperty("retry")
+                .GetProperty("recommended_bytes")
+                .GetInt64();
+
+            var retryArgs = args.ToArray();
+            retryArgs[^1] = recommendedBytes.ToString(
+                System.Globalization.CultureInfo.InvariantCulture);
+            var (retryExitCode, retryStdout, retryStderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunSearch(retryArgs, prettyJsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, retryExitCode);
+            Assert.Equal(string.Empty, retryStderr);
+            Assert.True(Encoding.UTF8.GetByteCount(retryStdout) <= recommendedBytes);
+            using var retryDocument = JsonDocument.Parse(retryStdout);
+            Assert.Single(retryDocument.RootElement.GetProperty("drafts").EnumerateArray());
         }
         finally
         {
@@ -9907,8 +10511,12 @@ public partial class QueryCommandRunnerTests
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.UsageError, capExitCode);
-            Assert.Equal(string.Empty, capStdout);
-            Assert.Contains("issue-draft JSON output", capStderr, StringComparison.Ordinal);
+            Assert.Equal(string.Empty, capStderr);
+            using var capDocument = ParseJsonOutput(capStdout);
+            Assert.Equal(
+                "E028_RESPONSE_BUDGET_TOO_SMALL",
+                capDocument.RootElement.GetProperty("error_code").GetString());
+            Assert.Equal("search", capDocument.RootElement.GetProperty("command").GetString());
         }
         finally
         {
@@ -9923,7 +10531,8 @@ public partial class QueryCommandRunnerTests
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(
+            TestProjectHelper.InsertFreshIndexedFile(
+                projectRoot,
                 dbPath,
                 "src/a.cs",
                 "csharp",
@@ -9969,7 +10578,11 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(1, root.GetProperty("result_count").GetInt32());
             Assert.Equal(1, freshness.GetProperty("positive_evidence_query_count").GetInt32());
             Assert.Equal(1, freshness.GetProperty("zero_result_query_count").GetInt32());
-            Assert.Contains(freshness.GetProperty("stale_query_names").EnumerateArray(), name => name.GetString() == "unbounded-json-parse");
+            Assert.Equal("clean", freshness.GetProperty("state").GetString());
+            Assert.Equal(2, freshness.GetProperty("clean_query_count").GetInt32());
+            Assert.Equal(1, freshness.GetProperty("clean_zero_match_query_count").GetInt32());
+            Assert.Contains(freshness.GetProperty("clean_zero_match_query_names").EnumerateArray(), name => name.GetString() == "unbounded-json-parse");
+            Assert.Empty(freshness.GetProperty("stale_query_names").EnumerateArray());
             Assert.Equal("raw-diagnostic-echo", source.GetProperty("query_name").GetString());
             Assert.Contains(source.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("raw exception messages", StringComparison.Ordinal));
         }
@@ -9986,7 +10599,8 @@ public partial class QueryCommandRunnerTests
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(
+            TestProjectHelper.InsertFreshIndexedFile(
+                projectRoot,
                 dbPath,
                 "src/a.cs",
                 "csharp",
@@ -10029,6 +10643,9 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(1, root.GetProperty("result_count").GetInt32());
             Assert.Equal(2, freshness.GetProperty("positive_evidence_query_count").GetInt32());
             Assert.Equal(0, freshness.GetProperty("zero_result_query_count").GetInt32());
+            Assert.Equal("clean", freshness.GetProperty("state").GetString());
+            Assert.Equal(2, freshness.GetProperty("clean_query_count").GetInt32());
+            Assert.Equal(0, freshness.GetProperty("clean_zero_match_query_count").GetInt32());
             Assert.Empty(freshness.GetProperty("stale_query_names").EnumerateArray());
         }
         finally
@@ -12107,10 +12724,13 @@ jobs:
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Equal(string.Empty, stdout);
-            Assert.Contains("excerpt JSON output", stderr);
-            Assert.Contains("--max-json-bytes 64", stderr);
-            Assert.Contains("--no-semantic-tokens", stderr);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var error = document.RootElement;
+            Assert.Equal(CommandErrorCodes.ResponseBudgetTooSmall, error.GetProperty("error_code").GetString());
+            Assert.Equal("response_budget", error.GetProperty("category").GetString());
+            Assert.Equal("excerpt", error.GetProperty("command").GetString());
+            Assert.Equal(64, error.GetProperty("requested_bytes").GetInt64());
         }
         finally
         {
@@ -15296,8 +15916,13 @@ jobs:
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Equal(string.Empty, stdout);
-            Assert.Contains("projected search result array JSON output", stderr, StringComparison.Ordinal);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var error = document.RootElement;
+            Assert.Equal(CommandErrorCodes.ResponseBudgetTooSmall, error.GetProperty("error_code").GetString());
+            Assert.Equal("response_budget", error.GetProperty("category").GetString());
+            Assert.Equal("search", error.GetProperty("command").GetString());
+            Assert.Equal(1, error.GetProperty("requested_bytes").GetInt64());
         }
         finally
         {

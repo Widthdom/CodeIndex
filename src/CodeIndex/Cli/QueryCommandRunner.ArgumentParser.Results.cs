@@ -225,6 +225,7 @@ public static partial class QueryCommandRunner
                     else if (TryParsePositiveInt(maxJsonBytesValue!, "--max-json-bytes", out var parsedMaxJsonBytes, out var maxJsonBytesError))
                     {
                         WarnIfDuplicateSingleValueOption("--max-json-bytes", maxJsonBytesValue!);
+                        requestedMaxJsonBytes = parsedMaxJsonBytes;
                         maxJsonBytes = Math.Min(parsedMaxJsonBytes, MaxSearchJsonByteLimit);
                     }
                     else

@@ -50,7 +50,8 @@ public static partial class QueryCommandRunner
                     json,
                     options,
                     "grouped search count",
-                    "Reduce --limit or increase --max-json-bytes.");
+                    "Reduce --limit or increase --max-json-bytes.",
+                    jsonOptions);
             }
             else
             {
@@ -87,7 +88,8 @@ public static partial class QueryCommandRunner
                 json,
                 options,
                 "grouped search count",
-                "Reduce --limit or increase --max-json-bytes.");
+                "Reduce --limit or increase --max-json-bytes.",
+                jsonOptions);
         }
         else
         {
@@ -330,7 +332,8 @@ public static partial class QueryCommandRunner
                 json,
                 options,
                 "search aggregation",
-                "Reduce --limit or increase --max-json-bytes.");
+                "Reduce --limit or increase --max-json-bytes.",
+                jsonOptions);
         }
         else
         {
@@ -527,7 +530,8 @@ public static partial class QueryCommandRunner
             json,
             options,
             "grouped search results",
-            "Reduce --limit, --per-file-limit, or increase --max-json-bytes.");
+            "Reduce --limit, --per-file-limit, or increase --max-json-bytes.",
+            jsonOptions);
     }
 
     private static QueryCountResult CountSearchMatches(DbReader reader, QueryCommandOptions options, bool exact)
@@ -655,7 +659,8 @@ public static partial class QueryCommandRunner
                 writer.ToString().TrimEnd('\r', '\n'),
                 options,
                 "projected search result array",
-                "Reduce --limit, --search-fields, or use `--json=ndjson --max-json-bytes` for streaming output.");
+                "Reduce --limit, --search-fields, or use `--json=ndjson --max-json-bytes` for streaming output.",
+                jsonOptions);
         }
 
         var records = new List<NdjsonOutputRecord>(projected.Length);
@@ -910,7 +915,8 @@ public static partial class QueryCommandRunner
                 BuildCompactLocationsPayload([], options, jsonOptions).ToJsonString(jsonOptions),
                 options,
                 "compact search results",
-                "Increase --max-json-bytes or remove the byte cap.");
+                "Increase --max-json-bytes or remove the byte cap.",
+                jsonOptions);
             return true;
         }
 
@@ -924,7 +930,8 @@ public static partial class QueryCommandRunner
                 }.ToJsonString(jsonOptions),
                 options,
                 "search count",
-                "Increase --max-json-bytes or remove the byte cap.");
+                "Increase --max-json-bytes or remove the byte cap.",
+                jsonOptions);
             return true;
         }
 
@@ -935,29 +942,59 @@ public static partial class QueryCommandRunner
     {
         return WithDb(options, jsonOptions, reader =>
         {
-            var queryCounts = CountSearchNamedBatchQueryResults(reader, options, userExact, out var total, out var fileCount);
+            var freshnessContext = options.Json
+                ? BuildNamedSearchFreshnessContext(
+                    reader,
+                    options.NamedSearchQueries,
+                    options,
+                    userExact)
+                : null;
+            var queryCounts = CountSearchNamedBatchQueryResults(
+                reader,
+                options,
+                userExact,
+                freshnessContext,
+                out var total,
+                out var fileCount,
+                out var freshnessObservations,
+                out var hasFailures);
 
             if (options.Json)
             {
+                var freshness = BuildSearchRecipeQueryFreshness(
+                    freshnessContext!,
+                    freshnessObservations);
                 var json = JsonSerializer.Serialize(
                     new SearchNamedBatchCountSummaryRunJsonResult(
                         JsonOutputContract.ApiVersion,
                         queryCounts.Count,
                         total,
                         fileCount,
-                        BuildSearchRecipeQueryFreshness(queryCounts.Select(query => (query.Name, query.Count))),
+                        freshness,
                         queryCounts),
                     CliJsonSerializerContextFactory.Create(jsonOptions).SearchNamedBatchCountSummaryRunJsonResult);
-                return WriteJsonObjectWithOptionalByteLimit(
+                var writeExitCode = WriteJsonObjectWithOptionalByteLimit(
                     json,
                     options,
                     "named-query count summary",
-                    "Use a larger --max-json-bytes value or narrow the named-query selection.");
+                    "Use a larger --max-json-bytes value or narrow the named-query selection.",
+                    jsonOptions);
+                if (writeExitCode != CommandExitCodes.Success || !hasFailures)
+                    return writeExitCode;
+
+                CommandErrorWriter.WriteStderr(
+                    $"Error [{CommandErrorCodes.UsageError}]: one or more named queries failed; inspect query_freshness.invalid_query_names.");
+                return CommandExitCodes.UsageError;
             }
 
             Console.WriteLine(total.ToString(CultureInfo.InvariantCulture));
             CommandErrorWriter.WriteStderr($"({total} named-query results in {fileCount} files across {queryCounts.Count} queries)");
-            return CommandExitCodes.Success;
+            if (!hasFailures)
+                return CommandExitCodes.Success;
+
+            CommandErrorWriter.WriteStderr(
+                $"Error [{CommandErrorCodes.UsageError}]: one or more named queries failed.");
+            return CommandExitCodes.UsageError;
         });
     }
 
@@ -982,7 +1019,8 @@ public static partial class QueryCommandRunner
                     json,
                     options,
                     "named-query search",
-                    "Reduce --limit, use --snippet-lines 0, or increase --max-json-bytes.");
+                    "Reduce --limit, use --snippet-lines 0, or increase --max-json-bytes.",
+                    jsonOptions);
             }
 
             Console.WriteLine("Named search batch");
@@ -1775,7 +1813,8 @@ public static partial class QueryCommandRunner
             writer.ToString().TrimEnd('\r', '\n'),
             options,
             "compact search results",
-            "Reduce --limit, --snippet-lines, or use `--json=ndjson --max-json-bytes` for streaming output.");
+            "Reduce --limit, --snippet-lines, or use `--json=ndjson --max-json-bytes` for streaming output.",
+            jsonOptions);
     }
 
     private static void WriteCompactSearchResults(

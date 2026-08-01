@@ -451,10 +451,72 @@ public class ProgramRunnerTests
             appVersion: "1.10.0"));
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
-        Assert.Empty(stdout);
-        Assert.Contains(expectedMessage, stderr, StringComparison.Ordinal);
-        Assert.Contains("Usage: cdidx recipes", stderr, StringComparison.Ordinal);
-        Assert.DoesNotContain("Usage: cdidx search", stderr, StringComparison.Ordinal);
+        if (expectedMessage.StartsWith("exceeds --max-json-bytes", StringComparison.Ordinal))
+        {
+            Assert.Empty(stderr);
+            using var document = JsonDocument.Parse(stdout);
+            var error = document.RootElement;
+            Assert.Equal(CommandErrorCodes.ResponseBudgetTooSmall, error.GetProperty("error_code").GetString());
+            Assert.Equal("response_budget", error.GetProperty("category").GetString());
+            Assert.Equal("recipes", error.GetProperty("command").GetString());
+            Assert.Contains("cdidx recipes ", error.GetProperty("usage").GetString(), StringComparison.Ordinal);
+        }
+        else
+        {
+            Assert.Empty(stdout);
+            Assert.Contains(expectedMessage, stderr, StringComparison.Ordinal);
+            Assert.Contains("Usage: cdidx recipes", stderr, StringComparison.Ordinal);
+            Assert.DoesNotContain("Usage: cdidx search", stderr, StringComparison.Ordinal);
+        }
+    }
+
+    [Theory]
+    [InlineData("hotspots")]
+    [InlineData("deps")]
+    [InlineData("inspect")]
+    [InlineData("excerpt")]
+    [InlineData("symbols")]
+    public void RunQueryAliases_ZeroJsonBudgetUsesStructuredResponseBudgetError_Issue4909(string command)
+    {
+        var args = command switch
+        {
+            "hotspots" => new[] { command, "--json", "--summary-only", "--max-json-bytes", "0" },
+            "deps" => [command, "--json", "--summary-only", "--max-json-bytes", "0"],
+            "inspect" => [command, "Target", "--json", "--max-json-bytes", "0"],
+            "excerpt" => [command, "missing.cs", "--start", "1", "--json", "--max-json-bytes", "0"],
+            _ => [command, "Target", "--count", "--json", "--max-json-bytes", "0"],
+        };
+        var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            args,
+            appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Empty(stderr);
+        using var document = JsonDocument.Parse(stdout);
+        var error = document.RootElement;
+        Assert.Equal(CommandErrorCodes.ResponseBudgetTooSmall, error.GetProperty("error_code").GetString());
+        Assert.Equal("response_budget", error.GetProperty("category").GetString());
+        Assert.Equal(command, error.GetProperty("command").GetString());
+        Assert.Equal(0, error.GetProperty("requested_bytes").GetInt64());
+        Assert.Equal(JsonValueKind.Null, error.GetProperty("effective_bytes").ValueKind);
+    }
+
+    [Fact]
+    public void RunQuery_MultipleParseErrorsKeepBudgetMessageAndOtherValidationErrors_Issue4909()
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["map", "--json", "--limit", "0", "--max-json-bytes", "0"],
+            appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.UsageError, exitCode);
+        Assert.Empty(stderr);
+        using var document = JsonDocument.Parse(stdout);
+        var error = document.RootElement;
+        Assert.Equal(CommandErrorCodes.ResponseBudgetTooSmall, error.GetProperty("error_code").GetString());
+        Assert.Contains("--max-json-bytes", error.GetProperty("message").GetString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("--limit", error.GetProperty("message").GetString(), StringComparison.Ordinal);
+        var otherError = Assert.Single(error.GetProperty("other_validation_errors").EnumerateArray());
+        Assert.Contains("--limit", otherError.GetString(), StringComparison.Ordinal);
     }
 
     [Fact]
