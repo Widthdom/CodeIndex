@@ -26,7 +26,15 @@ public static partial class QueryCommandRunner
             options.Lang);
         if (TryWriteUnsupportedOptionError("map", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("map")))
             return CommandExitCodes.UsageError;
-        if (TryWriteParseError(options, "map", options.LanguageValidationError ? jsonOptions : null))
+        if (TryWriteParseError(
+                options,
+                "map",
+                options.LanguageValidationError
+                    || options.Json
+                    && options.ParseError is not null
+                    && TryExtractNonPositiveMaxJsonBytes(options.ParseError, out _, out _, out _)
+                        ? jsonOptions
+                        : null))
             return CommandExitCodes.UsageError;
         if (TryWriteUnsupportedOutputFormat("map", options, RepoMapOutputFormats, "Use `--format json`, `--format compact`, or `--format issue-drafts` for map output; use `cdidx files --count` when you need only a file count."))
             return CommandExitCodes.UsageError;
@@ -108,6 +116,7 @@ public static partial class QueryCommandRunner
                     options,
                     "map issue-draft",
                     "Reduce --limit, narrow --path/--lang filters, or increase --max-json-bytes.",
+                    jsonOptions,
                     "map");
                 return issueDraftsExitCode != CommandExitCodes.Success
                     ? issueDraftsExitCode
@@ -130,6 +139,7 @@ public static partial class QueryCommandRunner
                         options,
                         "map",
                         "Use `--summary-only`, narrow --sections/--path/--lang filters, switch to --compact, or increase --max-json-bytes.",
+                        jsonOptions,
                         "map");
                     if (zeroJsonExitCode != CommandExitCodes.Success)
                         return zeroJsonExitCode;
@@ -156,6 +166,7 @@ public static partial class QueryCommandRunner
                     options,
                     "map",
                     "Use `--summary-only`, narrow --sections/--path/--lang filters, switch to --compact, or increase --max-json-bytes.",
+                    jsonOptions,
                     "map");
             }
             else

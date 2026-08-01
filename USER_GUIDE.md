@@ -1299,6 +1299,8 @@ Here, drift refusal means drift detected through the final pre-publication valid
 
 `cdidx optimize --dry-run --json` previews FTS5 maintenance without acquiring the index lock or changing the source DB/WAL/SHM files. The result includes DB/core-table/FTS sizes, page and freelist indicators, the incremental-write recommendation, current lock and readiness state, a previous-duration estimate when available, and the operations a real optimize would perform, including its repair-mode schema initialization or migration check. `object_sizes_measurement` distinguishes exact `dbstat` page bytes from the logical-payload fallback used when SQLite does not provide `dbstat`.
 
+`status --check --json` returns structured `repair_commands` for failed checks. Each entry identifies its `action`, `args`, `mutation_class`, `safety_class`, and `safety_notes`; `reason` remains the first trigger for compatibility, while `reasons` contains every trigger in deterministic check order. Identical structured actions are emitted once, but commands with different targets, options, actions, or safety semantics stay separate. Human check output applies the same rule, preserves platform-aware shell quoting, and visibly escapes control characters so each `[repair]` command remains one diagnostic line; structured JSON `args` retain their original values. Writable repair arguments use normalized local paths rather than preserving read-only `file:` URI options.
+
 ### Search code
 
 ```bash
@@ -1377,8 +1379,16 @@ limit before/after checks to the same source line and the primary match column
 ordering instead of nearby lines. JSON search results include
 `guard_evidence` for matched guards and `guard_checks` for each guard evaluated
 on a returned match. Guard evidence includes the guard name, pattern,
-before/after relationship, scope (`window` or `same_line`), 1-based span,
-origin category, and source line.
+before/after relationship, scope (`window`, `same_line`, or the recipe-only
+`container` scope), 1-based span, origin category, and source line. Built-in
+whole-file-read and filesystem-traversal recipes use bounded C# structural
+checks instead of line proximity: they correlate the same path through a
+size/control guard or resolved bounded writer, and resolve the
+`EnumerationOptions` value actually passed to `Directory.Enumerate*`.
+Structural `guard_evidence` also reports `decision`, `reason`, `subject`,
+`container`, and `evidence_path`; `guard_checks[].rejected_evidence` explains
+why unrelated paths, inverted checks, unawaited helpers, or missing/unrelated
+options were not accepted as guards.
 Each `guard_checks[]` entry includes a compact pass/fail summary.
 Guarded searches inspect a bounded candidate set before pagination; if a guarded
 query is too broad to satisfy the requested page within that budget, CLI and MCP
@@ -1410,15 +1420,24 @@ issue-draft export and downstream triage tools can keep the reviewer guidance
 next to the evidence path. For example,
 `classifiers` describe the triage dimensions that downstream tools should use,
 such as `source_origin`, `guard_evidence`, `secret_origin`,
-`parser_guard_evidence`, `process_launch_boundary`, `cancellation_intent`,
-`task_result_intent`, `active_skip_governance`, `broad_catch_boundary`, and
-`diagnostic_redaction`; each classifier lists categories, evidence fields, and
-guidance so noisy audit terms can be separated before filing.
+`parser_guard_evidence`, `process_launch_boundary`, `regex_operation_semantics`,
+`shell_execute_polarity`, `cancellation_intent`, `task_result_intent`,
+`active_skip_governance`, `broad_catch_boundary`, and `diagnostic_redaction`;
+each classifier lists categories, evidence fields, and guidance so noisy audit
+terms can be separated before filing.
 `dogfood-risk-patterns` includes process-launch boundary child queries for
 `ProcessStartInfo`, `Process.Start`, `ArgumentList`, `UseShellExecute`,
 working-directory choices, stdout/stderr redirection, waits, termination, shared
 launch/environment policies, and broad plugin/hook/trust-override discovery
 terms.
+The `static-regex-api*` children inspect the matched code-origin `Regex` member:
+exact `Escape` / `Unescape` helpers on a receiver proven to be the BCL type are
+suppressed, while matching operations and unresolved or source-defined
+receiver/member evidence remain findings. `process-shell-execute` similarly
+suppresses only a matched direct literal `UseShellExecute=false` assignment;
+literal `true` and propagated or otherwise unresolved values remain findings
+with semantic classification evidence. Nearby comments and string literals do
+not change either semantic decision.
 `risky-code/broad-exception-catch` includes broad-catch boundary categories and
 expected diagnostic behaviors so users can distinguish intentional top-level,
 cleanup, probe, diagnostic-sanitization, and worker boundaries from catches that
@@ -1469,12 +1488,19 @@ include `classifier_counts` when classified rows are present. For example,
 `phrase-risk-patterns/task-result-property-review` separates DTO/result-wrapper
 `.Result` properties from Task/ValueTask blocking waits. Recipe JSON and
 compact output also return `next_cursor` when a single selected recipe query is
-truncated. Recipe run summaries and
-count summaries include `query_freshness` with the number of queries that found
-positive evidence, the number that returned zero results, and `stale_query_names`
-so broad audit recipes can surface query drift without requiring the full
-recipe catalog JSON. Output-limited recipe runs use matched-count metadata for
-this summary, so queries with known omitted matches are not reported as stale.
+truncated. Recipe run summaries and count summaries include `query_freshness`.
+The compatibility fields `positive_evidence_query_count` and
+`zero_result_query_count` still describe result cardinality, while
+`clean_query_count`, `matched_query_count`, `clean_zero_match_query_count`, and
+per-query `freshness_state` / `result_state` keep successful zero-match queries
+separate from real freshness invalidation. `stale_query_names` is now reserved
+for stale index or changed recipe/query definition versions; failed or missing
+child executions are listed under `invalid_query_names`. Recipe definition and
+query definition versions make cached consumers able to detect drift without
+inferring freshness from match counts. Text recipe output summarizes the same
+states, and SARIF recipe runs expose the same `query_freshness` object in run
+properties. Output-limited recipe runs use matched-count metadata for this
+summary, so queries with known omitted matches are not reported as zero-match.
 The `relaxed-json-encoder` query and JSON read/write queries also publish the
 `json_trust_boundary` classifier. Place a source-proximate annotation immediately
 before the operation when the trust boundary is known:
@@ -2228,7 +2254,7 @@ If a query itself begins with `-`, pass it as `--query <query>` or `-- <query>`.
 
 ### Error codes
 
-For scripts and AI agents that need to classify failures without substring-matching the human prose, every CLI error carries a stable machine-readable code. Human stderr prefixes the code in brackets (`Error [E001_DB_NOT_FOUND]: database not found at …`) and CLI `--json` envelopes add an optional `error_code` field (omitted when not applicable, so existing JSON consumers see no schema break). Recoverable non-database failures from `outline`, `hooks`, `doctor`, and `validate-config` always use the versioned error envelope with `error_code`, `category`, `command`, `exit_code`, `hint`, and `usage`, plus sanitized optional context. In JSON mode, missing-query validation for `search` / `find`, incompatible `status --config` modes, `definition` / `goto` misses, and missing or out-of-range `excerpt` coordinates are emitted as one versioned `{ "status": "error", ... }` object on stdout instead of plain text or an empty stream. A `definition` miss uses `E018_QUERY_NOT_FOUND` and exit code `2`; bounded-envelope controls retain the error under `metadata.error` with an empty `results` array, while an explicitly impossible `--max-json-bytes` cap instead produces a usage error on stderr before any oversized stdout is written. MCP tool errors usually surface as `isError: true` text content, while newer failure modes can also expose stable fields under `structuredContent`; the bracketed CLI constant is not guaranteed to appear in MCP message text. See [Troubleshooting](#troubleshooting) for the MCP message text and structured fields each failure mode expects clients to match. Codes never get renamed or reused once published — retired codes simply stop being emitted.
+For scripts and AI agents that need to classify failures without substring-matching the human prose, every CLI error carries a stable machine-readable code. Human stderr prefixes the code in brackets (`Error [E001_DB_NOT_FOUND]: database not found at …`) and CLI `--json` envelopes add an optional `error_code` field (omitted when not applicable, so existing JSON consumers see no schema break). Recoverable non-database failures from `outline`, `hooks`, `doctor`, and `validate-config` always use the versioned error envelope with `error_code`, `category`, `command`, `exit_code`, `hint`, and `usage`, plus sanitized optional context. In JSON mode, missing-query validation for `search` / `find`, incompatible `status --config` modes, `definition` / `goto` misses, and missing or out-of-range `excerpt` coordinates are emitted as one versioned `{ "status": "error", ... }` object on stdout instead of plain text or an empty stream. A `definition` miss uses `E018_QUERY_NOT_FOUND` and exit code `2`; bounded-envelope controls retain the error under `metadata.error` with an empty `results` array. An impossible `--max-json-bytes` request—including an NDJSON terminal or first results-only row that cannot fit—uses `E028_RESPONSE_BUDGET_TOO_SMALL` / `response_budget` and writes one complete error object to stdout with empty stderr, even when the diagnostic exceeds the cap that applies to normal payloads. Its requested/effective/minimum and known/uncertain fields accompany a machine-readable `retry` action. `increase_max_json_bytes` provides `recommended_bytes`; when the minimum exceeds the effective 16 MiB ceiling, `reduce_response_size` instead returns a null recommendation and `maximum_effective_bytes`. MCP tool errors usually surface as `isError: true` text content, while newer failure modes can also expose stable fields under `structuredContent`; the bracketed CLI constant is not guaranteed to appear in MCP message text. See [Troubleshooting](#troubleshooting) for the MCP message text and structured fields each failure mode expects clients to match. Codes never get renamed or reused once published — retired codes simply stop being emitted.
 
 | Code | When emitted |
 |---|---|
@@ -2259,6 +2285,7 @@ For scripts and AI agents that need to classify failures without substring-match
 | `E025_HOOK_OPERATION_FAILED` | A Git hook operation failed at a platform or filesystem boundary |
 | `E026_NOT_GIT_REPOSITORY` | `hooks` was run outside a Git worktree and no valid `--project` was supplied |
 | `E027_DB_NOT_DATABASE` | SQLite rejected the target as not being a database, or maintenance validation rejected it as not being a CodeIndex database |
+| `E028_RESPONSE_BUDGET_TOO_SMALL` | The requested JSON byte budget cannot fit the minimum complete normal payload or envelope |
 
 ### Debugging reader errors
 
@@ -4712,7 +4739,7 @@ DB を read-only で開いて SQLite の `PRAGMA integrity_check` を実行し�
 
 DB / WAL の肥大や空き page を確認したい場合は `status --json` の `maintenance_guidance` を見ます。既定では WAL が 64 MiB 以上で `checkpoint_recommended`、`freelist_count / page_count` が 0.20 以上で `vacuum_recommended` になり、`recommended_command` と `post_maintenance_follow_up` が返ります。しきい値は `CDIDX_MAINTENANCE_WAL_WARN_BYTES` と `CDIDX_MAINTENANCE_FREELIST_WARN_RATIO` で調整できます。
 
-`status --check --json` は failed check ごとに `repair_commands` を返します。各 entry は `name`、`args`、`reason`、`safety_notes` を持つため、自動化は `recommended_action` の文章を分解せずに修復コマンドを組み立てられます。前回の index が中断・失敗した情報が DB に残っている場合は、`last_failed_or_partial_index_run` に bounded metadata だけを返し、例外本文や file path は含めません。
+`status --check --json` は failed check に対する構造化 `repair_commands` を返します。各 entry は `action`、`args`、`mutation_class`、`safety_class`、`safety_notes` を持ち、互換用の `reason` は最初の trigger、`reasons` は deterministic な check 順序ですべての trigger を保持します。同一の構造化 action は1件だけ返しますが、target、option、action、安全性 semantics が異なる command は別々に維持します。human check output にも同じ規則を適用し、platform-aware な shell quote と control character の可視 escape により、各 `[repair]` command を1行に維持します。構造化 JSON の `args` は原値を保持します。書き込み用の修復 argument には read-only の `file:` URI option を残さず、正規化済み local path を使います。前回の index が中断・失敗した情報が DB に残っている場合は、`last_failed_or_partial_index_run` に bounded metadata だけを返し、例外本文や file path は含めません。
 
 ```bash
 cdidx vacuum --dry-run --json   # 回収見積もりと maintenance guidance だけを確認
@@ -4795,7 +4822,14 @@ guard-aware search は primary の `search` 一致を近傍の literal guard で
 before / after を評価します。JSON の検索結果には
 一致した guard の `guard_evidence` と、返却された一致に対して評価した各 guard の
 `guard_checks` が含まれます。guard evidence には guard 名、pattern、before/after の関係、
-scope（`window` または `same_line`）、1-based span、origin category、ソース行、簡潔な pass/fail summary が入ります。
+scope（`window`、`same_line`、または recipe 専用の `container`）、1-based span、
+origin category、ソース行、簡潔な pass/fail summary が入ります。組み込みの whole-file-read と
+filesystem-traversal recipe は行の近接性ではなく、上限付きの C# 構造判定を使います。同じ path の
+size / control guard または解決済み bounded writer を関連付け、`Directory.Enumerate*` に実際に
+渡された `EnumerationOptions` 値を解決します。構造的な `guard_evidence` はさらに
+`decision`、`reason`、`subject`、`container`、`evidence_path` を返し、
+`guard_checks[].rejected_evidence` は無関係な path、反転した条件、await されない helper、
+未指定または無関係な options が guard として採用されなかった理由を説明します。
 guard filter を使う検索は pagination 前に上限付きの候補集合だけを調べます。その budget 内で
 要求ページを満たせないほど query が広い場合、CLI/MCP は validation error を返します。
 このエラーには guard budget、sampled candidate files / languages、`--count` / `--count-by`
@@ -4846,14 +4880,21 @@ facet の短い一覧です。recipe run の JSON は各 matching result にも�
 issue-draft export や下流の triage tool が evidence path の近くに reviewer guidance を
 保持できます。`classifiers` は下流 tool が使うべき triage の軸を表し、
 `source_origin`、`guard_evidence`、`secret_origin`、`parser_guard_evidence`、
-`process_launch_boundary`、`cancellation_intent`、`task_result_intent`、
-`active_skip_governance`、`broad_catch_boundary`、`diagnostic_redaction` などの
-classifier が category、evidence field、guidance を持つため、ノイズの多い audit term を
-起票前に切り分けられます。
+`process_launch_boundary`、`regex_operation_semantics`、`shell_execute_polarity`、
+`cancellation_intent`、`task_result_intent`、`active_skip_governance`、
+`broad_catch_boundary`、`diagnostic_redaction` などの classifier が category、
+evidence field、guidance を持つため、ノイズの多い audit term を起票前に切り分けられます。
 `dogfood-risk-patterns` は `ProcessStartInfo`、`Process.Start`、`ArgumentList`、
 `UseShellExecute`、working-directory 選択、stdout/stderr redirection、wait、
 termination、共有 launch/environment policy、広めの plugin/hook/trust-override
 discovery 用語を process-launch boundary の child query として含みます。
+`static-regex-api*` child は一致した code-origin の `Regex` member を判定し、BCL type と
+証明できる receiver 上の厳密な `Escape` / `Unescape` helper を除外する一方、matching
+operation、解決不能または source-defined の receiver/member evidence は finding として
+残します。`process-shell-execute` も、一致した直接の literal `UseShellExecute=false` 代入だけを
+除外します。literal `true` と、伝播またはその他の理由で解決できない値は、意味論的な分類
+evidence を伴う finding として残ります。周辺の comment や string literal は、どちらの意味
+判定も変更しません。
 たとえば `risky-code/broad-exception-catch` は
 broad catch の境界カテゴリと期待される diagnostic behavior を含めるため、意図的な
 top-level、cleanup、probe、diagnostic-sanitization、worker 境界と、narrowing または
@@ -4880,10 +4921,16 @@ DTO / result-wrapper の `.Result` property と Task / ValueTask の blocking wa
 recipe の JSON / compact output は、単一の recipe query が truncated された場合に `next_cursor`
 も返します。`--format compact` は
 summary、query count、query ごとの count、`truncated` flag、該当する場合の `next_cursor`
-を返します。recipe run summary と count summary は `query_freshness` も返し、肯定的な根拠が
-見つかった query 数、結果 0 件の query 数、`stale_query_names` を示します。これにより、
-広範な audit recipe の query drift を full recipe catalog JSON なしで確認できます。出力制限された
-recipe run では matched-count metadata を使うため、省略済みの match がある query は stale として報告されません。
+を返します。recipe run summary と count summary は `query_freshness` も返します。
+互換フィールドの `positive_evidence_query_count` と `zero_result_query_count` は引き続き結果件数を
+表し、`clean_query_count`、`matched_query_count`、`clean_zero_match_query_count` と query ごとの
+`freshness_state` / `result_state` により、正常に実行された 0 件の query を実際の freshness
+無効化と分離します。`stale_query_names` は stale index または recipe / query definition version
+変更だけに使い、失敗または欠落した child execution は `invalid_query_names` に示します。
+recipe definition と query definition の version により、cache consumer は match 数から freshness
+を推測せず drift を検出できます。text の recipe output も同じ状態を要約し、SARIF recipe run は
+run properties の `query_freshness` に同じ object を出力します。出力制限された recipe run では
+matched-count metadata を使うため、省略済みの match がある query は zero-match として報告されません。
 `relaxed-json-encoder` query と JSON の read / write query は
 `json_trust_boundary` classifier も公開します。trust boundary が判明している場合は、対象操作の
 直前に source-proximate な注釈を置きます。
@@ -5580,7 +5627,7 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 
 ### エラーコード
 
-スクリプトや AI エージェントが人間向け文言の部分一致なしで失敗を分類できるよう、CLI のエラーには安定した機械可読コードが付与されます。人間向け stderr ではコードを角括弧で前置し（`Error [E001_DB_NOT_FOUND]: database not found at …`）、CLI `--json` エンベロープには任意フィールド `error_code` を追加します（該当しない場合は省略されるので、既存 JSON 利用者にスキーマ破壊なし）。`outline`、`hooks`、`doctor`、`validate-config` の回復可能な非データベース系失敗は、`error_code`、`category`、`command`、`exit_code`、`hint`、`usage` と sanitization 済みの任意 context を持つバージョン付き error envelope を必ず使います。JSON モードでは、`search` / `find` の query 欠落、`status --config` の mode 競合、`definition` / `goto` の未検出、`excerpt` の file 未検出・行範囲外を plain text や空ストリームではなく、version 付きの `{ "status": "error", ... }` オブジェクト 1 件として stdout に出力します。`definition` の未検出は `E018_QUERY_NOT_FOUND` と終了コード `2` を使い、bounded-envelope control の使用時も空の `results` array と `metadata.error` に error を維持します。明示した `--max-json-bytes` が object を格納できない場合は、上限超過の stdout を書く前に stderr の usage error で終了します。MCP ツールエラーは通常 `isError: true` のテキストコンテンツとして返りますが、新しい失敗モードでは `structuredContent` に安定フィールドを持つこともあります。本文に CLI 側の角括弧付き定数が必ず含まれる保証はありません。MCP クライアントが照合すべき各失敗モードの MCP メッセージ本文と構造化フィールドは [トラブルシューティング](#トラブルシューティング) を参照してください。一度公開したコードは renaming / 使い回しをせず、廃止する場合も新規 emission を止めるだけです。
+スクリプトや AI エージェントが人間向け文言の部分一致なしで失敗を分類できるよう、CLI のエラーには安定した機械可読コードが付与されます。人間向け stderr ではコードを角括弧で前置し（`Error [E001_DB_NOT_FOUND]: database not found at …`）、CLI `--json` エンベロープには任意フィールド `error_code` を追加します（該当しない場合は省略されるので、既存 JSON 利用者にスキーマ破壊なし）。`outline`、`hooks`、`doctor`、`validate-config` の回復可能な非データベース系失敗は、`error_code`、`category`、`command`、`exit_code`、`hint`、`usage` と sanitization 済みの任意 context を持つバージョン付き error envelope を必ず使います。JSON モードでは、`search` / `find` の query 欠落、`status --config` の mode 競合、`definition` / `goto` の未検出、`excerpt` の file 未検出・行範囲外を plain text や空ストリームではなく、version 付きの `{ "status": "error", ... }` オブジェクト 1 件として stdout に出力します。`definition` の未検出は `E018_QUERY_NOT_FOUND` と終了コード `2` を使い、bounded-envelope control の使用時も空の `results` array と `metadata.error` に error を維持します。NDJSON terminal または results-only の先頭 row が収まらない場合を含む不可能な `--max-json-bytes` 要求は、`E028_RESPONSE_BUDGET_TOO_SMALL` / `response_budget` を使い、通常 payload に適用する cap より diagnostic が大きくなっても、完全な error object 1 件を stdout に出力して stderr を空に保ちます。requested / effective / minimum と既知 / 不確実性 field に加え、機械可読な `retry` action を返します。`increase_max_json_bytes` は `recommended_bytes` を返し、最小値が有効な 16 MiB 上限を超える場合は `reduce_response_size` が null の推奨値と `maximum_effective_bytes` を返します。MCP ツールエラーは通常 `isError: true` のテキストコンテンツとして返りますが、新しい失敗モードでは `structuredContent` に安定フィールドを持つこともあります。本文に CLI 側の角括弧付き定数が必ず含まれる保証はありません。MCP クライアントが照合すべき各失敗モードの MCP メッセージ本文と構造化フィールドは [トラブルシューティング](#トラブルシューティング) を参照してください。一度公開したコードは renaming / 使い回しをせず、廃止する場合も新規 emission を止めるだけです。
 
 | コード | 発行条件 |
 |---|---|
@@ -5611,6 +5658,7 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `E025_HOOK_OPERATION_FAILED` | Git hook 操作が platform または filesystem boundary で失敗した |
 | `E026_NOT_GIT_REPOSITORY` | Git worktree 外で `hooks` を実行し、有効な `--project` も指定されていなかった |
 | `E027_DB_NOT_DATABASE` | SQLite が対象を database ではないと拒否した、または maintenance validation が CodeIndex database ではないと判定した |
+| `E028_RESPONSE_BUDGET_TOO_SMALL` | 要求した JSON byte budget に最小の完全な通常 payload または envelope が収まらない |
 
 ### reader エラーのデバッグ
 

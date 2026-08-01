@@ -134,7 +134,7 @@ When the byte cap omits rows, these commands return partial-result exit code `11
 
 High-volume `definition`, `find`, `status`, `hotspots`, `references`, `callers`, `callees`, `impact`, `map`, and `outline` responses also support an opt-in bounded envelope through `--fields`, `--cursor`, compact output where advertised, and a total `--max-json-bytes` budget. Its metadata reports returned/total/omitted counts and an opaque `next_cursor`; replay that cursor with the same query, filters, and sort arguments. The response also exposes its 10,000-row safety window and reports when that window is exhausted instead of emitting an unusable cursor. Existing compact location responses retain their top-level keys and lightweight `file` / `line` rows while adding the shared metadata; `refs` / `stats` aliases and matching read-only `batch` children use the same envelope and hard cap. `hotspots` and `impact` page their active primary collection, while dotted projections such as `callers.path,callers.depth` select nested rows and report that collection's total. `map --sections` selects whole response sections; a bounded projection such as `--fields top_files.path` instead pages that section's rows and avoids building unrelated ranked sections. For `definition --body`, `body`, `body_content`, and `all` retain the explicit body; projections that exclude it avoid materializing body text. `outline --max-json-bytes` pages complete UTF-8 symbol rows, including the final newline, and keeps hierarchy and ordering stable while honoring `--outline-fields`; uncapped outline JSON retains its established shape and cursor contract.
 
-Bounded `map --compact` keeps the established top-level section arrays and compact truncation data while adding shared metadata. A map collection projection is rejected when `--summary-only` or an excluding `--sections` selection would remove that collection. Diagnostic `--profile` / `--verbose` objects are retained as metadata control records rather than projected rows, and every hard byte cap also applies to parser or capture error output; stdout stays empty when even the bounded error envelope cannot fit.
+Bounded `map --compact` keeps the established top-level section arrays and compact truncation data while adding shared metadata. A map collection projection is rejected when `--summary-only` or an excluding `--sections` selection would remove that collection. Diagnostic `--profile` / `--verbose` objects are retained as metadata control records rather than projected rows. `--max-json-bytes` is a hard cap for normal JSON payloads; if the minimum complete payload, envelope, NDJSON terminal, or first results-only NDJSON row cannot fit, JSON mode instead writes one complete `E028_RESPONSE_BUDGET_TOO_SMALL` object to stdout and leaves stderr empty, even when that error object is larger than the requested normal-payload cap. The error reports requested/effective bytes, a computable minimum (or a stable unavailability reason), any retry uncertainty, and machine-readable retry guidance. `retry.action=increase_max_json_bytes` supplies `recommended_bytes` when a larger supported budget can work; if the minimum exceeds the effective 16 MiB ceiling, `retry.action=reduce_response_size` leaves the byte recommendation null and reports `maximum_effective_bytes`.
 
 `find --all --json` also makes bounded scans explicit. Repository-wide case-insensitive ASCII literals of at least three characters use the trigram index to select candidate files before the existing line matcher verifies every result; regex, `--exact`, short, non-ASCII, legacy, unsynchronized, and actively rebuilding trigram-index queries use an explicit line-scan fallback. `search_strategy` and optional `search_fallback_reason` report which path ran. Default streaming JSON rows end with a terminal record containing `scan_complete`, `authoritative_rows`, verified file/line counts, active caps, truncation reason, and recovery guidance; count JSON carries the same scan state in its single result object through `authoritative_count`. Row formats that cannot carry this metadata, including JSON array and location-only formats, are rejected with `--all`; use text, NDJSON, or count output. A candidate-file or line-scan cap returns partial-result exit code `11` unless `--allow-partial` is set. Ordinary result-limit early stops remain exit `0` but report `scan_complete=false` and `result_limit_reached=true`.
 
@@ -195,6 +195,16 @@ If one file throws during indexing, cdidx commits successful files and their gra
 edges, reports structured `file_errors`, and exits with partial-result code `11`.
 Use `--allow-partial` only when automation deliberately accepts exit `0` for that
 incomplete generation; JSON still reports `status: "partial"`.
+
+`outline` derives callable display names from persisted signatures without changing
+canonical symbol names, paths, or exact-query aliases. C# generic methods normally use
+stable arity placeholders (`<T>` or `<T1, T2, ...>`), choosing deterministic
+collision-free `TArg` placeholders when a concrete type name would be ambiguous. The
+reader substitutes method-type-parameter references without rewriting qualified types,
+parses attributes and default-value literals lexically, omits constraints, and retains
+overload-significant `ref` / `out` / `in` modifiers. Older indexes whose callable
+signature is missing, truncated, or incomplete retain the compatibility fallback
+`Name@line` until they are reindexed.
 
 ## Highlights
 
@@ -307,6 +317,17 @@ optimization recommendation used by status and optimize.
 | Database size attribution | `database_size_attribution` separates main DB, WAL, and SHM file bytes and reconciles logical pages across tables, indexes, freelist pages, internal/leaf/overflow page types, payload, unused space, structural overhead, and `unexplained_residual_bytes`. It emits at most 20 redacted/truncated object names. `available=false` with `unavailable_reason` means page attribution was not measurable; omitted object-byte fields must not be interpreted as zero. |
 | Remediation fields | `degraded_root_cause`, `degraded_reason`, `recommended_action`, `alternative_action`, `readiness_degradations`, `repair_commands`. |
 | MCP-only session diagnostics | `mcp_session`, `mcp_session.metrics`, `mcp_session.audit_log`, `mcp.rate_limit.bucket_limit`, `mcp.rate_limit.bucket_limit_rejection_count`. |
+
+When check mode fails, each `repair_commands[]` entry includes `name`, `action`,
+`args`, `mutation_class`, `safety_class`, `safety_notes`, the compatibility
+`reason` (the first trigger), and the complete ordered `reasons` list. Commands
+with the same structured action, arguments, mutation class, and safety semantics
+are emitted once with their reasons aggregated in check priority order. Different
+targets, options, actions, or safety semantics remain separate even if their
+rendered command text looks similar. Human check output follows the same
+deduplication and preserves platform-aware shell quoting in one `[repair]` line per
+structured action. Control characters are visibly escaped in human output so they
+cannot forge additional lines; structured JSON `args` retain their original values.
 
 Supplying `status --stale-after <duration>` implies the workspace freshness check.
 Check-mode JSON includes `query_context.check_mode` (`explicit` or
@@ -644,7 +665,7 @@ byte cap により行を省略した場合、これらのコマンドは partial
 
 高ボリュームな `definition`、`find`、`status`、`hotspots`、`references`、`callers`、`callees`、`impact`、`map`、`outline` の応答は、`--fields`、`--cursor`、対応 command の compact 出力、応答全体に対する `--max-json-bytes` により opt-in の bounded envelope も利用できます。metadata は返却 / 総 / 省略件数と opaque な `next_cursor` を返します。次ページでは同じ query、filter、sort 引数とともにその cursor を再利用してください。応答は 10,000 row の safety window も公開し、上限到達時には利用不能な cursor を返さず、window の消費完了を報告します。既存の compact location 応答はトップレベル key と軽量な `file` / `line` row を維持したまま共通 metadata を追加し、`refs` / `stats` alias と対応する read-only `batch` 子 command にも同じ envelope と hard cap を適用します。`hotspots` と `impact` は active な主要 collection をページングし、`callers.path,callers.depth` のような dotted projection は nested row とその collection の総件数を返します。`map --sections` は section 全体を選びますが、`--fields top_files.path` のような bounded projection はその section の row をページングし、無関係な ranking section を構築しません。`definition --body` では `body`、`body_content`、`all` が明示的な body を保持し、body を除外する projection では本文を取得しません。`outline --max-json-bytes` は最後の改行を含む完全な UTF-8 symbol row 単位でページングし、`--outline-fields` を尊重しながら階層と順序を維持します。上限なしの outline JSON は従来の形状と cursor 契約を維持します。
 
-bounded な `map --compact` は、共通 metadata を追加しながら既存のトップレベル section array と compact truncation data を維持します。map collection projection と `--summary-only`、またはその collection を除外する `--sections` の組み合わせは拒否します。`--profile` / `--verbose` の diagnostic object は projected row ではなく metadata の control record として保持し、parser / capture error 出力にも hard byte cap を適用します。bounded error envelope 自体が収まらない場合、stdout は空のままです。
+bounded な `map --compact` は、共通 metadata を追加しながら既存のトップレベル section array と compact truncation data を維持します。map collection projection と `--summary-only`、またはその collection を除外する `--sections` の組み合わせは拒否します。`--profile` / `--verbose` の diagnostic object は projected row ではなく metadata の control record として保持します。`--max-json-bytes` は通常の JSON payload に対する hard cap です。最小の完全な payload、envelope、NDJSON terminal、または results-only NDJSON の先頭 row が収まらない場合、JSON mode は要求された通常 payload の cap より大きくなっても、完全な `E028_RESPONSE_BUDGET_TOO_SMALL` object を stdout に1件出力し、stderr を空に保ちます。この error は requested / effective byte、算出可能な最小値（または安定した算出不能理由）、再試行値の不確実性、機械可読な再試行案内を返します。より大きい対応 budget が有効な場合は `retry.action=increase_max_json_bytes` と `recommended_bytes` を返し、最小値が有効な 16 MiB 上限を超える場合は `retry.action=reduce_response_size`、null の byte 推奨値、`maximum_effective_bytes` を返します。
 
 `find --all --json` も上限付き scan を明示します。3 文字以上の大文字小文字を区別しない ASCII literal は、trigram index で候補 file を選んだ後、既存の行 matcher ですべての結果を検証します。regex、`--exact`、短い query、非 ASCII query、旧 trigram index、同期 trigger が欠けた index、再構築中の index は明示的な line-scan fallback を使います。実行経路は `search_strategy` と任意の `search_fallback_reason` で確認できます。既定の streaming JSON row は `scan_complete`、`authoritative_rows`、検証済み file / line 数、有効な cap、切り詰め理由、復旧案内を含む終端レコードで終了します。count JSON は単一 result object の `authoritative_count` と同じ scan 状態を返します。この metadata を表現できない JSON array や location-only 形式は `--all` との組み合わせを拒否するため、text、NDJSON、count 出力を使ってください。candidate-file cap または line-scan cap に達した場合は、`--allow-partial` を指定しない限り partial-result 終了コード `11` を返します。通常の result limit による早期停止は終了コード `0` のままですが、`scan_complete=false` と `result_limit_reached=true` を報告します。
 
@@ -702,6 +723,15 @@ index 中に 1 ファイルで例外が発生した場合、cdidx は成功フ�
 commit し、構造化 `file_errors` を返して partial-result 終了コード `11` で終了します。
 不完全 generation の終了コード `0` を automation が意図的に許容するときだけ
 `--allow-partial` を指定してください。JSON の `status: "partial"` は維持されます。
+
+`outline` は canonical symbol name、path、完全一致 query alias を変更せず、永続化済み
+signature から callable の表示名を導出します。C# generic method は通常、安定した arity
+placeholder（`<T>` または `<T1, T2, ...>`）を使い、具体的な型名と衝突する場合は決定的で
+衝突しない `TArg` placeholder を選びます。method type parameter の参照だけを置換して修飾型は
+書き換えず、attribute と既定値 literal は字句として解析します。constraint は省略しつつ
+overload を区別する `ref` / `out` / `in` modifier は保持します。callable signature が欠落、
+切り詰め、または不完全な旧 index は、再 index されるまで互換 fallback の `Name@line` を
+維持します。
 
 ## 特長
 
@@ -810,6 +840,16 @@ FTS optimization recommendation を説明します。
 | database size attribution | `database_size_attribution` は main DB / WAL / SHM の file byte を分離し、論理 page を table、index、freelist、internal / leaf / overflow page、payload、unused space、structural overhead、`unexplained_residual_bytes` に再照合します。object 名は伏字・切り詰めを適用して最大20件だけ返します。`available=false` と `unavailable_reason` がある場合は page attribution を計測できなかったことを示し、省略された object-byte field をゼロとして解釈してはいけません。 |
 | remediation fields | `degraded_root_cause`, `degraded_reason`, `recommended_action`, `alternative_action`, `readiness_degradations`, `repair_commands`。 |
 | MCP-only session diagnostics | `mcp_session`, `mcp_session.metrics`, `mcp_session.audit_log`, `mcp.rate_limit.bucket_limit`, `mcp.rate_limit.bucket_limit_rejection_count`。 |
+
+check mode が失敗した場合、各 `repair_commands[]` entry は `name`、`action`、
+`args`、`mutation_class`、`safety_class`、`safety_notes`、互換用の `reason`
+（最初の trigger）、および順序付きの全 `reasons` list を含みます。同じ構造化
+action、argument、mutation class、安全性 semantics を持つ command は1件だけ返し、
+reason は check の優先順で集約します。target、option、action、安全性 semantics が
+異なる command は、表示上の command text が似ていても別々に維持します。human
+check output も同じ deduplication を使い、platform-aware な shell quote を維持した
+`[repair]` line を構造化 action ごとに1件だけ表示します。human output では control
+character を可視 escape して偽の行を防ぎ、構造化 JSON の `args` は原値を維持します。
 
 `status --stale-after <duration>` を指定すると workspace freshness check を暗黙に有効化します。
 check mode の JSON は `query_context.check_mode`（`explicit` または

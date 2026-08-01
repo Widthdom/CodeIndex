@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization.Metadata;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
 using CodeIndex.Models;
@@ -12,6 +13,8 @@ namespace CodeIndex.Cli;
 
 public static partial class QueryCommandRunner
 {
+    internal static Action? SearchQueryFreshnessWorkspaceCheckForTesting;
+
     private static int WriteSearchRecipeList(
         QueryCommandOptions options,
         JsonSerializerOptions jsonOptions,
@@ -49,6 +52,7 @@ public static partial class QueryCommandRunner
                     options,
                     "recipe-name list",
                     "Use a larger --max-json-bytes value or remove recipe filters.",
+                    jsonOptions,
                     usageCommandName);
             }
 
@@ -69,6 +73,7 @@ public static partial class QueryCommandRunner
                 options,
                 "recipe summary",
                 "Use `cdidx recipes --names --json` for the smallest recipe-list JSON.",
+                jsonOptions,
                 usageCommandName);
         }
         if (options.SummaryOnly)
@@ -87,6 +92,7 @@ public static partial class QueryCommandRunner
                 options,
                 "recipe list",
                 "Use `cdidx recipes --names --json` or `cdidx recipes --summary-only --json` for smaller output.",
+                jsonOptions,
                 usageCommandName);
         }
 
@@ -120,30 +126,132 @@ public static partial class QueryCommandRunner
         return CommandExitCodes.Success;
     }
 
-    private static int WriteJsonObjectWithOptionalByteLimit(
+    internal static int WriteJsonObjectWithOptionalByteLimit(
         string json,
         QueryCommandOptions options,
         string outputDescription,
         string hint,
+        JsonSerializerOptions jsonOptions,
         string commandName = "search")
     {
         json = AddActiveSqliteDiagnostics(json);
         if (options.MaxJsonBytes.HasValue)
         {
-            var byteCount = Encoding.UTF8.GetByteCount(json) + Environment.NewLine.Length;
+            var byteCount = Encoding.UTF8.GetByteCount(json)
+                            + Encoding.UTF8.GetByteCount(Environment.NewLine);
             if (byteCount > options.MaxJsonBytes.Value)
             {
-                WriteUsageError(
-                    $"{outputDescription} JSON output is {byteCount.ToString(CultureInfo.InvariantCulture)} bytes and exceeds --max-json-bytes {options.MaxJsonBytes.Value.ToString(CultureInfo.InvariantCulture)}.",
-                    options,
+                var minimumRequiredBytes = ComputeRetryableMinimumJsonBytes(
+                    json,
+                    options.MaxJsonBytes.Value,
+                    jsonOptions);
+                var retryByIncreasingBudget = minimumRequiredBytes <= MaxSearchJsonByteLimit;
+                var effectiveHint = retryByIncreasingBudget
+                    ? hint
+                    : $"{hint} The response minimum exceeds the maximum effective --max-json-bytes value of {MaxSearchJsonByteLimit.ToString(CultureInfo.InvariantCulture)}; reduce the response size before retrying.";
+                return CommandErrorWriter.WriteResponseBudgetError(
+                    json: true,
+                    jsonOptions,
                     commandName,
-                    hint);
-                return CommandExitCodes.UsageError;
+                    $"{outputDescription} JSON output is {byteCount.ToString(CultureInfo.InvariantCulture)} bytes and exceeds --max-json-bytes {options.MaxJsonBytes.Value.ToString(CultureInfo.InvariantCulture)}.",
+                    effectiveHint,
+                    requestedBytes: options.RequestedMaxJsonBytes ?? options.MaxJsonBytes.Value,
+                    effectiveBytes: options.MaxJsonBytes.Value,
+                    minimumRequiredBytes: minimumRequiredBytes,
+                    recommendedBytes: retryByIncreasingBudget ? minimumRequiredBytes : null,
+                    usage: GetUsageLineOrThrow(commandName),
+                    retryByIncreasingBudget: retryByIncreasingBudget,
+                    maximumEffectiveBytes: MaxSearchJsonByteLimit);
             }
         }
 
         Console.WriteLine(json);
         return CommandExitCodes.Success;
+    }
+
+    private static long ComputeRetryableMinimumJsonBytes(
+        string json,
+        int requestedBytes,
+        JsonSerializerOptions jsonOptions)
+    {
+        var minimumRequiredBytes = (long)Encoding.UTF8.GetByteCount(json)
+                                   + Encoding.UTF8.GetByteCount(Environment.NewLine);
+        var payload = JsonNode.Parse(json);
+        if (payload is null)
+            return minimumRequiredBytes;
+
+        for (var iteration = 0; iteration < 8; iteration++)
+        {
+            RewriteEmbeddedJsonByteLimit(payload, requestedBytes, minimumRequiredBytes);
+            requestedBytes = checked((int)Math.Min(minimumRequiredBytes, int.MaxValue));
+            var candidateJson = payload.ToJsonString(EnsureJsonNodeSerializerOptions(jsonOptions));
+            var candidateBytes = (long)Encoding.UTF8.GetByteCount(candidateJson)
+                                 + Encoding.UTF8.GetByteCount(Environment.NewLine);
+            if (candidateBytes <= minimumRequiredBytes)
+                return minimumRequiredBytes;
+            minimumRequiredBytes = candidateBytes;
+        }
+
+        return minimumRequiredBytes;
+    }
+
+    private static void RewriteEmbeddedJsonByteLimit(
+        JsonNode node,
+        int previousBytes,
+        long nextBytes)
+    {
+        if (node is JsonObject obj)
+        {
+            foreach (var property in obj.ToList())
+            {
+                if (property.Key is "output_byte_limit" or "max_json_bytes"
+                    && property.Value is JsonValue)
+                {
+                    obj[property.Key] = nextBytes;
+                    continue;
+                }
+
+                if (property.Value is JsonValue value
+                    && value.TryGetValue<string>(out var text))
+                {
+                    obj[property.Key] = RewriteEmbeddedMaxJsonBytesArgument(
+                        text,
+                        previousBytes,
+                        nextBytes);
+                }
+                else if (property.Value is not null)
+                {
+                    RewriteEmbeddedJsonByteLimit(property.Value, previousBytes, nextBytes);
+                }
+            }
+            return;
+        }
+
+        if (node is not JsonArray array)
+            return;
+        for (var index = 0; index < array.Count; index++)
+        {
+            if (array[index] is JsonValue value && value.TryGetValue<string>(out var text))
+            {
+                array[index] = RewriteEmbeddedMaxJsonBytesArgument(text, previousBytes, nextBytes);
+            }
+            else if (array[index] is not null)
+            {
+                RewriteEmbeddedJsonByteLimit(array[index]!, previousBytes, nextBytes);
+            }
+        }
+    }
+
+    private static string RewriteEmbeddedMaxJsonBytesArgument(
+        string value,
+        int previousBytes,
+        long nextBytes)
+    {
+        var previousText = previousBytes.ToString(CultureInfo.InvariantCulture);
+        var nextText = nextBytes.ToString(CultureInfo.InvariantCulture);
+        return value
+            .Replace($"--max-json-bytes {previousText}", $"--max-json-bytes {nextText}", StringComparison.Ordinal)
+            .Replace($"--max-json-bytes={previousText}", $"--max-json-bytes={nextText}", StringComparison.Ordinal);
     }
 
     private static int WriteJsonPayloadWithOptionalByteLimit(
@@ -158,6 +266,7 @@ public static partial class QueryCommandRunner
             options,
             outputDescription,
             hint,
+            jsonOptions,
             commandName);
 
     private static JsonSerializerOptions EnsureJsonNodeSerializerOptions(JsonSerializerOptions jsonOptions)
@@ -673,9 +782,12 @@ public static partial class QueryCommandRunner
                     scope,
                     options,
                     userExact,
-                    options.SearchFields == null,
+                    freshnessContext: null,
+                    includeAuditClassifications: options.SearchFields == null,
                     out _,
-                    out var rowMinimumMatchedTotal);
+                    out var rowMinimumMatchedTotal,
+                    out _,
+                    out _);
                 var stream = WriteRecipeSearchResultRows(
                     reader,
                     recipe.Name,
@@ -689,7 +801,21 @@ public static partial class QueryCommandRunner
 
             if (options.OutputFormat == OutputFormatCompact)
             {
-                var compactQueryResults = CollectSearchRecipeCompactQueryResults(reader, selection.Queries, scope, options, userExact, out var compactTotal);
+                var compactFreshnessContext = BuildSearchRecipeFreshnessContext(
+                    reader,
+                    recipe,
+                    selection.Queries,
+                    options);
+                var compactQueryResults = CollectSearchRecipeCompactQueryResults(
+                    reader,
+                    selection.Queries,
+                    scope,
+                    options,
+                    userExact,
+                    compactFreshnessContext,
+                    out var compactTotal,
+                    out var compactFreshnessObservations,
+                    out var compactHasFailures);
                 var compactPayload = BuildSearchRecipeCompactRunPayload(
                     recipe,
                     selection.Queries,
@@ -697,27 +823,51 @@ public static partial class QueryCommandRunner
                     options,
                     jsonOptions,
                     compactQueryResults,
-                    compactTotal);
+                    compactTotal,
+                    compactFreshnessContext,
+                    compactFreshnessObservations);
                 var compactJson = compactPayload.ToJsonString(GetJsonNodeSerializationOptions(jsonOptions));
-                return WriteJsonObjectWithOptionalByteLimit(
-                    compactJson,
-                    options,
-                    "recipe compact",
-                    $"Reduce --limit or --total-limit, select one child query with {options.InvocationContext.RecipeCursorSelectorSyntax}, stream rows with --json=ndjson, or increase --max-json-bytes.");
+                return CompleteSearchRecipeOutput(
+                    WriteJsonObjectWithOptionalByteLimit(
+                        compactJson,
+                        options,
+                        "recipe compact",
+                        $"Reduce --limit or --total-limit, select one child query with {options.InvocationContext.RecipeCursorSelectorSyntax}, stream rows with --json=ndjson, or increase --max-json-bytes.",
+                        jsonOptions),
+                    compactHasFailures);
             }
 
+            var freshnessContext = BuildSearchRecipeFreshnessContext(
+                reader,
+                recipe,
+                selection.Queries,
+                options);
             var queryResults = CollectSearchRecipeQueryResults(
                 reader,
                 selection.Queries,
                 scope,
                 options,
                 userExact,
-                options.Json && options.OutputFormat != OutputFormatSarif,
+                freshnessContext,
+                includeAuditClassifications: options.Json && options.OutputFormat != OutputFormatSarif,
                 out var total,
-                out _);
+                out _,
+                out var freshnessObservations,
+                out var hasFailures);
 
             if (options.OutputFormat == OutputFormatSarif)
-                return WriteSearchRecipeSarif(recipe, scope, queryResults, total, options, jsonOptions);
+            {
+                var sarifExitCode = WriteSearchRecipeSarif(
+                    recipe,
+                    scope,
+                    queryResults,
+                    total,
+                    options,
+                    jsonOptions,
+                    freshnessContext,
+                    freshnessObservations);
+                return CompleteSearchRecipeOutput(sarifExitCode, hasFailures);
+            }
 
             if (options.Json)
             {
@@ -733,14 +883,19 @@ public static partial class QueryCommandRunner
                                 options.Limit,
                                 options.TotalLimit,
                                 total,
-                                options.InvocationContext),
+                                options.InvocationContext,
+                                freshnessContext,
+                                freshnessObservations),
                             queryResults),
                         CliJsonSerializerContextFactory.Create(jsonOptions).SearchRecipeRunJsonResult);
-                return WriteJsonObjectWithOptionalByteLimit(
-                    json,
-                    options,
-                    "recipe search",
-                    "Reduce --limit, use --snippet-lines 0, or increase --max-json-bytes.");
+                return CompleteSearchRecipeOutput(
+                    WriteJsonObjectWithOptionalByteLimit(
+                        json,
+                        options,
+                        "recipe search",
+                        "Reduce --limit, use --snippet-lines 0, or increase --max-json-bytes.",
+                        jsonOptions),
+                    hasFailures);
             }
 
             Console.WriteLine($"Recipe: {recipe.Name}");
@@ -787,8 +942,11 @@ public static partial class QueryCommandRunner
                 Console.WriteLine();
             }
 
+            WriteSearchRecipeFreshnessText(BuildSearchRecipeQueryFreshness(
+                freshnessContext,
+                freshnessObservations));
             CommandErrorWriter.WriteStderr($"({total} recipe results across {selection.Queries.Count} queries)");
-            return CommandExitCodes.Success;
+            return CompleteSearchRecipeOutput(CommandExitCodes.Success, hasFailures);
         }, _ =>
         {
             if (ndjsonTerminalLine != null && !options.ResultsOnly)
@@ -802,7 +960,9 @@ public static partial class QueryCommandRunner
         IReadOnlyList<SearchRecipeQueryResultJsonResult> queryResults,
         int total,
         QueryCommandOptions options,
-        JsonSerializerOptions jsonOptions)
+        JsonSerializerOptions jsonOptions,
+        SearchQueryFreshnessContext freshnessContext,
+        IReadOnlyList<SearchQueryFreshnessObservation> freshnessObservations)
     {
         var items = new List<SarifLocation>(total);
         foreach (var queryResult in queryResults)
@@ -858,6 +1018,8 @@ public static partial class QueryCommandRunner
             queryResults,
             options,
             jsonOptions,
+            freshnessContext,
+            freshnessObservations,
             items,
             items.Count);
         if (!options.MaxJsonBytes.HasValue)
@@ -901,6 +1063,8 @@ public static partial class QueryCommandRunner
                 queryResults,
                 options,
                 jsonOptions,
+                freshnessContext,
+                freshnessObservations,
                 items,
                 candidate,
                 completeDocumentBytes,
@@ -930,6 +1094,8 @@ public static partial class QueryCommandRunner
                 queryResults,
                 options,
                 jsonOptions,
+                freshnessContext,
+                freshnessObservations,
                 items,
                 completeDocumentBytes,
                 byteLimit);
@@ -957,6 +1123,8 @@ public static partial class QueryCommandRunner
         IReadOnlyList<SearchRecipeQueryResultJsonResult> queryResults,
         QueryCommandOptions options,
         JsonSerializerOptions jsonOptions,
+        SearchQueryFreshnessContext freshnessContext,
+        IReadOnlyList<SearchQueryFreshnessObservation> freshnessObservations,
         IReadOnlyList<SarifLocation> items,
         int emittedResultCount,
         int? minimumCompleteBytes = null,
@@ -968,7 +1136,9 @@ public static partial class QueryCommandRunner
             options.Limit,
             options.TotalLimit,
             items.Count,
-            options.InvocationContext);
+            options.InvocationContext,
+            freshnessContext,
+            freshnessObservations);
         var bounded = minimumCompleteBytes.HasValue;
         var emittedByRule = items
             .Take(emittedResultCount)
@@ -1022,8 +1192,11 @@ public static partial class QueryCommandRunner
             ["scope"] = JsonSerializer.SerializeToNode(
                 scope,
                 CliJsonSerializerContextFactory.Create(jsonOptions).SearchRecipeScopeJsonResult),
-            ["query_count"] = queryResults.Count,
+            ["query_count"] = summary.QueryFreshness.Queries.Count,
             ["result_count"] = emittedResultCount,
+            ["query_freshness"] = JsonSerializer.SerializeToNode(
+                summary.QueryFreshness,
+                CliJsonSerializerContextFactory.Create(jsonOptions).SearchRecipeQueryFreshnessJsonResult),
             ["limit_per_query"] = options.Limit,
             ["total_limit"] = JsonValue.Create(options.TotalLimit),
             ["queries"] = querySummaries,
@@ -1075,6 +1248,8 @@ public static partial class QueryCommandRunner
         IReadOnlyList<SearchRecipeQueryResultJsonResult> queryResults,
         QueryCommandOptions options,
         JsonSerializerOptions jsonOptions,
+        SearchQueryFreshnessContext freshnessContext,
+        IReadOnlyList<SearchQueryFreshnessObservation> freshnessObservations,
         IReadOnlyList<SarifLocation> items,
         int minimumCompleteBytes,
         int requestedByteLimit)
@@ -1089,6 +1264,8 @@ public static partial class QueryCommandRunner
                 queryResults,
                 options,
                 jsonOptions,
+                freshnessContext,
+                freshnessObservations,
                 items,
                 emittedResultCount: 0,
                 minimumCompleteBytes,
@@ -1238,7 +1415,9 @@ public static partial class QueryCommandRunner
         QueryCommandOptions options,
         JsonSerializerOptions jsonOptions,
         List<SearchRecipeCompactQueryResultJsonResult> compactQueryResults,
-        int compactTotal)
+        int compactTotal,
+        SearchQueryFreshnessContext freshnessContext,
+        IReadOnlyList<SearchQueryFreshnessObservation> freshnessObservations)
     {
         var run = new SearchRecipeCompactRunJsonResult(
             JsonOutputContract.ApiVersion,
@@ -1258,7 +1437,9 @@ public static partial class QueryCommandRunner
                 options.Limit,
                 options.TotalLimit,
                 compactTotal,
-                options.InvocationContext),
+                options.InvocationContext,
+                freshnessContext,
+                freshnessObservations),
             compactQueryResults);
         var payload = JsonSerializer.SerializeToNode(
             run,
@@ -1507,7 +1688,8 @@ public static partial class QueryCommandRunner
                     json,
                     options,
                     "recipe aggregation",
-                    "Reduce --limit or increase --max-json-bytes.");
+                    "Reduce --limit or increase --max-json-bytes.",
+                    jsonOptions);
             }
             else
             {
@@ -1652,15 +1834,23 @@ public static partial class QueryCommandRunner
 
         return WithDb(options, jsonOptions, reader =>
         {
+            var freshnessContext = BuildSearchRecipeFreshnessContext(
+                reader,
+                recipe,
+                selection.Queries,
+                options);
             var queryResults = CollectSearchRecipeQueryResults(
                 reader,
                 selection.Queries,
                 scope,
                 options,
                 userExact,
-                false,
+                freshnessContext,
+                includeAuditClassifications: false,
                 out var total,
-                out _);
+                out _,
+                out var freshnessObservations,
+                out var hasFailures);
             var drafts = queryResults
                 .Where(queryResult => queryResult.Count > 0)
                 .Select(queryResult => ToSearchIssueDraft(recipe, queryResult, preflight, options))
@@ -1676,7 +1866,7 @@ public static partial class QueryCommandRunner
                     scope,
                     selection.Queries.Count,
                     total,
-                    BuildSearchRecipeQueryFreshness(queryResults),
+                    BuildSearchRecipeQueryFreshness(freshnessContext, freshnessObservations),
                     drafts.Count,
                     new SuggestionIssueDraftPreflightSummaryJsonResult(
                         preflight.Checked,
@@ -1687,11 +1877,14 @@ public static partial class QueryCommandRunner
                     drafts,
                     BuildSearchIssueDraftSelectionAccounting(recipe.Name, queryResults)),
                 CliJsonSerializerContextFactory.Create(jsonOptions).SearchIssueDraftExportJsonResult);
-            return WriteJsonObjectWithOptionalByteLimit(
-                json,
-                options,
-                "issue-draft",
-                "Reduce --limit, use --snippet-lines 0, or increase --max-json-bytes.");
+            return CompleteSearchRecipeOutput(
+                WriteJsonObjectWithOptionalByteLimit(
+                    json,
+                    options,
+                    "issue-draft",
+                    "Reduce --limit, use --snippet-lines 0, or increase --max-json-bytes.",
+                    jsonOptions),
+                hasFailures);
         });
     }
 
@@ -1710,19 +1903,26 @@ public static partial class QueryCommandRunner
         var scope = BuildSearchRecipeScope(recipe, options);
         return WithDb(options, jsonOptions, reader =>
         {
+            var freshnessContext = options.SummaryOnly
+                ? BuildSearchRecipeFreshnessContext(reader, recipe, selection.Queries, options)
+                : null;
             var queryCounts = CountSearchRecipeQueryResults(
                 reader,
                 selection.Queries,
                 scope,
                 options,
                 userExact,
+                freshnessContext,
                 out var total,
-                out var fileCount);
+                out var fileCount,
+                out var freshnessObservations,
+                out var hasFailures);
 
             if (options.Json)
             {
                 if (options.SummaryOnly)
                 {
+                    var requiredFreshnessContext = freshnessContext!;
                     var summaryQueries = queryCounts
                         .Select(query => new SearchRecipeCountSummaryQueryJsonResult(
                             query.Name,
@@ -1737,14 +1937,19 @@ public static partial class QueryCommandRunner
                             selection.Queries.Count,
                             total,
                             fileCount,
-                            BuildSearchRecipeQueryFreshness(queryCounts),
+                            BuildSearchRecipeQueryFreshness(
+                                requiredFreshnessContext,
+                                freshnessObservations),
                             summaryQueries),
                         CliJsonSerializerContextFactory.Create(jsonOptions).SearchRecipeCountSummaryRunJsonResult);
-                    return WriteJsonObjectWithOptionalByteLimit(
-                        summaryJson,
-                        options,
-                        "recipe count summary",
-                        "Use a larger --max-json-bytes value or narrow the recipe/query selection.");
+                    return CompleteSearchRecipeOutput(
+                        WriteJsonObjectWithOptionalByteLimit(
+                            summaryJson,
+                            options,
+                            "recipe count summary",
+                            "Use a larger --max-json-bytes value or narrow the recipe/query selection.",
+                            jsonOptions),
+                        hasFailures);
                 }
 
                 var json = JsonSerializer.Serialize(
@@ -1761,7 +1966,8 @@ public static partial class QueryCommandRunner
                     json,
                     options,
                     "recipe count",
-                    "Use `--summary-only` to omit recipe metadata from count output.");
+                    "Use `--summary-only` to omit recipe metadata from count output.",
+                    jsonOptions);
             }
             else
             {
@@ -1895,7 +2101,8 @@ public static partial class QueryCommandRunner
                 json,
                 options,
                 "issue-draft",
-                "Reduce --limit, use --snippet-lines 0, or increase --max-json-bytes.");
+                "Reduce --limit, use --snippet-lines 0, or increase --max-json-bytes.",
+                jsonOptions);
         });
     }
 
@@ -1932,100 +2139,127 @@ public static partial class QueryCommandRunner
         SearchRecipeScopeJsonResult scope,
         QueryCommandOptions options,
         bool userExact,
+        SearchQueryFreshnessContext? freshnessContext,
         bool includeAuditClassifications,
         out int total,
-        out int minimumMatchedTotal)
+        out int minimumMatchedTotal,
+        out List<SearchQueryFreshnessObservation> freshnessObservations,
+        out bool hasFailures)
     {
         var queryResults = new List<SearchRecipeQueryResultJsonResult>();
+        freshnessObservations = [];
         total = 0;
         minimumMatchedTotal = 0;
+        hasFailures = false;
         foreach (var recipeQuery in recipeQueries)
         {
-            var exact = userExact || recipeQuery.ExactSubstring;
-            var queryScope = BuildSearchRecipeQueryScope(scope, recipeQuery);
-            var resultLimit = GetSearchRecipeEffectiveResultLimit(options, total);
-            var guardFilters = BuildSearchRecipeGuardFilters(options, recipeQuery);
-            var fetchLimit = GetSearchRecipeFetchLimit(options, resultLimit);
-            var results = reader.Search(
-                recipeQuery.Query,
-                fetchLimit,
-                options.Lang,
-                false,
-                queryScope.PathPatterns,
-                queryScope.ExcludePaths,
-                queryScope.ExcludeTests,
-                !options.NoDedup,
-                options.Since,
-                exact,
-                false,
-                !options.NoVisibilityRank,
-                cursor: options.SearchCursor,
-                guardFilters: guardFilters,
-                guardWindow: options.GuardWindow,
-                guardScope: options.GuardScope,
-                requiredPathPatterns: GetSearchRecipeRequiredPathPatterns(options, recipeQuery),
-                resultRanking: GetSearchRecipeResultRanking(recipeQuery.ResultRanking, resultLimit));
-            var sourceTotalAuthoritative = IsSearchRecipeSourceTotalAuthoritative(
-                options,
-                recipeQuery,
-                guardFilters,
-                results.Count,
-                fetchLimit);
-            results = ApplySearchRecipeFileRejectQueries(reader, results, options, recipeQuery);
-            var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, rawFtsOverride: false, recipeQuery: recipeQuery);
-            var outputSelection = ApplySearchOutputSelection(rows, options, resultLimit, sourceTotalAuthoritative);
-            rows = outputSelection.Rows;
-            if (includeAuditClassifications)
-                ApplySearchRecipeAuditClassifications(reader, recipeQuery, recipeQueries, rows);
-            var minimumOmitted = Math.Max(0, outputSelection.OriginalCount - rows.Count);
-            var selectionReason = GetSearchRecipeSelectionReason(outputSelection);
-            total += rows.Count;
-            minimumMatchedTotal += outputSelection.OriginalCount;
-            queryResults.Add(new SearchRecipeQueryResultJsonResult(
-                recipeQuery.Name,
-                recipeQuery.Query,
-                recipeQuery.Description,
-                recipeQuery.RecommendedLabels,
-                recipeQuery.FalsePositiveGuidance,
-                [.. recipeQuery.RiskEvidence],
-                ToSearchRecipeGuardFilterJsonResults(recipeQuery.GuardFilters),
-                exact,
-                recipeQuery.Severity,
-                [.. recipeQuery.PathPatterns],
-                [.. recipeQuery.ExcludePaths],
-                [.. recipeQuery.MatchOrigins],
-                [.. recipeQuery.ExcludeOrigins],
-                [.. recipeQuery.ResultKinds],
-                [.. recipeQuery.Classifiers],
-                recipeQuery.StringComparisonTaxonomy,
-                recipeQuery.BroadCatchTaxonomy,
-                recipeQuery.NullableContractTaxonomy,
-                BuildSearchRecipeClassifierCounts(rows),
-                rows.Count,
-                rows.Count,
-                outputSelection.OriginalCount,
-                minimumOmitted,
-                selectionReason,
-                selectionReason != null ? outputSelection.SelectionOmittedCount : null,
-                resultLimit,
-                minimumOmitted,
-                BuildSearchRecipeTopFiles(rows),
-                outputSelection.LimitTruncated,
-                outputSelection.LimitTruncated
-                    && !options.FirstPerFile
-                    && !options.SampleSize.HasValue
-                    && rows.Count > 0
-                        ? FormatSearchCursor(rows[^1].Result)
-                        : null,
-                rows.Select(row => row.Compact).ToList(),
-                outputSelection.SourceTotal,
-                outputSelection.SourceTotalAuthoritative,
-                outputSelection.SourceTotalAuthoritative ? null : outputSelection.SourceTotal,
-                outputSelection.SelectedTotal,
-                outputSelection.Returned,
-                outputSelection.SelectorOmittedCount,
-                outputSelection.LimitOmittedCount,
-                outputSelection.Selectors));
+            try
+            {
+                var exact = userExact || recipeQuery.ExactSubstring;
+                var queryScope = BuildSearchRecipeQueryScope(scope, recipeQuery);
+                var resultLimit = GetSearchRecipeEffectiveResultLimit(options, total);
+                var guardFilters = BuildSearchRecipeGuardFilters(options, recipeQuery);
+                var fetchLimit = GetSearchRecipeFetchLimit(options, resultLimit, recipeQuery);
+                var results = reader.Search(
+                    recipeQuery.Query,
+                    fetchLimit,
+                    options.Lang,
+                    false,
+                    queryScope.PathPatterns,
+                    queryScope.ExcludePaths,
+                    queryScope.ExcludeTests,
+                    !options.NoDedup,
+                    options.Since,
+                    exact,
+                    false,
+                    !options.NoVisibilityRank,
+                    cursor: options.SearchCursor,
+                    guardFilters: guardFilters,
+                    guardWindow: options.GuardWindow,
+                    guardScope: options.GuardScope,
+                    requiredPathPatterns: GetSearchRecipeRequiredPathPatterns(options, recipeQuery),
+                    resultRanking: GetSearchRecipeResultRanking(recipeQuery.ResultRanking, resultLimit));
+                var sourceTotalAuthoritative = IsSearchRecipeSourceTotalAuthoritative(
+                    options,
+                    recipeQuery,
+                    guardFilters,
+                    results.Count,
+                    fetchLimit);
+                results = ApplySearchRecipeFileRejectQueries(reader, results, options, recipeQuery);
+                var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, rawFtsOverride: false, recipeQuery: recipeQuery);
+                rows = ApplySearchRecipeSemanticFilter(reader, options, recipeQuery, rows);
+                var outputSelection = ApplySearchOutputSelection(rows, options, resultLimit, sourceTotalAuthoritative);
+                rows = outputSelection.Rows;
+                if (includeAuditClassifications)
+                    ApplySearchRecipeAuditClassifications(reader, recipeQuery, recipeQueries, rows);
+                var minimumOmitted = Math.Max(0, outputSelection.OriginalCount - rows.Count);
+                var selectionReason = GetSearchRecipeSelectionReason(outputSelection);
+                total += rows.Count;
+                minimumMatchedTotal += outputSelection.OriginalCount;
+                queryResults.Add(new SearchRecipeQueryResultJsonResult(
+                    recipeQuery.Name,
+                    recipeQuery.Query,
+                    recipeQuery.Description,
+                    recipeQuery.RecommendedLabels,
+                    recipeQuery.FalsePositiveGuidance,
+                    [.. recipeQuery.RiskEvidence],
+                    ToSearchRecipeGuardFilterJsonResults(recipeQuery.GuardFilters),
+                    exact,
+                    recipeQuery.Severity,
+                    [.. recipeQuery.PathPatterns],
+                    [.. recipeQuery.ExcludePaths],
+                    [.. recipeQuery.MatchOrigins],
+                    [.. recipeQuery.ExcludeOrigins],
+                    [.. recipeQuery.ResultKinds],
+                    [.. recipeQuery.Classifiers],
+                    recipeQuery.StringComparisonTaxonomy,
+                    recipeQuery.BroadCatchTaxonomy,
+                    recipeQuery.NullableContractTaxonomy,
+                    BuildSearchRecipeClassifierCounts(rows),
+                    rows.Count,
+                    rows.Count,
+                    outputSelection.OriginalCount,
+                    minimumOmitted,
+                    selectionReason,
+                    selectionReason != null ? outputSelection.SelectionOmittedCount : null,
+                    resultLimit,
+                    minimumOmitted,
+                    BuildSearchRecipeTopFiles(rows),
+                    outputSelection.LimitTruncated,
+                    outputSelection.LimitTruncated
+                        && !options.FirstPerFile
+                        && !options.SampleSize.HasValue
+                        && rows.Count > 0
+                            ? FormatSearchCursor(rows[^1].Result)
+                            : null,
+                    rows.Select(row => row.Compact).ToList(),
+                    outputSelection.SourceTotal,
+                    outputSelection.SourceTotalAuthoritative,
+                    outputSelection.SourceTotalAuthoritative ? null : outputSelection.SourceTotal,
+                    outputSelection.SelectedTotal,
+                    outputSelection.Returned,
+                    outputSelection.SelectorOmittedCount,
+                    outputSelection.LimitOmittedCount,
+                    outputSelection.Selectors));
+                if (freshnessContext != null)
+                {
+                    freshnessObservations.Add(SuccessfulSearchQueryObservation(
+                        freshnessContext,
+                        recipeQuery.Name,
+                        outputSelection.OriginalCount));
+                }
+            }
+            catch (Exception ex) when (
+                freshnessContext != null
+                && TryClassifySearchQueryExecutionFailure(ex, out _))
+            {
+                TryClassifySearchQueryExecutionFailure(ex, out var failureReason);
+                hasFailures = true;
+                freshnessObservations.Add(FailedSearchQueryObservation(
+                    freshnessContext,
+                    recipeQuery.Name,
+                    failureReason));
+            }
         }
 
         return queryResults;
@@ -2037,101 +2271,123 @@ public static partial class QueryCommandRunner
         SearchRecipeScopeJsonResult scope,
         QueryCommandOptions options,
         bool userExact,
-        out int total)
+        SearchQueryFreshnessContext freshnessContext,
+        out int total,
+        out List<SearchQueryFreshnessObservation> freshnessObservations,
+        out bool hasFailures)
     {
         var queryResults = new List<SearchRecipeCompactQueryResultJsonResult>();
+        freshnessObservations = [];
         total = 0;
+        hasFailures = false;
         foreach (var recipeQuery in recipeQueries)
         {
-            var exact = userExact || recipeQuery.ExactSubstring;
-            var queryScope = BuildSearchRecipeQueryScope(scope, recipeQuery);
-            var resultLimit = GetSearchRecipeEffectiveResultLimit(options, total);
-            var guardFilters = BuildSearchRecipeGuardFilters(options, recipeQuery);
-            var fetchLimit = GetSearchRecipeFetchLimit(options, resultLimit);
-            var results = reader.Search(
-                recipeQuery.Query,
-                fetchLimit,
-                options.Lang,
-                false,
-                queryScope.PathPatterns,
-                queryScope.ExcludePaths,
-                queryScope.ExcludeTests,
-                !options.NoDedup,
-                options.Since,
-                exact,
-                false,
-                !options.NoVisibilityRank,
-                cursor: options.SearchCursor,
-                guardFilters: guardFilters,
-                guardWindow: options.GuardWindow,
-                guardScope: options.GuardScope,
-                requiredPathPatterns: GetSearchRecipeRequiredPathPatterns(options, recipeQuery),
-                resultRanking: GetSearchRecipeResultRanking(recipeQuery.ResultRanking, resultLimit));
-            var sourceTotalAuthoritative = IsSearchRecipeSourceTotalAuthoritative(
-                options,
-                recipeQuery,
-                guardFilters,
-                results.Count,
-                fetchLimit);
-            results = ApplySearchRecipeFileRejectQueries(reader, results, options, recipeQuery);
-            var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, recipeQuery: recipeQuery);
-            var outputSelection = ApplySearchOutputSelection(rows, options, resultLimit, sourceTotalAuthoritative);
-            rows = outputSelection.Rows;
-            if (!options.SummaryOnly)
-                ApplySearchRecipeAuditClassifications(reader, recipeQuery, recipeQueries, rows);
-            var minimumOmitted = Math.Max(0, outputSelection.OriginalCount - rows.Count);
-            var selectionReason = GetSearchRecipeSelectionReason(outputSelection);
-            total += rows.Count;
-            queryResults.Add(new SearchRecipeCompactQueryResultJsonResult(
-                recipeQuery.Name,
-                recipeQuery.Query,
-                recipeQuery.Description,
-                recipeQuery.Severity,
-                [.. recipeQuery.RiskEvidence],
-                ToSearchRecipeGuardFilterJsonResults(recipeQuery.GuardFilters),
-                [.. recipeQuery.PathPatterns],
-                [.. recipeQuery.ExcludePaths],
-                [.. recipeQuery.MatchOrigins],
-                [.. recipeQuery.ExcludeOrigins],
-                [.. recipeQuery.ResultKinds],
-                [.. recipeQuery.Classifiers],
-                recipeQuery.StringComparisonTaxonomy,
-                recipeQuery.BroadCatchTaxonomy,
-                BuildSearchRecipeClassifierCounts(rows),
-                rows.Count,
-                rows.Count,
-                outputSelection.OriginalCount,
-                minimumOmitted,
-                selectionReason,
-                selectionReason != null ? outputSelection.SelectionOmittedCount : null,
-                resultLimit,
-                minimumOmitted,
-                BuildSearchRecipeTopFiles(rows),
-                outputSelection.LimitTruncated,
-                outputSelection.LimitTruncated
-                    && !options.FirstPerFile
-                    && !options.SampleSize.HasValue
-                    && rows.Count > 0
-                        ? FormatSearchCursor(rows[^1].Result)
-                        : null,
-                rows.Select(row => new SearchRecipeCompactResultJsonResult(
-                    row.Result.Path,
-                    row.Result.Lang,
-                    row.Result.Visibility,
+            try
+            {
+                var exact = userExact || recipeQuery.ExactSubstring;
+                var queryScope = BuildSearchRecipeQueryScope(scope, recipeQuery);
+                var resultLimit = GetSearchRecipeEffectiveResultLimit(options, total);
+                var guardFilters = BuildSearchRecipeGuardFilters(options, recipeQuery);
+                var fetchLimit = GetSearchRecipeFetchLimit(options, resultLimit, recipeQuery);
+                var results = reader.Search(
+                    recipeQuery.Query,
+                    fetchLimit,
+                    options.Lang,
+                    false,
+                    queryScope.PathPatterns,
+                    queryScope.ExcludePaths,
+                    queryScope.ExcludeTests,
+                    !options.NoDedup,
+                    options.Since,
+                    exact,
+                    false,
+                    !options.NoVisibilityRank,
+                    cursor: options.SearchCursor,
+                    guardFilters: guardFilters,
+                    guardWindow: options.GuardWindow,
+                    guardScope: options.GuardScope,
+                    requiredPathPatterns: GetSearchRecipeRequiredPathPatterns(options, recipeQuery),
+                    resultRanking: GetSearchRecipeResultRanking(recipeQuery.ResultRanking, resultLimit));
+                var sourceTotalAuthoritative = IsSearchRecipeSourceTotalAuthoritative(
+                    options,
+                    recipeQuery,
+                    guardFilters,
+                    results.Count,
+                    fetchLimit);
+                results = ApplySearchRecipeFileRejectQueries(reader, results, options, recipeQuery);
+                var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, recipeQuery: recipeQuery);
+                rows = ApplySearchRecipeSemanticFilter(reader, options, recipeQuery, rows);
+                var outputSelection = ApplySearchOutputSelection(rows, options, resultLimit, sourceTotalAuthoritative);
+                rows = outputSelection.Rows;
+                if (!options.SummaryOnly)
+                    ApplySearchRecipeAuditClassifications(reader, recipeQuery, recipeQueries, rows);
+                var minimumOmitted = Math.Max(0, outputSelection.OriginalCount - rows.Count);
+                var selectionReason = GetSearchRecipeSelectionReason(outputSelection);
+                total += rows.Count;
+                queryResults.Add(new SearchRecipeCompactQueryResultJsonResult(
+                    recipeQuery.Name,
+                    recipeQuery.Query,
+                    recipeQuery.Description,
+                    recipeQuery.Severity,
                     [.. recipeQuery.RiskEvidence],
-                    row.Result.StartLine,
-                    row.Result.EndLine,
-                    row.Compact.MatchLines,
-                    row.Compact.EnclosingSymbolName,
-                    row.Compact.EnclosingSymbolKind)).ToList(),
-                outputSelection.SourceTotal,
-                outputSelection.SourceTotalAuthoritative,
-                outputSelection.SourceTotalAuthoritative ? null : outputSelection.SourceTotal,
-                outputSelection.SelectedTotal,
-                outputSelection.Returned,
-                outputSelection.SelectorOmittedCount,
-                outputSelection.LimitOmittedCount,
-                outputSelection.Selectors));
+                    ToSearchRecipeGuardFilterJsonResults(recipeQuery.GuardFilters),
+                    [.. recipeQuery.PathPatterns],
+                    [.. recipeQuery.ExcludePaths],
+                    [.. recipeQuery.MatchOrigins],
+                    [.. recipeQuery.ExcludeOrigins],
+                    [.. recipeQuery.ResultKinds],
+                    [.. recipeQuery.Classifiers],
+                    recipeQuery.StringComparisonTaxonomy,
+                    recipeQuery.BroadCatchTaxonomy,
+                    BuildSearchRecipeClassifierCounts(rows),
+                    rows.Count,
+                    rows.Count,
+                    outputSelection.OriginalCount,
+                    minimumOmitted,
+                    selectionReason,
+                    selectionReason != null ? outputSelection.SelectionOmittedCount : null,
+                    resultLimit,
+                    minimumOmitted,
+                    BuildSearchRecipeTopFiles(rows),
+                    outputSelection.LimitTruncated,
+                    outputSelection.LimitTruncated
+                        && !options.FirstPerFile
+                        && !options.SampleSize.HasValue
+                        && rows.Count > 0
+                            ? FormatSearchCursor(rows[^1].Result)
+                            : null,
+                    rows.Select(row => new SearchRecipeCompactResultJsonResult(
+                        row.Result.Path,
+                        row.Result.Lang,
+                        row.Result.Visibility,
+                        [.. recipeQuery.RiskEvidence],
+                        row.Result.StartLine,
+                        row.Result.EndLine,
+                        row.Compact.MatchLines,
+                        row.Compact.EnclosingSymbolName,
+                        row.Compact.EnclosingSymbolKind)).ToList(),
+                    outputSelection.SourceTotal,
+                    outputSelection.SourceTotalAuthoritative,
+                    outputSelection.SourceTotalAuthoritative ? null : outputSelection.SourceTotal,
+                    outputSelection.SelectedTotal,
+                    outputSelection.Returned,
+                    outputSelection.SelectorOmittedCount,
+                    outputSelection.LimitOmittedCount,
+                    outputSelection.Selectors));
+                freshnessObservations.Add(SuccessfulSearchQueryObservation(
+                    freshnessContext,
+                    recipeQuery.Name,
+                    outputSelection.OriginalCount));
+            }
+            catch (Exception ex) when (TryClassifySearchQueryExecutionFailure(ex, out _))
+            {
+                TryClassifySearchQueryExecutionFailure(ex, out var failureReason);
+                hasFailures = true;
+                freshnessObservations.Add(FailedSearchQueryObservation(
+                    freshnessContext,
+                    recipeQuery.Name,
+                    failureReason));
+            }
         }
 
         return queryResults;
@@ -2151,11 +2407,18 @@ public static partial class QueryCommandRunner
         int fetchLimit)
         => guardFilters.Count == 0
            && recipeQuery.RejectFileQueries.Count == 0
+           && recipeQuery.SemanticFilter == SearchRecipeSemanticFilter.None
            && !HasSearchOriginFilters(BuildSearchDisplayFacetFilters(options, recipeQuery))
            && resultCount < fetchLimit;
 
-    private static int GetSearchRecipeFetchLimit(QueryCommandOptions options, int resultLimit)
+    private static int GetSearchRecipeFetchLimit(
+        QueryCommandOptions options,
+        int resultLimit,
+        SearchAuditRecipeQuery? recipeQuery = null)
     {
+        if (recipeQuery is { SemanticFilter: not SearchRecipeSemanticFilter.None })
+            return int.MaxValue;
+
         var selectionTarget = resultLimit > 0 && options.SampleSize.HasValue
             ? Math.Max(resultLimit, options.SampleSize.Value)
             : resultLimit;
@@ -2168,58 +2431,85 @@ public static partial class QueryCommandRunner
         SearchRecipeScopeJsonResult scope,
         QueryCommandOptions options,
         bool userExact,
+        SearchQueryFreshnessContext? freshnessContext,
         out int total,
-        out int fileCount)
+        out int fileCount,
+        out List<SearchQueryFreshnessObservation> freshnessObservations,
+        out bool hasFailures)
     {
         var queryCounts = new List<SearchRecipeCountQueryJsonResult>();
+        freshnessObservations = [];
         var paths = new HashSet<string>(StringComparer.Ordinal);
         total = 0;
+        hasFailures = false;
         foreach (var recipeQuery in recipeQueries)
         {
-            var exact = userExact || recipeQuery.ExactSubstring;
-            var queryScope = BuildSearchRecipeQueryScope(scope, recipeQuery);
-            var guardFilters = BuildSearchRecipeGuardFilters(options, recipeQuery);
-            var results = reader.Search(
-                recipeQuery.Query,
-                int.MaxValue,
-                options.Lang,
-                false,
-                queryScope.PathPatterns,
-                queryScope.ExcludePaths,
-                queryScope.ExcludeTests,
-                !options.NoDedup,
-                options.Since,
-                exact,
-                false,
-                !options.NoVisibilityRank,
-                cursor: options.SearchCursor,
-                guardFilters: guardFilters,
-                guardWindow: options.GuardWindow,
-                guardScope: options.GuardScope,
-                requiredPathPatterns: GetSearchRecipeRequiredPathPatterns(options, recipeQuery));
-            results = ApplySearchRecipeFileRejectQueries(reader, results, options, recipeQuery);
-            var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, rawFtsOverride: false, recipeQuery: recipeQuery);
-            if (options.Json && !options.SummaryOnly)
-                ApplySearchRecipeAuditClassifications(reader, recipeQuery, recipeQueries, rows);
-            var count = rows.Count;
-            var fileCountForQuery = rows.Select(row => row.Result.Path).Distinct(StringComparer.Ordinal).Count();
-            foreach (var path in rows.Select(row => row.Result.Path))
-                paths.Add(path);
+            try
+            {
+                var exact = userExact || recipeQuery.ExactSubstring;
+                var queryScope = BuildSearchRecipeQueryScope(scope, recipeQuery);
+                var guardFilters = BuildSearchRecipeGuardFilters(options, recipeQuery);
+                var results = reader.Search(
+                    recipeQuery.Query,
+                    int.MaxValue,
+                    options.Lang,
+                    false,
+                    queryScope.PathPatterns,
+                    queryScope.ExcludePaths,
+                    queryScope.ExcludeTests,
+                    !options.NoDedup,
+                    options.Since,
+                    exact,
+                    false,
+                    !options.NoVisibilityRank,
+                    cursor: options.SearchCursor,
+                    guardFilters: guardFilters,
+                    guardWindow: options.GuardWindow,
+                    guardScope: options.GuardScope,
+                    requiredPathPatterns: GetSearchRecipeRequiredPathPatterns(options, recipeQuery));
+                results = ApplySearchRecipeFileRejectQueries(reader, results, options, recipeQuery);
+                var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, rawFtsOverride: false, recipeQuery: recipeQuery);
+                rows = ApplySearchRecipeSemanticFilter(reader, options, recipeQuery, rows);
+                if (options.Json && !options.SummaryOnly)
+                    ApplySearchRecipeAuditClassifications(reader, recipeQuery, recipeQueries, rows);
+                var count = rows.Count;
+                var fileCountForQuery = rows.Select(row => row.Result.Path).Distinct(StringComparer.Ordinal).Count();
+                foreach (var path in rows.Select(row => row.Result.Path))
+                    paths.Add(path);
 
-            total += count;
-            queryCounts.Add(new SearchRecipeCountQueryJsonResult(
-                recipeQuery.Name,
-                recipeQuery.Query,
-                recipeQuery.Description,
-                recipeQuery.Severity,
-                count,
-                count,
-                0,
-                count,
-                fileCountForQuery,
-                false,
-                BuildSearchRecipeClassifierCounts(rows),
-                BuildSearchRecipeTopFiles(rows)));
+                total += count;
+                queryCounts.Add(new SearchRecipeCountQueryJsonResult(
+                    recipeQuery.Name,
+                    recipeQuery.Query,
+                    recipeQuery.Description,
+                    recipeQuery.Severity,
+                    count,
+                    count,
+                    0,
+                    count,
+                    fileCountForQuery,
+                    false,
+                    BuildSearchRecipeClassifierCounts(rows),
+                    BuildSearchRecipeTopFiles(rows)));
+                if (freshnessContext != null)
+                {
+                    freshnessObservations.Add(SuccessfulSearchQueryObservation(
+                        freshnessContext,
+                        recipeQuery.Name,
+                        count));
+                }
+            }
+            catch (Exception ex) when (
+                freshnessContext != null
+                && TryClassifySearchQueryExecutionFailure(ex, out _))
+            {
+                TryClassifySearchQueryExecutionFailure(ex, out var failureReason);
+                hasFailures = true;
+                freshnessObservations.Add(FailedSearchQueryObservation(
+                    freshnessContext,
+                    recipeQuery.Name,
+                    failureReason));
+            }
         }
 
         fileCount = paths.Count;
@@ -2418,6 +2708,93 @@ public static partial class QueryCommandRunner
                 details.Add($"match_site_count:{matchSites.Count.ToString(CultureInfo.InvariantCulture)}");
             details.Add($"boundary_categories:{string.Join(',', matchCategories)}");
         }
+        return new SearchAuditClassificationJsonResult(
+            classifier.Name,
+            categoryMetadata.Name,
+            categoryMetadata.Description,
+            categoryMetadata.ReviewGuidance,
+            details);
+    }
+
+    private static List<SearchDisplayRow> ApplySearchRecipeSemanticFilter(
+        DbReader reader,
+        QueryCommandOptions options,
+        SearchAuditRecipeQuery recipeQuery,
+        List<SearchDisplayRow> rows)
+    {
+        if (recipeQuery.SemanticFilter == SearchRecipeSemanticFilter.None)
+            return rows;
+
+        var classifierName = recipeQuery.SemanticFilter switch
+        {
+            SearchRecipeSemanticFilter.RegexStaticMember => "regex_operation_semantics",
+            SearchRecipeSemanticFilter.ShellExecuteAssignment => "shell_execute_polarity",
+            _ => null,
+        };
+        var classifier = classifierName == null
+            ? null
+            : recipeQuery.Classifiers.FirstOrDefault(candidate => string.Equals(candidate.Name, classifierName, StringComparison.Ordinal));
+        if (classifier == null)
+            return rows;
+
+        var retained = new List<SearchDisplayRow>(rows.Count);
+        var regexBindingPaths = recipeQuery.SemanticFilter == SearchRecipeSemanticFilter.RegexStaticMember
+            ? BuildRegexBareReceiverContexts(reader, options, rows)
+            : new Dictionary<string, RegexBareReceiverContext>(StringComparer.Ordinal);
+        foreach (var row in rows)
+        {
+            var evidence = recipeQuery.SemanticFilter switch
+            {
+                SearchRecipeSemanticFilter.RegexStaticMember => GetRegexOperationEvidence(
+                    reader,
+                    row,
+                    regexBindingPaths),
+                SearchRecipeSemanticFilter.ShellExecuteAssignment => GetShellExecuteAssignmentEvidence(row),
+                _ => null,
+            };
+            if (evidence?.Suppress == true)
+                continue;
+
+            if (evidence != null)
+            {
+                var classification = BuildSearchRecipeSemanticClassification(classifier, evidence, row);
+                if (classification != null)
+                {
+                    row.Compact.AuditClassifications ??= [];
+                    row.Compact.AuditClassifications.Add(classification);
+                }
+            }
+
+            retained.Add(row);
+        }
+
+        return retained;
+    }
+
+    private static SearchAuditClassificationJsonResult? BuildSearchRecipeSemanticClassification(
+        SearchRecipeClassifierJsonResult classifier,
+        SearchRecipeSemanticEvidence evidence,
+        SearchDisplayRow row)
+    {
+        var categoryMetadata = classifier.Categories
+            .FirstOrDefault(category => string.Equals(category.Name, evidence.Category, StringComparison.Ordinal));
+        if (categoryMetadata == null)
+            return null;
+
+        var details = new List<string>
+        {
+            $"reason:{evidence.Reason}",
+        };
+        if (!string.IsNullOrWhiteSpace(evidence.Operation))
+            details.Add($"operation:{evidence.Operation}");
+        if (!string.IsNullOrWhiteSpace(evidence.Value))
+            details.Add($"value:{evidence.Value}");
+        if (evidence.Line.HasValue)
+            details.Add($"line:{evidence.Line.Value.ToString(CultureInfo.InvariantCulture)}");
+        if (!string.IsNullOrWhiteSpace(row.Compact.EnclosingSymbolName))
+            details.Add($"enclosing_symbol_name:{row.Compact.EnclosingSymbolName}");
+        if (!string.IsNullOrWhiteSpace(row.Compact.EnclosingSymbolKind))
+            details.Add($"enclosing_symbol_kind:{row.Compact.EnclosingSymbolKind}");
 
         return new SearchAuditClassificationJsonResult(
             classifier.Name,
@@ -3402,6 +3779,353 @@ public static partial class QueryCommandRunner
     private static bool IsValidJsonTrustBoundaryRationale(string value)
         => value.Length is > 0 and <= 80
             && value.All(ch => char.IsAsciiLetterOrDigit(ch) || ch is '_' or '-' or '.');
+    private static SearchRecipeSemanticEvidence GetRegexOperationEvidence(
+        DbReader reader,
+        SearchDisplayRow row,
+        Dictionary<string, RegexBareReceiverContext> bindingPaths)
+    {
+        var operations = new List<string>();
+        int? firstLine = null;
+        var foundRiskOperation = false;
+        var foundUnresolvedOperation = false;
+        var foundSafeOperation = false;
+
+        foreach (var match in GetSemanticEvidenceMatches(row, "Regex."))
+        {
+            var searchFrom = match.MarkerIndex + "Regex.".Length;
+            firstLine ??= match.Line;
+
+            var receiver = ExtractRegexReceiver(match.Text, match.MarkerIndex);
+            var member = ExtractIdentifier(match.Text, searchFrom);
+            operations.Add(string.IsNullOrWhiteSpace(member) ? receiver : $"{receiver}.{member}");
+            if (!IsProvenSystemRegexReceiver(
+                    reader,
+                    row.Result.Path,
+                    receiver,
+                    match.Line,
+                    match.MarkerIndex,
+                    bindingPaths)
+                || string.IsNullOrWhiteSpace(member))
+            {
+                foundUnresolvedOperation = true;
+                continue;
+            }
+
+            if (member is "Escape" or "Unescape")
+            {
+                foundSafeOperation = true;
+                continue;
+            }
+
+            if (member is "IsMatch" or "Match" or "Matches" or "Replace" or "Split" or "EnumerateMatches" or "Count")
+                foundRiskOperation = true;
+            else
+                foundUnresolvedOperation = true;
+        }
+
+        var operation = string.Join(",", operations.Distinct(StringComparer.Ordinal));
+        if (foundRiskOperation)
+            return new SearchRecipeSemanticEvidence(false, "regex_pattern_operation", "matched_pattern_operation", operation, null, firstLine);
+        if (foundUnresolvedOperation || !foundSafeOperation)
+            return new SearchRecipeSemanticEvidence(false, "regex_operation_unresolved", "receiver_or_member_not_proven_safe", operation, null, firstLine);
+        return new SearchRecipeSemanticEvidence(true, "safe_escape_helper", "escape_helper_does_not_execute_pattern", operation, null, firstLine);
+    }
+
+    private static string ExtractRegexReceiver(string text, int regexIndex)
+    {
+        var start = regexIndex;
+        while (start > 0 && IsQualifiedIdentifierCharacter(text[start - 1]))
+            start--;
+        return text[start..(regexIndex + "Regex".Length)].Trim('.');
+    }
+
+    private static bool IsProvenSystemRegexReceiver(
+        DbReader reader,
+        string path,
+        string receiver,
+        int line,
+        int regexIndex,
+        Dictionary<string, RegexBareReceiverContext> bindingPaths)
+    {
+        if (string.Equals(receiver, "System.Text.RegularExpressions.Regex", StringComparison.Ordinal)
+            || string.Equals(receiver, "global::System.Text.RegularExpressions.Regex", StringComparison.Ordinal))
+        {
+            return true;
+        }
+        if (!string.Equals(receiver, "Regex", StringComparison.Ordinal))
+            return false;
+
+        if (!bindingPaths.TryGetValue(path, out var binding)
+            || !binding.HasSystemNamespaceImport
+            || binding.HasAliasDeclaration)
+        {
+            return false;
+        }
+
+        var resolution = reader.GetReferencePositionResolution(path, "Regex", line, regexIndex + 1, maxCandidates: 1);
+        return resolution.IdentityAvailable
+            && !resolution.CandidatesTruncated
+            && resolution.Candidates.Count == 0;
+    }
+
+    private static Dictionary<string, RegexBareReceiverContext> BuildRegexBareReceiverContexts(
+        DbReader reader,
+        QueryCommandOptions options,
+        IReadOnlyCollection<SearchDisplayRow> rows)
+    {
+        var paths = rows
+            .Select(row => row.Result.Path)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        var contexts = paths.ToDictionary(
+            path => path,
+            _ => new RegexBareReceiverContext(false, false),
+            StringComparer.Ordinal);
+        foreach (var pathBatch in paths.Chunk(100))
+        {
+            var usingResults = reader.Search(
+                "using",
+                int.MaxValue,
+                options.Lang,
+                rawQuery: false,
+                pathPatterns: pathBatch,
+                excludePathPatterns: null,
+                excludeTests: false,
+                deduplicate: false,
+                since: options.Since,
+                exact: true,
+                prefix: false,
+                visibilityRank: false);
+            foreach (var result in usingResults)
+            {
+                if (!contexts.TryGetValue(result.Path, out var context))
+                    continue;
+
+                foreach (var match in GetCodeSemanticMatches(result, "using"))
+                {
+                    var directive = ParseRegexUsingDirective(match.ContinuationText, match.MarkerIndex);
+                    context = new RegexBareReceiverContext(
+                        context.HasSystemNamespaceImport || directive.HasSystemNamespaceImport,
+                        context.HasAliasDeclaration || directive.HasAliasDeclaration);
+                }
+
+                contexts[result.Path] = context;
+            }
+        }
+
+        return contexts;
+    }
+
+    private static RegexBareReceiverContext ParseRegexUsingDirective(string content, int usingIndex)
+    {
+        var cursor = usingIndex + "using".Length;
+        if ((usingIndex > 0 && IsIdentifierCharacter(content[usingIndex - 1]))
+            || (cursor < content.Length && IsIdentifierCharacter(content[cursor])))
+        {
+            return new RegexBareReceiverContext(false, false);
+        }
+
+        cursor = SkipCSharpTrivia(content, cursor);
+        var firstIdentifier = ExtractIdentifier(content, cursor);
+        if (string.Equals(firstIdentifier, "Regex", StringComparison.Ordinal))
+        {
+            cursor = SkipCSharpTrivia(content, cursor + firstIdentifier.Length);
+            return new RegexBareReceiverContext(false, cursor < content.Length && content[cursor] == '=');
+        }
+
+        foreach (var identifier in new[] { "System", "Text", "RegularExpressions" })
+        {
+            var actual = ExtractIdentifier(content, cursor);
+            if (!string.Equals(actual, identifier, StringComparison.Ordinal))
+                return new RegexBareReceiverContext(false, false);
+            cursor = SkipCSharpTrivia(content, cursor + actual.Length);
+            if (!string.Equals(identifier, "RegularExpressions", StringComparison.Ordinal))
+            {
+                if (cursor >= content.Length || content[cursor] != '.')
+                    return new RegexBareReceiverContext(false, false);
+                cursor = SkipCSharpTrivia(content, cursor + 1);
+            }
+        }
+
+        return new RegexBareReceiverContext(
+            cursor < content.Length && content[cursor] == ';',
+            false);
+    }
+
+    private static int SkipCSharpTrivia(string text, int start)
+    {
+        var cursor = start;
+        while (cursor < text.Length)
+        {
+            if (char.IsWhiteSpace(text[cursor]))
+            {
+                cursor++;
+                continue;
+            }
+            if (cursor + 1 < text.Length && text[cursor] == '/' && text[cursor + 1] == '/')
+            {
+                cursor += 2;
+                while (cursor < text.Length && text[cursor] is not '\r' and not '\n')
+                    cursor++;
+                continue;
+            }
+            if (cursor + 1 < text.Length && text[cursor] == '/' && text[cursor + 1] == '*')
+            {
+                var commentEnd = text.IndexOf("*/", cursor + 2, StringComparison.Ordinal);
+                if (commentEnd < 0)
+                    return text.Length;
+                cursor = commentEnd + 2;
+                continue;
+            }
+
+            break;
+        }
+
+        return cursor;
+    }
+
+    private static bool IsIdentifierCharacter(char value)
+        => char.IsLetterOrDigit(value) || value == '_';
+
+    private static bool IsQualifiedIdentifierCharacter(char value)
+        => char.IsLetterOrDigit(value) || value is '_' or '.' or ':';
+
+    private static string ExtractIdentifier(string text, int start)
+    {
+        var end = start;
+        while (end < text.Length && (char.IsLetterOrDigit(text[end]) || text[end] == '_'))
+            end++;
+        return text[start..end];
+    }
+
+    private static SearchRecipeSemanticEvidence GetShellExecuteAssignmentEvidence(SearchDisplayRow row)
+    {
+        var values = new List<string>();
+        int? firstLine = null;
+        var foundFalse = false;
+        var foundTrue = false;
+        var foundUnresolved = false;
+
+        foreach (var match in GetSemanticEvidenceMatches(row, "UseShellExecute"))
+        {
+            var searchFrom = match.MarkerIndex + "UseShellExecute".Length;
+            firstLine ??= match.Line;
+            var value = ExtractAssignedBooleanLiteral(match.ContinuationText, searchFrom);
+            values.Add(value ?? "unresolved");
+            if (string.Equals(value, "false", StringComparison.Ordinal))
+                foundFalse = true;
+            else if (string.Equals(value, "true", StringComparison.Ordinal))
+                foundTrue = true;
+            else
+                foundUnresolved = true;
+        }
+
+        var valueEvidence = string.Join(",", values.Distinct(StringComparer.Ordinal));
+        if (foundTrue)
+            return new SearchRecipeSemanticEvidence(false, "shell_explicitly_enabled", "literal_true_enables_shell", "UseShellExecute", valueEvidence, firstLine);
+        if (foundUnresolved || !foundFalse)
+            return new SearchRecipeSemanticEvidence(false, "shell_policy_unresolved", "assigned_value_not_literal_boolean", "UseShellExecute", valueEvidence, firstLine);
+        return new SearchRecipeSemanticEvidence(true, "shell_explicitly_disabled", "literal_false_disables_shell", "UseShellExecute", valueEvidence, firstLine);
+    }
+
+    private static string? ExtractAssignedBooleanLiteral(string text, int start)
+    {
+        var cursor = start;
+        while (cursor < text.Length && char.IsWhiteSpace(text[cursor]))
+            cursor++;
+        if (cursor >= text.Length || (text[cursor] != '=' && text[cursor] != ':'))
+            return null;
+        if (text[cursor] == '=' && cursor + 1 < text.Length && text[cursor + 1] is '=' or '>')
+            return null;
+
+        cursor++;
+        while (cursor < text.Length && char.IsWhiteSpace(text[cursor]))
+            cursor++;
+        var value = ExtractIdentifier(text, cursor);
+        if (value is not ("false" or "true"))
+            return null;
+
+        cursor += value.Length;
+        cursor = SkipCSharpTrivia(text, cursor);
+        if (cursor == text.Length || text[cursor] is ',' or ';' or '}' or ')' or ']')
+            return value;
+        return null;
+    }
+
+    private static IEnumerable<SearchRecipeSemanticMatch> GetSemanticEvidenceMatches(SearchDisplayRow row, string marker)
+    {
+        var contentLines = row.Result.Content.Split('\n', StringSplitOptions.None);
+        var matches = new List<SearchRecipeSemanticMatch>();
+        var seen = new HashSet<(int Line, int MarkerIndex)>();
+        foreach (var facet in row.Compact.MatchFacets
+                     .Where(facet => string.Equals(facet.Origin, SearchMatchClassifier.Code, StringComparison.Ordinal))
+                     .OrderBy(facet => facet.Line)
+                     .ThenBy(facet => facet.Column))
+        {
+            if (facet.Line < row.Result.StartLine || facet.Line - row.Result.StartLine >= contentLines.Length)
+                continue;
+
+            var contentLineIndex = facet.Line - row.Result.StartLine;
+            var text = contentLines[contentLineIndex].TrimEnd('\r');
+            var continuationText = string.Join('\n', contentLines.Skip(contentLineIndex));
+            var facetStart = Math.Max(0, facet.Column - 1);
+            var facetEnd = facetStart + Math.Max(1, facet.Length);
+            for (var searchFrom = 0; searchFrom < text.Length;)
+            {
+                var markerIndex = text.IndexOf(marker, searchFrom, StringComparison.Ordinal);
+                if (markerIndex < 0)
+                    break;
+                searchFrom = markerIndex + marker.Length;
+                var markerEnd = markerIndex + marker.Length;
+                if (markerIndex >= facetEnd || facetStart >= markerEnd || !seen.Add((facet.Line, markerIndex)))
+                    continue;
+
+                matches.Add(new SearchRecipeSemanticMatch(text, continuationText, facet.Line, markerIndex));
+            }
+        }
+
+        return matches;
+    }
+
+    private static IEnumerable<SearchRecipeSemanticMatch> GetCodeSemanticMatches(SearchResult result, string marker)
+    {
+        var contentLines = result.Content.Split('\n', StringSplitOptions.None);
+        for (var contentLineIndex = 0; contentLineIndex < contentLines.Length; contentLineIndex++)
+        {
+            var text = contentLines[contentLineIndex].TrimEnd('\r');
+            var continuationText = string.Join('\n', contentLines.Skip(contentLineIndex));
+            for (var searchFrom = 0; searchFrom < text.Length;)
+            {
+                var markerIndex = text.IndexOf(marker, searchFrom, StringComparison.Ordinal);
+                if (markerIndex < 0)
+                    break;
+                searchFrom = markerIndex + marker.Length;
+                var line = result.StartLine + contentLineIndex;
+                var facet = SearchMatchClassifier.Classify(
+                    result.Path,
+                    result.Lang,
+                    line,
+                    text,
+                    markerIndex + 1,
+                    marker.Length,
+                    result.EnclosingSymbolKind);
+                if (string.Equals(facet.Origin, SearchMatchClassifier.Code, StringComparison.Ordinal))
+                    yield return new SearchRecipeSemanticMatch(text, continuationText, line, markerIndex);
+            }
+        }
+    }
+
+    private sealed record SearchRecipeSemanticEvidence(
+        bool Suppress,
+        string Category,
+        string Reason,
+        string Operation,
+        string? Value,
+        int? Line);
+
+    private sealed record RegexBareReceiverContext(bool HasSystemNamespaceImport, bool HasAliasDeclaration);
+
+    private sealed record SearchRecipeSemanticMatch(string Text, string ContinuationText, int Line, int MarkerIndex);
 
     private static SearchAuditClassificationJsonResult? TryClassifyTaskResultIntent(
         SearchRecipeClassifierJsonResult classifier,
@@ -3667,6 +4391,7 @@ public static partial class QueryCommandRunner
                 requiredPathPatterns: GetSearchRecipeRequiredPathPatterns(options, recipeQuery));
             results = ApplySearchRecipeFileRejectQueries(reader, results, options, recipeQuery);
             var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, rawFtsOverride: false, recipeQuery: recipeQuery);
+            rows = ApplySearchRecipeSemanticFilter(reader, options, recipeQuery, rows);
             foreach (var path in rows.Select(row => row.Result.Path))
                 paths.Add(path);
 
@@ -3709,14 +4434,16 @@ public static partial class QueryCommandRunner
         int limitPerQuery,
         int? totalLimit,
         int emittedResultCount,
-        QueryCommandInvocationContext invocationContext)
+        QueryCommandInvocationContext invocationContext,
+        SearchQueryFreshnessContext freshnessContext,
+        IReadOnlyList<SearchQueryFreshnessObservation> freshnessObservations)
         => new(
             limitPerQuery,
             totalLimit,
             emittedResultCount,
             queryResults.Count(query => query.Truncated),
             queryResults.Sum(query => query.MinimumOmittedResultCount),
-            BuildSearchRecipeQueryFreshness(queryResults),
+            BuildSearchRecipeQueryFreshness(freshnessContext, freshnessObservations),
             queryResults.Any(query => query.Truncated && !string.IsNullOrWhiteSpace(query.NextCursor)),
             BuildSearchRecipeCursoringHint(
                 queryResults.Any(query => query.Truncated),
@@ -3737,14 +4464,16 @@ public static partial class QueryCommandRunner
         int limitPerQuery,
         int? totalLimit,
         int emittedResultCount,
-        QueryCommandInvocationContext invocationContext)
+        QueryCommandInvocationContext invocationContext,
+        SearchQueryFreshnessContext freshnessContext,
+        IReadOnlyList<SearchQueryFreshnessObservation> freshnessObservations)
         => new(
             limitPerQuery,
             totalLimit,
             emittedResultCount,
             queryResults.Count(query => query.Truncated),
             queryResults.Sum(query => query.MinimumOmittedResultCount),
-            BuildSearchRecipeQueryFreshness(queryResults),
+            BuildSearchRecipeQueryFreshness(freshnessContext, freshnessObservations),
             queryResults.Any(query => query.Truncated && !string.IsNullOrWhiteSpace(query.NextCursor)),
             BuildSearchRecipeCursoringHint(
                 queryResults.Any(query => query.Truncated),
@@ -3760,6 +4489,29 @@ public static partial class QueryCommandRunner
             queryResults.Sum(query => query.SelectorOmittedCount),
             queryResults.Sum(query => query.LimitOmittedCount));
 
+    private static void WriteSearchRecipeFreshnessText(SearchRecipeQueryFreshnessJsonResult freshness)
+    {
+        Console.WriteLine(
+            $"Query freshness: {freshness.State} "
+            + $"(clean={freshness.CleanQueryCount}, matched={freshness.MatchedQueryCount}, "
+            + $"clean zero-match={freshness.CleanZeroMatchQueryCount}, stale={freshness.StaleQueryCount}, "
+            + $"invalid={freshness.InvalidQueryCount})");
+        if (freshness.StaleQueryNames.Count > 0)
+            Console.WriteLine($"Stale queries: {string.Join(", ", freshness.StaleQueryNames)}");
+        if (freshness.InvalidQueryNames.Count > 0)
+            Console.WriteLine($"Invalid queries: {string.Join(", ", freshness.InvalidQueryNames)}");
+    }
+
+    private static int CompleteSearchRecipeOutput(int writeExitCode, bool hasFailures)
+    {
+        if (writeExitCode != CommandExitCodes.Success || !hasFailures)
+            return writeExitCode;
+
+        CommandErrorWriter.WriteStderr(
+            $"Error [{CommandErrorCodes.UsageError}]: one or more recipe queries failed; inspect query_freshness.invalid_query_names.");
+        return CommandExitCodes.UsageError;
+    }
+
     private static string BuildSearchRecipeCursoringHint(
         bool hasTruncatedQuery,
         bool cursoringAvailable,
@@ -3770,27 +4522,366 @@ public static partial class QueryCommandRunner
                 ? "Continuation cursors are unavailable for the selected rows; increase --limit or --total-limit and rerun."
                 : "No query is truncated, so no continuation cursor is needed.";
 
-    private static SearchRecipeQueryFreshnessJsonResult BuildSearchRecipeQueryFreshness(IReadOnlyList<SearchRecipeQueryResultJsonResult> queryResults)
-        => BuildSearchRecipeQueryFreshness(queryResults.Select(query => (query.Name, query.MinimumMatchedCount)));
+    private static SearchRecipeQueryFreshnessJsonResult BuildSearchRecipeQueryFreshness(
+        IReadOnlyList<SearchRecipeQueryResultJsonResult> queryResults,
+        SearchQueryFreshnessContext context)
+        => BuildSearchRecipeQueryFreshness(
+            context,
+            queryResults.Select(query => SuccessfulSearchQueryObservation(
+                context,
+                query.Name,
+                query.MinimumMatchedCount)));
 
-    private static SearchRecipeQueryFreshnessJsonResult BuildSearchRecipeQueryFreshness(IReadOnlyList<SearchRecipeCompactQueryResultJsonResult> queryResults)
-        => BuildSearchRecipeQueryFreshness(queryResults.Select(query => (query.Name, query.MinimumMatchedCount)));
+    private static SearchRecipeQueryFreshnessJsonResult BuildSearchRecipeQueryFreshness(
+        IReadOnlyList<SearchRecipeCompactQueryResultJsonResult> queryResults,
+        SearchQueryFreshnessContext context)
+        => BuildSearchRecipeQueryFreshness(
+            context,
+            queryResults.Select(query => SuccessfulSearchQueryObservation(
+                context,
+                query.Name,
+                query.MinimumMatchedCount)));
 
-    private static SearchRecipeQueryFreshnessJsonResult BuildSearchRecipeQueryFreshness(IReadOnlyList<SearchRecipeCountQueryJsonResult> queryResults)
-        => BuildSearchRecipeQueryFreshness(queryResults.Select(query => (query.Name, query.Count)));
+    private static SearchRecipeQueryFreshnessJsonResult BuildSearchRecipeQueryFreshness(
+        IReadOnlyList<SearchRecipeCountQueryJsonResult> queryResults,
+        SearchQueryFreshnessContext context)
+        => BuildSearchRecipeQueryFreshness(
+            context,
+            queryResults.Select(query => SuccessfulSearchQueryObservation(
+                context,
+                query.Name,
+                query.Count)));
 
-    private static SearchRecipeQueryFreshnessJsonResult BuildSearchRecipeQueryFreshness(IEnumerable<(string Name, int Count)> queryResults)
+    private static SearchRecipeQueryFreshnessJsonResult BuildSearchRecipeQueryFreshness(
+        IEnumerable<(string Name, int Count)> queryResults,
+        SearchQueryFreshnessContext context)
+        => BuildSearchRecipeQueryFreshness(
+            context,
+            queryResults.Select(query => SuccessfulSearchQueryObservation(
+                context,
+                query.Name,
+                query.Count)));
+
+    internal static SearchRecipeQueryFreshnessJsonResult BuildSearchRecipeQueryFreshnessForTests(
+        SearchQueryFreshnessContext context,
+        IEnumerable<SearchQueryFreshnessObservation> observations)
+        => BuildSearchRecipeQueryFreshness(context, observations);
+
+    private static SearchRecipeQueryFreshnessJsonResult BuildSearchRecipeQueryFreshness(
+        SearchQueryFreshnessContext context,
+        IEnumerable<SearchQueryFreshnessObservation> observations)
     {
-        var results = queryResults.ToList();
-        var staleQueryNames = results
-            .Where(query => query.Count == 0)
+        var observedByName = observations
+            .GroupBy(observation => observation.Name, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Last(), StringComparer.Ordinal);
+        var states = new List<SearchRecipeQueryFreshnessStateJsonResult>();
+        var recipeChanged = !string.Equals(
+            context.ExpectedRecipeVersion,
+            context.ExecutedRecipeVersion,
+            StringComparison.Ordinal);
+
+        foreach (var expected in context.ExpectedQueries)
+        {
+            if (!observedByName.Remove(expected.Name, out var observation))
+            {
+                states.Add(new(
+                    expected.Name,
+                    "invalid",
+                    "unknown",
+                    null,
+                    "missing_query_result",
+                    expected.DefinitionVersion));
+                continue;
+            }
+
+            var resultState = observation.MatchCount switch
+            {
+                > 0 => "matched",
+                0 => "zero_match",
+                _ => "unknown",
+            };
+            if (!observation.ExecutionSucceeded)
+            {
+                states.Add(new(
+                    expected.Name,
+                    "invalid",
+                    resultState,
+                    observation.MatchCount,
+                    string.IsNullOrWhiteSpace(observation.FailureReason)
+                        ? "query_execution_failed"
+                        : observation.FailureReason!,
+                    observation.DefinitionVersion));
+                continue;
+            }
+
+            if (recipeChanged)
+            {
+                states.Add(new(
+                    expected.Name,
+                    "stale",
+                    resultState,
+                    observation.MatchCount,
+                    "recipe_definition_changed",
+                    observation.DefinitionVersion));
+                continue;
+            }
+
+            if (!string.Equals(expected.DefinitionVersion, observation.DefinitionVersion, StringComparison.Ordinal))
+            {
+                states.Add(new(
+                    expected.Name,
+                    "stale",
+                    resultState,
+                    observation.MatchCount,
+                    "query_definition_changed",
+                    observation.DefinitionVersion));
+                continue;
+            }
+
+            if (string.Equals(context.IndexState, "stale", StringComparison.Ordinal))
+            {
+                states.Add(new(
+                    expected.Name,
+                    "stale",
+                    resultState,
+                    observation.MatchCount,
+                    context.IndexReason ?? "index_stale",
+                    observation.DefinitionVersion));
+                continue;
+            }
+
+            states.Add(new(
+                expected.Name,
+                "clean",
+                resultState,
+                observation.MatchCount,
+                "executed_current_definition",
+                observation.DefinitionVersion));
+        }
+
+        foreach (var unexpected in observedByName.Values.OrderBy(observation => observation.Name, StringComparer.Ordinal))
+        {
+            states.Add(new(
+                unexpected.Name,
+                "invalid",
+                unexpected.MatchCount switch
+                {
+                    > 0 => "matched",
+                    0 => "zero_match",
+                    _ => "unknown",
+                },
+                unexpected.MatchCount,
+                "unexpected_query_result",
+                unexpected.DefinitionVersion));
+        }
+
+        var distinctFreshnessStates = states
+            .Select(query => query.FreshnessState)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        var aggregateState = distinctFreshnessStates.Count switch
+        {
+            0 => "clean",
+            1 => distinctFreshnessStates[0],
+            _ => "mixed",
+        };
+        var staleQueryNames = states
+            .Where(query => query.FreshnessState == "stale")
             .Select(query => query.Name)
             .ToList();
+        var invalidQueryNames = states
+            .Where(query => query.FreshnessState == "invalid")
+            .Select(query => query.Name)
+            .ToList();
+        var cleanZeroMatchQueryNames = states
+            .Where(query => query.FreshnessState == "clean" && query.ResultState == "zero_match")
+            .Select(query => query.Name)
+            .ToList();
+
         return new(
-            results.Count(query => query.Count > 0),
+            states.Count(query => query.ResultState == "matched"),
+            states.Count(query => query.ResultState == "zero_match"),
+            staleQueryNames,
+            aggregateState,
+            states.Count(query => query.FreshnessState == "clean"),
+            states.Count(query => query.ResultState == "matched"),
+            cleanZeroMatchQueryNames.Count,
+            cleanZeroMatchQueryNames,
             staleQueryNames.Count,
-            staleQueryNames);
+            invalidQueryNames.Count,
+            invalidQueryNames,
+            context.IndexState,
+            context.IndexReason,
+            context.ExecutedRecipeVersion,
+            states);
     }
+
+    private static SearchQueryFreshnessObservation SuccessfulSearchQueryObservation(
+        SearchQueryFreshnessContext context,
+        string name,
+        int count)
+    {
+        var definitionVersion = context.ExpectedQueries
+            .FirstOrDefault(query => string.Equals(query.Name, name, StringComparison.Ordinal))
+            ?.DefinitionVersion
+            ?? SearchQueryFreshnessUnknownDefinitionVersion;
+        return new(name, count, definitionVersion, true, null);
+    }
+
+    private static SearchQueryFreshnessObservation FailedSearchQueryObservation(
+        SearchQueryFreshnessContext context,
+        string name,
+        string failureReason)
+    {
+        var definitionVersion = context.ExpectedQueries
+            .FirstOrDefault(query => string.Equals(query.Name, name, StringComparison.Ordinal))
+            ?.DefinitionVersion
+            ?? SearchQueryFreshnessUnknownDefinitionVersion;
+        return new(name, null, definitionVersion, false, failureReason);
+    }
+
+    private static SearchQueryFreshnessContext BuildSearchRecipeFreshnessContext(
+        DbReader reader,
+        SearchAuditRecipe recipe,
+        IReadOnlyList<SearchAuditRecipeQuery> selectedQueries,
+        QueryCommandOptions options)
+    {
+        var recipeVersion = BuildSearchDefinitionVersion(
+            "audit-recipe-v1",
+            recipe,
+            CliJsonSerializerContext.Default.SearchAuditRecipe);
+        return new(
+            ResolveSearchQueryIndexFreshness(reader, options, out var indexReason),
+            indexReason,
+            recipeVersion,
+            recipeVersion,
+            selectedQueries
+                .Select(query => new SearchQueryFreshnessExpectedQuery(
+                    query.Name,
+                    BuildSearchDefinitionVersion(
+                        "audit-recipe-query-v1",
+                        query,
+                        CliJsonSerializerContext.Default.SearchAuditRecipeQuery)))
+                .ToList());
+    }
+
+    private static SearchQueryFreshnessContext BuildNamedSearchFreshnessContext(
+        DbReader reader,
+        IReadOnlyList<SearchNamedQuery> queries,
+        QueryCommandOptions options,
+        bool userExact)
+        => new(
+            ResolveSearchQueryIndexFreshness(reader, options, out var indexReason),
+            indexReason,
+            null,
+            null,
+            queries
+                .Select(query => new SearchQueryFreshnessExpectedQuery(
+                    query.Name,
+                    BuildSearchDefinitionVersion(
+                        "named-query-v1",
+                        query.Name,
+                        query.Query,
+                        options.RawFts.ToString(CultureInfo.InvariantCulture),
+                        userExact.ToString(CultureInfo.InvariantCulture),
+                        options.Prefix.ToString(CultureInfo.InvariantCulture),
+                        options.TokenBoundary.ToString(CultureInfo.InvariantCulture))))
+                .ToList());
+
+    private static string ResolveSearchQueryIndexFreshness(
+        DbReader reader,
+        QueryCommandOptions options,
+        out string? reason)
+    {
+        var health = reader.GetWorkspaceIndexHealth();
+        if (health.IndexNewerThanReader)
+        {
+            reason = "index_newer_than_reader";
+            return "stale";
+        }
+        if (!health.IndexComplete)
+        {
+            reason = "index_incomplete";
+            return "stale";
+        }
+
+        var projectRoot = s_activeQueryProjectRoot;
+        var indexedHead = reader.GetMetaString(DbContext.IndexedHeadShaMetaKey);
+        indexedHead = string.IsNullOrWhiteSpace(indexedHead)
+            ? reader.GetMetaString(DbContext.IndexedHeadCommitMetaKey)
+            : indexedHead;
+        var workspaceHead = string.IsNullOrWhiteSpace(projectRoot)
+            ? null
+            : GitHelper.TryGetHeadCommit(projectRoot);
+        if (!string.IsNullOrWhiteSpace(indexedHead)
+            && !string.IsNullOrWhiteSpace(workspaceHead)
+            && !string.Equals(indexedHead, workspaceHead, StringComparison.Ordinal))
+        {
+            reason = "index_head_changed";
+            return "stale";
+        }
+
+        if (!string.IsNullOrWhiteSpace(projectRoot))
+        {
+            SearchQueryFreshnessWorkspaceCheckForTesting?.Invoke();
+            var workspaceCheck = IndexFreshnessChecker.Check(
+                reader,
+                projectRoot,
+                internalIndexDatabasePath: DbPathResolver.NormalizeDbPath(options.DbPath));
+            if (!workspaceCheck.Checked)
+            {
+                reason = "index_workspace_unverified";
+                return "stale";
+            }
+            if (!workspaceCheck.MatchesWorkspace)
+            {
+                reason = workspaceCheck.Reason == "head_changed"
+                    ? "index_head_changed"
+                    : "index_workspace_changed";
+                return "stale";
+            }
+        }
+
+        reason = null;
+        return "current";
+    }
+
+    private static string BuildSearchDefinitionVersion<T>(
+        string contract,
+        T definition,
+        JsonTypeInfo<T> jsonTypeInfo)
+    {
+        var json = JsonSerializer.Serialize(definition, jsonTypeInfo);
+        return BuildSearchDefinitionVersion(contract, json);
+    }
+
+    private static string BuildSearchDefinitionVersion(string contract, params string[] parts)
+    {
+        var identity = new StringBuilder(contract);
+        foreach (var part in parts)
+            identity.Append('\0').Append(part.Length).Append(':').Append(part);
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identity.ToString()))).ToLowerInvariant();
+    }
+
+    internal const string SearchQueryFreshnessUnknownDefinitionVersion = "unknown";
+
+    internal sealed record SearchQueryFreshnessExpectedQuery(
+        string Name,
+        string DefinitionVersion);
+
+    internal sealed record SearchQueryFreshnessObservation(
+        string Name,
+        int? MatchCount,
+        string DefinitionVersion,
+        bool ExecutionSucceeded,
+        string? FailureReason);
+
+    internal sealed record SearchQueryFreshnessContext(
+        string IndexState,
+        string? IndexReason,
+        string? ExpectedRecipeVersion,
+        string? ExecutedRecipeVersion,
+        IReadOnlyList<SearchQueryFreshnessExpectedQuery> ExpectedQueries);
 
     private static SearchRecipeScopeJsonResult BuildSearchRecipeScope(SearchAuditRecipe recipe, QueryCommandOptions options)
     {
@@ -3988,46 +5079,94 @@ public static partial class QueryCommandRunner
         DbReader reader,
         QueryCommandOptions options,
         bool userExact,
+        SearchQueryFreshnessContext? freshnessContext,
         out int total,
-        out int fileCount)
+        out int fileCount,
+        out List<SearchQueryFreshnessObservation> freshnessObservations,
+        out bool hasFailures)
     {
         var queryCounts = new List<SearchNamedBatchCountSummaryQueryJsonResult>();
+        freshnessObservations = [];
         var paths = new HashSet<string>(StringComparer.Ordinal);
         total = 0;
+        hasFailures = false;
         foreach (var namedQuery in options.NamedSearchQueries)
         {
-            var results = reader.Search(
-                namedQuery.Query,
-                int.MaxValue,
-                options.Lang,
-                options.RawFts,
-                options.PathPatterns,
-                options.ExcludePaths,
-                options.ExcludeTests,
-                !options.NoDedup,
-                options.Since,
-                userExact,
-                options.Prefix,
-                !options.NoVisibilityRank,
-                guardFilters: options.GuardFilters,
-                guardWindow: options.GuardWindow,
-                guardScope: options.GuardScope);
-            var rows = BuildSearchDisplayRows(results, options, userExact, namedQuery.Query);
-            var count = rows.Count;
-            var fileCountForQuery = rows.Select(row => row.Result.Path).Distinct(StringComparer.Ordinal).Count();
-            foreach (var path in rows.Select(row => row.Result.Path))
-                paths.Add(path);
+            try
+            {
+                var results = reader.Search(
+                    namedQuery.Query,
+                    int.MaxValue,
+                    options.Lang,
+                    options.RawFts,
+                    options.PathPatterns,
+                    options.ExcludePaths,
+                    options.ExcludeTests,
+                    !options.NoDedup,
+                    options.Since,
+                    userExact,
+                    options.Prefix,
+                    !options.NoVisibilityRank,
+                    guardFilters: options.GuardFilters,
+                    guardWindow: options.GuardWindow,
+                    guardScope: options.GuardScope);
+                var rows = BuildSearchDisplayRows(results, options, userExact, namedQuery.Query);
+                var count = rows.Count;
+                var fileCountForQuery = rows.Select(row => row.Result.Path).Distinct(StringComparer.Ordinal).Count();
+                foreach (var path in rows.Select(row => row.Result.Path))
+                    paths.Add(path);
 
-            total += count;
-            queryCounts.Add(new SearchNamedBatchCountSummaryQueryJsonResult(
-                namedQuery.Name,
-                namedQuery.Query,
-                count,
-                fileCountForQuery));
+                total += count;
+                queryCounts.Add(new SearchNamedBatchCountSummaryQueryJsonResult(
+                    namedQuery.Name,
+                    namedQuery.Query,
+                    count,
+                    fileCountForQuery));
+                if (freshnessContext != null)
+                {
+                    freshnessObservations.Add(SuccessfulSearchQueryObservation(
+                        freshnessContext,
+                        namedQuery.Name,
+                        count));
+                }
+            }
+            catch (Exception ex) when (
+                freshnessContext != null
+                && TryClassifySearchQueryExecutionFailure(ex, out _))
+            {
+                TryClassifySearchQueryExecutionFailure(ex, out var failureReason);
+                hasFailures = true;
+                queryCounts.Add(new SearchNamedBatchCountSummaryQueryJsonResult(
+                    namedQuery.Name,
+                    namedQuery.Query,
+                    0,
+                    0));
+                var definitionVersion = freshnessContext.ExpectedQueries
+                    .First(query => string.Equals(query.Name, namedQuery.Name, StringComparison.Ordinal))
+                    .DefinitionVersion;
+                freshnessObservations.Add(new(
+                    namedQuery.Name,
+                    null,
+                    definitionVersion,
+                    false,
+                    failureReason));
+            }
         }
 
         fileCount = paths.Count;
         return queryCounts;
+    }
+
+    private static bool TryClassifySearchQueryExecutionFailure(Exception exception, out string reason)
+    {
+        reason = exception switch
+        {
+            FtsQuerySyntaxException => "query_syntax_invalid",
+            SearchGuardCandidateLimitException => "query_guard_limit_exceeded",
+            SearchQueryLimitException => "query_limit_exceeded",
+            _ => string.Empty,
+        };
+        return reason.Length > 0;
     }
 
     private static List<SearchResult> ApplySearchRecipeFileRejectQueries(
@@ -5098,7 +6237,19 @@ public static partial class QueryCommandRunner
                 filter.Direction == SearchGuardDirection.Before ? "before" : "after",
                 filter.Query,
                 BuildSearchGuardReplayOptionName(filter),
-                FormatSearchGuardFilterScope(filter)))
+                filter.Scope switch
+                {
+                    SearchGuardScope.Window => "window",
+                    SearchGuardScope.SameLine => "same_line",
+                    SearchGuardScope.Container => "container",
+                    _ => null,
+                },
+                filter.EvidenceKind switch
+                {
+                    SearchGuardEvidenceKind.CSharpBoundedFileRead => "csharp_bounded_file_read",
+                    SearchGuardEvidenceKind.CSharpEnumerationOptions => "csharp_enumeration_options",
+                    _ => null,
+                }))
             .ToList();
 
 }

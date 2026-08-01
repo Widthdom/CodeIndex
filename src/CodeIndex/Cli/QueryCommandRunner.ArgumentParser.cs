@@ -113,6 +113,7 @@ public static partial class QueryCommandRunner
         private int groupedPerFileLimit = DefaultSearchGroupedPerFileLimit;
         private bool groupedPerFileLimitExplicit;
         private int? sampleSize;
+        private int? requestedMaxJsonBytes;
         private int? maxJsonBytes;
         private bool rawBytes;
         private bool rawKinds;
@@ -505,6 +506,7 @@ public static partial class QueryCommandRunner
                 GroupedPerFileLimit = groupedPerFileLimit,
                 GroupedPerFileLimitExplicit = groupedPerFileLimitExplicit,
                 SampleSize = sampleSize,
+                RequestedMaxJsonBytes = requestedMaxJsonBytes,
                 MaxJsonBytes = maxJsonBytes,
                 RawBytes = rawBytes,
                 RawKinds = rawKinds,

@@ -369,6 +369,13 @@ public static partial class QueryCommandRunner
             };
             if (filter.Scope.HasValue)
                 item["scope"] = FormatSearchGuardScope(filter.Scope.Value);
+            if (filter.EvidenceKind != SearchGuardEvidenceKind.Text)
+                item["evidence_kind"] = filter.EvidenceKind switch
+                {
+                    SearchGuardEvidenceKind.CSharpBoundedFileRead => "csharp_bounded_file_read",
+                    SearchGuardEvidenceKind.CSharpEnumerationOptions => "csharp_enumeration_options",
+                    _ => "text",
+                };
 
             filters.Add(item);
         }

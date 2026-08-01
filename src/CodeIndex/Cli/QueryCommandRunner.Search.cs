@@ -81,7 +81,13 @@ public static partial class QueryCommandRunner
         if (TryWriteParseError(
             options,
             invocationContext,
-            options.LanguageValidationError || invocationContext.StructuredMachineUsageErrors ? jsonOptions : null))
+            options.LanguageValidationError
+                || invocationContext.StructuredMachineUsageErrors
+                || options.Json
+                && options.ParseError is not null
+                && TryExtractNonPositiveMaxJsonBytes(options.ParseError, out _, out _, out _)
+                ? jsonOptions
+                : null))
             return CommandExitCodes.UsageError;
         if (!TryResolveSearchExactMode(options, out var exact, out var exactError, out var exactHint))
         {
@@ -783,7 +789,8 @@ public static partial class QueryCommandRunner
                                 exactSubstringHint: exactSubstringHint).ToJsonString(jsonOptions),
                             options,
                             "search count",
-                            "Narrow the query or increase --max-json-bytes.");
+                            "Narrow the query or increase --max-json-bytes.",
+                            jsonOptions);
                     }
                     else
                     {
@@ -807,7 +814,8 @@ public static partial class QueryCommandRunner
                             exactSubstringHint: exactSubstringHint).ToJsonString(jsonOptions),
                         options,
                         "search count",
-                        "Narrow the query or increase --max-json-bytes.");
+                        "Narrow the query or increase --max-json-bytes.",
+                        jsonOptions);
                 }
                 else
                 {
@@ -865,7 +873,8 @@ public static partial class QueryCommandRunner
                                 CliJsonSerializerContextFactory.Create(jsonOptions).CompactSearchResultArray),
                             options,
                             "search result array",
-                            "Increase --max-json-bytes or remove the byte cap.");
+                            "Increase --max-json-bytes or remove the byte cap.",
+                            jsonOptions);
                     }
                     else
                     {
@@ -996,7 +1005,8 @@ public static partial class QueryCommandRunner
                             CliJsonSerializerContextFactory.Create(jsonOptions).CompactSearchResultArray),
                         options,
                         "search result array",
-                        "Reduce --limit, --snippet-lines, or use `--json=ndjson --max-json-bytes` for streaming output.");
+                        "Reduce --limit, --snippet-lines, or use `--json=ndjson --max-json-bytes` for streaming output.",
+                        jsonOptions);
                 }
                 else
                 {

@@ -1571,23 +1571,6 @@ public static partial class SymbolExtractor
         }
     }
 
-    private static bool HasPrologClauseTerminator(string line)
-    {
-        for (var column = 0; column < line.Length; column++)
-        {
-            if (line[column] is '\'' or '"')
-            {
-                column = SkipPrologQuotedTerm(line, column, line[column]) - 1;
-                continue;
-            }
-
-            if (DynamicDeclarativeReferenceExtractor.IsPrologClauseTerminator(line, column))
-                return true;
-        }
-
-        return false;
-    }
-
     private static int SkipPrologQuotedTerm(string line, int startColumn, char delimiter)
     {
         for (var column = startColumn + 1; column < line.Length; column++)

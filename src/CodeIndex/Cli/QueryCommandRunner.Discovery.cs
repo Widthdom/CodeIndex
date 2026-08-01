@@ -69,6 +69,7 @@ public static partial class QueryCommandRunner
                         options,
                         "symbols count",
                         "Narrow the query or increase --max-json-bytes.",
+                        jsonOptions,
                         "symbols");
                 }
 
@@ -814,6 +815,7 @@ public static partial class QueryCommandRunner
             options,
             $"{commandName} compact",
             "Use --summary-only, reduce --limit, or increase --max-json-bytes.",
+            jsonOptions,
             commandName);
 
         string BuildBoundedDiscoveryJson(int emittedRows)
@@ -859,6 +861,7 @@ public static partial class QueryCommandRunner
                     options,
                     $"{commandName} JSON array",
                     "Increase --max-json-bytes.",
+                    jsonOptions,
                     commandName);
             }
 
@@ -904,6 +907,7 @@ public static partial class QueryCommandRunner
                         options,
                         $"{commandName} JSON row",
                         "Reduce --limit or increase --max-json-bytes.",
+                        jsonOptions,
                         commandName);
                 }
                 break;

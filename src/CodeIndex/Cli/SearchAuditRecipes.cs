@@ -211,14 +211,14 @@ internal static class SearchAuditRecipes
         "Classify the timestamp boundary first. Persisted and machine-facing values need explicit UTC or offset semantics; cache expiry must compare like-with-like clocks; elapsed-time and timeout logic should use monotonic duration primitives rather than DateTime wall-clock subtraction.");
     private static readonly SearchRecipeClassifierJsonResult GuardEvidenceClassifier = new(
         "guard_evidence",
-        "Classifies whether nearby guard checks explain why a risky API call is already bounded, filtered, or intentionally rejected.",
+        "Classifies whether guard checks structurally explain why a risky API call is already bounded, filtered, or intentionally rejected.",
         [
-            new("bounded_positive_evidence", "A required guard appears near the primary match.", "Use guard_evidence and guard_checks to decide whether the hit is already bounded."),
-            new("missing_guard", "No required guard was found near the primary match.", "Prioritize review when the query describes an API that needs bounds or policy."),
+            new("bounded_positive_evidence", "A required guard is structurally tied to the primary match.", "Use guard_evidence and guard_checks to decide whether the hit is already bounded."),
+            new("missing_guard", "No applicable required guard was found for the primary match.", "Prioritize review when the query describes an API that needs bounds or policy."),
             new("reject_guard_excluded", "A reject guard intentionally removed an otherwise noisy hit.", "Use --show-excluded or a narrower child query when auditing recipe precision.")
         ],
         ["guard_filters", "guard_evidence", "guard_checks", "risk_evidence"],
-        "Guard evidence is query-local context, not proof of safety; verify that the guard applies to the matched operation and not an unrelated nearby call.");
+        "Guard evidence is diagnostic context, not proof of safety; verify accepted/rejected reasons, subject, container, relationship, and evidence path for the matched operation.");
     private static readonly SearchRecipeClassifierJsonResult SecretOriginClassifier = new(
         "secret_origin",
         "Classifies token/auth hits by likely sensitive runtime material versus structural, SQL, protocol, docs, or placeholder text.",
@@ -260,6 +260,26 @@ internal static class SearchAuditRecipes
         ],
         ["path", "enclosing_symbol_name", "risk_evidence", "guard_evidence", "guard_checks"],
         "Treat process-launch results as trust-boundary evidence; prefer ProcessLaunchPolicy/SubprocessEnvironmentPolicy or nearby purpose-specific wrappers.");
+    private static readonly SearchRecipeClassifierJsonResult RegexOperationClassifier = new(
+        "regex_operation_semantics",
+        "Classifies the matched System.Text.RegularExpressions.Regex member by whether it escapes text, executes a pattern, or cannot be resolved conservatively.",
+        [
+            new("safe_escape_helper", "The matched Regex.Escape or Regex.Unescape helper transforms text without executing or compiling a pattern.", "This category is suppressed from audit findings."),
+            new("regex_pattern_operation", "The matched Regex member performs matching, replacement, splitting, or another pattern operation.", "Review timeout policy, pattern trust, and input bounds."),
+            new("regex_operation_unresolved", "The matched receiver or member could not be proven to be a safe escaping helper.", "Keep aliases, qualifications, truncated snippets, and unknown members for manual review.")
+        ],
+        ["path", "enclosing_symbol_name", "audit_classifications.evidence", "risk_evidence", "match_origins"],
+        "Only exact Regex.Escape and Regex.Unescape operations are suppressed; execution members and unresolved receiver/member evidence remain findings.");
+    private static readonly SearchRecipeClassifierJsonResult ShellExecutePolarityClassifier = new(
+        "shell_execute_polarity",
+        "Classifies UseShellExecute assignments by their literal boolean polarity while preserving unresolved value flows for review.",
+        [
+            new("shell_explicitly_disabled", "The matched assignment uses the literal false value and explicitly disables shell execution.", "This category is suppressed from audit findings."),
+            new("shell_explicitly_enabled", "The matched assignment uses the literal true value and enables shell execution.", "Review command, argument, environment, and file-association trust boundaries."),
+            new("shell_policy_unresolved", "The assigned value is propagated, computed, truncated, or otherwise not a literal boolean.", "Retain the finding until the no-shell policy can be proven at the assignment boundary.")
+        ],
+        ["path", "enclosing_symbol_name", "audit_classifications.evidence", "risk_evidence", "match_origins"],
+        "Only a direct literal false assignment is suppressed; true and unresolved value propagation remain findings.");
     private static readonly SearchRecipeClassifierJsonResult CancellationIntentClassifier = new(
         "cancellation_intent",
         "Classifies cancellation-token hits by compatibility wrapper, short-lived probe, or long-running operation risk.",
@@ -494,27 +514,31 @@ internal static class SearchAuditRecipes
             MatchOrigins = ["code"],
         };
 
-    private static SearchAuditRecipeQuery DogfoodStaticRegexApiQuery(string name, string query, string shape) =>
+    private static SearchAuditRecipeQuery DogfoodStaticRegexApiQuery(
+        string name,
+        string query,
+        string shape,
+        bool rejectBoundedRegexAlias = true) =>
         new(
             name,
             query,
             $"Find raw static Regex API usage candidates with {shape} so bounded instance names are not counted.",
             ["audit", "performance", "security"],
-            "False positives include Regex.Escape/Unescape, explicit timeout overloads, generated/precompiled patterns, trusted small inputs, and tests that intentionally exercise raw Regex behavior.")
+            "Regex.Escape/Unescape are suppressed by matched-member semantics. Review retained execution members and unresolved receiver/member evidence for explicit timeout, generated/precompiled patterns, trusted small inputs, or intentional test behavior.")
         {
-            RejectFileQueries =
-            [
-                BoundedRegexAliasUsing
-            ],
+            RejectFileQueries = rejectBoundedRegexAlias ? [BoundedRegexAliasUsing] : [],
             ExcludePaths = [BoundedRegexPath],
             RiskEvidence =
             [
                 "risk: raw System.Text.RegularExpressions.Regex static APIs can run without explicit timeout or shared bounded-regex policy.",
                 "risk: classify each pattern by trust boundary: user input, config/env input, repository-controlled patterns, test fixtures, or generated diagnostics.",
-                "positive: BoundedRegex aliases and instance names ending in Regex are filtered out; remaining hits should be classified as timeout-backed, generated/precompiled, trusted small input, or non-matching helpers such as Escape."
+                "positive: exact Regex.Escape and Regex.Unescape helpers do not execute or compile patterns and are suppressed by matched-member semantics.",
+                "risk: matching/execution members and unresolved alias or qualification evidence remain findings until timeout and trust boundaries are proven."
             ],
             GuardFilters = BoundedRegexEvidenceGuardFilters(),
             MatchOrigins = ["code"],
+            Classifiers = [RegexOperationClassifier],
+            SemanticFilter = SearchRecipeSemanticFilter.RegexStaticMember,
         };
 
     private static readonly string[] TimestampBoundaryRiskEvidence =
@@ -581,7 +605,18 @@ internal static class SearchAuditRecipes
                     "File.ReadAllText",
                     "Find whole-file text reads that may need size caps, sharing policy, or streaming alternatives.",
                     ["audit", "performance"],
-                    "False positives include bounded test fixtures and small files guarded by explicit size checks."),
+                    "False positives include bounded test fixtures and small files guarded by explicit size checks.")
+                {
+                    GuardFilters =
+                    [
+                        new(
+                            SearchGuardRole.Reject,
+                            SearchGuardDirection.Before,
+                            "bounded-file-read",
+                            SearchGuardScope.Container,
+                            SearchGuardEvidenceKind.CSharpBoundedFileRead)
+                    ],
+                },
                 new(
                     "file-read-all-bytes",
                     "File.ReadAllBytes",
@@ -1269,6 +1304,11 @@ internal static class SearchAuditRecipes
                     "static-regex-api-parenthesized",
                     "(Regex.",
                     "an opening-parenthesis prefix"),
+                DogfoodStaticRegexApiQuery(
+                    "static-regex-api-qualified",
+                    "RegularExpressions.Regex.",
+                    "a fully qualified System.Text.RegularExpressions receiver",
+                    rejectBoundedRegexAlias: false),
                 new(
                     "relaxed-json-encoder",
                     "UnsafeRelaxedJsonEscaping",
@@ -1507,17 +1547,19 @@ internal static class SearchAuditRecipes
                 new(
                     "process-shell-execute",
                     "UseShellExecute",
-                    "Find shell-execution toggles that decide whether the platform shell participates in process launch.",
+                    "Find shell-execution toggles whose assigned value enables shell use or cannot be resolved conservatively.",
                     ["audit", "security"],
-                    "False positives include assertions that verify UseShellExecute is false.")
+                    "Literal UseShellExecute=false assignments are suppressed by value-polarity semantics; propagated or computed values remain findings for review.")
                 {
                     RiskEvidence =
                     [
                         "risk: UseShellExecute=true can reintroduce shell expansion, file association behavior, and inherited shell state.",
-                        "positive: UseShellExecute=false with ArgumentList and redirected stream handling is preferred for subprocess boundaries."
+                        "risk: variable-propagated or computed assignments remain findings until their no-shell value can be proven at the assignment boundary.",
+                        "positive: a direct UseShellExecute=false assignment explicitly disables the shell and is suppressed."
                     ],
                     MatchOrigins = ["code"],
-                    Classifiers = [ProcessLaunchClassifier],
+                    Classifiers = [ProcessLaunchClassifier, ShellExecutePolarityClassifier],
+                    SemanticFilter = SearchRecipeSemanticFilter.ShellExecuteAssignment,
                 },
                 new(
                     "process-working-directory",
@@ -2744,19 +2786,23 @@ internal static class SearchAuditRecipes
                 new(
                     "enumerate-without-options",
                     "Directory.Enumerate",
-                    "Find direct Directory.Enumerate* calls that do not have nearby EnumerationOptions evidence and may need traversal policy review.",
+                    "Find direct Directory.Enumerate* calls that do not pass structurally resolved EnumerationOptions evidence and may need traversal policy review.",
                     ["audit", "performance", "security"],
                     "False positives include known-small directories, already-budgeted traversal helpers, and wrappers that enforce cancellation or reparse-point policy.")
                 {
                     RiskEvidence =
                     [
-                        "risk: direct Directory.Enumerate* calls without nearby EnumerationOptions can inherit default recursion, inaccessible-path, and reparse-point behavior.",
-                        "positive: known-small directories, cancellation/budget checks, and shared traversal wrappers can explain intentional direct enumeration."
+                        "risk: direct Directory.Enumerate* calls without a resolved EnumerationOptions argument can inherit default recursion, inaccessible-path, and reparse-point behavior.",
+                        "positive: an inline, local, parameter, or same-container EnumerationOptions value passed to that call explains intentional direct enumeration."
                     ],
                     GuardFilters =
                     [
-                        new(SearchGuardRole.Reject, SearchGuardDirection.Before, "EnumerationOptions"),
-                        new(SearchGuardRole.Reject, SearchGuardDirection.After, "EnumerationOptions")
+                        new(
+                            SearchGuardRole.Reject,
+                            SearchGuardDirection.Before,
+                            "configured-enumeration-options",
+                            SearchGuardScope.Container,
+                            SearchGuardEvidenceKind.CSharpEnumerationOptions)
                     ],
                     MatchOrigins = ["code"],
                 },
@@ -3559,7 +3605,16 @@ internal static class SearchAuditRecipes
                     RiskEvidence =
                     [
                         "risk: whole-file text reads can materialize unbounded input without sharing or size policy.",
-                        "positive: nearby length checks, BoundedFile helpers, or tiny trusted files can make a hit intentional."
+                        "positive: same-path size/control checks, resolved bounded-writer helpers, or tiny trusted files can make a hit intentional."
+                    ],
+                    GuardFilters =
+                    [
+                        new(
+                            SearchGuardRole.Reject,
+                            SearchGuardDirection.Before,
+                            "bounded-file-read",
+                            SearchGuardScope.Container,
+                            SearchGuardEvidenceKind.CSharpBoundedFileRead)
                     ],
                 },
                 new(
@@ -4351,6 +4406,14 @@ internal sealed record SearchAuditRecipeQuery(
     public SearchRecipeStringComparisonTaxonomyJsonResult? StringComparisonTaxonomy { get; init; }
     public SearchRecipeBroadCatchTaxonomyJsonResult? BroadCatchTaxonomy { get; init; }
     public SearchRecipeNullableContractTaxonomyJsonResult? NullableContractTaxonomy { get; init; }
+    public SearchRecipeSemanticFilter SemanticFilter { get; init; }
+}
+
+internal enum SearchRecipeSemanticFilter
+{
+    None,
+    RegexStaticMember,
+    ShellExecuteAssignment,
 }
 
 internal enum SearchRecipeJsonTrustDirection
@@ -4447,7 +4510,10 @@ internal sealed record SearchRecipeGuardFilterJsonResult(
     [property: JsonPropertyName("option")] string Option,
     [property: JsonPropertyName("scope")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    string? Scope);
+    string? Scope,
+    [property: JsonPropertyName("evidence_kind")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? EvidenceKind);
 
 internal sealed record SearchRecipeClassifierJsonResult(
     [property: JsonPropertyName("name")] string Name,
@@ -4539,7 +4605,33 @@ internal sealed record SearchRecipeRunSummaryJsonResult(
 internal sealed record SearchRecipeQueryFreshnessJsonResult(
     [property: JsonPropertyName("positive_evidence_query_count")] int PositiveEvidenceQueryCount,
     [property: JsonPropertyName("zero_result_query_count")] int ZeroResultQueryCount,
-    [property: JsonPropertyName("stale_query_names")] List<string> StaleQueryNames);
+    [property: JsonPropertyName("stale_query_names")] List<string> StaleQueryNames,
+    [property: JsonPropertyName("state")] string State,
+    [property: JsonPropertyName("clean_query_count")] int CleanQueryCount,
+    [property: JsonPropertyName("matched_query_count")] int MatchedQueryCount,
+    [property: JsonPropertyName("clean_zero_match_query_count")] int CleanZeroMatchQueryCount,
+    [property: JsonPropertyName("clean_zero_match_query_names")] List<string> CleanZeroMatchQueryNames,
+    [property: JsonPropertyName("stale_query_count")] int StaleQueryCount,
+    [property: JsonPropertyName("invalid_query_count")] int InvalidQueryCount,
+    [property: JsonPropertyName("invalid_query_names")] List<string> InvalidQueryNames,
+    [property: JsonPropertyName("index_state")] string IndexState,
+    [property: JsonPropertyName("index_reason")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? IndexReason,
+    [property: JsonPropertyName("recipe_version")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? RecipeVersion,
+    [property: JsonPropertyName("queries")] List<SearchRecipeQueryFreshnessStateJsonResult> Queries);
+
+internal sealed record SearchRecipeQueryFreshnessStateJsonResult(
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("freshness_state")] string FreshnessState,
+    [property: JsonPropertyName("result_state")] string ResultState,
+    [property: JsonPropertyName("match_count")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    int? MatchCount,
+    [property: JsonPropertyName("reason")] string Reason,
+    [property: JsonPropertyName("definition_version")] string DefinitionVersion);
 
 internal sealed record SearchRowSelectorJsonResult(
     [property: JsonPropertyName("mode")] string Mode,

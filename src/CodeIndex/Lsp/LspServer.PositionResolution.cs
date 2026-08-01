@@ -268,14 +268,6 @@ internal sealed partial class LspServer : IDisposable
         return false;
     }
 
-    private List<DefinitionResult> PreferDefinitionAtPosition(
-        List<DefinitionResult> definitions,
-        PositionTokenContext context)
-    {
-        var positioned = FindDefinitionsAtPosition(definitions, context);
-        return positioned.Count > 0 ? positioned : definitions;
-    }
-
     private List<DefinitionResult> FindDefinitionsAtPosition(
         List<DefinitionResult> definitions,
         PositionTokenContext context)

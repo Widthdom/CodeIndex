@@ -95,4 +95,7 @@ internal static class CommandErrorCodes
 
     /// <summary>SQLite rejected the file as not being a database, or CodeIndex validation rejected its format.</summary>
     public const string DbNotDatabase = "E027_DB_NOT_DATABASE";
+
+    /// <summary>A requested JSON response byte budget cannot fit the minimum complete payload or envelope.</summary>
+    public const string ResponseBudgetTooSmall = "E028_RESPONSE_BUDGET_TOO_SMALL";
 }
