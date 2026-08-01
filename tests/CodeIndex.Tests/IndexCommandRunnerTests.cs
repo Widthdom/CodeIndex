@@ -23,7 +23,8 @@ namespace CodeIndex.Tests;
 [Collection("SQLite pool sensitive")]
 public partial class IndexCommandRunnerTests
 {
-    private static readonly TimeSpan LegacyEnvironmentHookWorkerBudget = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan SymbolWorkerStartupBudget = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan SymbolWorkerRequestBudget = TimeSpan.FromSeconds(5);
     private static readonly object FullScanContentLoadHookGate = new();
 
     private readonly JsonSerializerOptions _jsonOptions = new()
@@ -476,7 +477,7 @@ public partial class IndexCommandRunnerTests
                     "public class App { }\n",
                     Path.Combine(projectRoot, "App.cs"),
                     projectRoot,
-                    LegacyEnvironmentHookWorkerBudget);
+                    SymbolWorkerStartupBudget);
 
                 Assert.True(result.Success, result.WorkerError);
                 Assert.False(result.TimedOut);
@@ -507,6 +508,16 @@ public partial class IndexCommandRunnerTests
                 (Lang: "rust", Extension: ".rs", Content: "// 顧客\npub struct Customer {}\n"),
             };
             using var worker = new SymbolExtractionWorkerClient();
+            var warmup = worker.Invoke(
+                0,
+                "csharp",
+                "public class StartupProbe { }\n",
+                Path.Combine(projectRoot, "StartupProbe.cs"),
+                projectRoot,
+                SymbolWorkerStartupBudget);
+
+            Assert.False(warmup.TimedOut, "symbol worker startup exceeded the test-only startup budget");
+            Assert.True(warmup.Success, $"symbol worker startup: {warmup.WorkerError}");
 
             foreach (var testCase in cases)
             {
@@ -516,8 +527,11 @@ public partial class IndexCommandRunnerTests
                     testCase.Content,
                     Path.Combine(sourceDirectory, "顧客" + testCase.Extension),
                     projectRoot,
-                    TimeSpan.FromSeconds(5));
+                    SymbolWorkerRequestBudget);
 
+                Assert.False(
+                    result.TimedOut,
+                    $"{testCase.Lang}: symbol worker callback exceeded the request budget after startup warm-up");
                 Assert.True(result.Success, $"{testCase.Lang}: {result.WorkerError}");
                 Assert.Contains(result.Symbols!, symbol => symbol.Name == "Customer");
             }
