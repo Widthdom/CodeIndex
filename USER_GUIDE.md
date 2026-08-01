@@ -1377,8 +1377,16 @@ limit before/after checks to the same source line and the primary match column
 ordering instead of nearby lines. JSON search results include
 `guard_evidence` for matched guards and `guard_checks` for each guard evaluated
 on a returned match. Guard evidence includes the guard name, pattern,
-before/after relationship, scope (`window` or `same_line`), 1-based span,
-origin category, and source line.
+before/after relationship, scope (`window`, `same_line`, or the recipe-only
+`container` scope), 1-based span, origin category, and source line. Built-in
+whole-file-read and filesystem-traversal recipes use bounded C# structural
+checks instead of line proximity: they correlate the same path through a
+size/control guard or resolved bounded writer, and resolve the
+`EnumerationOptions` value actually passed to `Directory.Enumerate*`.
+Structural `guard_evidence` also reports `decision`, `reason`, `subject`,
+`container`, and `evidence_path`; `guard_checks[].rejected_evidence` explains
+why unrelated paths, inverted checks, unawaited helpers, or missing/unrelated
+options were not accepted as guards.
 Each `guard_checks[]` entry includes a compact pass/fail summary.
 Guarded searches inspect a bounded candidate set before pagination; if a guarded
 query is too broad to satisfy the requested page within that budget, CLI and MCP
@@ -4760,7 +4768,14 @@ guard-aware search は primary の `search` 一致を近傍の literal guard で
 before / after を評価します。JSON の検索結果には
 一致した guard の `guard_evidence` と、返却された一致に対して評価した各 guard の
 `guard_checks` が含まれます。guard evidence には guard 名、pattern、before/after の関係、
-scope（`window` または `same_line`）、1-based span、origin category、ソース行、簡潔な pass/fail summary が入ります。
+scope（`window`、`same_line`、または recipe 専用の `container`）、1-based span、
+origin category、ソース行、簡潔な pass/fail summary が入ります。組み込みの whole-file-read と
+filesystem-traversal recipe は行の近接性ではなく、上限付きの C# 構造判定を使います。同じ path の
+size / control guard または解決済み bounded writer を関連付け、`Directory.Enumerate*` に実際に
+渡された `EnumerationOptions` 値を解決します。構造的な `guard_evidence` はさらに
+`decision`、`reason`、`subject`、`container`、`evidence_path` を返し、
+`guard_checks[].rejected_evidence` は無関係な path、反転した条件、await されない helper、
+未指定または無関係な options が guard として採用されなかった理由を説明します。
 guard filter を使う検索は pagination 前に上限付きの候補集合だけを調べます。その budget 内で
 要求ページを満たせないほど query が広い場合、CLI/MCP は validation error を返します。
 このエラーには guard budget、sampled candidate files / languages、`--count` / `--count-by`

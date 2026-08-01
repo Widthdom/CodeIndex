@@ -211,14 +211,14 @@ internal static class SearchAuditRecipes
         "Classify the timestamp boundary first. Persisted and machine-facing values need explicit UTC or offset semantics; cache expiry must compare like-with-like clocks; elapsed-time and timeout logic should use monotonic duration primitives rather than DateTime wall-clock subtraction.");
     private static readonly SearchRecipeClassifierJsonResult GuardEvidenceClassifier = new(
         "guard_evidence",
-        "Classifies whether nearby guard checks explain why a risky API call is already bounded, filtered, or intentionally rejected.",
+        "Classifies whether guard checks structurally explain why a risky API call is already bounded, filtered, or intentionally rejected.",
         [
-            new("bounded_positive_evidence", "A required guard appears near the primary match.", "Use guard_evidence and guard_checks to decide whether the hit is already bounded."),
-            new("missing_guard", "No required guard was found near the primary match.", "Prioritize review when the query describes an API that needs bounds or policy."),
+            new("bounded_positive_evidence", "A required guard is structurally tied to the primary match.", "Use guard_evidence and guard_checks to decide whether the hit is already bounded."),
+            new("missing_guard", "No applicable required guard was found for the primary match.", "Prioritize review when the query describes an API that needs bounds or policy."),
             new("reject_guard_excluded", "A reject guard intentionally removed an otherwise noisy hit.", "Use --show-excluded or a narrower child query when auditing recipe precision.")
         ],
         ["guard_filters", "guard_evidence", "guard_checks", "risk_evidence"],
-        "Guard evidence is query-local context, not proof of safety; verify that the guard applies to the matched operation and not an unrelated nearby call.");
+        "Guard evidence is diagnostic context, not proof of safety; verify accepted/rejected reasons, subject, container, relationship, and evidence path for the matched operation.");
     private static readonly SearchRecipeClassifierJsonResult SecretOriginClassifier = new(
         "secret_origin",
         "Classifies token/auth hits by likely sensitive runtime material versus structural, SQL, protocol, docs, or placeholder text.",
@@ -594,7 +594,18 @@ internal static class SearchAuditRecipes
                     "File.ReadAllText",
                     "Find whole-file text reads that may need size caps, sharing policy, or streaming alternatives.",
                     ["audit", "performance"],
-                    "False positives include bounded test fixtures and small files guarded by explicit size checks."),
+                    "False positives include bounded test fixtures and small files guarded by explicit size checks.")
+                {
+                    GuardFilters =
+                    [
+                        new(
+                            SearchGuardRole.Reject,
+                            SearchGuardDirection.Before,
+                            "bounded-file-read",
+                            SearchGuardScope.Container,
+                            SearchGuardEvidenceKind.CSharpBoundedFileRead)
+                    ],
+                },
                 new(
                     "file-read-all-bytes",
                     "File.ReadAllBytes",
@@ -2750,19 +2761,23 @@ internal static class SearchAuditRecipes
                 new(
                     "enumerate-without-options",
                     "Directory.Enumerate",
-                    "Find direct Directory.Enumerate* calls that do not have nearby EnumerationOptions evidence and may need traversal policy review.",
+                    "Find direct Directory.Enumerate* calls that do not pass structurally resolved EnumerationOptions evidence and may need traversal policy review.",
                     ["audit", "performance", "security"],
                     "False positives include known-small directories, already-budgeted traversal helpers, and wrappers that enforce cancellation or reparse-point policy.")
                 {
                     RiskEvidence =
                     [
-                        "risk: direct Directory.Enumerate* calls without nearby EnumerationOptions can inherit default recursion, inaccessible-path, and reparse-point behavior.",
-                        "positive: known-small directories, cancellation/budget checks, and shared traversal wrappers can explain intentional direct enumeration."
+                        "risk: direct Directory.Enumerate* calls without a resolved EnumerationOptions argument can inherit default recursion, inaccessible-path, and reparse-point behavior.",
+                        "positive: an inline, local, parameter, or same-container EnumerationOptions value passed to that call explains intentional direct enumeration."
                     ],
                     GuardFilters =
                     [
-                        new(SearchGuardRole.Reject, SearchGuardDirection.Before, "EnumerationOptions"),
-                        new(SearchGuardRole.Reject, SearchGuardDirection.After, "EnumerationOptions")
+                        new(
+                            SearchGuardRole.Reject,
+                            SearchGuardDirection.Before,
+                            "configured-enumeration-options",
+                            SearchGuardScope.Container,
+                            SearchGuardEvidenceKind.CSharpEnumerationOptions)
                     ],
                     MatchOrigins = ["code"],
                 },
@@ -3565,7 +3580,16 @@ internal static class SearchAuditRecipes
                     RiskEvidence =
                     [
                         "risk: whole-file text reads can materialize unbounded input without sharing or size policy.",
-                        "positive: nearby length checks, BoundedFile helpers, or tiny trusted files can make a hit intentional."
+                        "positive: same-path size/control checks, resolved bounded-writer helpers, or tiny trusted files can make a hit intentional."
+                    ],
+                    GuardFilters =
+                    [
+                        new(
+                            SearchGuardRole.Reject,
+                            SearchGuardDirection.Before,
+                            "bounded-file-read",
+                            SearchGuardScope.Container,
+                            SearchGuardEvidenceKind.CSharpBoundedFileRead)
                     ],
                 },
                 new(
@@ -4454,7 +4478,10 @@ internal sealed record SearchRecipeGuardFilterJsonResult(
     [property: JsonPropertyName("option")] string Option,
     [property: JsonPropertyName("scope")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    string? Scope);
+    string? Scope,
+    [property: JsonPropertyName("evidence_kind")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? EvidenceKind);
 
 internal sealed record SearchRecipeClassifierJsonResult(
     [property: JsonPropertyName("name")] string Name,
