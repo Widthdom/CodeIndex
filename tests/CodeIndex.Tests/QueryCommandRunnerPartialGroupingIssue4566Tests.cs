@@ -424,7 +424,7 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void PartialCanonicalRepresentative_UsesSemanticRulesAndExposesFamilyNavigation_Issue4914()
     {
-        Assert.Equal(11, DbContext.HotspotFamilyVersion);
+        Assert.Equal(12, DbContext.HotspotFamilyVersion);
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_canonical_issue4914");
         try
         {
@@ -1364,6 +1364,7 @@ public partial class QueryCommandRunnerTests
             public partial class FileBodyHost { private int file; }
             public partial class BracketBodyHost { private int[] values = []; }
             public partial class PrimaryConstructorHost(int file) { }
+            public class ParameterNamedPartial(int partial) { }
             """;
         var extractedTypes = SymbolExtractor.Extract(1, "csharp", extractionSource);
         var fileBodyHost = Assert.Single(
@@ -1372,6 +1373,8 @@ public partial class QueryCommandRunnerTests
             extractedTypes.Where(symbol => symbol.Kind == "class" && symbol.Name == "BracketBodyHost"));
         var primaryConstructorHost = Assert.Single(
             extractedTypes.Where(symbol => symbol.Kind == "class" && symbol.Name == "PrimaryConstructorHost"));
+        var parameterNamedPartial = Assert.Single(
+            extractedTypes.Where(symbol => symbol.Kind == "class" && symbol.Name == "ParameterNamedPartial"));
 
         Assert.True(fileBodyHost.IsPartialDeclaration);
         Assert.False(fileBodyHost.IsFileLocalDeclaration);
@@ -1381,6 +1384,7 @@ public partial class QueryCommandRunnerTests
         Assert.Equal(0, bracketBodyHost.DeclarationSemanticScore);
         Assert.True(primaryConstructorHost.IsPartialDeclaration);
         Assert.False(primaryConstructorHost.IsFileLocalDeclaration);
+        Assert.False(parameterNamedPartial.IsPartialDeclaration);
 
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_header_evidence_issue4914");
         try
@@ -1412,10 +1416,17 @@ public partial class QueryCommandRunnerTests
                 {
                 #if A
                     void M(/* partial */ int value) { }
+                    void N(int partial) { }
                 #else
                     void M(/* partial */ int value) { }
+                    void N(int partial) { }
                 #endif
                 }
+                #if A
+                public class ConstructorHost(int partial) { }
+                #else
+                public class ConstructorHost(int partial) { }
+                #endif
                 """);
             MarkGraphAndFoldReady(dbPath);
 
@@ -1435,6 +1446,30 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(2, methods.Count);
             Assert.All(methods, method => Assert.False(method.TryGetProperty("definition_sites", out _)));
             Assert.All(methods, method => Assert.False(method.TryGetProperty("partial_family_id", out _)));
+
+            var (parameterMethodsExitCode, parameterMethodsStdout, parameterMethodsStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["N", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "function", "--group-partials", "--limit", "10"],
+                _jsonOptions));
+            using var parameterMethodsDocument = ParseJsonOutput(parameterMethodsStdout);
+            var parameterMethods = parameterMethodsDocument.RootElement.EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, parameterMethodsExitCode);
+            Assert.Equal(string.Empty, parameterMethodsStderr);
+            Assert.Equal(2, parameterMethods.Count);
+            Assert.All(parameterMethods, method => Assert.False(method.TryGetProperty("definition_sites", out _)));
+            Assert.All(parameterMethods, method => Assert.False(method.TryGetProperty("partial_family_id", out _)));
+
+            var (constructorsExitCode, constructorsStdout, constructorsStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["ConstructorHost", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "class", "--group-partials", "--limit", "10"],
+                _jsonOptions));
+            using var constructorsDocument = ParseJsonOutput(constructorsStdout);
+            var constructors = constructorsDocument.RootElement.EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, constructorsExitCode);
+            Assert.Equal(string.Empty, constructorsStderr);
+            Assert.Equal(2, constructors.Count);
+            Assert.All(constructors, constructor => Assert.False(constructor.TryGetProperty("definition_sites", out _)));
+            Assert.All(constructors, constructor => Assert.False(constructor.TryGetProperty("partial_family_id", out _)));
         }
         finally
         {
@@ -1673,6 +1708,32 @@ public partial class QueryCommandRunnerTests
                 "/* /** Not documentation. */ public partial class InlineDocumentationDecoy { }");
             TestProjectHelper.InsertIndexedFile(
                 dbPath,
+                "src/A.AssemblyTarget.cs",
+                "csharp",
+                "public partial class AssemblyTarget { }");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Z.AssemblyTarget.cs",
+                "csharp",
+                """
+                [assembly: System.CLSCompliant(true)]
+                public partial class AssemblyTarget { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.ModuleTarget.cs",
+                "csharp",
+                "public partial class ModuleTarget { }");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Z.ModuleTarget.cs",
+                "csharp",
+                """
+                [module: System.CLSCompliant(true)]
+                public partial class ModuleTarget { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
                 "src/Z.BlankDocumentation.cs",
                 "csharp",
                 """
@@ -1745,6 +1806,14 @@ public partial class QueryCommandRunnerTests
             var inlineDocumentationDecoy = RunGroupedSymbol(dbPath, "InlineDocumentationDecoy", "class");
             Assert.Equal("src/A.InlineDocumentationDecoy.cs", inlineDocumentationDecoy.GetProperty("path").GetString());
             Assert.Equal("stable_path_and_position", inlineDocumentationDecoy.GetProperty("representative_reason").GetString());
+
+            var assemblyTarget = RunGroupedSymbol(dbPath, "AssemblyTarget", "class");
+            Assert.Equal("src/A.AssemblyTarget.cs", assemblyTarget.GetProperty("path").GetString());
+            Assert.Equal("stable_path_and_position", assemblyTarget.GetProperty("representative_reason").GetString());
+
+            var moduleTarget = RunGroupedSymbol(dbPath, "ModuleTarget", "class");
+            Assert.Equal("src/A.ModuleTarget.cs", moduleTarget.GetProperty("path").GetString());
+            Assert.Equal("stable_path_and_position", moduleTarget.GetProperty("representative_reason").GetString());
 
             var unattributedAfterSibling = RunGroupedSymbol(dbPath, "UnattributedAfterSibling", "class");
             Assert.Equal("src/A.UnattributedAfterSibling.cs", unattributedAfterSibling.GetProperty("path").GetString());

@@ -28,16 +28,19 @@ public static partial class SymbolExtractor
             var signature = symbol.Signature ?? string.Empty;
             var sanitizedSignature = SanitizeCSharpDeclarationEvidence(signature);
             var declarationHeader = ExtractCSharpDeclarationHeader(sanitizedSignature);
+            var declarationModifierPrefix = ExtractCSharpDeclarationModifierPrefix(
+                declarationHeader,
+                symbol);
             var leading = ReadCSharpLeadingDeclarationEvidence(
                 lines,
                 symbol,
                 lineStartStates);
-            symbol.IsPartialDeclaration = PartialModifierRegex.IsMatch(declarationHeader) || leading.HasPartialModifier;
+            symbol.IsPartialDeclaration =
+                ContainsCSharpLeadingModifier(declarationModifierPrefix, "partial")
+                || leading.HasPartialModifier;
             symbol.IsFileLocalDeclaration =
                 symbol.Kind is "class" or "struct" or "interface" or "record"
-                && (ContainsCSharpModifier(
-                        ExtractCSharpTypeDeclarationModifierPrefix(declarationHeader, symbol.Name),
-                        "file")
+                && (ContainsCSharpLeadingModifier(declarationModifierPrefix, "file")
                     || leading.HasFileModifier);
             if (symbol.IsPartialDeclaration == true)
             {
@@ -184,6 +187,89 @@ public static partial class SymbolExtractor
             : prefix;
     }
 
+    private static string ExtractCSharpDeclarationModifierPrefix(
+        string declarationHeader,
+        SymbolRecord symbol)
+        => symbol.Kind is "class" or "struct" or "interface" or "record"
+            ? ExtractCSharpTypeDeclarationModifierPrefix(declarationHeader, symbol.Name)
+            : ExtractCSharpCallableDeclarationModifierPrefix(declarationHeader, symbol.Name);
+
+    private static string ExtractCSharpCallableDeclarationModifierPrefix(
+        string declarationHeader,
+        string symbolName)
+    {
+        var header = declarationHeader.AsSpan();
+        var name = symbolName.AsSpan().TrimStart('@');
+        var searchStart = 0;
+        while (searchStart < header.Length)
+        {
+            var nameColumn = FindCSharpIdentifierToken(header, name, searchStart);
+            if (nameColumn < 0)
+                break;
+
+            if (IsOutsideCSharpAttributeList(header, nameColumn)
+                && IsCSharpCallableNameOccurrence(header, nameColumn, name.Length))
+            {
+                return declarationHeader[..nameColumn];
+            }
+
+            searchStart = nameColumn + Math.Max(1, name.Length);
+        }
+
+        return declarationHeader;
+    }
+
+    private static bool ContainsCSharpLeadingModifier(
+        string declarationPrefix,
+        string modifier)
+    {
+        var remaining = declarationPrefix.AsSpan().Trim();
+        while (!remaining.IsEmpty && remaining[0] == '[')
+        {
+            var depth = 0;
+            var attributeEnd = -1;
+            for (var index = 0; index < remaining.Length; index++)
+            {
+                if (remaining[index] == '[')
+                    depth++;
+                else if (remaining[index] == ']' && --depth == 0)
+                {
+                    attributeEnd = index;
+                    break;
+                }
+            }
+
+            if (attributeEnd < 0)
+                return false;
+            remaining = remaining[(attributeEnd + 1)..].TrimStart();
+        }
+
+        while (!remaining.IsEmpty)
+        {
+            if (remaining[0] == '@')
+                return false;
+
+            var tokenLength = 0;
+            while (tokenLength < remaining.Length
+                && (remaining[tokenLength] == '_'
+                    || char.IsLetterOrDigit(remaining[tokenLength])))
+            {
+                tokenLength++;
+            }
+
+            if (tokenLength == 0)
+                return false;
+            var token = remaining[..tokenLength];
+            if (!CSharpStandaloneDeclarationModifiers.Contains(token.ToString()))
+                return false;
+            if (token.SequenceEqual(modifier))
+                return true;
+            remaining = remaining[tokenLength..].TrimStart();
+        }
+
+        return false;
+    }
+
     private static bool ContainsCSharpAttributeEvidence(string declarationHeader)
     {
         for (var index = 0; index < declarationHeader.Length; index++)
@@ -194,7 +280,31 @@ public static partial class SymbolExtractor
             var previous = index - 1;
             while (previous >= 0 && char.IsWhiteSpace(declarationHeader[previous]))
                 previous--;
-            if (previous < 0 || declarationHeader[previous] is '(' or ',' or '<')
+            if ((previous < 0 || declarationHeader[previous] is '(' or ',' or '<')
+                && !IsCSharpGlobalAttributeTarget(declarationHeader.AsSpan(index + 1)))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsCSharpGlobalAttributeTarget(ReadOnlySpan<char> text)
+    {
+        var remaining = text.TrimStart();
+        if (!remaining.IsEmpty && remaining[0] == '[')
+            remaining = remaining[1..].TrimStart();
+
+        foreach (var target in new[] { "assembly", "module" })
+        {
+            if (!remaining.StartsWith(target, StringComparison.Ordinal))
+                continue;
+
+            var cursor = target.Length;
+            if (cursor < remaining.Length && IsCSharpIdentifierPart(remaining[cursor]))
+                continue;
+            while (cursor < remaining.Length && char.IsWhiteSpace(remaining[cursor]))
+                cursor++;
+            if (cursor < remaining.Length && remaining[cursor] == ':')
                 return true;
         }
 
@@ -243,6 +353,8 @@ public static partial class SymbolExtractor
             lineStartStates);
         var documentationEvidenceAdjacent = true;
         var attributeDepth = 0;
+        var pendingAttributeEvidence = false;
+        var pendingAttributeIsGlobal = false;
 
         for (; lineIndex >= minimumLineIndex; lineIndex--)
         {
@@ -300,7 +412,6 @@ public static partial class SymbolExtractor
                 || hasTrailingModifiers;
             if (isAttributeLine)
             {
-                hasAttribute = true;
                 if (!trailingModifiers.IsEmpty)
                 {
                     if (!hasTrailingModifiers)
@@ -309,8 +420,16 @@ public static partial class SymbolExtractor
                     hasPartialModifier |= trailingHasPartial;
                     hasFileModifier |= trailingHasFile;
                 }
+                pendingAttributeEvidence = true;
+                pendingAttributeIsGlobal |= IsCSharpGlobalAttributeTarget(trimmed);
                 attributeDepth += CountCharacter(trimmed, ']') - CountCharacter(trimmed, '[');
                 attributeDepth = Math.Max(0, attributeDepth);
+                if (attributeDepth == 0)
+                {
+                    hasAttribute |= pendingAttributeEvidence && !pendingAttributeIsGlobal;
+                    pendingAttributeEvidence = false;
+                    pendingAttributeIsGlobal = false;
+                }
                 continue;
             }
 
