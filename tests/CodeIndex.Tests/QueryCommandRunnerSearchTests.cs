@@ -1364,17 +1364,20 @@ public partial class QueryCommandRunnerTests
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(
+            TestProjectHelper.InsertFreshIndexedFile(
+                projectRoot,
                 dbPath,
                 "release/pack.md",
                 "markdown",
                 "Run dotnet pack before publishing.");
-            TestProjectHelper.InsertIndexedFile(
+            TestProjectHelper.InsertFreshIndexedFile(
+                projectRoot,
                 dbPath,
                 "release/pack-extra.md",
                 "markdown",
                 "Run dotnet pack after signing.");
-            TestProjectHelper.InsertIndexedFile(
+            TestProjectHelper.InsertFreshIndexedFile(
+                projectRoot,
                 dbPath,
                 "release/push.md",
                 "markdown",
@@ -5992,12 +5995,14 @@ public partial class QueryCommandRunnerTests
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(
+            TestProjectHelper.InsertFreshIndexedFile(
+                projectRoot,
                 dbPath,
                 "src/a.cs",
                 "csharp",
                 "public sealed class A { void Run(Exception ex) { JsonDocument.Parse(\"{}\"); Console.WriteLine(ex.Message); } }");
-            TestProjectHelper.InsertIndexedFile(
+            TestProjectHelper.InsertFreshIndexedFile(
+                projectRoot,
                 dbPath,
                 "src/b.cs",
                 "csharp",
@@ -6196,7 +6201,8 @@ public partial class QueryCommandRunnerTests
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(
+            TestProjectHelper.InsertFreshIndexedFile(
+                projectRoot,
                 dbPath,
                 "src/a.cs",
                 "csharp",
@@ -6209,7 +6215,8 @@ public partial class QueryCommandRunnerTests
                     }
                 }
                 """);
-            TestProjectHelper.InsertIndexedFile(
+            TestProjectHelper.InsertFreshIndexedFile(
+                projectRoot,
                 dbPath,
                 "src/b.cs",
                 "csharp",
@@ -10307,7 +10314,8 @@ public partial class QueryCommandRunnerTests
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(
+            TestProjectHelper.InsertFreshIndexedFile(
+                projectRoot,
                 dbPath,
                 "src/a.cs",
                 "csharp",
@@ -10374,7 +10382,8 @@ public partial class QueryCommandRunnerTests
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(
+            TestProjectHelper.InsertFreshIndexedFile(
+                projectRoot,
                 dbPath,
                 "src/a.cs",
                 "csharp",
