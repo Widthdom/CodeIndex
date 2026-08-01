@@ -1381,6 +1381,76 @@ public partial class QueryCommandRunnerTests
                 [System.Obsolete]
                 public partial class Attributed { }
                 """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.AttributeModifier.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class AttributeModifier { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Z.AttributeModifier.cs",
+                "csharp",
+                """
+                namespace Demo;
+                [System.Obsolete] public partial
+                class AttributeModifier { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.BlankModifier.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class BlankModifier { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Z.BlankModifier.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public
+                partial
+
+                class BlankModifier { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.InlineAttributed.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class InlineAttributed { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Z.InlineAttributed.cs",
+                "csharp",
+                """
+                namespace Demo;
+                [System.Obsolete] public partial class InlineAttributed { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.BlankDocumentation.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class BlankDocumentation { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Z.BlankDocumentation.cs",
+                "csharp",
+                """
+                namespace Demo;
+                /// <summary>Detached documentation.</summary>
+
+                public partial class BlankDocumentation { }
+                """);
             MarkGraphAndFoldReady(dbPath);
 
             var split = RunGroupedSymbol(dbPath, "OnSplit", "function");
@@ -1406,6 +1476,22 @@ public partial class QueryCommandRunnerTests
             var attributed = RunGroupedSymbol(dbPath, "Attributed", "class");
             Assert.Equal("src/Z.Attributed.cs", attributed.GetProperty("path").GetString());
             Assert.Equal("semantic_declaration", attributed.GetProperty("representative_reason").GetString());
+
+            var attributeModifier = RunGroupedSymbol(dbPath, "AttributeModifier", "class");
+            Assert.Equal(2, attributeModifier.GetProperty("definition_sites").GetInt32());
+            Assert.Equal("src/Z.AttributeModifier.cs", attributeModifier.GetProperty("path").GetString());
+            Assert.Equal("semantic_declaration", attributeModifier.GetProperty("representative_reason").GetString());
+
+            var blankModifier = RunGroupedSymbol(dbPath, "BlankModifier", "class");
+            Assert.Equal(2, blankModifier.GetProperty("definition_sites").GetInt32());
+
+            var inlineAttributed = RunGroupedSymbol(dbPath, "InlineAttributed", "class");
+            Assert.Equal("src/Z.InlineAttributed.cs", inlineAttributed.GetProperty("path").GetString());
+            Assert.Equal("semantic_declaration", inlineAttributed.GetProperty("representative_reason").GetString());
+
+            var blankDocumentation = RunGroupedSymbol(dbPath, "BlankDocumentation", "class");
+            Assert.Equal("src/A.BlankDocumentation.cs", blankDocumentation.GetProperty("path").GetString());
+            Assert.Equal("stable_path_and_position", blankDocumentation.GetProperty("representative_reason").GetString());
         }
         finally
         {

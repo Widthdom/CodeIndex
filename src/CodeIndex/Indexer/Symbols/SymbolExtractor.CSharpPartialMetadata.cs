@@ -116,15 +116,27 @@ public static partial class SymbolExtractor
         var minimumLineIndex = Math.Max(0, lineIndex - CSharpLeadingDeclarationLookbackLines + 1);
         var hasPartialModifier = false;
         var hasFileModifier = false;
-        var hasAttribute = false;
+        var hasAttribute = HasCSharpDeclarationLineLeadingAttribute(
+            lines,
+            declarationStartLine,
+            lineStartStates);
         var hasDocumentation = false;
+        var documentationEvidenceAdjacent = true;
         var attributeDepth = 0;
 
         for (; lineIndex >= minimumLineIndex; lineIndex--)
         {
             var raw = lines[lineIndex].AsSpan().Trim();
             if (raw.IsEmpty)
-                break;
+            {
+                // Whitespace is valid declaration trivia between standalone modifiers
+                // and the declaration. It does, however, detach XML documentation from
+                // the declaration for representative ranking.
+                // standalone modifier と宣言の間の空行は有効な declaration trivia だが、
+                // XML documentation の representative rank 上の隣接性はここで切れる。
+                documentationEvidenceAdjacent = false;
+                continue;
+            }
 
             var lineStartState = lineStartStates != null && lineIndex < lineStartStates.Count
                 ? lineStartStates[lineIndex]
@@ -133,13 +145,13 @@ public static partial class SymbolExtractor
                 && lineStartState.InterpolationBraceDepth == 0;
             if (startsInDeclarationCode && raw.StartsWith("///", StringComparison.Ordinal))
             {
-                hasDocumentation = true;
+                hasDocumentation |= documentationEvidenceAdjacent;
                 continue;
             }
 
             if (startsInDeclarationCode && raw.StartsWith("/**", StringComparison.Ordinal))
             {
-                hasDocumentation = true;
+                hasDocumentation |= documentationEvidenceAdjacent;
                 continue;
             }
 
@@ -148,9 +160,32 @@ public static partial class SymbolExtractor
             if (trimmed.IsEmpty)
                 continue;
 
-            if (attributeDepth > 0 || trimmed[0] == '[' || trimmed[^1] == ']')
+            var lastAttributeClose = trimmed.LastIndexOf(']');
+            var trailingModifiers = lastAttributeClose >= 0
+                ? trimmed[(lastAttributeClose + 1)..].Trim()
+                : ReadOnlySpan<char>.Empty;
+            var trailingHasPartial = false;
+            var trailingHasFile = false;
+            var hasTrailingModifiers = !trailingModifiers.IsEmpty
+                && TryReadStandaloneCSharpModifiers(
+                    trailingModifiers,
+                    out trailingHasPartial,
+                    out trailingHasFile);
+            var isAttributeLine = attributeDepth > 0
+                || trimmed[0] == '['
+                || trimmed[^1] == ']'
+                || hasTrailingModifiers;
+            if (isAttributeLine)
             {
                 hasAttribute = true;
+                if (!trailingModifiers.IsEmpty)
+                {
+                    if (!hasTrailingModifiers)
+                        break;
+
+                    hasPartialModifier |= trailingHasPartial;
+                    hasFileModifier |= trailingHasFile;
+                }
                 attributeDepth += CountCharacter(trimmed, ']') - CountCharacter(trimmed, '[');
                 attributeDepth = Math.Max(0, attributeDepth);
                 continue;
@@ -168,6 +203,26 @@ public static partial class SymbolExtractor
             hasFileModifier,
             hasAttribute,
             hasDocumentation);
+    }
+
+    private static bool HasCSharpDeclarationLineLeadingAttribute(
+        IReadOnlyList<string> lines,
+        int declarationStartLine,
+        IReadOnlyList<CSharpLexState>? lineStartStates)
+    {
+        if (declarationStartLine <= 0 || declarationStartLine > lines.Count)
+            return false;
+
+        var lineIndex = declarationStartLine - 1;
+        var lineStartState = lineStartStates != null && lineIndex < lineStartStates.Count
+            ? lineStartStates[lineIndex]
+            : new CSharpLexState();
+        if (lineStartState.Mode != CSharpLexMode.Code || lineStartState.InterpolationBraceDepth != 0)
+            return false;
+
+        var sanitizedLine = LexCSharpLine(lines[lineIndex], lineStartState).SanitizedLine;
+        var trimmed = sanitizedLine.AsSpan().TrimStart();
+        return !trimmed.IsEmpty && trimmed[0] == '[';
     }
 
     private static bool TryReadStandaloneCSharpModifiers(
