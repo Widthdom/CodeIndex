@@ -1976,7 +1976,7 @@ public static partial class QueryCommandRunner
             var outputSelection = ApplySearchOutputSelection(rows, options, resultLimit, sourceTotalAuthoritative);
             rows = outputSelection.Rows;
             if (includeAuditClassifications)
-                ApplySearchRecipeAuditClassifications(reader, recipeQuery, rows);
+                ApplySearchRecipeAuditClassifications(reader, recipeQuery, recipeQueries, rows);
             var minimumOmitted = Math.Max(0, outputSelection.OriginalCount - rows.Count);
             var selectionReason = GetSearchRecipeSelectionReason(outputSelection);
             total += rows.Count;
@@ -2078,7 +2078,7 @@ public static partial class QueryCommandRunner
             var outputSelection = ApplySearchOutputSelection(rows, options, resultLimit, sourceTotalAuthoritative);
             rows = outputSelection.Rows;
             if (!options.SummaryOnly)
-                ApplySearchRecipeAuditClassifications(reader, recipeQuery, rows);
+                ApplySearchRecipeAuditClassifications(reader, recipeQuery, recipeQueries, rows);
             var minimumOmitted = Math.Max(0, outputSelection.OriginalCount - rows.Count);
             var selectionReason = GetSearchRecipeSelectionReason(outputSelection);
             total += rows.Count;
@@ -2200,7 +2200,7 @@ public static partial class QueryCommandRunner
             results = ApplySearchRecipeFileRejectQueries(reader, results, options, recipeQuery);
             var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, rawFtsOverride: false, recipeQuery: recipeQuery);
             if (options.Json && !options.SummaryOnly)
-                ApplySearchRecipeAuditClassifications(reader, recipeQuery, rows);
+                ApplySearchRecipeAuditClassifications(reader, recipeQuery, recipeQueries, rows);
             var count = rows.Count;
             var fileCountForQuery = rows.Select(row => row.Result.Path).Distinct(StringComparer.Ordinal).Count();
             foreach (var path in rows.Select(row => row.Result.Path))
@@ -2229,6 +2229,7 @@ public static partial class QueryCommandRunner
     private static void ApplySearchRecipeAuditClassifications(
         DbReader reader,
         SearchAuditRecipeQuery recipeQuery,
+        IReadOnlyList<SearchAuditRecipeQuery> selectedQueries,
         List<SearchDisplayRow> rows)
     {
         var taskResultClassifier = recipeQuery.Classifiers
@@ -2247,6 +2248,14 @@ public static partial class QueryCommandRunner
         if (jsonTrustBoundaryClassifier == null || !recipeQuery.JsonTrustDirection.HasValue)
             return;
 
+        var selectedJsonTrustQueries = selectedQueries
+            .Where(query => query.JsonTrustDirection.HasValue
+                && query.Classifiers.Any(classifier =>
+                    string.Equals(classifier.Name, "json_trust_boundary", StringComparison.Ordinal)))
+            .Select(query => query.Query)
+            .Where(query => !string.IsNullOrWhiteSpace(query))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
         var jsonTrustLexicalContextCache = new JsonTrustLexicalContextCache();
         foreach (var fileRows in rows.GroupBy(row => row.Result.Path, StringComparer.Ordinal))
         {
@@ -2273,7 +2282,8 @@ public static partial class QueryCommandRunner
                         recipeQuery.JsonTrustDirection.Value,
                         row,
                         reader,
-                        jsonTrustLexicalContextCache));
+                        jsonTrustLexicalContextCache,
+                        selectedJsonTrustQueries));
             }
         }
     }
@@ -2300,7 +2310,8 @@ public static partial class QueryCommandRunner
         SearchRecipeJsonTrustDirection expectedDirection,
         SearchDisplayRow row,
         DbReader reader,
-        JsonTrustLexicalContextCache lexicalContextCache)
+        JsonTrustLexicalContextCache lexicalContextCache,
+        IReadOnlyList<string> selectedJsonTrustQueries)
     {
         var matchLines = row.Compact.MatchLines
             .Where(line => line > 0)
@@ -2345,7 +2356,8 @@ public static partial class QueryCommandRunner
                 expectedDirection,
                 site.Line,
                 site.Column,
-                lexicalContext);
+                lexicalContext,
+                selectedJsonTrustQueries);
             if (candidate.AnnotationLine is { } annotationLine
                 && !consumedAnnotationLines.Add(annotationLine))
             {
@@ -2526,7 +2538,8 @@ public static partial class QueryCommandRunner
         SearchRecipeJsonTrustDirection expectedDirection,
         int focusLine,
         int? focusColumn,
-        JsonTrustLexicalContext? lexicalContext)
+        JsonTrustLexicalContext? lexicalContext,
+        IReadOnlyList<string> selectedJsonTrustQueries)
     {
         const string marker = "// cdidx-audit: json-trust ";
         var expectedDirectionText = expectedDirection == SearchRecipeJsonTrustDirection.Read ? "read" : "write";
@@ -2569,7 +2582,8 @@ public static partial class QueryCommandRunner
             lexicalContext,
             nearestLine,
             focusLine,
-            focusColumn))
+            focusColumn,
+            selectedJsonTrustQueries))
         {
             return new JsonTrustBoundaryEvidence(
                 "unknown",
@@ -2605,7 +2619,8 @@ public static partial class QueryCommandRunner
         JsonTrustLexicalContext lexicalContext,
         int annotationLine,
         int operationLine,
-        int? operationColumn)
+        int? operationColumn,
+        IReadOnlyList<string> selectedJsonTrustQueries)
     {
         for (var line = annotationLine + 1; line < operationLine; line++)
         {
@@ -2622,8 +2637,54 @@ public static partial class QueryCommandRunner
         {
             var operationText = lexicalContext.MaskedLines[operationLine - 1];
             var prefixLength = Math.Clamp(operationColumn.Value - 1, 0, operationText.Length);
-            if (HasPriorJsonTrustOperationOnLine(operationText.AsSpan(0, prefixLength)))
+            if (HasPriorJsonTrustOperationOnLine(operationText.AsSpan(0, prefixLength))
+                || HasPriorSelectedJsonTrustMatchOnLine(
+                    lexicalContext,
+                    operationLine,
+                    operationColumn.Value,
+                    selectedJsonTrustQueries))
                 return true;
+        }
+
+        return false;
+    }
+
+    private static bool HasPriorSelectedJsonTrustMatchOnLine(
+        JsonTrustLexicalContext lexicalContext,
+        int operationLine,
+        int operationColumn,
+        IReadOnlyList<string> selectedJsonTrustQueries)
+    {
+        if (operationLine <= 0
+            || operationLine > lexicalContext.MaskedLines.Length
+            || selectedJsonTrustQueries.Count == 0)
+        {
+            return false;
+        }
+
+        var line = lexicalContext.MaskedLines[operationLine - 1];
+        var prefixLength = Math.Clamp(operationColumn - 1, 0, line.Length);
+        var currentSite = new JsonTrustMatchSite(operationLine, operationColumn, null);
+        foreach (var query in selectedJsonTrustQueries)
+        {
+            var searchStart = 0;
+            while (searchStart < prefixLength)
+            {
+                var occurrence = line.IndexOf(query, searchStart, StringComparison.Ordinal);
+                if (occurrence < 0 || occurrence >= prefixLength)
+                    break;
+
+                var priorSite = new JsonTrustMatchSite(operationLine, occurrence + 1, query.Length);
+                if (!IsJsonTrustDeclarationFacetBeforeLaterMatch(
+                        priorSite,
+                        [priorSite, currentSite],
+                        lexicalContext))
+                {
+                    return true;
+                }
+
+                searchStart = occurrence + Math.Max(1, query.Length);
+            }
         }
 
         return false;
@@ -2865,7 +2926,6 @@ public static partial class QueryCommandRunner
         int assignmentIndex)
     {
         var genericDepth = 0;
-        var memberAccessCount = 0;
         for (var index = 0; index < assignmentIndex; index++)
         {
             var token = tokens[index];
@@ -2887,12 +2947,7 @@ public static partial class QueryCommandRunner
                 return true;
 
             if (token is "." or "?.")
-            {
-                memberAccessCount++;
-                if (token == "?." || memberAccessCount > 1)
-                    return true;
-                continue;
-            }
+                return true;
             if (token is "::" or "?" or "[")
                 continue;
 

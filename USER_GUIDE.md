@@ -1500,12 +1500,14 @@ only to the next operation: intervening executable code, including an earlier
 statement, evaluated operand, completed expression, control-flow block, or comma-separated operation on the matched line, leaves the later match
 `ambiguous_trust` with `annotation_status:not_adjacent`. The annotation only enriches `audit_classifications`; it never
 suppresses the underlying recipe result, so external parsing remains visible.
-When the same audited API is nested more than once on a line, the first lexical
-match consumes the annotation and later matches remain ambiguous.
+Across all selected JSON child queries, the first lexical audited match consumes
+the annotation; later matches on the line remain ambiguous even when they belong
+to a different API family.
 The C# syntax check distinguishes nullable declaration punctuation such as
 `JsonNode? value = ...` and first arguments of nested-generic calls from
 conditional/comparison operands, evaluated indexer targets, or property-valued
-assignment receivers before the JSON operation. Direct casts are part of the
+assignment receivers before the JSON operation. Even a one-hop member receiver
+remains conservative when its base cannot be proven side-effect-free. Direct casts are part of the
 audited operation, and declaration-type occurrences—including expression-bodied
 method or local-function return types—before a same-line constructor do not
 consume the annotation.
@@ -4898,8 +4900,8 @@ indexed source から検査します。1つの result に異なる trust evidenc
 `annotation_status:not_adjacent` を伴う `ambiguous_trust` のままです。
 この注釈は `audit_classifications` に根拠を追加するだけで、
 元の recipe result を抑制しないため、external parsing は引き続き表示されます。
-同じ audit 対象 API が1行で複数回 nest する場合、最初の lexical match が注釈を消費し、後続 match は曖昧なままです。
-C# 構文検査では `JsonNode? value = ...` のような nullable 宣言の記号や nested-generic 呼び出しの first argument と、JSON 操作より前に評価される条件式・比較式の operand、indexer 代入先、property-valued な代入 receiver を区別します。
+選択されたすべての JSON child query を横断して、最初の lexical な audit 対象 match が注釈を消費します。後続 match は別の API family に属する場合も曖昧なままです。
+C# 構文検査では `JsonNode? value = ...` のような nullable 宣言の記号や nested-generic 呼び出しの first argument と、JSON 操作より前に評価される条件式・比較式の operand、indexer 代入先、property-valued な代入 receiver を区別します。base が副作用なしと証明できない1段の member receiver も保守的に扱います。
 直接 cast は audit 対象操作の一部として扱い、expression-bodied method / local function の戻り型を含め、同じ行の constructor より前にある宣言型 occurrence は注釈を消費しません。
 `--show-excluded` を recipe と併用すると、有効な path scope と除外診断を出力に含めます。
 recipe run が対応する形式は text output、`--json` / `--format json` の aggregate JSON、
