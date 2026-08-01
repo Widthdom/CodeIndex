@@ -2432,16 +2432,34 @@ public static partial class QueryCommandRunner
         IReadOnlyList<JsonTrustMatchSite> matchSites,
         JsonTrustLexicalContext lexicalContext)
     {
+        var laterMatch = matchSites
+            .Where(candidate => candidate.Column.HasValue
+                && (candidate.Line > site.Line
+                    || candidate.Line == site.Line && candidate.Column > site.Column))
+            .OrderBy(candidate => candidate.Line)
+            .ThenBy(candidate => candidate.Column)
+            .FirstOrDefault();
         if (!site.Column.HasValue
             || !site.Length.HasValue
             || site.Line <= 0
             || site.Line > lexicalContext.MaskedLines.Length
-            || !matchSites.Any(candidate => candidate.Line == site.Line && candidate.Column > site.Column))
+            || laterMatch == default
+            || laterMatch.Line > lexicalContext.MaskedLines.Length)
         {
             return false;
         }
 
-        var line = lexicalContext.MaskedLines[site.Line - 1];
+        var declarationPrefix = new StringBuilder();
+        for (var lineNumber = site.Line; lineNumber <= laterMatch.Line; lineNumber++)
+        {
+            var sourceLine = GetJsonTrustCodeBeforeLineComment(lexicalContext.MaskedLines[lineNumber - 1]);
+            var prefixLength = lineNumber == laterMatch.Line
+                ? Math.Clamp(laterMatch.Column!.Value - 1, 0, sourceLine.Length)
+                : sourceLine.Length;
+            declarationPrefix.Append(sourceLine.AsSpan(0, prefixLength)).Append(' ');
+        }
+
+        var line = declarationPrefix.ToString();
         var index = Math.Clamp(site.Column.Value - 1 + site.Length.Value, 0, line.Length);
         SkipJsonTrustDeclarationTypeSuffix(
             line,
@@ -2455,6 +2473,9 @@ public static partial class QueryCommandRunner
         while (index < line.Length && (char.IsLetterOrDigit(line[index]) || line[index] == '_'))
             index++;
         SkipJsonTrustWhitespace(line, ref index);
+        if (line.AsSpan(index).IndexOfAny(';', '{', '}') >= 0)
+            return false;
+
         return index >= line.Length
             || line[index] is '=' or ';' or ',' or ')'
             || IsJsonTrustMethodDeclarationSuffix(line, index);
@@ -2604,12 +2625,11 @@ public static partial class QueryCommandRunner
         var nearestLine = -1;
         if (lexicalContext != null && focusLine > 0 && focusLine <= lexicalContext.SourceLines.Length)
         {
-            var firstCandidateLine = Math.Max(1, focusLine - 3);
-            for (var line = firstCandidateLine; line <= focusLine; line++)
-            {
-                if (lexicalContext.SourceLines[line - 1].TrimStart().StartsWith(marker, StringComparison.Ordinal))
-                    nearestLine = line;
-            }
+            var annotationIndex = Array.BinarySearch(lexicalContext.AnnotationLines, focusLine);
+            if (annotationIndex < 0)
+                annotationIndex = ~annotationIndex - 1;
+            if (annotationIndex >= 0)
+                nearestLine = lexicalContext.AnnotationLines[annotationIndex];
         }
 
         if (nearestLine < 0)
@@ -2793,6 +2813,9 @@ public static partial class QueryCommandRunner
         {
             expressionStart = expressionBodyStart;
         }
+        if (HasEvaluatedJsonTrustInvocationReceiver(tokens, expressionStart))
+            return true;
+
         for (var index = expressionStart; index < tokens.Count; index++)
         {
             var token = tokens[index];
@@ -2818,6 +2841,73 @@ public static partial class QueryCommandRunner
 
             if (IsJsonTrustNumericToken(token))
                 return true;
+        }
+
+        return false;
+    }
+
+    private static bool HasEvaluatedJsonTrustInvocationReceiver(
+        IReadOnlyList<string> tokens,
+        int expressionStart)
+    {
+        var closingDepth = 0;
+        for (var openIndex = tokens.Count - 1; openIndex >= expressionStart; openIndex--)
+        {
+            if (tokens[openIndex] == ")")
+            {
+                closingDepth++;
+                continue;
+            }
+            if (tokens[openIndex] != "(")
+                continue;
+            if (closingDepth > 0)
+            {
+                closingDepth--;
+                continue;
+            }
+
+            var methodNameIndex = openIndex - 1;
+            if (methodNameIndex >= expressionStart && tokens[methodNameIndex] == ">")
+            {
+                var genericDepth = 0;
+                for (; methodNameIndex >= expressionStart; methodNameIndex--)
+                {
+                    if (tokens[methodNameIndex] == ">")
+                    {
+                        genericDepth++;
+                        continue;
+                    }
+                    if (tokens[methodNameIndex] != "<")
+                        continue;
+
+                    genericDepth--;
+                    if (genericDepth == 0)
+                    {
+                        methodNameIndex--;
+                        break;
+                    }
+                }
+            }
+
+            if (methodNameIndex < expressionStart
+                || !IsJsonTrustIdentifierToken(tokens[methodNameIndex])
+                || methodNameIndex < expressionStart + 4
+                || tokens[methodNameIndex - 1] is not ("." or "?."))
+            {
+                continue;
+            }
+
+            // A direct call on a simple local/type receiver (source.Build(...)) does not
+            // evaluate a property before its first argument. An additional member hop
+            // (source.Factory.Build(...)) can execute a getter and therefore consumes the
+            // trust annotation before the JSON operation.
+            var receiverMemberIndex = methodNameIndex - 2;
+            if (receiverMemberIndex >= expressionStart + 2
+                && IsJsonTrustIdentifierToken(tokens[receiverMemberIndex])
+                && tokens[receiverMemberIndex - 1] is "." or "?.")
+            {
+                return true;
+            }
         }
 
         return false;
@@ -3140,9 +3230,17 @@ public static partial class QueryCommandRunner
         if (indexedLines.Count > 0)
         {
             var sourceLines = indexedLines.Select(line => line ?? string.Empty).ToArray();
+            var annotationLines = sourceLines
+                .Select((line, index) => (Line: line, Number: index + 1))
+                .Where(candidate => candidate.Line.TrimStart().StartsWith(
+                    "// cdidx-audit: json-trust ",
+                    StringComparison.Ordinal))
+                .Select(candidate => candidate.Number)
+                .ToArray();
             context = new JsonTrustLexicalContext(
                 sourceLines,
-                StructuralLineMasker.MaskLines("csharp", sourceLines));
+                StructuralLineMasker.MaskLines("csharp", sourceLines),
+                annotationLines);
         }
 
         // Retain only one bounded source prefix so count-mode memory does not grow with file count.
@@ -3412,7 +3510,8 @@ public static partial class QueryCommandRunner
 
     private sealed record JsonTrustLexicalContext(
         string[] SourceLines,
-        string[] MaskedLines);
+        string[] MaskedLines,
+        int[] AnnotationLines);
 
     private sealed class JsonTrustLexicalContextCache
     {
