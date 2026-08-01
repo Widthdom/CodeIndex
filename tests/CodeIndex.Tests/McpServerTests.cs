@@ -11432,16 +11432,14 @@ public sealed class Caller
         var pending = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         using var cts = new CancellationTokenSource();
         cts.Cancel();
-        var stopwatch = Stopwatch.StartNew();
 
         await _server.DrainInFlightTasksAsync(
             [pending.Task],
-            McpServer.DefaultEofDrainTimeout,
+            TimeSpan.FromDays(1),
             McpServer.DefaultEofPostCancelDrainTimeout,
-            cts.Token);
+            cts.Token).WaitAsync(TestDeterminism.DefaultTimeout);
 
-        stopwatch.Stop();
-        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(1), $"EOF drain cancellation took {stopwatch.Elapsed}.");
+        Assert.False(pending.Task.IsCompleted);
     }
 
     private sealed class QueuedFrameTransport : IMcpTransport
