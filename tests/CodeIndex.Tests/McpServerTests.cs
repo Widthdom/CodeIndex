@@ -7522,10 +7522,20 @@ public sealed class Caller
 
         releaseFirst.TrySetResult();
         await secondStarted.Task.WaitAsync(TestDeterminism.DefaultTimeout);
-        var responseText = await batchResponseTask.WaitAsync(TestDeterminism.DefaultTimeout);
-        var responses = JsonNode.Parse(responseText!)!.AsArray();
-        Assert.Equal("Request timed out", responses[0]!["error"]!["message"]!.GetValue<string>());
-        Assert.Equal("ok", responses[1]!["result"]!["status"]!.GetValue<string>());
+        var responseText = Assert.IsType<string>(
+            await batchResponseTask.WaitAsync(TestDeterminism.DefaultTimeout));
+        var responses = Assert.IsType<JsonArray>(JsonNode.Parse(responseText));
+        Assert.Equal(2, responses.Count);
+        var firstResponse = Assert.IsType<JsonObject>(responses[0]);
+        var firstError = Assert.IsType<JsonObject>(firstResponse["error"]);
+        Assert.Equal(
+            "Request timed out",
+            Assert.IsAssignableFrom<JsonValue>(firstError["message"]).GetValue<string>());
+        var secondResponse = Assert.IsType<JsonObject>(responses[1]);
+        var secondResult = Assert.IsType<JsonObject>(secondResponse["result"]);
+        Assert.Equal(
+            "ok",
+            Assert.IsAssignableFrom<JsonValue>(secondResult["status"]).GetValue<string>());
         Assert.Equal(1, server.AvailableConcurrencySlotsForTests);
     }
 
