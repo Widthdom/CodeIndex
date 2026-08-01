@@ -156,19 +156,33 @@ internal static class LogicalPartialSymbolGrouper
 
     public static bool TryBuildKey(SymbolResult symbol, out string key)
     {
-        if (!string.Equals(symbol.Lang, "csharp", StringComparison.OrdinalIgnoreCase)
-            || string.IsNullOrWhiteSpace(symbol.Signature)
-            || !ContainsPartialModifier(symbol.Signature))
+        if (!string.Equals(symbol.Lang, "csharp", StringComparison.OrdinalIgnoreCase))
         {
             key = string.Empty;
             return false;
         }
 
-        if (!string.IsNullOrWhiteSpace(symbol.LogicalPartialKey)
-            && symbol.LogicalPartialKey.StartsWith("family:", StringComparison.Ordinal))
+        if (!string.IsNullOrWhiteSpace(symbol.LogicalPartialKey))
         {
-            key = symbol.LogicalPartialKey;
-            return true;
+            if (symbol.LogicalPartialKey.StartsWith("family:", StringComparison.Ordinal))
+            {
+                key = symbol.LogicalPartialKey;
+                return true;
+            }
+
+            // A persisted physical key is authoritative when the index contract is stale.
+            // Reconstructing a family from the signature here would contradict the SQL
+            // readiness gate. stale index の physical key は SQL readiness gate の結果なので、
+            // signature から family を再構築してはならない。
+            key = string.Empty;
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(symbol.Signature)
+            || !ContainsPartialModifier(symbol.Signature))
+        {
+            key = string.Empty;
+            return false;
         }
 
         var containerIdentity = symbol.ContainerQualifiedName ?? symbol.ContainerName ?? string.Empty;

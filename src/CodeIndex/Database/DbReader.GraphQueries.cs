@@ -2462,6 +2462,7 @@ public partial class DbReader
         var bodyStartLineSql = GetSymbolColumnSql("body_start_line");
         var bodyEndLineSql = GetSymbolColumnSql("body_end_line");
         var startColumnSql = GetSymbolColumnSql("start_column");
+        var identifierStartColumnSql = GetSymbolColumnSql("identifier_start_column");
         var logicalPartialKeySql = LogicalPartialSymbolGrouper.BuildSqlKeyExpression(
             "f.lang",
             "s.kind",
@@ -2539,7 +2540,8 @@ public partial class DbReader
                    {generatedSql} AS canonical_generated_rank,
                    {canonicalSemanticScoreSql} AS canonical_semantic_score,
                    {canonicalDeclarationIdentitySql} AS canonical_declaration_identity,
-                   COALESCE({GetSymbolColumnSql("start_column")}, 2147483647) AS stable_start_column
+                   COALESCE({GetSymbolColumnSql("start_column")}, 2147483647) AS stable_start_column,
+                   {identifierStartColumnSql} AS identifier_start_column
             FROM symbols s
             JOIN files f ON s.file_id = f.id
             WHERE {nameCondition}
@@ -2599,6 +2601,7 @@ public partial class DbReader
                            'end_line', end_line,
                            'name', name,
                            'signature', signature,
+                           'identifier_start_column', identifier_start_column,
                            'generated', canonical_generated_rank
                        )) FILTER (WHERE
                            family_member_row_number <= CASE
@@ -2670,7 +2673,8 @@ public partial class DbReader
                        ELSE '{LogicalPartialSymbolGrouper.StableLocationReason}'
                    END AS representative_reason,
                    logical.logical_family_members_json,
-                   CASE WHEN logical.logical_definition_sites > {LogicalPartialSymbolGrouper.FamilyMemberLimit} THEN 1 ELSE 0 END AS family_members_truncated
+                   CASE WHEN logical.logical_definition_sites > {LogicalPartialSymbolGrouper.FamilyMemberLimit} THEN 1 ELSE 0 END AS family_members_truncated,
+                   logical.identifier_start_column
             FROM selected_definition_keys selected
             JOIN logical_definitions logical
               ON logical.logical_partial_key = selected.logical_partial_key
@@ -2719,11 +2723,13 @@ public partial class DbReader
                 Name = reader.GetString(3),
                 Line = reader.GetInt32(4),
                 StartLine = !reader.IsDBNull(5) ? reader.GetInt32(5) : reader.GetInt32(4),
-                StartColumn = ResolveSymbolIdentifierStartColumn(
-                    !reader.IsDBNull(6) ? reader.GetInt32(6) : null,
-                    !reader.IsDBNull(10) ? reader.GetString(10) : null,
-                    reader.GetString(3),
-                    reader.GetString(2)),
+                StartColumn = !reader.IsDBNull(29)
+                    ? reader.GetInt32(29)
+                    : ResolveSymbolIdentifierStartColumn(
+                        !reader.IsDBNull(6) ? reader.GetInt32(6) : null,
+                        !reader.IsDBNull(10) ? reader.GetString(10) : null,
+                        reader.GetString(3),
+                        reader.GetString(2)),
                 EndLine = !reader.IsDBNull(7) ? reader.GetInt32(7) : reader.GetInt32(4),
                 BodyStartLine = !reader.IsDBNull(8) ? reader.GetInt32(8) : null,
                 BodyEndLine = !reader.IsDBNull(9) ? reader.GetInt32(9) : null,

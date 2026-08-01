@@ -196,6 +196,7 @@ public partial class DbContext : IDisposable
         ("symbols", "return_type"),
         ("symbols", "is_partial_declaration"),
         ("symbols", "declaration_semantic_score"),
+        ("symbols", "identifier_start_column"),
         ("symbols", "is_metadata_target"),
         ("symbols", "metadata_target_source"),
         ("symbols", "name_folded"),

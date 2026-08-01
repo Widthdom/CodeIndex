@@ -29,6 +29,8 @@ public static partial class SymbolExtractor
                 symbol.StartLine,
                 lineStartStates);
             symbol.IsPartialDeclaration = PartialModifierRegex.IsMatch(signature) || leading.HasPartialModifier;
+            if (symbol.IsPartialDeclaration == true)
+                symbol.IdentifierStartColumn = FindCSharpDeclarationIdentifierColumn(lines, symbol);
 
             var semanticScore = 0;
             if (signature.Contains('[') || leading.HasAttribute)
@@ -65,6 +67,12 @@ public static partial class SymbolExtractor
                 break;
 
             if (raw.StartsWith("///", StringComparison.Ordinal))
+            {
+                hasDocumentation = true;
+                continue;
+            }
+
+            if (raw.StartsWith("/**", StringComparison.Ordinal))
             {
                 hasDocumentation = true;
                 continue;
@@ -116,6 +124,107 @@ public static partial class SymbolExtractor
             remaining = remaining[(separator + 1)..].TrimStart();
         }
         return found;
+    }
+
+    private static int? FindCSharpDeclarationIdentifierColumn(
+        IReadOnlyList<string> lines,
+        SymbolRecord symbol)
+    {
+        if (symbol.Line <= 0 || symbol.Line > lines.Count || string.IsNullOrWhiteSpace(symbol.Name))
+            return null;
+
+        var line = lines[symbol.Line - 1].AsSpan();
+        var name = symbol.Name.AsSpan().TrimStart('@');
+        if (name.IsEmpty)
+            return null;
+
+        if (symbol.Kind is "class" or "struct" or "interface" or "record")
+        {
+            var keywordColumn = FindCSharpIdentifierToken(line, symbol.Kind.AsSpan(), 0);
+            if (keywordColumn >= 0)
+            {
+                var nameColumn = FindCSharpIdentifierToken(
+                    line,
+                    name,
+                    keywordColumn + symbol.Kind.Length);
+                if (nameColumn >= 0)
+                    return nameColumn;
+            }
+        }
+
+        var searchStart = 0;
+        int? fallback = null;
+        while (searchStart < line.Length)
+        {
+            var nameColumn = FindCSharpIdentifierToken(line, name, searchStart);
+            if (nameColumn < 0)
+                break;
+
+            fallback = nameColumn;
+            if (symbol.Kind == "function" && IsCSharpCallableNameOccurrence(line, nameColumn, name.Length))
+                return nameColumn;
+            searchStart = nameColumn + Math.Max(1, name.Length);
+        }
+
+        return fallback;
+    }
+
+    private static int FindCSharpIdentifierToken(
+        ReadOnlySpan<char> line,
+        ReadOnlySpan<char> token,
+        int startIndex)
+    {
+        var searchIndex = Math.Clamp(startIndex, 0, line.Length);
+        while (searchIndex <= line.Length - token.Length)
+        {
+            var relativeIndex = line[searchIndex..].IndexOf(token, StringComparison.Ordinal);
+            if (relativeIndex < 0)
+                return -1;
+
+            var index = searchIndex + relativeIndex;
+            var tokenStart = index > 0 && line[index - 1] == '@' ? index - 1 : index;
+            var beforeIsIdentifier = tokenStart > 0 && IsCSharpIdentifierPart(line[tokenStart - 1]);
+            var afterIndex = index + token.Length;
+            var afterIsIdentifier = afterIndex < line.Length && IsCSharpIdentifierPart(line[afterIndex]);
+            if (!beforeIsIdentifier && !afterIsIdentifier)
+                return tokenStart;
+
+            searchIndex = index + Math.Max(1, token.Length);
+        }
+
+        return -1;
+    }
+
+    private static bool IsCSharpCallableNameOccurrence(
+        ReadOnlySpan<char> line,
+        int nameColumn,
+        int nameLength)
+    {
+        var cursor = nameColumn;
+        if (cursor < line.Length && line[cursor] == '@')
+            cursor++;
+        cursor += nameLength;
+        while (cursor < line.Length && char.IsWhiteSpace(line[cursor]))
+            cursor++;
+
+        if (cursor < line.Length && line[cursor] == '<')
+        {
+            var depth = 0;
+            do
+            {
+                if (line[cursor] == '<')
+                    depth++;
+                else if (line[cursor] == '>')
+                    depth--;
+                cursor++;
+            }
+            while (cursor < line.Length && depth > 0);
+
+            while (cursor < line.Length && char.IsWhiteSpace(line[cursor]))
+                cursor++;
+        }
+
+        return cursor < line.Length && line[cursor] == '(';
     }
 
     private static int CountCharacter(ReadOnlySpan<char> text, char value)

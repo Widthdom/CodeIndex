@@ -749,7 +749,8 @@ public partial class DbReader
                    {canonicalPrimaryRankSql} AS canonical_primary_rank,
                    {generatedSql} AS canonical_generated_rank,
                    {canonicalSemanticScoreSql} AS canonical_semantic_score,
-                   {canonicalDeclarationIdentitySql} AS canonical_declaration_identity
+                   {canonicalDeclarationIdentitySql} AS canonical_declaration_identity,
+                   {GetSymbolColumnSql("identifier_start_column")} AS identifier_start_column
             FROM symbols s
             JOIN files f ON s.file_id = f.id
             {symbolRankJoin}
@@ -919,6 +920,7 @@ public partial class DbReader
 
         var includeRankingMetadata = sortMode != SymbolSortMode.Name;
         var sortModeName = sortMode.ToString().ToLowerInvariant();
+        var identifierStartColumnIndex = groupPartials ? 31 : 36;
         var results = new List<SymbolResult>();
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
@@ -933,11 +935,12 @@ public partial class DbReader
                 Name = reader.GetString(4),
                 Line = reader.GetInt32(5),
                 StartLine = GetInt32OrFallback(reader, 6, 5),
-                StartColumn = ResolveSymbolIdentifierStartColumn(
-                    GetNullableInt32(reader, 7),
-                    GetNullableString(reader, 11),
-                    reader.GetString(4),
-                    reader.GetString(2)),
+                StartColumn = GetNullableInt32(reader, identifierStartColumnIndex)
+                    ?? ResolveSymbolIdentifierStartColumn(
+                        GetNullableInt32(reader, 7),
+                        GetNullableString(reader, 11),
+                        reader.GetString(4),
+                        reader.GetString(2)),
                 EndLine = GetInt32OrFallback(reader, 8, 5),
                 BodyStartLine = GetNullableInt32(reader, 9),
                 BodyEndLine = GetNullableInt32(reader, 10),
@@ -988,17 +991,22 @@ public partial class DbReader
             var memberSignature = element.GetProperty("signature").ValueKind == JsonValueKind.Null
                 ? null
                 : element.GetProperty("signature").GetString();
+            var identifierStartColumn = element.TryGetProperty("identifier_start_column", out var identifierColumnElement)
+                && identifierColumnElement.ValueKind != JsonValueKind.Null
+                    ? identifierColumnElement.GetInt32()
+                    : (int?)null;
             members.Add(new PartialFamilyMember
             {
                 SymbolId = symbolId,
                 Path = path,
                 Line = element.GetProperty("line").GetInt32(),
                 StartLine = startLine,
-                StartColumn = ResolveSymbolIdentifierStartColumn(
-                    rawStartColumn,
-                    memberSignature,
-                    memberName,
-                    representative.Kind),
+                StartColumn = identifierStartColumn
+                    ?? ResolveSymbolIdentifierStartColumn(
+                        rawStartColumn,
+                        memberSignature,
+                        memberName,
+                        representative.Kind),
                 EndLine = element.GetProperty("end_line").GetInt32(),
                 Generated = element.GetProperty("generated").GetInt32() != 0,
                 Representative = representative.SymbolId == symbolId
@@ -1100,6 +1108,7 @@ public partial class DbReader
                            'end_line', end_line,
                            'name', name,
                            'signature', signature,
+                           'identifier_start_column', identifier_start_column,
                            'generated', canonical_generated_rank
                        )) FILTER (WHERE
                            family_member_row_number <= CASE
@@ -1132,7 +1141,8 @@ public partial class DbReader
                        ELSE '{LogicalPartialSymbolGrouper.StableLocationReason}'
                    END AS representative_reason,
                    logical_family_members_json,
-                   CASE WHEN logical_definition_sites > {LogicalPartialSymbolGrouper.FamilyMemberLimit} THEN 1 ELSE 0 END AS family_members_truncated
+                   CASE WHEN logical_definition_sites > {LogicalPartialSymbolGrouper.FamilyMemberLimit} THEN 1 ELSE 0 END AS family_members_truncated,
+                   identifier_start_column
             FROM logical_symbols
             WHERE logical_row_number = 1
             {orderBy}";

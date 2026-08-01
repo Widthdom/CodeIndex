@@ -85,6 +85,14 @@ public class SymbolRecord
     internal int? DeclarationSemanticScore { get; set; }
 
     /// <summary>
+    /// Zero-based column of the declared identifier on <see cref="Line"/> when extraction
+    /// can distinguish it from a preceding-line modifier anchor.
+    /// 前行 modifier の anchor と区別できる場合の、<see cref="Line"/> 上の宣言識別子列（0始まり）。
+    /// </summary>
+    [JsonInclude]
+    internal int? IdentifierStartColumn { get; set; }
+
+    /// <summary>
     /// Authoritative metadata-target flag (e.g. C# attribute class derived from System.Attribute).
     /// Persisted in `symbols.is_metadata_target` after a per-language resolver pass and gated by
     /// `metadata_target_version_<lang>` in `codeindex_meta`. NULL on legacy DBs and on languages

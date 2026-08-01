@@ -1087,7 +1087,31 @@ public partial class QueryCommandRunnerTests
         var method = Assert.Single(symbols.Where(symbol => symbol.Kind == "function" && symbol.Name == "OnReady"));
         Assert.True(method.IsPartialDeclaration);
         Assert.Equal(3, method.DeclarationSemanticScore);
+        Assert.Equal(9, method.IdentifierStartColumn);
         Assert.DoesNotContain("partial", method.Signature, StringComparison.Ordinal);
+
+        var persistedFamily = new SymbolResult
+        {
+            Lang = "csharp",
+            Kind = "function",
+            Name = "OnReady",
+            Signature = method.Signature,
+            LogicalPartialKey = "family:csharp\u001ffunction\u001fDemo.Container\u001fOnReady/0(System.Int32):System.Void",
+        };
+        Assert.True(LogicalPartialSymbolGrouper.TryBuildKey(persistedFamily, out var persistedFamilyKey));
+        Assert.Equal(persistedFamily.LogicalPartialKey, persistedFamilyKey);
+
+        var persistedPhysical = new SymbolResult
+        {
+            Lang = "csharp",
+            Kind = "function",
+            Name = "OnReady",
+            Signature = "partial void OnReady(int value);",
+            ReturnType = "void",
+            ContainerName = "Container",
+            LogicalPartialKey = "symbol:42",
+        };
+        Assert.False(LogicalPartialSymbolGrouper.TryBuildKey(persistedPhysical, out _));
 
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_worker_metadata_issue4914");
         try
@@ -1120,6 +1144,7 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(string.Empty, error.ToString());
             Assert.True(transportedMethod.IsPartialDeclaration);
             Assert.Equal(3, transportedMethod.DeclarationSemanticScore);
+            Assert.Equal(9, transportedMethod.IdentifierStartColumn);
         }
         finally
         {
@@ -1172,7 +1197,9 @@ public partial class QueryCommandRunnerTests
                 "csharp",
                 """
                 namespace Demo;
-                /// <summary>Primary declaration.</summary>
+                /**
+                 * <summary>Primary declaration.</summary>
+                 */
                 public partial class Documented { }
                 """);
             TestProjectHelper.InsertIndexedFile(
@@ -1198,10 +1225,13 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(2, split.GetProperty("definition_sites").GetInt32());
             Assert.Contains(
                 split.GetProperty("family_members").EnumerateArray(),
-                member => member.GetProperty("path").GetString() == "src/A.Split.cs");
+                member => member.GetProperty("path").GetString() == "src/A.Split.cs"
+                    && member.GetProperty("start_column").GetInt32() == 9);
             Assert.Contains(
                 split.GetProperty("family_members").EnumerateArray(),
-                member => member.GetProperty("path").GetString() == "src/Z.Split.cs");
+                member => member.GetProperty("path").GetString() == "src/Z.Split.cs"
+                    && member.GetProperty("start_column").GetInt32() == 9);
+            Assert.Equal(9, split.GetProperty("start_column").GetInt32());
 
             var documented = RunGroupedSymbol(dbPath, "Documented", "class");
             Assert.Equal("src/Z.Documented.cs", documented.GetProperty("path").GetString());
@@ -1285,6 +1315,22 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(4, rows.Count);
             Assert.All(rows, row => Assert.False(row.TryGetProperty("definition_sites", out _)));
             Assert.All(rows, row => Assert.False(row.TryGetProperty("partial_family_id", out _)));
+
+            var (impactExitCode, impactStdout, impactStderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["Host", "--db", dbPath, "--json", "--lang", "csharp", "--max-hops", "0", "--limit", "10"],
+                _jsonOptions));
+            using var impactDocument = ParseJsonOutput(impactStdout);
+            var impact = impactDocument.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, impactExitCode);
+            Assert.Equal(string.Empty, impactStderr);
+            Assert.Equal(4, impact.GetProperty("definition_count").GetInt32());
+            Assert.Equal(4, impact.GetProperty("logical_definition_count").GetInt32());
+            Assert.Equal(4, impact.GetProperty("definition_output_count").GetInt32());
+            Assert.False(impact.GetProperty("definitions_collapsed").GetBoolean());
+            Assert.All(
+                impact.GetProperty("definitions").EnumerateArray(),
+                definition => Assert.False(definition.TryGetProperty("partial_family_id", out _)));
         }
         finally
         {
