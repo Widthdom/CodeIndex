@@ -102,8 +102,9 @@ internal static partial class JsonEnvelopeWrapper
     {
         var afterEndOfOptions = false;
         var nextTokenIsValue = false;
-        foreach (var arg in args)
+        for (var i = 0; i < args.Length; i++)
         {
+            var arg = args[i];
             var isOption = !afterEndOfOptions && !nextTokenIsValue;
             yield return new ArgumentToken(arg, isOption);
 
@@ -119,7 +120,10 @@ internal static partial class JsonEnvelopeWrapper
                 afterEndOfOptions = true;
                 continue;
             }
-            nextTokenIsValue = IsValueConsumingOption(command, arg);
+            nextTokenIsValue = IsValueConsumingOption(command, arg)
+                               && i + 1 < args.Length
+                               && (!string.Equals(args[i + 1], EnvelopeFlag, StringComparison.Ordinal)
+                                   || string.Equals(arg, "--query", StringComparison.Ordinal));
         }
     }
 

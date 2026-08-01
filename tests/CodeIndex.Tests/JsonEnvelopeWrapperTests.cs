@@ -476,7 +476,8 @@ public class JsonEnvelopeWrapperTests
         Assert.False(JsonEnvelopeWrapper.HasEnvelopeFlag("search", ["--json"]));
         Assert.False(JsonEnvelopeWrapper.HasEnvelopeFlag("search", ["--json-envelope=1"]));
         Assert.False(JsonEnvelopeWrapper.HasEnvelopeFlag("search", ["--query", "--json-envelope"]));
-        Assert.False(JsonEnvelopeWrapper.HasEnvelopeFlag("search", ["--path", "--json-envelope"]));
+        Assert.True(JsonEnvelopeWrapper.HasEnvelopeFlag("search", ["--path", "--json-envelope"]));
+        Assert.True(JsonEnvelopeWrapper.HasEnvelopeFlag("search", ["--lang", "--json-envelope"]));
         Assert.False(JsonEnvelopeWrapper.HasEnvelopeFlag("search", ["--", "--json-envelope"]));
     }
 
@@ -505,10 +506,10 @@ public class JsonEnvelopeWrapperTests
     public void PrepareInnerArgs_PreservesOptionValuesAndEndMarker_Issue4976()
     {
         Assert.Equal(
-            ["--path", "--json-envelope", "--json"],
+            ["--path", "--json"],
             JsonEnvelopeWrapper.PrepareInnerArgs(
                 "search",
-                ["--path", "--json-envelope", "--json-envelope"]));
+                ["--path", "--json-envelope"]));
         Assert.Equal(
             ["--query", "--json", "--json"],
             JsonEnvelopeWrapper.PrepareInnerArgs(
@@ -519,6 +520,25 @@ public class JsonEnvelopeWrapperTests
             JsonEnvelopeWrapper.PrepareInnerArgs(
                 "search",
                 ["--json-envelope", "--", "--json-envelope"]));
+    }
+
+    [Theory]
+    [InlineData("--lang")]
+    [InlineData("--path")]
+    public void Search_MissingOptionValueBeforeEnvelope_ReturnsStructuredError_Issue4976(string option)
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["search", "Needle", option, "--json-envelope"],
+            _jsonOptions,
+            "1.0.0-test"));
+
+        Assert.NotEqual(CommandExitCodes.Success, exitCode);
+        Assert.Contains($"{option} requires a value", stderr);
+        using var document = JsonDocument.Parse(stdout);
+        Assert.Equal(
+            exitCode,
+            document.RootElement.GetProperty("metadata").GetProperty("exit_code").GetInt32());
+        Assert.Equal(JsonValueKind.Array, document.RootElement.GetProperty("results").ValueKind);
     }
 
     [Fact]
