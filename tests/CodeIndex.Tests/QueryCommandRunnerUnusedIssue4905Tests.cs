@@ -153,9 +153,17 @@ public partial class QueryCommandRunnerTests
                     "1.0.0-test"));
 
             Assert.Equal(CommandExitCodes.UsageError, smallExitCode);
-            Assert.Equal(string.Empty, smallStdout);
-            Assert.Contains($"Error [{CommandErrorCodes.UsageError}]", smallStderr, StringComparison.Ordinal);
-            Assert.Contains("bounded response metadata and one projected row", smallStderr, StringComparison.Ordinal);
+            Assert.Equal(string.Empty, smallStderr);
+            using var smallDocument = JsonDocument.Parse(smallStdout);
+            var smallError = smallDocument.RootElement;
+            Assert.Equal(CommandErrorCodes.ResponseBudgetTooSmall, smallError.GetProperty("error_code").GetString());
+            Assert.Equal("response_budget", smallError.GetProperty("category").GetString());
+            Assert.Equal("unused", smallError.GetProperty("command").GetString());
+            Assert.Contains(
+                "bounded response metadata and one projected row",
+                smallError.GetProperty("message").GetString(),
+                StringComparison.Ordinal);
+            Assert.Equal(64, smallError.GetProperty("requested_bytes").GetInt64());
 
             var (emptyExitCode, emptyStdout, emptyStderr) = CaptureConsole(() =>
                 ProgramRunner.Run(

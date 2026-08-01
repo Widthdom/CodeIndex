@@ -227,20 +227,26 @@ public partial class QueryCommandRunnerTests
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Equal(string.Empty, stdout);
-            Assert.Contains("deps JSON output is", stderr);
-            Assert.Contains("exceeds --max-json-bytes 1", stderr);
-            Assert.Contains("Usage: cdidx deps", stderr);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var error = document.RootElement;
+            Assert.Equal(CommandErrorCodes.ResponseBudgetTooSmall, error.GetProperty("error_code").GetString());
+            Assert.Equal("response_budget", error.GetProperty("category").GetString());
+            Assert.Equal("deps", error.GetProperty("command").GetString());
+            Assert.Equal(1, error.GetProperty("requested_bytes").GetInt64());
+            Assert.True(error.GetProperty("minimum_required_bytes_known").GetBoolean());
 
             var (graphExitCode, graphStdout, graphStderr) = CaptureConsole(() => QueryCommandRunner.RunDeps(
                 ["--db", dbPath, "--format", "json-graph", "--max-json-bytes", "1", "--lang", "sql"],
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.UsageError, graphExitCode);
-            Assert.Equal(string.Empty, graphStdout);
-            Assert.Contains("deps JSON output is", graphStderr);
-            Assert.Contains("exceeds --max-json-bytes 1", graphStderr);
-            Assert.Contains("Usage: cdidx deps", graphStderr);
+            Assert.Equal(string.Empty, graphStderr);
+            using var graphDocument = ParseJsonOutput(graphStdout);
+            Assert.Equal(
+                CommandErrorCodes.ResponseBudgetTooSmall,
+                graphDocument.RootElement.GetProperty("error_code").GetString());
+            Assert.Equal("deps", graphDocument.RootElement.GetProperty("command").GetString());
         }
         finally
         {
@@ -299,10 +305,13 @@ public partial class QueryCommandRunnerTests
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Equal(string.Empty, stdout);
-            Assert.Contains("deps JSON output is", stderr);
-            Assert.Contains("exceeds --max-json-bytes 1", stderr);
-            Assert.Contains("Usage: cdidx deps", stderr);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var error = document.RootElement;
+            Assert.Equal(CommandErrorCodes.ResponseBudgetTooSmall, error.GetProperty("error_code").GetString());
+            Assert.Equal("response_budget", error.GetProperty("category").GetString());
+            Assert.Equal("deps", error.GetProperty("command").GetString());
+            Assert.Equal(1, error.GetProperty("requested_bytes").GetInt64());
 
             var (summaryExitCode, summaryStdout, _) = CaptureConsole(() => QueryCommandRunner.RunDeps(
                 ["--db", readOnlyUri, "--json", "--summary-only"],
@@ -459,10 +468,13 @@ public partial class QueryCommandRunnerTests
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Equal(string.Empty, stdout);
-            Assert.Contains("hotspots JSON output is", stderr);
-            Assert.Contains("exceeds --max-json-bytes 1", stderr);
-            Assert.Contains("Usage: cdidx hotspots", stderr);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var error = document.RootElement;
+            Assert.Equal(CommandErrorCodes.ResponseBudgetTooSmall, error.GetProperty("error_code").GetString());
+            Assert.Equal("response_budget", error.GetProperty("category").GetString());
+            Assert.Equal("hotspots", error.GetProperty("command").GetString());
+            Assert.Equal(1, error.GetProperty("requested_bytes").GetInt64());
         }
         finally
         {
@@ -481,10 +493,13 @@ public partial class QueryCommandRunnerTests
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Equal(string.Empty, stdout);
-            Assert.Contains("hotspots JSON output is", stderr);
-            Assert.Contains("exceeds --max-json-bytes 1", stderr);
-            Assert.Contains("Usage: cdidx hotspots", stderr);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var error = document.RootElement;
+            Assert.Equal(CommandErrorCodes.ResponseBudgetTooSmall, error.GetProperty("error_code").GetString());
+            Assert.Equal("response_budget", error.GetProperty("category").GetString());
+            Assert.Equal("hotspots", error.GetProperty("command").GetString());
+            Assert.Equal(1, error.GetProperty("requested_bytes").GetInt64());
         }
         finally
         {

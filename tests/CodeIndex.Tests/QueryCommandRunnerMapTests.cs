@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using CodeIndex.Cli;
 using CodeIndex.Database;
@@ -495,9 +496,53 @@ public partial class QueryCommandRunnerTests
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.UsageError, capExitCode);
-            Assert.Equal(string.Empty, capStdout);
-            Assert.Contains("map JSON output", capStderr, StringComparison.Ordinal);
-            Assert.Contains("Usage: cdidx map", capStderr, StringComparison.Ordinal);
+            Assert.Equal(string.Empty, capStderr);
+            using var capDocument = ParseJsonOutput(capStdout);
+            var capError = capDocument.RootElement;
+            Assert.Equal("E028_RESPONSE_BUDGET_TOO_SMALL", capError.GetProperty("error_code").GetString());
+            Assert.Equal("response_budget", capError.GetProperty("category").GetString());
+            Assert.Equal("map", capError.GetProperty("command").GetString());
+            Assert.StartsWith("cdidx map ", capError.GetProperty("usage").GetString(), StringComparison.Ordinal);
+            Assert.Equal(1, capError.GetProperty("requested_bytes").GetInt64());
+            Assert.Equal(1, capError.GetProperty("effective_bytes").GetInt64());
+            Assert.True(capError.GetProperty("minimum_required_bytes_known").GetBoolean());
+            Assert.False(capError.GetProperty("minimum_required_bytes_uncertain").GetBoolean());
+            var minimumRequiredBytes = capError.GetProperty("minimum_required_bytes").GetInt64();
+            Assert.True(minimumRequiredBytes > 1);
+            Assert.Equal(
+                minimumRequiredBytes,
+                capError.GetProperty("retry").GetProperty("recommended_bytes").GetInt64());
+
+            var (exactExitCode, exactStdout, exactStderr) = CaptureConsole(() => QueryCommandRunner.RunMap(
+                [
+                    "--db", dbPath, "--compact", "--max-json-bytes",
+                    minimumRequiredBytes.ToString(CultureInfo.InvariantCulture),
+                ],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exactExitCode);
+            Assert.Equal(string.Empty, exactStderr);
+            Assert.Equal(minimumRequiredBytes, Encoding.UTF8.GetByteCount(exactStdout));
+            using var exactDocument = ParseJsonOutput(exactStdout);
+            Assert.Equal(
+                minimumRequiredBytes,
+                exactDocument.RootElement.GetProperty("output_byte_limit").GetInt64());
+
+            var (zeroExitCode, zeroStdout, zeroStderr) = CaptureConsole(() => QueryCommandRunner.RunMap(
+                ["--db", dbPath, "--json", "--max-json-bytes", "0"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, zeroExitCode);
+            Assert.Equal(string.Empty, zeroStderr);
+            using var zeroDocument = ParseJsonOutput(zeroStdout);
+            var zeroError = zeroDocument.RootElement;
+            Assert.Equal("E028_RESPONSE_BUDGET_TOO_SMALL", zeroError.GetProperty("error_code").GetString());
+            Assert.Equal(0, zeroError.GetProperty("requested_bytes").GetInt64());
+            Assert.Equal(JsonValueKind.Null, zeroError.GetProperty("effective_bytes").ValueKind);
+            Assert.False(zeroError.GetProperty("minimum_required_bytes_known").GetBoolean());
+            Assert.Equal(
+                "normal_payload_not_materialized",
+                zeroError.GetProperty("minimum_required_bytes_unavailable_reason").GetString());
         }
         finally
         {

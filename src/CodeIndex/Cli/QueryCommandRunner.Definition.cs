@@ -199,6 +199,7 @@ public static partial class QueryCommandRunner
                         options,
                         "definition not-found response",
                         "Increase --max-json-bytes to allow the structured not-found response.",
+                        jsonOptions,
                         "definition");
                     return writeExitCode == CommandExitCodes.Success
                         ? CommandExitCodes.NotFound

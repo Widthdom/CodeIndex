@@ -24,8 +24,18 @@ public partial class QueryCommandRunnerTests
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.UsageError, tinyExitCode);
-            Assert.Equal(string.Empty, tinyStdout);
-            Assert.Contains("terminal record", tinyStderr, StringComparison.Ordinal);
+            Assert.Equal(string.Empty, tinyStderr);
+            using (var tinyDocument = ParseJsonOutput(tinyStdout))
+            {
+                var error = tinyDocument.RootElement;
+                Assert.Equal(
+                    CommandErrorCodes.ResponseBudgetTooSmall,
+                    error.GetProperty("error_code").GetString());
+                Assert.Equal("search", error.GetProperty("command").GetString());
+                Assert.Equal(1, error.GetProperty("requested_bytes").GetInt64());
+                Assert.True(error.GetProperty("minimum_required_bytes_known").GetBoolean());
+                Assert.True(error.GetProperty("minimum_required_bytes_uncertain").GetBoolean());
+            }
 
             var (partialExitCode, partialStdout, partialStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 ["Issue4561Needle", "--db", dbPath, "--json=ndjson", "--max-json-bytes", "600"],
