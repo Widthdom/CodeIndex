@@ -7239,6 +7239,8 @@ public partial class DbReaderTests : IDisposable
 
                 public void Keyword<@string>(@string value) { }
 
+                public void EscapedOrdinary<@U>(U value) { }
+
                 public void Combining<T́>(T́ value) { }
 
                 public void Defaults<T>(
@@ -7320,6 +7322,9 @@ public partial class DbReaderTests : IDisposable
         Assert.Contains(beforeCallables, symbol =>
             symbol.Name == "Keyword"
             && symbol.DisplayName == "Keyword<T>(T)");
+        Assert.Contains(beforeCallables, symbol =>
+            symbol.Name == "EscapedOrdinary"
+            && symbol.DisplayName == "EscapedOrdinary<T>(T)");
         Assert.Contains(beforeCallables, symbol =>
             symbol.Name == "Combining"
             && symbol.DisplayName == "Combining<T>(T)");
