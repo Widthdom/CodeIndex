@@ -711,7 +711,7 @@ public partial class DbReader
             "s.kind",
             GetSymbolColumnSql("declaration_semantic_score"));
         var fallbackCanonicalDeclarationIdentitySql = BuildCanonicalDeclarationIdentitySql(signatureSql);
-        var canonicalDeclarationIdentitySql = $"CASE WHEN s.kind = 'function' THEN COALESCE(csharp_partial_callable_identity({signatureSql}, s.name, {returnTypeSql}), {fallbackCanonicalDeclarationIdentitySql}) ELSE {fallbackCanonicalDeclarationIdentitySql} END";
+        var canonicalDeclarationIdentitySql = $"CASE WHEN s.kind IN ('function', 'test.method') THEN COALESCE(csharp_partial_callable_identity({signatureSql}, s.name, {returnTypeSql}), {fallbackCanonicalDeclarationIdentitySql}) ELSE {fallbackCanonicalDeclarationIdentitySql} END";
         var exactNameOrderSql = "CASE " +
             "WHEN @preferLiteralExactMatch = 1 AND s.name = @rawQuery THEN 0 " +
             "WHEN @preferLiteralNormalizedSqlMatch = 1 AND f.lang = 'sql' AND sql_segment_count(s.name) = @rawQuerySegmentCount AND sql_normalize_name(s.name) = @rawQueryNormalized THEN 1 " +

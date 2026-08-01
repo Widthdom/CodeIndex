@@ -535,7 +535,7 @@ public static partial class SymbolExtractor
                 break;
 
             fallback = nameColumn;
-            if (symbol.Kind == "function"
+            if (symbol.Kind is "function" or "test.method"
                 && IsOutsideCSharpAttributeList(line, nameColumn)
                 && IsCSharpCallableNameOccurrence(line, nameColumn, name.Length))
                 return nameColumn;

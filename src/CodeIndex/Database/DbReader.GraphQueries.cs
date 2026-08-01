@@ -2488,7 +2488,7 @@ public partial class DbReader
             "s.kind",
             GetSymbolColumnSql("declaration_semantic_score"));
         var fallbackCanonicalDeclarationIdentitySql = BuildCanonicalDeclarationIdentitySql(signatureSql);
-        var canonicalDeclarationIdentitySql = $"CASE WHEN s.kind = 'function' THEN COALESCE(csharp_partial_callable_identity({signatureSql}, s.name, {returnTypeSql}), {fallbackCanonicalDeclarationIdentitySql}) ELSE {fallbackCanonicalDeclarationIdentitySql} END";
+        var canonicalDeclarationIdentitySql = $"CASE WHEN s.kind IN ('function', 'test.method') THEN COALESCE(csharp_partial_callable_identity({signatureSql}, s.name, {returnTypeSql}), {fallbackCanonicalDeclarationIdentitySql}) ELSE {fallbackCanonicalDeclarationIdentitySql} END";
         var nameCondition = _foldReady
             ? allowLeafFallback
                 ? $"({BuildPersistedFoldedNameMatchSql("s.name_folded", "@resolvedNameFolded")} OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @resolvedNameSegmentCount AND sql_normalize_name_folded(s.name) = @resolvedNameNormalizedFolded) OR sql_leaf_name_folded(s.name) = @resolvedNameLeafFolded)))"
