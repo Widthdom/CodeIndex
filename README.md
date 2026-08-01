@@ -316,7 +316,8 @@ are emitted once with their reasons aggregated in check priority order. Differen
 targets, options, actions, or safety semantics remain separate even if their
 rendered command text looks similar. Human check output follows the same
 deduplication and preserves platform-aware shell quoting in one `[repair]` line per
-structured action.
+structured action. Control characters are visibly escaped in human output so they
+cannot forge additional lines; structured JSON `args` retain their original values.
 
 Supplying `status --stale-after <duration>` implies the workspace freshness check.
 Check-mode JSON includes `query_context.check_mode` (`explicit` or
@@ -828,7 +829,8 @@ action、argument、mutation class、安全性 semantics を持つ command は1�
 reason は check の優先順で集約します。target、option、action、安全性 semantics が
 異なる command は、表示上の command text が似ていても別々に維持します。human
 check output も同じ deduplication を使い、platform-aware な shell quote を維持した
-`[repair]` line を構造化 action ごとに1件だけ表示します。
+`[repair]` line を構造化 action ごとに1件だけ表示します。human output では control
+character を可視 escape して偽の行を防ぎ、構造化 JSON の `args` は原値を維持します。
 
 `status --stale-after <duration>` を指定すると workspace freshness check を暗黙に有効化します。
 check mode の JSON は `query_context.check_mode`（`explicit` または

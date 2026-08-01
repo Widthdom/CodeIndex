@@ -2667,6 +2667,29 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RenderStatusRepairCommand_EscapesControlCharactersOnOneLine_Issue4915()
+    {
+        var command = new StatusRepairCommand
+        {
+            Name = "cdidx",
+            Action = "index",
+            Args = ["index", "workspace\n[repair] forged\u001b"],
+            Reason = "workspace_stale",
+            Reasons = ["workspace_stale"],
+            MutationClass = "index_write",
+            SafetyClass = "workspace_refresh",
+        };
+
+        var rendered = QueryCommandRunner.RenderStatusRepairCommand(command);
+
+        Assert.Equal("cdidx index 'workspace\\n[repair] forged\\u001B'", rendered);
+        Assert.DoesNotContain('\n', rendered);
+        Assert.DoesNotContain('\r', rendered);
+        Assert.DoesNotContain('\u001b', rendered);
+        Assert.Equal("workspace\n[repair] forged\u001b", command.Args[1]);
+    }
+
+    [Fact]
     public void RunStatus_Check_DeduplicatesRepairCommandsForJsonAndHumanOutput_Issue4915()
     {
         var containerRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_status_repair_dedup");
