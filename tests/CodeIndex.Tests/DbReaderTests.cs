@@ -7184,6 +7184,210 @@ public partial class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetOutline_CSharpGenericCallablesUseStableReadableSignatures_Issue4916()
+    {
+        const string source = """"
+            using System;
+            using System.Collections.Generic;
+
+            [AttributeUsage(AttributeTargets.Parameter)]
+            public sealed class MarkerAttribute : Attribute
+            {
+                public MarkerAttribute(string text) { }
+                public MarkerAttribute(bool value) { }
+            }
+
+            public sealed class T { }
+            public sealed class U { }
+
+            public static class Outer
+            {
+                public sealed class U { }
+            }
+
+            public interface IWorker
+            {
+                TResult Convert<TSource, TResult>(TSource source, ref TResult result)
+                    where TSource : class;
+            }
+
+            public static class WorkerExtensions
+            {
+                public static TResult Project<TSource, TResult>(
+                    this Worker worker,
+                    IReadOnlyDictionary<string, List<TSource?[]>> values,
+                    Func<(TSource, int[]), TResult?[]> selector)
+                    where TSource : class
+                    where TResult : class => default!;
+            }
+
+            public sealed class Worker : IWorker
+            {
+                public void Convert(int count) { }
+
+                public void NonGenericLiteral(string closing = "\u0029", int count = 0) { }
+
+                public T Convert<T>(T value)
+                    where T : notnull => value;
+
+                public void Qualified<U>(global::U one, Outer.U two, U three) { }
+
+                public void Collision<U>(U value) { }
+
+                public void Collision<U>(T value) { }
+
+                public void Keyword<@string>(string value) { }
+
+                public void Keyword<@string>(@string value) { }
+
+                public void EscapedOrdinary<@U>(U value) { }
+
+                public void Combining<T́>(T́ value) { }
+
+                public void Defaults<T>(
+                    string closing = ")",
+                    string comma = "a,b",
+                    char close = ')',
+                    T value = default!) { }
+
+                public void RawDefault<T>(string value = """a,b)""", T other = default!) { }
+
+                public void InterpolatedDefault<T>(string value = $"{"a,b)"}", T other = default!) { }
+
+                public void AttributeParam<T>([Marker("x]")] T value, int count) { }
+
+                public void AttributeExpression<T>([Marker(1 < 2)] T value, int count) { }
+
+                public void CommentedName /* between name and type parameters */ <T>(T value) { }
+
+                public void CommentedParameters<T> /* before parameters */ (T value) { }
+
+                public void Escaped<\u0055>(\u0055 value) { }
+
+                TResult IWorker.Convert<TSource, TResult>(TSource source, ref TResult result)
+                    where TSource : class => result;
+
+                public void Use()
+                {
+                    TLocal Local<TLocal>(TLocal?[] values)
+                        where TLocal : struct => values[0].Value;
+                }
+            }
+            """";
+
+        InsertIndexedFile("src/generic-before.cs", "csharp", source);
+        InsertIndexedFile("src/generic-after.cs", "csharp", "\n\n\n" + source);
+
+        var before = _reader.GetOutline("src/generic-before.cs");
+        var after = _reader.GetOutline("src/generic-after.cs");
+
+        Assert.NotNull(before);
+        Assert.NotNull(after);
+        var beforeCallables = before!.Symbols
+            .Where(symbol => symbol.Kind == "function")
+            .OrderBy(symbol => symbol.Signature, StringComparer.Ordinal)
+            .Select(symbol => (symbol.Name, symbol.Path, symbol.Signature, symbol.DisplayName))
+            .ToList();
+        var afterCallables = after!.Symbols
+            .Where(symbol => symbol.Kind == "function")
+            .OrderBy(symbol => symbol.Signature, StringComparer.Ordinal)
+            .Select(symbol => (symbol.Name, symbol.Path, symbol.Signature, symbol.DisplayName))
+            .ToList();
+
+        Assert.Equal(beforeCallables, afterCallables);
+        Assert.Contains(beforeCallables, symbol =>
+            symbol.Name == "Convert"
+            && symbol.DisplayName == "Convert(int)");
+        Assert.Contains(beforeCallables, symbol =>
+            symbol.Name == "Convert"
+            && symbol.Path == "Worker.Convert"
+            && symbol.DisplayName == "Convert<T>(T)");
+        Assert.Contains(beforeCallables, symbol =>
+            symbol.Name == "Convert"
+            && symbol.Signature!.Contains("IWorker.Convert", StringComparison.Ordinal)
+            && symbol.DisplayName == "Convert<T1, T2>(T1, ref T2)");
+        Assert.Contains(beforeCallables, symbol =>
+            symbol.Name == "Project"
+            && symbol.DisplayName ==
+                "Project<T1, T2>(Worker, IReadOnlyDictionary<string, List<T1?[]>>, Func<(T1, int[]), T2?[]>)");
+        Assert.Contains(beforeCallables, symbol =>
+            symbol.Name == "Local"
+            && symbol.DisplayName == "Local<T>(T?[])");
+        Assert.Contains(beforeCallables, symbol =>
+            symbol.Name == "NonGenericLiteral"
+            && symbol.DisplayName == "NonGenericLiteral(string, int)");
+        Assert.Contains(beforeCallables, symbol =>
+            symbol.Name == "Qualified"
+            && symbol.DisplayName == "Qualified<T>(global::U, Outer.U, T)");
+        Assert.Contains(beforeCallables, symbol =>
+            symbol.Name == "Collision"
+            && symbol.DisplayName == "Collision<T>(T)");
+        Assert.Contains(beforeCallables, symbol =>
+            symbol.Name == "Collision"
+            && symbol.DisplayName == "Collision<TArg1>(T)");
+        Assert.Contains(beforeCallables, symbol =>
+            symbol.Name == "Keyword"
+            && symbol.DisplayName == "Keyword<T>(string)");
+        Assert.Contains(beforeCallables, symbol =>
+            symbol.Name == "Keyword"
+            && symbol.DisplayName == "Keyword<T>(T)");
+        Assert.Contains(beforeCallables, symbol =>
+            symbol.Name == "EscapedOrdinary"
+            && symbol.DisplayName == "EscapedOrdinary<T>(T)");
+        Assert.Contains(beforeCallables, symbol =>
+            symbol.Name == "Combining"
+            && symbol.DisplayName == "Combining<T>(T)");
+        Assert.Contains(beforeCallables, symbol =>
+            symbol.Name == "Defaults"
+            && symbol.DisplayName == "Defaults<T>(string, string, char, T)");
+        Assert.Contains(beforeCallables, symbol =>
+            symbol.Name == "RawDefault"
+            && symbol.DisplayName == "RawDefault<T>(string, T)");
+        Assert.Contains(beforeCallables, symbol =>
+            symbol.Name == "InterpolatedDefault"
+            && symbol.DisplayName == "InterpolatedDefault<T>(string, T)");
+        Assert.Contains(beforeCallables, symbol =>
+            symbol.Name == "AttributeParam"
+            && symbol.DisplayName == "AttributeParam<T>(T, int)");
+        Assert.Contains(beforeCallables, symbol =>
+            symbol.Name == "AttributeExpression"
+            && symbol.DisplayName == "AttributeExpression<T>(T, int)");
+        Assert.Contains(beforeCallables, symbol =>
+            symbol.Name == "CommentedName"
+            && symbol.DisplayName == "CommentedName<T>(T)");
+        Assert.Contains(beforeCallables, symbol =>
+            symbol.Name == "CommentedParameters"
+            && symbol.DisplayName == "CommentedParameters<T>(T)");
+        Assert.Contains(beforeCallables, symbol =>
+            symbol.Name == "Escaped"
+            && symbol.DisplayName == "Escaped<T>(T)");
+        Assert.DoesNotContain(beforeCallables, symbol =>
+            symbol.DisplayName!.Contains('@', StringComparison.Ordinal));
+
+        var legacyFileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/legacy-generic.cs",
+            Lang = "csharp",
+            Size = 32,
+            Lines = 40,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertSymbols([new SymbolRecord
+        {
+            FileId = legacyFileId,
+            Kind = "function",
+            Name = "Incomplete",
+            Signature = "T Incomplete<T",
+            Line = 37,
+            StartLine = 37,
+            EndLine = 37,
+        }]);
+
+        var legacy = _reader.GetOutline("src/legacy-generic.cs");
+        Assert.Equal("Incomplete@37", Assert.Single(legacy!.Symbols).DisplayName);
+    }
+
+    [Fact]
     public void GetOutline_PathFallsBackToContainerNameWhenQualifiedContainerIsUnavailable()
     {
         var fileId = _writer.UpsertFile(new FileRecord

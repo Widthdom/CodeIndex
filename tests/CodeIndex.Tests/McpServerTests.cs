@@ -7490,10 +7490,12 @@ public sealed class Caller
         {
             RequestTimeout = TimeSpan.FromMilliseconds(100),
         };
-        Assert.NotNull(await server.ProcessFrameAsync(
-            """{"jsonrpc":"2.0","id":"issue-4536-batch-timeout-init","method":"initialize","params":{}}"""));
+        var initializeResponse = Assert.IsType<JsonObject>(server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":"issue-4536-batch-timeout-init","method":"initialize","params":{}}""")!));
+        Assert.IsType<JsonObject>(initializeResponse["result"]);
 
         var firstStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstTimedOut = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var releaseFirst = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var secondRegistered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var secondStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -7502,11 +7504,12 @@ public sealed class Caller
             if (id?.GetValue<int>() == 453654)
                 secondRegistered.TrySetResult();
         };
-        server.RequestDelayForTestsWithId = (id, _) =>
+        server.RequestDelayForTestsWithId = (id, cancellationToken) =>
         {
             if (id?.GetValue<int>() == 453653)
             {
                 firstStarted.TrySetResult();
+                cancellationToken.Register(() => firstTimedOut.TrySetResult());
                 return releaseFirst.Task;
             }
 
@@ -7515,17 +7518,26 @@ public sealed class Caller
         };
 
         var batchResponseTask = server.ProcessFrameAsync(
-            """[{"jsonrpc":"2.0","id":453653,"method":"ping"},{"jsonrpc":"2.0","id":453654,"method":"ping"}]""");
+            """[{"jsonrpc":"2.0","id":453653,"method":"ping"},{"jsonrpc":"2.0","id":453654,"method":"prompts/list"}]""");
         await Task.WhenAll(firstStarted.Task, secondRegistered.Task).WaitAsync(TestDeterminism.DefaultTimeout);
         Assert.False(secondStarted.Task.IsCompleted);
         Assert.Equal(0, server.AvailableConcurrencySlotsForTests);
+        await firstTimedOut.Task.WaitAsync(TestDeterminism.DefaultTimeout);
 
         releaseFirst.TrySetResult();
         await secondStarted.Task.WaitAsync(TestDeterminism.DefaultTimeout);
-        var responseText = await batchResponseTask.WaitAsync(TestDeterminism.DefaultTimeout);
-        var responses = JsonNode.Parse(responseText!)!.AsArray();
-        Assert.Equal("Request timed out", responses[0]!["error"]!["message"]!.GetValue<string>());
-        Assert.Equal("ok", responses[1]!["result"]!["status"]!.GetValue<string>());
+        var responseText = Assert.IsType<string>(
+            await batchResponseTask.WaitAsync(TestDeterminism.DefaultTimeout));
+        var responses = Assert.IsType<JsonArray>(JsonNode.Parse(responseText));
+        Assert.Equal(2, responses.Count);
+        var firstResponse = Assert.IsType<JsonObject>(responses[0]);
+        var firstError = Assert.IsType<JsonObject>(firstResponse["error"]);
+        Assert.Equal(
+            "Request timed out",
+            Assert.IsAssignableFrom<JsonValue>(firstError["message"]).GetValue<string>());
+        var secondResponse = Assert.IsType<JsonObject>(responses[1]);
+        var secondResult = Assert.IsType<JsonObject>(secondResponse["result"]);
+        Assert.IsType<JsonArray>(secondResult["prompts"]);
         Assert.Equal(1, server.AvailableConcurrencySlotsForTests);
     }
 
@@ -7543,26 +7555,29 @@ public sealed class Caller
         {
             RequestTimeout = TimeSpan.FromMilliseconds(250),
         };
-        Assert.NotNull(await server.ProcessFrameAsync(
-            """{"jsonrpc":"2.0","id":"batch-generation-init","method":"initialize","params":{}}"""));
+        var initializeResponse = Assert.IsType<JsonObject>(server.HandleMessage(JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":"batch-generation-init","method":"initialize","params":{}}""")!));
+        Assert.IsType<JsonObject>(initializeResponse["result"]);
 
         var firstStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstTimedOut = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var releaseFirst = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var followingPingStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var releaseFollowingPing = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var followingRequestStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFollowingRequest = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var observedDrainingCaller = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-        server.RequestDelayForTestsWithId = async (id, _) =>
+        server.RequestDelayForTestsWithId = async (id, cancellationToken) =>
         {
             switch (id?.GetValue<int>())
             {
                 case 454031:
                     firstStarted.TrySetResult();
+                    cancellationToken.Register(() => firstTimedOut.TrySetResult());
                     await releaseFirst.Task;
                     observedDrainingCaller.TrySetResult(server.CurrentCaller);
                     break;
                 case 454033:
-                    followingPingStarted.TrySetResult();
-                    await releaseFollowingPing.Task;
+                    followingRequestStarted.TrySetResult();
+                    await releaseFollowingRequest.Task;
                     break;
                 default:
                     break;
@@ -7570,32 +7585,46 @@ public sealed class Caller
         };
 
         var batchTask = server.ProcessFrameAsync(
-            """[{"jsonrpc":"2.0","id":454031,"method":"tools/call","params":{"name":"status","arguments":{}}},{"jsonrpc":"2.0","id":454032,"method":"initialize","params":{"clientInfo":{"name":"later-generation"}}},{"jsonrpc":"2.0","id":454033,"method":"ping"}]""");
+            """[{"jsonrpc":"2.0","id":454031,"method":"tools/call","params":{"name":"status","arguments":{}}},{"jsonrpc":"2.0","id":454032,"method":"initialize","params":{"clientInfo":{"name":"later-generation"}}},{"jsonrpc":"2.0","id":454033,"method":"prompts/list"}]""");
         try
         {
             await firstStarted.Task.WaitAsync(TestDeterminism.DefaultTimeout);
-            await followingPingStarted.Task.WaitAsync(TestDeterminism.DefaultTimeout);
+            await followingRequestStarted.Task.WaitAsync(TestDeterminism.DefaultTimeout);
+            await firstTimedOut.Task.WaitAsync(TestDeterminism.DefaultTimeout);
 
             releaseFirst.TrySetResult();
             Assert.Equal(
                 "unknown",
                 await observedDrainingCaller.Task.WaitAsync(TestDeterminism.DefaultTimeout));
 
-            releaseFollowingPing.TrySetResult();
-            var responseText = await batchTask.WaitAsync(TestDeterminism.DefaultTimeout);
-            var responses = Assert.IsType<JsonArray>(JsonNode.Parse(responseText!));
-            Assert.Equal("Request timed out", responses[0]!["error"]!["message"]!.GetValue<string>());
-            Assert.Equal(-32600, responses[1]!["error"]!["code"]!.GetValue<int>());
+            releaseFollowingRequest.TrySetResult();
+            var responseText = Assert.IsType<string>(
+                await batchTask.WaitAsync(TestDeterminism.DefaultTimeout));
+            var responses = Assert.IsType<JsonArray>(JsonNode.Parse(responseText));
+            Assert.Equal(3, responses.Count);
+            var timedOutResponse = Assert.IsType<JsonObject>(responses[0]);
+            var timedOutError = Assert.IsType<JsonObject>(timedOutResponse["error"]);
+            Assert.Equal(
+                "Request timed out",
+                Assert.IsAssignableFrom<JsonValue>(timedOutError["message"]).GetValue<string>());
+            var duplicateResponse = Assert.IsType<JsonObject>(responses[1]);
+            var duplicateError = Assert.IsType<JsonObject>(duplicateResponse["error"]);
+            Assert.Equal(
+                -32600,
+                Assert.IsAssignableFrom<JsonValue>(duplicateError["code"]).GetValue<int>());
+            var duplicateData = Assert.IsType<JsonObject>(duplicateError["data"]);
             Assert.Equal(
                 "duplicate_initialize",
-                responses[1]!["error"]!["data"]!["reason"]!.GetValue<string>());
-            Assert.Equal("ok", responses[2]!["result"]!["status"]!.GetValue<string>());
+                Assert.IsAssignableFrom<JsonValue>(duplicateData["reason"]).GetValue<string>());
+            var followingResponse = Assert.IsType<JsonObject>(responses[2]);
+            var followingResult = Assert.IsType<JsonObject>(followingResponse["result"]);
+            Assert.IsType<JsonArray>(followingResult["prompts"]);
             Assert.Equal("unknown", server.CurrentCaller);
         }
         finally
         {
             releaseFirst.TrySetResult();
-            releaseFollowingPing.TrySetResult();
+            releaseFollowingRequest.TrySetResult();
             await batchTask.WaitAsync(TestDeterminism.DefaultTimeout);
         }
     }
@@ -11419,16 +11448,14 @@ public sealed class Caller
         var pending = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         using var cts = new CancellationTokenSource();
         cts.Cancel();
-        var stopwatch = Stopwatch.StartNew();
 
         await _server.DrainInFlightTasksAsync(
             [pending.Task],
-            McpServer.DefaultEofDrainTimeout,
+            TimeSpan.FromDays(1),
             McpServer.DefaultEofPostCancelDrainTimeout,
-            cts.Token);
+            cts.Token).WaitAsync(TestDeterminism.DefaultTimeout);
 
-        stopwatch.Stop();
-        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(1), $"EOF drain cancellation took {stopwatch.Elapsed}.");
+        Assert.False(pending.Task.IsCompleted);
     }
 
     private sealed class QueuedFrameTransport : IMcpTransport
