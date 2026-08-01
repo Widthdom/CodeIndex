@@ -3292,8 +3292,7 @@ public static partial class QueryCommandRunner
         for (var index = 0; index < maskedLines.Count; index++)
         {
             var trimmed = maskedLines[index].AsSpan().TrimStart();
-            if (trimmed.StartsWith("#if", StringComparison.Ordinal)
-                && (trimmed.Length == 3 || char.IsWhiteSpace(trimmed[3])))
+            if (IsJsonTrustConditionalCompilationDirective(trimmed, "if", allowOpeningParenthesis: true))
             {
                 depth++;
                 conditionalLines[index] = true;
@@ -3301,14 +3300,36 @@ public static partial class QueryCommandRunner
             }
 
             conditionalLines[index] = depth > 0;
-            if (trimmed.StartsWith("#endif", StringComparison.Ordinal)
-                && (trimmed.Length == 6 || char.IsWhiteSpace(trimmed[6])))
+            if (IsJsonTrustConditionalCompilationDirective(trimmed, "endif", allowOpeningParenthesis: false))
             {
                 depth = Math.Max(0, depth - 1);
             }
         }
 
         return conditionalLines;
+    }
+
+    private static bool IsJsonTrustConditionalCompilationDirective(
+        ReadOnlySpan<char> line,
+        ReadOnlySpan<char> directive,
+        bool allowOpeningParenthesis)
+    {
+        var index = 0;
+        while (index < line.Length && char.IsWhiteSpace(line[index]))
+            index++;
+        if (index >= line.Length || line[index] != '#')
+            return false;
+
+        index++;
+        while (index < line.Length && char.IsWhiteSpace(line[index]))
+            index++;
+        if (!line[index..].StartsWith(directive, StringComparison.Ordinal))
+            return false;
+
+        index += directive.Length;
+        return index == line.Length
+            || char.IsWhiteSpace(line[index])
+            || (allowOpeningParenthesis && line[index] == '(');
     }
 
     private static bool TryParseJsonTrustBoundaryAnnotation(
