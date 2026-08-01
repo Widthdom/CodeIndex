@@ -565,7 +565,15 @@ internal static class LogicalPartialSymbolGrouper
                 }
             }
 
-            if (genericParameterIndex >= 0)
+            // A method type parameter is substituted only when it appears as an
+            // unqualified type reference. In N.T / Alias::T, the leaf T names a
+            // real qualified type even when the method also declares <T>.
+            // method type parameter は unqualified な type reference の場合だけ置換する。
+            // N.T / Alias::T の末尾 T は、method が <T> を宣言していても実型である。
+            var isQualifiedTypeSegment =
+                (offset > 0 && tokens[offset - 1] is "." or ":")
+                || (offset + 1 < tokens.Count && tokens[offset + 1] is "." or ":");
+            if (genericParameterIndex >= 0 && !isQualifiedTypeSegment)
             {
                 builder.Append('`');
                 builder.Append(genericParameterIndex.ToString(System.Globalization.CultureInfo.InvariantCulture));

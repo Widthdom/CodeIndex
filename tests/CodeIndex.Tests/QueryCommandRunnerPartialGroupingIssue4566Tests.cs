@@ -424,7 +424,7 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void PartialCanonicalRepresentative_UsesSemanticRulesAndExposesFamilyNavigation_Issue4914()
     {
-        Assert.Equal(6, DbContext.HotspotFamilyVersion);
+        Assert.Equal(7, DbContext.HotspotFamilyVersion);
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_canonical_issue4914");
         try
         {
@@ -459,7 +459,7 @@ public partial class QueryCommandRunnerTests
                 "csharp",
                 """
                 namespace Demo;
-                public partial record Customer
+                public partial record Customer : System.IComparable<Customer>
                 {
                 }
                 """);
@@ -469,7 +469,7 @@ public partial class QueryCommandRunnerTests
                 "csharp",
                 """
                 namespace Demo;
-                public partial record Customer
+                public partial record Customer : System.IComparable<Customer>
                 {
                 }
                 """);
@@ -502,6 +502,8 @@ public partial class QueryCommandRunnerTests
                     partial void Shadowed(int declarationValue);
                     partial void ReferenceNullable(string? declarationValue);
                     partial void ValueNullable(int? declarationValue);
+                    partial void QualifiedGeneric<T>(N.T declarationValue);
+                    partial void QualifiedGeneric<U>(N.U declarationValue);
                     private partial Result<int> Result();
                 }
                 """);
@@ -510,6 +512,11 @@ public partial class QueryCommandRunnerTests
                 "src/Root.Item.cs",
                 "csharp",
                 "public class Item { }");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/QualifiedGenericTypes.cs",
+                "csharp",
+                "namespace N { public class T { } public class U { } }");
             TestProjectHelper.InsertIndexedFile(
                 dbPath,
                 "src/Z.Controller.cs",
@@ -538,6 +545,8 @@ public partial class QueryCommandRunnerTests
                     partial void Shadowed(int implementationValue) { }
                     partial void ReferenceNullable(string implementationValue) { }
                     partial void ValueNullable(global::System.Nullable<int> implementationValue) { }
+                    partial void QualifiedGeneric<T>(N.T implementationValue) { }
+                    partial void QualifiedGeneric<U>(N.U implementationValue) { }
                     private partial Result<global::@System.@Int32> Result() => new();
                 }
                 """);
@@ -679,6 +688,10 @@ public partial class QueryCommandRunnerTests
             var customer = RunGroupedSymbol(dbPath, "Customer", "class");
             Assert.Equal("src/Z.Customer.cs", customer.GetProperty("path").GetString());
             Assert.Equal("non_generated_source", customer.GetProperty("representative_reason").GetString());
+            Assert.Equal(22, customer.GetProperty("start_column").GetInt32());
+            Assert.All(
+                customer.GetProperty("family_members").EnumerateArray(),
+                member => Assert.Equal(22, member.GetProperty("start_column").GetInt32()));
 
             var onReady = RunGroupedSymbol(dbPath, "OnReady", "function");
             Assert.Equal("src/Z.Controller.cs", onReady.GetProperty("path").GetString());
@@ -714,6 +727,15 @@ public partial class QueryCommandRunnerTests
                     "partial TResult Transform<TResult>(TResult implementationValue) { }",
                     "Transform",
                     "TResult"));
+            Assert.NotEqual(
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void QualifiedGeneric<T>(N.T declarationValue);",
+                    "QualifiedGeneric",
+                    "void"),
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void QualifiedGeneric<U>(N.U implementationValue) { }",
+                    "QualifiedGeneric",
+                    "void"));
             Assert.Equal(
                 LogicalPartialSymbolGrouper.BuildCallableIdentity(
                     "partial void Collect(params int[] declarationValues);",
@@ -940,6 +962,24 @@ public partial class QueryCommandRunnerTests
             var verbatim = RunGroupedSymbol(dbPath, "event", "function");
             Assert.Equal(2, verbatim.GetProperty("definition_sites").GetInt32());
 
+            var (verbatimGotoExitCode, verbatimGotoStdout, verbatimGotoStderr) = CaptureConsole(() => QueryCommandRunner.RunGoto(
+                ["event", "--db", dbPath, "--exact-name", "--lang", "csharp", "--kind", "function", "--include-generated"],
+                _jsonOptions));
+            using var verbatimGotoDocument = ParseJsonOutput(verbatimGotoStdout);
+            var verbatimGoto = verbatimGotoDocument.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, verbatimGotoExitCode);
+            Assert.Equal(string.Empty, verbatimGotoStderr);
+            Assert.Equal(18, verbatimGoto.GetProperty("range").GetProperty("start").GetProperty("character").GetInt32());
+            Assert.Equal(23, verbatimGoto.GetProperty("range").GetProperty("end").GetProperty("character").GetInt32());
+            Assert.All(
+                verbatimGoto.GetProperty("family_members").EnumerateArray(),
+                member =>
+                {
+                    Assert.Equal(18, member.GetProperty("range").GetProperty("start").GetProperty("character").GetInt32());
+                    Assert.Equal(23, member.GetProperty("range").GetProperty("end").GetProperty("character").GetInt32());
+                });
+
             var dynamicAlias = RunGroupedSymbol(dbPath, "Dynamic", "function");
             Assert.Equal(2, dynamicAlias.GetProperty("definition_sites").GetInt32());
 
@@ -954,6 +994,19 @@ public partial class QueryCommandRunnerTests
 
             var valueNullable = RunGroupedSymbol(dbPath, "ValueNullable", "function");
             Assert.Equal(2, valueNullable.GetProperty("definition_sites").GetInt32());
+
+            var (qualifiedGenericExitCode, qualifiedGenericStdout, qualifiedGenericStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["QualifiedGeneric", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "function", "--group-partials", "--include-generated", "--limit", "10"],
+                _jsonOptions));
+            using var qualifiedGenericDocument = ParseJsonOutput(qualifiedGenericStdout);
+            var qualifiedGenericFamilies = qualifiedGenericDocument.RootElement.EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, qualifiedGenericExitCode);
+            Assert.Equal(string.Empty, qualifiedGenericStderr);
+            Assert.Equal(2, qualifiedGenericFamilies.Count);
+            Assert.All(qualifiedGenericFamilies, family => Assert.Equal(2, family.GetProperty("definition_sites").GetInt32()));
+            Assert.Contains(qualifiedGenericFamilies, family => family.GetProperty("signature").GetString()!.Contains("N.T", StringComparison.Ordinal));
+            Assert.Contains(qualifiedGenericFamilies, family => family.GetProperty("signature").GetString()!.Contains("N.U", StringComparison.Ordinal));
 
             var (rootedExitCode, rootedStdout, rootedStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
                 ["Rooted", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "function", "--group-partials", "--include-generated", "--limit", "10"],

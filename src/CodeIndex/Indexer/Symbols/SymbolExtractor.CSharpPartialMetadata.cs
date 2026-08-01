@@ -213,6 +213,25 @@ public static partial class SymbolExtractor
         if (name.IsEmpty)
             return null;
 
+        if (symbol.Kind == "class")
+        {
+            // Plain records use the existing class kind. Resolve their declaration
+            // keyword before the class-kind lookup can fall through to a later
+            // same-name occurrence in a base list.
+            // plain record は既存の class kind を使うため、base list 内の同名参照へ
+            // fallback する前に record declaration keyword から宣言名を解決する。
+            var recordKeywordColumn = FindCSharpIdentifierToken(line, "record".AsSpan(), 0);
+            if (recordKeywordColumn >= 0)
+            {
+                var recordNameColumn = FindCSharpIdentifierToken(
+                    line,
+                    name,
+                    recordKeywordColumn + "record".Length);
+                if (recordNameColumn >= 0)
+                    return recordNameColumn;
+            }
+        }
+
         if (symbol.Kind is "class" or "struct" or "interface" or "record")
         {
             var keywordColumn = FindCSharpIdentifierToken(line, symbol.Kind.AsSpan(), 0);
@@ -278,7 +297,7 @@ public static partial class SymbolExtractor
             var afterIndex = index + token.Length;
             var afterIsIdentifier = afterIndex < line.Length && IsCSharpIdentifierPart(line[afterIndex]);
             if (!beforeIsIdentifier && !afterIsIdentifier)
-                return tokenStart;
+                return index;
 
             searchIndex = index + Math.Max(1, token.Length);
         }
