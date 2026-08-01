@@ -69,7 +69,9 @@ public static partial class QueryCommandRunner
     }
 
     private static string RenderStatusRepairCommand(StatusRepairCommand command)
-        => string.Join(' ', new[] { command.Name }.Concat(command.Args).Select(QuoteCommandToken));
+        => ExcerptRecoveryCommandFormatter.RenderDisplayCommand(
+            new[] { command.Name }.Concat(command.Args).ToArray(),
+            OperatingSystem.IsWindows() ? RecoveryCommandShell.PowerShell : RecoveryCommandShell.PosixSh);
 
     private static string QuoteCommandToken(string value)
     {

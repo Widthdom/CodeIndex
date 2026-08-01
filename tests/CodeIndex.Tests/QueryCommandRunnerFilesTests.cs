@@ -2670,7 +2670,7 @@ public partial class QueryCommandRunnerTests
     public void RunStatus_Check_DeduplicatesRepairCommandsForJsonAndHumanOutput_Issue4915()
     {
         var containerRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_status_repair_dedup");
-        var projectRoot = Path.Combine(containerRoot, "workspace member with spaces");
+        var projectRoot = Path.Combine(containerRoot, "workspace;printf_PWNED'$value");
         try
         {
             Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
@@ -2716,7 +2716,14 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(2, humanExitCode);
             Assert.Equal(string.Empty, humanStdout);
             Assert.Equal(4, repairLines.Length);
-            Assert.Contains($"cdidx index \"{projectRoot}\" --db \"{dbPath}\"", repairLines[0], StringComparison.Ordinal);
+            var quotedProjectRoot = OperatingSystem.IsWindows()
+                ? $"'{projectRoot.Replace("'", "''", StringComparison.Ordinal)}'"
+                : $"'{projectRoot.Replace("'", "'\\''", StringComparison.Ordinal)}'";
+            var quotedDbPath = OperatingSystem.IsWindows()
+                ? $"'{dbPath.Replace("'", "''", StringComparison.Ordinal)}'"
+                : $"'{dbPath.Replace("'", "'\\''", StringComparison.Ordinal)}'";
+            Assert.Contains($"cdidx index {quotedProjectRoot} --db {quotedDbPath}", repairLines[0], StringComparison.Ordinal);
+            Assert.DoesNotContain($"index {projectRoot}", repairLines[0], StringComparison.Ordinal);
             Assert.Contains(
                 "reasons=graph_table_available,file_issues_data_current,csharp_symbol_name_ready,csharp_metadata_target_ready",
                 repairLines[0],

@@ -315,7 +315,7 @@ with the same structured action, arguments, mutation class, and safety semantics
 are emitted once with their reasons aggregated in check priority order. Different
 targets, options, actions, or safety semantics remain separate even if their
 rendered command text looks similar. Human check output follows the same
-deduplication and preserves command-token quoting in one `[repair]` line per
+deduplication and preserves platform-aware shell quoting in one `[repair]` line per
 structured action.
 
 Supplying `status --stale-after <duration>` implies the workspace freshness check.
@@ -827,7 +827,7 @@ check mode が失敗した場合、各 `repair_commands[]` entry は `name`、`a
 action、argument、mutation class、安全性 semantics を持つ command は1件だけ返し、
 reason は check の優先順で集約します。target、option、action、安全性 semantics が
 異なる command は、表示上の command text が似ていても別々に維持します。human
-check output も同じ deduplication を使い、command token の quote を維持した
+check output も同じ deduplication を使い、platform-aware な shell quote を維持した
 `[repair]` line を構造化 action ごとに1件だけ表示します。
 
 `status --stale-after <duration>` を指定すると workspace freshness check を暗黙に有効化します。
