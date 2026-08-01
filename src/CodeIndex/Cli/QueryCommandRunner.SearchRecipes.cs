@@ -3156,19 +3156,27 @@ public static partial class QueryCommandRunner
 
         var line = lexicalContext.MaskedLines[operationLine - 1];
         var prefixLength = Math.Clamp(operationColumn - 1, 0, line.Length);
+        var normalizedLine = CSharpVerbatimNameNormalizer.Normalize(line, out var rawIndexMap);
+        var normalizedPrefixLength = Array.BinarySearch(rawIndexMap, prefixLength);
+        if (normalizedPrefixLength < 0)
+            normalizedPrefixLength = ~normalizedPrefixLength;
         var currentSite = new JsonTrustMatchSite(operationLine, operationColumn, null);
         foreach (var query in selectedJsonTrustQueries)
         {
+            var normalizedQuery = CSharpVerbatimNameNormalizer.Normalize(query);
             var searchStart = 0;
-            while (searchStart < prefixLength)
+            while (searchStart < normalizedPrefixLength)
             {
-                var occurrence = line.IndexOf(query, searchStart, StringComparison.Ordinal);
-                if (occurrence < 0 || occurrence >= prefixLength)
+                var occurrence = normalizedLine.IndexOf(normalizedQuery, searchStart, StringComparison.Ordinal);
+                if (occurrence < 0 || occurrence >= normalizedPrefixLength)
                     break;
 
-                var priorSite = new JsonTrustMatchSite(operationLine, occurrence + 1, query.Length);
-                if (occurrence + query.Length > prefixLength)
+                var normalizedEnd = occurrence + normalizedQuery.Length;
+                if (normalizedEnd > normalizedPrefixLength)
                     return true;
+                var rawStart = rawIndexMap[occurrence];
+                var rawEnd = rawIndexMap[normalizedEnd - 1] + 1;
+                var priorSite = new JsonTrustMatchSite(operationLine, rawStart + 1, rawEnd - rawStart);
                 if (!IsJsonTrustDeclarationFacetBeforeLaterMatch(
                         priorSite,
                         [priorSite, currentSite],
@@ -3177,7 +3185,7 @@ public static partial class QueryCommandRunner
                     return true;
                 }
 
-                searchStart = occurrence + Math.Max(1, query.Length);
+                searchStart = occurrence + Math.Max(1, normalizedQuery.Length);
             }
         }
 

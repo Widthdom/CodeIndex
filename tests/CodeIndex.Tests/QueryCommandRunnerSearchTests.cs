@@ -4026,7 +4026,7 @@ public partial class QueryCommandRunnerTests
                     public static object Parse(Stream stream)
                     {
                         // cdidx-audit: json-trust origin=network direction=read sensitivity=untrusted trust=untrusted rationale=first_overlapping_query_only
-                        return JsonSerializer.DeserializeAsyncEnumerable<object>(stream);
+                        return JsonSerializer.@DeserializeAsyncEnumerable<object>(stream);
                     }
                 }
                 """);
