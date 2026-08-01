@@ -557,6 +557,9 @@ public class JsonEnvelopeWrapperTests
             [
                 ["search", "--query", "--json-envelope", "--db", dbPath, "--exact-substring", "--json-envelope"],
                 ["search", "--json-envelope", "--db", dbPath, "--exact-substring", "--", "--json-envelope"],
+                ["search", "--query", "--json-envelope", "--db", dbPath, "--exact-substring", "--fields", "path", "--json-envelope"],
+                ["search", "--query", "--json-envelope", "--db", dbPath, "--exact-substring", "--json=array", "--json-envelope"],
+                ["search", "--json-envelope", "--db", dbPath, "--exact-substring", "--fields", "path", "--", "--json-envelope"],
             ];
             foreach (var args in envelopeCases)
             {
@@ -567,6 +570,8 @@ public class JsonEnvelopeWrapperTests
                 Assert.Equal(string.Empty, stderr);
                 using var document = JsonDocument.Parse(stdout);
                 Assert.Equal("--json-envelope", document.RootElement.GetProperty("metadata").GetProperty("query_normalized").GetString());
+                if (args.Contains("--fields") || args.Contains("--json=array"))
+                    Assert.True(document.RootElement.GetProperty("metadata").GetProperty("total_count_authoritative").GetBoolean());
                 Assert.NotEmpty(document.RootElement.GetProperty("results").EnumerateArray());
             }
         }

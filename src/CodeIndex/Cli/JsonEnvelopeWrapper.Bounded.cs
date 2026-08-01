@@ -1334,7 +1334,7 @@ internal static partial class JsonEnvelopeWrapper
 
     private static string[] PrepareBoundedInnerArgs(string command, string[] args, BoundedResponseControls controls)
     {
-        var stripped = StripResponseOptions(args, stripLimit: PageableResponseCommands.Contains(command));
+        var stripped = StripResponseOptions(command, args, stripLimit: PageableResponseCommands.Contains(command));
         var bodyRequested = HasExplicitBodyProjection(controls.Fields);
         if (command != "outline"
             && !bodyRequested
@@ -1342,18 +1342,20 @@ internal static partial class JsonEnvelopeWrapper
         {
             stripped.RemoveAll(arg => string.Equals(arg, "--body", StringComparison.Ordinal));
         }
+        var additions = new List<string>();
         if (PageableResponseCommands.Contains(command))
         {
-            stripped.Add("--limit");
-            stripped.Add(controls.PageLimit.ToString(CultureInfo.InvariantCulture));
+            additions.Add("--limit");
+            additions.Add(controls.PageLimit.ToString(CultureInfo.InvariantCulture));
         }
         if (controls.Compact
             && (command == "map" || LegacyLocationCompactCommands.Contains(command) && !bodyRequested))
         {
-            stripped.Add("--format");
-            stripped.Add("compact");
+            additions.Add("--format");
+            additions.Add("compact");
         }
-        stripped.Add("--json");
+        additions.Add("--json");
+        InsertBeforeEndOfOptions(command, stripped, additions);
         return [.. stripped];
     }
 
@@ -1428,18 +1430,20 @@ internal static partial class JsonEnvelopeWrapper
 
     private static string[] PrepareCountArgs(string command, string[] args)
     {
-        var stripped = StripResponseOptions(args, stripLimit: true);
+        var stripped = StripResponseOptions(command, args, stripLimit: true);
         stripped.RemoveAll(arg => string.Equals(arg, "--body", StringComparison.Ordinal)
                                   || string.Equals(arg, "--summary-only", StringComparison.Ordinal)
                                   || string.Equals(arg, "--strict-not-found", StringComparison.Ordinal));
         RemoveParsedGraphSnippetLinesOption(stripped);
+        var additions = new List<string>();
         if (command == "impact")
         {
-            stripped.Add("--limit");
-            stripped.Add(MaxPageWindow.ToString(CultureInfo.InvariantCulture));
+            additions.Add("--limit");
+            additions.Add(MaxPageWindow.ToString(CultureInfo.InvariantCulture));
         }
-        stripped.Add("--count");
-        stripped.Add("--json");
+        additions.Add("--count");
+        additions.Add("--json");
+        InsertBeforeEndOfOptions(command, stripped, additions);
         return [.. stripped];
     }
 
@@ -1474,33 +1478,55 @@ internal static partial class JsonEnvelopeWrapper
         }
     }
 
-    private static List<string> StripResponseOptions(string[] args, bool stripLimit)
+    private static List<string> StripResponseOptions(string command, string[] args, bool stripLimit)
     {
         var stripped = new List<string>(args.Length);
-        for (var i = 0; i < args.Length; i++)
+        var tokens = ClassifyArgumentTokens(command, args).ToArray();
+        for (var i = 0; i < tokens.Length; i++)
         {
-            var arg = args[i];
-            if (string.Equals(arg, EnvelopeFlag, StringComparison.Ordinal)
-                || string.Equals(arg, "--compact", StringComparison.Ordinal)
-                || string.Equals(arg, "--pretty", StringComparison.Ordinal)
-                || string.Equals(arg, "--json", StringComparison.Ordinal)
-                || arg.StartsWith("--json=", StringComparison.Ordinal)
-                || arg.StartsWith("--fields=", StringComparison.Ordinal)
-                || arg.StartsWith("--cursor=", StringComparison.Ordinal)
-                || arg.StartsWith("--max-json-bytes=", StringComparison.Ordinal)
-                || arg.StartsWith("--format=", StringComparison.Ordinal)
-                || (stripLimit && (arg.StartsWith("--limit=", StringComparison.Ordinal) || arg.StartsWith("--top=", StringComparison.Ordinal))))
+            var token = tokens[i];
+            var arg = token.Value;
+            if (token.IsOption
+                && (string.Equals(arg, EnvelopeFlag, StringComparison.Ordinal)
+                    || string.Equals(arg, "--compact", StringComparison.Ordinal)
+                    || string.Equals(arg, "--pretty", StringComparison.Ordinal)
+                    || string.Equals(arg, "--json", StringComparison.Ordinal)
+                    || arg.StartsWith("--json=", StringComparison.Ordinal)
+                    || arg.StartsWith("--fields=", StringComparison.Ordinal)
+                    || arg.StartsWith("--cursor=", StringComparison.Ordinal)
+                    || arg.StartsWith("--max-json-bytes=", StringComparison.Ordinal)
+                    || arg.StartsWith("--format=", StringComparison.Ordinal)
+                    || (stripLimit && (arg.StartsWith("--limit=", StringComparison.Ordinal) || arg.StartsWith("--top=", StringComparison.Ordinal)))))
                 continue;
-            if (IsResponseValueOption(arg, stripLimit) && i + 1 < args.Length)
+            if (token.IsOption && IsResponseValueOption(arg, stripLimit) && i + 1 < tokens.Length)
             {
                 i++;
                 continue;
             }
-            if (string.Equals(arg, "--count", StringComparison.Ordinal))
+            if (token.IsOption && string.Equals(arg, "--count", StringComparison.Ordinal))
                 continue;
             stripped.Add(arg);
         }
         return stripped;
+    }
+
+    private static void InsertBeforeEndOfOptions(
+        string command,
+        List<string> args,
+        IReadOnlyCollection<string> additions)
+    {
+        var insertionIndex = args.Count;
+        var index = 0;
+        foreach (var token in ClassifyArgumentTokens(command, [.. args]))
+        {
+            if (token.IsOption && string.Equals(token.Value, "--", StringComparison.Ordinal))
+            {
+                insertionIndex = index;
+                break;
+            }
+            index++;
+        }
+        args.InsertRange(insertionIndex, additions);
     }
 
     private static bool IsResponseValueOption(string arg, bool includeLimit)
@@ -1698,7 +1724,7 @@ internal static partial class JsonEnvelopeWrapper
         var scanMode = command == "find"
             ? IsFindCountResponseRequest(args) ? "count" : "rows"
             : null;
-        var normalized = StripResponseOptions(args, stripLimit: true);
+        var normalized = StripResponseOptions(command, args, stripLimit: true);
         normalized.RemoveAll(arg => string.Equals(arg, "--body", StringComparison.Ordinal));
         normalized.RemoveAll(arg => arg is "--allow-partial" or "--results-only" or "--verbose" or "--profile");
         RemoveOptionWithValue(normalized, "--line-scan-limit");
