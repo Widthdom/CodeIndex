@@ -1148,31 +1148,6 @@ public static class DiffCommandRunner
         return leftHasValue == rightHasValue;
     }
 
-    private static bool StringRowsEqual(SqliteConnection leftConnection, SqliteConnection rightConnection, string sql, CancellationToken cancellationToken)
-    {
-        using var leftCommand = leftConnection.CreateCommand();
-        leftCommand.CommandText = sql;
-        using var rightCommand = rightConnection.CreateCommand();
-        rightCommand.CommandText = sql;
-        using var leftReader = leftCommand.ExecuteReader();
-        using var rightReader = rightCommand.ExecuteReader();
-
-        var leftRowsRead = 0;
-        var rightRowsRead = 0;
-        var leftHasValue = TryReadString(leftReader, out var leftValue, ref leftRowsRead, "left", cancellationToken);
-        var rightHasValue = TryReadString(rightReader, out var rightValue, ref rightRowsRead, "right", cancellationToken);
-        while (leftHasValue && rightHasValue)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (!string.Equals(leftValue, rightValue, StringComparison.Ordinal))
-                return false;
-            leftHasValue = TryReadString(leftReader, out leftValue, ref leftRowsRead, "left", cancellationToken);
-            rightHasValue = TryReadString(rightReader, out rightValue, ref rightRowsRead, "right", cancellationToken);
-        }
-
-        return leftHasValue == rightHasValue;
-    }
-
     private static bool TryReadRow(SqliteDataReader reader, out DiffRow value, ref int rowsRead, string side, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
