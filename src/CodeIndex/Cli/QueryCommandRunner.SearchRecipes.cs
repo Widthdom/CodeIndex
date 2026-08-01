@@ -51,6 +51,7 @@ public static partial class QueryCommandRunner
                     options,
                     "recipe-name list",
                     "Use a larger --max-json-bytes value or remove recipe filters.",
+                    jsonOptions,
                     usageCommandName);
             }
 
@@ -71,6 +72,7 @@ public static partial class QueryCommandRunner
                 options,
                 "recipe summary",
                 "Use `cdidx recipes --names --json` for the smallest recipe-list JSON.",
+                jsonOptions,
                 usageCommandName);
         }
         if (options.SummaryOnly)
@@ -89,6 +91,7 @@ public static partial class QueryCommandRunner
                 options,
                 "recipe list",
                 "Use `cdidx recipes --names --json` or `cdidx recipes --summary-only --json` for smaller output.",
+                jsonOptions,
                 usageCommandName);
         }
 
@@ -122,30 +125,132 @@ public static partial class QueryCommandRunner
         return CommandExitCodes.Success;
     }
 
-    private static int WriteJsonObjectWithOptionalByteLimit(
+    internal static int WriteJsonObjectWithOptionalByteLimit(
         string json,
         QueryCommandOptions options,
         string outputDescription,
         string hint,
+        JsonSerializerOptions jsonOptions,
         string commandName = "search")
     {
         json = AddActiveSqliteDiagnostics(json);
         if (options.MaxJsonBytes.HasValue)
         {
-            var byteCount = Encoding.UTF8.GetByteCount(json) + Environment.NewLine.Length;
+            var byteCount = Encoding.UTF8.GetByteCount(json)
+                            + Encoding.UTF8.GetByteCount(Environment.NewLine);
             if (byteCount > options.MaxJsonBytes.Value)
             {
-                WriteUsageError(
-                    $"{outputDescription} JSON output is {byteCount.ToString(CultureInfo.InvariantCulture)} bytes and exceeds --max-json-bytes {options.MaxJsonBytes.Value.ToString(CultureInfo.InvariantCulture)}.",
-                    options,
+                var minimumRequiredBytes = ComputeRetryableMinimumJsonBytes(
+                    json,
+                    options.MaxJsonBytes.Value,
+                    jsonOptions);
+                var retryByIncreasingBudget = minimumRequiredBytes <= MaxSearchJsonByteLimit;
+                var effectiveHint = retryByIncreasingBudget
+                    ? hint
+                    : $"{hint} The response minimum exceeds the maximum effective --max-json-bytes value of {MaxSearchJsonByteLimit.ToString(CultureInfo.InvariantCulture)}; reduce the response size before retrying.";
+                return CommandErrorWriter.WriteResponseBudgetError(
+                    json: true,
+                    jsonOptions,
                     commandName,
-                    hint);
-                return CommandExitCodes.UsageError;
+                    $"{outputDescription} JSON output is {byteCount.ToString(CultureInfo.InvariantCulture)} bytes and exceeds --max-json-bytes {options.MaxJsonBytes.Value.ToString(CultureInfo.InvariantCulture)}.",
+                    effectiveHint,
+                    requestedBytes: options.RequestedMaxJsonBytes ?? options.MaxJsonBytes.Value,
+                    effectiveBytes: options.MaxJsonBytes.Value,
+                    minimumRequiredBytes: minimumRequiredBytes,
+                    recommendedBytes: retryByIncreasingBudget ? minimumRequiredBytes : null,
+                    usage: GetUsageLineOrThrow(commandName),
+                    retryByIncreasingBudget: retryByIncreasingBudget,
+                    maximumEffectiveBytes: MaxSearchJsonByteLimit);
             }
         }
 
         Console.WriteLine(json);
         return CommandExitCodes.Success;
+    }
+
+    private static long ComputeRetryableMinimumJsonBytes(
+        string json,
+        int requestedBytes,
+        JsonSerializerOptions jsonOptions)
+    {
+        var minimumRequiredBytes = (long)Encoding.UTF8.GetByteCount(json)
+                                   + Encoding.UTF8.GetByteCount(Environment.NewLine);
+        var payload = JsonNode.Parse(json);
+        if (payload is null)
+            return minimumRequiredBytes;
+
+        for (var iteration = 0; iteration < 8; iteration++)
+        {
+            RewriteEmbeddedJsonByteLimit(payload, requestedBytes, minimumRequiredBytes);
+            requestedBytes = checked((int)Math.Min(minimumRequiredBytes, int.MaxValue));
+            var candidateJson = payload.ToJsonString(EnsureJsonNodeSerializerOptions(jsonOptions));
+            var candidateBytes = (long)Encoding.UTF8.GetByteCount(candidateJson)
+                                 + Encoding.UTF8.GetByteCount(Environment.NewLine);
+            if (candidateBytes <= minimumRequiredBytes)
+                return minimumRequiredBytes;
+            minimumRequiredBytes = candidateBytes;
+        }
+
+        return minimumRequiredBytes;
+    }
+
+    private static void RewriteEmbeddedJsonByteLimit(
+        JsonNode node,
+        int previousBytes,
+        long nextBytes)
+    {
+        if (node is JsonObject obj)
+        {
+            foreach (var property in obj.ToList())
+            {
+                if (property.Key is "output_byte_limit" or "max_json_bytes"
+                    && property.Value is JsonValue)
+                {
+                    obj[property.Key] = nextBytes;
+                    continue;
+                }
+
+                if (property.Value is JsonValue value
+                    && value.TryGetValue<string>(out var text))
+                {
+                    obj[property.Key] = RewriteEmbeddedMaxJsonBytesArgument(
+                        text,
+                        previousBytes,
+                        nextBytes);
+                }
+                else if (property.Value is not null)
+                {
+                    RewriteEmbeddedJsonByteLimit(property.Value, previousBytes, nextBytes);
+                }
+            }
+            return;
+        }
+
+        if (node is not JsonArray array)
+            return;
+        for (var index = 0; index < array.Count; index++)
+        {
+            if (array[index] is JsonValue value && value.TryGetValue<string>(out var text))
+            {
+                array[index] = RewriteEmbeddedMaxJsonBytesArgument(text, previousBytes, nextBytes);
+            }
+            else if (array[index] is not null)
+            {
+                RewriteEmbeddedJsonByteLimit(array[index]!, previousBytes, nextBytes);
+            }
+        }
+    }
+
+    private static string RewriteEmbeddedMaxJsonBytesArgument(
+        string value,
+        int previousBytes,
+        long nextBytes)
+    {
+        var previousText = previousBytes.ToString(CultureInfo.InvariantCulture);
+        var nextText = nextBytes.ToString(CultureInfo.InvariantCulture);
+        return value
+            .Replace($"--max-json-bytes {previousText}", $"--max-json-bytes {nextText}", StringComparison.Ordinal)
+            .Replace($"--max-json-bytes={previousText}", $"--max-json-bytes={nextText}", StringComparison.Ordinal);
     }
 
     private static int WriteJsonPayloadWithOptionalByteLimit(
@@ -160,6 +265,7 @@ public static partial class QueryCommandRunner
             options,
             outputDescription,
             hint,
+            jsonOptions,
             commandName);
 
     private static JsonSerializerOptions EnsureJsonNodeSerializerOptions(JsonSerializerOptions jsonOptions)
@@ -721,10 +827,11 @@ public static partial class QueryCommandRunner
                 var compactJson = compactPayload.ToJsonString(GetJsonNodeSerializationOptions(jsonOptions));
                 return CompleteSearchRecipeOutput(
                     WriteJsonObjectWithOptionalByteLimit(
-                    compactJson,
-                    options,
-                    "recipe compact",
-                    $"Reduce --limit or --total-limit, select one child query with {options.InvocationContext.RecipeCursorSelectorSyntax}, stream rows with --json=ndjson, or increase --max-json-bytes."),
+                        compactJson,
+                        options,
+                        "recipe compact",
+                        $"Reduce --limit or --total-limit, select one child query with {options.InvocationContext.RecipeCursorSelectorSyntax}, stream rows with --json=ndjson, or increase --max-json-bytes.",
+                        jsonOptions),
                     compactHasFailures);
             }
 
@@ -783,7 +890,8 @@ public static partial class QueryCommandRunner
                         json,
                         options,
                         "recipe search",
-                        "Reduce --limit, use --snippet-lines 0, or increase --max-json-bytes."),
+                        "Reduce --limit, use --snippet-lines 0, or increase --max-json-bytes.",
+                        jsonOptions),
                     hasFailures);
             }
 
@@ -1577,7 +1685,8 @@ public static partial class QueryCommandRunner
                     json,
                     options,
                     "recipe aggregation",
-                    "Reduce --limit or increase --max-json-bytes.");
+                    "Reduce --limit or increase --max-json-bytes.",
+                    jsonOptions);
             }
             else
             {
@@ -1769,7 +1878,8 @@ public static partial class QueryCommandRunner
                     json,
                     options,
                     "issue-draft",
-                    "Reduce --limit, use --snippet-lines 0, or increase --max-json-bytes."),
+                    "Reduce --limit, use --snippet-lines 0, or increase --max-json-bytes.",
+                    jsonOptions),
                 hasFailures);
         });
     }
@@ -1833,7 +1943,8 @@ public static partial class QueryCommandRunner
                             summaryJson,
                             options,
                             "recipe count summary",
-                            "Use a larger --max-json-bytes value or narrow the recipe/query selection."),
+                            "Use a larger --max-json-bytes value or narrow the recipe/query selection.",
+                            jsonOptions),
                         hasFailures);
                 }
 
@@ -1851,7 +1962,8 @@ public static partial class QueryCommandRunner
                     json,
                     options,
                     "recipe count",
-                    "Use `--summary-only` to omit recipe metadata from count output.");
+                    "Use `--summary-only` to omit recipe metadata from count output.",
+                    jsonOptions);
             }
             else
             {
@@ -1985,7 +2097,8 @@ public static partial class QueryCommandRunner
                 json,
                 options,
                 "issue-draft",
-                "Reduce --limit, use --snippet-lines 0, or increase --max-json-bytes.");
+                "Reduce --limit, use --snippet-lines 0, or increase --max-json-bytes.",
+                jsonOptions);
         });
     }
 

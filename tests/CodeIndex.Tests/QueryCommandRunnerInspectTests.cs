@@ -1522,10 +1522,13 @@ public partial class QueryCommandRunnerTests
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Equal(string.Empty, stdout);
-            Assert.Contains("inspect JSON output", stderr);
-            Assert.Contains("--max-json-bytes 64", stderr);
-            Assert.Contains("--compact", stderr);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var error = document.RootElement;
+            Assert.Equal(CommandErrorCodes.ResponseBudgetTooSmall, error.GetProperty("error_code").GetString());
+            Assert.Equal("response_budget", error.GetProperty("category").GetString());
+            Assert.Equal("inspect", error.GetProperty("command").GetString());
+            Assert.Equal(64, error.GetProperty("requested_bytes").GetInt64());
         }
         finally
         {

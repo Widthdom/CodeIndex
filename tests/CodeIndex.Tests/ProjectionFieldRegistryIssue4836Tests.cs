@@ -355,12 +355,15 @@ public sealed class ProjectionFieldRegistryIssue4836Tests
                 "1.0.0-test"));
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
-        Assert.True(Encoding.UTF8.GetByteCount(stdout) <= maxJsonBytes);
-        Assert.Equal(string.Empty, stdout);
-        Assert.Contains(
-            $"--max-json-bytes {maxJsonBytes} is too small",
-            stderr,
-            StringComparison.Ordinal);
+        Assert.Equal(string.Empty, stderr);
+        using var document = JsonDocument.Parse(stdout);
+        var error = document.RootElement;
+        Assert.Equal(CommandErrorCodes.ResponseBudgetTooSmall, error.GetProperty("error_code").GetString());
+        Assert.Equal("response_budget", error.GetProperty("category").GetString());
+        Assert.Equal("status", error.GetProperty("command").GetString());
+        Assert.Equal(maxJsonBytes, error.GetProperty("requested_bytes").GetInt64());
+        Assert.Equal(maxJsonBytes, error.GetProperty("effective_bytes").GetInt64());
+        Assert.True(error.GetProperty("minimum_required_bytes_known").GetBoolean());
     }
 
     [Theory]

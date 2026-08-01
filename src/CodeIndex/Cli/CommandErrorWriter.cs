@@ -7,6 +7,10 @@ namespace CodeIndex.Cli;
 internal static class CommandErrorWriter
 {
     internal const string DefaultHint = "Run '<cmd> --help' for usage information.";
+    internal const string ResponseBudgetCategory = "response_budget";
+    internal const string MinimumResponseBytesUnavailableBeforeMaterialization = "normal_payload_not_materialized";
+    internal const string MinimumResponseBytesUncertainRuntimeEnvelope = "runtime_metadata_or_embedded_budget_varies_between_invocations";
+    internal const string MinimumResponseBytesUncertainCapturedValidation = "captured_validation_output_may_vary_between_invocations";
     private const int SanitizedExceptionTypeNameLimit = 120;
 
     internal static void WriteStdout(string message = "")
@@ -113,6 +117,82 @@ internal static class CommandErrorWriter
         }
 
         return payload;
+    }
+
+    internal static int WriteResponseBudgetError(
+        bool json,
+        JsonSerializerOptions jsonOptions,
+        string command,
+        string message,
+        string hint,
+        long? requestedBytes,
+        long? effectiveBytes,
+        long? minimumRequiredBytes,
+        string? minimumRequiredBytesUnavailableReason = null,
+        string? minimumRequiredBytesUncertaintyReason = null,
+        long? recommendedBytes = null,
+        string? usage = null,
+        int exitCode = CommandExitCodes.UsageError,
+        bool retryByIncreasingBudget = true,
+        long? maximumEffectiveBytes = null,
+        JsonObject? additionalJsonProperties = null)
+    {
+        var minimumKnown = minimumRequiredBytes.HasValue;
+        if (!minimumKnown && string.IsNullOrWhiteSpace(minimumRequiredBytesUnavailableReason))
+            throw new ArgumentException(
+                "An unavailable minimum response size requires a stable reason.",
+                nameof(minimumRequiredBytesUnavailableReason));
+
+        long? retryBytes = retryByIncreasingBudget
+            ? recommendedBytes ?? minimumRequiredBytes ?? 1
+            : null;
+        var minimumUncertain = !string.IsNullOrWhiteSpace(minimumRequiredBytesUncertaintyReason);
+        var responseBudgetProperties = new JsonObject
+        {
+            ["requested_bytes"] = requestedBytes,
+            ["effective_bytes"] = effectiveBytes,
+            ["minimum_required_bytes"] = minimumRequiredBytes,
+            ["minimum_required_bytes_known"] = minimumKnown,
+            ["minimum_required_bytes_unavailable_reason"] = minimumKnown
+                ? null
+                : minimumRequiredBytesUnavailableReason,
+            ["minimum_required_bytes_uncertain"] = minimumUncertain,
+            ["minimum_required_bytes_uncertainty_reason"] = minimumUncertain
+                ? minimumRequiredBytesUncertaintyReason
+                : null,
+            ["retry"] = new JsonObject
+            {
+                ["action"] = retryByIncreasingBudget
+                    ? "increase_max_json_bytes"
+                    : "reduce_response_size",
+                ["option"] = retryByIncreasingBudget ? "--max-json-bytes" : null,
+                ["recommended_bytes"] = retryBytes,
+                ["maximum_effective_bytes"] = retryByIncreasingBudget
+                    ? null
+                    : maximumEffectiveBytes,
+                ["command"] = command,
+            },
+        };
+        if (additionalJsonProperties != null)
+        {
+            foreach (var property in additionalJsonProperties)
+            {
+                if (!responseBudgetProperties.ContainsKey(property.Key))
+                    responseBudgetProperties[property.Key] = property.Value?.DeepClone();
+            }
+        }
+
+        return WriteJsonOrHuman(
+            json,
+            jsonOptions,
+            message,
+            exitCode,
+            hint,
+            usage,
+            errorCode: CommandErrorCodes.ResponseBudgetTooSmall,
+            category: ResponseBudgetCategory,
+            command: command,
+            additionalJsonProperties: responseBudgetProperties);
     }
 
     internal static (string ErrorCode, string Category) ResolveMachineContract(
