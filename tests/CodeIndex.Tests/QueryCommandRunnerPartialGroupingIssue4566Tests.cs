@@ -424,7 +424,7 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void PartialCanonicalRepresentative_UsesSemanticRulesAndExposesFamilyNavigation_Issue4914()
     {
-        Assert.Equal(12, DbContext.HotspotFamilyVersion);
+        Assert.Equal(13, DbContext.HotspotFamilyVersion);
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_canonical_issue4914");
         try
         {
@@ -2134,6 +2134,71 @@ public partial class QueryCommandRunnerTests
                 legacyWidget.GetProperty("family_members").EnumerateArray(),
                 member => member.GetProperty("path").GetString() == "src/A.LegacyWidget.Designer.cs"
                     && member.GetProperty("generated").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PartialCanonicalRepresentative_DistinguishesNestedTypeNamesAndArities_Issue4914()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_nested_identity_issue4914");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            foreach (var path in new[] { "src/A.Host.cs", "src/B.Host.cs" })
+            {
+                TestProjectHelper.InsertIndexedFile(
+                    dbPath,
+                    path,
+                    "csharp",
+                    """
+                    namespace Demo;
+                    public partial class Host
+                    {
+                        public partial class Child { }
+                        public partial class Sibling { }
+                        public partial class Nested<T> { }
+                        public partial class Nested<T, U> { }
+                    }
+                    """);
+            }
+            MarkGraphAndFoldReady(dbPath);
+
+            var child = RunGroupedSymbol(dbPath, "Child", "class");
+            var sibling = RunGroupedSymbol(dbPath, "Sibling", "class");
+            Assert.Equal(2, child.GetProperty("definition_sites").GetInt32());
+            Assert.Equal(2, sibling.GetProperty("definition_sites").GetInt32());
+            Assert.NotEqual(
+                child.GetProperty("partial_family_id").GetString(),
+                sibling.GetProperty("partial_family_id").GetString());
+
+            var (symbolsExitCode, symbolsStdout, symbolsStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["Nested", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "class", "--group-partials", "--include-generated", "--limit", "10"],
+                _jsonOptions));
+            using var symbolsDocument = ParseJsonOutput(symbolsStdout);
+            var nestedFamilies = symbolsDocument.RootElement.EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, symbolsExitCode);
+            Assert.Equal(string.Empty, symbolsStderr);
+            Assert.Equal(2, nestedFamilies.Count);
+            Assert.All(nestedFamilies, family => Assert.Equal(2, family.GetProperty("definition_sites").GetInt32()));
+            Assert.Equal(
+                2,
+                nestedFamilies
+                    .Select(family => family.GetProperty("partial_family_id").GetString())
+                    .Distinct(StringComparer.Ordinal)
+                    .Count());
+
+            var (gotoExitCode, gotoStdout, gotoStderr) = CaptureConsole(() => QueryCommandRunner.RunGoto(
+                ["Nested", "--db", dbPath, "--exact-name", "--lang", "csharp", "--kind", "class"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, gotoExitCode);
+            Assert.Equal(string.Empty, gotoStdout);
+            Assert.Contains("goto found 2 matching definitions", gotoStderr, StringComparison.Ordinal);
         }
         finally
         {

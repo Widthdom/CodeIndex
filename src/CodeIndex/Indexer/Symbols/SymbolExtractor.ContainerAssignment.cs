@@ -171,7 +171,12 @@ public static partial class SymbolExtractor
                 }
             }
 
-            symbol.FamilyKey ??= BuildSelfFamilyKey(symbol, containerPath);
+            // Type declarations own their family identity. A nested partial type must
+            // not retain the inherited key of its nearest partial container, because
+            // sibling names and generic arities would then collapse into that parent.
+            // type declaration は自身の family identity を持つ。nested partial type が
+            // 親 partial container の key を保持すると sibling / arity を誤集約する。
+            symbol.FamilyKey = BuildSelfFamilyKey(symbol, containerPath) ?? symbol.FamilyKey;
             if (symbol.FamilyKey == null
                 && symbol.Kind is "function" or "test.method"
                 && ContainsFileLocalType(containerPath))

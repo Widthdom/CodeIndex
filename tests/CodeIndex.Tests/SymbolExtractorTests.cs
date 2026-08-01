@@ -10186,7 +10186,7 @@ public partial class SymbolExtractorTests
 
         var child = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Child"));
         Assert.Equal("ReviewFixtures.Host.Wrapped", child.ContainerQualifiedName);
-        Assert.Equal("ReviewFixtures.Host.Wrapped`1", child.FamilyKey);
+        Assert.Equal("ReviewFixtures.Host.Wrapped`1.Child", child.FamilyKey);
     }
 
     [Fact]
