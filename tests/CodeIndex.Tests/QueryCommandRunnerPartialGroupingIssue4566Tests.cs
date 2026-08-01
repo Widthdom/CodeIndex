@@ -424,7 +424,7 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void PartialCanonicalRepresentative_UsesSemanticRulesAndExposesFamilyNavigation_Issue4914()
     {
-        Assert.Equal(10, DbContext.HotspotFamilyVersion);
+        Assert.Equal(11, DbContext.HotspotFamilyVersion);
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_canonical_issue4914");
         try
         {
@@ -1443,6 +1443,68 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void PartialCanonicalRepresentative_GroupsTestClassifiedImplementation_Issue4914()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_test_method_issue4914");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.AttributedPartial.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class AttributedPartial
+                {
+                    public partial void Execute();
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Z.AttributedPartial.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class AttributedPartial
+                {
+                    [Fact]
+                    public partial void Execute() { }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (symbolsExitCode, symbolsStdout, symbolsStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["Execute", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--group-partials", "--limit", "10"],
+                _jsonOptions));
+            using var symbolsDocument = ParseJsonOutput(symbolsStdout);
+            var grouped = Assert.Single(symbolsDocument.RootElement.EnumerateArray().ToList());
+
+            Assert.Equal(CommandExitCodes.Success, symbolsExitCode);
+            Assert.Equal(string.Empty, symbolsStderr);
+            Assert.Equal("test.method", grouped.GetProperty("kind").GetString());
+            Assert.Equal("src/Z.AttributedPartial.cs", grouped.GetProperty("path").GetString());
+            Assert.Equal(2, grouped.GetProperty("definition_sites").GetInt32());
+            Assert.Equal("implementation_body", grouped.GetProperty("representative_reason").GetString());
+
+            var (gotoExitCode, gotoStdout, gotoStderr) = CaptureConsole(() => QueryCommandRunner.RunGoto(
+                ["Execute", "--db", dbPath, "--exact-name", "--lang", "csharp"],
+                _jsonOptions));
+            using var gotoDocument = ParseJsonOutput(gotoStdout);
+            var location = gotoDocument.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, gotoExitCode);
+            Assert.Equal(string.Empty, gotoStderr);
+            Assert.Contains("Z.AttributedPartial.cs", location.GetProperty("uri").GetString(), StringComparison.Ordinal);
+            Assert.Equal(2, location.GetProperty("family_members").GetArrayLength());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void PartialCanonicalRepresentative_GroupsSplitModifierAndRanksLeadingEvidence_Issue4914()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_leading_evidence_issue4914");
@@ -1489,6 +1551,7 @@ public partial class QueryCommandRunnerTests
                 namespace Demo;
                 /**
                  * <summary>Primary declaration.</summary>
+
                  */
                 public partial class Documented { }
                 """);

@@ -91,11 +91,11 @@ internal static class LogicalPartialSymbolGrouper
             THEN 'family:' || {languageSql} || CHAR(31) || {kindSql} || CHAR(31) ||
                  {selfFamilySql}
             WHEN {languageSql} = 'csharp'
-             AND {kindSql} = 'function'
+             AND {kindSql} IN ('function', 'test.method')
              AND {partialDeclarationSql}
              AND {callableContainerSql} IS NOT NULL
              AND {callableIdentitySql} IS NOT NULL
-            THEN 'family:' || {languageSql} || CHAR(31) || {kindSql} || CHAR(31) ||
+            THEN 'family:' || {languageSql} || CHAR(31) || 'function' || CHAR(31) ||
                  {callableContainerSql} || CHAR(31) || {callableIdentitySql}
             ELSE 'symbol:' || {symbolIdSql}
         END";
@@ -105,7 +105,7 @@ internal static class LogicalPartialSymbolGrouper
         string kindSql,
         string bodyStartLineSql,
         string bodyEndLineSql)
-        => $"CASE WHEN {kindSql} = 'function' AND ({bodyStartLineSql} IS NULL OR {bodyEndLineSql} IS NULL) THEN 1 ELSE 0 END";
+        => $"CASE WHEN {kindSql} IN ('function', 'test.method') AND ({bodyStartLineSql} IS NULL OR {bodyEndLineSql} IS NULL) THEN 1 ELSE 0 END";
 
     internal static string BuildSqlSemanticScoreExpression(
         string signatureSql,
@@ -225,7 +225,7 @@ internal static class LogicalPartialSymbolGrouper
         }
 
         var containerIdentity = symbol.ContainerQualifiedName ?? symbol.ContainerName ?? string.Empty;
-        if (symbol.Kind == "function")
+        if (IsLogicalPartialCallableKind(symbol.Kind))
         {
             var callableIdentity = BuildCallableIdentity(symbol.Signature, symbol.Name, symbol.ReturnType);
             if (callableIdentity == null || string.IsNullOrWhiteSpace(containerIdentity))
@@ -237,7 +237,7 @@ internal static class LogicalPartialSymbolGrouper
             key = string.Join(
                 KeySeparator,
                 symbol.Lang?.ToLowerInvariant() ?? string.Empty,
-                symbol.Kind,
+                "function",
                 containerIdentity,
                 callableIdentity);
             return true;
@@ -1160,7 +1160,7 @@ internal static class LogicalPartialSymbolGrouper
     }
 
     private static int GetPrimaryRank(SymbolResult symbol)
-        => symbol.Kind == "function" && (!symbol.BodyStartLine.HasValue || !symbol.BodyEndLine.HasValue)
+        => IsLogicalPartialCallableKind(symbol.Kind) && (!symbol.BodyStartLine.HasValue || !symbol.BodyEndLine.HasValue)
             ? 1
             : 0;
 
@@ -1172,7 +1172,7 @@ internal static class LogicalPartialSymbolGrouper
         => GetSemanticScore(symbol.Signature, symbol.Kind);
 
     private static string GetCanonicalDeclarationIdentity(SymbolResult symbol)
-        => symbol.Kind == "function"
+        => IsLogicalPartialCallableKind(symbol.Kind)
             ? BuildCallableIdentity(symbol.Signature, symbol.Name, symbol.ReturnType) ?? string.Empty
             : BuildCanonicalDeclarationIdentity(symbol.Signature);
 
@@ -1521,4 +1521,7 @@ internal static class LogicalPartialSymbolGrouper
 
     private static bool IsLogicalPartialTypeKind(string kind)
         => kind is "class" or "struct" or "interface" or "record";
+
+    private static bool IsLogicalPartialCallableKind(string? kind)
+        => kind is "function" or "test.method";
 }

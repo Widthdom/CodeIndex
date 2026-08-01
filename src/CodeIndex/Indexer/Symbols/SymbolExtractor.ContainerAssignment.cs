@@ -173,7 +173,7 @@ public static partial class SymbolExtractor
 
             symbol.FamilyKey ??= BuildSelfFamilyKey(symbol, containerPath);
             if (symbol.FamilyKey == null
-                && symbol.Kind == "function"
+                && symbol.Kind is "function" or "test.method"
                 && ContainsFileLocalType(containerPath))
             {
                 symbol.FamilyKey = BuildFileLocalContainerFamilyKey(containerPath);

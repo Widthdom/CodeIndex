@@ -22,7 +22,7 @@ public static partial class SymbolExtractor
         var lineStartStates = getCSharpLineStartStates?.Invoke();
         foreach (var symbol in symbols)
         {
-            if (symbol.Kind is not ("function" or "class" or "struct" or "interface" or "record"))
+            if (symbol.Kind is not ("function" or "test.method" or "class" or "struct" or "interface" or "record"))
                 continue;
 
             var signature = symbol.Signature ?? string.Empty;
@@ -247,20 +247,23 @@ public static partial class SymbolExtractor
         for (; lineIndex >= minimumLineIndex; lineIndex--)
         {
             var raw = lines[lineIndex].AsSpan().Trim();
-            if (raw.IsEmpty)
-            {
-                // Whitespace is valid declaration trivia between standalone modifiers
-                // and the declaration. It does, however, detach XML documentation from
-                // the declaration for representative ranking.
-                // standalone modifier と宣言の間の空行は有効な declaration trivia だが、
-                // XML documentation の representative rank 上の隣接性はここで切れる。
-                documentationEvidenceAdjacent = false;
-                continue;
-            }
-
             var lineStartState = lineStartStates != null && lineIndex < lineStartStates.Count
                 ? lineStartStates[lineIndex]
                 : new CSharpLexState();
+            if (raw.IsEmpty)
+            {
+                // Whitespace is valid declaration trivia between standalone modifiers
+                // and the declaration. Outside an active delimited comment it detaches
+                // XML documentation from the declaration for representative ranking;
+                // inside `/** ... */` it remains part of the same documentation comment.
+                // standalone modifier と宣言の間の空行は有効な declaration trivia だが、
+                // active な `/** ... */` の外側なら XML documentation の representative
+                // rank 上の隣接性を切り、内側なら同じ documentation comment として維持する。
+                if (lineStartState.Mode != CSharpLexMode.BlockComment)
+                    documentationEvidenceAdjacent = false;
+                continue;
+            }
+
             var startsInDeclarationCode = lineStartState.Mode == CSharpLexMode.Code
                 && lineStartState.InterpolationBraceDepth == 0;
             if (startsInDeclarationCode && raw.StartsWith("///", StringComparison.Ordinal))
