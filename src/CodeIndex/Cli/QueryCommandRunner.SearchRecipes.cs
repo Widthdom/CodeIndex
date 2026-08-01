@@ -2937,8 +2937,34 @@ public static partial class QueryCommandRunner
             }
 
             var receiver = tokens[receiverMemberIndex];
-            if (!tokens.Take(expressionStart).Any(token => string.Equals(token, receiver, StringComparison.Ordinal)))
+            if (!IsJsonTrustReceiverDeclaredBeforeExpression(tokens, expressionStart, receiver))
                 return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsJsonTrustReceiverDeclaredBeforeExpression(
+        IReadOnlyList<string> tokens,
+        int expressionStart,
+        string receiver)
+    {
+        for (var index = 1; index < expressionStart; index++)
+        {
+            if (!string.Equals(tokens[index], receiver, StringComparison.Ordinal))
+                continue;
+            if (index + 1 >= expressionStart
+                || tokens[index + 1] is not ("," or ")" or "="))
+            {
+                continue;
+            }
+
+            var precedingToken = tokens[index - 1];
+            if (IsJsonTrustIdentifierToken(precedingToken)
+                || precedingToken is ">" or "]" or "?" or "*")
+            {
+                return true;
+            }
         }
 
         return false;

@@ -3484,6 +3484,29 @@ public partial class QueryCommandRunnerTests
                 """);
             TestProjectHelper.InsertIndexedFile(
                 dbPath,
+                "src/repeated-assignment-property-receiver-writer.cs",
+                "csharp",
+                """
+                using System.Text.Json;
+
+                public sealed class RepeatedAssignmentBuilder
+                {
+                    public RepeatedAssignmentBuilder Build(string json) => this;
+                }
+
+                public static class RepeatedAssignmentPropertyReceiverWriter
+                {
+                    private static RepeatedAssignmentBuilder Factory { get; set; } = new();
+
+                    public static void Create(object payload)
+                    {
+                        // cdidx-audit: json-trust origin=private_local direction=write sensitivity=diagnostic trust=controlled rationale=repeated_assignment_property_getter_executes_first
+                        Factory = Factory.Build(JsonSerializer.Serialize(payload));
+                    }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
                 "src/explicit-utf8-writer.cs",
                 "csharp",
                 """
@@ -3560,12 +3583,13 @@ public partial class QueryCommandRunnerTests
                 """
                 using System.IO;
                 using System.Text.Json;
-                using System.Threading.Tasks;
+
+                public sealed record GenericWriterHolder<T>(T Value);
 
                 public static class GenericReturnUtf8Writer
                 {
                     // cdidx-audit: json-trust origin=private_local direction=write sensitivity=diagnostic trust=controlled rationale=generic_return_private_writer
-                    public static Task<Utf8JsonWriter> Create(Stream stream) => Task.FromResult(new Utf8JsonWriter(stream));
+                    public static GenericWriterHolder<Utf8JsonWriter> Create(Stream stream) => new(new Utf8JsonWriter(stream));
                 }
                 """);
             TestProjectHelper.InsertIndexedFile(
@@ -3590,14 +3614,15 @@ public partial class QueryCommandRunnerTests
                 """
                 using System.IO;
                 using System.Text.Json;
-                using System.Threading.Tasks;
+
+                public sealed record SplitGenericWriterHolder<T>(T Value);
 
                 public static class SplitGenericReturnUtf8Writer
                 {
                     // cdidx-audit: json-trust origin=private_local direction=write sensitivity=diagnostic trust=controlled rationale=split_generic_return_private_writer
-                    public static Task<
+                    public static SplitGenericWriterHolder<
                         Utf8JsonWriter> Create(Stream stream) =>
-                        Task.FromResult(new Utf8JsonWriter(stream));
+                        new(new Utf8JsonWriter(stream));
                 }
                 """);
             TestProjectHelper.InsertIndexedFile(
@@ -3683,7 +3708,7 @@ public partial class QueryCommandRunnerTests
                 ["--recipe", "json-parse-apis/json-document-parse", "--db", dbPath, "--json", "--limit", "10", "--snippet-lines", "1"],
                 _jsonOptions));
             var (nestedExitCode, nestedStdout, nestedStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                ["--recipe", "json-parse-apis/json-serializer-serialize", "--db", dbPath, "--path", "src/nested-serializer-writer.cs", "--path", "src/cast-serializer-writer.cs", "--path", "src/multiline-serializer-writer.cs", "--path", "src/property-invocation-receiver-writer.cs", "--path", "src/direct-invocation-receiver-writer.cs", "--path", "src/bare-property-invocation-receiver-writer.cs", "--path", "src/conditional-compilation-writer.cs", "--path", "src/parenthesized-conditional-compilation-writer.cs", "--json", "--limit", "10", "--snippet-lines", "1"],
+                ["--recipe", "json-parse-apis/json-serializer-serialize", "--db", dbPath, "--path", "src/nested-serializer-writer.cs", "--path", "src/cast-serializer-writer.cs", "--path", "src/multiline-serializer-writer.cs", "--path", "src/property-invocation-receiver-writer.cs", "--path", "src/direct-invocation-receiver-writer.cs", "--path", "src/bare-property-invocation-receiver-writer.cs", "--path", "src/conditional-compilation-writer.cs", "--path", "src/parenthesized-conditional-compilation-writer.cs", "--path", "src/repeated-assignment-property-receiver-writer.cs", "--json", "--limit", "10", "--snippet-lines", "1"],
                 _jsonOptions));
             var (utf8ExitCode, utf8Stdout, utf8Stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 ["--recipe", "json-parse-apis/utf8-json-writer", "--db", dbPath, "--path", "src/explicit-utf8-writer.cs", "--path", "src/multiline-explicit-utf8-writer.cs", "--path", "src/long-multiline-utf8-writer.cs", "--path", "src/expression-bodied-utf8-writer.cs", "--path", "src/generic-return-utf8-writer.cs", "--path", "src/outer-generic-return-utf8-writer.cs", "--path", "src/split-generic-return-utf8-writer.cs", "--path", "src/qualified-utf8-writer.cs", "--json", "--limit", "10", "--snippet-lines", "1"],
@@ -3964,7 +3989,7 @@ public partial class QueryCommandRunnerTests
                 var query = Assert.Single(document.RootElement.GetProperty("queries").EnumerateArray());
                 AssertJsonTrustClassifierCounts(
                     query,
-                    ("ambiguous_trust", 5),
+                    ("ambiguous_trust", 6),
                     ("controlled_private_writer", 3));
                 var results = query.GetProperty("results").EnumerateArray().ToArray();
                 AssertJsonTrustClassification(
@@ -4008,6 +4033,11 @@ public partial class QueryCommandRunnerTests
                     Assert.Single(results, result => result.GetProperty("path").GetString() == "src/parenthesized-conditional-compilation-writer.cs"),
                     "ambiguous_trust",
                     "rationale:conditional_compilation_annotation",
+                    "annotation_status:not_adjacent");
+                AssertJsonTrustClassification(
+                    Assert.Single(results, result => result.GetProperty("path").GetString() == "src/repeated-assignment-property-receiver-writer.cs"),
+                    "ambiguous_trust",
+                    "rationale:annotation_not_bound_to_operation",
                     "annotation_status:not_adjacent");
             }
 
