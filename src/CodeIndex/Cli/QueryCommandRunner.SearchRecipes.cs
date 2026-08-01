@@ -2283,13 +2283,31 @@ public static partial class QueryCommandRunner
         if (matchLines.Count == 0)
             matchLines.Add(row.Compact.FocusLine.GetValueOrDefault(row.Result.StartLine));
 
+        var matchSites = row.Compact.MatchFacets
+            .Where(facet => facet.Line > 0 && facet.Column > 0)
+            .Select(facet => new JsonTrustMatchSite(facet.Line, facet.Column))
+            .Distinct()
+            .OrderBy(site => site.Line)
+            .ThenBy(site => site.Column)
+            .ToList();
+        foreach (var line in matchLines.Where(line => matchSites.All(site => site.Line != line)))
+            matchSites.Add(new JsonTrustMatchSite(line, null));
+        matchSites = matchSites
+            .OrderBy(site => site.Line)
+            .ThenBy(site => site.Column)
+            .ToList();
+
         var lexicalContext = GetJsonTrustLexicalContext(
             reader,
             row,
-            matchLines.Max(),
+            matchSites.Max(site => site.Line),
             lexicalContextCache);
-        var matchEvidence = matchLines
-            .Select(line => GetJsonTrustBoundaryEvidence(expectedDirection, line, lexicalContext))
+        var matchEvidence = matchSites
+            .Select(site => GetJsonTrustBoundaryEvidence(
+                expectedDirection,
+                site.Line,
+                site.Column,
+                lexicalContext))
             .ToList();
         var evidence = matchEvidence[0];
         var mixedBoundaries = matchEvidence
@@ -2333,6 +2351,8 @@ public static partial class QueryCommandRunner
         if (mixedBoundaries)
         {
             details.Add($"match_line_count:{matchLines.Count.ToString(CultureInfo.InvariantCulture)}");
+            if (matchSites.Count != matchLines.Count)
+                details.Add($"match_site_count:{matchSites.Count.ToString(CultureInfo.InvariantCulture)}");
             details.Add($"boundary_categories:{string.Join(',', matchCategories)}");
         }
 
@@ -2378,6 +2398,7 @@ public static partial class QueryCommandRunner
     private static JsonTrustBoundaryEvidence GetJsonTrustBoundaryEvidence(
         SearchRecipeJsonTrustDirection expectedDirection,
         int focusLine,
+        int? focusColumn,
         JsonTrustLexicalContext? lexicalContext)
     {
         const string marker = "// cdidx-audit: json-trust ";
@@ -2417,7 +2438,11 @@ public static partial class QueryCommandRunner
                 nearestLine);
         }
 
-        if (HasInterveningJsonTrustExecutableLine(lexicalContext, nearestLine, focusLine))
+        if (HasInterveningJsonTrustExecutableLine(
+            lexicalContext,
+            nearestLine,
+            focusLine,
+            focusColumn))
         {
             return new JsonTrustBoundaryEvidence(
                 "unknown",
@@ -2452,7 +2477,8 @@ public static partial class QueryCommandRunner
     private static bool HasInterveningJsonTrustExecutableLine(
         JsonTrustLexicalContext lexicalContext,
         int annotationLine,
-        int operationLine)
+        int operationLine,
+        int? operationColumn)
     {
         for (var line = annotationLine + 1; line < operationLine; line++)
         {
@@ -2461,6 +2487,16 @@ public static partial class QueryCommandRunner
                 continue;
 
             return true;
+        }
+
+        if (operationColumn.HasValue
+            && operationLine > 0
+            && operationLine <= lexicalContext.MaskedLines.Length)
+        {
+            var operationText = lexicalContext.MaskedLines[operationLine - 1];
+            var prefixLength = Math.Clamp(operationColumn.Value - 1, 0, operationText.Length);
+            if (operationText.AsSpan(0, prefixLength).Contains(';'))
+                return true;
         }
 
         return false;
@@ -2749,6 +2785,8 @@ public static partial class QueryCommandRunner
         string? Receiver,
         int? Line,
         string Reason);
+
+    private readonly record struct JsonTrustMatchSite(int Line, int? Column);
 
     private sealed record JsonTrustBoundaryEvidence(
         string Origin,

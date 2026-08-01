@@ -3043,6 +3043,22 @@ public partial class QueryCommandRunnerTests
                 """);
             TestProjectHelper.InsertIndexedFile(
                 dbPath,
+                "src/same-line-intervening-writer.cs",
+                "csharp",
+                """
+                using System.Text.Encodings.Web;
+
+                public static class SameLineInterveningWriter
+                {
+                    public static JavaScriptEncoder Create()
+                    {
+                        // cdidx-audit: json-trust origin=private_local direction=write sensitivity=diagnostic trust=controlled rationale=next_operation_only
+                        Console.WriteLine("intervening"); return JavaScriptEncoder.UnsafeRelaxedJsonEscaping;
+                    }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
                 "src/private-looking-writer.cs",
                 "csharp",
                 """
@@ -3153,7 +3169,7 @@ public partial class QueryCommandRunnerTests
             }
 
             var (writerExitCode, writerStdout, writerStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                ["--recipe", "dogfood-risk-patterns/relaxed-json-encoder", "--db", dbPath, "--json", "--limit", "10", "--snippet-lines", "1"],
+                ["--recipe", "dogfood-risk-patterns/relaxed-json-encoder", "--db", dbPath, "--json", "--limit", "20", "--snippet-lines", "1"],
                 _jsonOptions));
             var (parserExitCode, parserStdout, parserStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 ["--recipe", "json-parse-apis/json-document-parse", "--db", dbPath, "--json", "--limit", "10", "--snippet-lines", "1"],
@@ -3208,7 +3224,7 @@ public partial class QueryCommandRunnerTests
             using (var document = ParseJsonOutput(writerStdout))
             {
                 var query = Assert.Single(document.RootElement.GetProperty("queries").EnumerateArray());
-                Assert.Equal(10, query.GetProperty("count").GetInt32());
+                Assert.Equal(11, query.GetProperty("count").GetInt32());
                 var trustClassifier = Assert.Single(
                     query.GetProperty("classifiers").EnumerateArray(),
                     classifier => classifier.GetProperty("name").GetString() == "json_trust_boundary");
@@ -3222,7 +3238,7 @@ public partial class QueryCommandRunnerTests
                     query,
                     ("controlled_private_writer", 1),
                     ("external_or_public_writer", 1),
-                    ("ambiguous_trust", 8));
+                    ("ambiguous_trust", 9));
 
                 var results = query.GetProperty("results").EnumerateArray().ToArray();
                 AssertJsonTrustClassification(
@@ -3250,6 +3266,11 @@ public partial class QueryCommandRunnerTests
                     "ambiguous_trust",
                     "annotation_status:mixed_boundaries",
                     "boundary_categories:ambiguous_trust,controlled_private_writer");
+                AssertJsonTrustClassification(
+                    Assert.Single(results, result => result.GetProperty("path").GetString() == "src/same-line-intervening-writer.cs"),
+                    "ambiguous_trust",
+                    "rationale:annotation_not_bound_to_operation",
+                    "annotation_status:not_adjacent");
                 AssertJsonTrustClassification(
                     Assert.Single(results, result => result.GetProperty("path").GetString() == "src/private-looking-writer.cs"),
                     "ambiguous_trust",
