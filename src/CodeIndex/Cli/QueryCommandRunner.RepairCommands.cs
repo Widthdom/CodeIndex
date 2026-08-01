@@ -65,8 +65,19 @@ public static partial class QueryCommandRunner
         if (!fullPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
             fullPath = Path.GetFullPath(fullPath);
 
-        return fullPath.IndexOfAny([' ', '\t', '"']) >= 0
-            ? $"\"{fullPath.Replace("\"", "\\\"", StringComparison.Ordinal)}\""
-            : fullPath;
+        return QuoteCommandToken(fullPath);
+    }
+
+    private static string RenderStatusRepairCommand(StatusRepairCommand command)
+        => string.Join(' ', new[] { command.Name }.Concat(command.Args).Select(QuoteCommandToken));
+
+    private static string QuoteCommandToken(string value)
+    {
+        if (value.Length >= 2 && value[0] == '<' && value[^1] == '>')
+            return value;
+
+        return value.IndexOfAny([' ', '\t', '"']) >= 0
+            ? $"\"{value.Replace("\"", "\\\"", StringComparison.Ordinal)}\""
+            : value;
     }
 }

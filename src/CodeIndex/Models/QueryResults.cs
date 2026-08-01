@@ -2027,8 +2027,14 @@ internal sealed partial class StatusMetadataJsonContext : JsonSerializerContext
 public sealed class StatusRepairCommand
 {
     public string Name { get; set; } = string.Empty;
+    public string Action { get; set; } = string.Empty;
     public List<string> Args { get; set; } = [];
     public string Reason { get; set; } = string.Empty;
+    public List<string> Reasons { get; set; } = [];
+    [JsonPropertyName("mutation_class")]
+    public string MutationClass { get; set; } = string.Empty;
+    [JsonPropertyName("safety_class")]
+    public string SafetyClass { get; set; } = string.Empty;
     [JsonPropertyName("safety_notes")]
     public List<string> SafetyNotes { get; set; } = [];
 }

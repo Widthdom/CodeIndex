@@ -1358,13 +1358,13 @@ public partial class QueryCommandRunnerTests
             SqliteConnection.ClearAllPools();
 
             var (exitCode, stdout, stderr) = RunBuiltCli(
-                ["status", "--db", "file:codeindex.db?immutable=1", "--json"],
+                ["status", "--db", "file:codeindex.db?immutable=1", "--check=fold", "--json"],
                 dbDirectory);
 
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(2, exitCode);
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("stale_fold_key_version", json.GetProperty("fold_ready_reason").GetString());
             Assert.Contains(dbPath, json.GetProperty("recommended_action").GetString());
@@ -1373,6 +1373,20 @@ public partial class QueryCommandRunnerTests
             Assert.DoesNotContain("<writable-db-path>", json.GetProperty("alternative_action").GetString());
             Assert.DoesNotContain("file:", json.GetProperty("recommended_action").GetString());
             Assert.DoesNotContain("file:", json.GetProperty("alternative_action").GetString());
+            var repairCommand = Assert.Single(json.GetProperty("repair_commands").EnumerateArray());
+            Assert.Equal("backfill_fold", repairCommand.GetProperty("action").GetString());
+            Assert.Equal("fold_ready", repairCommand.GetProperty("reason").GetString());
+            Assert.Equal(
+                ["fold_ready"],
+                repairCommand.GetProperty("reasons").EnumerateArray().Select(value => value.GetString()).ToArray());
+            Assert.Equal("database_write", repairCommand.GetProperty("mutation_class").GetString());
+            Assert.Equal("fold_backfill", repairCommand.GetProperty("safety_class").GetString());
+            var repairArgs = repairCommand.GetProperty("args").EnumerateArray().Select(value => value.GetString()).ToArray();
+            Assert.Equal("backfill-fold", repairArgs[0]);
+            Assert.Equal("--db", repairArgs[1]);
+            Assert.EndsWith(Path.Combine(".cdidx", "codeindex.db"), repairArgs[2], StringComparison.Ordinal);
+            Assert.DoesNotContain(repairArgs, value => value?.Contains("file:", StringComparison.Ordinal) == true);
+            Assert.DoesNotContain(repairArgs, value => value?.Contains("immutable=1", StringComparison.Ordinal) == true);
         }
         finally
         {
@@ -1407,16 +1421,20 @@ public partial class QueryCommandRunnerTests
             SqliteConnection.ClearAllPools();
 
             var (exitCode, stdout, stderr) = RunBuiltCli(
-                ["status", "--db", "file:codeindex.db?mode=ro"],
+                ["status", "--db", "file:codeindex.db?mode=ro", "--check=fold"],
                 dbDirectory);
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Contains(dbPath, stdout);
-            Assert.Contains("cdidx backfill-fold --db", stdout);
-            Assert.Contains("cdidx index", stdout);
-            Assert.DoesNotContain("<writable-db-path>", stdout);
-            Assert.DoesNotContain("file:codeindex.db", stdout);
+            Assert.Equal(2, exitCode);
+            Assert.Equal(string.Empty, stdout);
+            Assert.Contains("[repair] cdidx backfill-fold --db ", stderr, StringComparison.Ordinal);
+            Assert.Contains("codeindex.db", stderr, StringComparison.Ordinal);
+            Assert.Contains("reasons=fold_ready", stderr, StringComparison.Ordinal);
+            Assert.Contains("action=backfill_fold", stderr, StringComparison.Ordinal);
+            Assert.Contains("mutation=database_write", stderr, StringComparison.Ordinal);
+            Assert.Contains("safety=fold_backfill", stderr, StringComparison.Ordinal);
+            Assert.DoesNotContain("<writable-db-path>", stderr, StringComparison.Ordinal);
+            Assert.DoesNotContain("file:codeindex.db", stderr, StringComparison.Ordinal);
+            Assert.DoesNotContain("mode=ro", stderr, StringComparison.Ordinal);
         }
         finally
         {
@@ -2396,6 +2414,7 @@ public partial class QueryCommandRunnerTests
             Assert.True(headFreshness.GetProperty("workspace_matches_index").GetBoolean());
             Assert.Equal(1, check.GetProperty("matched_file_count").GetInt32());
             Assert.Contains("index fresh", json.GetProperty("summary").GetString());
+            Assert.False(json.TryGetProperty("repair_commands", out _));
             var queryContext = json.GetProperty("query_context");
             Assert.Equal(QueryCommandRunner.StatusCheckModeExplicit, queryContext.GetProperty("check_mode").GetString());
             Assert.Equal(json.GetProperty("stale_after_seconds").GetInt64(), queryContext.GetProperty("stale_after_seconds").GetInt64());
@@ -2577,7 +2596,13 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("src/app.cs", check.GetProperty("changed_files")[0].GetString());
             var repairCommand = Assert.Single(json.GetProperty("repair_commands").EnumerateArray());
             Assert.Equal("cdidx", repairCommand.GetProperty("name").GetString());
+            Assert.Equal("index", repairCommand.GetProperty("action").GetString());
             Assert.Equal("workspace_stale", repairCommand.GetProperty("reason").GetString());
+            Assert.Equal(
+                ["workspace_stale"],
+                repairCommand.GetProperty("reasons").EnumerateArray().Select(value => value.GetString()).ToArray());
+            Assert.Equal("index_write", repairCommand.GetProperty("mutation_class").GetString());
+            Assert.Equal("workspace_refresh", repairCommand.GetProperty("safety_class").GetString());
             var repairArgs = repairCommand.GetProperty("args").EnumerateArray().Select(arg => arg.GetString()).ToArray();
             Assert.Contains("index", repairArgs);
             Assert.Contains(projectRoot, repairArgs);
@@ -2589,6 +2614,118 @@ public partial class QueryCommandRunnerTests
         finally
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void DeduplicateStatusRepairCommands_UsesStructuredIdentityAndStableReasonOrder_Issue4915()
+    {
+        static StatusRepairCommand Command(
+            string reason,
+            string target = "workspace-a",
+            string action = "index",
+            string mutationClass = "index_write",
+            string safetyClass = "metadata_refresh",
+            string safetyNote = "Refresh metadata.",
+            bool rebuild = false)
+            => new()
+            {
+                Name = "cdidx",
+                Action = action,
+                Args = rebuild ? ["index", target, "--rebuild"] : ["index", target],
+                Reason = reason,
+                Reasons = [reason],
+                MutationClass = mutationClass,
+                SafetyClass = safetyClass,
+                SafetyNotes = [safetyNote],
+            };
+
+        var commands = QueryCommandRunner.DeduplicateStatusRepairCommands(
+        [
+            Command("graph_table_available"),
+            Command("issues_table_available"),
+            Command("other_target", target: "workspace-b"),
+            Command("other_options", rebuild: true),
+            Command("other_safety_class", safetyClass: "reference_graph_refresh"),
+            Command("other_safety_note", safetyNote: "Inspect reference caps."),
+            Command("other_mutation", mutationClass: "database_write"),
+            Command("other_action", action: "backfill_fold"),
+        ]);
+
+        Assert.Equal(7, commands.Count);
+        Assert.Equal("graph_table_available", commands[0].Reason);
+        Assert.Equal(
+            ["graph_table_available", "issues_table_available"],
+            commands[0].Reasons);
+        Assert.Equal("workspace-b", commands[1].Args[1]);
+        Assert.Equal("--rebuild", commands[2].Args[2]);
+        Assert.Equal("reference_graph_refresh", commands[3].SafetyClass);
+        Assert.Equal("Inspect reference caps.", commands[4].SafetyNotes[0]);
+        Assert.Equal("database_write", commands[5].MutationClass);
+        Assert.Equal("backfill_fold", commands[6].Action);
+        Assert.Empty(QueryCommandRunner.DeduplicateStatusRepairCommands([]));
+    }
+
+    [Fact]
+    public void RunStatus_Check_DeduplicatesRepairCommandsForJsonAndHumanOutput_Issue4915()
+    {
+        var containerRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_status_repair_dedup");
+        var projectRoot = Path.Combine(containerRoot, "workspace member with spaces");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            const string content = "class App {}\n";
+            File.WriteAllText(Path.Combine(projectRoot, "src", "app.cs"), content);
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/app.cs", "csharp", content);
+
+            var (jsonExitCode, jsonStdout, jsonStderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbPath, "--check", "--json"],
+                _jsonOptions));
+
+            using var document = ParseJsonOutput(jsonStdout);
+            var repairCommands = document.RootElement.GetProperty("repair_commands").EnumerateArray().ToArray();
+            var metadataRefresh = repairCommands[0];
+
+            Assert.Equal(2, jsonExitCode);
+            Assert.Equal(string.Empty, jsonStderr);
+            Assert.Equal(4, repairCommands.Length);
+            Assert.Equal(
+                ["metadata_refresh", "reference_graph_refresh", "full_rebuild", "fold_backfill"],
+                repairCommands.Select(command => command.GetProperty("safety_class").GetString()).ToArray());
+            Assert.Equal("graph_table_available", metadataRefresh.GetProperty("reason").GetString());
+            Assert.Equal(
+                [
+                    "graph_table_available",
+                    "file_issues_data_current",
+                    "csharp_symbol_name_ready",
+                    "csharp_metadata_target_ready",
+                ],
+                metadataRefresh.GetProperty("reasons").EnumerateArray().Select(value => value.GetString()).ToArray());
+            Assert.Equal("index", metadataRefresh.GetProperty("action").GetString());
+            Assert.Equal("index_write", metadataRefresh.GetProperty("mutation_class").GetString());
+
+            var (humanExitCode, humanStdout, humanStderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbPath, "--check"],
+                _jsonOptions));
+            var repairLines = humanStderr
+                .Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries)
+                .Where(line => line.StartsWith("[repair] ", StringComparison.Ordinal))
+                .ToArray();
+
+            Assert.Equal(2, humanExitCode);
+            Assert.Equal(string.Empty, humanStdout);
+            Assert.Equal(4, repairLines.Length);
+            Assert.Contains($"cdidx index \"{projectRoot}\" --db \"{dbPath}\"", repairLines[0], StringComparison.Ordinal);
+            Assert.Contains(
+                "reasons=graph_table_available,file_issues_data_current,csharp_symbol_name_ready,csharp_metadata_target_ready",
+                repairLines[0],
+                StringComparison.Ordinal);
+            Assert.Equal(1, repairLines.Count(line => line.Contains("safety=metadata_refresh", StringComparison.Ordinal)));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(containerRoot);
         }
     }
 
@@ -2699,7 +2836,10 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("fold_ready", json.GetProperty("failed_checks")[0].GetString());
             Assert.Equal("cdidx", repairCommand.GetProperty("name").GetString());
+            Assert.Equal("backfill_fold", repairCommand.GetProperty("action").GetString());
             Assert.Equal("fold_ready", repairCommand.GetProperty("reason").GetString());
+            Assert.Equal("database_write", repairCommand.GetProperty("mutation_class").GetString());
+            Assert.Equal("fold_backfill", repairCommand.GetProperty("safety_class").GetString());
             Assert.Equal("backfill-fold", repairArgs[0]);
             Assert.Contains("--db", repairArgs);
             Assert.Contains(dbPath, repairArgs);

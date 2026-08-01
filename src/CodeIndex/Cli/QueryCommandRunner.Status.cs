@@ -209,7 +209,10 @@ public static partial class QueryCommandRunner
                 if (options.StaleAfter.HasValue)
                     WriteStatusAge(status, staleAfter.Value);
                 if (checkFailures.Count > 0)
+                {
                     WriteStatusCheckDiagnostics(checkFailures);
+                    WriteStatusRepairCommands(status.RepairCommands);
+                }
             }
             else
             {
@@ -1037,7 +1040,7 @@ public static partial class QueryCommandRunner
         if (failures.Count == 0)
             return null;
 
-        var commands = new List<StatusRepairCommand>();
+        var candidates = new List<StatusRepairCommand>();
         foreach (var failure in failures)
         {
             var command = failure.Name switch
@@ -1047,18 +1050,21 @@ public static partial class QueryCommandRunner
                     options,
                     failure.Name,
                     rebuild: false,
+                    safetyClass: "workspace_refresh",
                     "Re-runs indexing for the current workspace snapshot."),
                 "index_complete" => BuildIndexRepairCommand(
                     status,
                     options,
                     failure.Name,
                     rebuild: false,
+                    safetyClass: "source_error_recovery",
                     "Fix the reported file/extractor error first; successful rows remain persisted and a rebuild is not required."),
                 "reference_graph_complete" => BuildIndexRepairCommand(
                     status,
                     options,
                     failure.Name,
                     rebuild: false,
+                    safetyClass: "reference_graph_refresh",
                     GetReferenceGraphRepairSafetyNote(status)),
                 "graph_table_available" or "issues_table_available" or "file_issues_data_current"
                     or "sql_graph_contract_ready" or "csharp_symbol_name_ready" or "csharp_metadata_target_ready"
@@ -1067,21 +1073,24 @@ public static partial class QueryCommandRunner
                         options,
                         failure.Name,
                         rebuild: false,
+                        safetyClass: "metadata_refresh",
                         "Rewrites stale or missing index metadata before query results are trusted."),
                 "hotspot_family_ready" or "index_newer_than_reader" => BuildIndexRepairCommand(
                     status,
                     options,
                     failure.Name,
                     rebuild: true,
+                    safetyClass: "full_rebuild",
                     "Performs a full rebuild because partial updates cannot prove every indexed row was restamped."),
                 "fold_ready" => BuildBackfillFoldRepairCommand(options, failure.Name),
                 "migration_in_progress" => BuildStatusCheckRepairCommand(options, failure.Name),
                 _ => null,
             };
             if (command != null)
-                commands.Add(command);
+                candidates.Add(command);
         }
 
+        var commands = DeduplicateStatusRepairCommands(candidates);
         return commands.Count == 0 ? null : commands;
     }
 
@@ -1107,6 +1116,7 @@ public static partial class QueryCommandRunner
         QueryCommandOptions options,
         string reason,
         bool rebuild,
+        string safetyClass,
         string safetyNote)
     {
         var args = new List<string>
@@ -1131,8 +1141,12 @@ public static partial class QueryCommandRunner
         return new StatusRepairCommand
         {
             Name = "cdidx",
+            Action = "index",
             Args = args,
             Reason = reason,
+            Reasons = [reason],
+            MutationClass = "index_write",
+            SafetyClass = safetyClass,
             SafetyNotes =
             [
                 safetyNote,
@@ -1166,8 +1180,12 @@ public static partial class QueryCommandRunner
         return new StatusRepairCommand
         {
             Name = "cdidx",
+            Action = "backfill_fold",
             Args = args,
             Reason = reason,
+            Reasons = [reason],
+            MutationClass = "database_write",
+            SafetyClass = "fold_backfill",
             SafetyNotes =
             [
                 "Restamps folded-name columns in place without reparsing source files.",
@@ -1188,14 +1206,64 @@ public static partial class QueryCommandRunner
         return new StatusRepairCommand
         {
             Name = "cdidx",
+            Action = "status_check",
             Args = args,
             Reason = reason,
+            Reasons = [reason],
+            MutationClass = "read_only",
+            SafetyClass = "wait_for_writer",
             SafetyNotes =
             [
                 "Wait for the active index or migration writer to finish before rerunning status.",
                 "Do not start a second writer unless the existing writer is known to be gone.",
             ],
         };
+    }
+
+    internal static List<StatusRepairCommand> DeduplicateStatusRepairCommands(
+        IEnumerable<StatusRepairCommand> candidates)
+    {
+        var commands = new List<StatusRepairCommand>();
+        foreach (var candidate in candidates)
+        {
+            if (candidate.Reasons.Count == 0 && !string.IsNullOrWhiteSpace(candidate.Reason))
+                candidate.Reasons.Add(candidate.Reason);
+
+            var existing = commands.FirstOrDefault(command =>
+                string.Equals(command.Name, candidate.Name, StringComparison.Ordinal)
+                && string.Equals(command.Action, candidate.Action, StringComparison.Ordinal)
+                && string.Equals(command.MutationClass, candidate.MutationClass, StringComparison.Ordinal)
+                && string.Equals(command.SafetyClass, candidate.SafetyClass, StringComparison.Ordinal)
+                && command.Args.SequenceEqual(candidate.Args, StringComparer.Ordinal)
+                && command.SafetyNotes.SequenceEqual(candidate.SafetyNotes, StringComparer.Ordinal));
+            if (existing == null)
+            {
+                commands.Add(candidate);
+                continue;
+            }
+
+            foreach (var reason in candidate.Reasons)
+            {
+                if (!existing.Reasons.Contains(reason, StringComparer.Ordinal))
+                    existing.Reasons.Add(reason);
+            }
+        }
+
+        return commands;
+    }
+
+    private static void WriteStatusRepairCommands(IReadOnlyList<StatusRepairCommand>? commands)
+    {
+        if (commands == null)
+            return;
+
+        foreach (var command in commands)
+        {
+            CommandErrorWriter.WriteStderr(
+                $"[repair] {RenderStatusRepairCommand(command)} "
+                + $"(reasons={string.Join(',', command.Reasons)}; action={command.Action}; "
+                + $"mutation={command.MutationClass}; safety={command.SafetyClass})");
+        }
     }
 
     private static void WriteStatusCheckDiagnostics(IReadOnlyList<StatusCheckFailure> failures)
