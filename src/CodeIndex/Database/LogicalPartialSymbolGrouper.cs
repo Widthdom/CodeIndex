@@ -94,6 +94,7 @@ internal static class LogicalPartialSymbolGrouper
                  {selfFamilySql}
             WHEN {languageSql} = 'csharp'
              AND {kindSql} = 'function'
+             AND {partialDeclarationSql}
              AND {callableContainerSql} IS NOT NULL
              AND {callableIdentitySql} IS NOT NULL
             THEN 'family:' || {languageSql} || CHAR(31) || {kindSql} || CHAR(31) ||
@@ -320,7 +321,7 @@ internal static class LogicalPartialSymbolGrouper
         if (string.IsNullOrWhiteSpace(signature))
             return 0;
 
-        var declaration = RemoveCSharpComments(signature);
+        var declaration = ExtractCSharpDeclarationHeader(RemoveCSharpComments(signature));
         var score = 0;
         if (declaration.Contains('['))
             score += 2;
@@ -338,7 +339,40 @@ internal static class LogicalPartialSymbolGrouper
         => NormalizeIdentityToken(
             string.IsNullOrWhiteSpace(signature)
                 ? signature
-                : RemoveCSharpComments(signature));
+                : ExtractCSharpDeclarationHeader(RemoveCSharpComments(signature)));
+
+    private static string ExtractCSharpDeclarationHeader(string declaration)
+    {
+        var parenthesisDepth = 0;
+        var bracketDepth = 0;
+        for (var index = 0; index < declaration.Length; index++)
+        {
+            switch (declaration[index])
+            {
+                case '(':
+                    parenthesisDepth++;
+                    break;
+                case ')' when parenthesisDepth > 0:
+                    parenthesisDepth--;
+                    break;
+                case '[':
+                    bracketDepth++;
+                    break;
+                case ']' when bracketDepth > 0:
+                    bracketDepth--;
+                    break;
+                case '{' when parenthesisDepth == 0 && bracketDepth == 0:
+                    return declaration[..index];
+                case '=' when parenthesisDepth == 0
+                    && bracketDepth == 0
+                    && index + 1 < declaration.Length
+                    && declaration[index + 1] == '>':
+                    return declaration[..index];
+            }
+        }
+
+        return declaration;
+    }
 
     internal static string BuildPartialFamilyId(string key)
     {

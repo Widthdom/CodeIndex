@@ -11,6 +11,8 @@ public static partial class SymbolExtractor
         "sealed", "virtual", "override", "readonly", "unsafe", "extern", "partial", "async",
         "ref", "required",
     };
+    private static readonly string[] CSharpTypeDeclarationKeywords =
+        ["class", "struct", "interface", "record"];
 
     private static void PopulateCSharpPartialDeclarationMetadata(
         IReadOnlyList<string> lines,
@@ -25,14 +27,18 @@ public static partial class SymbolExtractor
 
             var signature = symbol.Signature ?? string.Empty;
             var sanitizedSignature = SanitizeCSharpDeclarationEvidence(signature);
+            var declarationHeader = ExtractCSharpDeclarationHeader(sanitizedSignature);
             var leading = ReadCSharpLeadingDeclarationEvidence(
                 lines,
                 symbol,
                 lineStartStates);
-            symbol.IsPartialDeclaration = PartialModifierRegex.IsMatch(sanitizedSignature) || leading.HasPartialModifier;
+            symbol.IsPartialDeclaration = PartialModifierRegex.IsMatch(declarationHeader) || leading.HasPartialModifier;
             symbol.IsFileLocalDeclaration =
                 symbol.Kind is "class" or "struct" or "interface" or "record"
-                && (ContainsCSharpModifier(sanitizedSignature, "file") || leading.HasFileModifier);
+                && (ContainsCSharpModifier(
+                        ExtractCSharpTypeDeclarationModifierPrefix(declarationHeader, symbol.Name),
+                        "file")
+                    || leading.HasFileModifier);
             if (symbol.IsPartialDeclaration == true)
             {
                 symbol.IdentifierStartColumn = FindCSharpDeclarationIdentifierColumn(
@@ -42,16 +48,16 @@ public static partial class SymbolExtractor
             }
 
             var semanticScore = 0;
-            if (sanitizedSignature.Contains('[') || leading.HasAttribute)
+            if (ContainsCSharpAttributeEvidence(declarationHeader) || leading.HasAttribute)
                 semanticScore += 2;
             if (leading.HasDocumentation)
                 semanticScore += 1;
             if (symbol.Kind is "class" or "struct" or "interface" or "record"
-                && sanitizedSignature.Contains(':', StringComparison.Ordinal))
+                && declarationHeader.Contains(':', StringComparison.Ordinal))
             {
                 semanticScore += 4;
             }
-            if (sanitizedSignature.Contains(" where ", StringComparison.Ordinal))
+            if (declarationHeader.Contains(" where ", StringComparison.Ordinal))
                 semanticScore += 1;
             symbol.DeclarationSemanticScore = semanticScore;
         }
@@ -83,6 +89,116 @@ public static partial class SymbolExtractor
         }
 
         return sanitized.ToString();
+    }
+
+    private static string ExtractCSharpDeclarationHeader(string declaration)
+    {
+        var parenthesisDepth = 0;
+        var bracketDepth = 0;
+        for (var index = 0; index < declaration.Length; index++)
+        {
+            switch (declaration[index])
+            {
+                case '(':
+                    parenthesisDepth++;
+                    break;
+                case ')' when parenthesisDepth > 0:
+                    parenthesisDepth--;
+                    break;
+                case '[':
+                    bracketDepth++;
+                    break;
+                case ']' when bracketDepth > 0:
+                    bracketDepth--;
+                    break;
+                case '{' when parenthesisDepth == 0 && bracketDepth == 0:
+                    return declaration[..index];
+                case '=' when parenthesisDepth == 0
+                    && bracketDepth == 0
+                    && index + 1 < declaration.Length
+                    && declaration[index + 1] == '>':
+                    return declaration[..index];
+            }
+        }
+
+        return declaration;
+    }
+
+    private static string ExtractCSharpTypeDeclarationModifierPrefix(
+        string declarationHeader,
+        string symbolName)
+    {
+        var header = declarationHeader.AsSpan();
+        var name = symbolName.AsSpan().TrimStart('@');
+        var bestKeywordIndex = -1;
+        var bestKeywordDistance = int.MaxValue;
+        foreach (var keyword in CSharpTypeDeclarationKeywords)
+        {
+            var searchStart = 0;
+            while (searchStart < header.Length)
+            {
+                var keywordIndex = FindCSharpIdentifierToken(header, keyword, searchStart);
+                if (keywordIndex < 0)
+                    break;
+
+                var nameIndex = FindCSharpIdentifierToken(
+                    header,
+                    name,
+                    keywordIndex + keyword.Length);
+                if (nameIndex >= 0)
+                {
+                    var distance = nameIndex - keywordIndex - keyword.Length;
+                    if (distance < bestKeywordDistance)
+                    {
+                        bestKeywordIndex = keywordIndex;
+                        bestKeywordDistance = distance;
+                    }
+                }
+
+                searchStart = keywordIndex + keyword.Length;
+            }
+        }
+
+        if (bestKeywordIndex < 0)
+            return declarationHeader;
+
+        var prefix = declarationHeader[..bestKeywordIndex];
+        var attributeDepth = 0;
+        var lastAttributeEnd = -1;
+        for (var index = 0; index < prefix.Length; index++)
+        {
+            if (prefix[index] == '[')
+            {
+                attributeDepth++;
+            }
+            else if (prefix[index] == ']' && attributeDepth > 0)
+            {
+                attributeDepth--;
+                if (attributeDepth == 0)
+                    lastAttributeEnd = index;
+            }
+        }
+
+        return lastAttributeEnd >= 0
+            ? prefix[(lastAttributeEnd + 1)..]
+            : prefix;
+    }
+
+    private static bool ContainsCSharpAttributeEvidence(string declarationHeader)
+    {
+        for (var index = 0; index < declarationHeader.Length; index++)
+        {
+            if (declarationHeader[index] != '[')
+                continue;
+
+            var previous = index - 1;
+            while (previous >= 0 && char.IsWhiteSpace(declarationHeader[previous]))
+                previous--;
+            if (previous < 0 || declarationHeader[previous] is '(' or ',' or '<')
+                return true;
+        }
+
+        return false;
     }
 
     private static bool ContainsCSharpModifier(string declaration, string modifier)
