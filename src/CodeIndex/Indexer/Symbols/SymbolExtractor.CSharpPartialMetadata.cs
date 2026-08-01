@@ -121,7 +121,10 @@ public static partial class SymbolExtractor
             lines,
             symbol,
             lineStartStates);
-        var hasDocumentation = false;
+        var hasDocumentation = HasCSharpDeclarationLineLeadingDocumentation(
+            lines,
+            symbol,
+            lineStartStates);
         var documentationEvidenceAdjacent = true;
         var attributeDepth = 0;
 
@@ -241,6 +244,61 @@ public static partial class SymbolExtractor
         // この宣言の attribute とみなす。前方の同一行宣言に付いた attribute を、後続の
         // 全 symbol の rank に誤適用しない。
         return cursor >= 0 && sanitizedLine[cursor] == ']';
+    }
+
+    private static bool HasCSharpDeclarationLineLeadingDocumentation(
+        IReadOnlyList<string> lines,
+        SymbolRecord symbol,
+        IReadOnlyList<CSharpLexState>? lineStartStates)
+    {
+        var declarationLine = symbol.Line > 0 ? symbol.Line : symbol.StartLine;
+        if (declarationLine <= 0 || declarationLine > lines.Count)
+            return false;
+
+        var lineIndex = declarationLine - 1;
+        var lineStartState = lineStartStates != null && lineIndex < lineStartStates.Count
+            ? lineStartStates[lineIndex]
+            : new CSharpLexState();
+        if (lineStartState.Mode != CSharpLexMode.Code || lineStartState.InterpolationBraceDepth != 0)
+            return false;
+
+        var rawLine = lines[lineIndex];
+        var declarationStartColumn = FindCSharpDeclarationOccurrenceStartColumn(
+            rawLine,
+            symbol,
+            lineStartState);
+        if (declarationStartColumn <= 0)
+            return false;
+
+        var cursor = Math.Min(declarationStartColumn, rawLine.Length) - 1;
+        while (cursor >= 0 && char.IsWhiteSpace(rawLine[cursor]))
+            cursor--;
+        if (cursor < 1 || rawLine[cursor - 1] != '*' || rawLine[cursor] != '/')
+            return false;
+
+        var expectedCommentEnd = cursor - 1;
+        var commentStart = rawLine.LastIndexOf("/**", expectedCommentEnd, StringComparison.Ordinal);
+        while (commentStart >= 0)
+        {
+            // Re-lex the prefix so a `/**` sequence inside a normal block comment,
+            // string, character literal, or interpolation hole cannot become documentation.
+            // prefix を再 lex し、通常 block comment・string・character literal・
+            // interpolation hole 内の `/**` を documentation と誤認しない。
+            var stateAtCommentStart = LexCSharpLine(rawLine[..commentStart], lineStartState).EndState;
+            if (stateAtCommentStart.Mode == CSharpLexMode.Code
+                && stateAtCommentStart.InterpolationReturnMode == CSharpLexMode.Code
+                && stateAtCommentStart.InterpolationBraceDepth == 0
+                && rawLine.IndexOf("*/", commentStart + 2, StringComparison.Ordinal) == expectedCommentEnd)
+            {
+                return true;
+            }
+
+            commentStart = commentStart == 0
+                ? -1
+                : rawLine.LastIndexOf("/**", commentStart - 1, StringComparison.Ordinal);
+        }
+
+        return false;
     }
 
     private static int FindCSharpDeclarationOccurrenceStartColumn(

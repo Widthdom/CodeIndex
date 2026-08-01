@@ -576,7 +576,16 @@ internal static class LogicalPartialSymbolGrouper
             }
             else
             {
-                builder.Append(token.TrimStart('@'));
+                // `@global::` can name an ordinary using alias, while only unescaped
+                // `global::` is the reserved root qualifier. Keep those identities distinct.
+                // `@global::` は通常の using alias を指し得る。予約済み root qualifier は
+                // escape なしの `global::` だけなので、両 identity を区別する。
+                var isVerbatimGlobalAliasQualifier =
+                    token == "@global"
+                    && offset + 2 < tokens.Count
+                    && tokens[offset + 1] == ":"
+                    && tokens[offset + 2] == ":";
+                builder.Append(isVerbatimGlobalAliasQualifier ? token : token.TrimStart('@'));
             }
             offset++;
         }

@@ -424,7 +424,7 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void PartialCanonicalRepresentative_UsesSemanticRulesAndExposesFamilyNavigation_Issue4914()
     {
-        Assert.Equal(7, DbContext.HotspotFamilyVersion);
+        Assert.Equal(8, DbContext.HotspotFamilyVersion);
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_canonical_issue4914");
         try
         {
@@ -478,6 +478,7 @@ public partial class QueryCommandRunnerTests
                 "src/A.Controller.cs",
                 "csharp",
                 """
+                using @global = Demo;
                 namespace Demo;
                 public class Item { }
                 public class item { }
@@ -506,6 +507,8 @@ public partial class QueryCommandRunnerTests
                     partial void ValueNullable(int? declarationValue);
                     partial void QualifiedGeneric<T>(N.T declarationValue);
                     partial void QualifiedGeneric<U>(N.U declarationValue);
+                    partial void VerbatimGlobal(@global::System.Int32 declarationValue);
+                    partial void VerbatimGlobal(global::System.Int32 declarationValue);
                     private partial Result<int> Result();
                 }
                 """);
@@ -524,6 +527,7 @@ public partial class QueryCommandRunnerTests
                 "src/Z.Controller.cs",
                 "csharp",
                 """
+                using @global = Demo;
                 namespace Demo;
                 public partial class Controller
                 {
@@ -551,6 +555,8 @@ public partial class QueryCommandRunnerTests
                     partial void ValueNullable(global::System.Nullable<int> implementationValue) { }
                     partial void QualifiedGeneric<T>(N.T implementationValue) { }
                     partial void QualifiedGeneric<U>(N.U implementationValue) { }
+                    partial void VerbatimGlobal(@global::System.Int32 implementationValue) { }
+                    partial void VerbatimGlobal(global::System.Int32 implementationValue) { }
                     private partial Result<global::@System.@Int32> Result() => new();
                 }
                 """);
@@ -814,6 +820,15 @@ public partial class QueryCommandRunnerTests
                     "void"));
             Assert.NotEqual(
                 LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void VerbatimGlobal(@global::System.Int32 declarationValue);",
+                    "VerbatimGlobal",
+                    "void"),
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void VerbatimGlobal(global::System.Int32 implementationValue) { }",
+                    "VerbatimGlobal",
+                    "void"));
+            Assert.NotEqual(
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
                     "partial void Rooted(Item declarationValue);",
                     "Rooted",
                     "void"),
@@ -1046,6 +1061,23 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(string.Empty, rootedStderr);
             Assert.Equal(2, rootedFamilies.Count);
             Assert.All(rootedFamilies, family => Assert.Equal(2, family.GetProperty("definition_sites").GetInt32()));
+
+            var (verbatimGlobalExitCode, verbatimGlobalStdout, verbatimGlobalStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["VerbatimGlobal", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "function", "--group-partials", "--include-generated", "--limit", "10"],
+                _jsonOptions));
+            using var verbatimGlobalDocument = ParseJsonOutput(verbatimGlobalStdout);
+            var verbatimGlobalFamilies = verbatimGlobalDocument.RootElement.EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, verbatimGlobalExitCode);
+            Assert.Equal(string.Empty, verbatimGlobalStderr);
+            Assert.Equal(2, verbatimGlobalFamilies.Count);
+            Assert.All(verbatimGlobalFamilies, family => Assert.Equal(2, family.GetProperty("definition_sites").GetInt32()));
+            Assert.Equal(
+                2,
+                verbatimGlobalFamilies
+                    .Select(family => family.GetProperty("partial_family_id").GetString())
+                    .Distinct(StringComparer.Ordinal)
+                    .Count());
 
             var (shellExitCode, shellStdout, shellStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
                 ["hello", "--db", dbPath, "--json=array", "--exact-name", "--lang", "shell", "--kind", "function", "--limit", "1"],
@@ -1471,6 +1503,26 @@ public partial class QueryCommandRunnerTests
                 """);
             TestProjectHelper.InsertIndexedFile(
                 dbPath,
+                "src/A.InlineDocumented.cs",
+                "csharp",
+                "public partial class InlineDocumented { }");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Z.InlineDocumented.cs",
+                "csharp",
+                "/** <summary>Primary declaration.</summary> */ public partial class InlineDocumented { }");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.InlineDocumentationDecoy.cs",
+                "csharp",
+                "public partial class InlineDocumentationDecoy { }");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Z.InlineDocumentationDecoy.cs",
+                "csharp",
+                "/* /** Not documentation. */ public partial class InlineDocumentationDecoy { }");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
                 "src/Z.BlankDocumentation.cs",
                 "csharp",
                 """
@@ -1535,6 +1587,14 @@ public partial class QueryCommandRunnerTests
             var blankDocumentation = RunGroupedSymbol(dbPath, "BlankDocumentation", "class");
             Assert.Equal("src/A.BlankDocumentation.cs", blankDocumentation.GetProperty("path").GetString());
             Assert.Equal("stable_path_and_position", blankDocumentation.GetProperty("representative_reason").GetString());
+
+            var inlineDocumented = RunGroupedSymbol(dbPath, "InlineDocumented", "class");
+            Assert.Equal("src/Z.InlineDocumented.cs", inlineDocumented.GetProperty("path").GetString());
+            Assert.Equal("semantic_declaration", inlineDocumented.GetProperty("representative_reason").GetString());
+
+            var inlineDocumentationDecoy = RunGroupedSymbol(dbPath, "InlineDocumentationDecoy", "class");
+            Assert.Equal("src/A.InlineDocumentationDecoy.cs", inlineDocumentationDecoy.GetProperty("path").GetString());
+            Assert.Equal("stable_path_and_position", inlineDocumentationDecoy.GetProperty("representative_reason").GetString());
 
             var unattributedAfterSibling = RunGroupedSymbol(dbPath, "UnattributedAfterSibling", "class");
             Assert.Equal("src/A.UnattributedAfterSibling.cs", unattributedAfterSibling.GetProperty("path").GetString());
