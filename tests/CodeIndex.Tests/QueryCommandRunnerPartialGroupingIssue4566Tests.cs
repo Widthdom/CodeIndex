@@ -487,7 +487,6 @@ public partial class QueryCommandRunnerTests
                 {
                     partial void OnReady([P] int declarationValue = 0);
                     partial void Alias(int declarationValue);
-                    partial void Global(global::System.Uri declarationValue);
                     partial void Defaults(bool flag = 1 < 2, int count = 0);
                     partial void Quoted(string text = ")", int count = 0);
                     partial void Escaped(@Item declarationValue);
@@ -497,9 +496,16 @@ public partial class QueryCommandRunnerTests
                     partial void AttrString([Marker("/*")] int declarationValue);
                     partial void Run(Item declarationValue);
                     partial void Run(item declarationValue);
+                    partial void Rooted(Item declarationValue);
+                    partial void Rooted(global::Item declarationValue);
                     private partial Result<int> Result();
                 }
                 """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Root.Item.cs",
+                "csharp",
+                "public class Item { }");
             TestProjectHelper.InsertIndexedFile(
                 dbPath,
                 "src/Z.Controller.cs",
@@ -513,7 +519,6 @@ public partial class QueryCommandRunnerTests
                     }
 
                     partial void Alias(System.Int32 implementationValue) { }
-                    partial void Global(System.Uri implementationValue) { }
                     partial void Defaults(bool flag, int count) { }
                     partial void Quoted(string text, int count) { }
                     partial void Escaped(Item implementationValue) { }
@@ -523,6 +528,8 @@ public partial class QueryCommandRunnerTests
                     partial void AttrString(int implementationValue) { }
                     partial void Run(Item implementationValue) { }
                     partial void Run(item implementationValue) { }
+                    partial void Rooted(Item implementationValue) { }
+                    partial void Rooted(global::Item implementationValue) { }
                     private partial Result<System.Int32> Result() => new();
                 }
                 """);
@@ -541,14 +548,20 @@ public partial class QueryCommandRunnerTests
                 "csharp",
                 """
                 namespace Demo;
-                public partial class GenericHost<T>
+                public
+                partial // one-arity host modifier
+                class GenericHost<T>
                 {
-                    partial void ContainerMethod();
+                    partial // declaration modifier
+                    void ContainerMethod();
                 }
 
-                public partial class GenericHost<T, U>
+                public
+                partial /* two-arity host modifier */
+                class GenericHost<T, U>
                 {
-                    partial void ContainerMethod();
+                    partial /* declaration modifier */
+                    void ContainerMethod();
                 }
 
                 public partial class Outer<T>
@@ -567,14 +580,20 @@ public partial class QueryCommandRunnerTests
                 "csharp",
                 """
                 namespace Demo;
-                public partial class GenericHost<T>
+                public
+                partial // one-arity host modifier
+                class GenericHost<T>
                 {
-                    partial void ContainerMethod() { }
+                    partial // implementation modifier
+                    void ContainerMethod() { }
                 }
 
-                public partial class GenericHost<T, U>
+                public
+                partial /* two-arity host modifier */
+                class GenericHost<T, U>
                 {
-                    partial void ContainerMethod() { }
+                    partial /* implementation modifier */
+                    void ContainerMethod() { }
                 }
 
                 public partial class Outer<T>
@@ -706,7 +725,7 @@ public partial class QueryCommandRunnerTests
                     "partial void Alias(global::System.Int32 value) { }",
                     "Alias",
                     "System.Void"));
-            Assert.Equal(
+            Assert.NotEqual(
                 LogicalPartialSymbolGrouper.BuildCallableIdentity(
                     "partial void Global(global::System.Uri declarationValue);",
                     "Global",
@@ -714,6 +733,15 @@ public partial class QueryCommandRunnerTests
                 LogicalPartialSymbolGrouper.BuildCallableIdentity(
                     "partial void Global(System.Uri implementationValue) { }",
                     "Global",
+                    "void"));
+            Assert.NotEqual(
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void Rooted(Item declarationValue);",
+                    "Rooted",
+                    "void"),
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void Rooted(global::Item implementationValue) { }",
+                    "Rooted",
                     "void"));
             Assert.Equal(
                 LogicalPartialSymbolGrouper.BuildCallableIdentity(
@@ -832,9 +860,6 @@ public partial class QueryCommandRunnerTests
             var alias = RunGroupedSymbol(dbPath, "Alias", "function");
             Assert.Equal(2, alias.GetProperty("definition_sites").GetInt32());
 
-            var global = RunGroupedSymbol(dbPath, "Global", "function");
-            Assert.Equal(2, global.GetProperty("definition_sites").GetInt32());
-
             var defaults = RunGroupedSymbol(dbPath, "Defaults", "function");
             Assert.Equal(2, defaults.GetProperty("definition_sites").GetInt32());
 
@@ -855,6 +880,17 @@ public partial class QueryCommandRunnerTests
 
             var attrString = RunGroupedSymbol(dbPath, "AttrString", "function");
             Assert.Equal(2, attrString.GetProperty("definition_sites").GetInt32());
+
+            var (rootedExitCode, rootedStdout, rootedStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["Rooted", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "function", "--group-partials", "--include-generated", "--limit", "10"],
+                _jsonOptions));
+            using var rootedDocument = ParseJsonOutput(rootedStdout);
+            var rootedFamilies = rootedDocument.RootElement.EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, rootedExitCode);
+            Assert.Equal(string.Empty, rootedStderr);
+            Assert.Equal(2, rootedFamilies.Count);
+            Assert.All(rootedFamilies, family => Assert.Equal(2, family.GetProperty("definition_sites").GetInt32()));
 
             var (shellExitCode, shellStdout, shellStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
                 ["hello", "--db", dbPath, "--json=array", "--exact-name", "--lang", "shell", "--kind", "function", "--limit", "1"],
@@ -1036,7 +1072,7 @@ public partial class QueryCommandRunnerTests
             {
                 /// <summary>Primary declaration.</summary>
                 [System.Obsolete]
-                partial
+                partial // declaration modifier
                 void OnReady(
                     int value)
                 {

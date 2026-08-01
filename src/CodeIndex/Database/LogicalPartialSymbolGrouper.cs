@@ -440,14 +440,6 @@ internal static class LogicalPartialSymbolGrouper
         var builder = new StringBuilder(value.Length);
         for (var offset = 0; offset < tokens.Count;)
         {
-            if (offset + 2 < tokens.Count
-                && tokens[offset] == "global"
-                && tokens[offset + 1] == ":"
-                && tokens[offset + 2] == ":")
-            {
-                offset += 3;
-                continue;
-            }
             if (TryReadFrameworkTypeIdentity(tokens, offset, out var frameworkIdentity, out var consumedTokens))
             {
                 builder.Append(frameworkIdentity);

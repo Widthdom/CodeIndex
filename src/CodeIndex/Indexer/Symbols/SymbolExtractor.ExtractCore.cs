@@ -1264,6 +1264,13 @@ public static partial class SymbolExtractor
                 pythonModulePrefix,
                 prologMultilineHeads);
         }
+        if (lang == "csharp")
+        {
+            PopulateCSharpPartialDeclarationMetadata(
+                lines,
+                symbols,
+                getCSharpLineStartStates);
+        }
         FinalizePatternSymbols(
             fileId,
             lang,
@@ -1273,8 +1280,6 @@ public static partial class SymbolExtractor
             extractionState,
             getCSharpLineStartStates,
             pendingRecordPrimaryComponents);
-        if (lang == "csharp")
-            PopulateCSharpPartialDeclarationMetadata(lines, symbols);
         return symbols;
     }
 

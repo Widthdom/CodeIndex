@@ -351,8 +351,7 @@ public static partial class SymbolExtractor
 
     private static bool SupportsCrossFileFamily(SymbolRecord symbol) =>
         symbol.Kind is "class" or "interface" or "struct"
-        && !string.IsNullOrWhiteSpace(symbol.Signature)
-        && PartialModifierRegex.IsMatch(symbol.Signature);
+        && symbol.IsPartialDeclaration == true;
 
     private static bool TryGetObjCCategoryDisplayName(string objcDeclaration, string baseName, out string displayName)
     {

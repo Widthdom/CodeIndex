@@ -14,15 +14,20 @@ public static partial class SymbolExtractor
 
     private static void PopulateCSharpPartialDeclarationMetadata(
         IReadOnlyList<string> lines,
-        IReadOnlyList<SymbolRecord> symbols)
+        IReadOnlyList<SymbolRecord> symbols,
+        Func<CSharpLexState[]>? getCSharpLineStartStates)
     {
+        var lineStartStates = getCSharpLineStartStates?.Invoke();
         foreach (var symbol in symbols)
         {
             if (symbol.Kind is not ("function" or "class" or "struct" or "interface" or "record"))
                 continue;
 
             var signature = symbol.Signature ?? string.Empty;
-            var leading = ReadCSharpLeadingDeclarationEvidence(lines, symbol.StartLine);
+            var leading = ReadCSharpLeadingDeclarationEvidence(
+                lines,
+                symbol.StartLine,
+                lineStartStates);
             symbol.IsPartialDeclaration = PartialModifierRegex.IsMatch(signature) || leading.HasPartialModifier;
 
             var semanticScore = 0;
@@ -43,7 +48,8 @@ public static partial class SymbolExtractor
 
     private static CSharpLeadingDeclarationEvidence ReadCSharpLeadingDeclarationEvidence(
         IReadOnlyList<string> lines,
-        int declarationStartLine)
+        int declarationStartLine,
+        IReadOnlyList<CSharpLexState>? lineStartStates)
     {
         var lineIndex = Math.Min(lines.Count, Math.Max(1, declarationStartLine)) - 2;
         var minimumLineIndex = Math.Max(0, lineIndex - CSharpLeadingDeclarationLookbackLines + 1);
@@ -54,15 +60,22 @@ public static partial class SymbolExtractor
 
         for (; lineIndex >= minimumLineIndex; lineIndex--)
         {
-            var trimmed = lines[lineIndex].AsSpan().Trim();
-            if (trimmed.IsEmpty)
+            var raw = lines[lineIndex].AsSpan().Trim();
+            if (raw.IsEmpty)
                 break;
 
-            if (trimmed.StartsWith("///", StringComparison.Ordinal))
+            if (raw.StartsWith("///", StringComparison.Ordinal))
             {
                 hasDocumentation = true;
                 continue;
             }
+
+            var sanitizedLine = lineStartStates != null && lineIndex < lineStartStates.Count
+                ? LexCSharpLine(lines[lineIndex], lineStartStates[lineIndex]).SanitizedLine
+                : LexCSharpLine(lines[lineIndex], new CSharpLexState()).SanitizedLine;
+            var trimmed = sanitizedLine.AsSpan().Trim();
+            if (trimmed.IsEmpty)
+                continue;
 
             if (attributeDepth > 0 || trimmed[0] == '[' || trimmed[^1] == ']')
             {
