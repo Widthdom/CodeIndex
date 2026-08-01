@@ -129,6 +129,18 @@ public partial class DbWriter
     private static string BuildCSharpProjectPrefixSql(string symbolAlias)
         => $"""
             CASE
+                WHEN INSTR(COALESCE({symbolAlias}.family_key, ''), CHAR(31)) > 0
+                     AND (
+                         SUBSTR(COALESCE({symbolAlias}.family_key, ''), 1, 11) = 'file-local:'
+                         OR SUBSTR(
+                                COALESCE({symbolAlias}.family_key, ''),
+                                INSTR(COALESCE({symbolAlias}.family_key, ''), '|') + 1,
+                                11) = 'file-local:'
+                     )
+                    THEN SUBSTR(
+                        {symbolAlias}.family_key,
+                        1,
+                        INSTR({symbolAlias}.family_key, CHAR(31)))
                 WHEN INSTR(COALESCE({symbolAlias}.family_key, ''), '|') > 0
                     THEN SUBSTR(
                         {symbolAlias}.family_key,

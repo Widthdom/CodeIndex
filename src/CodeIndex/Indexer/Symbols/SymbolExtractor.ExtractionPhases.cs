@@ -729,13 +729,19 @@ public static partial class SymbolExtractor
         long fileId,
         string lang,
         string? filePath,
+        string? projectRoot,
         string[] lines,
         SymbolExtractionList symbols,
         SymbolExtractionState extractionState,
         Func<CSharpLexState[]>? getCSharpLineStartStates,
         List<PendingRecordPrimaryComponents>? pendingRecordPrimaryComponents)
     {
-        AssignContainers(symbols, lines, getCSharpLineStartStates);
+        AssignContainers(
+            symbols,
+            lines,
+            getCSharpLineStartStates,
+            filePath,
+            projectRoot);
         if (lang is "shell" or "powershell")
             AddScriptScopeSymbol(fileId, lines, symbols);
         if (lang == "csharp")

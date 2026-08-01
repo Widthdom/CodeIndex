@@ -44,7 +44,7 @@ public partial class DbContext : IDisposable
     // (`family_key` / `container_qualified_name` are authoritative for the whole DB), not
     // low-level table availability.
     // hotspots family grouping 用 readiness。table の有無ではなく query 意味論の trust を表す。
-    public const int HotspotFamilyVersion = 9;
+    public const int HotspotFamilyVersion = 10;
     public const string HotspotFamilyVersionMetaKey = "hotspot_family_version";
     public const string HotspotFamilyMarkerFingerprintMetaKey = "hotspot_family_marker_fingerprint";
     public const string HotspotFamilyIncompleteMarkerFingerprintPrefix = "incomplete:";
@@ -62,13 +62,15 @@ public partial class DbContext : IDisposable
     public const string SqlGraphContractVersionMetaKey = "sql_graph_contract_version";
     public const int HdlGraphContractVersion = 1;
     public const string HdlGraphContractVersionMetaKey = "hdl_graph_contract_version";
-    // Version 6 (#4850) invalidates C# instantiate candidates written before constructor
-    // callables and logical partial-type families had separate identities. Version 5
-    // (#4846) previously made Markdown fragment resolution document/path-scoped.
-    // バージョン 6 (#4850) では、constructor callable と logical partial type family の
-    // identity 分離前に書かれた C# instantiate candidate を無効化する。バージョン 5
-    // (#4846) では Markdown fragment 解決を document/path 内に限定した。
-    public const int ReferenceIdentityContractVersion = 6;
+    // Version 7 (#4914) invalidates C# candidates written before file-local partial families
+    // carried source-file identity. Version 6 (#4850) previously separated constructor
+    // callables from logical partial-type families; version 5 (#4846) made Markdown fragment
+    // resolution document/path-scoped.
+    // バージョン 7 (#4914) では、file-local partial family が source-file identity を持つ前の
+    // C# candidate を無効化する。バージョン 6 (#4850) は constructor callable と logical
+    // partial type family を分離し、バージョン 5 (#4846) は Markdown fragment 解決を
+    // document/path 内に限定した。
+    public const int ReferenceIdentityContractVersion = 7;
     public const string ReferenceIdentityContractVersionMetaKey = "reference_identity_contract_version";
     public static string GetDynamicReferenceGraphContractVersionMetaKey(string lang) =>
         $"dynamic_reference_graph_contract_version_{lang}";

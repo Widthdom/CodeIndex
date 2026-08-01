@@ -424,7 +424,7 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void PartialCanonicalRepresentative_UsesSemanticRulesAndExposesFamilyNavigation_Issue4914()
     {
-        Assert.Equal(9, DbContext.HotspotFamilyVersion);
+        Assert.Equal(10, DbContext.HotspotFamilyVersion);
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_canonical_issue4914");
         try
         {
@@ -1722,6 +1722,7 @@ public partial class QueryCommandRunnerTests
     public void PartialCanonicalRepresentative_RespectsFileLocalAndLexedEvidence_Issue4914()
     {
         const string definingLine = "    [M()] partial /* M( */ void M();";
+        var publicDefiningLine = definingLine.Replace("partial", "public partial", StringComparison.Ordinal);
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_file_local_issue4914");
         try
         {
@@ -1737,9 +1738,13 @@ public partial class QueryCommandRunnerTests
                     file sealed class MAttribute : Attribute { }
                     file partial class Host
                     {
-                    {{definingLine}}
-                        partial void M() { }
+                    {{publicDefiningLine}}
                     }
+                    partial class Host
+                    {
+                        public partial void M() { }
+                    }
+                    file sealed class Use { public void Call() { new Host().M(); } }
                     """);
             }
             TestProjectHelper.InsertIndexedFile(
@@ -1781,8 +1786,74 @@ public partial class QueryCommandRunnerTests
                         members,
                         member => member.GetProperty("line").GetInt32() == 5
                             && member.GetProperty("start_column").GetInt32()
-                                == definingLine.LastIndexOf("M", StringComparison.Ordinal));
+                                == publicDefiningLine.LastIndexOf("M", StringComparison.Ordinal));
                 });
+
+            var (hostExitCode, hostStdout, hostStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["Host", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "class", "--group-partials", "--include-generated", "--limit", "10"],
+                _jsonOptions));
+            using var hostDocument = ParseJsonOutput(hostStdout);
+            var hostFamilies = hostDocument.RootElement.EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, hostExitCode);
+            Assert.Equal(string.Empty, hostStderr);
+            Assert.Equal(2, hostFamilies.Count);
+            Assert.All(hostFamilies, family => Assert.Equal(2, family.GetProperty("definition_sites").GetInt32()));
+            Assert.All(
+                hostFamilies,
+                family => Assert.Single(
+                    family.GetProperty("family_members")
+                        .EnumerateArray()
+                        .Select(member => member.GetProperty("path").GetString())
+                        .Distinct(StringComparer.Ordinal)));
+
+            var (hotspotsExitCode, hotspotsStdout, hotspotsStderr) = CaptureConsole(() => QueryCommandRunner.RunHotspots(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "function", "--limit", "10"],
+                _jsonOptions));
+            using var hotspotsDocument = ParseJsonOutput(hotspotsStdout);
+            var methodHotspots = hotspotsDocument.RootElement.GetProperty("hotspots")
+                .EnumerateArray()
+                .Where(hotspot => hotspot.GetProperty("name").GetString() == "M")
+                .ToList();
+
+            Assert.Equal(CommandExitCodes.Success, hotspotsExitCode);
+            Assert.Equal(string.Empty, hotspotsStderr);
+            Assert.Equal(2, methodHotspots.Count);
+            Assert.All(methodHotspots, hotspot => Assert.Equal(2, hotspot.GetProperty("reference_count").GetInt32()));
+            Assert.Equal(
+                2,
+                methodHotspots
+                    .Select(hotspot => hotspot.GetProperty("path").GetString())
+                    .Distinct(StringComparer.Ordinal)
+                    .Count());
+
+            using (var connection = new SqliteConnection($"Data Source={dbPath}"))
+            {
+                connection.Open();
+                using var candidatePaths = connection.CreateCommand();
+                candidatePaths.CommandText =
+                    """
+                    SELECT source_file.path, target_file.path
+                    FROM symbol_references AS reference
+                    JOIN files AS source_file ON source_file.id = reference.file_id
+                    JOIN symbol_reference_candidates AS candidate ON candidate.reference_id = reference.id
+                    JOIN symbols AS target ON target.id = candidate.symbol_id
+                    JOIN files AS target_file ON target_file.id = target.file_id
+                    WHERE reference.symbol_name IN ('Host', 'M')
+                      AND reference.reference_kind IN ('instantiate', 'call')
+                    ORDER BY source_file.path, target_file.path
+                    """;
+                using var reader = candidatePaths.ExecuteReader();
+                var resolvedPaths = new List<(string Source, string Target)>();
+                while (reader.Read())
+                    resolvedPaths.Add((reader.GetString(0), reader.GetString(1)));
+
+                Assert.NotEmpty(resolvedPaths);
+                Assert.All(resolvedPaths, paths => Assert.Equal(paths.Source, paths.Target));
+                Assert.Equal(
+                    ["src/A.Local.cs", "src/B.Local.cs"],
+                    resolvedPaths.Select(paths => paths.Source).Distinct(StringComparer.Ordinal).ToArray());
+            }
 
             var widget = RunGroupedSymbol(dbPath, "Widget", "class");
             Assert.Equal("src/A.Widget.cs", widget.GetProperty("path").GetString());

@@ -7,7 +7,6 @@ namespace CodeIndex.Database;
 internal static class LogicalPartialSymbolGrouper
 {
     private const char KeySeparator = '\u001f';
-    private const string CSharpFileLocalFamilyPrefix = "file-local:";
     private static readonly IReadOnlyDictionary<string, string> CSharpPredefinedTypeIdentities =
         new Dictionary<string, string>(StringComparer.Ordinal)
         {
@@ -68,8 +67,7 @@ internal static class LogicalPartialSymbolGrouper
             return $"'symbol:' || {symbolIdSql}";
 
         var persistedFamilySql = $"NULLIF(TRIM({familyKeySql}), '')";
-        var persistedFamilyBodySql = $"CASE WHEN INSTR(COALESCE({persistedFamilySql}, ''), '|') > 0 THEN SUBSTR({persistedFamilySql}, INSTR({persistedFamilySql}, '|') + 1) ELSE {persistedFamilySql} END";
-        var scopedPersistedFamilySql = $"CASE WHEN SUBSTR(COALESCE({persistedFamilyBodySql}, ''), 1, {CSharpFileLocalFamilyPrefix.Length}) = '{CSharpFileLocalFamilyPrefix}' THEN {persistedFamilySql} || CHAR(31) || {fileIdentitySql} ELSE {persistedFamilySql} END";
+        var scopedPersistedFamilySql = persistedFamilySql;
         var fallbackContainerSql = $"COALESCE(NULLIF(TRIM({containerQualifiedNameSql}), ''), NULLIF(TRIM({containerNameSql}), ''), '')";
         var normalizedSignatureSql = $"REPLACE(REPLACE(REPLACE(LOWER(COALESCE({signatureSql}, '')), CHAR(9), ' '), CHAR(10), ' '), CHAR(13), ' ')";
         var signaturePartialDeclarationSql = $"INSTR(' ' || {normalizedSignatureSql} || ' ', ' partial ') > 0";

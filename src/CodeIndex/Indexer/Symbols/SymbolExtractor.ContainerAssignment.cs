@@ -79,7 +79,9 @@ public static partial class SymbolExtractor
     private static void AssignContainers(
         List<SymbolRecord> symbols,
         string[]? rawLines = null,
-        Func<CSharpLexState[]>? getCSharpLineStartStates = null)
+        Func<CSharpLexState[]>? getCSharpLineStartStates = null,
+        string? filePath = null,
+        string? projectRoot = null)
     {
         if (symbols.Count == 0)
             return;
@@ -87,6 +89,7 @@ public static partial class SymbolExtractor
         if (symbols.Count == 1)
         {
             AssignTopLevelFamilyKey(symbols[0]);
+            FinalizeCSharpFileLocalFamilyKeys(symbols, filePath, projectRoot);
             return;
         }
 
@@ -95,6 +98,7 @@ public static partial class SymbolExtractor
         {
             foreach (var symbol in symbols)
                 AssignTopLevelFamilyKey(symbol);
+            FinalizeCSharpFileLocalFamilyKeys(symbols, filePath, projectRoot);
             return;
         }
 
@@ -178,7 +182,70 @@ public static partial class SymbolExtractor
             if (CanContainSymbols(symbol, includeCallableContainers))
                 stack.Push(symbol);
         }
+
+        FinalizeCSharpFileLocalFamilyKeys(symbols, filePath, projectRoot);
     }
+
+    private static void FinalizeCSharpFileLocalFamilyKeys(
+        IReadOnlyList<SymbolRecord> symbols,
+        string? filePath,
+        string? projectRoot)
+    {
+        var fileLocalFamilyBodies = symbols
+            .Select(symbol => symbol.FamilyKey)
+            .Where(familyKey => familyKey?.StartsWith(CSharpFileLocalFamilyPrefix, StringComparison.Ordinal) == true)
+            .Select(familyKey => familyKey![CSharpFileLocalFamilyPrefix.Length..])
+            .ToHashSet(StringComparer.Ordinal);
+        if (fileLocalFamilyBodies.Count == 0)
+            return;
+
+        // C# permits the `file` modifier on only one part of a same-file partial type.
+        // Propagate that scope to every matching declaration and inherited member before
+        // persistence, then make the persisted key file-specific so all consumers,
+        // including hotspots, observe the same boundary without reconstructing it.
+        // C# では同一ファイル内の partial type の一部だけに `file` を付けられる。
+        // 永続化前に同じ family の全宣言と配下 member へ scope を伝播し、さらに
+        // 永続 key をファイル固有にして hotspots を含む全 consumer の境界を揃える。
+        var fileIdentity = BuildCSharpFileLocalIdentity(filePath, projectRoot, symbols);
+        foreach (var symbol in symbols)
+        {
+            if (string.IsNullOrWhiteSpace(symbol.FamilyKey))
+                continue;
+
+            var alreadyFileLocal = symbol.FamilyKey.StartsWith(
+                CSharpFileLocalFamilyPrefix,
+                StringComparison.Ordinal);
+            var familyBody = alreadyFileLocal
+                ? symbol.FamilyKey[CSharpFileLocalFamilyPrefix.Length..]
+                : symbol.FamilyKey;
+            if (!fileLocalFamilyBodies.Contains(familyBody))
+                continue;
+
+            symbol.FamilyKey = $"{CSharpFileLocalFamilyPrefix}{fileIdentity}\u001f{familyBody}";
+            if (IsCSharpTypeFamilyKind(symbol.Kind) && symbol.IsPartialDeclaration == true)
+                symbol.IsFileLocalDeclaration = true;
+        }
+    }
+
+    private static string BuildCSharpFileLocalIdentity(
+        string? filePath,
+        string? projectRoot,
+        IReadOnlyList<SymbolRecord> symbols)
+    {
+        if (!string.IsNullOrWhiteSpace(filePath))
+        {
+            var identity = filePath;
+            if (Path.IsPathRooted(identity) && !string.IsNullOrWhiteSpace(projectRoot))
+                identity = Path.GetRelativePath(projectRoot, identity);
+            return identity.Replace('\\', '/');
+        }
+
+        var fileId = symbols.Count > 0 ? symbols[0].FileId : 0;
+        return $"file-id:{fileId.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+    }
+
+    private static bool IsCSharpTypeFamilyKind(string kind) =>
+        kind is "class" or "struct" or "interface" or "record";
 
     private static void AssignTopLevelFamilyKey(SymbolRecord symbol)
         => symbol.FamilyKey ??= BuildSelfFamilyKey(symbol, Array.Empty<SymbolRecord>());

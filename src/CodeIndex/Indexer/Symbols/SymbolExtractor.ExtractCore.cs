@@ -1275,6 +1275,7 @@ public static partial class SymbolExtractor
             fileId,
             lang,
             filePath,
+            projectRoot,
             lines,
             symbols,
             extractionState,
