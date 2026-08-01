@@ -7,6 +7,7 @@ internal sealed class FtsBulkLoadTriggerGuard : IDisposable
 
     private readonly Func<bool>? _shouldRebuildOnAbandon;
     private readonly long _durableCommitGenerationAtStart;
+    private bool _preserveCompleteFailure;
     private DbWriter? _writer;
 
     private FtsBulkLoadTriggerGuard(DbWriter writer, Func<bool>? shouldRebuildOnAbandon)
@@ -133,6 +134,15 @@ internal sealed class FtsBulkLoadTriggerGuard : IDisposable
             _writer = null;
             throw;
         }
+        catch
+        {
+            // Dispose still retries recovery, but a second cleanup failure must not replace the
+            // actionable exception from the normal completion path.
+            // Dispose でも recovery は再試行するが、2 回目の cleanup failure で通常の
+            // completion path からの実行可能な例外を上書きしてはならない。
+            _preserveCompleteFailure = true;
+            throw;
+        }
     }
 
     public void Dispose()
@@ -176,7 +186,8 @@ internal sealed class FtsBulkLoadTriggerGuard : IDisposable
             {
                 // The original cleanup failure is the actionable error.
             }
-            throw;
+            if (!_preserveCompleteFailure)
+                throw;
         }
         finally
         {
