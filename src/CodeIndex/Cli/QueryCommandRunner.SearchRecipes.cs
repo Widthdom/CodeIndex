@@ -2465,7 +2465,24 @@ public static partial class QueryCommandRunner
         int typeStartIndex,
         ref int index)
     {
-        var mayCloseGenericWrapper = HasJsonTrustUnclosedGenericBefore(line, typeStartIndex);
+        var enclosingGenericDepth = GetJsonTrustUnclosedGenericDepthBefore(line, typeStartIndex);
+        while (enclosingGenericDepth > 0 && index < line.Length)
+        {
+            switch (line[index])
+            {
+                case '<':
+                    enclosingGenericDepth++;
+                    break;
+                case '>':
+                    enclosingGenericDepth--;
+                    break;
+                case ';' or '=' or '{' or '}':
+                    return;
+            }
+
+            index++;
+        }
+
         while (true)
         {
             SkipJsonTrustWhitespace(line, ref index);
@@ -2479,19 +2496,14 @@ public static partial class QueryCommandRunner
                 index += 2;
                 continue;
             }
-            if (mayCloseGenericWrapper && index < line.Length && line[index] == '>')
-            {
-                index++;
-                continue;
-            }
-
             return;
         }
     }
 
-    private static bool HasJsonTrustUnclosedGenericBefore(string line, int typeStartIndex)
+    private static int GetJsonTrustUnclosedGenericDepthBefore(string line, int typeStartIndex)
     {
         var closingDepth = 0;
+        var unclosedDepth = 0;
         for (var index = typeStartIndex - 1; index >= 0; index--)
         {
             switch (line[index])
@@ -2503,13 +2515,14 @@ public static partial class QueryCommandRunner
                     closingDepth--;
                     break;
                 case '<':
-                    return true;
+                    unclosedDepth++;
+                    break;
                 case ';' or '=' or '{' or '}':
-                    return false;
+                    return unclosedDepth;
             }
         }
 
-        return false;
+        return unclosedDepth;
     }
 
     private static bool IsJsonTrustMethodDeclarationSuffix(string line, int index)
@@ -2735,6 +2748,8 @@ public static partial class QueryCommandRunner
                     break;
 
                 var priorSite = new JsonTrustMatchSite(operationLine, occurrence + 1, query.Length);
+                if (occurrence + query.Length > prefixLength)
+                    return true;
                 if (!IsJsonTrustDeclarationFacetBeforeLaterMatch(
                         priorSite,
                         [priorSite, currentSite],
@@ -2985,6 +3000,9 @@ public static partial class QueryCommandRunner
         IReadOnlyList<string> tokens,
         int assignmentIndex)
     {
+        if (IsJsonTrustDeclarationAssignmentTarget(tokens, assignmentIndex))
+            return false;
+
         var genericDepth = 0;
         for (var index = 0; index < assignmentIndex; index++)
         {
@@ -3021,6 +3039,18 @@ public static partial class QueryCommandRunner
         }
 
         return false;
+    }
+
+    private static bool IsJsonTrustDeclarationAssignmentTarget(
+        IReadOnlyList<string> tokens,
+        int assignmentIndex)
+    {
+        if (assignmentIndex < 2 || !IsJsonTrustIdentifierToken(tokens[assignmentIndex - 1]))
+            return false;
+
+        var precedingToken = tokens[assignmentIndex - 2];
+        return IsJsonTrustIdentifierToken(precedingToken)
+            || precedingToken is ">" or "]" or "?" or "*" or ")";
     }
 
     private static List<string> TokenizeJsonTrustCSharpPrefix(ReadOnlySpan<char> prefix)

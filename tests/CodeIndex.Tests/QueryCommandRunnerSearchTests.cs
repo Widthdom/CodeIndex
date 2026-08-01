@@ -3434,6 +3434,37 @@ public partial class QueryCommandRunnerTests
                 """);
             TestProjectHelper.InsertIndexedFile(
                 dbPath,
+                "src/outer-generic-return-utf8-writer.cs",
+                "csharp",
+                """
+                using System;
+                using System.IO;
+                using System.Text.Json;
+
+                public static class OuterGenericReturnUtf8Writer
+                {
+                    // cdidx-audit: json-trust origin=private_local direction=write sensitivity=diagnostic trust=controlled rationale=outer_generic_return_private_writer
+                    public static Tuple<Utf8JsonWriter, int> Create(Stream stream) => new(new Utf8JsonWriter(stream), 1);
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/qualified-utf8-writer.cs",
+                "csharp",
+                """
+                using System.IO;
+
+                public static class QualifiedUtf8Writer
+                {
+                    public static void Create(Stream stream)
+                    {
+                        // cdidx-audit: json-trust origin=private_local direction=write sensitivity=diagnostic trust=controlled rationale=qualified_local_declaration
+                        System.Text.Json.Utf8JsonWriter writer = new System.Text.Json.Utf8JsonWriter(stream);
+                    }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
                 "src/cross-query-writer.cs",
                 "csharp",
                 """
@@ -3446,6 +3477,23 @@ public partial class QueryCommandRunnerTests
                     {
                         // cdidx-audit: json-trust origin=private_local direction=write sensitivity=diagnostic trust=controlled rationale=first_selected_json_operation_only
                         return JsonSerializer.Serialize(new Utf8JsonWriter(stream));
+                    }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/overlapping-parser.cs",
+                "csharp",
+                """
+                using System.IO;
+                using System.Text.Json;
+
+                public static class OverlappingParser
+                {
+                    public static object Parse(Stream stream)
+                    {
+                        // cdidx-audit: json-trust origin=network direction=read sensitivity=untrusted trust=untrusted rationale=first_overlapping_query_only
+                        return JsonSerializer.DeserializeAsyncEnumerable<object>(stream);
                     }
                 }
                 """);
@@ -3485,7 +3533,7 @@ public partial class QueryCommandRunnerTests
                 ["--recipe", "json-parse-apis/json-serializer-serialize", "--db", dbPath, "--path", "src/nested-serializer-writer.cs", "--path", "src/cast-serializer-writer.cs", "--path", "src/multiline-serializer-writer.cs", "--json", "--limit", "10", "--snippet-lines", "1"],
                 _jsonOptions));
             var (utf8ExitCode, utf8Stdout, utf8Stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                ["--recipe", "json-parse-apis/utf8-json-writer", "--db", dbPath, "--path", "src/explicit-utf8-writer.cs", "--path", "src/expression-bodied-utf8-writer.cs", "--path", "src/generic-return-utf8-writer.cs", "--json", "--limit", "10", "--snippet-lines", "1"],
+                ["--recipe", "json-parse-apis/utf8-json-writer", "--db", dbPath, "--path", "src/explicit-utf8-writer.cs", "--path", "src/expression-bodied-utf8-writer.cs", "--path", "src/generic-return-utf8-writer.cs", "--path", "src/outer-generic-return-utf8-writer.cs", "--path", "src/qualified-utf8-writer.cs", "--json", "--limit", "10", "--snippet-lines", "1"],
                 _jsonOptions));
             var (crossQueryExitCode, crossQueryStdout, crossQueryStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 [
@@ -3494,6 +3542,18 @@ public partial class QueryCommandRunnerTests
                     "--include-query", "json-serializer-serialize",
                     "--db", dbPath,
                     "--path", "src/cross-query-writer.cs",
+                    "--json",
+                    "--limit", "10",
+                    "--snippet-lines", "1",
+                ],
+                _jsonOptions));
+            var (overlapQueryExitCode, overlapQueryStdout, overlapQueryStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [
+                    "--recipe", "json-parse-apis",
+                    "--include-query", "json-serializer-deserialize",
+                    "--include-query", "json-async-deserialize",
+                    "--db", dbPath,
+                    "--path", "src/overlapping-parser.cs",
                     "--json",
                     "--limit", "10",
                     "--snippet-lines", "1",
@@ -3778,7 +3838,7 @@ public partial class QueryCommandRunnerTests
             using (var document = ParseJsonOutput(utf8Stdout))
             {
                 var query = Assert.Single(document.RootElement.GetProperty("queries").EnumerateArray());
-                AssertJsonTrustClassifierCounts(query, ("controlled_private_writer", 3));
+                AssertJsonTrustClassifierCounts(query, ("controlled_private_writer", 5));
                 var results = query.GetProperty("results").EnumerateArray().ToArray();
                 AssertJsonTrustClassification(
                     Assert.Single(results, result => result.GetProperty("path").GetString() == "src/explicit-utf8-writer.cs"),
@@ -3794,6 +3854,16 @@ public partial class QueryCommandRunnerTests
                     Assert.Single(results, result => result.GetProperty("path").GetString() == "src/generic-return-utf8-writer.cs"),
                     "controlled_private_writer",
                     "rationale:generic_return_private_writer",
+                    "annotation_status:valid");
+                AssertJsonTrustClassification(
+                    Assert.Single(results, result => result.GetProperty("path").GetString() == "src/outer-generic-return-utf8-writer.cs"),
+                    "controlled_private_writer",
+                    "rationale:outer_generic_return_private_writer",
+                    "annotation_status:valid");
+                AssertJsonTrustClassification(
+                    Assert.Single(results, result => result.GetProperty("path").GetString() == "src/qualified-utf8-writer.cs"),
+                    "controlled_private_writer",
+                    "rationale:qualified_local_declaration",
                     "annotation_status:valid");
             }
 
@@ -3817,6 +3887,31 @@ public partial class QueryCommandRunnerTests
                 AssertJsonTrustClassifierCounts(writerQuery, ("ambiguous_trust", 1));
                 AssertJsonTrustClassification(
                     Assert.Single(writerQuery.GetProperty("results").EnumerateArray()),
+                    "ambiguous_trust",
+                    "rationale:annotation_not_bound_to_operation",
+                    "annotation_status:not_adjacent");
+            }
+
+            Assert.Equal(CommandExitCodes.Success, overlapQueryExitCode);
+            Assert.Equal(string.Empty, overlapQueryStderr);
+            using (var document = ParseJsonOutput(overlapQueryStdout))
+            {
+                var queries = document.RootElement.GetProperty("queries").EnumerateArray().ToArray();
+                var serializerQuery = Assert.Single(
+                    queries,
+                    query => query.GetProperty("name").GetString() == "json-serializer-deserialize");
+                var asyncQuery = Assert.Single(
+                    queries,
+                    query => query.GetProperty("name").GetString() == "json-async-deserialize");
+                AssertJsonTrustClassifierCounts(serializerQuery, ("untrusted_parser", 1));
+                AssertJsonTrustClassification(
+                    Assert.Single(serializerQuery.GetProperty("results").EnumerateArray()),
+                    "untrusted_parser",
+                    "rationale:first_overlapping_query_only",
+                    "annotation_status:valid");
+                AssertJsonTrustClassifierCounts(asyncQuery, ("ambiguous_trust", 1));
+                AssertJsonTrustClassification(
+                    Assert.Single(asyncQuery.GetProperty("results").EnumerateArray()),
                     "ambiguous_trust",
                     "rationale:annotation_not_bound_to_operation",
                     "annotation_status:not_adjacent");
