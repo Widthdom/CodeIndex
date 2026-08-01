@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
 using CodeIndex.Indexer;
@@ -220,7 +221,7 @@ public partial class DbReader
             return null;
 
         var normalizedSignature = lang == "csharp"
-            ? ExactSourceSearchNormalizer.NormalizeCSharpUnicodeEscapes(signature, out _)
+            ? NormalizeCSharpSignatureForOutline(signature)
             : signature;
         var openParen = FindCallableParameterOpenParen(
             normalizedSignature,
@@ -230,30 +231,87 @@ public partial class DbReader
         if (openParen < 0)
             return null;
 
-        var closeParen = FindMatchingParen(normalizedSignature, openParen);
+        var closeParen = lang == "csharp"
+            ? FindMatchingCSharpDelimiter(normalizedSignature, openParen, '(', ')')
+            : FindMatchingParen(normalizedSignature, openParen);
         if (closeParen < 0)
             return null;
 
         var parameters = normalizedSignature.Substring(openParen + 1, closeParen - openParen - 1);
-        var normalizedTypeParameters = BuildNormalizedCSharpTypeParameterMap(csharpTypeParameters);
-        var parameterLabels = SplitTopLevelParameters(parameters)
-            .Select(parameter => normalizedTypeParameters == null
-                ? SimplifyParameterForOutline(parameter, lang)
-                : SimplifyCSharpGenericParameterForOutline(parameter, normalizedTypeParameters))
+        var splitParameters = (lang == "csharp"
+                ? SplitTopLevelCSharpParameters(parameters)
+                : SplitTopLevelParameters(parameters))
+            .ToList();
+        if (csharpTypeParameters == null)
+        {
+            var ordinaryParameterLabels = splitParameters
+                .Select(parameter => SimplifyParameterForOutline(parameter, lang))
+                .Where(parameter => !string.IsNullOrWhiteSpace(parameter));
+            return $"{name}({string.Join(", ", ordinaryParameterLabels)})";
+        }
+
+        var simplifiedParameters = splitParameters
+            .Select(SimplifyCSharpGenericParameterForOutline)
             .Where(parameter => !string.IsNullOrWhiteSpace(parameter))
             .ToList();
-
-        var displayName = normalizedTypeParameters == null
-            ? name
-            : name + BuildNormalizedCSharpTypeParameterSuffix(csharpTypeParameters!.Count);
+        var normalizedTypeParameters = BuildNormalizedCSharpTypeParameterMap(
+            csharpTypeParameters,
+            simplifiedParameters);
+        var parameterLabels = simplifiedParameters
+            .Select(parameter => ReplaceCSharpTypeParameterTokens(
+                parameter,
+                csharpTypeParameters,
+                normalizedTypeParameters))
+            .ToList();
+        var displayName = name + BuildNormalizedCSharpTypeParameterSuffix(
+            csharpTypeParameters,
+            normalizedTypeParameters);
         return $"{displayName}({string.Join(", ", parameterLabels)})";
+    }
+
+    private readonly record struct CSharpTypeParameterName(string Name, bool RequiresEscape);
+
+    private static string NormalizeCSharpSignatureForOutline(string signature)
+    {
+        var builder = new StringBuilder(signature.Length);
+        var segmentStart = 0;
+        var index = 0;
+        while (index < signature.Length)
+        {
+            if (!TryGetCSharpLexicalRegionEnd(signature, index, out var regionEnd))
+            {
+                index++;
+                continue;
+            }
+
+            AppendNormalizedCSharpSignatureSegment(builder, signature, segmentStart, index);
+            builder.Append(signature, index, regionEnd - index);
+            index = regionEnd;
+            segmentStart = regionEnd;
+        }
+
+        AppendNormalizedCSharpSignatureSegment(builder, signature, segmentStart, signature.Length);
+        return builder.ToString();
+    }
+
+    private static void AppendNormalizedCSharpSignatureSegment(
+        StringBuilder builder,
+        string signature,
+        int start,
+        int end)
+    {
+        if (end <= start)
+            return;
+
+        var segment = signature[start..end];
+        builder.Append(ExactSourceSearchNormalizer.NormalizeCSharpUnicodeEscapes(segment, out _));
     }
 
     private static int FindCallableParameterOpenParen(
         string signature,
         string name,
         string? lang,
-        out IReadOnlyList<string>? csharpTypeParameters)
+        out IReadOnlyList<CSharpTypeParameterName>? csharpTypeParameters)
     {
         csharpTypeParameters = null;
         var searchStart = 0;
@@ -285,7 +343,7 @@ public partial class DbReader
 
             if (lang == "csharp" && cursor < signature.Length && signature[cursor] == '<')
             {
-                var closeAngle = FindMatchingAngleBracket(signature, cursor);
+                var closeAngle = FindMatchingCSharpDelimiter(signature, cursor, '<', '>');
                 if (closeAngle > cursor
                     && TryReadCSharpTypeParameterNames(
                         signature[(cursor + 1)..closeAngle],
@@ -309,16 +367,26 @@ public partial class DbReader
         return -1;
     }
 
-    private static int FindMatchingAngleBracket(string value, int openAngle)
+    private static int FindMatchingCSharpDelimiter(
+        string value,
+        int openIndex,
+        char openDelimiter,
+        char closeDelimiter)
     {
         var depth = 0;
-        for (var i = openAngle; i < value.Length; i++)
+        for (var i = openIndex; i < value.Length; i++)
         {
-            if (value[i] == '<')
+            if (TryGetCSharpLexicalRegionEnd(value, i, out var regionEnd))
+            {
+                i = regionEnd - 1;
+                continue;
+            }
+
+            if (value[i] == openDelimiter)
             {
                 depth++;
             }
-            else if (value[i] == '>')
+            else if (value[i] == closeDelimiter)
             {
                 depth--;
                 if (depth == 0)
@@ -329,81 +397,260 @@ public partial class DbReader
         return -1;
     }
 
+    private static bool TryGetCSharpLexicalRegionEnd(string value, int start, out int end)
+    {
+        end = start;
+        if (start + 1 < value.Length && value[start] == '/')
+        {
+            if (value[start + 1] == '/')
+            {
+                var newline = value.IndexOf('\n', start + 2);
+                end = newline < 0 ? value.Length : newline + 1;
+                return true;
+            }
+
+            if (value[start + 1] == '*')
+            {
+                var close = value.IndexOf("*/", start + 2, StringComparison.Ordinal);
+                end = close < 0 ? value.Length : close + 2;
+                return true;
+            }
+        }
+
+        if (value[start] == '\'')
+        {
+            end = FindCSharpQuotedLiteralEnd(value, start, '\'', verbatim: false);
+            return true;
+        }
+
+        var quoteStart = -1;
+        var verbatim = false;
+        if (value[start] == '"')
+        {
+            quoteStart = start;
+        }
+        else if (value[start] == '@' && start + 1 < value.Length && value[start + 1] == '"')
+        {
+            quoteStart = start + 1;
+            verbatim = true;
+        }
+        else if (value[start] == '$')
+        {
+            var cursor = start;
+            while (cursor < value.Length && value[cursor] == '$')
+                cursor++;
+            if (cursor < value.Length && value[cursor] == '@')
+            {
+                verbatim = true;
+                cursor++;
+            }
+
+            if (cursor < value.Length && value[cursor] == '"')
+                quoteStart = cursor;
+        }
+        else if (value[start] == '@'
+                 && start + 2 < value.Length
+                 && value[start + 1] == '$'
+                 && value[start + 2] == '"')
+        {
+            quoteStart = start + 2;
+            verbatim = true;
+        }
+
+        if (quoteStart < 0)
+            return false;
+
+        var quoteCount = 1;
+        while (quoteStart + quoteCount < value.Length && value[quoteStart + quoteCount] == '"')
+            quoteCount++;
+        end = quoteCount >= 3
+            ? FindCSharpRawStringEnd(value, quoteStart, quoteCount)
+            : FindCSharpQuotedLiteralEnd(value, quoteStart, '"', verbatim);
+        return true;
+    }
+
+    private static int FindCSharpQuotedLiteralEnd(
+        string value,
+        int quoteStart,
+        char quote,
+        bool verbatim)
+    {
+        for (var i = quoteStart + 1; i < value.Length; i++)
+        {
+            if (verbatim && value[i] == quote && i + 1 < value.Length && value[i + 1] == quote)
+            {
+                i++;
+                continue;
+            }
+
+            if (!verbatim && value[i] == '\\')
+            {
+                i++;
+                continue;
+            }
+
+            if (value[i] == quote)
+                return i + 1;
+        }
+
+        return value.Length;
+    }
+
+    private static int FindCSharpRawStringEnd(string value, int quoteStart, int quoteCount)
+    {
+        for (var i = quoteStart + quoteCount; i < value.Length; i++)
+        {
+            if (value[i] != '"')
+                continue;
+
+            var runLength = 1;
+            while (i + runLength < value.Length && value[i + runLength] == '"')
+                runLength++;
+            if (runLength >= quoteCount)
+                return i + quoteCount;
+
+            i += runLength - 1;
+        }
+
+        return value.Length;
+    }
+
     private static bool TryReadCSharpTypeParameterNames(
         string typeParameterList,
-        out IReadOnlyList<string> typeParameters)
+        out IReadOnlyList<CSharpTypeParameterName> typeParameters)
     {
-        var parsed = new List<string>();
+        var parsed = new List<CSharpTypeParameterName>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var parameter in SplitTopLevelParameters(typeParameterList))
+        foreach (var parameter in SplitTopLevelCSharpParameters(typeParameterList))
         {
             var name = ReadTrailingCSharpIdentifier(parameter);
-            if (name == null || !seen.Add(name))
+            if (name == null || !seen.Add(name.Value.Name))
             {
-                typeParameters = Array.Empty<string>();
+                typeParameters = Array.Empty<CSharpTypeParameterName>();
                 return false;
             }
 
-            parsed.Add(name);
+            parsed.Add(name.Value);
         }
 
         typeParameters = parsed;
         return parsed.Count > 0;
     }
 
-    private static string? ReadTrailingCSharpIdentifier(string value)
+    private static CSharpTypeParameterName? ReadTrailingCSharpIdentifier(string value)
     {
         var end = value.Length;
         while (end > 0 && char.IsWhiteSpace(value[end - 1]))
             end--;
 
-        var start = end;
-        while (start > 0 && IsCSharpIdentifierPart(value[start - 1]))
-            start--;
-        if (start > 0 && value[start - 1] == '@')
-            start--;
-        if (start == end)
-            return null;
+        for (var start = 0; start < end;)
+        {
+            if (!TryReadCSharpIdentifierToken(
+                    value,
+                    start,
+                    out var tokenEnd,
+                    out var identifier,
+                    out var escaped))
+            {
+                start++;
+                continue;
+            }
 
-        var identifier = value[start..end];
-        if (identifier[0] == '@')
-            identifier = identifier[1..];
-        return identifier.Length > 0 && IsCSharpIdentifierStart(identifier[0])
-            ? identifier
-            : null;
+            if (tokenEnd == end)
+                return new CSharpTypeParameterName(identifier, escaped);
+
+            start = tokenEnd;
+        }
+
+        return null;
     }
 
-    private static Dictionary<string, string>? BuildNormalizedCSharpTypeParameterMap(
-        IReadOnlyList<string>? typeParameters)
+    private static Dictionary<string, string> BuildNormalizedCSharpTypeParameterMap(
+        IReadOnlyList<CSharpTypeParameterName> typeParameters,
+        IReadOnlyList<string> parameterTypes)
     {
-        if (typeParameters == null || typeParameters.Count == 0)
-            return null;
+        var typeParameterLookup = typeParameters.ToDictionary(
+            parameter => parameter.Name,
+            StringComparer.Ordinal);
+        var reservedNames = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var parameterType in parameterTypes)
+        {
+            for (var index = 0; index < parameterType.Length;)
+            {
+                if (!TryReadCSharpIdentifierToken(
+                        parameterType,
+                        index,
+                        out var tokenEnd,
+                        out var identifier,
+                        out var escaped))
+                {
+                    index++;
+                    continue;
+                }
+
+                if (!IsCSharpTypeParameterReference(
+                        parameterType,
+                        index,
+                        tokenEnd,
+                        identifier,
+                        escaped,
+                        typeParameterLookup))
+                {
+                    reservedNames.Add(identifier);
+                }
+
+                index = tokenEnd;
+            }
+        }
+
+        var placeholders = ChooseCSharpTypeParameterPlaceholders(typeParameters.Count, reservedNames);
 
         var normalized = new Dictionary<string, string>(typeParameters.Count, StringComparer.Ordinal);
         for (var i = 0; i < typeParameters.Count; i++)
-        {
-            normalized[typeParameters[i]] = typeParameters.Count == 1
-                ? "T"
-                : $"T{i + 1}";
-        }
+            normalized[typeParameters[i].Name] = placeholders[i];
 
         return normalized;
     }
 
-    private static string BuildNormalizedCSharpTypeParameterSuffix(int arity)
+    private static IReadOnlyList<string> ChooseCSharpTypeParameterPlaceholders(
+        int arity,
+        IReadOnlySet<string> reservedNames)
     {
-        if (arity == 1)
-            return "<T>";
-
-        return $"<{string.Join(", ", Enumerable.Range(1, arity).Select(index => $"T{index}"))}>";
+        for (var attempt = 0; ; attempt++)
+        {
+            var prefix = attempt switch
+            {
+                0 => "T",
+                1 => "TArg",
+                _ => $"TArg{attempt}",
+            };
+            var candidates = Enumerable.Range(1, arity)
+                .Select(index => arity == 1 && attempt == 0 ? prefix : $"{prefix}{index}")
+                .ToList();
+            if (candidates.All(candidate => !reservedNames.Contains(candidate)))
+                return candidates;
+        }
     }
 
-    private static string SimplifyCSharpGenericParameterForOutline(
-        string parameter,
-        IReadOnlyDictionary<string, string> typeParameters)
+    private static string BuildNormalizedCSharpTypeParameterSuffix(
+        IReadOnlyList<CSharpTypeParameterName> typeParameters,
+        IReadOnlyDictionary<string, string> normalizedTypeParameters)
     {
-        var cleaned = Regex.Replace(parameter, @"\s*=\s*.*$", "").Trim();
-        cleaned = Regex.Replace(cleaned, @"^\[[^\]]+\]\s*", "").Trim();
+        return $"<{string.Join(", ", typeParameters.Select(
+            parameter => normalizedTypeParameters[parameter.Name]))}>";
+    }
+
+    private static string SimplifyCSharpGenericParameterForOutline(string parameter)
+    {
+        var cleaned = RemoveCSharpDefaultValue(parameter).Trim();
+        while (cleaned.Length > 0 && cleaned[0] == '[')
+        {
+            var attributeEnd = FindMatchingCSharpDelimiter(cleaned, 0, '[', ']');
+            if (attributeEnd < 0)
+                return string.Empty;
+            cleaned = cleaned[(attributeEnd + 1)..].TrimStart();
+        }
+
         if (cleaned.Length == 0)
             return string.Empty;
 
@@ -428,14 +675,67 @@ public partial class DbReader
             cleaned = remainder.TrimStart();
         }
 
-        var typeName = SimplifyParameterForOutline(cleaned, "csharp");
+        var parts = cleaned.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var typeName = parts.Length <= 1
+            ? cleaned
+            : string.Join(" ", parts.Take(parts.Length - 1));
         if (typeName.Length == 0)
             return string.Empty;
 
-        typeName = ReplaceCSharpTypeParameterTokens(typeName, typeParameters);
         return overloadModifiers.Count == 0
             ? typeName
             : $"{string.Join(" ", overloadModifiers)} {typeName}";
+    }
+
+    private static string RemoveCSharpDefaultValue(string parameter)
+    {
+        var angleDepth = 0;
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        for (var i = 0; i < parameter.Length; i++)
+        {
+            if (TryGetCSharpLexicalRegionEnd(parameter, i, out var regionEnd))
+            {
+                i = regionEnd - 1;
+                continue;
+            }
+
+            switch (parameter[i])
+            {
+                case '<':
+                    angleDepth++;
+                    break;
+                case '>':
+                    if (angleDepth > 0) angleDepth--;
+                    break;
+                case '(':
+                    parenDepth++;
+                    break;
+                case ')':
+                    if (parenDepth > 0) parenDepth--;
+                    break;
+                case '[':
+                    bracketDepth++;
+                    break;
+                case ']':
+                    if (bracketDepth > 0) bracketDepth--;
+                    break;
+                case '{':
+                    braceDepth++;
+                    break;
+                case '}':
+                    if (braceDepth > 0) braceDepth--;
+                    break;
+                case '=' when angleDepth == 0
+                                   && parenDepth == 0
+                                   && bracketDepth == 0
+                                   && braceDepth == 0:
+                    return parameter[..i];
+            }
+        }
+
+        return parameter;
     }
 
     private static bool TryReadLeadingWord(string value, out string word, out string remainder)
@@ -458,48 +758,131 @@ public partial class DbReader
 
     private static string ReplaceCSharpTypeParameterTokens(
         string typeName,
-        IReadOnlyDictionary<string, string> typeParameters)
+        IReadOnlyList<CSharpTypeParameterName> typeParameters,
+        IReadOnlyDictionary<string, string> normalizedTypeParameters)
     {
+        var typeParameterLookup = typeParameters.ToDictionary(
+            parameter => parameter.Name,
+            StringComparer.Ordinal);
         var builder = new StringBuilder(typeName.Length);
         for (var i = 0; i < typeName.Length;)
         {
-            var tokenStart = i;
-            if (typeName[i] == '@'
-                && i + 1 < typeName.Length
-                && IsCSharpIdentifierStart(typeName[i + 1]))
+            if (!TryReadCSharpIdentifierToken(
+                    typeName,
+                    i,
+                    out var tokenEnd,
+                    out var identifier,
+                    out var escaped))
             {
+                builder.Append(typeName[i]);
                 i++;
-            }
-
-            if (!IsCSharpIdentifierStart(typeName[i]))
-            {
-                builder.Append(typeName[tokenStart]);
-                i = tokenStart + 1;
                 continue;
             }
 
-            i++;
-            while (i < typeName.Length && IsCSharpIdentifierPart(typeName[i]))
-                i++;
+            if (IsCSharpTypeParameterReference(
+                    typeName,
+                    i,
+                    tokenEnd,
+                    identifier,
+                    escaped,
+                    typeParameterLookup)
+                && normalizedTypeParameters.TryGetValue(identifier, out var normalized))
+            {
+                builder.Append(normalized);
+            }
+            else
+            {
+                builder.Append(typeName, i, tokenEnd - i);
+            }
 
-            var token = typeName[tokenStart..i];
-            var lookup = token[0] == '@' ? token[1..] : token;
-            builder.Append(typeParameters.TryGetValue(lookup, out var normalized)
-                ? normalized
-                : token);
+            i = tokenEnd;
         }
 
         return builder.ToString();
     }
 
+    private static bool IsCSharpTypeParameterReference(
+        string value,
+        int tokenStart,
+        int tokenEnd,
+        string identifier,
+        bool escaped,
+        IReadOnlyDictionary<string, CSharpTypeParameterName> typeParameters)
+    {
+        if (!typeParameters.TryGetValue(identifier, out var typeParameter)
+            || (typeParameter.RequiresEscape && !escaped))
+        {
+            return false;
+        }
+
+        var previous = tokenStart - 1;
+        while (previous >= 0 && char.IsWhiteSpace(value[previous]))
+            previous--;
+        if (previous >= 0 && value[previous] is '.' or ':')
+            return false;
+
+        var next = tokenEnd;
+        while (next < value.Length && char.IsWhiteSpace(value[next]))
+            next++;
+        return next + 1 >= value.Length || value[next] != ':' || value[next + 1] != ':';
+    }
+
+    private static bool TryReadCSharpIdentifierToken(
+        string value,
+        int start,
+        out int end,
+        out string identifier,
+        out bool escaped)
+    {
+        end = start;
+        identifier = string.Empty;
+        escaped = false;
+        if (start >= value.Length)
+            return false;
+
+        var identifierStart = start;
+        if (value[identifierStart] == '@')
+        {
+            escaped = true;
+            identifierStart++;
+        }
+
+        if (identifierStart >= value.Length || !IsCSharpIdentifierStart(value[identifierStart]))
+            return false;
+
+        end = identifierStart + 1;
+        while (end < value.Length && IsCSharpIdentifierPart(value[end]))
+            end++;
+
+        identifier = value[identifierStart..end];
+        return true;
+    }
+
     private static bool IsCSharpIdentifierStart(char value)
     {
-        return value == '_' || char.IsLetter(value);
+        if (value == '_' || char.IsSurrogate(value))
+            return true;
+
+        return char.GetUnicodeCategory(value) is
+            UnicodeCategory.UppercaseLetter or
+            UnicodeCategory.LowercaseLetter or
+            UnicodeCategory.TitlecaseLetter or
+            UnicodeCategory.ModifierLetter or
+            UnicodeCategory.OtherLetter or
+            UnicodeCategory.LetterNumber;
     }
 
     private static bool IsCSharpIdentifierPart(char value)
     {
-        return IsCSharpIdentifierStart(value) || char.IsDigit(value);
+        if (IsCSharpIdentifierStart(value))
+            return true;
+
+        return char.GetUnicodeCategory(value) is
+            UnicodeCategory.DecimalDigitNumber or
+            UnicodeCategory.ConnectorPunctuation or
+            UnicodeCategory.NonSpacingMark or
+            UnicodeCategory.SpacingCombiningMark or
+            UnicodeCategory.Format;
     }
 
     private static int FindMatchingParen(string value, int openParen)
@@ -554,6 +937,70 @@ public partial class DbReader
                 case ',' when angleDepth == 0 && parenDepth == 0 && bracketDepth == 0:
                     yield return parameters[start..i].Trim();
                     start = i + 1;
+                    break;
+            }
+        }
+
+        var last = parameters[start..].Trim();
+        if (last.Length > 0)
+            yield return last;
+    }
+
+    private static IEnumerable<string> SplitTopLevelCSharpParameters(string parameters)
+    {
+        var start = 0;
+        var angleDepth = 0;
+        var parenDepth = 0;
+        var bracketDepth = 0;
+        var braceDepth = 0;
+        var inDefaultValue = false;
+        for (var i = 0; i < parameters.Length; i++)
+        {
+            if (TryGetCSharpLexicalRegionEnd(parameters, i, out var regionEnd))
+            {
+                i = regionEnd - 1;
+                continue;
+            }
+
+            switch (parameters[i])
+            {
+                case '<' when !inDefaultValue:
+                    angleDepth++;
+                    break;
+                case '>' when !inDefaultValue:
+                    if (angleDepth > 0) angleDepth--;
+                    break;
+                case '(':
+                    parenDepth++;
+                    break;
+                case ')':
+                    if (parenDepth > 0) parenDepth--;
+                    break;
+                case '[':
+                    bracketDepth++;
+                    break;
+                case ']':
+                    if (bracketDepth > 0) bracketDepth--;
+                    break;
+                case '{':
+                    braceDepth++;
+                    break;
+                case '}':
+                    if (braceDepth > 0) braceDepth--;
+                    break;
+                case '=' when angleDepth == 0
+                                   && parenDepth == 0
+                                   && bracketDepth == 0
+                                   && braceDepth == 0:
+                    inDefaultValue = true;
+                    break;
+                case ',' when angleDepth == 0
+                                   && parenDepth == 0
+                                   && bracketDepth == 0
+                                   && braceDepth == 0:
+                    yield return parameters[start..i].Trim();
+                    start = i + 1;
+                    inDefaultValue = false;
                     break;
             }
         }

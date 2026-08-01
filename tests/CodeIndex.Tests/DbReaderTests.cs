@@ -7186,7 +7186,24 @@ public partial class DbReaderTests : IDisposable
     [Fact]
     public void GetOutline_CSharpGenericCallablesUseStableReadableSignatures_Issue4916()
     {
-        const string source = """
+        const string source = """"
+            using System;
+            using System.Collections.Generic;
+
+            [AttributeUsage(AttributeTargets.Parameter)]
+            public sealed class MarkerAttribute : Attribute
+            {
+                public MarkerAttribute(string text) { }
+            }
+
+            public sealed class T { }
+            public sealed class U { }
+
+            public static class Outer
+            {
+                public sealed class U { }
+            }
+
             public interface IWorker
             {
                 TResult Convert<TSource, TResult>(TSource source, ref TResult result)
@@ -7207,8 +7224,34 @@ public partial class DbReaderTests : IDisposable
             {
                 public void Convert(int count) { }
 
+                public void NonGenericLiteral(string closing = "\u0029", int count = 0) { }
+
                 public T Convert<T>(T value)
                     where T : notnull => value;
+
+                public void Qualified<U>(global::U one, Outer.U two, U three) { }
+
+                public void Collision<U>(U value) { }
+
+                public void Collision<U>(T value) { }
+
+                public void Keyword<@string>(string value) { }
+
+                public void Keyword<@string>(@string value) { }
+
+                public void Combining<T́>(T́ value) { }
+
+                public void Defaults<T>(
+                    string closing = ")",
+                    string comma = "a,b",
+                    char close = ')',
+                    T value = default!) { }
+
+                public void RawDefault<T>(string value = """a,b)""", T other = default!) { }
+
+                public void AttributeParam<T>([Marker("x]")] T value, int count) { }
+
+                public void Escaped<\u0055>(\u0055 value) { }
 
                 TResult IWorker.Convert<TSource, TResult>(TSource source, ref TResult result)
                     where TSource : class => result;
@@ -7219,7 +7262,7 @@ public partial class DbReaderTests : IDisposable
                         where TLocal : struct => values[0].Value;
                 }
             }
-            """;
+            """";
 
         InsertIndexedFile("src/generic-before.cs", "csharp", source);
         InsertIndexedFile("src/generic-after.cs", "csharp", "\n\n\n" + source);
@@ -7259,6 +7302,39 @@ public partial class DbReaderTests : IDisposable
         Assert.Contains(beforeCallables, symbol =>
             symbol.Name == "Local"
             && symbol.DisplayName == "Local<T>(T?[])");
+        Assert.Contains(beforeCallables, symbol =>
+            symbol.Name == "NonGenericLiteral"
+            && symbol.DisplayName == "NonGenericLiteral(string, int)");
+        Assert.Contains(beforeCallables, symbol =>
+            symbol.Name == "Qualified"
+            && symbol.DisplayName == "Qualified<T>(global::U, Outer.U, T)");
+        Assert.Contains(beforeCallables, symbol =>
+            symbol.Name == "Collision"
+            && symbol.DisplayName == "Collision<T>(T)");
+        Assert.Contains(beforeCallables, symbol =>
+            symbol.Name == "Collision"
+            && symbol.DisplayName == "Collision<TArg1>(T)");
+        Assert.Contains(beforeCallables, symbol =>
+            symbol.Name == "Keyword"
+            && symbol.DisplayName == "Keyword<T>(string)");
+        Assert.Contains(beforeCallables, symbol =>
+            symbol.Name == "Keyword"
+            && symbol.DisplayName == "Keyword<T>(T)");
+        Assert.Contains(beforeCallables, symbol =>
+            symbol.Name == "Combining"
+            && symbol.DisplayName == "Combining<T>(T)");
+        Assert.Contains(beforeCallables, symbol =>
+            symbol.Name == "Defaults"
+            && symbol.DisplayName == "Defaults<T>(string, string, char, T)");
+        Assert.Contains(beforeCallables, symbol =>
+            symbol.Name == "RawDefault"
+            && symbol.DisplayName == "RawDefault<T>(string, T)");
+        Assert.Contains(beforeCallables, symbol =>
+            symbol.Name == "AttributeParam"
+            && symbol.DisplayName == "AttributeParam<T>(T, int)");
+        Assert.Contains(beforeCallables, symbol =>
+            symbol.Name == "Escaped"
+            && symbol.DisplayName == "Escaped<T>(T)");
         Assert.DoesNotContain(beforeCallables, symbol =>
             symbol.DisplayName!.Contains('@', StringComparison.Ordinal));
 

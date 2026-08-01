@@ -197,11 +197,14 @@ Use `--allow-partial` only when automation deliberately accepts exit `0` for tha
 incomplete generation; JSON still reports `status: "partial"`.
 
 `outline` derives callable display names from persisted signatures without changing
-canonical symbol names, paths, or exact-query aliases. C# generic methods use stable
-arity placeholders (`<T>` or `<T1, T2, ...>`), substitute those placeholders in
-parameter types, omit constraints, and retain overload-significant `ref` / `out` /
-`in` modifiers. Older indexes whose callable signature is missing, truncated, or
-incomplete retain the compatibility fallback `Name@line` until they are reindexed.
+canonical symbol names, paths, or exact-query aliases. C# generic methods normally use
+stable arity placeholders (`<T>` or `<T1, T2, ...>`), choosing deterministic
+collision-free `TArg` placeholders when a concrete type name would be ambiguous. The
+reader substitutes method-type-parameter references without rewriting qualified types,
+parses attributes and default-value literals lexically, omits constraints, and retains
+overload-significant `ref` / `out` / `in` modifiers. Older indexes whose callable
+signature is missing, truncated, or incomplete retain the compatibility fallback
+`Name@line` until they are reindexed.
 
 ## Highlights
 
@@ -711,11 +714,13 @@ commit し、構造化 `file_errors` を返して partial-result 終了コード
 `--allow-partial` を指定してください。JSON の `status: "partial"` は維持されます。
 
 `outline` は canonical symbol name、path、完全一致 query alias を変更せず、永続化済み
-signature から callable の表示名を導出します。C# generic method は安定した arity
-placeholder（`<T>` または `<T1, T2, ...>`）を使い、parameter type 内も同じ placeholder
-へ置換し、constraint は省略しつつ overload を区別する `ref` / `out` / `in` modifier は
-保持します。callable signature が欠落、切り詰め、または不完全な旧 index は、再 index
-されるまで互換 fallback の `Name@line` を維持します。
+signature から callable の表示名を導出します。C# generic method は通常、安定した arity
+placeholder（`<T>` または `<T1, T2, ...>`）を使い、具体的な型名と衝突する場合は決定的で
+衝突しない `TArg` placeholder を選びます。method type parameter の参照だけを置換して修飾型は
+書き換えず、attribute と既定値 literal は字句として解析します。constraint は省略しつつ
+overload を区別する `ref` / `out` / `in` modifier は保持します。callable signature が欠落、
+切り詰め、または不完全な旧 index は、再 index されるまで互換 fallback の `Name@line` を
+維持します。
 
 ## 特長
 
