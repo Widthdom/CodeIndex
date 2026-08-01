@@ -1490,8 +1490,9 @@ before the operation when the trust boundary is known:
 of up to 80 ASCII letters, digits, `_`, `-`, or `.`. A valid annotation can
 classify a controlled private writer, an external/public writer, or an untrusted
 parser. The marker must be a real C# line comment; annotation-shaped text inside
-regular, verbatim, or raw strings is ignored. Missing, malformed, lexically
-invalid, directionally inconsistent, or `review_required` evidence remains
+regular, verbatim, or raw strings is ignored. Annotations inside conditional-compilation
+regions, or separated from the operation by a preprocessor directive, are not trust
+evidence. Missing, malformed, lexically invalid, directionally inconsistent, or `review_required` evidence remains
 `ambiguous_trust`. Every match line is checked from indexed source even when
 guard filtering projects the result to one line. If one result contains matches
 with distinct trust evidence, it is conservatively reported as
@@ -1510,8 +1511,9 @@ substring of the same call.
 The C# syntax check distinguishes nullable declaration punctuation such as
 `JsonNode? value = ...` and first arguments of nested-generic calls from
 conditional/comparison operands, evaluated indexer targets, or property-valued
-assignment and invocation receivers before the JSON operation. Even a one-hop member receiver
-remains conservative when its base cannot be proven side-effect-free. Direct casts are part of the
+assignment and invocation receivers before the JSON operation. Even an unresolved bare receiver
+or a one-hop member receiver remains conservative when its local/type identity cannot be proven
+from the audited declaration prefix. Direct casts are part of the
 audited operation, and declaration-type occurrences—including expression-bodied
 method or local-function return types, fully qualified local declaration types,
 and types at any position in generic return wrappers—before a constructor in the
@@ -4896,7 +4898,8 @@ recipe run では matched-count metadata を使うため、省略済みの match
 `review_required` を受け付けます。`rationale` は ASCII の英数字、`_`、`-`、`.` からなる
 80文字以下の安定した token です。有効な注釈は controlled private writer、external / public
 writer、untrusted parser を分類できます。marker は実際の C# line comment でなければならず、
-regular / verbatim / raw string 内にある注釈形式の text は無視します。注釈の欠落、不正、
+regular / verbatim / raw string 内にある注釈形式の text は無視します。条件コンパイル領域内の注釈、
+または preprocessor directive をまたいで対象操作へ到達する注釈は trust evidence にしません。注釈の欠落、不正、
 lexical context 不正、read / write の不一致、または `review_required` の evidence は
 `ambiguous_trust` のままです。guard filter により result が1行へ投影される場合も、各 match line を
 indexed source から検査します。1つの result に異なる trust evidence を持つ match が含まれる場合は、
@@ -4907,7 +4910,7 @@ indexed source から検査します。1つの result に異なる trust evidenc
 元の recipe result を抑制しないため、external parsing は引き続き表示されます。
 未完了の宣言または代入 prefix が上限付き indexed-source statement 内で audit 対象操作の行まで継続する場合は、隣接性を失いません。注釈探索は固定の3行差に制限されません。
 選択されたすべての JSON child query を横断して、最初の lexical な audit 対象 match が注釈を消費します。後続 match は別の API family に属する場合や、同じ呼び出しに対する別の child-query substring として最初の match に重なる場合も曖昧なままです。
-C# 構文検査では `JsonNode? value = ...` のような nullable 宣言の記号や nested-generic 呼び出しの first argument と、JSON 操作より前に評価される条件式・比較式の operand、indexer 代入先、property-valued な代入 / 呼び出し receiver を区別します。base が副作用なしと証明できない1段の member receiver も保守的に扱います。
+C# 構文検査では `JsonNode? value = ...` のような nullable 宣言の記号や nested-generic 呼び出しの first argument と、JSON 操作より前に評価される条件式・比較式の operand、indexer 代入先、property-valued な代入 / 呼び出し receiver を区別します。audited declaration prefix から local / type と証明できない単純名 receiver や1段の member receiver も保守的に扱います。
 直接 cast は audit 対象操作の一部として扱い、expression-bodied method / local function の戻り型、完全修飾された local 宣言型、generic return wrapper 内の任意位置にある型を含め、同じ containing statement の constructor より前にある宣言型 occurrence は改行をまたいでも注釈を消費しません。
 `--show-excluded` を recipe と併用すると、有効な path scope と除外診断を出力に含めます。
 recipe run が対応する形式は text output、`--json` / `--format json` の aggregate JSON、
