@@ -493,6 +493,8 @@ public partial class QueryCommandRunnerTests
                     partial void @event(int declarationValue);
                     partial void Dynamic(dynamic declarationValue);
                     partial /* CommentName( */ void CommentName(int declarationValue);
+                    partial void CommentGap /* identity trivia */ (int value);
+                    partial void GenericGap<T> /* identity trivia */ (T value);
                     partial void AttrString([Marker("/*")] int declarationValue);
                     partial void Run(Item declarationValue);
                     partial void Run(item declarationValue);
@@ -536,6 +538,8 @@ public partial class QueryCommandRunnerTests
                     partial void @event(int implementationValue) { }
                     partial void Dynamic(object implementationValue) { }
                     partial void CommentName(int implementationValue) { }
+                    partial void CommentGap(int value) { }
+                    partial void GenericGap<T>(T value) { }
                     partial void AttrString(int implementationValue) { }
                     partial void Run(Item implementationValue) { }
                     partial void Run(item implementationValue) { }
@@ -916,6 +920,24 @@ public partial class QueryCommandRunnerTests
                     "void"));
             Assert.Equal(
                 LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void CommentGap /* identity trivia */ (int value);",
+                    "CommentGap",
+                    "void"),
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void CommentGap(int value) { }",
+                    "CommentGap",
+                    "void"));
+            Assert.Equal(
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void GenericGap<T> /* identity trivia */ (T value);",
+                    "GenericGap",
+                    "void"),
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void GenericGap<T>(T value) { }",
+                    "GenericGap",
+                    "void"));
+            Assert.Equal(
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
                     "partial void AttrString([Marker(\"/*\")] int declarationValue);",
                     "AttrString",
                     "void"),
@@ -985,6 +1007,12 @@ public partial class QueryCommandRunnerTests
 
             var commentName = RunGroupedSymbol(dbPath, "CommentName", "function");
             Assert.Equal(2, commentName.GetProperty("definition_sites").GetInt32());
+
+            var commentGap = RunGroupedSymbol(dbPath, "CommentGap", "function");
+            Assert.Equal(2, commentGap.GetProperty("definition_sites").GetInt32());
+
+            var genericGap = RunGroupedSymbol(dbPath, "GenericGap", "function");
+            Assert.Equal(2, genericGap.GetProperty("definition_sites").GetInt32());
 
             var attrString = RunGroupedSymbol(dbPath, "AttrString", "function");
             Assert.Equal(2, attrString.GetProperty("definition_sites").GetInt32());
@@ -1451,6 +1479,21 @@ public partial class QueryCommandRunnerTests
 
                 public partial class BlankDocumentation { }
                 """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.UnattributedAfterSibling.cs",
+                "csharp",
+                "public partial class UnattributedAfterSibling { }");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Z.UnattributedAfterSibling.cs",
+                "csharp",
+                "[System.Obsolete] public class AttributeOwner { } public partial class UnattributedAfterSibling { }");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/SameLineDuplicate.cs",
+                "csharp",
+                "public partial class SameLineDuplicate { } public partial class SameLineDuplicate { }");
             MarkGraphAndFoldReady(dbPath);
 
             var split = RunGroupedSymbol(dbPath, "OnSplit", "function");
@@ -1492,6 +1535,35 @@ public partial class QueryCommandRunnerTests
             var blankDocumentation = RunGroupedSymbol(dbPath, "BlankDocumentation", "class");
             Assert.Equal("src/A.BlankDocumentation.cs", blankDocumentation.GetProperty("path").GetString());
             Assert.Equal("stable_path_and_position", blankDocumentation.GetProperty("representative_reason").GetString());
+
+            var unattributedAfterSibling = RunGroupedSymbol(dbPath, "UnattributedAfterSibling", "class");
+            Assert.Equal("src/A.UnattributedAfterSibling.cs", unattributedAfterSibling.GetProperty("path").GetString());
+            Assert.Equal("stable_path_and_position", unattributedAfterSibling.GetProperty("representative_reason").GetString());
+
+            var sameLineDuplicate = RunGroupedSymbol(dbPath, "SameLineDuplicate", "class");
+            Assert.Equal(2, sameLineDuplicate.GetProperty("definition_sites").GetInt32());
+            Assert.Equal(
+                [21, 64],
+                sameLineDuplicate.GetProperty("family_members")
+                    .EnumerateArray()
+                    .Select(member => member.GetProperty("start_column").GetInt32())
+                    .Order()
+                    .ToArray());
+
+            var (gotoAllExitCode, gotoAllStdout, gotoAllStderr) = CaptureConsole(() => QueryCommandRunner.RunGoto(
+                ["SameLineDuplicate", "--db", dbPath, "--exact-name", "--lang", "csharp", "--kind", "class", "--all"],
+                _jsonOptions));
+            using var gotoAllDocument = ParseJsonOutput(gotoAllStdout);
+            var allLocations = gotoAllDocument.RootElement.EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, gotoAllExitCode);
+            Assert.Equal(string.Empty, gotoAllStderr);
+            Assert.Equal(
+                [21, 64],
+                allLocations
+                    .Select(location => location.GetProperty("range").GetProperty("start").GetProperty("character").GetInt32())
+                    .Order()
+                    .ToArray());
         }
         finally
         {

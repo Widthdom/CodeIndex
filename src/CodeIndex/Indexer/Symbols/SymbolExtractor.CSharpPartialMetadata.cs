@@ -27,7 +27,7 @@ public static partial class SymbolExtractor
             var sanitizedSignature = SanitizeCSharpDeclarationEvidence(signature);
             var leading = ReadCSharpLeadingDeclarationEvidence(
                 lines,
-                symbol.StartLine,
+                symbol,
                 lineStartStates);
             symbol.IsPartialDeclaration = PartialModifierRegex.IsMatch(sanitizedSignature) || leading.HasPartialModifier;
             symbol.IsFileLocalDeclaration =
@@ -109,16 +109,17 @@ public static partial class SymbolExtractor
 
     private static CSharpLeadingDeclarationEvidence ReadCSharpLeadingDeclarationEvidence(
         IReadOnlyList<string> lines,
-        int declarationStartLine,
+        SymbolRecord symbol,
         IReadOnlyList<CSharpLexState>? lineStartStates)
     {
+        var declarationStartLine = symbol.StartLine;
         var lineIndex = Math.Min(lines.Count, Math.Max(1, declarationStartLine)) - 2;
         var minimumLineIndex = Math.Max(0, lineIndex - CSharpLeadingDeclarationLookbackLines + 1);
         var hasPartialModifier = false;
         var hasFileModifier = false;
         var hasAttribute = HasCSharpDeclarationLineLeadingAttribute(
             lines,
-            declarationStartLine,
+            symbol,
             lineStartStates);
         var hasDocumentation = false;
         var documentationEvidenceAdjacent = true;
@@ -207,22 +208,58 @@ public static partial class SymbolExtractor
 
     private static bool HasCSharpDeclarationLineLeadingAttribute(
         IReadOnlyList<string> lines,
-        int declarationStartLine,
+        SymbolRecord symbol,
         IReadOnlyList<CSharpLexState>? lineStartStates)
     {
-        if (declarationStartLine <= 0 || declarationStartLine > lines.Count)
+        var declarationLine = symbol.Line > 0 ? symbol.Line : symbol.StartLine;
+        if (declarationLine <= 0 || declarationLine > lines.Count)
             return false;
 
-        var lineIndex = declarationStartLine - 1;
+        var lineIndex = declarationLine - 1;
         var lineStartState = lineStartStates != null && lineIndex < lineStartStates.Count
             ? lineStartStates[lineIndex]
             : new CSharpLexState();
         if (lineStartState.Mode != CSharpLexMode.Code || lineStartState.InterpolationBraceDepth != 0)
             return false;
 
-        var sanitizedLine = LexCSharpLine(lines[lineIndex], lineStartState).SanitizedLine;
-        var trimmed = sanitizedLine.AsSpan().TrimStart();
-        return !trimmed.IsEmpty && trimmed[0] == '[';
+        var declarationStartColumn = FindCSharpDeclarationOccurrenceStartColumn(
+            lines[lineIndex],
+            symbol,
+            lineStartState);
+        if (declarationStartColumn <= 0)
+            return false;
+
+        var sanitizedLine = LexCSharpLine(lines[lineIndex], lineStartState).SanitizedLine.AsSpan();
+        var cursor = Math.Min(declarationStartColumn, sanitizedLine.Length) - 1;
+        while (cursor >= 0 && char.IsWhiteSpace(sanitizedLine[cursor]))
+            cursor--;
+
+        // An attribute belongs to this declaration only when its closing bracket is the
+        // last code token before this declaration occurrence. This prevents an attribute
+        // on an earlier same-line declaration from ranking every later symbol on the line.
+        // attribute の閉じ括弧がこの宣言 occurrence 直前の最後の code token である場合だけ、
+        // この宣言の attribute とみなす。前方の同一行宣言に付いた attribute を、後続の
+        // 全 symbol の rank に誤適用しない。
+        return cursor >= 0 && sanitizedLine[cursor] == ']';
+    }
+
+    private static int FindCSharpDeclarationOccurrenceStartColumn(
+        string rawLine,
+        SymbolRecord symbol,
+        CSharpLexState lineStartState)
+    {
+        if (!string.IsNullOrEmpty(symbol.Signature))
+        {
+            var signatureColumn = FindSignatureOccurrenceStartColumn(
+                rawLine,
+                symbol.Signature,
+                symbol.SameLineSignatureOccurrenceIndex ?? 0,
+                lineStartState);
+            if (signatureColumn >= 0)
+                return signatureColumn;
+        }
+
+        return symbol.StartColumn ?? -1;
     }
 
     private static bool TryReadStandaloneCSharpModifiers(
@@ -260,10 +297,15 @@ public static partial class SymbolExtractor
             return null;
 
         var lineIndex = symbol.Line - 1;
-        var line = (lineStartStates != null && lineIndex < lineStartStates.Count
-                ? LexCSharpLine(lines[lineIndex], lineStartStates[lineIndex]).SanitizedLine
-                : LexCSharpLine(lines[lineIndex], new CSharpLexState()).SanitizedLine)
-            .AsSpan();
+        var lineStartState = lineStartStates != null && lineIndex < lineStartStates.Count
+            ? lineStartStates[lineIndex]
+            : new CSharpLexState();
+        var line = LexCSharpLine(lines[lineIndex], lineStartState).SanitizedLine.AsSpan();
+        var declarationOccurrenceStart = FindCSharpDeclarationOccurrenceStartColumn(
+            lines[lineIndex],
+            symbol,
+            lineStartState);
+        var declarationSearchStart = Math.Max(0, declarationOccurrenceStart);
         var name = symbol.Name.AsSpan().TrimStart('@');
         if (name.IsEmpty)
             return null;
@@ -275,7 +317,10 @@ public static partial class SymbolExtractor
             // same-name occurrence in a base list.
             // plain record は既存の class kind を使うため、base list 内の同名参照へ
             // fallback する前に record declaration keyword から宣言名を解決する。
-            var recordKeywordColumn = FindCSharpIdentifierToken(line, "record".AsSpan(), 0);
+            var recordKeywordColumn = FindCSharpIdentifierToken(
+                line,
+                "record".AsSpan(),
+                declarationSearchStart);
             if (recordKeywordColumn >= 0)
             {
                 var recordNameColumn = FindCSharpIdentifierToken(
@@ -289,7 +334,10 @@ public static partial class SymbolExtractor
 
         if (symbol.Kind is "class" or "struct" or "interface" or "record")
         {
-            var keywordColumn = FindCSharpIdentifierToken(line, symbol.Kind.AsSpan(), 0);
+            var keywordColumn = FindCSharpIdentifierToken(
+                line,
+                symbol.Kind.AsSpan(),
+                declarationSearchStart);
             if (keywordColumn >= 0)
             {
                 var nameColumn = FindCSharpIdentifierToken(
@@ -301,7 +349,7 @@ public static partial class SymbolExtractor
             }
         }
 
-        var searchStart = 0;
+        var searchStart = declarationSearchStart;
         int? fallback = null;
         while (searchStart < line.Length)
         {

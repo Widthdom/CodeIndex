@@ -281,9 +281,7 @@ internal static class LogicalPartialSymbolGrouper
         if (nameOffset < 0)
             return null;
 
-        var cursor = nameOffset + name.Length;
-        while (cursor < signature.Length && char.IsWhiteSpace(signature[cursor]))
-            cursor++;
+        var cursor = SkipCSharpDeclarationTrivia(signature, nameOffset + name.Length);
 
         var genericArity = 0;
         var genericParameterNames = new List<string>();
@@ -296,9 +294,7 @@ internal static class LogicalPartialSymbolGrouper
                 .Select(ExtractGenericParameterName)
                 .ToList();
             genericArity = genericParameterNames.Count;
-            cursor = genericEnd + 1;
-            while (cursor < signature.Length && char.IsWhiteSpace(signature[cursor]))
-                cursor++;
+            cursor = SkipCSharpDeclarationTrivia(signature, genericEnd + 1);
         }
 
         if (cursor >= signature.Length || signature[cursor] != '(')
@@ -1156,18 +1152,12 @@ internal static class LogicalPartialSymbolGrouper
                 && !afterIsIdentifier
                 && IsTopLevelCSharpDeclarationOffset(signature, offset))
             {
-                var cursor = after;
-                while (cursor < signature.Length && char.IsWhiteSpace(signature[cursor]))
-                    cursor++;
+                var cursor = SkipCSharpDeclarationTrivia(signature, after);
                 if (cursor < signature.Length && signature[cursor] == '<')
                 {
                     var genericEnd = FindBalancedEnd(signature, cursor, '<', '>');
                     if (genericEnd >= 0)
-                    {
-                        cursor = genericEnd + 1;
-                        while (cursor < signature.Length && char.IsWhiteSpace(signature[cursor]))
-                            cursor++;
-                    }
+                        cursor = SkipCSharpDeclarationTrivia(signature, genericEnd + 1);
                 }
                 if (cursor < signature.Length && signature[cursor] == '(')
                     return offset;
@@ -1175,6 +1165,37 @@ internal static class LogicalPartialSymbolGrouper
             offset += name.Length;
         }
         return -1;
+    }
+
+    private static int SkipCSharpDeclarationTrivia(string text, int start)
+    {
+        var cursor = Math.Clamp(start, 0, text.Length);
+        while (cursor < text.Length)
+        {
+            while (cursor < text.Length && char.IsWhiteSpace(text[cursor]))
+                cursor++;
+
+            if (cursor + 1 >= text.Length || text[cursor] != '/')
+                break;
+
+            if (text[cursor + 1] == '/')
+            {
+                cursor += 2;
+                while (cursor < text.Length && text[cursor] is not ('\r' or '\n'))
+                    cursor++;
+                continue;
+            }
+
+            if (text[cursor + 1] != '*')
+                break;
+
+            var commentEnd = text.IndexOf("*/", cursor + 2, StringComparison.Ordinal);
+            if (commentEnd < 0)
+                return text.Length;
+            cursor = commentEnd + 2;
+        }
+
+        return cursor;
     }
 
     private static bool IsTopLevelCSharpDeclarationOffset(string text, int targetOffset)
