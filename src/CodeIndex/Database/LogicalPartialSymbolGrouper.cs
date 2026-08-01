@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Globalization;
 using CodeIndex.Indexer;
 
 namespace CodeIndex.Database;
@@ -80,10 +81,10 @@ internal static class LogicalPartialSymbolGrouper
         var reconstructedSelfFamilySql = $"{projectPrefixSql} || CASE WHEN {fallbackContainerSql} = '' THEN {typeIdentitySql} ELSE {fallbackContainerSql} || '.' || {typeIdentitySql} END";
         var selfFamilySql = $"COALESCE({scopedPersistedFamilySql}, {reconstructedSelfFamilySql})";
         var callableSignatureSql = $"CASE WHEN {signaturePartialDeclarationSql} THEN {signatureSql} WHEN {partialDeclarationSql} THEN 'partial ' || COALESCE({signatureSql}, '') ELSE {signatureSql} END";
+        var callableContainerSql = $"COALESCE({scopedPersistedFamilySql}, NULLIF({fallbackContainerSql}, ''))";
         var callableIdentitySql = returnTypeSql == null
             ? "NULL"
-            : $"csharp_partial_callable_identity({callableSignatureSql}, {nameSql}, {returnTypeSql}, {fallbackContainerSql})";
-        var callableContainerSql = $"COALESCE({scopedPersistedFamilySql}, NULLIF({fallbackContainerSql}, ''))";
+            : $"csharp_partial_callable_identity({callableSignatureSql}, {nameSql}, {returnTypeSql}, {callableContainerSql}, {symbolIdSql})";
         return $@"CASE
             WHEN {languageSql} = 'csharp'
              AND {kindSql} IN ('class', 'struct', 'interface', 'record')
@@ -270,7 +271,8 @@ internal static class LogicalPartialSymbolGrouper
         string? name,
         string? returnType,
         string? containerQualifiedName = null,
-        CSharpCallableTypeKindLookup? typeKinds = null)
+        CSharpCallableTypeKindLookup? typeKinds = null,
+        long? symbolId = null)
     {
         if (string.IsNullOrWhiteSpace(signature)
             || string.IsNullOrWhiteSpace(name)
@@ -308,19 +310,27 @@ internal static class LogicalPartialSymbolGrouper
         if (closeParenthesis < 0)
             return null;
 
+        var valueConstrainedGenericParameters = ReadValueConstrainedGenericParameters(
+            signature,
+            closeParenthesis,
+            genericParameterNames);
         var parameterIdentity = BuildCallableParameterIdentity(
             signature[(cursor + 1)..closeParenthesis],
             genericParameterNames,
+            valueConstrainedGenericParameters,
             containerQualifiedName,
-            typeKinds);
+            typeKinds,
+            symbolId);
         return string.Join(
             KeySeparator,
             normalizedName,
             NormalizeCallableTypeIdentity(
                 returnType,
                 genericParameterNames,
+                valueConstrainedGenericParameters,
                 containerQualifiedName,
-                typeKinds),
+                typeKinds,
+                symbolId),
             genericArity.ToString(System.Globalization.CultureInfo.InvariantCulture),
             parameterIdentity);
     }
@@ -450,8 +460,10 @@ internal static class LogicalPartialSymbolGrouper
     private static string BuildCallableParameterIdentity(
         string parameters,
         IReadOnlyList<string> genericParameterNames,
+        IReadOnlySet<int> valueConstrainedGenericParameters,
         string? containerQualifiedName,
-        CSharpCallableTypeKindLookup? typeKinds)
+        CSharpCallableTypeKindLookup? typeKinds,
+        long? symbolId)
     {
         if (string.IsNullOrWhiteSpace(parameters))
             return string.Empty;
@@ -466,15 +478,19 @@ internal static class LogicalPartialSymbolGrouper
                 .Select(parameter => BuildParameterTypeAndRefIdentity(
                     parameter,
                     genericParameterNames,
+                    valueConstrainedGenericParameters,
                     containerQualifiedName,
-                    typeKinds)));
+                    typeKinds,
+                    symbolId)));
     }
 
     private static string BuildParameterTypeAndRefIdentity(
         string parameter,
         IReadOnlyList<string> genericParameterNames,
+        IReadOnlySet<int> valueConstrainedGenericParameters,
         string? containerQualifiedName,
-        CSharpCallableTypeKindLookup? typeKinds)
+        CSharpCallableTypeKindLookup? typeKinds,
+        long? symbolId)
     {
         var remaining = parameter.TrimStart();
         var refKind = string.Empty;
@@ -503,8 +519,10 @@ internal static class LogicalPartialSymbolGrouper
         return $"{refKind}:{NormalizeCallableTypeIdentity(
             remaining,
             genericParameterNames,
+            valueConstrainedGenericParameters,
             containerQualifiedName,
-            typeKinds)}";
+            typeKinds,
+            symbolId)}";
     }
 
     private static bool TryReadLeadingIdentifier(
@@ -514,7 +532,7 @@ internal static class LogicalPartialSymbolGrouper
     {
         identifier = string.Empty;
         identifierLength = 0;
-        if (value.Length == 0 || !IsIdentifierCharacter(value[0]))
+        if (value.Length == 0 || !IsIdentifierStartCharacter(value[0]))
             return false;
 
         while (identifierLength < value.Length && IsIdentifierCharacter(value[identifierLength]))
@@ -542,8 +560,10 @@ internal static class LogicalPartialSymbolGrouper
     private static string NormalizeCallableTypeIdentity(
         string? value,
         IReadOnlyList<string> genericParameterNames,
+        IReadOnlySet<int>? valueConstrainedGenericParameters = null,
         string? containerQualifiedName = null,
-        CSharpCallableTypeKindLookup? typeKinds = null)
+        CSharpCallableTypeKindLookup? typeKinds = null,
+        long? symbolId = null)
     {
         if (string.IsNullOrWhiteSpace(value))
             return string.Empty;
@@ -601,7 +621,8 @@ internal static class LogicalPartialSymbolGrouper
             if (token == "?"
                 && typeKinds?.Resolve(
                     ReadCustomNullableSourceIdentity(tokens, offset),
-                    containerQualifiedName) == CSharpCallableTypeKindLookup.TypeKind.Reference)
+                    containerQualifiedName,
+                    symbolId) == CSharpCallableTypeKindLookup.TypeKind.Reference)
             {
                 // Nullable reference annotations do not participate in a C# callable
                 // signature. Remove one only when the indexed source type facts resolve
@@ -645,6 +666,20 @@ internal static class LogicalPartialSymbolGrouper
             {
                 builder.Append('`');
                 builder.Append(genericParameterIndex.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                offset++;
+                if (offset < tokens.Count
+                    && tokens[offset] == "?"
+                    && valueConstrainedGenericParameters?.Contains(genericParameterIndex) != true)
+                {
+                    // For unconstrained and reference-constrained method parameters, T?
+                    // is a nullable annotation and not part of the CLR signature. Under a
+                    // struct/unmanaged constraint it represents Nullable<T> and must remain.
+                    // unconstrained / reference constraint の method type parameter では T?
+                    // は CLR signature 外の annotation。struct / unmanaged constraint では
+                    // Nullable<T> を表すため保持する。
+                    offset++;
+                }
+                continue;
             }
             else
             {
@@ -662,6 +697,61 @@ internal static class LogicalPartialSymbolGrouper
             offset++;
         }
         return builder.ToString();
+    }
+
+    private static IReadOnlySet<int> ReadValueConstrainedGenericParameters(
+        string signature,
+        int closeParenthesis,
+        IReadOnlyList<string> genericParameterNames)
+    {
+        var constrained = new HashSet<int>();
+        if (genericParameterNames.Count == 0 || closeParenthesis + 1 >= signature.Length)
+            return constrained;
+
+        var tokens = TokenizeCallableType(signature[(closeParenthesis + 1)..]);
+        for (var offset = 0; offset + 1 < tokens.Count; offset++)
+        {
+            if (!string.Equals(tokens[offset].TrimStart('@'), "where", StringComparison.Ordinal))
+                continue;
+
+            var parameterIndex = FindGenericParameterIndex(tokens[offset + 1], genericParameterNames);
+            if (parameterIndex < 0)
+                continue;
+
+            for (var constraintOffset = offset + 2; constraintOffset < tokens.Count; constraintOffset++)
+            {
+                var token = tokens[constraintOffset].TrimStart('@');
+                if (constraintOffset > offset + 2
+                    && (token == "where" || token is "{" or ";"))
+                {
+                    offset = constraintOffset - 1;
+                    break;
+                }
+
+                if (token is "struct" or "unmanaged")
+                    constrained.Add(parameterIndex);
+            }
+        }
+
+        return constrained;
+    }
+
+    private static int FindGenericParameterIndex(
+        string token,
+        IReadOnlyList<string> genericParameterNames)
+    {
+        for (var index = 0; index < genericParameterNames.Count; index++)
+        {
+            if (string.Equals(
+                    token.TrimStart('@'),
+                    genericParameterNames[index].TrimStart('@'),
+                    StringComparison.Ordinal))
+            {
+                return index;
+            }
+        }
+
+        return -1;
     }
 
     private static string ReadCustomNullableSourceIdentity(
@@ -765,7 +855,7 @@ internal static class LogicalPartialSymbolGrouper
                 offset++;
                 continue;
             }
-            if (!IsIdentifierCharacter(value[offset]))
+            if (!IsIdentifierStartCharacter(value[offset]))
             {
                 tokens.Add(value[offset].ToString());
                 offset++;
@@ -1608,7 +1698,22 @@ internal static class LogicalPartialSymbolGrouper
     }
 
     private static bool IsIdentifierCharacter(char value)
-        => value == '_' || value == '@' || char.IsLetterOrDigit(value);
+    {
+        if (IsIdentifierStartCharacter(value))
+            return true;
+
+        return char.GetUnicodeCategory(value) is
+            UnicodeCategory.DecimalDigitNumber or
+            UnicodeCategory.ConnectorPunctuation or
+            UnicodeCategory.NonSpacingMark or
+            UnicodeCategory.SpacingCombiningMark or
+            UnicodeCategory.Format;
+    }
+
+    private static bool IsIdentifierStartCharacter(char value)
+        => value is '_' or '@'
+            || char.IsLetter(value)
+            || char.GetUnicodeCategory(value) == UnicodeCategory.LetterNumber;
 
     private static bool ContainsPartialModifier(string signature)
     {

@@ -132,6 +132,16 @@ public partial class DbContext : IDisposable
                     containerQualifiedName,
                     csharpCallableTypeKinds));
         connection.CreateFunction(
+            "csharp_partial_callable_identity",
+            (string? signature, string? identifier, string? returnType, string? containerQualifiedName, long? symbolId) =>
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    signature,
+                    identifier,
+                    returnType,
+                    containerQualifiedName,
+                    csharpCallableTypeKinds,
+                    symbolId));
+        connection.CreateFunction(
             "csharp_partial_semantic_score",
             (string? signature, string? symbolKind) =>
                 LogicalPartialSymbolGrouper.GetSemanticScore(signature, symbolKind),

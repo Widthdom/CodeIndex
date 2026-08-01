@@ -2231,6 +2231,97 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void PartialCanonicalRepresentative_ResolvesScopedAndGenericNullableIdentities_Issue4914()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_scoped_nullable_issue4914");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Scoped.cs",
+                "csharp",
+                """
+                #nullable enable
+                namespace Demo;
+                public struct Node { }
+                public partial class Outer<T>
+                {
+                    public class Node { }
+                    partial void Nested(Node? value);
+                    partial void Nested(Node value) { }
+                }
+                public class QualifiedOuter<T>
+                {
+                    public class QualifiedNode { }
+                }
+                public partial class Container
+                {
+                    partial void Qualified(QualifiedOuter<int>.QualifiedNode? value);
+                    partial void Qualified(QualifiedOuter<int>.QualifiedNode value) { }
+                    partial void Generic<T>(T? value) where T : class;
+                    partial void Generic<T>(T value) where T : class { }
+                    partial void Combining(int á);
+                    partial void Combining(int b́) { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.FileLocal.cs",
+                "csharp",
+                """
+                #nullable enable
+                namespace Demo;
+                file class LocalNode { }
+                file partial class LocalContainer
+                {
+                    partial void Local(LocalNode? value);
+                    partial void Local(LocalNode value) { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/B.FileLocal.cs",
+                "csharp",
+                """
+                namespace Demo;
+                file struct LocalNode { }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            foreach (var name in new[] { "Nested", "Qualified", "Generic", "Combining", "Local" })
+            {
+                var grouped = RunGroupedSymbol(dbPath, name, "function");
+                Assert.True(grouped.TryGetProperty("definition_sites", out var definitionSites), grouped.GetRawText());
+                Assert.Equal(2, definitionSites.GetInt32());
+            }
+
+            Assert.Equal(
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial T? Generic<T>(T? value) where T : class;",
+                    "Generic",
+                    "T?"),
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial T Generic<TResult>(TResult value) where TResult : class { }",
+                    "Generic",
+                    "TResult"));
+            Assert.NotEqual(
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void Value<T>(T? value) where T : struct;",
+                    "Value",
+                    "void"),
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void Value<T>(T value) where T : struct { }",
+                    "Value",
+                    "void"));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void PartialCanonicalRepresentative_LazilyRefreshesExternalTypeFacts_Issue4914()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_external_type_facts_issue4914");

@@ -25,6 +25,9 @@ internal sealed class CSharpCallableTypeKindLookup
     private readonly object _gate = new();
     private Dictionary<string, int> _identityKinds = new(StringComparer.Ordinal);
     private Dictionary<string, int> _leafKinds = new(StringComparer.Ordinal);
+    private Dictionary<FileTypeIdentity, int> _fileIdentityKinds = new();
+    private Dictionary<FileTypeIdentity, int> _fileLeafKinds = new();
+    private Dictionary<long, long> _callableFileIds = new();
     private long? _loadedTotalChanges;
     private long? _loadedDataVersion;
 
@@ -58,6 +61,9 @@ internal sealed class CSharpCallableTypeKindLookup
             ScanForTesting?.Invoke();
             var identityKinds = new Dictionary<string, int>(StringComparer.Ordinal);
             var leafKinds = new Dictionary<string, int>(StringComparer.Ordinal);
+            var fileIdentityKinds = new Dictionary<FileTypeIdentity, int>();
+            var fileLeafKinds = new Dictionary<FileTypeIdentity, int>();
+            var callableFileIds = new Dictionary<long, long>();
             var facts = new List<TypeFact>();
             using var command = connection.CreateCommand();
             var startLineSql = symbolColumns.Contains("start_line")
@@ -67,6 +73,12 @@ internal sealed class CSharpCallableTypeKindLookup
                 ? "COALESCE(s.end_line, s.line)"
                 : "s.line";
             var familyKeySql = symbolColumns.Contains("family_key") ? "s.family_key" : "NULL";
+            var isPartialSql = symbolColumns.Contains("is_partial_declaration")
+                ? "s.is_partial_declaration"
+                : "NULL";
+            var isFileLocalSql = symbolColumns.Contains("is_file_local_declaration")
+                ? "s.is_file_local_declaration"
+                : "NULL";
             command.CommandText = $"""
                 SELECT s.name,
                        s.container_qualified_name,
@@ -75,7 +87,9 @@ internal sealed class CSharpCallableTypeKindLookup
                        {familyKeySql},
                        s.file_id,
                        {startLineSql},
-                       {endLineSql}
+                       {endLineSql},
+                       {isPartialSql},
+                       {isFileLocalSql}
                 FROM symbols AS s
                 JOIN files AS f ON f.id = s.file_id
                 WHERE f.lang = 'csharp'
@@ -93,16 +107,24 @@ internal sealed class CSharpCallableTypeKindLookup
                 var fileId = reader.GetInt64(5);
                 var startLine = reader.GetInt32(6);
                 var endLine = reader.GetInt32(7);
+                var arity = CSharpTypeReferenceArity.GetDefinitionArity(signature, name, kind) ?? 0;
+                var ownsFamilyIdentity = OwnsFamilyIdentity(familyKey, name, arity);
+                var isPartial = reader.IsDBNull(8)
+                    ? ownsFamilyIdentity
+                    : reader.GetBoolean(8);
+                var isFileLocal = reader.IsDBNull(9)
+                    ? ContainsDeclarationModifier(signature, "file") || IsFileLocalFamily(familyKey)
+                    : reader.GetBoolean(9) || IsFileLocalFamily(familyKey);
                 var typeKind = IsValueTypeDeclaration(signature, kind)
                     ? TypeKind.Value
                     : TypeKind.Reference;
-                var arity = CSharpTypeReferenceArity.GetDefinitionArity(signature, name, kind) ?? 0;
                 facts.Add(new TypeFact(
                     NormalizeIdentity(name),
                     NormalizeIdentity(container),
                     arity,
                     typeKind,
-                    NormalizeFamilyIdentity(familyKey),
+                    isPartial && ownsFamilyIdentity ? NormalizeFamilyIdentity(familyKey) : string.Empty,
+                    isFileLocal,
                     fileId,
                     startLine,
                     endLine));
@@ -118,25 +140,49 @@ internal sealed class CSharpCallableTypeKindLookup
             foreach (var fact in facts)
             {
                 var arityName = AppendArity(fact.Name, fact.Arity);
-                Add(leafKinds, arityName, fact.Kind);
+                Add(fileLeafKinds, new FileTypeIdentity(fact.FileId, arityName), fact.Kind);
+                if (!fact.IsFileLocal)
+                    Add(leafKinds, arityName, fact.Kind);
                 foreach (var identity in ResolveIdentities(
                              fact,
                              containingFacts,
                              resolvedIdentities,
                              new HashSet<TypeFact>()))
                 {
-                    Add(identityKinds, identity, fact.Kind);
+                    Add(fileIdentityKinds, new FileTypeIdentity(fact.FileId, identity), fact.Kind);
+                    if (!fact.IsFileLocal)
+                        Add(identityKinds, identity, fact.Kind);
                 }
+            }
+
+            using (var callableCommand = connection.CreateCommand())
+            {
+                callableCommand.CommandText = """
+                    SELECT s.id, s.file_id
+                    FROM symbols AS s
+                    JOIN files AS f ON f.id = s.file_id
+                    WHERE f.lang = 'csharp'
+                      AND s.kind IN ('function', 'test.method')
+                    """;
+                using var callableReader = callableCommand.ExecuteReader();
+                while (callableReader.Read())
+                    callableFileIds[callableReader.GetInt64(0)] = callableReader.GetInt64(1);
             }
 
             _identityKinds = identityKinds;
             _leafKinds = leafKinds;
+            _fileIdentityKinds = fileIdentityKinds;
+            _fileLeafKinds = fileLeafKinds;
+            _callableFileIds = callableFileIds;
             _loadedTotalChanges = totalChanges;
             _loadedDataVersion = dataVersion;
         }
     }
 
-    internal TypeKind Resolve(string sourceIdentity, string? containerQualifiedName)
+    internal TypeKind Resolve(
+        string sourceIdentity,
+        string? containerQualifiedName,
+        long? symbolId = null)
     {
         var normalizedSource = NormalizeIdentity(sourceIdentity);
         if (normalizedSource.Length == 0)
@@ -144,14 +190,18 @@ internal sealed class CSharpCallableTypeKindLookup
 
         lock (_gate)
         {
+            var fileId = symbolId.HasValue
+                && _callableFileIds.TryGetValue(symbolId.Value, out var resolvedFileId)
+                    ? resolvedFileId
+                    : (long?)null;
             if (sourceIdentity.StartsWith("global::", StringComparison.Ordinal))
-                return GetUnambiguousKind(_identityKinds, normalizedSource);
+                return ResolveIdentity(normalizedSource, fileId);
 
-            var container = NormalizeIdentity(containerQualifiedName);
+            var container = NormalizeFamilyIdentity(containerQualifiedName);
             while (container.Length > 0)
             {
                 var qualified = $"{container}.{normalizedSource}";
-                var resolved = GetUnambiguousKind(_identityKinds, qualified);
+                var resolved = ResolveIdentity(qualified, fileId);
                 if (resolved != TypeKind.Unknown)
                     return resolved;
 
@@ -159,14 +209,36 @@ internal sealed class CSharpCallableTypeKindLookup
                 container = separator < 0 ? string.Empty : container[..separator];
             }
 
-            var direct = GetUnambiguousKind(_identityKinds, normalizedSource);
+            var direct = ResolveIdentity(normalizedSource, fileId);
             if (direct != TypeKind.Unknown)
                 return direct;
 
             var leafSeparator = normalizedSource.LastIndexOf('.');
             var leaf = leafSeparator < 0 ? normalizedSource : normalizedSource[(leafSeparator + 1)..];
+            if (fileId.HasValue)
+            {
+                var fileKind = GetUnambiguousKind(
+                    _fileLeafKinds,
+                    new FileTypeIdentity(fileId.Value, leaf));
+                if (fileKind != TypeKind.Unknown)
+                    return fileKind;
+            }
             return GetUnambiguousKind(_leafKinds, leaf);
         }
+    }
+
+    private TypeKind ResolveIdentity(string identity, long? fileId)
+    {
+        if (fileId.HasValue)
+        {
+            var fileKind = GetUnambiguousKind(
+                _fileIdentityKinds,
+                new FileTypeIdentity(fileId.Value, identity));
+            if (fileKind != TypeKind.Unknown)
+                return fileKind;
+        }
+
+        return GetUnambiguousKind(_identityKinds, identity);
     }
 
     private static bool IsValueTypeDeclaration(string? signature, string kind)
@@ -263,7 +335,7 @@ internal sealed class CSharpCallableTypeKindLookup
         if (normalized.Length == 0)
             return string.Empty;
 
-        var scopeSeparator = normalized.IndexOf('|');
+        var scopeSeparator = normalized.LastIndexOf('|');
         if (scopeSeparator >= 0)
             normalized = normalized[(scopeSeparator + 1)..];
         var fileLocalSeparator = normalized.IndexOf('\u001f');
@@ -272,6 +344,43 @@ internal sealed class CSharpCallableTypeKindLookup
         return normalized.StartsWith("file-local:", StringComparison.Ordinal)
             ? string.Empty
             : normalized;
+    }
+
+    private static bool IsFileLocalFamily(string? familyKey)
+    {
+        if (string.IsNullOrWhiteSpace(familyKey))
+            return false;
+
+        var normalized = familyKey.Trim();
+        var scopeSeparator = normalized.LastIndexOf('|');
+        if (scopeSeparator >= 0)
+            normalized = normalized[(scopeSeparator + 1)..];
+        return normalized.StartsWith("file-local:", StringComparison.Ordinal);
+    }
+
+    private static bool OwnsFamilyIdentity(string? familyKey, string name, int arity)
+    {
+        var familyIdentity = NormalizeFamilyIdentity(familyKey);
+        if (familyIdentity.Length == 0)
+            return false;
+
+        var separator = familyIdentity.LastIndexOf('.');
+        var leaf = separator < 0 ? familyIdentity : familyIdentity[(separator + 1)..];
+        return string.Equals(
+            leaf,
+            AppendArity(NormalizeIdentity(name), arity),
+            StringComparison.Ordinal);
+    }
+
+    private static bool ContainsDeclarationModifier(string? signature, string modifier)
+    {
+        if (string.IsNullOrWhiteSpace(signature))
+            return false;
+
+        return signature.Split(
+                [' ', '\t', '\r', '\n', '(', ')', '[', ']', '{', '}', ':'],
+                StringSplitOptions.RemoveEmptyEntries)
+            .Contains(modifier, StringComparer.Ordinal);
     }
 
     private static void Add(Dictionary<string, int> kinds, string identity, TypeKind kind)
@@ -285,6 +394,27 @@ internal sealed class CSharpCallableTypeKindLookup
     }
 
     private static TypeKind GetUnambiguousKind(IReadOnlyDictionary<string, int> kinds, string identity)
+    {
+        if (!kinds.TryGetValue(identity, out var flags))
+            return TypeKind.Unknown;
+        return flags switch
+        {
+            ReferenceKindFlag => TypeKind.Reference,
+            ValueKindFlag => TypeKind.Value,
+            _ => TypeKind.Unknown,
+        };
+    }
+
+    private static void Add<TKey>(Dictionary<TKey, int> kinds, TKey identity, TypeKind kind)
+        where TKey : notnull
+    {
+        var flag = kind == TypeKind.Value ? ValueKindFlag : ReferenceKindFlag;
+        kinds.TryGetValue(identity, out var existing);
+        kinds[identity] = existing | flag;
+    }
+
+    private static TypeKind GetUnambiguousKind<TKey>(IReadOnlyDictionary<TKey, int> kinds, TKey identity)
+        where TKey : notnull
     {
         if (!kinds.TryGetValue(identity, out var flags))
             return TypeKind.Unknown;
@@ -310,7 +440,10 @@ internal sealed class CSharpCallableTypeKindLookup
         int Arity,
         TypeKind Kind,
         string FamilyIdentity,
+        bool IsFileLocal,
         long FileId,
         int StartLine,
         int EndLine);
+
+    private readonly record struct FileTypeIdentity(long FileId, string Identity);
 }
