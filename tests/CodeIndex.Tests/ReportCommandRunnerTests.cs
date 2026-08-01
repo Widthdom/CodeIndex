@@ -648,6 +648,59 @@ public class ReportCommandRunnerTests
     }
 
     [Fact]
+    public void PersistedFailure_WithUnrepresentableStackUsesCanonicalChain_Issue5012()
+    {
+        var workDir = CreateWorkDir();
+        var projectPath = Path.Combine(workDir, "project");
+        var dbPath = Path.Combine(projectPath, ".cdidx", "codeindex.db");
+        var logDir = CreateLogDir(workDir);
+        var timestamp = new DateTimeOffset(2026, 8, 1, 12, 34, 56, TimeSpan.Zero);
+        const string version = "1.40.3-test";
+        try
+        {
+            Directory.CreateDirectory(projectPath);
+            using var env = EnvironmentVariableScope.Capture("CDIDX_GLOBAL_TOOL_LOG_DIR");
+            env.Set("CDIDX_GLOBAL_TOOL_LOG_DIR", logDir);
+
+            Assert.True(LastFailureEventStore.TryPersist(
+                ["index", projectPath],
+                version,
+                CommandExitCodes.UnhandledException,
+                new UnrepresentableStackException(),
+                timestamp,
+                dbPathForTesting: dbPath,
+                workspacePathForTesting: projectPath));
+
+            var reportProvenance = LastFailureEventStore.CreateReportProvenance(
+                dbPath,
+                version,
+                timestamp + TimeSpan.FromMinutes(1),
+                LastFailureEventStore.CreateRunId(),
+                projectPath);
+            Assert.True(LastFailureEventStore.TryBuildReportPayload(
+                reportProvenance,
+                out var payload,
+                out var evidence));
+
+            using var failure = JsonDocument.Parse(payload);
+            var diagnostics = failure.RootElement.GetProperty("diagnostics").GetString();
+            Assert.StartsWith("exception[0] type=", diagnostics, StringComparison.Ordinal);
+            Assert.DoesNotContain("stack:", diagnostics, StringComparison.Ordinal);
+            Assert.Equal("included", evidence.Disposition);
+            Assert.Equal("matched", evidence.Reason);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(workDir);
+        }
+    }
+
+    private sealed class UnrepresentableStackException : InvalidOperationException
+    {
+        public override string? StackTrace => "   native frame without managed method syntax";
+    }
+
+    [Fact]
     public void CreateReportProvenance_FoldsCaseOnCaseInsensitiveFilesystem_Issue4828()
     {
         var workDir = CreateWorkDir();

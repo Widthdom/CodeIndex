@@ -49,6 +49,8 @@ internal static class LastFailureEventStore
                 occurredAtUtc,
                 runId ?? CreateRunId(),
                 workspacePathForTesting ?? resolvedPaths.WorkspacePath);
+            var exceptionCategory = SanitizeField(DiagnosticRedactor.ClassifyException(exception));
+            var exceptionType = SanitizeField(exception.GetType().FullName ?? exception.GetType().Name);
             var failure = new LastFailureEvent(
                 SchemaVersion,
                 occurredAtUtc.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture),
@@ -57,10 +59,10 @@ internal static class LastFailureEventStore
                 DiagnosticSanitizer.ForPath(Environment.ProcessPath),
                 ResolveCommandCategory(args),
                 exitCode,
-                SanitizeField(DiagnosticRedactor.ClassifyException(exception)),
-                SanitizeField(exception.GetType().FullName ?? exception.GetType().Name),
-                SanitizeField(DiagnosticRedactor.ClassifyException(exception)),
-                SanitizeDiagnostics(GlobalToolLog.FormatExceptionChain(exception, includeStacks: true)),
+                exceptionCategory,
+                exceptionType,
+                exceptionCategory,
+                BuildPersistedDiagnostics(exception, exceptionCategory, exceptionType),
                 PathsRedacted: true,
                 LiteralArgumentsIncluded: false,
                 WorkspaceId: provenance.WorkspaceId,
@@ -415,6 +417,41 @@ internal static class LastFailureEventStore
 
     private static string SanitizeField(string? value)
         => DiagnosticSanitizer.ForMessage(value, MaxFieldChars);
+
+    private static string BuildPersistedDiagnostics(
+        Exception exception,
+        string exceptionCategory,
+        string exceptionType)
+    {
+        var diagnostics = SanitizeDiagnostics(
+            GlobalToolLog.FormatExceptionChain(exception, includeStacks: true));
+        if (TryNormalizeStoredDiagnostics(
+                diagnostics,
+                exceptionCategory,
+                exceptionType,
+                out var normalized))
+        {
+            return normalized;
+        }
+
+        // A platform or runtime may emit a stack frame that cannot survive the bounded canonical
+        // representation. Preserve the exception chain without stacks instead of persisting an
+        // event that report would immediately reject as invalid.
+        // platform / runtime 固有の stack frame が上限付き canonical 表現に収まらない場合は、
+        // report が直後に invalid として拒否する event ではなく stack なしの例外 chain を保存する。
+        var chainOnlyDiagnostics = SanitizeDiagnostics(
+            GlobalToolLog.FormatExceptionChain(exception, includeStacks: false));
+        if (TryNormalizeStoredDiagnostics(
+                chainOnlyDiagnostics,
+                exceptionCategory,
+                exceptionType,
+                out normalized))
+        {
+            return normalized;
+        }
+
+        return $"exception[0] type={exceptionType} message=\"{exceptionCategory}\"";
+    }
 
     private static bool TryNormalizeStoredCommandCategory(string category, out string normalized)
     {
