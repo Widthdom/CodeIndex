@@ -43,6 +43,7 @@
       "name": "FolderDiffService",
       "line": 1,
       "start_line": 1,
+      "start_column": 13,
       "end_line": 4,
       "body_start_line": 2,
       "body_end_line": 4,

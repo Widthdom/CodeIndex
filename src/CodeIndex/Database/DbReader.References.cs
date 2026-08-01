@@ -187,7 +187,8 @@ public partial class DbReader
             signatureSql,
             GetSymbolColumnSql("container_name"),
             GetSymbolColumnSql("container_qualified_name"),
-            GetSymbolColumnSql("family_key"));
+            GetSymbolColumnSql("family_key"),
+            GetSymbolColumnSql("return_type"));
         cmd.CommandText = $@"
             SELECT target_file.path,
                    target_file.lang,
@@ -244,7 +245,11 @@ public partial class DbReader
                     Name = name,
                     Line = reader.GetInt32(5),
                     StartLine = GetInt32OrFallback(reader, 6, 5),
-                    StartColumn = ResolveSymbolIdentifierStartColumn(GetNullableInt32(reader, 7), signature, name),
+                    StartColumn = ResolveSymbolIdentifierStartColumn(
+                        GetNullableInt32(reader, 7),
+                        signature,
+                        name,
+                        reader.GetString(2)),
                     EndLine = GetInt32OrFallback(reader, 8, 5),
                     BodyStartLine = GetNullableInt32(reader, 9),
                     BodyEndLine = GetNullableInt32(reader, 10),

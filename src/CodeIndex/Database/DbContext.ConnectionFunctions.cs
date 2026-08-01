@@ -106,6 +106,20 @@ public partial class DbContext : IDisposable
             (string? signature, string? identifier, string? symbolKind) =>
                 CSharpTypeReferenceArity.GetConstructorParameterCount(signature, identifier, symbolKind));
         connection.CreateFunction(
+            "csharp_partial_callable_identity",
+            (string? signature, string? identifier, string? returnType) =>
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(signature, identifier, returnType),
+            isDeterministic: true);
+        connection.CreateFunction(
+            "csharp_partial_semantic_score",
+            (string? signature, string? symbolKind) =>
+                LogicalPartialSymbolGrouper.GetSemanticScore(signature, symbolKind),
+            isDeterministic: true);
+        connection.CreateFunction(
+            "codeindex_generated_file_name",
+            (string? path) => FileIndexer.HasGeneratedCodeFileName(path ?? string.Empty),
+            isDeterministic: true);
+        connection.CreateFunction(
             "csharp_invocation_argument_count",
             (string? context, string? identifier, long? columnNumber) =>
                 CSharpTypeReferenceArity.GetInvocationArgumentCount(context, identifier, columnNumber));

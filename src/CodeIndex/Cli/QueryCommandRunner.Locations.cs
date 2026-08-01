@@ -85,7 +85,29 @@ public static partial class QueryCommandRunner
     {
         var line = result.Line > 0 ? result.Line : Math.Max(1, result.StartLine);
         var column = result.StartColumn.HasValue ? result.StartColumn.Value + 1 : 1;
-        return BuildLspLocation(result.Path, line, column, line, column + Math.Max(1, result.Name.Length));
+        var location = BuildLspLocation(result.Path, line, column, line, column + Math.Max(1, result.Name.Length));
+        if (result.PartialFamilyId == null)
+            return location;
+
+        location.SymbolId = result.SymbolId;
+        location.PartialFamilyId = result.PartialFamilyId;
+        location.RepresentativeReason = result.RepresentativeReason;
+        location.FamilyMembersTruncated = result.FamilyMembersTruncated;
+        location.Representative = true;
+        location.FamilyMembers = result.FamilyMembers?
+            .Select(member => BuildPartialFamilyMemberLspLocation(member, result.Name))
+            .ToList();
+        return location;
+    }
+
+    private static LspLocation BuildPartialFamilyMemberLspLocation(PartialFamilyMember member, string symbolName)
+    {
+        var line = member.Line > 0 ? member.Line : Math.Max(1, member.StartLine);
+        var column = member.StartColumn.HasValue ? member.StartColumn.Value + 1 : 1;
+        var location = BuildLspLocation(member.Path, line, column, line, column + Math.Max(1, symbolName.Length));
+        location.SymbolId = member.SymbolId;
+        location.Representative = member.Representative;
+        return location;
     }
 
     private static LspLocation ToLspLocation(CallerResult result)

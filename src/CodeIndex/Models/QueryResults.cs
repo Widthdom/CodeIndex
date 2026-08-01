@@ -369,9 +369,35 @@ public class SymbolResult
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? DefinitionSites { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? PartialFamilyId { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? RepresentativeReason { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<PartialFamilyMember>? FamilyMembers { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool FamilyMembersTruncated { get; set; }
+    [JsonIgnore]
+    internal bool? IsGeneratedCode { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? SizeLines { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public double? ComplexityScore { get; set; }
+}
+
+public sealed class PartialFamilyMember
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? SymbolId { get; set; }
+    public string Path { get; set; } = string.Empty;
+    public int Line { get; set; }
+    public int StartLine { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? StartColumn { get; set; }
+    public int EndLine { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool Generated { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool Representative { get; set; }
 }
 
 public class UnusedSymbolResult : SymbolResult
@@ -670,6 +696,18 @@ public sealed class LspLocation
     public string? Severity { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Source { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? SymbolId { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? PartialFamilyId { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? RepresentativeReason { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<LspLocation>? FamilyMembers { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool FamilyMembersTruncated { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool Representative { get; set; }
 }
 
 public class ExactZeroHintResult

@@ -162,7 +162,7 @@ public static partial class SymbolExtractor
                     symbol.ContainerName ??= effectiveContainer.Name;
                     var qualifiedContainerName = BuildQualifiedContainerName(containerPath);
                     symbol.ContainerQualifiedName = qualifiedContainerName;
-                    symbol.FamilyKey = BuildInheritedFamilyKey(effectiveContainer, qualifiedContainerName);
+                    symbol.FamilyKey = BuildInheritedFamilyKey(effectiveContainer, containerPath);
                 }
             }
 
@@ -298,9 +298,11 @@ public static partial class SymbolExtractor
         return builder?.ToString();
     }
 
-    private static string? BuildInheritedFamilyKey(SymbolRecord container, string? qualifiedContainerName) =>
+    private static string? BuildInheritedFamilyKey(
+        SymbolRecord container,
+        IReadOnlyList<SymbolRecord> containers) =>
         SupportsCrossFileFamily(container)
-            ? qualifiedContainerName
+            ? BuildQualifiedFamilyName(containers)
             : null;
 
     private static string? BuildSelfFamilyKey(SymbolRecord symbol, IReadOnlyList<SymbolRecord> containers)
@@ -308,31 +310,43 @@ public static partial class SymbolExtractor
         if (!SupportsCrossFileFamily(symbol))
             return null;
 
-        var symbolName = symbol.Name;
-        if (containers.Count == 0)
-            return symbolName;
+        var builder = new StringBuilder();
+        AppendQualifiedFamilySegments(builder, containers);
+        AppendFamilySegment(builder, symbol);
+        return builder.ToString();
+    }
 
-        StringBuilder? builder = null;
-        for (var i = 0; i < containers.Count; i++)
-        {
-            var name = containers[i].Name;
-            if (string.IsNullOrWhiteSpace(name))
-                continue;
+    private static string? BuildQualifiedFamilyName(IReadOnlyList<SymbolRecord> symbols)
+    {
+        var builder = new StringBuilder();
+        AppendQualifiedFamilySegments(builder, symbols);
+        return builder.Length == 0 ? null : builder.ToString();
+    }
 
-            builder ??= new StringBuilder(name.Length + symbolName.Length + 1);
-            if (builder.Length > 0)
-                builder.Append('.');
+    private static void AppendQualifiedFamilySegments(
+        StringBuilder builder,
+        IReadOnlyList<SymbolRecord> symbols)
+    {
+        foreach (var symbol in symbols)
+            AppendFamilySegment(builder, symbol);
+    }
 
-            builder.Append(name);
-        }
-
-        builder ??= new StringBuilder(symbolName.Length);
+    private static void AppendFamilySegment(StringBuilder builder, SymbolRecord symbol)
+    {
+        if (string.IsNullOrWhiteSpace(symbol.Name))
+            return;
         if (builder.Length > 0)
             builder.Append('.');
-
-        builder.Append(symbolName);
-
-        return builder?.ToString();
+        builder.Append(symbol.Name);
+        var genericArity = CSharpTypeReferenceArity.GetDefinitionArity(
+            symbol.Signature,
+            symbol.Name,
+            symbol.Kind);
+        if (genericArity > 0)
+        {
+            builder.Append('`');
+            builder.Append(genericArity.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        }
     }
 
     private static bool SupportsCrossFileFamily(SymbolRecord symbol) =>

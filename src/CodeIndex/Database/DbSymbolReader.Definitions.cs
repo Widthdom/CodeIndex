@@ -151,6 +151,11 @@ public partial class DbReader
             Visibility = symbol.Visibility,
             ReturnType = symbol.ReturnType,
             DefinitionSites = symbol.DefinitionSites,
+            PartialFamilyId = symbol.PartialFamilyId,
+            RepresentativeReason = symbol.RepresentativeReason,
+            FamilyMembers = symbol.FamilyMembers,
+            FamilyMembersTruncated = symbol.FamilyMembersTruncated,
+            IsGeneratedCode = symbol.IsGeneratedCode,
             Disambiguator = BuildDefinitionDisambiguator(symbol),
             Content = definitionExcerpt.Content,
             BodyContent = bodyContent,
@@ -310,7 +315,8 @@ public partial class DbReader
             GetSymbolColumnSql("signature"),
             GetSymbolColumnSql("container_name"),
             GetSymbolColumnSql("container_qualified_name"),
-            GetSymbolColumnSql("family_key"));
+            GetSymbolColumnSql("family_key"),
+            GetSymbolColumnSql("return_type"));
         var countSql = groupPartials
             ? $"COUNT(DISTINCT ({logicalPartialKeySql}))"
             : "COUNT(*)";

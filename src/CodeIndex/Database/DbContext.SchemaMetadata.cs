@@ -44,7 +44,7 @@ public partial class DbContext : IDisposable
     // (`family_key` / `container_qualified_name` are authoritative for the whole DB), not
     // low-level table availability.
     // hotspots family grouping 用 readiness。table の有無ではなく query 意味論の trust を表す。
-    public const int HotspotFamilyVersion = 2;
+    public const int HotspotFamilyVersion = 3;
     public const string HotspotFamilyVersionMetaKey = "hotspot_family_version";
     public const string HotspotFamilyMarkerFingerprintMetaKey = "hotspot_family_marker_fingerprint";
     public const string HotspotFamilyIncompleteMarkerFingerprintPrefix = "incomplete:";

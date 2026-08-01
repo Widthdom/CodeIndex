@@ -338,7 +338,7 @@ public static partial class QueryCommandRunner
             var limit = all
                 ? options.LimitExplicit ? options.Limit : int.MaxValue
                 : Math.Max(options.Limit, 2);
-            var results = reader.GetDefinitions(options.Query, limit, options.Kind, options.Lang, includeBody: false, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters);
+            var results = reader.GetDefinitions(options.Query, limit, options.Kind, options.Lang, includeBody: false, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters, groupPartials: !all);
             if (results.Count == 0)
             {
                 return CommandErrorWriter.WriteJsonOrHuman(
@@ -359,12 +359,6 @@ public static partial class QueryCommandRunner
 
             if (results.Count > 1)
             {
-                if (TrySelectLogicalPartialDefinition(results, out var representative))
-                {
-                    Console.WriteLine(SerializeQueryJson(ToLspLocation(representative), CliJsonSerializerContextFactory.Create(jsonOptions).LspLocation, jsonOptions));
-                    return CommandExitCodes.Success;
-                }
-
                 CommandErrorWriter.WriteStderr($"Error: goto found {results.Count} matching definitions for '{options.Query}'.");
                 CommandErrorWriter.WriteStderr("Hint: narrow the query with --kind, --lang, --path, or pass --all to return all LSP locations.");
                 return CommandExitCodes.UsageError;
@@ -373,19 +367,5 @@ public static partial class QueryCommandRunner
             Console.WriteLine(SerializeQueryJson(ToLspLocation(results[0]), CliJsonSerializerContextFactory.Create(jsonOptions).LspLocation, jsonOptions));
             return CommandExitCodes.Success;
         });
-    }
-
-    private static bool TrySelectLogicalPartialDefinition(IReadOnlyList<SymbolResult> results, out SymbolResult representative)
-    {
-        representative = results[0];
-        if (results.Count <= 1)
-            return false;
-
-        var grouped = LogicalPartialSymbolGrouper.Group(results);
-        if (grouped.Count != 1 || grouped[0].DefinitionSites != results.Count)
-            return false;
-
-        representative = grouped[0];
-        return true;
     }
 }

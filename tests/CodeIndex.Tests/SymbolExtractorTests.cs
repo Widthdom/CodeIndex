@@ -10153,13 +10153,14 @@ public partial class SymbolExtractorTests
     {
         // The #535 container-path fix changes `BuildSelfFamilyKey` to receive a root-to-leaf
         // effective container path. If the old `Reverse()` is left in place, nested partial
-        // types flip their family key order (`Host.ReviewFixtures.Wrapped`) and no longer
+        // types flip their arity-aware family key order (for example, starting with `Host`)
+        // and no longer
         // match the container-qualified-name contract used by hotspot-family grouping.
         // Pin a wrapped nested partial-type fixture so both the container path and family key
         // stay in canonical root-to-leaf order. Closes #541.
         // #535 の container-path fix 以降、`BuildSelfFamilyKey` は root-to-leaf 順の
         // effective container path を受け取る。ここで旧 `Reverse()` が残ると、nested partial
-        // type の family key が `Host.ReviewFixtures.Wrapped` のように逆順化し、
+        // type の arity-aware family key が `Host` から始まるように逆順化し、
         // hotspot-family grouping が依存する container-qualified-name 契約と食い違う。
         // wrapped な nested partial-type の fixture を固定し、container path と family key の
         // 両方が canonical な root-to-leaf 順を保つことを検証する。Closes #541.
@@ -10181,11 +10182,11 @@ public partial class SymbolExtractorTests
 
         var wrapped = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Wrapped"));
         Assert.Equal("ReviewFixtures.Host", wrapped.ContainerQualifiedName);
-        Assert.Equal("ReviewFixtures.Host.Wrapped", wrapped.FamilyKey);
+        Assert.Equal("ReviewFixtures.Host.Wrapped`1", wrapped.FamilyKey);
 
         var child = Assert.Single(symbols.Where(s => s.Kind == "class" && s.Name == "Child"));
         Assert.Equal("ReviewFixtures.Host.Wrapped", child.ContainerQualifiedName);
-        Assert.Equal("ReviewFixtures.Host.Wrapped", child.FamilyKey);
+        Assert.Equal("ReviewFixtures.Host.Wrapped`1", child.FamilyKey);
     }
 
     [Fact]

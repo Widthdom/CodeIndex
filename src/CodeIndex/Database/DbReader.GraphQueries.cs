@@ -2457,15 +2457,33 @@ public partial class DbReader
         var allowLeafFallback = !SqlNameResolver.HasQualifier(resolvedName);
         using var cmd = _conn.CreateCommand();
         var supportedLangFilter = BuildGraphSupportedLanguagePredicate(cmd, "f", "impactDefLang");
+        var signatureSql = GetSymbolColumnSql("signature");
+        var returnTypeSql = GetSymbolColumnSql("return_type");
+        var bodyStartLineSql = GetSymbolColumnSql("body_start_line");
+        var bodyEndLineSql = GetSymbolColumnSql("body_end_line");
+        var startColumnSql = GetSymbolColumnSql("start_column");
         var logicalPartialKeySql = LogicalPartialSymbolGrouper.BuildSqlKeyExpression(
             "f.lang",
             "s.kind",
             "s.name",
             "s.id",
-            GetSymbolColumnSql("signature"),
+            signatureSql,
             GetSymbolColumnSql("container_name"),
             GetSymbolColumnSql("container_qualified_name"),
-            GetSymbolColumnSql("family_key"));
+            GetSymbolColumnSql("family_key"),
+            returnTypeSql);
+        var generatedSql = _fileColumns.Contains("generated")
+            ? "CASE WHEN COALESCE(f.generated, 0) <> 0 OR codeindex_generated_file_name(f.path) THEN 1 ELSE 0 END"
+            : "CASE WHEN codeindex_generated_file_name(f.path) THEN 1 ELSE 0 END";
+        var canonicalPrimaryRankSql = LogicalPartialSymbolGrouper.BuildSqlPrimaryRankExpression(
+            "s.kind",
+            bodyStartLineSql,
+            bodyEndLineSql);
+        var canonicalSemanticScoreSql = LogicalPartialSymbolGrouper.BuildSqlSemanticScoreExpression(
+            signatureSql,
+            "s.kind");
+        var fallbackCanonicalDeclarationIdentitySql = BuildCanonicalDeclarationIdentitySql(signatureSql);
+        var canonicalDeclarationIdentitySql = $"CASE WHEN s.kind = 'function' THEN COALESCE(csharp_partial_callable_identity({signatureSql}, s.name, {returnTypeSql}), {fallbackCanonicalDeclarationIdentitySql}) ELSE {fallbackCanonicalDeclarationIdentitySql} END";
         var nameCondition = _foldReady
             ? allowLeafFallback
                 ? $"({BuildPersistedFoldedNameMatchSql("s.name_folded", "@resolvedNameFolded")} OR (f.lang = 'sql' AND ((sql_segment_count(s.name) = @resolvedNameSegmentCount AND sql_normalize_name_folded(s.name) = @resolvedNameNormalizedFolded) OR sql_leaf_name_folded(s.name) = @resolvedNameLeafFolded)))"
@@ -2497,14 +2515,15 @@ public partial class DbReader
         var matchingSql = $@"
             SELECT f.path, f.lang, s.kind, s.name, s.line,
                    {GetSymbolColumnSql("start_line", "s.line")} AS start_line,
+                   {startColumnSql} AS start_column,
                    {GetSymbolColumnSql("end_line", "s.line")} AS end_line,
-                   {GetSymbolColumnSql("body_start_line")} AS body_start_line,
-                   {GetSymbolColumnSql("body_end_line")} AS body_end_line,
-                   {GetSymbolColumnSql("signature")} AS signature,
+                   {bodyStartLineSql} AS body_start_line,
+                   {bodyEndLineSql} AS body_end_line,
+                   {signatureSql} AS signature,
                    {GetSymbolColumnSql("container_kind")} AS container_kind,
                    {GetSymbolColumnSql("container_name")} AS container_name,
                    {GetSymbolColumnSql("visibility")} AS visibility,
-                   {GetSymbolColumnSql("return_type")} AS return_type,
+                   {returnTypeSql} AS return_type,
                    {GetSymbolColumnSql("container_qualified_name")} AS container_qualified_name,
                    {logicalPartialKeySql} AS logical_partial_key,
                    s.id AS symbol_id,
@@ -2512,7 +2531,12 @@ public partial class DbReader
                    {PathBucketOrder} AS path_bucket,
                    {VisibilityOrder} AS visibility_rank,
                    CASE WHEN s.kind IN ('class', 'struct', 'interface') THEN 1 ELSE 0 END AS is_precise,
-                   CASE WHEN s.kind IN ('namespace', 'import') THEN 1 ELSE 0 END AS is_non_callable
+                   CASE WHEN s.kind IN ('namespace', 'import') THEN 1 ELSE 0 END AS is_non_callable,
+                   {canonicalPrimaryRankSql} AS canonical_primary_rank,
+                   {generatedSql} AS canonical_generated_rank,
+                   {canonicalSemanticScoreSql} AS canonical_semantic_score,
+                   {canonicalDeclarationIdentitySql} AS canonical_declaration_identity,
+                   COALESCE({GetSymbolColumnSql("start_column")}, 2147483647) AS stable_start_column
             FROM symbols s
             JOIN files f ON s.file_id = f.id
             WHERE {nameCondition}
@@ -2527,7 +2551,8 @@ public partial class DbReader
         var precisePathDistinctSql = ReferenceEquals(GetIndexedPathComparer(), StringComparer.Ordinal)
             ? "COUNT(DISTINCT CASE WHEN is_precise = 1 THEN path END)"
             : "COUNT(DISTINCT CASE WHEN is_precise = 1 THEN path END COLLATE NOCASE)";
-        const string representativeOrder = "match_order, path_bucket, visibility_rank, name, path COLLATE BINARY, line, symbol_id";
+        const string canonicalRepresentativeOrder = "canonical_primary_rank, canonical_generated_rank, canonical_semantic_score DESC, canonical_declaration_identity COLLATE BINARY, path COLLATE BINARY, start_line, stable_start_column, symbol_id";
+        const string resultOrder = "match_order, path_bucket, visibility_rank, name, path COLLATE BINARY, line, symbol_id";
         var sql = $@"
             WITH matching_definitions AS (
                 {matchingSql}
@@ -2536,27 +2561,72 @@ public partial class DbReader
                 SELECT matching_definitions.*,
                        ROW_NUMBER() OVER (
                            PARTITION BY logical_partial_key
-                           ORDER BY {representativeOrder}
+                           ORDER BY {canonicalRepresentativeOrder}
                        ) AS logical_row_number,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY logical_partial_key
+                           ORDER BY path COLLATE BINARY, start_line, stable_start_column, symbol_id
+                       ) AS family_member_row_number,
                        COUNT(*) OVER (PARTITION BY logical_partial_key) AS logical_definition_sites
                 FROM matching_definitions
             ),
+            family_ranked_definitions AS (
+                SELECT ranked_definitions.*,
+                       MAX(CASE WHEN logical_row_number = 1 THEN family_member_row_number END) OVER (
+                           PARTITION BY logical_partial_key
+                       ) AS representative_member_row_number
+                FROM ranked_definitions
+            ),
+            family_metadata_definitions AS (
+                SELECT family_ranked_definitions.*,
+                       MIN(canonical_primary_rank) OVER (PARTITION BY logical_partial_key) AS logical_primary_rank_min,
+                       MAX(canonical_primary_rank) OVER (PARTITION BY logical_partial_key) AS logical_primary_rank_max,
+                       MIN(canonical_generated_rank) OVER (PARTITION BY logical_partial_key) AS logical_generated_rank_min,
+                       MAX(canonical_generated_rank) OVER (PARTITION BY logical_partial_key) AS logical_generated_rank_max,
+                       MIN(canonical_semantic_score) OVER (PARTITION BY logical_partial_key) AS logical_semantic_score_min,
+                       MAX(canonical_semantic_score) OVER (PARTITION BY logical_partial_key) AS logical_semantic_score_max,
+                       MIN(canonical_declaration_identity) OVER (PARTITION BY logical_partial_key) AS logical_declaration_identity_min,
+                       MAX(canonical_declaration_identity) OVER (PARTITION BY logical_partial_key) AS logical_declaration_identity_max,
+                       json_group_array(json_object(
+                           'symbol_id', symbol_id,
+                           'path', path,
+                           'line', line,
+                           'start_line', start_line,
+                           'start_column', start_column,
+                           'end_line', end_line,
+                           'name', name,
+                           'signature', signature,
+                           'generated', canonical_generated_rank
+                       )) FILTER (WHERE
+                           family_member_row_number <= CASE
+                               WHEN representative_member_row_number <= {LogicalPartialSymbolGrouper.FamilyMemberLimit}
+                               THEN {LogicalPartialSymbolGrouper.FamilyMemberLimit}
+                               ELSE {LogicalPartialSymbolGrouper.FamilyMemberLimit - 1}
+                           END
+                           OR logical_row_number = 1
+                       ) OVER (
+                           PARTITION BY logical_partial_key
+                           ORDER BY path COLLATE BINARY, start_line, stable_start_column, symbol_id
+                           ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+                       ) AS logical_family_members_json
+                FROM family_ranked_definitions
+            ),
             logical_definitions AS (
                 SELECT *
-                FROM ranked_definitions
+                FROM family_metadata_definitions
                 WHERE logical_row_number = 1
             ),
             requested_definitions AS (
                 SELECT logical_partial_key, 1 AS requested_row
                 FROM logical_definitions
-                ORDER BY {representativeOrder}
+                ORDER BY {resultOrder}
                 LIMIT @definitionLimit OFFSET @definitionOffset
             ),
             single_precise_definition AS (
                 SELECT logical_partial_key, 0 AS requested_row
                 FROM logical_definitions
                 WHERE is_precise = 1
-                ORDER BY {representativeOrder}
+                ORDER BY {resultOrder}
                 LIMIT 1
             ),
             selected_definition_keys AS (
@@ -2581,19 +2651,28 @@ public partial class DbReader
                 FROM matching_definitions
             )
             SELECT logical.path, logical.lang, logical.kind, logical.name, logical.line,
-                   logical.start_line, logical.end_line,
+                   logical.start_line, logical.start_column, logical.end_line,
                    logical.body_start_line, logical.body_end_line, logical.signature,
                    logical.container_kind, logical.container_name,
                    logical.visibility, logical.return_type,
                    logical.container_qualified_name, logical.logical_partial_key,
                    logical.symbol_id, logical.logical_definition_sites, selected.requested_row,
                    stats.physical_count, stats.physical_file_count, stats.logical_count,
-                   stats.precise_count, stats.precise_file_count, stats.non_callable_count
+                   stats.precise_count, stats.precise_file_count, stats.non_callable_count,
+                   CASE
+                       WHEN logical.logical_primary_rank_min <> logical.logical_primary_rank_max THEN '{LogicalPartialSymbolGrouper.ImplementationBodyReason}'
+                       WHEN logical.logical_generated_rank_min <> logical.logical_generated_rank_max THEN '{LogicalPartialSymbolGrouper.NonGeneratedSourceReason}'
+                       WHEN logical.logical_semantic_score_min <> logical.logical_semantic_score_max THEN '{LogicalPartialSymbolGrouper.SemanticDeclarationReason}'
+                       WHEN logical.logical_declaration_identity_min <> logical.logical_declaration_identity_max THEN '{LogicalPartialSymbolGrouper.CanonicalDeclarationIdentityReason}'
+                       ELSE '{LogicalPartialSymbolGrouper.StableLocationReason}'
+                   END AS representative_reason,
+                   logical.logical_family_members_json,
+                   CASE WHEN logical.logical_definition_sites > {LogicalPartialSymbolGrouper.FamilyMemberLimit} THEN 1 ELSE 0 END AS family_members_truncated
             FROM selected_definition_keys selected
             JOIN logical_definitions logical
               ON logical.logical_partial_key = selected.logical_partial_key
             CROSS JOIN definition_stats stats
-            ORDER BY {representativeOrder}";
+            ORDER BY {resultOrder}";
 
         cmd.CommandText = sql;
         SqliteCommandPolicy.Add(cmd, "@resolvedName", resolvedName);
@@ -2628,7 +2707,7 @@ public partial class DbReader
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
         {
-            var definitionSites = reader.GetInt32(17);
+            var definitionSites = reader.GetInt32(18);
             var result = new SymbolResult
             {
                 Path = reader.GetString(0),
@@ -2637,28 +2716,40 @@ public partial class DbReader
                 Name = reader.GetString(3),
                 Line = reader.GetInt32(4),
                 StartLine = !reader.IsDBNull(5) ? reader.GetInt32(5) : reader.GetInt32(4),
-                EndLine = !reader.IsDBNull(6) ? reader.GetInt32(6) : reader.GetInt32(4),
-                BodyStartLine = !reader.IsDBNull(7) ? reader.GetInt32(7) : null,
-                BodyEndLine = !reader.IsDBNull(8) ? reader.GetInt32(8) : null,
-                Signature = !reader.IsDBNull(9) ? reader.GetString(9) : null,
-                ContainerKind = !reader.IsDBNull(10) ? reader.GetString(10) : null,
-                ContainerName = !reader.IsDBNull(11) ? reader.GetString(11) : null,
-                ContainerQualifiedName = !reader.IsDBNull(14) ? reader.GetString(14) : null,
-                LogicalPartialKey = !reader.IsDBNull(15) ? reader.GetString(15) : null,
-                Visibility = !reader.IsDBNull(12) ? reader.GetString(12) : null,
-                ReturnType = !reader.IsDBNull(13) ? reader.GetString(13) : null,
-                SymbolId = reader.GetInt64(16),
+                StartColumn = ResolveSymbolIdentifierStartColumn(
+                    !reader.IsDBNull(6) ? reader.GetInt32(6) : null,
+                    !reader.IsDBNull(10) ? reader.GetString(10) : null,
+                    reader.GetString(3),
+                    reader.GetString(2)),
+                EndLine = !reader.IsDBNull(7) ? reader.GetInt32(7) : reader.GetInt32(4),
+                BodyStartLine = !reader.IsDBNull(8) ? reader.GetInt32(8) : null,
+                BodyEndLine = !reader.IsDBNull(9) ? reader.GetInt32(9) : null,
+                Signature = !reader.IsDBNull(10) ? reader.GetString(10) : null,
+                ContainerKind = !reader.IsDBNull(11) ? reader.GetString(11) : null,
+                ContainerName = !reader.IsDBNull(12) ? reader.GetString(12) : null,
+                ContainerQualifiedName = !reader.IsDBNull(15) ? reader.GetString(15) : null,
+                LogicalPartialKey = !reader.IsDBNull(16) ? reader.GetString(16) : null,
+                Visibility = !reader.IsDBNull(13) ? reader.GetString(13) : null,
+                ReturnType = !reader.IsDBNull(14) ? reader.GetString(14) : null,
+                SymbolId = reader.GetInt64(17),
                 DefinitionSites = definitionSites > 1 ? definitionSites : null,
             };
-            physicalCount = reader.GetInt32(19);
-            physicalFileCount = reader.GetInt32(20);
-            logicalCount = reader.GetInt32(21);
-            preciseCount = reader.GetInt32(22);
-            preciseFileCount = reader.GetInt32(23);
-            nonCallableCount = reader.GetInt32(24);
+            if (definitionSites > 1)
+            {
+                result.PartialFamilyId = LogicalPartialSymbolGrouper.BuildPartialFamilyId(result.LogicalPartialKey!);
+                result.RepresentativeReason = reader.GetString(26);
+                result.FamilyMembers = ReadPartialFamilyMembers(reader.GetString(27), result);
+                result.FamilyMembersTruncated = reader.GetInt64(28) != 0;
+            }
+            physicalCount = reader.GetInt32(20);
+            physicalFileCount = reader.GetInt32(21);
+            logicalCount = reader.GetInt32(22);
+            preciseCount = reader.GetInt32(23);
+            preciseFileCount = reader.GetInt32(24);
+            nonCallableCount = reader.GetInt32(25);
             if (IsPreciseImpactFallbackKind(result.Kind))
                 preciseDefinition ??= result;
-            if (reader.GetInt32(18) == 1)
+            if (reader.GetInt32(19) == 1)
                 results.Add(result);
         }
 
