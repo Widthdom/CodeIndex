@@ -7560,16 +7560,18 @@ public sealed class Caller
             """{"jsonrpc":"2.0","id":"batch-generation-init","method":"initialize","params":{}}"""));
 
         var firstStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstTimedOut = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var releaseFirst = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var followingPingStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var releaseFollowingPing = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var observedDrainingCaller = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-        server.RequestDelayForTestsWithId = async (id, _) =>
+        server.RequestDelayForTestsWithId = async (id, cancellationToken) =>
         {
             switch (id?.GetValue<int>())
             {
                 case 454031:
                     firstStarted.TrySetResult();
+                    cancellationToken.Register(() => firstTimedOut.TrySetResult());
                     await releaseFirst.Task;
                     observedDrainingCaller.TrySetResult(server.CurrentCaller);
                     break;
@@ -7588,6 +7590,7 @@ public sealed class Caller
         {
             await firstStarted.Task.WaitAsync(TestDeterminism.DefaultTimeout);
             await followingPingStarted.Task.WaitAsync(TestDeterminism.DefaultTimeout);
+            await firstTimedOut.Task.WaitAsync(TestDeterminism.DefaultTimeout);
 
             releaseFirst.TrySetResult();
             Assert.Equal(
@@ -7595,14 +7598,29 @@ public sealed class Caller
                 await observedDrainingCaller.Task.WaitAsync(TestDeterminism.DefaultTimeout));
 
             releaseFollowingPing.TrySetResult();
-            var responseText = await batchTask.WaitAsync(TestDeterminism.DefaultTimeout);
-            var responses = Assert.IsType<JsonArray>(JsonNode.Parse(responseText!));
-            Assert.Equal("Request timed out", responses[0]!["error"]!["message"]!.GetValue<string>());
-            Assert.Equal(-32600, responses[1]!["error"]!["code"]!.GetValue<int>());
+            var responseText = Assert.IsType<string>(
+                await batchTask.WaitAsync(TestDeterminism.DefaultTimeout));
+            var responses = Assert.IsType<JsonArray>(JsonNode.Parse(responseText));
+            Assert.Equal(3, responses.Count);
+            var timedOutResponse = Assert.IsType<JsonObject>(responses[0]);
+            var timedOutError = Assert.IsType<JsonObject>(timedOutResponse["error"]);
+            Assert.Equal(
+                "Request timed out",
+                Assert.IsAssignableFrom<JsonValue>(timedOutError["message"]).GetValue<string>());
+            var duplicateResponse = Assert.IsType<JsonObject>(responses[1]);
+            var duplicateError = Assert.IsType<JsonObject>(duplicateResponse["error"]);
+            Assert.Equal(
+                -32600,
+                Assert.IsAssignableFrom<JsonValue>(duplicateError["code"]).GetValue<int>());
+            var duplicateData = Assert.IsType<JsonObject>(duplicateError["data"]);
             Assert.Equal(
                 "duplicate_initialize",
-                responses[1]!["error"]!["data"]!["reason"]!.GetValue<string>());
-            Assert.Equal("ok", responses[2]!["result"]!["status"]!.GetValue<string>());
+                Assert.IsAssignableFrom<JsonValue>(duplicateData["reason"]).GetValue<string>());
+            var pingResponse = Assert.IsType<JsonObject>(responses[2]);
+            var pingResult = Assert.IsType<JsonObject>(pingResponse["result"]);
+            Assert.Equal(
+                "ok",
+                Assert.IsAssignableFrom<JsonValue>(pingResult["status"]).GetValue<string>());
             Assert.Equal("unknown", server.CurrentCaller);
         }
         finally
