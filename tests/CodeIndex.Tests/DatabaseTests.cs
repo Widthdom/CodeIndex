@@ -2508,35 +2508,62 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
-    public void FtsBulkLoadTriggerGuard_CompleteFailureKeepsDisposeRecovery()
+    public void FtsBulkLoadTriggerGuard_CompleteFailureKeepsDisposeRecovery_Issue5012()
     {
         var fileId = UpsertTestFile("src/failed-complete-bulk-fts.cs", checksum: "failed-complete-bulk-fts");
+        var previousHook = DbWriter.FtsMaintenanceBeforeExecuteForTesting;
+        var primaryException = new InvalidOperationException("simulated optimize precheck failure");
+        var cleanupException = new InvalidOperationException("simulated dispose trigger restoration failure");
+        var restoreCount = 0;
         var ftsMutated = false;
 
-        using (var guard = FtsBulkLoadTriggerGuard.Start(_writer, enabled: true, () => ftsMutated))
+        try
         {
-            Assert.NotNull(guard);
-            _writer.InsertChunks(
-            [
-                new ChunkRecord
+            DbWriter.FtsMaintenanceBeforeExecuteForTesting = phase =>
+            {
+                previousHook?.Invoke(phase);
+                if (phase == DbWriter.FtsRestoreTriggersMaintenancePhase
+                    && Interlocked.Increment(ref restoreCount) == 2)
                 {
-                    FileId = fileId,
-                    ChunkIndex = 0,
-                    StartLine = 1,
-                    EndLine = 1,
-                    Content = "failedcompletebulktoken",
-                },
-            ]);
-            ftsMutated = true;
+                    throw cleanupException;
+                }
+            };
 
-            Assert.Throws<InvalidOperationException>(() => guard!.Complete(
-                rebuild: true,
-                beforeOptimize: () => throw new InvalidOperationException("simulated optimize precheck failure")));
+            using (var guard = FtsBulkLoadTriggerGuard.Start(_writer, enabled: true, () => ftsMutated))
+            {
+                Assert.NotNull(guard);
+                _writer.InsertChunks(
+                [
+                    new ChunkRecord
+                    {
+                        FileId = fileId,
+                        ChunkIndex = 0,
+                        StartLine = 1,
+                        EndLine = 1,
+                        Content = "failedcompletebulktoken",
+                    },
+                ]);
+                ftsMutated = true;
+
+                var thrown = Assert.Throws<InvalidOperationException>(() => guard!.Complete(
+                    rebuild: true,
+                    beforeOptimize: () => throw primaryException));
+                Assert.Same(primaryException, thrown);
+            }
+
+            Assert.Equal(2, restoreCount);
+            Assert.Equal("true", ReadMeta(DbWriter.FtsBulkLoadInProgressMetaKey));
+            Assert.Equal(3L, CountFtsSyncTriggers());
+            Assert.Equal(1L, ExecuteScalarLong(
+                "SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH 'failedcompletebulktoken'"));
+
+            Assert.True(_writer.RecoverInterruptedFtsBulkLoadIfNeeded());
+            Assert.Null(ReadMeta(DbWriter.FtsBulkLoadInProgressMetaKey));
         }
-
-        Assert.Equal(3L, CountFtsSyncTriggers());
-        Assert.Null(ReadMeta(DbWriter.FtsBulkLoadInProgressMetaKey));
-        Assert.Equal(1L, ExecuteScalarLong("SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH 'failedcompletebulktoken'"));
+        finally
+        {
+            DbWriter.FtsMaintenanceBeforeExecuteForTesting = previousHook;
+        }
     }
 
     [Fact]

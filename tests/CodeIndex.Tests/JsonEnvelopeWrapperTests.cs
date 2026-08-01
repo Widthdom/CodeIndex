@@ -469,31 +469,136 @@ public class JsonEnvelopeWrapperTests
     }
 
     [Fact]
-    public void HasEnvelopeFlag_DetectsExactFlagOnly()
+    public void HasEnvelopeFlag_ClassifiesOptionRoles_Issue4976()
     {
-        Assert.True(JsonEnvelopeWrapper.HasEnvelopeFlag(["--json-envelope"]));
-        Assert.True(JsonEnvelopeWrapper.HasEnvelopeFlag(["foo", "--json", "--json-envelope"]));
-        Assert.False(JsonEnvelopeWrapper.HasEnvelopeFlag(["--json"]));
-        Assert.False(JsonEnvelopeWrapper.HasEnvelopeFlag(["--json-envelope=1"]));
+        Assert.True(JsonEnvelopeWrapper.HasEnvelopeFlag("search", ["--json-envelope"]));
+        Assert.True(JsonEnvelopeWrapper.HasEnvelopeFlag("search", ["--query", "--json-envelope", "--json-envelope"]));
+        Assert.False(JsonEnvelopeWrapper.HasEnvelopeFlag("search", ["--json"]));
+        Assert.False(JsonEnvelopeWrapper.HasEnvelopeFlag("search", ["--json-envelope=1"]));
+        Assert.False(JsonEnvelopeWrapper.HasEnvelopeFlag("search", ["--query", "--json-envelope"]));
+        Assert.True(JsonEnvelopeWrapper.HasEnvelopeFlag("search", ["--path", "--json-envelope"]));
+        Assert.True(JsonEnvelopeWrapper.HasEnvelopeFlag("search", ["--lang", "--json-envelope"]));
+        Assert.False(JsonEnvelopeWrapper.HasEnvelopeFlag("search", ["--", "--json-envelope"]));
     }
 
     [Fact]
     public void PrepareInnerArgs_StripsEnvelopeAndAddsJson()
     {
-        var prepared = JsonEnvelopeWrapper.PrepareInnerArgs(["foo", "--json-envelope", "--limit", "5"]);
-        Assert.DoesNotContain("--json-envelope", prepared);
-        Assert.Contains("--json", prepared);
-        Assert.Contains("foo", prepared);
-        Assert.Contains("--limit", prepared);
-        Assert.Contains("5", prepared);
+        var prepared = JsonEnvelopeWrapper.PrepareInnerArgs(
+            "search",
+            ["foo", "--json-envelope", "--limit", "5"]);
+
+        Assert.Equal(["foo", "--limit", "5", "--json"], prepared);
     }
 
     [Fact]
     public void PrepareInnerArgs_PreservesExistingJsonFlag()
     {
-        var prepared = JsonEnvelopeWrapper.PrepareInnerArgs(["foo", "--json", "--json-envelope"]);
+        var prepared = JsonEnvelopeWrapper.PrepareInnerArgs(
+            "search",
+            ["foo", "--json", "--json-envelope"]);
+
         Assert.DoesNotContain("--json-envelope", prepared);
         Assert.Equal(1, prepared.Count(a => a == "--json"));
+    }
+
+    [Fact]
+    public void PrepareInnerArgs_PreservesOptionValuesAndEndMarker_Issue4976()
+    {
+        Assert.Equal(
+            ["--path", "--json"],
+            JsonEnvelopeWrapper.PrepareInnerArgs(
+                "search",
+                ["--path", "--json-envelope"]));
+        Assert.Equal(
+            ["--query", "--json", "--json"],
+            JsonEnvelopeWrapper.PrepareInnerArgs(
+                "search",
+                ["--query", "--json", "--json-envelope"]));
+        Assert.Equal(
+            ["--json", "--", "--json-envelope"],
+            JsonEnvelopeWrapper.PrepareInnerArgs(
+                "search",
+                ["--json-envelope", "--", "--json-envelope"]));
+    }
+
+    [Theory]
+    [InlineData("--lang")]
+    [InlineData("--path")]
+    public void Search_MissingOptionValueBeforeEnvelope_ReturnsStructuredError_Issue4976(string option)
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["search", "Needle", option, "--json-envelope"],
+            _jsonOptions,
+            "1.0.0-test"));
+
+        Assert.NotEqual(CommandExitCodes.Success, exitCode);
+        Assert.Contains($"{option} requires a value", stderr);
+        using var document = JsonDocument.Parse(stdout);
+        Assert.Equal(
+            exitCode,
+            document.RootElement.GetProperty("metadata").GetProperty("exit_code").GetInt32());
+        Assert.Equal(JsonValueKind.Array, document.RootElement.GetProperty("results").ValueKind);
+    }
+
+    [Fact]
+    public void Search_JsonEnvelopeLiteralRemainsCommandDataAcrossQueryForms_Issue4976()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("json_envelope_option_value_4976");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/App.txt",
+                "text",
+                "The literal --json-envelope remains searchable.\n");
+
+            string[][] arrayCases =
+            [
+                ["search", "--query", "--json-envelope", "--db", dbPath, "--exact-substring", "--json=array"],
+                ["search", "--json=array", "--db", dbPath, "--query", "--json-envelope", "--exact-substring"],
+                ["search", "--query=--json-envelope", "--db", dbPath, "--exact-substring", "--json=array"],
+                ["search", "--db", dbPath, "--exact-substring", "--json=array", "--", "--json-envelope"],
+            ];
+            foreach (var args in arrayCases)
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() =>
+                    ProgramRunner.Run(args, _jsonOptions, "1.0.0-test"));
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                using var document = JsonDocument.Parse(stdout);
+                Assert.Equal(JsonValueKind.Array, document.RootElement.ValueKind);
+                Assert.NotEmpty(document.RootElement.EnumerateArray());
+            }
+
+            string[][] envelopeCases =
+            [
+                ["search", "--query", "--json-envelope", "--db", dbPath, "--exact-substring", "--json-envelope"],
+                ["search", "--json-envelope", "--db", dbPath, "--exact-substring", "--", "--json-envelope"],
+                ["search", "--query", "--json-envelope", "--db", dbPath, "--exact-substring", "--fields", "path", "--json-envelope"],
+                ["search", "--query", "--json-envelope", "--db", dbPath, "--exact-substring", "--json=array", "--json-envelope"],
+                ["search", "--json-envelope", "--db", dbPath, "--exact-substring", "--fields", "path", "--", "--json-envelope"],
+            ];
+            foreach (var args in envelopeCases)
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() =>
+                    ProgramRunner.Run(args, _jsonOptions, "1.0.0-test"));
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                using var document = JsonDocument.Parse(stdout);
+                Assert.Equal("--json-envelope", document.RootElement.GetProperty("metadata").GetProperty("query_normalized").GetString());
+                if (args.Contains("--fields") || args.Contains("--json=array"))
+                    Assert.True(document.RootElement.GetProperty("metadata").GetProperty("total_count_authoritative").GetBoolean());
+                Assert.NotEmpty(document.RootElement.GetProperty("results").EnumerateArray());
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
     }
 
     [Fact]
