@@ -451,6 +451,11 @@ public partial class DbWriter
             "1",
             StringComparison.Ordinal);
 
+    internal bool HasFoldBackfillRewriteCheckpoint()
+        => GetMetaString(FoldBackfillPhaseMetaKey) != null
+            || GetMetaString(FoldBackfillLastSymbolIdMetaKey) != null
+            || GetMetaString(FoldBackfillLastReferenceIdMetaKey) != null;
+
     private static int ToInt32Count(object? value)
     {
         var count = value is long l ? l : (value is int i ? i : 0);

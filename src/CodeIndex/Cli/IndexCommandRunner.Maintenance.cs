@@ -638,9 +638,17 @@ public static partial class IndexCommandRunner
             // Missing or mismatched fold metadata means persisted keys may have been generated
             // by a different fold algorithm/runtime, so refresh every row from source names.
             // fold metadata 未記録 / 不一致時は全行再計算して version/runtime skew を解消する。
-            var rewriteAll = writer.ResolveFoldBackfillRewriteAll(!foldMetadataCurrentBefore);
+            var rewriteAll = writer.ResolveFoldBackfillRewriteAll(
+                !foldMetadataCurrentBefore || writer.HasFoldBackfillRewriteCheckpoint());
 
-            if (!rewriteAll && !writer.AllPresentFoldedColumnValuesMatchCurrentFold())
+            var symbols = 0;
+            var symbolReferences = 0;
+            var verified = false;
+            var userVersionAfter = userVersionBefore;
+            var pendingRows = writer.CountBackfillFoldedColumns(rewriteAll);
+            if (!rewriteAll
+                && (pendingRows.Symbols > 0 || pendingRows.SymbolReferences > 0)
+                && !writer.AllPresentFoldedColumnValuesMatchCurrentFold())
             {
                 // Missing folded values can use the targeted backfill, but any non-NULL
                 // drift must promote the same invocation to a full refresh. This avoids a
@@ -648,13 +656,8 @@ public static partial class IndexCommandRunner
                 // NULL の folded 値は対象行だけ修復できるが、非 NULL の drift も混在する場合は
                 // 同じ invocation を全行 refresh に昇格し、partial pass 後の検証失敗を防ぐ。
                 rewriteAll = true;
+                pendingRows = writer.CountBackfillFoldedColumns(rewriteAll);
             }
-
-            var symbols = 0;
-            var symbolReferences = 0;
-            var verified = false;
-            var userVersionAfter = userVersionBefore;
-            var pendingRows = writer.CountBackfillFoldedColumns(rewriteAll);
             if (!rewriteAll
                 && pendingRows.Symbols == 0
                 && pendingRows.SymbolReferences == 0
