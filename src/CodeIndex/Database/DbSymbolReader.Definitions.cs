@@ -305,6 +305,8 @@ public partial class DbReader
     public QueryCountResult CountDefinitionsTotal(string query, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null, bool groupPartials = false)
     {
         var normalizedQuery = NormalizeSymbolSearchQueryForSymbolSearch(query, lang, exact);
+        if (groupPartials)
+            EnsureCSharpCallableTypeKinds(DbReader.NormalizeQueryLanguage(lang));
         using var cmd = _conn.CreateCommand();
 
         var logicalPartialKeySql = LogicalPartialSymbolGrouper.BuildSqlKeyExpression(

@@ -120,7 +120,8 @@ public partial class DbContext : IDisposable
                     identifier,
                     returnType,
                     containerQualifiedName: null,
-                    typeKinds: csharpCallableTypeKinds));
+                    typeKinds: null),
+            isDeterministic: true);
         connection.CreateFunction(
             "csharp_partial_callable_identity",
             (string? signature, string? identifier, string? returnType, string? containerQualifiedName) =>

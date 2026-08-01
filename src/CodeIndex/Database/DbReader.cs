@@ -595,7 +595,6 @@ public partial class DbReader : IDisposable
         _fileColumns = LoadColumns("files");
         GeneratedColumnAvailableScope.Value = _fileColumns.Contains("generated");
         _symbolColumns = LoadColumns("symbols");
-        DbContext.RefreshCSharpCallableTypeKinds(_conn, _fileColumns, _symbolColumns);
         _referenceColumns = LoadColumns("symbol_references");
         _chunkIndexes = LoadIndexes("chunks");
         _symbolIndexes = LoadIndexes("symbols");
@@ -682,6 +681,14 @@ public partial class DbReader : IDisposable
         // Issue #1515: 旧 cdidx が新 cdidx 製 DB を開いたケースを明示的に検知する。
         _indexWriterVersion = TryGetMetaString(_conn, DbContext.CdidxWriterVersionMetaKey);
         (_indexNewerThanReader, _indexNewerThanReaderReason) = DetectNewerThanReaderContracts(_conn, userVersion);
+    }
+
+    private void EnsureCSharpCallableTypeKinds(string? lang = null)
+    {
+        if (lang != null && !string.Equals(lang, "csharp", StringComparison.OrdinalIgnoreCase))
+            return;
+
+        DbContext.RefreshCSharpCallableTypeKinds(_conn, _fileColumns, _symbolColumns);
     }
 
     private static void RecoverInterruptedFtsBulkLoadForRead(SqliteConnection conn, bool isReadOnly)

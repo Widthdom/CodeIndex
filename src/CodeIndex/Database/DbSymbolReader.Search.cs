@@ -402,6 +402,8 @@ public partial class DbReader
     public QueryCountResult CountSearchSymbolsTotal(IReadOnlyList<string>? queries, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null, bool groupPartials = false)
     {
         lang = DbReader.NormalizeQueryLanguage(lang);
+        if (groupPartials)
+            EnsureCSharpCallableTypeKinds(lang);
         using var cmd = _conn.CreateCommand();
 
         var logicalPartialKeySql = LogicalPartialSymbolGrouper.BuildSqlKeyExpression(
@@ -603,6 +605,8 @@ public partial class DbReader
             return merged.Skip(Math.Max(0, offset)).Take(limit).ToList();
         }
 
+        if (groupPartials)
+            EnsureCSharpCallableTypeKinds(lang);
         using var cmd = _conn.CreateCommand();
 
         var startLineSql = GetSymbolColumnSql("start_line", "s.line");
@@ -1031,10 +1035,11 @@ public partial class DbReader
 
         var firstLineEnd = signature.IndexOfAny(['\r', '\n']);
         var firstLine = firstLineEnd >= 0 ? signature[..firstLineEnd] : signature;
-        var relativeColumn = kind == "function"
+        var callable = kind is "function" or "test.method";
+        var relativeColumn = callable
             ? LogicalPartialSymbolGrouper.FindCallableNameOffset(firstLine, name)
             : firstLine.IndexOf(name, StringComparison.Ordinal);
-        if (relativeColumn < 0 && kind == "function")
+        if (relativeColumn < 0 && callable)
             relativeColumn = firstLine.IndexOf(name, StringComparison.Ordinal);
         return relativeColumn >= 0 ? declarationStartColumn.Value + relativeColumn : declarationStartColumn;
     }

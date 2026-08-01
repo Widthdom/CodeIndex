@@ -2455,6 +2455,7 @@ public partial class DbReader
         var leafName = SqlNameResolver.GetLeafName(resolvedName);
         var segmentCount = SqlNameResolver.GetSegmentCount(resolvedName);
         var allowLeafFallback = !SqlNameResolver.HasQualifier(resolvedName);
+        EnsureCSharpCallableTypeKinds(lang);
         using var cmd = _conn.CreateCommand();
         var supportedLangFilter = BuildGraphSupportedLanguagePredicate(cmd, "f", "impactDefLang");
         var signatureSql = GetSymbolColumnSql("signature");

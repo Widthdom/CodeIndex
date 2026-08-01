@@ -668,33 +668,20 @@ internal static class LogicalPartialSymbolGrouper
         IReadOnlyList<string> tokens,
         int nullableOffset)
     {
-        var nameEnd = nullableOffset - 1;
-        if (nameEnd < 0)
+        var identityEnd = nullableOffset - 1;
+        if (identityEnd < 0)
             return string.Empty;
 
-        if (tokens[nameEnd] == ">")
-        {
-            var depth = 0;
-            while (nameEnd >= 0)
-            {
-                if (tokens[nameEnd] == ">")
-                    depth++;
-                else if (tokens[nameEnd] == "<" && --depth == 0)
-                    break;
-                nameEnd--;
-            }
-            nameEnd--;
-        }
-
-        if (nameEnd < 0 || !IsIdentifierCharacter(tokens[nameEnd][0]))
+        var nameStart = FindCustomTypeSegmentStart(tokens, identityEnd);
+        if (nameStart < 0)
             return string.Empty;
 
-        var nameStart = nameEnd;
-        while (nameStart >= 2
-               && tokens[nameStart - 1] == "."
-               && IsIdentifierCharacter(tokens[nameStart - 2][0]))
+        while (nameStart >= 2 && tokens[nameStart - 1] == ".")
         {
-            nameStart -= 2;
+            var previousStart = FindCustomTypeSegmentStart(tokens, nameStart - 2);
+            if (previousStart < 0)
+                break;
+            nameStart = previousStart;
         }
 
         if (nameStart >= 3
@@ -705,7 +692,35 @@ internal static class LogicalPartialSymbolGrouper
             nameStart -= 3;
         }
 
-        return string.Concat(tokens.Skip(nameStart).Take(nameEnd - nameStart + 1));
+        return string.Concat(tokens.Skip(nameStart).Take(identityEnd - nameStart + 1));
+    }
+
+    private static int FindCustomTypeSegmentStart(
+        IReadOnlyList<string> tokens,
+        int segmentEnd)
+    {
+        if (segmentEnd < 0)
+            return -1;
+        if (tokens[segmentEnd] != ">")
+            return IsIdentifierCharacter(tokens[segmentEnd][0]) ? segmentEnd : -1;
+
+        var depth = 0;
+        for (var offset = segmentEnd; offset >= 0; offset--)
+        {
+            if (tokens[offset] == ">")
+            {
+                depth++;
+            }
+            else if (tokens[offset] == "<" && --depth == 0)
+            {
+                var nameOffset = offset - 1;
+                return nameOffset >= 0 && IsIdentifierCharacter(tokens[nameOffset][0])
+                    ? nameOffset
+                    : -1;
+            }
+        }
+
+        return -1;
     }
 
     private static bool TryReadFrameworkNullableTypeIdentity(

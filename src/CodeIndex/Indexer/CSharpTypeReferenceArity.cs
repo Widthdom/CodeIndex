@@ -1,3 +1,5 @@
+using System.Text;
+
 namespace CodeIndex.Indexer;
 
 internal static class CSharpTypeReferenceArity
@@ -143,6 +145,59 @@ internal static class CSharpTypeReferenceArity
            || (string.Equals(symbolKind, "record", StringComparison.Ordinal)
                && !string.IsNullOrWhiteSpace(signature)
                && ContainsIdentifier(signature, "struct", signature.Length));
+
+    internal static string NormalizeTypeIdentityArity(string? identity)
+    {
+        if (string.IsNullOrWhiteSpace(identity))
+            return string.Empty;
+
+        var value = identity.Trim();
+        if (value.StartsWith("global::", StringComparison.Ordinal))
+            value = value["global::".Length..];
+
+        var normalized = new StringBuilder(value.Length);
+        for (var index = 0; index < value.Length;)
+        {
+            var current = value[index];
+            if (char.IsWhiteSpace(current) || current == '@')
+            {
+                index++;
+                continue;
+            }
+
+            if (!IsIdentifierPart(current) || char.IsDigit(current))
+            {
+                if (current != '?')
+                    normalized.Append(current);
+                index++;
+                continue;
+            }
+
+            var identifierStart = index;
+            while (index < value.Length && IsIdentifierPart(value[index]))
+                index++;
+            normalized.Append(value, identifierStart, index - identifierStart);
+
+            var genericStart = index;
+            SkipWhitespace(value, ref genericStart);
+            if (genericStart >= value.Length || value[genericStart] != '<')
+                continue;
+            if (!TryCountTopLevelTypeArguments(
+                    value,
+                    genericStart,
+                    out var arity,
+                    out var closeAngleIndex))
+            {
+                return string.Empty;
+            }
+
+            normalized.Append('`');
+            normalized.Append(arity.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            index = closeAngleIndex + 1;
+        }
+
+        return normalized.ToString();
+    }
 
     private static int FindClosestIdentifierOccurrence(string text, string identifier, long? columnNumber)
     {
