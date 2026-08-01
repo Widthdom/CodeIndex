@@ -1299,6 +1299,8 @@ Here, drift refusal means drift detected through the final pre-publication valid
 
 `cdidx optimize --dry-run --json` previews FTS5 maintenance without acquiring the index lock or changing the source DB/WAL/SHM files. The result includes DB/core-table/FTS sizes, page and freelist indicators, the incremental-write recommendation, current lock and readiness state, a previous-duration estimate when available, and the operations a real optimize would perform, including its repair-mode schema initialization or migration check. `object_sizes_measurement` distinguishes exact `dbstat` page bytes from the logical-payload fallback used when SQLite does not provide `dbstat`.
 
+`status --check --json` returns structured `repair_commands` for failed checks. Each entry identifies its `action`, `args`, `mutation_class`, `safety_class`, and `safety_notes`; `reason` remains the first trigger for compatibility, while `reasons` contains every trigger in deterministic check order. Identical structured actions are emitted once, but commands with different targets, options, actions, or safety semantics stay separate. Human check output applies the same rule, preserves platform-aware shell quoting, and visibly escapes control characters so each `[repair]` command remains one diagnostic line; structured JSON `args` retain their original values. Writable repair arguments use normalized local paths rather than preserving read-only `file:` URI options.
+
 ### Search code
 
 ```bash
@@ -4691,7 +4693,7 @@ DB を read-only で開いて SQLite の `PRAGMA integrity_check` を実行し�
 
 DB / WAL の肥大や空き page を確認したい場合は `status --json` の `maintenance_guidance` を見ます。既定では WAL が 64 MiB 以上で `checkpoint_recommended`、`freelist_count / page_count` が 0.20 以上で `vacuum_recommended` になり、`recommended_command` と `post_maintenance_follow_up` が返ります。しきい値は `CDIDX_MAINTENANCE_WAL_WARN_BYTES` と `CDIDX_MAINTENANCE_FREELIST_WARN_RATIO` で調整できます。
 
-`status --check --json` は failed check ごとに `repair_commands` を返します。各 entry は `name`、`args`、`reason`、`safety_notes` を持つため、自動化は `recommended_action` の文章を分解せずに修復コマンドを組み立てられます。前回の index が中断・失敗した情報が DB に残っている場合は、`last_failed_or_partial_index_run` に bounded metadata だけを返し、例外本文や file path は含めません。
+`status --check --json` は failed check に対する構造化 `repair_commands` を返します。各 entry は `action`、`args`、`mutation_class`、`safety_class`、`safety_notes` を持ち、互換用の `reason` は最初の trigger、`reasons` は deterministic な check 順序ですべての trigger を保持します。同一の構造化 action は1件だけ返しますが、target、option、action、安全性 semantics が異なる command は別々に維持します。human check output にも同じ規則を適用し、platform-aware な shell quote と control character の可視 escape により、各 `[repair]` command を1行に維持します。構造化 JSON の `args` は原値を保持します。書き込み用の修復 argument には read-only の `file:` URI option を残さず、正規化済み local path を使います。前回の index が中断・失敗した情報が DB に残っている場合は、`last_failed_or_partial_index_run` に bounded metadata だけを返し、例外本文や file path は含めません。
 
 ```bash
 cdidx vacuum --dry-run --json   # 回収見積もりと maintenance guidance だけを確認
