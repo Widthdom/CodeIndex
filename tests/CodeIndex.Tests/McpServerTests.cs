@@ -7494,6 +7494,7 @@ public sealed class Caller
             """{"jsonrpc":"2.0","id":"issue-4536-batch-timeout-init","method":"initialize","params":{}}"""));
 
         var firstStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstTimedOut = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var releaseFirst = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var secondRegistered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var secondStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -7502,11 +7503,12 @@ public sealed class Caller
             if (id?.GetValue<int>() == 453654)
                 secondRegistered.TrySetResult();
         };
-        server.RequestDelayForTestsWithId = (id, _) =>
+        server.RequestDelayForTestsWithId = (id, cancellationToken) =>
         {
             if (id?.GetValue<int>() == 453653)
             {
                 firstStarted.TrySetResult();
+                cancellationToken.Register(() => firstTimedOut.TrySetResult());
                 return releaseFirst.Task;
             }
 
@@ -7519,6 +7521,7 @@ public sealed class Caller
         await Task.WhenAll(firstStarted.Task, secondRegistered.Task).WaitAsync(TestDeterminism.DefaultTimeout);
         Assert.False(secondStarted.Task.IsCompleted);
         Assert.Equal(0, server.AvailableConcurrencySlotsForTests);
+        await firstTimedOut.Task.WaitAsync(TestDeterminism.DefaultTimeout);
 
         releaseFirst.TrySetResult();
         await secondStarted.Task.WaitAsync(TestDeterminism.DefaultTimeout);
