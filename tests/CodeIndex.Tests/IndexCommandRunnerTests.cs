@@ -6485,6 +6485,299 @@ public sealed class Caller
     }
 
     [Fact]
+    public void RunBackfillFold_MixedMissingAndNonCurrentRows_RewritesAll_Issue4946()
+    {
+        var dbPath = CreateTempDbPath("cdidx_backfill_fold_mixed_4946");
+        try
+        {
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                db.InitializeSchema();
+                var writer = new DbWriter(db.Connection);
+                var csharpFileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = "src/App.cs",
+                    Lang = "csharp",
+                    Size = 64,
+                    Lines = 2,
+                    Modified = new DateTime(2026, 8, 1, 0, 0, 0, DateTimeKind.Utc),
+                });
+                var markdownFileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = "changelog.d/unreleased/4946.fixed.md",
+                    Lang = "markdown",
+                    Size = 64,
+                    Lines = 2,
+                    Modified = new DateTime(2026, 8, 1, 0, 0, 0, DateTimeKind.Utc),
+                });
+                writer.InsertSymbols([
+                    new SymbolRecord { FileId = csharpFileId, Kind = "function", Name = "MissingMember", Line = 1, StartLine = 1, EndLine = 1 },
+                    new SymbolRecord { FileId = markdownFileId, Kind = "heading", Name = "Current heading", Line = 1, StartLine = 1, EndLine = 2 },
+                ]);
+                writer.InsertReferences([
+                    new ReferenceRecord
+                    {
+                        FileId = csharpFileId,
+                        SymbolName = "MissingMember",
+                        ReferenceKind = "call",
+                        Line = 2,
+                        Column = 5,
+                        Context = "MissingMember()",
+                        ContainerKind = "function",
+                        ContainerName = "CurrentContainer",
+                    },
+                ]);
+                writer.BackfillFoldedColumns(rewriteAll: true);
+                Assert.True(writer.MarkFoldReady());
+                writer.MarkCSharpSymbolNameContractReady();
+
+                using var corrupt = db.Connection.CreateCommand();
+                corrupt.CommandText = """
+                    UPDATE symbols
+                    SET name_folded = CASE
+                        WHEN name = 'MissingMember' THEN NULL
+                        ELSE 'stale-non-current-fold'
+                    END;
+                    UPDATE symbol_references
+                    SET symbol_name_folded = NULL,
+                        container_name_folded = 'stale-non-current-fold';
+                    """;
+                corrupt.ExecuteNonQuery();
+            }
+
+            JsonElement json;
+            int exitCode;
+            lock (TestConsoleLock.Gate)
+            {
+                var originalOut = Console.Out;
+                using var output = new StringWriter();
+                try
+                {
+                    Console.SetOut(output);
+                    exitCode = IndexCommandRunner.RunBackfillFold(["--db", dbPath, "--json"], _jsonOptions);
+                    using var document = JsonDocument.Parse(output.ToString());
+                    json = document.RootElement.Clone();
+                }
+                finally
+                {
+                    Console.SetOut(originalOut);
+                }
+            }
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(2, json.GetProperty("symbols").GetInt32());
+            Assert.Equal(1, json.GetProperty("symbol_references").GetInt32());
+            Assert.True(json.GetProperty("rewrite_all").GetBoolean());
+            Assert.True(json.GetProperty("verified").GetBoolean());
+            Assert.True(json.GetProperty("fold_ready").GetBoolean());
+
+            using var verifyDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            var verifyWriter = new DbWriter(verifyDb.Connection);
+            Assert.True(verifyWriter.AllFoldedColumnsBackfilled(requireCurrentFoldKeys: true));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteFile(dbPath);
+            TestProjectHelper.DeleteDirectory(dbPath + ".checkpoints");
+        }
+    }
+
+    [Fact]
+    public void RunBackfillFold_InterruptedPromotedRewriteResumesBeforeTargetedMode_Issue4946Review()
+    {
+        var dbPath = CreateTempDbPath("cdidx_backfill_fold_promoted_resume_4946");
+        using var cts = new CancellationTokenSource();
+        try
+        {
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                db.InitializeSchema();
+                var writer = new DbWriter(db.Connection);
+                var fileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = "src/app.py",
+                    Lang = "python",
+                    Size = 64,
+                    Lines = 2,
+                    Modified = new DateTime(2026, 8, 1, 0, 0, 0, DateTimeKind.Utc),
+                });
+                writer.InsertSymbols([
+                    new SymbolRecord { FileId = fileId, Kind = "function", Name = "first", Line = 1, StartLine = 1, EndLine = 1 },
+                    new SymbolRecord { FileId = fileId, Kind = "function", Name = "second", Line = 2, StartLine = 2, EndLine = 2 },
+                ]);
+                writer.BackfillFoldedColumns(rewriteAll: true);
+                Assert.True(writer.MarkFoldReady());
+
+                using (var corrupt = db.Connection.CreateCommand())
+                {
+                    corrupt.CommandText = """
+                        UPDATE symbols
+                        SET name_folded = CASE
+                            WHEN name = 'first' THEN 'stale-non-current-fold'
+                            ELSE NULL
+                        END
+                        """;
+                    corrupt.ExecuteNonQuery();
+                }
+
+                DbWriter.FoldBackfillRowUpdatedForTesting = cts.Cancel;
+                Assert.Throws<OperationCanceledException>(
+                    () => writer.BackfillFoldedColumns(rewriteAll: true, cts.Token));
+                DbWriter.FoldBackfillRowUpdatedForTesting = null;
+                Assert.True(writer.HasFoldBackfillRewriteCheckpoint());
+            }
+
+            var resumed = RunBackfill();
+            Assert.Equal(CommandExitCodes.Success, resumed.ExitCode);
+            Assert.Equal(1, resumed.Json.GetProperty("symbols").GetInt32());
+            Assert.True(resumed.Json.GetProperty("rewrite_all").GetBoolean());
+            Assert.True(resumed.Json.GetProperty("verified").GetBoolean());
+
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                Assert.False(writer.HasFoldBackfillRewriteCheckpoint());
+                Assert.True(writer.AllFoldedColumnsBackfilled(requireCurrentFoldKeys: true));
+
+                using var corrupt = db.Connection.CreateCommand();
+                corrupt.CommandText = "UPDATE symbols SET name_folded = 'stale-again' WHERE name = 'first'";
+                corrupt.ExecuteNonQuery();
+            }
+
+            var laterRewrite = RunBackfill();
+            Assert.Equal(CommandExitCodes.Success, laterRewrite.ExitCode);
+            Assert.Equal(2, laterRewrite.Json.GetProperty("symbols").GetInt32());
+            Assert.True(laterRewrite.Json.GetProperty("rewrite_all").GetBoolean());
+            Assert.True(laterRewrite.Json.GetProperty("verified").GetBoolean());
+
+            using var verifyDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            var verifyWriter = new DbWriter(verifyDb.Connection);
+            Assert.True(verifyWriter.AllFoldedColumnsBackfilled(requireCurrentFoldKeys: true));
+
+            (int ExitCode, JsonElement Json) RunBackfill()
+            {
+                lock (TestConsoleLock.Gate)
+                {
+                    var originalOut = Console.Out;
+                    using var output = new StringWriter();
+                    try
+                    {
+                        Console.SetOut(output);
+                        var exitCode = IndexCommandRunner.RunBackfillFold(
+                            ["--db", dbPath, "--json", "--no-checkpoint"],
+                            _jsonOptions);
+                        using var document = JsonDocument.Parse(output.ToString());
+                        return (exitCode, document.RootElement.Clone());
+                    }
+                    finally
+                    {
+                        Console.SetOut(originalOut);
+                    }
+                }
+            }
+        }
+        finally
+        {
+            DbWriter.FoldBackfillRowUpdatedForTesting = null;
+            SqliteConnection.ClearAllPools();
+            DeleteFile(dbPath);
+            TestProjectHelper.DeleteDirectory(dbPath + ".checkpoints");
+        }
+    }
+
+    [Fact]
+    public void RunBackfillFold_ClearsCompletedRewriteCheckpointBeforeLaterScopedRepair_Issue4946Review2()
+    {
+        var dbPath = CreateTempDbPath("cdidx_backfill_fold_completed_checkpoint_4946");
+        try
+        {
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                db.InitializeSchema();
+                var writer = new DbWriter(db.Connection);
+                var fileId = writer.UpsertFile(new FileRecord
+                {
+                    Path = "src/app.py",
+                    Lang = "python",
+                    Size = 64,
+                    Lines = 2,
+                    Modified = new DateTime(2026, 8, 1, 0, 0, 0, DateTimeKind.Utc),
+                });
+                writer.InsertSymbols([
+                    new SymbolRecord { FileId = fileId, Kind = "function", Name = "first", Line = 1, StartLine = 1, EndLine = 1 },
+                    new SymbolRecord { FileId = fileId, Kind = "function", Name = "second", Line = 2, StartLine = 2, EndLine = 2 },
+                ]);
+                writer.BackfillFoldedColumns(rewriteAll: true);
+                Assert.True(writer.MarkFoldReady());
+
+                // Model cancellation after the graph refresh but before the completed
+                // full-rewrite checkpoint is cleared.
+                writer.SetMeta("fold_backfill_phase", "references");
+                writer.SetMeta("fold_backfill_last_symbol_id", long.MaxValue.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                writer.SetMeta("fold_backfill_last_reference_id", long.MaxValue.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                Assert.True(writer.HasFoldBackfillRewriteCheckpoint());
+            }
+
+            var cleanup = RunBackfill();
+            Assert.Equal(CommandExitCodes.Success, cleanup.ExitCode);
+            Assert.Equal(0, cleanup.Json.GetProperty("symbols").GetInt32());
+            Assert.Equal(0, cleanup.Json.GetProperty("symbol_references").GetInt32());
+            Assert.True(cleanup.Json.GetProperty("rewrite_all").GetBoolean());
+            Assert.False(cleanup.Json.GetProperty("was_already_complete").GetBoolean());
+            Assert.True(cleanup.Json.GetProperty("verified").GetBoolean());
+
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                Assert.False(writer.HasFoldBackfillRewriteCheckpoint());
+                using var scopedUpdate = db.Connection.CreateCommand();
+                scopedUpdate.CommandText = "UPDATE symbols SET name_folded = NULL WHERE name = 'first'";
+                Assert.Equal(1, scopedUpdate.ExecuteNonQuery());
+            }
+
+            var repair = RunBackfill();
+            Assert.Equal(CommandExitCodes.Success, repair.ExitCode);
+            Assert.Equal(1, repair.Json.GetProperty("symbols").GetInt32());
+            Assert.False(repair.Json.GetProperty("rewrite_all").GetBoolean());
+            Assert.True(repair.Json.GetProperty("verified").GetBoolean());
+
+            using var verifyDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            var verifyWriter = new DbWriter(verifyDb.Connection);
+            Assert.False(verifyWriter.HasFoldBackfillRewriteCheckpoint());
+            Assert.True(verifyWriter.AllFoldedColumnsBackfilled(requireCurrentFoldKeys: true));
+
+            (int ExitCode, JsonElement Json) RunBackfill()
+            {
+                lock (TestConsoleLock.Gate)
+                {
+                    var originalOut = Console.Out;
+                    using var output = new StringWriter();
+                    try
+                    {
+                        Console.SetOut(output);
+                        var exitCode = IndexCommandRunner.RunBackfillFold(
+                            ["--db", dbPath, "--json", "--no-checkpoint"],
+                            _jsonOptions);
+                        using var document = JsonDocument.Parse(output.ToString());
+                        return (exitCode, document.RootElement.Clone());
+                    }
+                    finally
+                    {
+                        Console.SetOut(originalOut);
+                    }
+                }
+            }
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteFile(dbPath);
+            TestProjectHelper.DeleteDirectory(dbPath + ".checkpoints");
+        }
+    }
+
+    [Fact]
     public void RunBackfillFold_DryRunReportsRowsWithoutWriting()
     {
         var dbPath = CreateTempDbPath("cdidx_backfill_fold_dry");

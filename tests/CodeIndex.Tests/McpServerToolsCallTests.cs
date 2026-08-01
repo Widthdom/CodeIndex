@@ -12021,6 +12021,82 @@ public partial class McpServerTests
     }
 
     [Fact]
+    public void ToolsCall_BackfillFold_MixedMissingAndNonCurrentRows_RewritesAll_Issue4946()
+    {
+        var writer = new DbWriter(_db.Connection);
+        writer.BackfillFoldedColumns(rewriteAll: true);
+        Assert.True(writer.MarkFoldReady());
+
+        using (var corrupt = _db.Connection.CreateCommand())
+        {
+            corrupt.CommandText = """
+                UPDATE symbols
+                SET name_folded = CASE
+                    WHEN id = (SELECT MIN(id) FROM symbols) THEN NULL
+                    ELSE 'stale-non-current-fold'
+                END
+                """;
+            corrupt.ExecuteNonQuery();
+        }
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":4946,"method":"tools/call","params":{"name":"backfill_fold","arguments":{}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false, response.ToJsonString());
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal(2, structured["symbols"]!.GetValue<int>());
+        Assert.True(structured["rewrite_all"]!.GetValue<bool>());
+        Assert.True(structured["verified"]!.GetValue<bool>());
+        Assert.True(structured["fold_ready"]!.GetValue<bool>());
+        Assert.True(writer.AllFoldedColumnsBackfilled(requireCurrentFoldKeys: true));
+    }
+
+    [Fact]
+    public void ToolsCall_BackfillFold_InterruptedPromotedRewriteResumesBeforeTargetedMode_Issue4946Review()
+    {
+        var writer = new DbWriter(_db.Connection);
+        writer.BackfillFoldedColumns(rewriteAll: true);
+        Assert.True(writer.MarkFoldReady());
+
+        using (var corrupt = _db.Connection.CreateCommand())
+        {
+            corrupt.CommandText = """
+                UPDATE symbols
+                SET name_folded = CASE
+                    WHEN id = (SELECT MIN(id) FROM symbols) THEN 'stale-non-current-fold'
+                    ELSE NULL
+                END
+                """;
+            corrupt.ExecuteNonQuery();
+        }
+
+        using var cts = new CancellationTokenSource();
+        try
+        {
+            DbWriter.FoldBackfillRowUpdatedForTesting = cts.Cancel;
+            Assert.Throws<OperationCanceledException>(
+                () => writer.BackfillFoldedColumns(rewriteAll: true, cts.Token));
+        }
+        finally
+        {
+            DbWriter.FoldBackfillRowUpdatedForTesting = null;
+        }
+        Assert.True(writer.HasFoldBackfillRewriteCheckpoint());
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":4946,"method":"tools/call","params":{"name":"backfill_fold","arguments":{}}}""")!;
+        var response = _server.HandleMessage(request)!;
+
+        Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false, response.ToJsonString());
+        var structured = response["result"]!["structuredContent"]!;
+        Assert.Equal(1, structured["symbols"]!.GetValue<int>());
+        Assert.True(structured["rewrite_all"]!.GetValue<bool>());
+        Assert.True(structured["verified"]!.GetValue<bool>());
+        Assert.True(structured["fold_ready"]!.GetValue<bool>());
+        Assert.False(writer.HasFoldBackfillRewriteCheckpoint());
+        Assert.True(writer.AllFoldedColumnsBackfilled(requireCurrentFoldKeys: true));
+    }
+
+    [Fact]
     public void ToolsCall_BackfillFold_RejectsNewerCSharpIdentityContract_Issue4866Review()
     {
         var writer = new DbWriter(_db.Connection);
