@@ -7,6 +7,7 @@ namespace CodeIndex.Database;
 internal static class LogicalPartialSymbolGrouper
 {
     private const char KeySeparator = '\u001f';
+    private const string CSharpFileLocalFamilyPrefix = "file-local:";
     private static readonly IReadOnlyDictionary<string, string> CSharpPredefinedTypeIdentities =
         new Dictionary<string, string>(StringComparer.Ordinal)
         {
@@ -49,6 +50,7 @@ internal static class LogicalPartialSymbolGrouper
         string kindSql,
         string nameSql,
         string symbolIdSql,
+        string fileIdentitySql,
         string signatureSql,
         string containerNameSql,
         string containerQualifiedNameSql,
@@ -61,6 +63,8 @@ internal static class LogicalPartialSymbolGrouper
             return $"'symbol:' || {symbolIdSql}";
 
         var persistedFamilySql = $"NULLIF(TRIM({familyKeySql}), '')";
+        var persistedFamilyBodySql = $"CASE WHEN INSTR(COALESCE({persistedFamilySql}, ''), '|') > 0 THEN SUBSTR({persistedFamilySql}, INSTR({persistedFamilySql}, '|') + 1) ELSE {persistedFamilySql} END";
+        var scopedPersistedFamilySql = $"CASE WHEN SUBSTR(COALESCE({persistedFamilyBodySql}, ''), 1, {CSharpFileLocalFamilyPrefix.Length}) = '{CSharpFileLocalFamilyPrefix}' THEN {persistedFamilySql} || CHAR(31) || {fileIdentitySql} ELSE {persistedFamilySql} END";
         var fallbackContainerSql = $"COALESCE(NULLIF(TRIM({containerQualifiedNameSql}), ''), NULLIF(TRIM({containerNameSql}), ''), '')";
         var normalizedSignatureSql = $"REPLACE(REPLACE(REPLACE(LOWER(COALESCE({signatureSql}, '')), CHAR(9), ' '), CHAR(10), ' '), CHAR(13), ' ')";
         var signaturePartialDeclarationSql = $"INSTR(' ' || {normalizedSignatureSql} || ' ', ' partial ') > 0";
@@ -71,12 +75,12 @@ internal static class LogicalPartialSymbolGrouper
         var typeAritySql = $"COALESCE(csharp_definition_type_arity({signatureSql}, {nameSql}, {kindSql}), 0)";
         var typeIdentitySql = $"{nameSql} || CASE WHEN {typeAritySql} > 0 THEN '`' || {typeAritySql} ELSE '' END";
         var reconstructedSelfFamilySql = $"{projectPrefixSql} || CASE WHEN {fallbackContainerSql} = '' THEN {typeIdentitySql} ELSE {fallbackContainerSql} || '.' || {typeIdentitySql} END";
-        var selfFamilySql = $"COALESCE({persistedFamilySql}, {reconstructedSelfFamilySql})";
+        var selfFamilySql = $"COALESCE({scopedPersistedFamilySql}, {reconstructedSelfFamilySql})";
         var callableSignatureSql = $"CASE WHEN {signaturePartialDeclarationSql} THEN {signatureSql} WHEN {partialDeclarationSql} THEN 'partial ' || COALESCE({signatureSql}, '') ELSE {signatureSql} END";
         var callableIdentitySql = returnTypeSql == null
             ? "NULL"
             : $"csharp_partial_callable_identity({callableSignatureSql}, {nameSql}, {returnTypeSql})";
-        var callableContainerSql = $"COALESCE({persistedFamilySql}, NULLIF({fallbackContainerSql}, ''))";
+        var callableContainerSql = $"COALESCE({scopedPersistedFamilySql}, NULLIF({fallbackContainerSql}, ''))";
         return $@"CASE
             WHEN {languageSql} = 'csharp'
              AND {kindSql} IN ('class', 'struct', 'interface', 'record')
@@ -177,6 +181,37 @@ internal static class LogicalPartialSymbolGrouper
             key = string.Empty;
             return false;
         }
+
+        return TryBuildDeclarationKey(symbol, out key);
+    }
+
+    internal static bool TryBuildTypeFamilyKeyForReferenceResolution(
+        SymbolResult symbol,
+        out string key)
+    {
+        if (TryBuildKey(symbol, out key))
+            return true;
+
+        // A stale family contract deliberately exposes physical `symbol:*` rows to
+        // ordinary grouping, but LSP position resolution still needs to distinguish
+        // partial type declarations from same-name constructors. Reconstruct only a
+        // partial *type* identity for that local disambiguation step; never use this
+        // degraded fallback for result collapsing.
+        // stale family contract は通常 query では意図的に physical `symbol:*` row を
+        // 維持する。一方 LSP の位置解決では partial type 宣言と同名 constructor を
+        // 区別する必要があるため、この局所的な判定に限って partial *type* identity
+        // を再構築し、result grouping には流用しない。
+        if (!IsLogicalPartialTypeKind(symbol.Kind))
+        {
+            key = string.Empty;
+            return false;
+        }
+
+        return TryBuildDeclarationKey(symbol, out key);
+    }
+
+    private static bool TryBuildDeclarationKey(SymbolResult symbol, out string key)
+    {
 
         if (string.IsNullOrWhiteSpace(symbol.Signature)
             || !ContainsPartialModifier(symbol.Signature))
@@ -284,20 +319,25 @@ internal static class LogicalPartialSymbolGrouper
         if (string.IsNullOrWhiteSpace(signature))
             return 0;
 
+        var declaration = RemoveCSharpComments(signature);
         var score = 0;
-        if (signature.Contains('['))
+        if (declaration.Contains('['))
             score += 2;
-        if (signature.Contains("///", StringComparison.Ordinal))
-            score += 1;
         if (IsLogicalPartialTypeKind(kind ?? string.Empty)
-            && signature.Contains(':', StringComparison.Ordinal))
+            && declaration.Contains(':', StringComparison.Ordinal))
         {
             score += 4;
         }
-        if (signature.Contains(" where ", StringComparison.Ordinal))
+        if (declaration.Contains(" where ", StringComparison.Ordinal))
             score += 1;
         return score;
     }
+
+    internal static string BuildCanonicalDeclarationIdentity(string? signature)
+        => NormalizeIdentityToken(
+            string.IsNullOrWhiteSpace(signature)
+                ? signature
+                : RemoveCSharpComments(signature));
 
     internal static string BuildPartialFamilyId(string key)
     {
@@ -874,29 +914,112 @@ internal static class LogicalPartialSymbolGrouper
     private static string RemoveCSharpComments(string value)
     {
         var builder = new StringBuilder(value.Length);
+        var quote = '\0';
+        var rawQuoteLength = 0;
+        var escaped = false;
+        var verbatim = false;
+        var lineComment = false;
+        var blockComment = false;
         for (var offset = 0; offset < value.Length;)
         {
-            if (value[offset] == '/' && offset + 1 < value.Length)
+            var ch = value[offset];
+            if (lineComment)
+            {
+                if (ch is '\r' or '\n')
+                {
+                    lineComment = false;
+                    builder.Append(ch);
+                }
+                offset++;
+                continue;
+            }
+            if (blockComment)
+            {
+                if (ch == '*' && offset + 1 < value.Length && value[offset + 1] == '/')
+                {
+                    blockComment = false;
+                    offset += 2;
+                    continue;
+                }
+                if (ch is '\r' or '\n')
+                    builder.Append(ch);
+                offset++;
+                continue;
+            }
+            if (rawQuoteLength > 0)
+            {
+                var repeatedQuotes = ch == '"' ? CountRepeatedCharacter(value, offset, '"') : 0;
+                if (repeatedQuotes >= rawQuoteLength)
+                {
+                    builder.Append(value, offset, rawQuoteLength);
+                    offset += rawQuoteLength;
+                    rawQuoteLength = 0;
+                    continue;
+                }
+
+                builder.Append(ch);
+                offset++;
+                continue;
+            }
+            if (quote != '\0')
+            {
+                builder.Append(ch);
+                if (verbatim && ch == '"' && offset + 1 < value.Length && value[offset + 1] == '"')
+                {
+                    builder.Append('"');
+                    offset += 2;
+                    continue;
+                }
+                if (escaped)
+                    escaped = false;
+                else if (!verbatim && ch == '\\')
+                    escaped = true;
+                else if (ch == quote)
+                {
+                    quote = '\0';
+                    verbatim = false;
+                }
+                offset++;
+                continue;
+            }
+
+            if (ch == '/' && offset + 1 < value.Length)
             {
                 if (value[offset + 1] == '/')
                 {
                     if (builder.Length > 0 && !char.IsWhiteSpace(builder[^1]))
                         builder.Append(' ');
+                    lineComment = true;
                     offset += 2;
-                    while (offset < value.Length && value[offset] is not ('\r' or '\n'))
-                        offset++;
                     continue;
                 }
                 if (value[offset + 1] == '*')
                 {
                     if (builder.Length > 0 && !char.IsWhiteSpace(builder[^1]))
                         builder.Append(' ');
-                    var commentEnd = value.IndexOf("*/", offset + 2, StringComparison.Ordinal);
-                    offset = commentEnd < 0 ? value.Length : commentEnd + 2;
+                    blockComment = true;
+                    offset += 2;
                     continue;
                 }
             }
-            builder.Append(value[offset]);
+            if (ch == '"')
+            {
+                var repeatedQuotes = CountRepeatedCharacter(value, offset, '"');
+                if (repeatedQuotes >= 3)
+                {
+                    builder.Append(value, offset, repeatedQuotes);
+                    rawQuoteLength = repeatedQuotes;
+                    offset += repeatedQuotes;
+                    continue;
+                }
+                quote = ch;
+                verbatim = IsVerbatimStringStart(value, offset);
+            }
+            else if (ch == '\'')
+            {
+                quote = ch;
+            }
+            builder.Append(ch);
             offset++;
         }
         return builder.ToString();
@@ -932,7 +1055,7 @@ internal static class LogicalPartialSymbolGrouper
     private static string GetCanonicalDeclarationIdentity(SymbolResult symbol)
         => symbol.Kind == "function"
             ? BuildCallableIdentity(symbol.Signature, symbol.Name, symbol.ReturnType) ?? string.Empty
-            : NormalizeIdentityToken(symbol.Signature);
+            : BuildCanonicalDeclarationIdentity(symbol.Signature);
 
     internal static int FindCallableNameOffset(string signature, string name)
     {

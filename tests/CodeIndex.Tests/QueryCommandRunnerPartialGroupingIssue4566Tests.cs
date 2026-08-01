@@ -424,7 +424,7 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void PartialCanonicalRepresentative_UsesSemanticRulesAndExposesFamilyNavigation_Issue4914()
     {
-        Assert.Equal(4, DbContext.HotspotFamilyVersion);
+        Assert.Equal(5, DbContext.HotspotFamilyVersion);
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_canonical_issue4914");
         try
         {
@@ -1113,6 +1113,22 @@ public partial class QueryCommandRunnerTests
         };
         Assert.False(LogicalPartialSymbolGrouper.TryBuildKey(persistedPhysical, out _));
 
+        var persistedPhysicalType = new SymbolResult
+        {
+            Lang = "csharp",
+            Kind = "class",
+            Name = "Container",
+            Signature = "public partial class Container",
+            ContainerName = "Demo",
+            LogicalPartialKey = "symbol:43",
+        };
+        Assert.False(LogicalPartialSymbolGrouper.TryBuildKey(persistedPhysicalType, out _));
+        Assert.True(
+            LogicalPartialSymbolGrouper.TryBuildTypeFamilyKeyForReferenceResolution(
+                persistedPhysicalType,
+                out var degradedTypeFamilyKey));
+        Assert.Contains("Container", degradedTypeFamilyKey, StringComparison.Ordinal);
+
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_worker_metadata_issue4914");
         try
         {
@@ -1240,6 +1256,82 @@ public partial class QueryCommandRunnerTests
             var attributed = RunGroupedSymbol(dbPath, "Attributed", "class");
             Assert.Equal("src/Z.Attributed.cs", attributed.GetProperty("path").GetString());
             Assert.Equal("semantic_declaration", attributed.GetProperty("representative_reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PartialCanonicalRepresentative_RespectsFileLocalAndLexedEvidence_Issue4914()
+    {
+        const string definingLine = "    [M()] partial /* M( */ void M();";
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_file_local_issue4914");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            foreach (var path in new[] { "src/A.Local.cs", "src/B.Local.cs" })
+            {
+                TestProjectHelper.InsertIndexedFile(
+                    dbPath,
+                    path,
+                    "csharp",
+                    $$"""
+                    using System;
+                    file sealed class MAttribute : Attribute { }
+                    file partial class Host
+                    {
+                    {{definingLine}}
+                        partial void M() { }
+                    }
+                    """);
+            }
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.Widget.cs",
+                "csharp",
+                "public partial class Widget { }");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Z.Widget.cs",
+                "csharp",
+                "public partial /* [ : where */ class Widget { }");
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["M", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "function", "--group-partials", "--include-generated", "--limit", "10"],
+                _jsonOptions));
+            using var document = ParseJsonOutput(stdout);
+            var families = document.RootElement.EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(2, families.Count);
+            Assert.All(families, family => Assert.Equal(2, family.GetProperty("definition_sites").GetInt32()));
+            Assert.Equal(
+                2,
+                families
+                    .Select(family => family.GetProperty("partial_family_id").GetString())
+                    .Distinct(StringComparer.Ordinal)
+                    .Count());
+            Assert.All(
+                families,
+                family =>
+                {
+                    var path = family.GetProperty("path").GetString();
+                    var members = family.GetProperty("family_members").EnumerateArray().ToList();
+                    Assert.All(members, member => Assert.Equal(path, member.GetProperty("path").GetString()));
+                    Assert.Contains(
+                        members,
+                        member => member.GetProperty("line").GetInt32() == 5
+                            && member.GetProperty("start_column").GetInt32()
+                                == definingLine.LastIndexOf("M", StringComparison.Ordinal));
+                });
+
+            var widget = RunGroupedSymbol(dbPath, "Widget", "class");
+            Assert.Equal("src/A.Widget.cs", widget.GetProperty("path").GetString());
+            Assert.Equal("stable_path_and_position", widget.GetProperty("representative_reason").GetString());
         }
         finally
         {

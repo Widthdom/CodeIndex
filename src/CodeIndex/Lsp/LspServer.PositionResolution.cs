@@ -122,7 +122,9 @@ internal sealed partial class LspServer : IDisposable
 
         var typeFamilyKeys = resolution.Candidates
             .Select(candidate =>
-                LogicalPartialSymbolGrouper.TryBuildKey(candidate.Definition, out var key)
+                LogicalPartialSymbolGrouper.TryBuildTypeFamilyKeyForReferenceResolution(
+                    candidate.Definition,
+                    out var key)
                     ? key
                     : null)
             .Where(static key => key != null)
@@ -131,7 +133,9 @@ internal sealed partial class LspServer : IDisposable
             .ToList();
         if (typeFamilyKeys.Count != 1 ||
             resolution.Candidates.Any(candidate =>
-                !LogicalPartialSymbolGrouper.TryBuildKey(candidate.Definition, out _)))
+                !LogicalPartialSymbolGrouper.TryBuildTypeFamilyKeyForReferenceResolution(
+                    candidate.Definition,
+                    out _)))
         {
             return [];
         }

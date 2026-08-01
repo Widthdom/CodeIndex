@@ -184,6 +184,7 @@ public partial class DbReader
             "s.kind",
             "s.name",
             "s.id",
+            "target_file.path",
             signatureSql,
             GetSymbolColumnSql("container_name"),
             GetSymbolColumnSql("container_qualified_name"),

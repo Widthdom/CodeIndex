@@ -116,6 +116,11 @@ public partial class DbContext : IDisposable
                 LogicalPartialSymbolGrouper.GetSemanticScore(signature, symbolKind),
             isDeterministic: true);
         connection.CreateFunction(
+            "csharp_partial_declaration_identity",
+            (string? signature) =>
+                LogicalPartialSymbolGrouper.BuildCanonicalDeclarationIdentity(signature),
+            isDeterministic: true);
+        connection.CreateFunction(
             "codeindex_generated_file_name",
             (string? path) => FileIndexer.HasGeneratedCodeFileName(path ?? string.Empty),
             isDeterministic: true);

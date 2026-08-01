@@ -5,6 +5,7 @@ namespace CodeIndex.Indexer;
 
 public static partial class SymbolExtractor
 {
+    private const string CSharpFileLocalFamilyPrefix = "file-local:";
     private readonly record struct DeclaredContainerIdentity(long FileId, string Kind, string Name);
 
     private static void PopulateDeclaredContainerQualifiedNames(List<SymbolRecord> symbols)
@@ -167,6 +168,12 @@ public static partial class SymbolExtractor
             }
 
             symbol.FamilyKey ??= BuildSelfFamilyKey(symbol, containerPath);
+            if (symbol.FamilyKey == null
+                && symbol.Kind == "function"
+                && ContainsFileLocalType(containerPath))
+            {
+                symbol.FamilyKey = BuildFileLocalContainerFamilyKey(containerPath);
+            }
 
             if (CanContainSymbols(symbol, includeCallableContainers))
                 stack.Push(symbol);
@@ -300,10 +307,16 @@ public static partial class SymbolExtractor
 
     private static string? BuildInheritedFamilyKey(
         SymbolRecord container,
-        IReadOnlyList<SymbolRecord> containers) =>
-        SupportsCrossFileFamily(container)
-            ? BuildQualifiedFamilyName(containers)
-            : null;
+        IReadOnlyList<SymbolRecord> containers)
+    {
+        if (!SupportsCrossFileFamily(container))
+            return null;
+
+        var familyName = BuildQualifiedFamilyName(containers);
+        return familyName == null || !ContainsFileLocalType(containers)
+            ? familyName
+            : CSharpFileLocalFamilyPrefix + familyName;
+    }
 
     private static string? BuildSelfFamilyKey(SymbolRecord symbol, IReadOnlyList<SymbolRecord> containers)
     {
@@ -313,7 +326,26 @@ public static partial class SymbolExtractor
         var builder = new StringBuilder();
         AppendQualifiedFamilySegments(builder, containers);
         AppendFamilySegment(builder, symbol);
-        return builder.ToString();
+        return symbol.IsFileLocalDeclaration || ContainsFileLocalType(containers)
+            ? CSharpFileLocalFamilyPrefix + builder.ToString()
+            : builder.ToString();
+    }
+
+    private static string? BuildFileLocalContainerFamilyKey(IReadOnlyList<SymbolRecord> containers)
+    {
+        var familyName = BuildQualifiedFamilyName(containers);
+        return familyName == null ? null : CSharpFileLocalFamilyPrefix + familyName;
+    }
+
+    private static bool ContainsFileLocalType(IReadOnlyList<SymbolRecord> symbols)
+    {
+        foreach (var symbol in symbols)
+        {
+            if (symbol.IsFileLocalDeclaration)
+                return true;
+        }
+
+        return false;
     }
 
     private static string? BuildQualifiedFamilyName(IReadOnlyList<SymbolRecord> symbols)
@@ -350,7 +382,7 @@ public static partial class SymbolExtractor
     }
 
     private static bool SupportsCrossFileFamily(SymbolRecord symbol) =>
-        symbol.Kind is "class" or "interface" or "struct"
+        symbol.Kind is "class" or "interface" or "struct" or "record"
         && (symbol.IsPartialDeclaration == true
             || (symbol.IsPartialDeclaration == null
                 && !string.IsNullOrWhiteSpace(symbol.Signature)

@@ -81,6 +81,16 @@ public class SymbolRecord
     [JsonInclude]
     internal bool? IsPartialDeclaration { get; set; }
 
+    /// <summary>
+    /// Extraction-only marker for a C# top-level type declared with the <c>file</c>
+    /// modifier. Container assignment uses it to keep inherited partial-family keys
+    /// scoped to one source file; the marker itself does not need database persistence.
+    /// <c>file</c> 修飾子を持つ C# top-level type の抽出時専用 marker。
+    /// container assignment が配下の partial-family key を同一 source file 内に
+    /// 制限するために使い、marker 自体は DB に永続化しない。
+    /// </summary>
+    internal bool IsFileLocalDeclaration { get; set; }
+
     [JsonInclude]
     internal int? DeclarationSemanticScore { get; set; }
 

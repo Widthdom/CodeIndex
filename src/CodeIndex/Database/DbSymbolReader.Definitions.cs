@@ -312,6 +312,7 @@ public partial class DbReader
             "s.kind",
             "s.name",
             "s.id",
+            "f.path",
             GetSymbolColumnSql("signature"),
             GetSymbolColumnSql("container_name"),
             GetSymbolColumnSql("container_qualified_name"),

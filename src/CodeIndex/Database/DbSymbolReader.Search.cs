@@ -409,6 +409,7 @@ public partial class DbReader
             "s.kind",
             "s.name",
             "s.id",
+            "f.path",
             GetSymbolColumnSql("signature"),
             GetSymbolColumnSql("container_name"),
             GetSymbolColumnSql("container_qualified_name"),
@@ -690,6 +691,7 @@ public partial class DbReader
             "s.kind",
             "s.name",
             "s.id",
+            "f.path",
             signatureSql,
             containerNameSql,
             containerQualifiedNameSql,
@@ -1041,7 +1043,7 @@ public partial class DbReader
         => $"CASE WHEN lower({nameSql}) IN {GenericSymbolRankNamesSql} THEN {GenericSymbolRankNamePenaltySqlLiteral} ELSE 1.0 END";
 
     private static string BuildCanonicalDeclarationIdentitySql(string signatureSql)
-        => $"LOWER(REPLACE(REPLACE(REPLACE(REPLACE(COALESCE({signatureSql}, ''), ' ', ''), CHAR(9), ''), CHAR(10), ''), CHAR(13), ''))";
+        => $"csharp_partial_declaration_identity({signatureSql})";
 
     private static string BuildLogicalPartialSymbolQuery(string matchingSymbolsSql, SymbolSortMode sortMode)
     {
