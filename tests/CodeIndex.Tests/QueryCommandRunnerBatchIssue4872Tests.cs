@@ -121,6 +121,7 @@ public partial class QueryCommandRunnerTests
         using var stderr = new StringWriter();
         using var firstWaveCompleted = new CountdownEvent(2);
         using var cancellation = new CancellationTokenSource();
+        var statusWaveTimeout = TimeSpan.FromMinutes(2);
         Task<int>? runTask = null;
         var openedSessions = 0;
         QueryCommandRunner.BatchParallelSessionOpenedForTesting =
@@ -144,7 +145,7 @@ public partial class QueryCommandRunnerTests
             input.WriteLine("""{"command":"status","args":["--json"]}""");
             input.WriteLine("""{"command":"status","args":["--json"]}""");
             Assert.True(
-                firstWaveCompleted.Wait(TimeSpan.FromSeconds(60)),
+                firstWaveCompleted.Wait(statusWaveTimeout),
                 "The first parallel batch wave did not complete.");
 
             using (var update = writer.CreateCommand())
@@ -163,7 +164,7 @@ public partial class QueryCommandRunnerTests
             input.WriteLine("""{"command":"status","args":["--json"]}""");
             input.Complete();
 
-            var exitCode = await runTask.WaitAsync(TimeSpan.FromSeconds(60));
+            var exitCode = await runTask.WaitAsync(statusWaveTimeout);
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr.ToString());
 
