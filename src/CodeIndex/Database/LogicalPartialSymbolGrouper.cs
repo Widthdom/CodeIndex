@@ -325,7 +325,7 @@ internal static class LogicalPartialSymbolGrouper
             KeySeparator,
             normalizedName,
             NormalizeCallableTypeIdentity(
-                returnType,
+                RemoveCallableReturnDeclarationTrivia(returnType),
                 genericParameterNames,
                 valueConstrainedGenericParameters,
                 containerQualifiedName,
@@ -333,6 +333,27 @@ internal static class LogicalPartialSymbolGrouper
                 symbolId),
             genericArity.ToString(System.Globalization.CultureInfo.InvariantCulture),
             parameterIdentity);
+    }
+
+    private static string RemoveCallableReturnDeclarationTrivia(string returnType)
+    {
+        var remaining = RemoveLeadingParameterAttributes(RemoveCSharpComments(returnType));
+        while (TryReadLeadingIdentifier(remaining, out var modifier, out var modifierLength)
+               && modifier.ToLowerInvariant() is
+                   "public" or "private" or "protected" or "internal" or
+                   "new" or "static" or "virtual" or "sealed" or "abstract" or
+                   "override" or "extern" or "unsafe" or "async" or "partial")
+        {
+            remaining = RemoveLeadingParameterAttributes(remaining[modifierLength..]);
+        }
+
+        // Keep ref/readonly as part of the return identity; only declaration attributes
+        // and method modifiers are discarded. This also repairs legacy rows where an
+        // inline attribute caused those tokens to leak into return_type.
+        // ref/readonly は return identity の一部として保持し、宣言 attribute と method
+        // modifier だけを除去する。行内 attribute によりそれらが return_type へ漏れた
+        // legacy row も同じ処理で補正する。
+        return remaining.Trim();
     }
 
     internal static int GetSemanticScore(string? signature, string? kind)

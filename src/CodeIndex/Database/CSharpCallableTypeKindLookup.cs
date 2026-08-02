@@ -30,6 +30,7 @@ internal sealed class CSharpCallableTypeKindLookup
     private Dictionary<ScopedTypeIdentity, int> _scopedIdentityKinds = new();
     private Dictionary<FileTypeIdentity, int> _fileIdentityKinds = new();
     private Dictionary<long, long> _callableFileIds = new();
+    private Dictionary<CallableTypeParameterIdentity, TypeKind> _callableTypeParameterKinds = new();
     private long? _loadedTotalChanges;
     private long? _loadedDataVersion;
     private string? _loadedScopeKey;
@@ -80,17 +81,23 @@ internal sealed class CSharpCallableTypeKindLookup
             var scopedIdentityKinds = new Dictionary<ScopedTypeIdentity, int>();
             var fileIdentityKinds = new Dictionary<FileTypeIdentity, int>();
             var callableFileIds = new Dictionary<long, long>();
+            var callables = new List<CallableFact>();
             var candidateTypeNames = LoadCandidateCallables(
                 connection,
                 symbolColumns,
                 candidateQueries,
                 exact,
                 useFoldedNames,
-                callableFileIds);
+                callableFileIds,
+                callables);
             var useFullScan = candidateTypeNames == null
                               || candidateTypeNames.Count > CandidateTypeNameLimit;
             if (useFullScan)
-                LoadAllCallableFileIds(connection, callableFileIds);
+            {
+                callableFileIds.Clear();
+                callables.Clear();
+                LoadAllCallableFacts(connection, symbolColumns, callableFileIds, callables);
+            }
             var facts = LoadTypeFacts(
                 connection,
                 symbolColumns,
@@ -132,6 +139,7 @@ internal sealed class CSharpCallableTypeKindLookup
             _scopedIdentityKinds = scopedIdentityKinds;
             _fileIdentityKinds = fileIdentityKinds;
             _callableFileIds = callableFileIds;
+            _callableTypeParameterKinds = BuildCallableTypeParameterKinds(callables, facts);
             _loadedTotalChanges = totalChanges;
             _loadedDataVersion = dataVersion;
             _loadedScopeKey = scopeKey;
@@ -154,6 +162,14 @@ internal sealed class CSharpCallableTypeKindLookup
                 && _callableFileIds.TryGetValue(symbolId.Value, out var resolvedFileId)
                     ? resolvedFileId
                     : (long?)null;
+            if (symbolId.HasValue
+                && IsSimpleIdentifier(sourceIdentity)
+                && _callableTypeParameterKinds.TryGetValue(
+                    new CallableTypeParameterIdentity(symbolId.Value, normalizedSource.TrimStart('@')),
+                    out var typeParameterKind))
+            {
+                return typeParameterKind;
+            }
             if (sourceIdentity.StartsWith("global::", StringComparison.Ordinal))
                 return ResolveIdentity(normalizedSource, fileId, projectScope);
 
@@ -195,7 +211,8 @@ internal sealed class CSharpCallableTypeKindLookup
         IReadOnlyList<string>? candidateQueries,
         bool exact,
         bool useFoldedNames,
-        IDictionary<long, long> callableFileIds)
+        IDictionary<long, long> callableFileIds,
+        ICollection<CallableFact> callables)
     {
         if (candidateQueries is not { Count: > 0 })
             return null;
@@ -233,12 +250,20 @@ internal sealed class CSharpCallableTypeKindLookup
             return [];
 
         var returnTypeSql = symbolColumns.Contains("return_type") ? "s.return_type" : "NULL";
+        var startLineSql = symbolColumns.Contains("start_line")
+            ? "COALESCE(s.start_line, s.line)"
+            : "s.line";
+        var endLineSql = symbolColumns.Contains("end_line")
+            ? "COALESCE(s.end_line, s.line)"
+            : "s.line";
         command.CommandText = $"""
             SELECT s.id,
                    s.file_id,
                    s.signature,
                    s.container_qualified_name,
-                   {returnTypeSql}
+                   {returnTypeSql},
+                   {startLineSql},
+                   {endLineSql}
             FROM symbols AS s
             JOIN files AS f ON f.id = s.file_id
             WHERE f.lang = 'csharp'
@@ -253,7 +278,15 @@ internal sealed class CSharpCallableTypeKindLookup
         {
             if (++count > CandidateCallableLimit)
                 return null;
-            callableFileIds[reader.GetInt64(0)] = reader.GetInt64(1);
+            var symbolId = reader.GetInt64(0);
+            var fileId = reader.GetInt64(1);
+            callableFileIds[symbolId] = fileId;
+            callables.Add(new CallableFact(
+                symbolId,
+                fileId,
+                reader.GetInt32(5),
+                reader.GetInt32(6),
+                NormalizeIdentity(reader.IsDBNull(3) ? null : reader.GetString(3))));
             AddIdentifiers(typeNames, reader.IsDBNull(2) ? null : reader.GetString(2));
             AddIdentifiers(typeNames, reader.IsDBNull(3) ? null : reader.GetString(3));
             AddIdentifiers(typeNames, reader.IsDBNull(4) ? null : reader.GetString(4));
@@ -351,7 +384,8 @@ internal sealed class CSharpCallableTypeKindLookup
                 projectScope,
                 fileId,
                 startLine,
-                endLine));
+                endLine,
+                signature));
         }
         return facts;
     }
@@ -418,13 +452,25 @@ internal sealed class CSharpCallableTypeKindLookup
         return separator < 0 ? "." : path[..separator];
     }
 
-    private static void LoadAllCallableFileIds(
+    private static void LoadAllCallableFacts(
         SqliteConnection connection,
-        IDictionary<long, long> callableFileIds)
+        IReadOnlySet<string> symbolColumns,
+        IDictionary<long, long> callableFileIds,
+        ICollection<CallableFact> callables)
     {
         using var command = connection.CreateCommand();
-        command.CommandText = """
-            SELECT s.id, s.file_id
+        var startLineSql = symbolColumns.Contains("start_line")
+            ? "COALESCE(s.start_line, s.line)"
+            : "s.line";
+        var endLineSql = symbolColumns.Contains("end_line")
+            ? "COALESCE(s.end_line, s.line)"
+            : "s.line";
+        command.CommandText = $"""
+            SELECT s.id,
+                   s.file_id,
+                   {startLineSql},
+                   {endLineSql},
+                   s.container_qualified_name
             FROM symbols AS s
             JOIN files AS f ON f.id = s.file_id
             WHERE f.lang = 'csharp'
@@ -432,7 +478,241 @@ internal sealed class CSharpCallableTypeKindLookup
             """;
         using var reader = command.ExecuteReader();
         while (reader.Read())
-            callableFileIds[reader.GetInt64(0)] = reader.GetInt64(1);
+        {
+            var symbolId = reader.GetInt64(0);
+            var fileId = reader.GetInt64(1);
+            callableFileIds[symbolId] = fileId;
+            callables.Add(new CallableFact(
+                symbolId,
+                fileId,
+                reader.GetInt32(2),
+                reader.GetInt32(3),
+                NormalizeIdentity(reader.IsDBNull(4) ? null : reader.GetString(4))));
+        }
+    }
+
+    private static Dictionary<CallableTypeParameterIdentity, TypeKind> BuildCallableTypeParameterKinds(
+        IReadOnlyCollection<CallableFact> callables,
+        IReadOnlyCollection<TypeFact> facts)
+    {
+        var result = new Dictionary<CallableTypeParameterIdentity, TypeKind>();
+        var factsByFile = facts.GroupBy(fact => fact.FileId)
+            .ToDictionary(group => group.Key, group => group.ToArray());
+        foreach (var callable in callables)
+        {
+            if (!factsByFile.TryGetValue(callable.FileId, out var fileFacts))
+                continue;
+
+            // Process outer declarations before inner declarations so a nested type
+            // parameter correctly shadows a same-named parameter from its container.
+            // outer 宣言から inner 宣言の順に処理し、nested type parameter が包含型の
+            // 同名 parameter を正しく shadow するようにする。
+            foreach (var fact in fileFacts
+                         .Where(fact => fact.StartLine <= callable.StartLine
+                                        && fact.EndLine >= callable.EndLine)
+                         .Where(fact => IsContainingTypeIdentity(
+                             callable.Container,
+                             BuildUnqualifiedIdentity(fact)))
+                         .OrderByDescending(fact => fact.EndLine - fact.StartLine)
+                         .ThenBy(fact => fact.StartLine))
+            {
+                foreach (var parameter in ReadTypeParameterKinds(fact))
+                {
+                    result[new CallableTypeParameterIdentity(callable.SymbolId, parameter.Key)] = parameter.Value;
+                }
+            }
+        }
+
+        return result;
+    }
+
+    private static bool IsContainingTypeIdentity(string callableContainer, string typeIdentity)
+        => callableContainer.Equals(typeIdentity, StringComparison.Ordinal)
+           || callableContainer.StartsWith($"{typeIdentity}.", StringComparison.Ordinal);
+
+    private static IReadOnlyDictionary<string, TypeKind> ReadTypeParameterKinds(TypeFact fact)
+    {
+        var result = new Dictionary<string, TypeKind>(StringComparer.Ordinal);
+        if (string.IsNullOrWhiteSpace(fact.Signature))
+            return result;
+
+        var declaration = SymbolExtractor.SanitizeCSharpDeclarationSignature(fact.Signature);
+        if (!TryFindTypeParameterList(declaration, fact.Name, out var open, out var close))
+            return result;
+
+        foreach (var parameter in SplitTypeParameterList(declaration[(open + 1)..close]))
+        {
+            var name = ReadLastIdentifier(parameter);
+            if (name.Length > 0)
+                result[name] = TypeKind.Unknown;
+        }
+
+        var constraintTokens = ReadIdentifierTokens(declaration[(close + 1)..]);
+        for (var index = 0; index + 1 < constraintTokens.Count; index++)
+        {
+            if (!constraintTokens[index].Equals("where", StringComparison.Ordinal))
+                continue;
+
+            var parameterName = constraintTokens[index + 1].TrimStart('@');
+            if (!result.ContainsKey(parameterName))
+                continue;
+
+            var kind = TypeKind.Unknown;
+            for (var constraintIndex = index + 2;
+                 constraintIndex < constraintTokens.Count
+                 && !constraintTokens[constraintIndex].Equals("where", StringComparison.Ordinal);
+                 constraintIndex++)
+            {
+                var constraint = constraintTokens[constraintIndex].TrimStart('@');
+                if (constraint is "struct" or "unmanaged")
+                {
+                    kind = TypeKind.Value;
+                    break;
+                }
+                if (constraint == "class")
+                    kind = TypeKind.Reference;
+            }
+            result[parameterName] = kind;
+        }
+
+        return result;
+    }
+
+    private static bool TryFindTypeParameterList(
+        string declaration,
+        string expectedName,
+        out int open,
+        out int close)
+    {
+        open = -1;
+        close = -1;
+        var cursor = 0;
+        while (TryReadNextIdentifier(declaration, ref cursor, out var keyword, out _))
+        {
+            var normalizedKeyword = keyword.TrimStart('@');
+            if (normalizedKeyword is not ("class" or "struct" or "interface" or "record"))
+                continue;
+
+            if (!TryReadNextIdentifier(declaration, ref cursor, out var declaredName, out var nameEnd))
+                return false;
+            if (normalizedKeyword == "record" && declaredName.TrimStart('@') is "class" or "struct")
+            {
+                if (!TryReadNextIdentifier(declaration, ref cursor, out declaredName, out nameEnd))
+                    return false;
+            }
+            if (!declaredName.TrimStart('@').Equals(expectedName.TrimStart('@'), StringComparison.Ordinal))
+                continue;
+
+            open = nameEnd;
+            while (open < declaration.Length && char.IsWhiteSpace(declaration[open]))
+                open++;
+            if (open >= declaration.Length || declaration[open] != '<')
+                return false;
+            close = FindBalancedAngleEnd(declaration, open);
+            return close >= 0;
+        }
+
+        return false;
+    }
+
+    private static int FindBalancedAngleEnd(string value, int open)
+    {
+        var depth = 0;
+        for (var index = open; index < value.Length; index++)
+        {
+            if (value[index] == '<')
+                depth++;
+            else if (value[index] == '>' && --depth == 0)
+                return index;
+        }
+        return -1;
+    }
+
+    private static IReadOnlyList<string> SplitTypeParameterList(string parameters)
+    {
+        var result = new List<string>();
+        var start = 0;
+        var angleDepth = 0;
+        var bracketDepth = 0;
+        var parenthesisDepth = 0;
+        for (var index = 0; index < parameters.Length; index++)
+        {
+            switch (parameters[index])
+            {
+                case '<': angleDepth++; break;
+                case '>' when angleDepth > 0: angleDepth--; break;
+                case '[': bracketDepth++; break;
+                case ']' when bracketDepth > 0: bracketDepth--; break;
+                case '(': parenthesisDepth++; break;
+                case ')' when parenthesisDepth > 0: parenthesisDepth--; break;
+                case ',' when angleDepth == 0 && bracketDepth == 0 && parenthesisDepth == 0:
+                    result.Add(parameters[start..index]);
+                    start = index + 1;
+                    break;
+            }
+        }
+        result.Add(parameters[start..]);
+        return result;
+    }
+
+    private static string ReadLastIdentifier(string value)
+    {
+        var tokens = ReadIdentifierTokens(value);
+        return tokens.Count == 0 ? string.Empty : tokens[^1].TrimStart('@');
+    }
+
+    private static List<string> ReadIdentifierTokens(string value)
+    {
+        var result = new List<string>();
+        var cursor = 0;
+        while (TryReadNextIdentifier(value, ref cursor, out var identifier, out _))
+            result.Add(identifier);
+        return result;
+    }
+
+    private static bool TryReadNextIdentifier(
+        string value,
+        ref int cursor,
+        out string identifier,
+        out int end)
+    {
+        identifier = string.Empty;
+        end = cursor;
+        while (cursor < value.Length
+               && !IsIdentifierStart(value[cursor])
+               && !(value[cursor] == '@'
+                    && cursor + 1 < value.Length
+                    && IsIdentifierStart(value[cursor + 1])))
+        {
+            cursor++;
+        }
+        if (cursor >= value.Length)
+            return false;
+
+        var start = cursor;
+        if (value[cursor] == '@')
+            cursor++;
+        cursor++;
+        while (cursor < value.Length && IsIdentifierPart(value[cursor]))
+            cursor++;
+        end = cursor;
+        identifier = value[start..cursor];
+        return true;
+    }
+
+    private static bool IsSimpleIdentifier(string value)
+    {
+        var remaining = value.AsSpan().Trim();
+        if (!remaining.IsEmpty && remaining[0] == '@')
+            remaining = remaining[1..];
+        if (remaining.IsEmpty || !IsIdentifierStart(remaining[0]))
+            return false;
+        for (var index = 1; index < remaining.Length; index++)
+        {
+            if (!IsIdentifierPart(remaining[index]))
+                return false;
+        }
+        return true;
     }
 
     private static void AddIdentifiers(ISet<string> names, string? text)
@@ -715,7 +995,15 @@ internal sealed class CSharpCallableTypeKindLookup
         string ProjectScope,
         long FileId,
         int StartLine,
-        int EndLine);
+        int EndLine,
+        string? Signature);
+
+    private sealed record CallableFact(
+        long SymbolId,
+        long FileId,
+        int StartLine,
+        int EndLine,
+        string Container);
 
     internal sealed record CandidateScanStats(
         bool UsedFullScan,
@@ -724,4 +1012,5 @@ internal sealed class CSharpCallableTypeKindLookup
 
     private readonly record struct FileTypeIdentity(long FileId, string Identity);
     private readonly record struct ScopedTypeIdentity(string ProjectScope, string Identity);
+    private readonly record struct CallableTypeParameterIdentity(long SymbolId, string ParameterName);
 }

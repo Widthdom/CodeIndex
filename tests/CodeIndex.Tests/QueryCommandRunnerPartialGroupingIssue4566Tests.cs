@@ -1493,6 +1493,7 @@ public partial class QueryCommandRunnerTests
                 public partial class AttributedPartial
                 {
                     public partial void Execute();
+                    public partial void InlineExecute();
                 }
                 """);
             TestProjectHelper.InsertIndexedFile(
@@ -1505,6 +1506,7 @@ public partial class QueryCommandRunnerTests
                 {
                     [Fact]
                     public partial void Execute() { }
+                    [Fact] public partial void InlineExecute() { }
                 }
                 """);
             MarkGraphAndFoldReady(dbPath);
@@ -1532,6 +1534,32 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(string.Empty, gotoStderr);
             Assert.Contains("Z.AttributedPartial.cs", location.GetProperty("uri").GetString(), StringComparison.Ordinal);
             Assert.Equal(2, location.GetProperty("family_members").GetArrayLength());
+
+            var (inlineExitCode, inlineStdout, inlineStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["InlineExecute", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--group-partials", "--limit", "10"],
+                _jsonOptions));
+            using var inlineDocument = ParseJsonOutput(inlineStdout);
+            var inlineExecute = Assert.Single(inlineDocument.RootElement.EnumerateArray().ToList());
+            Assert.Equal(CommandExitCodes.Success, inlineExitCode);
+            Assert.Equal(string.Empty, inlineStderr);
+            Assert.True(inlineExecute.TryGetProperty("definition_sites", out var inlineDefinitionSites));
+            Assert.Equal(2, inlineDefinitionSites.GetInt32());
+            Assert.Equal(
+                ["src/A.AttributedPartial.cs", "src/Z.AttributedPartial.cs"],
+                inlineExecute.GetProperty("family_members")
+                    .EnumerateArray()
+                    .Select(member => member.GetProperty("path").GetString())
+                    .Order(StringComparer.Ordinal)
+                    .ToArray());
+
+            var (inlineGotoExitCode, inlineGotoStdout, inlineGotoStderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunGoto(
+                    ["InlineExecute", "--db", dbPath, "--exact-name", "--lang", "csharp"],
+                    _jsonOptions));
+            using var inlineGotoDocument = ParseJsonOutput(inlineGotoStdout);
+            Assert.Equal(CommandExitCodes.Success, inlineGotoExitCode);
+            Assert.Equal(string.Empty, inlineGotoStderr);
+            Assert.Equal(2, inlineGotoDocument.RootElement.GetProperty("family_members").GetArrayLength());
         }
         finally
         {
@@ -1734,6 +1762,26 @@ public partial class QueryCommandRunnerTests
                 """);
             TestProjectHelper.InsertIndexedFile(
                 dbPath,
+                "src/A.InlineAssemblyTarget.cs",
+                "csharp",
+                "public partial class InlineAssemblyTarget { }");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Z.InlineAssemblyTarget.cs",
+                "csharp",
+                "[assembly: System.CLSCompliant(true)] public partial class InlineAssemblyTarget { }");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.InlineModuleTarget.cs",
+                "csharp",
+                "public partial class InlineModuleTarget { }");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Z.InlineModuleTarget.cs",
+                "csharp",
+                "[module: System.CLSCompliant(true)] public partial class InlineModuleTarget { }");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
                 "src/Z.BlankDocumentation.cs",
                 "csharp",
                 """
@@ -1814,6 +1862,13 @@ public partial class QueryCommandRunnerTests
             var moduleTarget = RunGroupedSymbol(dbPath, "ModuleTarget", "class");
             Assert.Equal("src/A.ModuleTarget.cs", moduleTarget.GetProperty("path").GetString());
             Assert.Equal("stable_path_and_position", moduleTarget.GetProperty("representative_reason").GetString());
+
+            foreach (var inlineGlobalTarget in new[] { "InlineAssemblyTarget", "InlineModuleTarget" })
+            {
+                var grouped = RunGroupedSymbol(dbPath, inlineGlobalTarget, "class");
+                Assert.Equal($"src/A.{inlineGlobalTarget}.cs", grouped.GetProperty("path").GetString());
+                Assert.Equal("stable_path_and_position", grouped.GetProperty("representative_reason").GetString());
+            }
 
             var unattributedAfterSibling = RunGroupedSymbol(dbPath, "UnattributedAfterSibling", "class");
             Assert.Equal("src/A.UnattributedAfterSibling.cs", unattributedAfterSibling.GetProperty("path").GetString());
@@ -2371,6 +2426,21 @@ public partial class QueryCommandRunnerTests
                     partial void Nested(Node? value);
                     partial void Nested(Node value) { }
                 }
+                public partial class ReferenceContainer<T> where T : class
+                {
+                    partial void ContainingReference(T? value);
+                }
+                public partial class ValueContainer<T> where T : struct
+                {
+                    partial void ContainingValue(T? value);
+                }
+                public partial class ShadowOuter<T> where T : class
+                {
+                    public partial class ShadowInner<T> where T : struct
+                    {
+                        partial void Shadowed(T? value);
+                    }
+                }
                 public class QualifiedOuter<T>
                 {
                     public class QualifiedNode { }
@@ -2387,6 +2457,29 @@ public partial class QueryCommandRunnerTests
                     partial void Imported(ImportedNode? value);
                     partial void Imported(ImportedNode value) { }
                     partial void Imported(ImportedNode? value) { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/ScopedImplementations.cs",
+                "csharp",
+                """
+                #nullable enable
+                namespace Demo;
+                public partial class ReferenceContainer<T> where T : class
+                {
+                    partial void ContainingReference(T value) { }
+                }
+                public partial class ValueContainer<T> where T : struct
+                {
+                    partial void ContainingValue(global::System.Nullable<T> value) { }
+                }
+                public partial class ShadowOuter<T> where T : class
+                {
+                    public partial class ShadowInner<T> where T : struct
+                    {
+                        partial void Shadowed(global::System.Nullable<T> value) { }
+                    }
                 }
                 """);
             TestProjectHelper.InsertIndexedFile(
@@ -2421,7 +2514,17 @@ public partial class QueryCommandRunnerTests
                 """);
             MarkGraphAndFoldReady(dbPath);
 
-            foreach (var name in new[] { "Nested", "Qualified", "Generic", "Combining", "Local" })
+            foreach (var name in new[]
+                     {
+                         "Nested",
+                         "ContainingReference",
+                         "ContainingValue",
+                         "Shadowed",
+                         "Qualified",
+                         "Generic",
+                         "Combining",
+                         "Local",
+                     })
             {
                 var grouped = RunGroupedSymbol(dbPath, name, "function");
                 Assert.True(grouped.TryGetProperty("definition_sites", out var definitionSites), grouped.GetRawText());

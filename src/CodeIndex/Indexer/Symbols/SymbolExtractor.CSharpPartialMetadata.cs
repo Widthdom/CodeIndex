@@ -476,12 +476,39 @@ public static partial class SymbolExtractor
             cursor--;
 
         // An attribute belongs to this declaration only when its closing bracket is the
-        // last code token before this declaration occurrence. This prevents an attribute
-        // on an earlier same-line declaration from ranking every later symbol on the line.
+        // last code token before this declaration occurrence. Assembly/module targets are
+        // compilation-unit metadata, not semantic evidence for the following declaration.
         // attribute の閉じ括弧がこの宣言 occurrence 直前の最後の code token である場合だけ、
-        // この宣言の attribute とみなす。前方の同一行宣言に付いた attribute を、後続の
-        // 全 symbol の rank に誤適用しない。
-        return cursor >= 0 && sanitizedLine[cursor] == ']';
+        // この宣言の attribute とみなす。assembly/module target は compilation-unit の
+        // metadata であり、後続宣言の semantic evidence ではない。
+        if (cursor < 0 || sanitizedLine[cursor] != ']')
+            return false;
+
+        var attributeStart = FindCSharpAttributeStart(sanitizedLine, cursor);
+        return attributeStart >= 0
+               && !IsCSharpGlobalAttributeTarget(sanitizedLine[attributeStart..(cursor + 1)]);
+    }
+
+    private static int FindCSharpAttributeStart(ReadOnlySpan<char> line, int closingBracket)
+    {
+        var depth = 0;
+        for (var cursor = closingBracket; cursor >= 0; cursor--)
+        {
+            if (line[cursor] == ']')
+            {
+                depth++;
+                continue;
+            }
+
+            if (line[cursor] != '[')
+                continue;
+
+            depth--;
+            if (depth == 0)
+                return cursor;
+        }
+
+        return -1;
     }
 
     private static bool HasCSharpDeclarationLineLeadingDocumentation(
