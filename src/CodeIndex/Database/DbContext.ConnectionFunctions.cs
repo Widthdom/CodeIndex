@@ -152,6 +152,10 @@ public partial class DbContext : IDisposable
                 LogicalPartialSymbolGrouper.BuildCanonicalDeclarationIdentity(signature),
             isDeterministic: true);
         connection.CreateFunction(
+            "csharp_is_partial_declaration",
+            (string? signature) => LogicalPartialSymbolGrouper.ContainsPartialModifier(signature),
+            isDeterministic: true);
+        connection.CreateFunction(
             "codeindex_generated_file_name",
             (string? path) => FileIndexer.HasGeneratedCodeFileName(path ?? string.Empty),
             isDeterministic: true);

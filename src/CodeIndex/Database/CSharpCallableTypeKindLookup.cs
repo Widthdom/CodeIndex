@@ -170,6 +170,17 @@ internal sealed class CSharpCallableTypeKindLookup
             {
                 return typeParameterKind;
             }
+            if (sourceIdentity.Contains("::", StringComparison.Ordinal)
+                && !sourceIdentity.StartsWith("global::", StringComparison.Ordinal))
+            {
+                // Using/extern aliases cannot be bound from the persisted type facts.
+                // In particular, escaped @global is an ordinary alias, not the root
+                // qualifier. Preserve nullable syntax instead of rebinding its leaf name.
+                // using/extern alias は永続 type fact だけでは bind できない。特に escaped
+                // @global は root qualifier ではなく通常 alias なので、leaf 名へ再 binding
+                // せず nullable syntax を保持する。
+                return TypeKind.Unknown;
+            }
             if (sourceIdentity.StartsWith("global::", StringComparison.Ordinal))
                 return ResolveIdentity(normalizedSource, fileId, projectScope);
 
@@ -544,7 +555,7 @@ internal sealed class CSharpCallableTypeKindLookup
         {
             var name = ReadLastIdentifier(parameter);
             if (name.Length > 0)
-                result[name] = TypeKind.Unknown;
+                result[name] = TypeKind.Reference;
         }
 
         var constraintTokens = ReadIdentifierTokens(declaration[(close + 1)..]);
@@ -557,13 +568,21 @@ internal sealed class CSharpCallableTypeKindLookup
             if (!result.ContainsKey(parameterName))
                 continue;
 
-            var kind = TypeKind.Unknown;
+            // T? on an unconstrained or reference-constrained type parameter is a
+            // nullable annotation for callable identity. Only the two unescaped C#
+            // value constraints change it to Nullable<T>; ordinary escaped identifiers
+            // such as @struct are type constraints and remain reference-compatible.
+            // unconstrained / reference constraint の type parameter に対する T? は
+            // callable identity 上の nullable annotation。Nullable<T> へ変えるのは
+            // escape なしの2つの C# value constraint だけで、@struct のような通常の
+            // escaped identifier は type constraint として reference-compatible に保つ。
+            var kind = TypeKind.Reference;
             for (var constraintIndex = index + 2;
                  constraintIndex < constraintTokens.Count
                  && !constraintTokens[constraintIndex].Equals("where", StringComparison.Ordinal);
                  constraintIndex++)
             {
-                var constraint = constraintTokens[constraintIndex].TrimStart('@');
+                var constraint = constraintTokens[constraintIndex];
                 if (constraint is "struct" or "unmanaged")
                 {
                     kind = TypeKind.Value;
@@ -589,13 +608,13 @@ internal sealed class CSharpCallableTypeKindLookup
         var cursor = 0;
         while (TryReadNextIdentifier(declaration, ref cursor, out var keyword, out _))
         {
-            var normalizedKeyword = keyword.TrimStart('@');
+            var normalizedKeyword = keyword;
             if (normalizedKeyword is not ("class" or "struct" or "interface" or "record"))
                 continue;
 
             if (!TryReadNextIdentifier(declaration, ref cursor, out var declaredName, out var nameEnd))
                 return false;
-            if (normalizedKeyword == "record" && declaredName.TrimStart('@') is "class" or "struct")
+            if (normalizedKeyword == "record" && declaredName is "class" or "struct")
             {
                 if (!TryReadNextIdentifier(declaration, ref cursor, out declaredName, out nameEnd))
                     return false;

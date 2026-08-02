@@ -2994,7 +2994,15 @@ public partial class DbReaderTests : IDisposable
         {
             command.CommandText = """
                 UPDATE symbols
-                SET family_key = NULL
+                SET family_key = NULL,
+                    is_partial_declaration = CASE
+                        WHEN kind = 'class'
+                         AND file_id IN (
+                             SELECT id FROM files WHERE path = 'src/csharp/Api.Part2.cs'
+                         )
+                        THEN NULL
+                        ELSE is_partial_declaration
+                    END
                 WHERE file_id IN (
                     SELECT id
                     FROM files

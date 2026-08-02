@@ -793,7 +793,7 @@ internal static class LogicalPartialSymbolGrouper
         var tokens = TokenizeCallableType(signature[(closeParenthesis + 1)..declarationHeaderEnd]);
         for (var offset = 0; offset + 1 < tokens.Count; offset++)
         {
-            if (!string.Equals(tokens[offset].TrimStart('@'), "where", StringComparison.Ordinal))
+            if (!string.Equals(tokens[offset], "where", StringComparison.Ordinal))
                 continue;
 
             var parameterIndex = FindGenericParameterIndex(tokens[offset + 1], genericParameterNames);
@@ -802,7 +802,7 @@ internal static class LogicalPartialSymbolGrouper
 
             for (var constraintOffset = offset + 2; constraintOffset < tokens.Count; constraintOffset++)
             {
-                var token = tokens[constraintOffset].TrimStart('@');
+                var token = tokens[constraintOffset];
                 if (constraintOffset > offset + 2
                     && (token == "where" || token is "{" or ";"))
                 {
@@ -878,8 +878,14 @@ internal static class LogicalPartialSymbolGrouper
         if (nameStart >= 3
             && tokens[nameStart - 1] == ":"
             && tokens[nameStart - 2] == ":"
-            && tokens[nameStart - 3] == "global")
+            && IsIdentifierCharacter(tokens[nameStart - 3][0]))
         {
+            // Retain every alias qualifier, including escaped @global. Only literal
+            // global:: has reserved root semantics; other aliases must remain visible
+            // so the source-fact lookup can conservatively leave them unresolved.
+            // escaped @global を含むすべての alias qualifier を保持する。予約済み root
+            // semantics を持つのは literal global:: だけであり、ほかの alias は source
+            // fact lookup が保守的に unresolved と判断できるよう残す。
             nameStart -= 3;
         }
 
@@ -1839,12 +1845,48 @@ internal static class LogicalPartialSymbolGrouper
             || char.IsLetter(value)
             || char.GetUnicodeCategory(value) == UnicodeCategory.LetterNumber;
 
-    private static bool ContainsPartialModifier(string signature)
+    internal static bool ContainsPartialModifier(string? signature)
     {
-        var tokens = signature.Split(
-            [' ', '\t', '\r', '\n', '(', ')', '[', ']', '{', '}', ':'],
-            StringSplitOptions.RemoveEmptyEntries);
-        return tokens.Contains("partial", StringComparer.Ordinal);
+        if (string.IsNullOrWhiteSpace(signature))
+            return false;
+
+        var declaration = ExtractCSharpDeclarationHeader(
+            SymbolExtractor.SanitizeCSharpDeclarationSignature(signature));
+        var parenthesisDepth = 0;
+        var bracketDepth = 0;
+        for (var index = 0; index <= declaration.Length - "partial".Length; index++)
+        {
+            switch (declaration[index])
+            {
+                case '(':
+                    parenthesisDepth++;
+                    continue;
+                case ')' when parenthesisDepth > 0:
+                    parenthesisDepth--;
+                    continue;
+                case '[':
+                    bracketDepth++;
+                    continue;
+                case ']' when bracketDepth > 0:
+                    bracketDepth--;
+                    continue;
+            }
+
+            if (parenthesisDepth != 0
+                || bracketDepth != 0
+                || !declaration.AsSpan(index).StartsWith("partial", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var beforeIsIdentifier = index > 0 && IsIdentifierCharacter(declaration[index - 1]);
+            var after = index + "partial".Length;
+            var afterIsIdentifier = after < declaration.Length && IsIdentifierCharacter(declaration[after]);
+            if (!beforeIsIdentifier && !afterIsIdentifier)
+                return true;
+        }
+
+        return false;
     }
 
     private static bool IsLogicalPartialTypeKind(string kind)

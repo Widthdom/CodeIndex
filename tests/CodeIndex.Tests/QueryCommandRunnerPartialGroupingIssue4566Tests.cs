@@ -2418,8 +2418,11 @@ public partial class QueryCommandRunnerTests
                 """
                 #nullable enable
                 using External;
+                using @global = Values;
+                using @struct = External.ConstraintClass;
                 namespace Demo;
                 public struct Node { }
+                public class Target { }
                 public partial class Outer<T>
                 {
                     public class Node { }
@@ -2433,6 +2436,10 @@ public partial class QueryCommandRunnerTests
                 public partial class ValueContainer<T> where T : struct
                 {
                     partial void ContainingValue(T? value);
+                }
+                public partial class EscapedConstraintContainer<T> where T : @struct
+                {
+                    partial void ContainingEscapedConstraint(T? value);
                 }
                 public partial class ShadowOuter<T> where T : class
                 {
@@ -2451,6 +2458,12 @@ public partial class QueryCommandRunnerTests
                     partial void Qualified(QualifiedOuter<int>.QualifiedNode value) { }
                     partial void Generic<T>(T? value) where T : class;
                     partial void Generic<T>(T value) where T : class { }
+                    partial void EscapedMethodConstraint<T>(T? value) where T : @struct;
+                    partial void EscapedMethodConstraint<T>(T value) where T : @struct { }
+                    partial void Aliased(@global::Target value);
+                    partial void Aliased(@global::Target value) { }
+                    partial void Aliased(@global::Target? value);
+                    partial void Aliased(@global::Target? value) { }
                     partial void Combining(int á);
                     partial void Combining(int b́) { }
                     partial void Imported(ImportedNode value);
@@ -2465,6 +2478,7 @@ public partial class QueryCommandRunnerTests
                 "csharp",
                 """
                 #nullable enable
+                using @struct = External.ConstraintClass;
                 namespace Demo;
                 public partial class ReferenceContainer<T> where T : class
                 {
@@ -2473,6 +2487,10 @@ public partial class QueryCommandRunnerTests
                 public partial class ValueContainer<T> where T : struct
                 {
                     partial void ContainingValue(global::System.Nullable<T> value) { }
+                }
+                public partial class EscapedConstraintContainer<T> where T : @struct
+                {
+                    partial void ContainingEscapedConstraint(T value) { }
                 }
                 public partial class ShadowOuter<T> where T : class
                 {
@@ -2489,6 +2507,20 @@ public partial class QueryCommandRunnerTests
                 """
                 namespace Other;
                 public class ImportedNode { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/AliasTypes.cs",
+                "csharp",
+                """
+                namespace Values
+                {
+                    public struct Target { }
+                }
+                namespace External
+                {
+                    public class ConstraintClass { }
+                }
                 """);
             TestProjectHelper.InsertIndexedFile(
                 dbPath,
@@ -2519,9 +2551,11 @@ public partial class QueryCommandRunnerTests
                          "Nested",
                          "ContainingReference",
                          "ContainingValue",
+                         "ContainingEscapedConstraint",
                          "Shadowed",
                          "Qualified",
                          "Generic",
+                         "EscapedMethodConstraint",
                          "Combining",
                          "Local",
                      })
@@ -2542,6 +2576,19 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(2, importedFamilies.Count);
             Assert.All(
                 importedFamilies,
+                family => Assert.Equal(2, family.GetProperty("definition_sites").GetInt32()));
+
+            var (aliasedExitCode, aliasedStdout, aliasedStderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunSymbols(
+                    ["Aliased", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "function", "--group-partials", "--limit", "10"],
+                    _jsonOptions));
+            using var aliasedDocument = ParseJsonOutput(aliasedStdout);
+            var aliasedFamilies = aliasedDocument.RootElement.EnumerateArray().ToList();
+            Assert.Equal(CommandExitCodes.Success, aliasedExitCode);
+            Assert.Equal(string.Empty, aliasedStderr);
+            Assert.Equal(2, aliasedFamilies.Count);
+            Assert.All(
+                aliasedFamilies,
                 family => Assert.Equal(2, family.GetProperty("definition_sites").GetInt32()));
 
             Assert.Equal(

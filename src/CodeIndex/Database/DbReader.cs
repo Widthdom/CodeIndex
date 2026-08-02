@@ -1083,11 +1083,9 @@ public partial class DbReader : IDisposable
         // 直接検査する。leaf・container・arity だけで family を再構築すると、file-local type
         // や containing arity が異なる nested type を誤って結合する。ほかの言語は同等の
         // declaration 情報を持つまで bounded な混在 population scan を維持する。
-        const string normalizedSignatureSql =
-            "LOWER(REPLACE(REPLACE(REPLACE(COALESCE(s.signature, ''), CHAR(9), ' '), CHAR(10), ' '), CHAR(13), ' '))";
         var csharpPartialSql = _symbolColumns.Contains("is_partial_declaration")
-            ? "s.is_partial_declaration = 1"
-            : $"INSTR(' ' || {normalizedSignatureSql} || ' ', ' partial ') > 0";
+            ? "(s.is_partial_declaration = 1 OR (s.is_partial_declaration IS NULL AND s.kind IN ('class', 'struct', 'interface', 'record', 'function', 'test.method') AND csharp_is_partial_declaration(s.signature)))"
+            : "(s.kind IN ('class', 'struct', 'interface', 'record', 'function', 'test.method') AND csharp_is_partial_declaration(s.signature))";
         using (var cmd = conn.CreateCommand())
         {
             var parameterNames = new string[candidateLangs.Count];
