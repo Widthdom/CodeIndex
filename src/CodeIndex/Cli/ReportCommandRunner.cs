@@ -578,7 +578,7 @@ public static class ReportCommandRunner
                 GetMeta(meta, DbContext.SqlGraphContractVersionMetaKey),
                 DbContext.SqlGraphContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 StringComparison.Ordinal);
-            var hotspotFamilyReady = IsHotspotFamilyReady(connection, meta);
+            var hotspotFamilyReady = IsHotspotFamilyReady(connection, symbolColumns, meta);
             var foldReady = (userVersion & DbContext.FoldReadyFlag) == DbContext.FoldReadyFlag
                 && symbolColumns.Contains("name_folded");
 
@@ -618,9 +618,11 @@ public static class ReportCommandRunner
 
     private static bool IsHotspotFamilyReady(
         SqliteConnection connection,
+        IReadOnlySet<string> symbolColumns,
         Dictionary<string, string?> meta)
     {
         var legacyGlobalVersion = GetMeta(meta, DbContext.HotspotFamilyVersionMetaKey);
+        var indexedLanguages = new List<string>();
         foreach (var language in FileIndexer.GetHotspotFamilyMarkerLanguages())
         {
             if (CountFilesByLanguage(connection, language) == 0)
@@ -646,6 +648,23 @@ public static class ReportCommandRunner
                     return false;
                 }
             }
+
+            indexedLanguages.Add(language);
+        }
+
+        if (indexedLanguages.Count > 0
+            && (!symbolColumns.Contains("family_key")
+                || !symbolColumns.Contains("container_qualified_name")))
+        {
+            return false;
+        }
+
+        if (DbReader.LoadIncompleteHotspotFamilyLanguages(
+                connection,
+                symbolColumns,
+                indexedLanguages).Count > 0)
+        {
+            return false;
         }
 
         // All indexed family-aware languages passed above. If none were indexed, the

@@ -1099,7 +1099,31 @@ public partial class DbReader : IDisposable
         // 直接検査する。leaf・container・arity だけで family を再構築すると、file-local type
         // や containing arity が異なる nested type を誤って結合する。ほかの言語は同等の
         // declaration 情報を持つまで bounded な混在 population scan を維持する。
-        var csharpPartialSql = _symbolColumns.Contains("is_partial_declaration")
+        incompleteLangs.UnionWith(LoadIncompleteHotspotFamilyLanguages(
+            conn,
+            _symbolColumns,
+            candidateLangs));
+
+        foreach (var lang in candidateLangs)
+        {
+            if (!incompleteLangs.Contains(lang))
+                readyLangs.Add(lang);
+        }
+
+        return (readyLangs, incompleteLangs);
+    }
+
+    internal static HashSet<string> LoadIncompleteHotspotFamilyLanguages(
+        SqliteConnection conn,
+        IReadOnlySet<string> symbolColumns,
+        IReadOnlyList<string> candidateLangs)
+    {
+        var incompleteLangs = new HashSet<string>(StringComparer.Ordinal);
+        if (candidateLangs.Count == 0)
+            return incompleteLangs;
+
+        DbContext.RegisterCSharpPartialDeclarationFunction(conn);
+        var csharpPartialSql = symbolColumns.Contains("is_partial_declaration")
             ? "(s.is_partial_declaration = 1 OR (s.is_partial_declaration IS NULL AND s.kind IN ('class', 'struct', 'interface', 'record', 'function', 'test.method') AND csharp_is_partial_declaration(s.signature, s.kind, s.name)))"
             : "(s.kind IN ('class', 'struct', 'interface', 'record', 'function', 'test.method') AND csharp_is_partial_declaration(s.signature, s.kind, s.name))";
         using (var cmd = conn.CreateCommand())
@@ -1144,13 +1168,7 @@ public partial class DbReader : IDisposable
                 incompleteLangs.Add(reader.GetString(0));
         }
 
-        foreach (var lang in candidateLangs)
-        {
-            if (!incompleteLangs.Contains(lang))
-                readyLangs.Add(lang);
-        }
-
-        return (readyLangs, incompleteLangs);
+        return incompleteLangs;
     }
 
     /// <summary>

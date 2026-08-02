@@ -2093,12 +2093,14 @@ public class ReportCommandRunnerTests
     }
 
     [Theory]
-    [InlineData(null, false)]
-    [InlineData("incomplete:marker_scan_cap", false)]
-    [InlineData("complete-fingerprint", true)]
+    [InlineData(null, false, false)]
+    [InlineData("incomplete:marker_scan_cap", false, false)]
+    [InlineData("complete-fingerprint", true, false)]
+    [InlineData("complete-fingerprint", false, true)]
     public void Run_WithPerLanguageHotspotVersion_RequiresCompleteMarkerFingerprint_Issue4914(
         string? markerFingerprint,
-        bool expectedReady)
+        bool expectedReady,
+        bool insertIncompletePartialFamily)
     {
         var workDir = CreateWorkDir();
         var dbPath = Path.Combine(workDir, "per-language-hotspot-family.db");
@@ -2121,10 +2123,35 @@ public class ReportCommandRunnerTests
                     VALUES (
                         '{DbContext.GetHotspotFamilyMarkerFingerprintMetaKey("csharp")}',
                         @markerFingerprint);
+                    INSERT INTO symbols (
+                        file_id,
+                        kind,
+                        name,
+                        line,
+                        start_line,
+                        end_line,
+                        signature,
+                        is_partial_declaration,
+                        family_key)
+                    SELECT
+                        id,
+                        'class',
+                        'IncompletePartial',
+                        1,
+                        1,
+                        1,
+                        'public partial class IncompletePartial',
+                        1,
+                        NULL
+                    FROM files
+                    WHERE @insertIncompletePartialFamily = 1;
                     """;
                 cmd.Parameters.AddWithValue(
                     "@markerFingerprint",
                     (object?)markerFingerprint ?? DBNull.Value);
+                cmd.Parameters.AddWithValue(
+                    "@insertIncompletePartialFamily",
+                    insertIncompletePartialFamily ? 1 : 0);
                 cmd.ExecuteNonQuery();
             }
             SqliteConnection.ClearAllPools();
