@@ -3226,6 +3226,13 @@ public static partial class QueryCommandRunner
         for (var index = expressionStart; index < tokens.Count; index++)
         {
             var token = tokens[index];
+            if (token == "("
+                && TrySkipJsonTrustCast(tokens, expressionStart, index, out var castCloseIndex))
+            {
+                index = castCloseIndex;
+                continue;
+            }
+
             if (token == "<"
                 && TrySkipJsonTrustGenericArgumentList(tokens, index, out var genericCloseIndex))
             {
@@ -3248,6 +3255,45 @@ public static partial class QueryCommandRunner
 
             if (IsJsonTrustNumericToken(token))
                 return true;
+        }
+
+        return false;
+    }
+
+    private static bool TrySkipJsonTrustCast(
+        IReadOnlyList<string> tokens,
+        int expressionStart,
+        int openIndex,
+        out int closeIndex)
+    {
+        closeIndex = -1;
+        if (openIndex < expressionStart
+            || openIndex >= tokens.Count
+            || tokens[openIndex] != "(")
+        {
+            return false;
+        }
+
+        var depth = 0;
+        for (var index = openIndex; index < tokens.Count; index++)
+        {
+            if (tokens[index] == "(")
+            {
+                depth++;
+                continue;
+            }
+            if (tokens[index] != ")")
+                continue;
+
+            depth--;
+            if (depth != 0)
+                continue;
+
+            if (!IsJsonTrustCastClosingParenthesis(tokens, expressionStart, index))
+                return false;
+
+            closeIndex = index;
+            return true;
         }
 
         return false;

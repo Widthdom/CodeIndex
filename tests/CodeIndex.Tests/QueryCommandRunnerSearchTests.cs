@@ -4045,6 +4045,23 @@ public partial class QueryCommandRunnerTests
                     }
                 }
                 """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/composite-cast-parser.cs",
+                "csharp",
+                """
+                using System.Collections.Generic;
+                using System.Text.Json;
+
+                public static class CompositeCastParser
+                {
+                    public static IEnumerable<string>? Parse(string payload)
+                    {
+                        // cdidx-audit: json-trust origin=file direction=read sensitivity=untrusted trust=untrusted rationale=generic_nullable_cast_input
+                        return (IEnumerable<string>?)JsonSerializer.Deserialize<List<string>>(payload);
+                    }
+                }
+                """);
 
             foreach (var (path, origin, rationale) in new[]
                      {
@@ -4102,6 +4119,7 @@ public partial class QueryCommandRunnerTests
                     "--include-query", "json-async-deserialize",
                     "--db", dbPath,
                     "--path", "src/overlapping-parser.cs",
+                    "--path", "src/composite-cast-parser.cs",
                     "--json",
                     "--limit", "10",
                     "--snippet-lines", "1",
@@ -4501,11 +4519,20 @@ public partial class QueryCommandRunnerTests
                 var asyncQuery = Assert.Single(
                     queries,
                     query => query.GetProperty("name").GetString() == "json-async-deserialize");
-                AssertJsonTrustClassifierCounts(serializerQuery, ("untrusted_parser", 1));
+                AssertJsonTrustClassifierCounts(serializerQuery, ("untrusted_parser", 2));
                 AssertJsonTrustClassification(
-                    Assert.Single(serializerQuery.GetProperty("results").EnumerateArray()),
+                    Assert.Single(
+                        serializerQuery.GetProperty("results").EnumerateArray(),
+                        result => result.GetProperty("path").GetString() == "src/overlapping-parser.cs"),
                     "untrusted_parser",
                     "rationale:first_overlapping_query_only",
+                    "annotation_status:valid");
+                AssertJsonTrustClassification(
+                    Assert.Single(
+                        serializerQuery.GetProperty("results").EnumerateArray(),
+                        result => result.GetProperty("path").GetString() == "src/composite-cast-parser.cs"),
+                    "untrusted_parser",
+                    "rationale:generic_nullable_cast_input",
                     "annotation_status:valid");
                 AssertJsonTrustClassifierCounts(asyncQuery, ("ambiguous_trust", 1));
                 AssertJsonTrustClassification(
