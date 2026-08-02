@@ -1089,7 +1089,8 @@ public partial class DbReader : IDisposable
         // DbReader は caller 所有の open 済み connection も受け取る。その connection は
         // DbContext の関数登録を通っていない場合があるため、この readiness scan が使う
         // bounded な依存関数をここで登録する。
-        if (candidateLangs.Contains("csharp", StringComparer.Ordinal))
+        if (candidateLangs.Contains("csharp", StringComparer.Ordinal)
+            && !HasSqliteFunction(conn, "csharp_definition_type_arity", arity: 3))
         {
             conn.CreateFunction(
                 "csharp_definition_type_arity",
@@ -1140,6 +1141,24 @@ public partial class DbReader : IDisposable
         }
 
         return (readyLangs, incompleteLangs);
+    }
+
+    private static bool HasSqliteFunction(SqliteConnection connection, string name, int arity)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT EXISTS(
+                SELECT 1
+                FROM pragma_function_list
+                WHERE name = @name
+                  AND narg = @arity
+            )
+            """;
+        SqliteCommandPolicy.Add(command, "@name", name);
+        SqliteCommandPolicy.Add(command, "@arity", arity);
+        return Convert.ToInt64(
+            command.ExecuteScalar(),
+            System.Globalization.CultureInfo.InvariantCulture) != 0;
     }
 
     /// <summary>
