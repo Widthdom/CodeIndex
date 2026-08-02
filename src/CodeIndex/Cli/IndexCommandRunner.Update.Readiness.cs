@@ -170,7 +170,7 @@ public static partial class IndexCommandRunner
             }
             if (!options.SymbolsOnly)
             {
-                if (writer.CSharpFamilyTrustAllowsReferenceIdentityReady())
+                if (writer.CSharpFamilyTrustAllowsReferenceIdentityReady(hasCSharpFilesAfter))
                     writer.MarkReferenceIdentityContractReady();
                 else
                     writer.ClearReferenceIdentityContractReady();

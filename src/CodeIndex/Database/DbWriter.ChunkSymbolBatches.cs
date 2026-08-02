@@ -54,6 +54,7 @@ public partial class DbWriter
     {
         if (symbols.Count == 0) return;
         cancellationToken.ThrowIfCancellationRequested();
+        TrackCurrentWriterCSharpFamilyRows(symbols);
         _typeScriptAugmentationDirtyNameScope?.TrackInsertedSymbols(symbols, cancellationToken);
         TrackReferenceGraphInsertedSymbols(symbols);
         InvalidateReferenceIdentityContractForMutation();
@@ -80,6 +81,25 @@ public partial class DbWriter
             }
         }
         CheckBatchCancellationAndReportProgress("insert_symbols", symbols.Count, symbols.Count, cancellationToken);
+    }
+
+    private void TrackCurrentWriterCSharpFamilyRows(IReadOnlyList<SymbolRecord> symbols)
+    {
+        if (_currentWriterOwnsAllCSharpFamilyRows != true)
+            return;
+
+        foreach (var symbol in symbols)
+        {
+            if (!_currentWriterCSharpFileIds.Contains(symbol.FileId))
+                continue;
+            if (symbol.Kind is not ("function" or "test.method" or "class" or "struct" or "interface" or "record" or "enum" or "delegate"))
+                continue;
+            if (symbol.IsPartialDeclaration.HasValue)
+                continue;
+
+            _currentWriterOwnsAllCSharpFamilyRows = false;
+            return;
+        }
     }
 
     private void InsertChunksWithRowSkip(IReadOnlyList<ChunkRecord> chunks, int start, int end, SqliteException batchException, CancellationToken cancellationToken)

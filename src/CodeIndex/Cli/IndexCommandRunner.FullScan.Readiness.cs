@@ -159,7 +159,7 @@ public static partial class IndexCommandRunner
                 context.CurrentHotspotFamilyMarkerFingerprints);
             if (!options.SymbolsOnly)
             {
-                if (writer.CSharpFamilyTrustAllowsReferenceIdentityReady())
+                if (writer.CSharpFamilyTrustAllowsReferenceIdentityReady(context.HasCSharpFilesAfter))
                     writer.MarkReferenceIdentityContractReady();
                 else
                     writer.ClearReferenceIdentityContractReady();

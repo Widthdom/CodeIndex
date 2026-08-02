@@ -1030,7 +1030,12 @@ public static partial class IndexCommandRunner
                 writer.RefreshMutualRecursionFlags(
                     cancellationToken,
                     stampReferenceIdentityContractReady:
-                        writer.CSharpFamilyTrustAllowsReferenceIdentityReady());
+                        writer.CSharpFamilyTrustAllowsReferenceIdentityReady(
+                            (options.Rebuild || startedWithNoIndexedFiles)
+                            && !scanHadErrors
+                            && errors == 0
+                                ? languageCounts.ContainsKey("csharp")
+                                : null));
             }
             finally
             {

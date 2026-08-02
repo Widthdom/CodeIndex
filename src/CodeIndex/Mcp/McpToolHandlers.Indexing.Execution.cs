@@ -1762,7 +1762,12 @@ public partial class McpServer
             writer.RefreshMutualRecursionFlags(
                 requestToken,
                 stampReferenceIdentityContractReady:
-                    writer.CSharpFamilyTrustAllowsReferenceIdentityReady());
+                    writer.CSharpFamilyTrustAllowsReferenceIdentityReady(
+                        startedWithNoIndexedFiles
+                        && !scanHadErrors
+                        && errors == 0
+                            ? csharpPrepassTargets.Count > 0
+                            : null));
         }
 
         if (ftsBulkLoad != null)
@@ -1959,7 +1964,7 @@ public partial class McpServer
                 indexSnapshot.HotspotFamilyVersions,
                 indexSnapshot.HotspotFamilyMarkerFingerprints,
                 currentHotspotFamilyMarkerFingerprints);
-            if (writer.CSharpFamilyTrustAllowsReferenceIdentityReady())
+            if (writer.CSharpFamilyTrustAllowsReferenceIdentityReady(hasCSharpFilesAfter))
                 writer.MarkReferenceIdentityContractReady();
             else
                 writer.ClearReferenceIdentityContractReady();

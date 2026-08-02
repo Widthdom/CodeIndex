@@ -131,6 +131,7 @@ public partial class DbWriter
         out bool referenceIdentityChanged,
         bool cleanExistingData = true)
     {
+        TrackCSharpFamilyFileBeforeWrite(file, cleanExistingData ? file.Path : null);
         var typeScriptDirtyNameScope = _typeScriptAugmentationDirtyNameScope;
         var wasExistingTypeScript = cleanExistingData
             && typeScriptDirtyNameScope?.TrackExistingFile(file.Path) == true;
@@ -188,6 +189,7 @@ public partial class DbWriter
         // RETURNING reader と prepared command を解放してから cleanup command を借りる。
         // 既存行は同じIDを保ち、新規行のDELETEはno-op。fresh bulk loadはInsertNewFileを使う。
         typeScriptDirtyNameScope?.TrackCurrentFile(fileId, file.Lang, wasExistingTypeScript);
+        TrackCurrentWriterCSharpFile(fileId, file.Lang);
         referenceIdentityChanged = cleanExistingData && DeleteFileDataCore(fileId, trackTypeScriptInterfaceNames: false);
 
         return fileId;
@@ -203,6 +205,7 @@ public partial class DbWriter
     /// </summary>
     public long InsertNewFile(FileRecord file)
     {
+        TrackCSharpFamilyFileBeforeWrite(file, excludedCleanPath: null);
         var cmd = RentCommand(
             @"
             INSERT INTO files (path, lang, size, lines, checksum, modified, generated, indexed_at)
@@ -238,8 +241,48 @@ public partial class DbWriter
             ReleaseCommand(cmd);
         }
         _typeScriptAugmentationDirtyNameScope?.TrackCurrentFile(fileId, file.Lang);
+        TrackCurrentWriterCSharpFile(fileId, file.Lang);
         TrackReferenceGraphFileIds([fileId]);
         return fileId;
+    }
+
+    private void TrackCSharpFamilyFileBeforeWrite(FileRecord file, string? excludedCleanPath)
+    {
+        if (!string.Equals(file.Lang, "csharp", StringComparison.Ordinal)
+            || _currentWriterOwnsAllCSharpFamilyRows.HasValue)
+        {
+            return;
+        }
+
+        using var cmd = _conn.CreateCommand();
+        cmd.Transaction = _activeTransaction;
+        cmd.CommandText = excludedCleanPath == null
+            ? """
+              SELECT 1
+              FROM symbols s
+              JOIN files f ON f.id = s.file_id
+              WHERE f.lang = 'csharp'
+              LIMIT 1
+              """
+            : """
+              SELECT 1
+              FROM symbols s
+              JOIN files f ON f.id = s.file_id
+              WHERE f.lang = 'csharp'
+                AND f.path <> @excludedCleanPath
+              LIMIT 1
+              """;
+        if (excludedCleanPath != null)
+            SqliteCommandPolicy.Add(cmd, "@excludedCleanPath", excludedCleanPath);
+        _currentWriterOwnsAllCSharpFamilyRows = cmd.ExecuteScalar() == null;
+    }
+
+    private void TrackCurrentWriterCSharpFile(long fileId, string? lang)
+    {
+        if (string.Equals(lang, "csharp", StringComparison.Ordinal))
+            _currentWriterCSharpFileIds.Add(fileId);
+        else
+            _currentWriterCSharpFileIds.Remove(fileId);
     }
 
     /// <summary>

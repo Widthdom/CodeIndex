@@ -172,6 +172,8 @@ public partial class DbWriter
     private string? _transactionOwnerOperation;
     private DateTimeOffset _transactionOwnerAcquiredAtUtc;
     private bool? _hasIssueMetadataColumns;
+    private bool? _currentWriterOwnsAllCSharpFamilyRows;
+    private readonly HashSet<long> _currentWriterCSharpFileIds = [];
     internal static TimeSpan? TransactionStateContentionTimeoutForTesting { get; set; }
     // Outermost SqliteTransaction currently held open by this writer (null when no
     // transaction is active OR after the outermost transaction has been committed /

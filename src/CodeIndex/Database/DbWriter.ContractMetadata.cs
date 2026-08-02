@@ -116,23 +116,29 @@ public partial class DbWriter
     /// <summary>
     /// Return whether reference identity v7 may trust every persisted C# family row.
     /// A partial upgrade cannot publish v7 while untouched pre-v7 C# symbols remain.
+    /// Callers may supply an authoritative C# presence result to avoid another database probe;
+    /// a writer that started without other C# rows may also trust the current rows it inserted.
     /// reference identity v7 が全 C# family row を信頼できるかを返す。
     /// 未更新の旧 C# symbol が残る部分 upgrade では v7 を公開しない。
+    /// caller は既知の C# presence を渡して再照会を避けられ、既存 C# row がない状態から
+    /// current row を挿入した writer はその session 内の row も信頼できる。
     /// </summary>
-    internal bool CSharpFamilyTrustAllowsReferenceIdentityReady()
+    internal bool CSharpFamilyTrustAllowsReferenceIdentityReady(bool? hasCSharpFiles = null)
     {
-        if (!HasAnyFilesWithLanguage("csharp"))
+        if (!(hasCSharpFiles ?? HasAnyFilesWithLanguage("csharp")))
             return true;
 
         var version = GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp"));
         var fingerprint = GetMetaString(DbContext.GetHotspotFamilyMarkerFingerprintMetaKey("csharp"));
-        return string.Equals(
+        var stampedFamilyTrustIsCurrent = string.Equals(
                    version,
                    DbContext.GetHotspotFamilyVersion("csharp").ToString(
                        System.Globalization.CultureInfo.InvariantCulture),
                    StringComparison.Ordinal)
                && !string.IsNullOrWhiteSpace(fingerprint)
                && !DbContext.IsIncompleteHotspotFamilyMarkerFingerprint(fingerprint);
+        return stampedFamilyTrustIsCurrent
+            || _currentWriterOwnsAllCSharpFamilyRows == true;
     }
 
     public void MarkReferenceIdentityContractReady()
