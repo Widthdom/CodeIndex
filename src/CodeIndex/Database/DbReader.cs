@@ -664,6 +664,11 @@ public partial class DbReader : IDisposable
                 TryGetMetaString(_conn, DbContext.ReferenceIdentityContractVersionMetaKey),
                 DbContext.ReferenceIdentityContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 StringComparison.Ordinal);
+        // Public DbReader constructors accept caller-owned raw connections that have not
+        // necessarily passed through DbContext's full function registration path.
+        // public DbReader は DbContext の function 登録を通っていない caller-owned raw
+        // connection も受け付けるため、readiness が直接使う UDF はここでも保証する。
+        DbContext.RegisterCSharpPartialDeclarationFunction(connection);
         (_hotspotFamilyReadyLanguages, _incompleteHotspotFamilyLanguages) =
             LoadHotspotFamilyReadiness(connection);
         // NOTE: row presence is intentionally NOT used as a fallback. A legacy DB or an
@@ -1084,8 +1089,8 @@ public partial class DbReader : IDisposable
         // や containing arity が異なる nested type を誤って結合する。ほかの言語は同等の
         // declaration 情報を持つまで bounded な混在 population scan を維持する。
         var csharpPartialSql = _symbolColumns.Contains("is_partial_declaration")
-            ? "(s.is_partial_declaration = 1 OR (s.is_partial_declaration IS NULL AND s.kind IN ('class', 'struct', 'interface', 'record', 'function', 'test.method') AND csharp_is_partial_declaration(s.signature)))"
-            : "(s.kind IN ('class', 'struct', 'interface', 'record', 'function', 'test.method') AND csharp_is_partial_declaration(s.signature))";
+            ? "(s.is_partial_declaration = 1 OR (s.is_partial_declaration IS NULL AND s.kind IN ('class', 'struct', 'interface', 'record', 'function', 'test.method') AND csharp_is_partial_declaration(s.signature, s.kind, s.name)))"
+            : "(s.kind IN ('class', 'struct', 'interface', 'record', 'function', 'test.method') AND csharp_is_partial_declaration(s.signature, s.kind, s.name))";
         using (var cmd = conn.CreateCommand())
         {
             var parameterNames = new string[candidateLangs.Count];

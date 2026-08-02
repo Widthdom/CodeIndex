@@ -36,7 +36,10 @@ public static partial class SymbolExtractor
                 symbol,
                 lineStartStates);
             symbol.IsPartialDeclaration =
-                ContainsCSharpLeadingModifier(declarationModifierPrefix, "partial")
+                ContainsCSharpLeadingModifier(
+                    declarationModifierPrefix,
+                    "partial",
+                    requireTrailingDeclarationType: symbol.Kind is "function" or "test.method")
                 || leading.HasPartialModifier;
             symbol.IsFileLocalDeclaration =
                 symbol.Kind is "class" or "struct" or "interface" or "record"
@@ -221,7 +224,8 @@ public static partial class SymbolExtractor
 
     private static bool ContainsCSharpLeadingModifier(
         string declarationPrefix,
-        string modifier)
+        string modifier,
+        bool requireTrailingDeclarationType = false)
     {
         var remaining = declarationPrefix.AsSpan().Trim();
         while (!remaining.IsEmpty && remaining[0] == '[')
@@ -244,10 +248,11 @@ public static partial class SymbolExtractor
             remaining = remaining[(attributeEnd + 1)..].TrimStart();
         }
 
+        var hasModifier = false;
         while (!remaining.IsEmpty)
         {
             if (remaining[0] == '@')
-                return false;
+                return requireTrailingDeclarationType && hasModifier;
 
             var tokenLength = 0;
             while (tokenLength < remaining.Length
@@ -258,16 +263,54 @@ public static partial class SymbolExtractor
             }
 
             if (tokenLength == 0)
-                return false;
+                return requireTrailingDeclarationType && hasModifier;
             var token = remaining[..tokenLength];
             if (!CSharpStandaloneDeclarationModifiers.Contains(token.ToString()))
-                return false;
-            if (token.SequenceEqual(modifier))
-                return true;
-            remaining = remaining[tokenLength..].TrimStart();
+                return requireTrailingDeclarationType && hasModifier;
+
+            var trailing = remaining[tokenLength..].TrimStart();
+            if (requireTrailingDeclarationType
+                && (trailing.IsEmpty || IsCSharpTypeContinuation(trailing[0])))
+            {
+                // A contextual keyword at the end of a callable prefix, or followed by
+                // type punctuation, is the return type rather than a declaration modifier.
+                // callable prefix 末尾、または型 punctuation の直前にある contextual
+                // keyword は declaration modifier ではなく return type とみなす。
+                return hasModifier;
+            }
+
+            hasModifier |= token.SequenceEqual(modifier);
+            remaining = trailing;
         }
 
-        return false;
+        return !requireTrailingDeclarationType && hasModifier;
+    }
+
+    private static bool IsCSharpTypeContinuation(char value)
+        => value is '.' or ':' or '<' or '[' or '?' or '*';
+
+    internal static bool ContainsCSharpPartialDeclarationModifier(
+        string? signature,
+        string? kind,
+        string? symbolName)
+    {
+        if (string.IsNullOrWhiteSpace(signature)
+            || string.IsNullOrWhiteSpace(kind)
+            || string.IsNullOrWhiteSpace(symbolName)
+            || kind is not ("function" or "test.method" or "class" or "struct" or "interface" or "record"))
+        {
+            return false;
+        }
+
+        var declarationHeader = ExtractCSharpDeclarationHeader(
+            SanitizeCSharpDeclarationEvidence(signature));
+        var modifierPrefix = kind is "class" or "struct" or "interface" or "record"
+            ? ExtractCSharpTypeDeclarationModifierPrefix(declarationHeader, symbolName)
+            : ExtractCSharpCallableDeclarationModifierPrefix(declarationHeader, symbolName);
+        return ContainsCSharpLeadingModifier(
+            modifierPrefix,
+            "partial",
+            requireTrailingDeclarationType: kind is "function" or "test.method");
     }
 
     private static bool ContainsCSharpAttributeEvidence(string declarationHeader)

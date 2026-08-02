@@ -219,7 +219,7 @@ internal static class LogicalPartialSymbolGrouper
     {
 
         if (string.IsNullOrWhiteSpace(symbol.Signature)
-            || !ContainsPartialModifier(symbol.Signature))
+            || !ContainsPartialModifier(symbol.Signature, symbol.Kind, symbol.Name))
         {
             key = string.Empty;
             return false;
@@ -277,7 +277,7 @@ internal static class LogicalPartialSymbolGrouper
         if (string.IsNullOrWhiteSpace(signature)
             || string.IsNullOrWhiteSpace(name)
             || string.IsNullOrWhiteSpace(returnType)
-            || !ContainsPartialModifier(signature))
+            || !ContainsPartialModifier(signature, "function", name))
         {
             return null;
         }
@@ -855,21 +855,19 @@ internal static class LogicalPartialSymbolGrouper
             return false;
 
         elementRanges.Add((elementStart, closeOffset));
-        if (elementRanges.Any(range =>
-                range.Start >= range.End || TupleElementHasExplicitName(tokens, range.Start, range.End)))
-        {
-            // Tuple element names are part of the partial declaration contract even though
-            // they are absent from the CLR ValueTuple type. Preserve named tuple syntax so
-            // it cannot collapse into an explicitly unnamed ValueTuple spelling.
-            // tuple element name は CLR ValueTuple type には含まれないが partial 宣言の
-            // contract には含まれるため、明示的に unnamed な ValueTuple と統合しない。
-            return false;
-        }
-
         var elementIdentities = new List<string>(elementRanges.Count);
+        var elementNames = new List<string?>(elementRanges.Count);
         foreach (var range in elementRanges)
         {
-            var elementSource = string.Concat(tokens.Skip(range.Start).Take(range.End - range.Start));
+            if (range.Start >= range.End)
+                return false;
+
+            var nameOffset = GetTupleElementNameOffset(tokens, range.Start, range.End);
+            var typeEnd = nameOffset >= 0 ? nameOffset : range.End;
+            if (typeEnd <= range.Start)
+                return false;
+
+            var elementSource = string.Concat(tokens.Skip(range.Start).Take(typeEnd - range.Start));
             elementIdentities.Add(NormalizeCallableTypeIdentity(
                 elementSource,
                 genericParameterNames,
@@ -877,9 +875,22 @@ internal static class LogicalPartialSymbolGrouper
                 containerQualifiedName,
                 typeKinds,
                 symbolId));
+            elementNames.Add(nameOffset >= 0 ? tokens[nameOffset].TrimStart('@') : null);
         }
 
         var tupleIdentity = BuildValueTupleIdentity(elementIdentities);
+        if (elementNames.Any(name => name != null))
+        {
+            // Tuple element names participate in the partial declaration contract but are
+            // absent from the CLR ValueTuple type. Append a source-impossible marker so
+            // matching named tuples remain stable without collapsing into an explicitly
+            // unnamed ValueTuple spelling. Normalize only each element's type above; names
+            // that happen to equal method type parameters must remain literal names.
+            // tuple element name は partial 宣言 contract に含まれる一方、CLR ValueTuple
+            // type には含まれない。source に現れない marker で保持し、method type parameter
+            // と同名の element name を型 parameter として置換しない。
+            tupleIdentity += $"#tuple_names({string.Join(',', elementNames.Select(name => name ?? string.Empty))})";
+        }
         consumedTokens = closeOffset - offset + 1;
         if (closeOffset + 1 < tokens.Count && tokens[closeOffset + 1] == "?")
         {
@@ -894,21 +905,21 @@ internal static class LogicalPartialSymbolGrouper
         return true;
     }
 
-    private static bool TupleElementHasExplicitName(
+    private static int GetTupleElementNameOffset(
         IReadOnlyList<string> tokens,
         int start,
         int end)
     {
         var last = end - 1;
         if (last <= start || !IsIdentifierCharacter(tokens[last][0]))
-            return false;
+            return -1;
 
         // A final identifier preceded by member/alias qualification is the leaf type name.
         // Every other final identifier following a complete tokenized type is a tuple element
         // name (for example `int value`, `T[] values`, or `(int, int) pair`).
         // member / alias qualifier 直後の末尾 identifier は型名。それ以外で完全な型の
         // 後ろに続く末尾 identifier は tuple element name とみなす。
-        return tokens[last - 1] is not "." and not ":";
+        return tokens[last - 1] is not "." and not ":" ? last : -1;
     }
 
     private static string BuildValueTupleIdentity(IReadOnlyList<string> elementIdentities)
@@ -1438,10 +1449,13 @@ internal static class LogicalPartialSymbolGrouper
                 case ')':
                     parenthesisDepth--;
                     break;
-                case '<' when defaultValueStart < 0 && bracketDepth == 0:
+                case '<' when bracketDepth == 0
+                                   && (defaultValueStart < 0
+                                       || angleDepth > 0
+                                       || IsDefaultExpressionGenericMemberAccess(value, i)):
                     angleDepth++;
                     break;
-                case '>' when defaultValueStart < 0 && bracketDepth == 0 && angleDepth > 0:
+                case '>' when bracketDepth == 0 && angleDepth > 0:
                     angleDepth--;
                     break;
                 case '[':
@@ -1466,7 +1480,7 @@ internal static class LogicalPartialSymbolGrouper
                 case ',' when parenthesisDepth == 0
                                    && bracketDepth == 0
                                    && braceDepth == 0
-                                   && (defaultValueStart >= 0 || angleDepth == 0):
+                                   && angleDepth == 0:
                     items.Add(value[start..(defaultValueStart >= 0 ? defaultValueStart : i)]);
                     start = i + 1;
                     defaultValueStart = -1;
@@ -1476,6 +1490,34 @@ internal static class LogicalPartialSymbolGrouper
         }
         items.Add(value[start..(defaultValueStart >= 0 ? defaultValueStart : value.Length)]);
         return items;
+    }
+
+    private static bool IsDefaultExpressionGenericMemberAccess(string value, int openAngleOffset)
+    {
+        // Optional defaults can reference a generic const as `G<int, string>.Value`.
+        // Track only angle lists that close into member access: treating every `<` after
+        // `=` as generic would break valid relational constants such as `1 < 2`.
+        // optional default の `G<int, string>.Value` は generic comma を含む。一方、`=`
+        // 以降の全 `<` を generic とみなすと `1 < 2` を壊すため、member access へ閉じる
+        // angle list だけを追跡する。
+        var depth = 0;
+        for (var cursor = openAngleOffset; cursor < value.Length; cursor++)
+        {
+            if (value[cursor] == '<')
+            {
+                depth++;
+                continue;
+            }
+            if (value[cursor] != '>' || --depth != 0)
+                continue;
+
+            cursor++;
+            while (cursor < value.Length && char.IsWhiteSpace(value[cursor]))
+                cursor++;
+            return cursor < value.Length && value[cursor] == '.';
+        }
+
+        return false;
     }
 
     private static string RemoveLeadingParameterAttributes(string parameter)
@@ -1987,49 +2029,11 @@ internal static class LogicalPartialSymbolGrouper
             || char.IsLetter(value)
             || char.GetUnicodeCategory(value) == UnicodeCategory.LetterNumber;
 
-    internal static bool ContainsPartialModifier(string? signature)
-    {
-        if (string.IsNullOrWhiteSpace(signature))
-            return false;
-
-        var declaration = ExtractCSharpDeclarationHeader(
-            SymbolExtractor.SanitizeCSharpDeclarationSignature(signature));
-        var parenthesisDepth = 0;
-        var bracketDepth = 0;
-        for (var index = 0; index <= declaration.Length - "partial".Length; index++)
-        {
-            switch (declaration[index])
-            {
-                case '(':
-                    parenthesisDepth++;
-                    continue;
-                case ')' when parenthesisDepth > 0:
-                    parenthesisDepth--;
-                    continue;
-                case '[':
-                    bracketDepth++;
-                    continue;
-                case ']' when bracketDepth > 0:
-                    bracketDepth--;
-                    continue;
-            }
-
-            if (parenthesisDepth != 0
-                || bracketDepth != 0
-                || !declaration.AsSpan(index).StartsWith("partial", StringComparison.Ordinal))
-            {
-                continue;
-            }
-
-            var beforeIsIdentifier = index > 0 && IsIdentifierCharacter(declaration[index - 1]);
-            var after = index + "partial".Length;
-            var afterIsIdentifier = after < declaration.Length && IsIdentifierCharacter(declaration[after]);
-            if (!beforeIsIdentifier && !afterIsIdentifier)
-                return true;
-        }
-
-        return false;
-    }
+    internal static bool ContainsPartialModifier(
+        string? signature,
+        string? kind,
+        string? name)
+        => SymbolExtractor.ContainsCSharpPartialDeclarationModifier(signature, kind, name);
 
     private static bool IsLogicalPartialTypeKind(string kind)
         => kind is "class" or "struct" or "interface" or "record";

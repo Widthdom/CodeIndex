@@ -151,10 +151,7 @@ public partial class DbContext : IDisposable
             (string? signature) =>
                 LogicalPartialSymbolGrouper.BuildCanonicalDeclarationIdentity(signature),
             isDeterministic: true);
-        connection.CreateFunction(
-            "csharp_is_partial_declaration",
-            (string? signature) => LogicalPartialSymbolGrouper.ContainsPartialModifier(signature),
-            isDeterministic: true);
+        RegisterCSharpPartialDeclarationFunction(connection);
         connection.CreateFunction(
             "codeindex_generated_file_name",
             (string? path) => FileIndexer.HasGeneratedCodeFileName(path ?? string.Empty),
@@ -262,6 +259,15 @@ public partial class DbContext : IDisposable
             "sql_allow_leaf_fallback_at",
             (string? symbolName, string? context, string? containerName, long? columnNumber) =>
                 SqlNameResolver.AllowLeafFallbackAtColumn(symbolName, context, containerName, ToNullableInt(columnNumber)) ? 1 : 0);
+    }
+
+    internal static void RegisterCSharpPartialDeclarationFunction(SqliteConnection connection)
+    {
+        connection.CreateFunction(
+            "csharp_is_partial_declaration",
+            (string? signature, string? kind, string? name) =>
+                LogicalPartialSymbolGrouper.ContainsPartialModifier(signature, kind, name),
+            isDeterministic: true);
     }
 
     internal static void RefreshCSharpCallableTypeKinds(

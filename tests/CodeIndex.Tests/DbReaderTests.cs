@@ -2965,6 +2965,27 @@ public partial class DbReaderTests : IDisposable
             namespace Demo;
             class Outer<T1, T2> { public class Child { } }
             """);
+        InsertIndexedFile("src/D.PartialReturnType.cs", "csharp",
+            """
+            namespace Demo;
+            class partial { }
+            class PartialReturnTypeHost
+            {
+                partial M() => new partial();
+            }
+            """);
+        using (var command = _db.Connection.CreateCommand())
+        {
+            command.CommandText = """
+                UPDATE symbols
+                SET is_partial_declaration = NULL
+                WHERE name = 'M'
+                  AND file_id IN (
+                      SELECT id FROM files WHERE path = 'src/D.PartialReturnType.cs'
+                  )
+                """;
+            Assert.Equal(1, command.ExecuteNonQuery());
+        }
 
         var reader = new DbReader(_db.Connection);
         var signal = reader.GetHotspotFamilySignal("csharp");

@@ -1365,6 +1365,11 @@ public partial class QueryCommandRunnerTests
             public partial class BracketBodyHost { private int[] values = []; }
             public partial class PrimaryConstructorHost(int file) { }
             public class ParameterNamedPartial(int partial) { }
+            public class partial { }
+            public class PartialReturnTypeHost
+            {
+                partial M() => new partial();
+            }
             """;
         var extractedTypes = SymbolExtractor.Extract(1, "csharp", extractionSource);
         var fileBodyHost = Assert.Single(
@@ -1375,6 +1380,8 @@ public partial class QueryCommandRunnerTests
             extractedTypes.Where(symbol => symbol.Kind == "class" && symbol.Name == "PrimaryConstructorHost"));
         var parameterNamedPartial = Assert.Single(
             extractedTypes.Where(symbol => symbol.Kind == "class" && symbol.Name == "ParameterNamedPartial"));
+        var partialReturnTypeMethod = Assert.Single(
+            extractedTypes.Where(symbol => symbol.Kind == "function" && symbol.Name == "M"));
 
         Assert.True(fileBodyHost.IsPartialDeclaration);
         Assert.False(fileBodyHost.IsFileLocalDeclaration);
@@ -1385,6 +1392,15 @@ public partial class QueryCommandRunnerTests
         Assert.True(primaryConstructorHost.IsPartialDeclaration);
         Assert.False(primaryConstructorHost.IsFileLocalDeclaration);
         Assert.False(parameterNamedPartial.IsPartialDeclaration);
+        Assert.False(partialReturnTypeMethod.IsPartialDeclaration);
+        Assert.False(LogicalPartialSymbolGrouper.ContainsPartialModifier(
+            partialReturnTypeMethod.Signature,
+            partialReturnTypeMethod.Kind,
+            partialReturnTypeMethod.Name));
+        Assert.True(LogicalPartialSymbolGrouper.ContainsPartialModifier(
+            "partial (int, int) Pair();",
+            "function",
+            "Pair"));
 
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_header_evidence_issue4914");
         try
@@ -2464,14 +2480,6 @@ public partial class QueryCommandRunnerTests
                     partial void Aliased(@global::Target value) { }
                     partial void Aliased(@global::Target? value);
                     partial void Aliased(@global::Target? value) { }
-                    partial void TupleEquivalent((int, string) value);
-                    partial void TupleEquivalent(global::System.ValueTuple<int, string> value) { }
-                    partial void NestedTupleEquivalent((int, (string, bool)) value);
-                    partial void NestedTupleEquivalent(global::System.ValueTuple<int, global::System.ValueTuple<string, bool>> value) { }
-                    partial void NullableTupleEquivalent((int, (string, bool))? value);
-                    partial void NullableTupleEquivalent(global::System.Nullable<global::System.ValueTuple<int, global::System.ValueTuple<string, bool>>> value) { }
-                    partial void LongTupleEquivalent((int, int, int, int, int, int, int, int) value);
-                    partial void LongTupleEquivalent(global::System.ValueTuple<int, int, int, int, int, int, int, global::System.ValueTuple<int>> value) { }
                     partial void Combining(int á);
                     partial void Combining(int b́) { }
                     partial void Imported(ImportedNode value);
@@ -2564,10 +2572,6 @@ public partial class QueryCommandRunnerTests
                          "Qualified",
                          "Generic",
                          "EscapedMethodConstraint",
-                         "TupleEquivalent",
-                         "NestedTupleEquivalent",
-                         "NullableTupleEquivalent",
-                         "LongTupleEquivalent",
                          "Combining",
                          "Local",
                      })
@@ -2620,15 +2624,6 @@ public partial class QueryCommandRunnerTests
                 LogicalPartialSymbolGrouper.BuildCallableIdentity(
                     "partial void Value<T>(T value) where T : struct { }",
                     "Value",
-                    "void"));
-            Assert.NotEqual(
-                LogicalPartialSymbolGrouper.BuildCallableIdentity(
-                    "partial void NamedTuple((int x, string y) value);",
-                    "NamedTuple",
-                    "void"),
-                LogicalPartialSymbolGrouper.BuildCallableIdentity(
-                    "partial void NamedTuple(global::System.ValueTuple<int, string> value) { }",
-                    "NamedTuple",
                     "void"));
         }
         finally
@@ -3016,7 +3011,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void PartialCallableGrouping_NormalizesNullableTupleShorthand_Issue4914()
+    public void PartialCallableGrouping_NormalizesTupleAndOptionalDefaultIdentities_Issue4914()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_nullable_tuple_issue4914");
         try
@@ -3029,18 +3024,49 @@ public partial class QueryCommandRunnerTests
                 """
                 #nullable enable
                 namespace Demo;
+                public class GenericDefaults<T, U>
+                {
+                    public const int Value = 1;
+                }
                 public partial class Container
                 {
                     partial void M((int, int)? value);
                     partial void M(global::System.Nullable<(int, int)> value) { }
+                    partial void TupleEquivalent((int, string) value);
+                    partial void TupleEquivalent(global::System.ValueTuple<int, string> value) { }
+                    partial void NestedTupleEquivalent((int, (string, bool)) value);
+                    partial void NestedTupleEquivalent(global::System.ValueTuple<int, global::System.ValueTuple<string, bool>> value) { }
+                    partial void NullableTupleEquivalent((int, (string, bool))? value);
+                    partial void NullableTupleEquivalent(global::System.Nullable<global::System.ValueTuple<int, global::System.ValueTuple<string, bool>>> value) { }
+                    partial void LongTupleEquivalent((int, int, int, int, int, int, int, int) value);
+                    partial void LongTupleEquivalent(global::System.ValueTuple<int, int, int, int, int, int, int, global::System.ValueTuple<int>> value) { }
+                    partial void NamedTuple<T>((int T, string S) value);
+                    partial void NamedTuple<U>((int T, string S) value) { }
+                    partial void GenericDefault(int value = GenericDefaults<int, string>.Value, int other = 0);
+                    partial void GenericDefault(int value, int other) { }
+                    partial void RelationalDefault(bool value = 1 < 2, int other = 0);
+                    partial void RelationalDefault(bool value, int other) { }
                 }
                 """);
             MarkGraphAndFoldReady(dbPath);
 
-            var grouped = RunGroupedSymbol(dbPath, "M", "function");
+            foreach (var name in new[]
+                     {
+                         "M",
+                         "TupleEquivalent",
+                         "NestedTupleEquivalent",
+                         "NullableTupleEquivalent",
+                         "LongTupleEquivalent",
+                         "NamedTuple",
+                         "GenericDefault",
+                         "RelationalDefault",
+                     })
+            {
+                var grouped = RunGroupedSymbol(dbPath, name, "function");
+                Assert.Equal(2, grouped.GetProperty("definition_sites").GetInt32());
+                Assert.Equal("implementation_body", grouped.GetProperty("representative_reason").GetString());
+            }
 
-            Assert.Equal(2, grouped.GetProperty("definition_sites").GetInt32());
-            Assert.Equal("implementation_body", grouped.GetProperty("representative_reason").GetString());
             Assert.Equal(
                 LogicalPartialSymbolGrouper.BuildCallableIdentity(
                     "partial void M((int, int)? value);",
@@ -3049,6 +3075,33 @@ public partial class QueryCommandRunnerTests
                 LogicalPartialSymbolGrouper.BuildCallableIdentity(
                     "partial void M(global::System.Nullable<(int, int)> value) { }",
                     "M",
+                    "void"));
+            Assert.NotEqual(
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void NamedTuple((int x, string y) value);",
+                    "NamedTuple",
+                    "void"),
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void NamedTuple(global::System.ValueTuple<int, string> value) { }",
+                    "NamedTuple",
+                    "void"));
+            Assert.Equal(
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void GenericDefault(int value = GenericDefaults<int, string>.Value, int other = 0);",
+                    "GenericDefault",
+                    "void"),
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void GenericDefault(int value, int other) { }",
+                    "GenericDefault",
+                    "void"));
+            Assert.Equal(
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void RelationalDefault(bool value = 1 < 2, int other = 0);",
+                    "RelationalDefault",
+                    "void"),
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void RelationalDefault(bool value, int other) { }",
+                    "RelationalDefault",
                     "void"));
         }
         finally
