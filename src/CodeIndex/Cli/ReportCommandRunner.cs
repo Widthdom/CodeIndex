@@ -578,10 +578,7 @@ public static class ReportCommandRunner
                 GetMeta(meta, DbContext.SqlGraphContractVersionMetaKey),
                 DbContext.SqlGraphContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 StringComparison.Ordinal);
-            var hotspotFamilyReady = string.Equals(
-                GetMeta(meta, DbContext.HotspotFamilyVersionMetaKey),
-                DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                StringComparison.Ordinal);
+            var hotspotFamilyReady = IsHotspotFamilyReady(connection, meta);
             var foldReady = (userVersion & DbContext.FoldReadyFlag) == DbContext.FoldReadyFlag
                 && symbolColumns.Contains("name_folded");
 
@@ -617,6 +614,33 @@ public static class ReportCommandRunner
                 "read_failed",
                 ["readiness_unavailable"]);
         }
+    }
+
+    private static bool IsHotspotFamilyReady(
+        SqliteConnection connection,
+        Dictionary<string, string?> meta)
+    {
+        var legacyGlobalVersion = GetMeta(meta, DbContext.HotspotFamilyVersionMetaKey);
+        var indexedLanguageCount = 0;
+        foreach (var language in FileIndexer.GetHotspotFamilyMarkerLanguages())
+        {
+            if (CountFilesByLanguage(connection, language) == 0)
+                continue;
+
+            indexedLanguageCount++;
+            var storedVersion = GetMeta(meta, DbContext.GetHotspotFamilyVersionMetaKey(language))
+                ?? legacyGlobalVersion;
+            var expectedVersion = DbContext.GetHotspotFamilyVersion(language)
+                .ToString(System.Globalization.CultureInfo.InvariantCulture);
+            if (!string.Equals(storedVersion, expectedVersion, StringComparison.Ordinal))
+                return false;
+        }
+
+        return indexedLanguageCount > 0
+            || string.Equals(
+                legacyGlobalVersion,
+                DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                StringComparison.Ordinal);
     }
 
     private static ReportDiagnosticSummary BuildDiagnosticSummary()

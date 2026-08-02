@@ -208,6 +208,7 @@ public static partial class SymbolExtractor
             return;
 
         var materialized = symbols as List<SymbolRecord> ?? symbols.ToList();
+        var derivedRecordComponentContainers = CaptureDerivedCSharpRecordComponentContainers(materialized);
         foreach (var symbol in materialized)
         {
             symbol.FamilyKey = null;
@@ -259,11 +260,112 @@ public static partial class SymbolExtractor
         {
             RefreshHookMutatedCSharpFamilyKey(symbol, materialized);
         }
+        RestoreDerivedCSharpRecordComponentContainers(derivedRecordComponentContainers);
 
         FinalizeCSharpFileLocalFamilyKeys(materialized, filePath, projectRoot);
         ApplyFamilyScope(materialized, familyScopeKey);
         foreach (var symbol in materialized)
             symbol.DeclarationStructureMutatedByHook = false;
+    }
+
+    private readonly record struct DerivedCSharpRecordComponentContainer(
+        SymbolRecord Component,
+        SymbolRecord Container);
+
+    private static List<DerivedCSharpRecordComponentContainer> CaptureDerivedCSharpRecordComponentContainers(
+        IReadOnlyList<SymbolRecord> symbols)
+    {
+        var captured = new List<DerivedCSharpRecordComponentContainer>();
+        var containersByIdentity = new Dictionary<DeclaredContainerIdentity, List<SymbolRecord>>();
+        var bodylessRecordContainers = new List<SymbolRecord>();
+        foreach (var candidate in symbols)
+        {
+            if (candidate.BodyStartLine != null
+                || candidate.BodyEndLine != null
+                || !IsBodylessCSharpRecordDeclaration(candidate))
+            {
+                continue;
+            }
+
+            bodylessRecordContainers.Add(candidate);
+            var identity = new DeclaredContainerIdentity(
+                candidate.FileId,
+                candidate.Kind,
+                candidate.Name);
+            if (!containersByIdentity.TryGetValue(identity, out var candidates))
+            {
+                candidates = [];
+                containersByIdentity.Add(identity, candidates);
+            }
+            candidates.Add(candidate);
+        }
+
+        if (bodylessRecordContainers.Count == 0)
+            return captured;
+
+        foreach (var component in symbols)
+        {
+            if (component.DeclarationStructureMutatedByHook
+                || component.Kind != "property"
+                || component.ContainerKind is not ("class" or "struct")
+                || string.IsNullOrWhiteSpace(component.ContainerName))
+            {
+                continue;
+            }
+
+            containersByIdentity.TryGetValue(
+                new DeclaredContainerIdentity(
+                    component.FileId,
+                    component.ContainerKind,
+                    component.ContainerName),
+                out var exactCandidates);
+            var container = exactCandidates == null
+                ? null
+                : FindDeclaredContainerSymbol(exactCandidates, component);
+            container ??= FindDeclaredContainerSymbol(
+                bodylessRecordContainers.Where(candidate =>
+                    candidate.FileId == component.FileId
+                    && candidate.Kind == component.ContainerKind
+                    && component.Signature != null
+                    && candidate.Signature?.Contains(component.Signature, StringComparison.Ordinal) == true).ToList(),
+                component);
+            if (container != null)
+                captured.Add(new DerivedCSharpRecordComponentContainer(component, container));
+        }
+
+        return captured;
+    }
+
+    private static bool IsBodylessCSharpRecordDeclaration(SymbolRecord symbol)
+    {
+        if (symbol.Signature == null || symbol.Kind is not ("class" or "struct"))
+            return false;
+
+        var declarationHeader = ExtractCSharpDeclarationHeader(
+            SanitizeCSharpDeclarationEvidence(symbol.Signature));
+        var recordKeywordColumn = FindCSharpIdentifierToken(
+            declarationHeader.AsSpan(),
+            "record".AsSpan(),
+            0);
+        if (recordKeywordColumn < 0)
+            return false;
+
+        return FindCSharpIdentifierToken(
+            declarationHeader.AsSpan(),
+            symbol.Name.AsSpan().TrimStart('@'),
+            recordKeywordColumn + "record".Length) >= 0;
+    }
+
+    private static void RestoreDerivedCSharpRecordComponentContainers(
+        IReadOnlyList<DerivedCSharpRecordComponentContainer> captured)
+    {
+        foreach (var assignment in captured)
+        {
+            assignment.Component.ContainerKind = assignment.Container.Kind;
+            assignment.Component.ContainerName = assignment.Container.Name;
+            assignment.Component.ContainerQualifiedName = BuildDeclaredQualifiedName(assignment.Container);
+            assignment.Component.FamilyKey = assignment.Container.FamilyKey;
+        }
     }
 
     private static void RefreshHookMutatedCSharpFamilyKey(

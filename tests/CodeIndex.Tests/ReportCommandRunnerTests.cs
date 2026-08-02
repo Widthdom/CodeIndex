@@ -2039,6 +2039,58 @@ public class ReportCommandRunnerTests
         }
     }
 
+    [Theory]
+    [InlineData("vb", true)]
+    [InlineData("csharp", false)]
+    public void Run_WithLegacyGlobalHotspotVersion_UsesIndexedLanguageContract_Issue4914(
+        string language,
+        bool expectedReady)
+    {
+        var workDir = CreateWorkDir();
+        var dbPath = Path.Combine(workDir, "legacy-hotspot-family.db");
+        try
+        {
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+                db.InitializeSchema();
+            using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
+            {
+                connection.Open();
+                using var cmd = connection.CreateCommand();
+                cmd.CommandText = $"""
+                    INSERT INTO files (path, lang, size, lines, checksum, modified)
+                    VALUES ('src/Legacy', '{language}', 1, 1, 'legacy', '2026-01-01T00:00:00Z');
+                    DELETE FROM codeindex_meta
+                    WHERE key = '{DbContext.GetHotspotFamilyVersionMetaKey(language)}';
+                    INSERT OR REPLACE INTO codeindex_meta (key, value)
+                    VALUES ('{DbContext.HotspotFamilyVersionMetaKey}', '{DbContext.LegacyHotspotFamilyVersion}');
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+            SqliteConnection.ClearAllPools();
+
+            var output = Path.Combine(workDir, "bundle.tgz");
+            var (exitCode, _, _) = RunAndCaptureStreams([
+                "--output", output,
+                "--db", dbPath,
+                "--no-log",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            var entries = ReadTarGzEntries(output);
+            using var manifest = ReadJsonEntry(entries, "support-manifest.json");
+            var readiness = manifest.RootElement.GetProperty("readiness");
+            Assert.Equal(expectedReady, readiness.GetProperty("hotspot_family_ready").GetBoolean());
+            Assert.Equal(
+                !expectedReady,
+                JsonArrayContains(readiness.GetProperty("degraded_fields"), "hotspot_family_ready"));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            TestProjectHelper.DeleteDirectory(workDir);
+        }
+    }
+
     private (int ExitCode, string StdOut, string StdErr) RunAndCaptureStreams(string[] args)
     {
         lock (TestConsoleLock.Gate)

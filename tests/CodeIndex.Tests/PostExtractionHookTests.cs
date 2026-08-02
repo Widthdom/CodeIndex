@@ -249,6 +249,34 @@ public class PostExtractionHookTests
     }
 
     [Fact]
+    public void HookMutation_NoOpPreservesPositionalRecordComponentContainer_Issue4914()
+    {
+        const string content = "namespace Demo;\npublic record Person(string Name);";
+        var symbols = SymbolExtractor.ExtractNormalized(
+            10,
+            "csharp",
+            content,
+            hasOversizeLine: false,
+            filePath: "/project/src/App.cs");
+        var component = Assert.Single(symbols, symbol => symbol is { Kind: "property", Name: "Name" });
+
+        Assert.Equal("class", component.ContainerKind);
+        Assert.Equal("Person", component.ContainerName);
+        Assert.Equal("Demo.Person", component.ContainerQualifiedName);
+
+        SymbolExtractor.RefreshCSharpContainerAndFamilyScopeAfterHookMutation(
+            symbols,
+            content,
+            "/project/src/App.cs",
+            "/project",
+            "hook-project");
+
+        Assert.Equal("class", component.ContainerKind);
+        Assert.Equal("Person", component.ContainerName);
+        Assert.Equal("Demo.Person", component.ContainerQualifiedName);
+    }
+
+    [Fact]
     public void HookMutation_NestedTypeUsesContainingGenericArity_Issue4914()
     {
         const string content = """
