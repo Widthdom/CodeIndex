@@ -7,6 +7,7 @@ using System.Text.Json.Serialization.Metadata;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
 using CodeIndex.Models;
+using CodeIndex.Semantics;
 
 namespace CodeIndex.Cli;
 
@@ -782,6 +783,7 @@ public static partial class QueryCommandRunner
                     options,
                     userExact,
                     freshnessContext: null,
+                    includeAuditClassifications: options.SearchFields == null,
                     out _,
                     out var rowMinimumMatchedTotal,
                     out _,
@@ -847,6 +849,7 @@ public static partial class QueryCommandRunner
                 options,
                 userExact,
                 freshnessContext,
+                includeAuditClassifications: options.Json && options.OutputFormat != OutputFormatSarif,
                 out var total,
                 out _,
                 out var freshnessObservations,
@@ -1843,6 +1846,7 @@ public static partial class QueryCommandRunner
                 options,
                 userExact,
                 freshnessContext,
+                includeAuditClassifications: false,
                 out var total,
                 out _,
                 out var freshnessObservations,
@@ -2136,6 +2140,7 @@ public static partial class QueryCommandRunner
         QueryCommandOptions options,
         bool userExact,
         SearchQueryFreshnessContext? freshnessContext,
+        bool includeAuditClassifications,
         out int total,
         out int minimumMatchedTotal,
         out List<SearchQueryFreshnessObservation> freshnessObservations,
@@ -2185,7 +2190,8 @@ public static partial class QueryCommandRunner
                 rows = ApplySearchRecipeSemanticFilter(reader, options, recipeQuery, rows);
                 var outputSelection = ApplySearchOutputSelection(rows, options, resultLimit, sourceTotalAuthoritative);
                 rows = outputSelection.Rows;
-                ApplySearchRecipeAuditClassifications(recipeQuery, rows);
+                if (includeAuditClassifications)
+                    ApplySearchRecipeAuditClassifications(reader, recipeQuery, recipeQueries, rows);
                 var minimumOmitted = Math.Max(0, outputSelection.OriginalCount - rows.Count);
                 var selectionReason = GetSearchRecipeSelectionReason(outputSelection);
                 total += rows.Count;
@@ -2313,7 +2319,8 @@ public static partial class QueryCommandRunner
                 rows = ApplySearchRecipeSemanticFilter(reader, options, recipeQuery, rows);
                 var outputSelection = ApplySearchOutputSelection(rows, options, resultLimit, sourceTotalAuthoritative);
                 rows = outputSelection.Rows;
-                ApplySearchRecipeAuditClassifications(recipeQuery, rows);
+                if (!options.SummaryOnly)
+                    ApplySearchRecipeAuditClassifications(reader, recipeQuery, recipeQueries, rows);
                 var minimumOmitted = Math.Max(0, outputSelection.OriginalCount - rows.Count);
                 var selectionReason = GetSearchRecipeSelectionReason(outputSelection);
                 total += rows.Count;
@@ -2463,7 +2470,8 @@ public static partial class QueryCommandRunner
                 results = ApplySearchRecipeFileRejectQueries(reader, results, options, recipeQuery);
                 var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, rawFtsOverride: false, recipeQuery: recipeQuery);
                 rows = ApplySearchRecipeSemanticFilter(reader, options, recipeQuery, rows);
-                ApplySearchRecipeAuditClassifications(recipeQuery, rows);
+                if (options.Json && !options.SummaryOnly)
+                    ApplySearchRecipeAuditClassifications(reader, recipeQuery, recipeQueries, rows);
                 var count = rows.Count;
                 var fileCountForQuery = rows.Select(row => row.Result.Path).Distinct(StringComparer.Ordinal).Count();
                 foreach (var path in rows.Select(row => row.Result.Path))
@@ -2508,22 +2516,204 @@ public static partial class QueryCommandRunner
         return queryCounts;
     }
 
-    private static void ApplySearchRecipeAuditClassifications(SearchAuditRecipeQuery recipeQuery, List<SearchDisplayRow> rows)
+    private static void ApplySearchRecipeAuditClassifications(
+        DbReader reader,
+        SearchAuditRecipeQuery recipeQuery,
+        IReadOnlyList<SearchAuditRecipeQuery> selectedQueries,
+        List<SearchDisplayRow> rows)
     {
         var taskResultClassifier = recipeQuery.Classifiers
             .FirstOrDefault(classifier => string.Equals(classifier.Name, "task_result_intent", StringComparison.Ordinal));
-        if (taskResultClassifier == null)
+        var jsonTrustBoundaryClassifier = recipeQuery.Classifiers
+            .FirstOrDefault(classifier => string.Equals(classifier.Name, "json_trust_boundary", StringComparison.Ordinal));
+        if (taskResultClassifier == null && jsonTrustBoundaryClassifier == null)
             return;
 
-        foreach (var row in rows)
+        if (taskResultClassifier != null)
         {
-            var classification = TryClassifyTaskResultIntent(taskResultClassifier, row);
-            if (classification == null)
-                continue;
-
-            row.Compact.AuditClassifications ??= [];
-            row.Compact.AuditClassifications.Add(classification);
+            foreach (var row in rows)
+                AddSearchRecipeAuditClassification(row, TryClassifyTaskResultIntent(taskResultClassifier, row));
         }
+
+        if (jsonTrustBoundaryClassifier == null || !recipeQuery.JsonTrustDirection.HasValue)
+            return;
+
+        var selectedJsonTrustQueries = selectedQueries
+            .Where(query => query.JsonTrustDirection.HasValue
+                && query.Classifiers.Any(classifier =>
+                    string.Equals(classifier.Name, "json_trust_boundary", StringComparison.Ordinal)))
+            .Select(query => query.Query)
+            .Where(query => !string.IsNullOrWhiteSpace(query))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        var jsonTrustLexicalContextCache = new JsonTrustLexicalContextCache();
+        foreach (var fileRows in rows.GroupBy(row => row.Result.Path, StringComparer.Ordinal))
+        {
+            var groupedRows = fileRows.ToList();
+            var maximumRequiredLine = groupedRows
+                .Select(GetJsonTrustRequiredLine)
+                .Where(line => line > 0 && line <= CSharpSemanticTokenClassifier.DefaultExcerptSourceLineLimit)
+                .DefaultIfEmpty()
+                .Max();
+            if (maximumRequiredLine > 0)
+            {
+                _ = GetJsonTrustLexicalContext(
+                    reader,
+                    groupedRows[0],
+                    maximumRequiredLine,
+                    jsonTrustLexicalContextCache);
+            }
+            foreach (var row in groupedRows)
+            {
+                AddSearchRecipeAuditClassification(
+                    row,
+                    ClassifyJsonTrustBoundary(
+                        jsonTrustBoundaryClassifier,
+                        recipeQuery.JsonTrustDirection.Value,
+                        row,
+                        reader,
+                        jsonTrustLexicalContextCache,
+                        selectedJsonTrustQueries));
+            }
+        }
+    }
+
+    private static int GetJsonTrustRequiredLine(SearchDisplayRow row)
+        => row.Compact.MatchLines
+            .Where(line => line > 0)
+            .DefaultIfEmpty(row.Compact.FocusLine.GetValueOrDefault(row.Result.StartLine))
+            .Max();
+
+    private static void AddSearchRecipeAuditClassification(
+        SearchDisplayRow row,
+        SearchAuditClassificationJsonResult? classification)
+    {
+        if (classification == null)
+            return;
+
+        row.Compact.AuditClassifications ??= [];
+        row.Compact.AuditClassifications.Add(classification);
+    }
+
+    private static SearchAuditClassificationJsonResult ClassifyJsonTrustBoundary(
+        SearchRecipeClassifierJsonResult classifier,
+        SearchRecipeJsonTrustDirection expectedDirection,
+        SearchDisplayRow row,
+        DbReader reader,
+        JsonTrustLexicalContextCache lexicalContextCache,
+        IReadOnlyList<string> selectedJsonTrustQueries)
+    {
+        var matchLines = row.Compact.MatchLines
+            .Where(line => line > 0)
+            .Distinct()
+            .OrderBy(line => line)
+            .ToList();
+        if (matchLines.Count == 0)
+            matchLines.Add(row.Compact.FocusLine.GetValueOrDefault(row.Result.StartLine));
+
+        var matchSites = row.Compact.MatchFacets
+            .Where(facet => facet.Line > 0
+                && facet.Column > 0
+                && matchLines.Contains(facet.Line))
+            .Select(facet => new JsonTrustMatchSite(facet.Line, facet.Column, facet.Length))
+            .Distinct()
+            .OrderBy(site => site.Line)
+            .ThenBy(site => site.Column)
+            .ToList();
+        foreach (var line in matchLines.Where(line => matchSites.All(site => site.Line != line)))
+            matchSites.Add(new JsonTrustMatchSite(line, null, null));
+        matchSites = matchSites
+            .OrderBy(site => site.Line)
+            .ThenBy(site => site.Column)
+            .ToList();
+
+        var lexicalContext = GetJsonTrustLexicalContext(
+            reader,
+            row,
+            matchSites.Max(site => site.Line),
+            lexicalContextCache);
+        if (lexicalContext != null)
+        {
+            matchSites = matchSites
+                .Where(site => !IsJsonTrustDeclarationFacetBeforeLaterMatch(site, matchSites, lexicalContext))
+                .ToList();
+        }
+        var consumedAnnotationLines = new HashSet<int>();
+        var matchEvidence = new List<JsonTrustBoundaryEvidence>(matchSites.Count);
+        foreach (var site in matchSites)
+        {
+            var candidate = GetJsonTrustBoundaryEvidence(
+                expectedDirection,
+                site.Line,
+                site.Column,
+                lexicalContext,
+                selectedJsonTrustQueries);
+            if (candidate.AnnotationLine is { } annotationLine
+                && !consumedAnnotationLines.Add(annotationLine))
+            {
+                candidate = new JsonTrustBoundaryEvidence(
+                    "unknown",
+                    expectedDirection == SearchRecipeJsonTrustDirection.Read ? "read" : "write",
+                    "unknown",
+                    "review_required",
+                    "annotation_not_bound_to_operation",
+                    "not_adjacent",
+                    annotationLine);
+            }
+            matchEvidence.Add(candidate);
+        }
+        var evidence = matchEvidence[0];
+        var mixedBoundaries = matchEvidence
+            .Skip(1)
+            .Any(candidate => !HasEquivalentJsonTrustBoundary(evidence, candidate));
+        var matchCategories = matchEvidence
+            .Select(candidate => candidate.AnnotationStatus == "valid"
+                ? ClassifyValidJsonTrustBoundary(candidate)
+                : "ambiguous_trust")
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(category => category, StringComparer.Ordinal)
+            .ToList();
+        if (mixedBoundaries)
+        {
+            evidence = new JsonTrustBoundaryEvidence(
+                "unknown",
+                expectedDirection == SearchRecipeJsonTrustDirection.Read ? "read" : "write",
+                "unknown",
+                "review_required",
+                "multiple_trust_boundaries",
+                "mixed_boundaries",
+                null);
+        }
+
+        var categoryName = mixedBoundaries
+            ? "ambiguous_trust"
+            : matchCategories[0];
+        var categoryMetadata = classifier.Categories
+            .First(category => string.Equals(category.Name, categoryName, StringComparison.Ordinal));
+        var details = new List<string>
+        {
+            $"origin:{evidence.Origin}",
+            $"direction:{evidence.Direction}",
+            $"sensitivity:{evidence.Sensitivity}",
+            $"trust:{evidence.Trust}",
+            $"rationale:{evidence.Rationale}",
+            $"annotation_status:{evidence.AnnotationStatus}",
+        };
+        if (evidence.AnnotationLine.HasValue)
+            details.Add($"annotation_line:{evidence.AnnotationLine.Value.ToString(CultureInfo.InvariantCulture)}");
+        if (mixedBoundaries)
+        {
+            details.Add($"match_line_count:{matchLines.Count.ToString(CultureInfo.InvariantCulture)}");
+            if (matchSites.Count != matchLines.Count)
+                details.Add($"match_site_count:{matchSites.Count.ToString(CultureInfo.InvariantCulture)}");
+            details.Add($"boundary_categories:{string.Join(',', matchCategories)}");
+        }
+        return new SearchAuditClassificationJsonResult(
+            classifier.Name,
+            categoryMetadata.Name,
+            categoryMetadata.Description,
+            categoryMetadata.ReviewGuidance,
+            details);
     }
 
     private static List<SearchDisplayRow> ApplySearchRecipeSemanticFilter(
@@ -2614,6 +2804,1037 @@ public static partial class QueryCommandRunner
             details);
     }
 
+    private static bool IsJsonTrustDeclarationFacetBeforeLaterMatch(
+        JsonTrustMatchSite site,
+        IReadOnlyList<JsonTrustMatchSite> matchSites,
+        JsonTrustLexicalContext lexicalContext)
+    {
+        var laterMatch = matchSites
+            .Where(candidate => candidate.Column.HasValue
+                && (candidate.Line > site.Line
+                    || candidate.Line == site.Line && candidate.Column > site.Column))
+            .OrderBy(candidate => candidate.Line)
+            .ThenBy(candidate => candidate.Column)
+            .FirstOrDefault();
+        if (!site.Column.HasValue
+            || !site.Length.HasValue
+            || site.Line <= 0
+            || site.Line > lexicalContext.MaskedLines.Length
+            || laterMatch == default
+            || laterMatch.Line > lexicalContext.MaskedLines.Length)
+        {
+            return false;
+        }
+
+        var declarationPrefix = new StringBuilder();
+        for (var lineNumber = site.Line; lineNumber <= laterMatch.Line; lineNumber++)
+        {
+            var sourceLine = GetJsonTrustCodeBeforeLineComment(lexicalContext.MaskedLines[lineNumber - 1]);
+            var prefixLength = lineNumber == laterMatch.Line
+                ? Math.Clamp(laterMatch.Column!.Value - 1, 0, sourceLine.Length)
+                : sourceLine.Length;
+            declarationPrefix.Append(sourceLine.AsSpan(0, prefixLength)).Append(' ');
+        }
+
+        var line = declarationPrefix.ToString();
+        var index = Math.Clamp(site.Column.Value - 1 + site.Length.Value, 0, line.Length);
+        SkipJsonTrustDeclarationTypeSuffix(
+            line,
+            ref index,
+            GetJsonTrustUnclosedGenericDepthBeforeSite(lexicalContext, site));
+
+        if (index >= line.Length || !(char.IsLetter(line[index]) || line[index] is '_' or '@'))
+            return false;
+
+        index++;
+        while (index < line.Length && (char.IsLetterOrDigit(line[index]) || line[index] == '_'))
+            index++;
+        SkipJsonTrustWhitespace(line, ref index);
+        if (line.AsSpan(index).IndexOfAny(';', '{', '}') >= 0)
+            return false;
+
+        return index >= line.Length
+            || line[index] is '=' or ';' or ',' or ')'
+            || IsJsonTrustMethodDeclarationSuffix(line, index);
+    }
+
+    private static void SkipJsonTrustDeclarationTypeSuffix(
+        string line,
+        ref int index,
+        int enclosingGenericDepth)
+    {
+        while (enclosingGenericDepth > 0 && index < line.Length)
+        {
+            switch (line[index])
+            {
+                case '<':
+                    enclosingGenericDepth++;
+                    break;
+                case '>':
+                    enclosingGenericDepth--;
+                    break;
+                case ';' or '=' or '{' or '}':
+                    return;
+            }
+
+            index++;
+        }
+
+        while (true)
+        {
+            SkipJsonTrustWhitespace(line, ref index);
+            if (index < line.Length && line[index] == '?')
+            {
+                index++;
+                continue;
+            }
+            if (index + 1 < line.Length && line[index] == '[' && line[index + 1] == ']')
+            {
+                index += 2;
+                continue;
+            }
+            return;
+        }
+    }
+
+    private static int GetJsonTrustUnclosedGenericDepthBeforeSite(
+        JsonTrustLexicalContext lexicalContext,
+        JsonTrustMatchSite site)
+    {
+        var closingDepth = 0;
+        var unclosedDepth = 0;
+        for (var lineNumber = site.Line; lineNumber >= 1; lineNumber--)
+        {
+            var line = GetJsonTrustCodeBeforeLineComment(lexicalContext.MaskedLines[lineNumber - 1]);
+            var startIndex = lineNumber == site.Line
+                ? Math.Clamp(site.Column.GetValueOrDefault(1) - 2, -1, line.Length - 1)
+                : line.Length - 1;
+            for (var index = startIndex; index >= 0; index--)
+            {
+                switch (line[index])
+                {
+                    case '>':
+                        closingDepth++;
+                        break;
+                    case '<' when closingDepth > 0:
+                        closingDepth--;
+                        break;
+                    case '<':
+                        unclosedDepth++;
+                        break;
+                    case ';' or '=' or '{' or '}':
+                        return unclosedDepth;
+                }
+            }
+        }
+
+        return unclosedDepth;
+    }
+
+    private static bool IsJsonTrustMethodDeclarationSuffix(string line, int index)
+    {
+        if (index >= line.Length || line[index] == '(')
+            return index < line.Length;
+        if (line[index] != '<')
+            return false;
+
+        var depth = 0;
+        for (; index < line.Length; index++)
+        {
+            if (line[index] == '<')
+            {
+                depth++;
+                continue;
+            }
+            if (line[index] != '>')
+                continue;
+
+            depth--;
+            if (depth != 0)
+                continue;
+
+            index++;
+            SkipJsonTrustWhitespace(line, ref index);
+            return index < line.Length && line[index] == '(';
+        }
+
+        return false;
+    }
+
+    private static void SkipJsonTrustWhitespace(string line, ref int index)
+    {
+        while (index < line.Length && char.IsWhiteSpace(line[index]))
+            index++;
+    }
+
+    private static string ClassifyValidJsonTrustBoundary(JsonTrustBoundaryEvidence evidence)
+    {
+        if (evidence.Trust == "review_required")
+            return "ambiguous_trust";
+
+        var externalOrigin = evidence.Origin is "public_api" or "network" or "file" or "external";
+        if (evidence.Direction == "write" && externalOrigin)
+            return "external_or_public_writer";
+        if (evidence.Direction == "read" && externalOrigin && evidence.Trust == "untrusted")
+            return "untrusted_parser";
+        if (evidence.Direction == "write"
+            && evidence.Origin == "private_local"
+            && evidence.Trust == "controlled"
+            && evidence.Sensitivity is "diagnostic" or "confidential")
+        {
+            return "controlled_private_writer";
+        }
+
+        return "ambiguous_trust";
+    }
+
+    private static bool HasEquivalentJsonTrustBoundary(
+        JsonTrustBoundaryEvidence left,
+        JsonTrustBoundaryEvidence right)
+        => string.Equals(left.Origin, right.Origin, StringComparison.Ordinal)
+            && string.Equals(left.Direction, right.Direction, StringComparison.Ordinal)
+            && string.Equals(left.Sensitivity, right.Sensitivity, StringComparison.Ordinal)
+            && string.Equals(left.Trust, right.Trust, StringComparison.Ordinal)
+            && string.Equals(left.Rationale, right.Rationale, StringComparison.Ordinal)
+            && string.Equals(left.AnnotationStatus, right.AnnotationStatus, StringComparison.Ordinal);
+
+    private static JsonTrustBoundaryEvidence GetJsonTrustBoundaryEvidence(
+        SearchRecipeJsonTrustDirection expectedDirection,
+        int focusLine,
+        int? focusColumn,
+        JsonTrustLexicalContext? lexicalContext,
+        IReadOnlyList<string> selectedJsonTrustQueries)
+    {
+        const string marker = "// cdidx-audit: json-trust ";
+        var expectedDirectionText = expectedDirection == SearchRecipeJsonTrustDirection.Read ? "read" : "write";
+        var nearestLine = -1;
+        if (lexicalContext != null && focusLine > 0 && focusLine <= lexicalContext.SourceLines.Length)
+        {
+            var annotationIndex = Array.BinarySearch(lexicalContext.AnnotationLines, focusLine);
+            if (annotationIndex < 0)
+                annotationIndex = ~annotationIndex - 1;
+            if (annotationIndex >= 0)
+                nearestLine = lexicalContext.AnnotationLines[annotationIndex];
+        }
+
+        if (nearestLine < 0)
+        {
+            return new JsonTrustBoundaryEvidence(
+                "unknown",
+                expectedDirectionText,
+                "unknown",
+                "review_required",
+                "missing_explicit_trust_annotation",
+                "missing",
+                null);
+        }
+
+        if (!lexicalContext!.MaskedLines[nearestLine - 1].TrimStart().StartsWith(marker, StringComparison.Ordinal))
+        {
+            return new JsonTrustBoundaryEvidence(
+                "unknown",
+                expectedDirectionText,
+                "unknown",
+                "review_required",
+                "invalid_explicit_trust_annotation",
+                "invalid",
+                nearestLine);
+        }
+
+        if (lexicalContext.ConditionalCompilationLines[nearestLine - 1])
+        {
+            return new JsonTrustBoundaryEvidence(
+                "unknown",
+                expectedDirectionText,
+                "unknown",
+                "review_required",
+                "conditional_compilation_annotation",
+                "not_adjacent",
+                nearestLine);
+        }
+
+        if (HasInterveningJsonTrustExecutableLine(
+            lexicalContext,
+            nearestLine,
+            focusLine,
+            focusColumn,
+            selectedJsonTrustQueries))
+        {
+            return new JsonTrustBoundaryEvidence(
+                "unknown",
+                expectedDirectionText,
+                "unknown",
+                "review_required",
+                "annotation_not_bound_to_operation",
+                "not_adjacent",
+                nearestLine);
+        }
+
+        var annotation = lexicalContext.SourceLines[nearestLine - 1].TrimStart();
+        var payload = annotation[marker.Length..].Trim();
+        if (!TryParseJsonTrustBoundaryAnnotation(payload, out var parsed))
+        {
+            return new JsonTrustBoundaryEvidence(
+                "unknown",
+                expectedDirectionText,
+                "unknown",
+                "review_required",
+                "invalid_explicit_trust_annotation",
+                "invalid",
+                nearestLine);
+        }
+
+        if (!string.Equals(parsed.Direction, expectedDirectionText, StringComparison.Ordinal))
+            return parsed with { AnnotationStatus = "direction_mismatch", AnnotationLine = nearestLine };
+
+        return parsed with { AnnotationStatus = "valid", AnnotationLine = nearestLine };
+    }
+
+    private static bool HasInterveningJsonTrustExecutableLine(
+        JsonTrustLexicalContext lexicalContext,
+        int annotationLine,
+        int operationLine,
+        int? operationColumn,
+        IReadOnlyList<string> selectedJsonTrustQueries)
+    {
+        var statementPrefix = new StringBuilder();
+        for (var line = annotationLine + 1; line < operationLine; line++)
+        {
+            var maskedLine = GetJsonTrustCodeBeforeLineComment(lexicalContext.MaskedLines[line - 1]);
+            if (string.IsNullOrWhiteSpace(maskedLine))
+                continue;
+            if (maskedLine.AsSpan().TrimStart().StartsWith("#", StringComparison.Ordinal))
+                return true;
+
+            statementPrefix.Append(maskedLine).Append(' ');
+            if (HasPriorSelectedJsonTrustMatchOnLine(
+                    lexicalContext,
+                    line,
+                    maskedLine.Length + 1,
+                    selectedJsonTrustQueries))
+            {
+                return true;
+            }
+        }
+
+        if (operationColumn.HasValue
+            && operationLine > 0
+            && operationLine <= lexicalContext.MaskedLines.Length)
+        {
+            var operationText = lexicalContext.MaskedLines[operationLine - 1];
+            var prefixLength = Math.Clamp(operationColumn.Value - 1, 0, operationText.Length);
+            statementPrefix.Append(operationText.AsSpan(0, prefixLength));
+            if (HasPriorSelectedJsonTrustMatchOnLine(
+                    lexicalContext,
+                    operationLine,
+                    operationColumn.Value,
+                    selectedJsonTrustQueries))
+                return true;
+        }
+
+        return HasPriorJsonTrustOperationOnLine(statementPrefix.ToString().AsSpan());
+    }
+
+    private static string GetJsonTrustCodeBeforeLineComment(string maskedLine)
+    {
+        var commentIndex = maskedLine.IndexOf("//", StringComparison.Ordinal);
+        return commentIndex >= 0 ? maskedLine[..commentIndex] : maskedLine;
+    }
+
+    private static bool HasPriorSelectedJsonTrustMatchOnLine(
+        JsonTrustLexicalContext lexicalContext,
+        int operationLine,
+        int operationColumn,
+        IReadOnlyList<string> selectedJsonTrustQueries)
+    {
+        if (operationLine <= 0
+            || operationLine > lexicalContext.MaskedLines.Length
+            || selectedJsonTrustQueries.Count == 0)
+        {
+            return false;
+        }
+
+        var line = lexicalContext.MaskedLines[operationLine - 1];
+        var prefixLength = Math.Clamp(operationColumn - 1, 0, line.Length);
+        var normalizedLine = CSharpVerbatimNameNormalizer.Normalize(line, out var rawIndexMap);
+        var normalizedPrefixLength = Array.BinarySearch(rawIndexMap, prefixLength);
+        if (normalizedPrefixLength < 0)
+            normalizedPrefixLength = ~normalizedPrefixLength;
+        var currentSite = new JsonTrustMatchSite(operationLine, operationColumn, null);
+        foreach (var query in selectedJsonTrustQueries)
+        {
+            var normalizedQuery = CSharpVerbatimNameNormalizer.Normalize(query);
+            var searchStart = 0;
+            while (searchStart < normalizedPrefixLength)
+            {
+                var occurrence = normalizedLine.IndexOf(normalizedQuery, searchStart, StringComparison.Ordinal);
+                if (occurrence < 0 || occurrence >= normalizedPrefixLength)
+                    break;
+
+                var normalizedEnd = occurrence + normalizedQuery.Length;
+                if (normalizedEnd > normalizedPrefixLength)
+                    return true;
+                var rawStart = rawIndexMap[occurrence];
+                var rawEnd = rawIndexMap[normalizedEnd - 1] + 1;
+                var priorSite = new JsonTrustMatchSite(operationLine, rawStart + 1, rawEnd - rawStart);
+                if (!IsJsonTrustDeclarationFacetBeforeLaterMatch(
+                        priorSite,
+                        [priorSite, currentSite],
+                        lexicalContext))
+                {
+                    return true;
+                }
+
+                searchStart = occurrence + Math.Max(1, normalizedQuery.Length);
+            }
+        }
+
+        return false;
+    }
+
+    private static bool HasPriorJsonTrustOperationOnLine(ReadOnlySpan<char> prefix)
+    {
+        var tokens = TokenizeJsonTrustCSharpPrefix(prefix);
+        if (tokens.Count == 0)
+            return false;
+
+        var expressionStart = 0;
+        if (TryGetJsonTrustExpressionBodiedMethodStart(tokens, out var expressionBodyStart))
+            expressionStart = expressionBodyStart;
+
+        var assignmentIndex = -1;
+        for (var index = tokens.Count - 1; index >= expressionStart; index--)
+        {
+            if (tokens[index] == "=")
+            {
+                assignmentIndex = index;
+                break;
+            }
+        }
+
+        if (assignmentIndex >= 0
+            && HasEvaluatedJsonTrustAssignmentTarget(tokens, expressionStart, assignmentIndex))
+        {
+            return true;
+        }
+
+        if (assignmentIndex >= 0)
+            expressionStart = assignmentIndex + 1;
+        if (HasEvaluatedJsonTrustInvocationReceiver(tokens, expressionStart))
+            return true;
+
+        for (var index = expressionStart; index < tokens.Count; index++)
+        {
+            var token = tokens[index];
+            if (token == "("
+                && TrySkipJsonTrustCast(tokens, expressionStart, index, out var castCloseIndex))
+            {
+                index = castCloseIndex;
+                continue;
+            }
+
+            if (token == "<"
+                && TrySkipJsonTrustGenericArgumentList(tokens, index, out var genericCloseIndex))
+            {
+                index = genericCloseIndex;
+                continue;
+            }
+
+            if (token == ")" && IsJsonTrustCastClosingParenthesis(tokens, expressionStart, index))
+                continue;
+
+            if (token is ";" or "," or "{" or "}" or ")" or "]" or "=>"
+                or "==" or "!=" or "<=" or ">=" or "++" or "--"
+                or "+" or "-" or "*" or "/" or "%" or "&" or "|" or "^"
+                or "&&" or "||" or "??" or "?" or "<" or ">" or "<<" or ">>"
+                or "+=" or "-=" or "*=" or "/=" or "%=" or "&=" or "|=" or "^="
+                or "is" or "as" or "and" or "or")
+            {
+                return true;
+            }
+
+            if (IsJsonTrustNumericToken(token))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool TrySkipJsonTrustCast(
+        IReadOnlyList<string> tokens,
+        int expressionStart,
+        int openIndex,
+        out int closeIndex)
+    {
+        closeIndex = -1;
+        if (openIndex < expressionStart
+            || openIndex >= tokens.Count
+            || tokens[openIndex] != "(")
+        {
+            return false;
+        }
+
+        var depth = 0;
+        for (var index = openIndex; index < tokens.Count; index++)
+        {
+            if (tokens[index] == "(")
+            {
+                depth++;
+                continue;
+            }
+            if (tokens[index] != ")")
+                continue;
+
+            depth--;
+            if (depth != 0)
+                continue;
+
+            if (!IsJsonTrustCastClosingParenthesis(tokens, expressionStart, index))
+                return false;
+
+            closeIndex = index;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool HasEvaluatedJsonTrustInvocationReceiver(
+        IReadOnlyList<string> tokens,
+        int expressionStart)
+    {
+        var closingDepth = 0;
+        for (var openIndex = tokens.Count - 1; openIndex >= expressionStart; openIndex--)
+        {
+            if (tokens[openIndex] == ")")
+            {
+                closingDepth++;
+                continue;
+            }
+            if (tokens[openIndex] != "(")
+                continue;
+            if (closingDepth > 0)
+            {
+                closingDepth--;
+                continue;
+            }
+
+            var methodNameIndex = openIndex - 1;
+            if (methodNameIndex >= expressionStart && tokens[methodNameIndex] == ">")
+            {
+                var genericDepth = 0;
+                for (; methodNameIndex >= expressionStart; methodNameIndex--)
+                {
+                    if (tokens[methodNameIndex] == ">")
+                    {
+                        genericDepth++;
+                        continue;
+                    }
+                    if (tokens[methodNameIndex] != "<")
+                        continue;
+
+                    genericDepth--;
+                    if (genericDepth == 0)
+                    {
+                        methodNameIndex--;
+                        break;
+                    }
+                }
+            }
+
+            if (methodNameIndex < expressionStart + 2
+                || !IsJsonTrustIdentifierToken(tokens[methodNameIndex])
+                || tokens[methodNameIndex - 1] is not ("." or "?."))
+            {
+                continue;
+            }
+
+            // A direct call on a simple local/type receiver (source.Build(...)) does not
+            // evaluate a property before its first argument. An additional member hop
+            // (source.Factory.Build(...)) can execute a getter and therefore consumes the
+            // trust annotation before the JSON operation.
+            var receiverMemberIndex = methodNameIndex - 2;
+            if (receiverMemberIndex >= expressionStart + 2
+                && IsJsonTrustIdentifierToken(tokens[receiverMemberIndex])
+                && tokens[receiverMemberIndex - 1] is "." or "?.")
+            {
+                return true;
+            }
+
+            if (receiverMemberIndex < expressionStart
+                || !IsJsonTrustIdentifierToken(tokens[receiverMemberIndex]))
+            {
+                return true;
+            }
+
+            var receiver = tokens[receiverMemberIndex];
+            if (!IsJsonTrustReceiverDeclaredBeforeExpression(tokens, expressionStart, receiver))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsJsonTrustReceiverDeclaredBeforeExpression(
+        IReadOnlyList<string> tokens,
+        int expressionStart,
+        string receiver)
+    {
+        for (var index = 1; index < expressionStart; index++)
+        {
+            if (!string.Equals(tokens[index], receiver, StringComparison.Ordinal))
+                continue;
+            if (index + 1 >= expressionStart
+                || tokens[index + 1] is not ("," or ")" or "="))
+            {
+                continue;
+            }
+
+            var precedingToken = tokens[index - 1];
+            if (IsJsonTrustIdentifierToken(precedingToken)
+                || precedingToken is ">" or "]" or "?" or "*")
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryGetJsonTrustExpressionBodiedMethodStart(
+        IReadOnlyList<string> tokens,
+        out int expressionStart)
+    {
+        expressionStart = -1;
+        var arrowIndex = -1;
+        for (var index = tokens.Count - 1; index >= 0; index--)
+        {
+            if (tokens[index] == "=>")
+            {
+                arrowIndex = index;
+                break;
+            }
+        }
+        if (arrowIndex < 2 || tokens[arrowIndex - 1] != ")")
+            return false;
+
+        var depth = 0;
+        var openIndex = -1;
+        for (var index = arrowIndex - 1; index >= 0; index--)
+        {
+            if (tokens[index] == ")")
+            {
+                depth++;
+                continue;
+            }
+            if (tokens[index] != "(")
+                continue;
+
+            depth--;
+            if (depth == 0)
+            {
+                openIndex = index;
+                break;
+            }
+        }
+
+        if (openIndex < 2 || !HasJsonTrustMethodNameBeforeParenthesis(tokens, openIndex))
+            return false;
+
+        expressionStart = arrowIndex + 1;
+        return true;
+    }
+
+    private static bool IsJsonTrustIdentifierToken(string token)
+        => token.Length > 0 && (char.IsLetter(token[0]) || token[0] is '_' or '@');
+
+    private static bool HasJsonTrustMethodNameBeforeParenthesis(
+        IReadOnlyList<string> tokens,
+        int openIndex)
+    {
+        var nameIndex = openIndex - 1;
+        if (IsJsonTrustIdentifierToken(tokens[nameIndex]))
+            return true;
+        if (tokens[nameIndex] != ">")
+            return false;
+
+        var depth = 0;
+        for (var index = nameIndex; index >= 0; index--)
+        {
+            if (tokens[index] == ">")
+            {
+                depth++;
+                continue;
+            }
+            if (tokens[index] != "<")
+                continue;
+
+            depth--;
+            if (depth == 0)
+                return index > 0 && IsJsonTrustIdentifierToken(tokens[index - 1]);
+        }
+
+        return false;
+    }
+
+    private static bool IsJsonTrustCastClosingParenthesis(
+        IReadOnlyList<string> tokens,
+        int expressionStart,
+        int closeIndex)
+    {
+        var depth = 0;
+        var openIndex = -1;
+        for (var index = closeIndex; index >= expressionStart; index--)
+        {
+            if (tokens[index] == ")")
+            {
+                depth++;
+                continue;
+            }
+            if (tokens[index] != "(")
+                continue;
+
+            depth--;
+            if (depth == 0)
+            {
+                openIndex = index;
+                break;
+            }
+        }
+        if (openIndex < 0 || openIndex + 1 >= closeIndex)
+            return false;
+
+        if (openIndex > expressionStart
+            && tokens[openIndex - 1] is not ("return" or "throw" or "await" or "(" or "," or ":"
+                or "=" or "=>" or "!" or "~" or "+" or "-"))
+        {
+            return false;
+        }
+
+        var hasTypeIdentifier = false;
+        var nestedParentheses = 0;
+        for (var index = openIndex + 1; index < closeIndex; index++)
+        {
+            var token = tokens[index];
+            if (token == "(")
+            {
+                nestedParentheses++;
+                continue;
+            }
+            if (token == ")" && nestedParentheses > 0)
+            {
+                nestedParentheses--;
+                continue;
+            }
+            if (token.Length > 0 && (char.IsLetter(token[0]) || token[0] is '_' or '@'))
+            {
+                hasTypeIdentifier = true;
+                continue;
+            }
+            if (token is "." or "::" or "?" or "[" or "]" or "<" or ">" or "," or "*")
+                continue;
+
+            return false;
+        }
+
+        return hasTypeIdentifier && nestedParentheses == 0;
+    }
+
+    private static bool TrySkipJsonTrustGenericArgumentList(
+        IReadOnlyList<string> tokens,
+        int openIndex,
+        out int closeIndex)
+    {
+        closeIndex = -1;
+        var depth = 0;
+        for (var index = openIndex; index < tokens.Count; index++)
+        {
+            var token = tokens[index];
+            if (token == "<")
+            {
+                depth++;
+                continue;
+            }
+            if (token != ">")
+                continue;
+
+            depth--;
+            if (depth != 0)
+                continue;
+
+            if (index + 1 < tokens.Count
+                && tokens[index + 1] is "(" or "." or "?." or "::")
+            {
+                closeIndex = index;
+                return true;
+            }
+            return false;
+        }
+
+        return false;
+    }
+
+    private static bool HasEvaluatedJsonTrustAssignmentTarget(
+        IReadOnlyList<string> tokens,
+        int expressionStart,
+        int assignmentIndex)
+    {
+        if (IsJsonTrustDeclarationAssignmentTarget(tokens, assignmentIndex))
+            return false;
+
+        var genericDepth = 0;
+        for (var index = expressionStart; index < assignmentIndex; index++)
+        {
+            var token = tokens[index];
+            if (token == "<")
+            {
+                genericDepth++;
+                continue;
+            }
+            if (token == ">" && genericDepth > 0)
+            {
+                genericDepth--;
+                continue;
+            }
+            if (token == "," && genericDepth > 0)
+                continue;
+            if (token == "]" && index > 0 && tokens[index - 1] == "[")
+                continue;
+            if (token == "]")
+                return true;
+
+            if (token is "." or "?.")
+                return true;
+            if (token is "::" or "[")
+                continue;
+
+            if (token is ";" or "," or "{" or "}" or ")" or "=>" or "?" or ":"
+                or "==" or "!=" or "<=" or ">=" or "++" or "--"
+                or "+" or "-" or "*" or "/" or "%" or "&" or "|" or "^"
+                or "&&" or "||" or "??" or "<<" or ">>"
+                or "is" or "as" or "and" or "or")
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsJsonTrustDeclarationAssignmentTarget(
+        IReadOnlyList<string> tokens,
+        int assignmentIndex)
+    {
+        if (assignmentIndex < 2 || !IsJsonTrustIdentifierToken(tokens[assignmentIndex - 1]))
+            return false;
+
+        var precedingToken = tokens[assignmentIndex - 2];
+        return IsJsonTrustIdentifierToken(precedingToken)
+            || precedingToken is ">" or "]" or "?" or "*" or ")";
+    }
+
+    private static List<string> TokenizeJsonTrustCSharpPrefix(ReadOnlySpan<char> prefix)
+    {
+        var tokens = new List<string>();
+        for (var index = 0; index < prefix.Length;)
+        {
+            if (char.IsWhiteSpace(prefix[index]))
+            {
+                index++;
+                continue;
+            }
+
+            if (char.IsLetter(prefix[index]) || prefix[index] is '_' or '@')
+            {
+                var start = index++;
+                while (index < prefix.Length &&
+                    (char.IsLetterOrDigit(prefix[index]) || prefix[index] == '_'))
+                {
+                    index++;
+                }
+                tokens.Add(prefix[start..index].ToString().TrimStart('@'));
+                continue;
+            }
+
+            if (char.IsDigit(prefix[index]))
+            {
+                var start = index++;
+                while (index < prefix.Length &&
+                    (char.IsLetterOrDigit(prefix[index]) || prefix[index] is '_' or '.'))
+                {
+                    index++;
+                }
+                tokens.Add(prefix[start..index].ToString());
+                continue;
+            }
+
+            if (index + 1 < prefix.Length)
+            {
+                var pair = prefix.Slice(index, 2);
+                if (pair is "=>" or "::" or "?." or "??" or "==" or "!="
+                    or "<=" or ">=" or "++" or "--" or "&&" or "||"
+                    or "+=" or "-=" or "*=" or "/="
+                    or "%=" or "&=" or "|=" or "^=")
+                {
+                    tokens.Add(pair.ToString());
+                    index += 2;
+                    continue;
+                }
+            }
+
+            tokens.Add(prefix[index].ToString());
+            index++;
+        }
+
+        return tokens;
+    }
+
+    private static bool IsJsonTrustNumericToken(string token)
+        => token.Length > 0 && char.IsDigit(token[0]);
+
+    private static JsonTrustLexicalContext? GetJsonTrustLexicalContext(
+        DbReader reader,
+        SearchDisplayRow row,
+        int requiredLine,
+        JsonTrustLexicalContextCache cache)
+    {
+        if (!string.Equals(row.Result.Lang, "csharp", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        if (requiredLine <= 0 || requiredLine > CSharpSemanticTokenClassifier.DefaultExcerptSourceLineLimit)
+            return null;
+
+        if (string.Equals(cache.Path, row.Result.Path, StringComparison.Ordinal))
+        {
+            if (cache.LoadedThroughLine >= requiredLine)
+                return cache.Context;
+            if (cache.SourceLimitReached)
+                return null;
+        }
+
+        var indexedLines = reader.GetIndexedSourceLinesForSemanticTokens(
+            row.Result.Path,
+            requiredLine,
+            CSharpSemanticTokenClassifier.DefaultExcerptSourceCharacterLimit);
+        JsonTrustLexicalContext? context = null;
+        if (indexedLines.Count > 0)
+        {
+            var sourceLines = indexedLines.Select(line => line ?? string.Empty).ToArray();
+            var maskedLines = StructuralLineMasker.MaskLines("csharp", sourceLines);
+            var annotationLines = sourceLines
+                .Select((line, index) => (Line: line, Number: index + 1))
+                .Where(candidate => candidate.Line.TrimStart().StartsWith(
+                    "// cdidx-audit: json-trust ",
+                    StringComparison.Ordinal))
+                .Select(candidate => candidate.Number)
+                .ToArray();
+            var conditionalCompilationLines = GetJsonTrustConditionalCompilationLines(maskedLines);
+            context = new JsonTrustLexicalContext(
+                sourceLines,
+                maskedLines,
+                annotationLines,
+                conditionalCompilationLines);
+        }
+
+        // Retain only one bounded source prefix so count-mode memory does not grow with file count.
+        cache.Path = row.Result.Path;
+        cache.LoadedThroughLine = indexedLines.Count;
+        cache.SourceLimitReached = indexedLines.Count < requiredLine;
+        cache.Context = context;
+        return context;
+    }
+
+    private static bool[] GetJsonTrustConditionalCompilationLines(IReadOnlyList<string> maskedLines)
+    {
+        var conditionalLines = new bool[maskedLines.Count];
+        var depth = 0;
+        for (var index = 0; index < maskedLines.Count; index++)
+        {
+            var trimmed = maskedLines[index].AsSpan().TrimStart();
+            if (IsJsonTrustConditionalCompilationDirective(trimmed, "if", allowExpressionStartWithoutWhitespace: true))
+            {
+                depth++;
+                conditionalLines[index] = true;
+                continue;
+            }
+
+            conditionalLines[index] = depth > 0;
+            if (IsJsonTrustConditionalCompilationDirective(trimmed, "endif", allowExpressionStartWithoutWhitespace: false))
+            {
+                depth = Math.Max(0, depth - 1);
+            }
+        }
+
+        return conditionalLines;
+    }
+
+    private static bool IsJsonTrustConditionalCompilationDirective(
+        ReadOnlySpan<char> line,
+        ReadOnlySpan<char> directive,
+        bool allowExpressionStartWithoutWhitespace)
+    {
+        var index = 0;
+        while (index < line.Length && char.IsWhiteSpace(line[index]))
+            index++;
+        if (index >= line.Length || line[index] != '#')
+            return false;
+
+        index++;
+        while (index < line.Length && char.IsWhiteSpace(line[index]))
+            index++;
+        if (!line[index..].StartsWith(directive, StringComparison.Ordinal))
+            return false;
+
+        index += directive.Length;
+        return index == line.Length
+            || char.IsWhiteSpace(line[index])
+            || (allowExpressionStartWithoutWhitespace && line[index] is '(' or '!');
+    }
+
+    private static bool TryParseJsonTrustBoundaryAnnotation(
+        string payload,
+        out JsonTrustBoundaryEvidence evidence)
+    {
+        evidence = null!;
+        var values = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var token in payload.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var equalsIndex = token.IndexOf('=');
+            if (equalsIndex <= 0 || equalsIndex == token.Length - 1)
+                return false;
+            if (!values.TryAdd(token[..equalsIndex], token[(equalsIndex + 1)..]))
+                return false;
+        }
+
+        if (values.Count != 5
+            || !values.TryGetValue("origin", out var origin)
+            || !values.TryGetValue("direction", out var direction)
+            || !values.TryGetValue("sensitivity", out var sensitivity)
+            || !values.TryGetValue("trust", out var trust)
+            || !values.TryGetValue("rationale", out var rationale)
+            || origin is not ("private_local" or "public_api" or "network" or "file" or "external" or "unknown")
+            || direction is not ("read" or "write")
+            || sensitivity is not ("diagnostic" or "public" or "untrusted" or "confidential" or "unknown")
+            || trust is not ("controlled" or "untrusted" or "review_required")
+            || !IsValidJsonTrustBoundaryRationale(rationale))
+        {
+            return false;
+        }
+
+        evidence = new JsonTrustBoundaryEvidence(
+            origin,
+            direction,
+            sensitivity,
+            trust,
+            rationale,
+            string.Empty,
+            null);
+        return true;
+    }
+
+    private static bool IsValidJsonTrustBoundaryRationale(string value)
+        => value.Length is > 0 and <= 80
+            && value.All(ch => char.IsAsciiLetterOrDigit(ch) || ch is '_' or '-' or '.');
     private static SearchRecipeSemanticEvidence GetRegexOperationEvidence(
         DbReader reader,
         SearchDisplayRow row,
@@ -3162,6 +4383,31 @@ public static partial class QueryCommandRunner
         string? Receiver,
         int? Line,
         string Reason);
+
+    private readonly record struct JsonTrustMatchSite(int Line, int? Column, int? Length);
+
+    private sealed record JsonTrustBoundaryEvidence(
+        string Origin,
+        string Direction,
+        string Sensitivity,
+        string Trust,
+        string Rationale,
+        string AnnotationStatus,
+        int? AnnotationLine);
+
+    private sealed record JsonTrustLexicalContext(
+        string[] SourceLines,
+        string[] MaskedLines,
+        int[] AnnotationLines,
+        bool[] ConditionalCompilationLines);
+
+    private sealed class JsonTrustLexicalContextCache
+    {
+        public string? Path { get; set; }
+        public int LoadedThroughLine { get; set; }
+        public bool SourceLimitReached { get; set; }
+        public JsonTrustLexicalContext? Context { get; set; }
+    }
 
     private static List<SearchRecipeAggregationQueryJsonResult> CollectSearchRecipeAggregationResults(
         DbReader reader,
