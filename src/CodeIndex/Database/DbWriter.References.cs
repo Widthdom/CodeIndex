@@ -1979,7 +1979,9 @@ public partial class DbWriter
         }
     }
 
-    internal void RefreshMutualRecursionFlags(CancellationToken cancellationToken = default)
+    internal void RefreshMutualRecursionFlags(
+        CancellationToken cancellationToken = default,
+        bool stampReferenceIdentityContractReady = true)
     {
         cancellationToken.ThrowIfCancellationRequested();
         MutualRecursionRefreshForTesting?.Invoke();
@@ -2047,10 +2049,15 @@ public partial class DbWriter
                     ? RefreshMutualRecursionFlagsSql
                     : RefreshScopedMutualRecursionFlagsSql,
                 static _ => { });
-            // Stamp inside the same transaction, but before the graph refresh so the
-            // public SQLite changes() result continues to describe recursion updates.
-            // 同一トランザクション内で先に marker を設定し、公開 changes() は再帰更新件数を維持する。
-            MarkReferenceIdentityContractReady();
+            // Reconcile the marker inside the same transaction, but before the graph refresh
+            // so the public SQLite changes() result continues to describe recursion updates.
+            // High-level indexing defers v7 while untouched legacy C# family rows remain.
+            // 同一 transaction 内で先に marker を調整して公開 changes() を維持する。
+            // high-level index は未更新の旧 C# family row が残る間 v7 を保留する。
+            if (stampReferenceIdentityContractReady)
+                MarkReferenceIdentityContractReady();
+            else
+                ClearReferenceIdentityContractReady();
             cancellationToken.ThrowIfCancellationRequested();
             refreshIdentityCommand.ExecuteNonQuery();
             cancellationToken.ThrowIfCancellationRequested();

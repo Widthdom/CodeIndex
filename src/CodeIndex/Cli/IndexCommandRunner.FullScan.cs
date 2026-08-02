@@ -1027,7 +1027,10 @@ public static partial class IndexCommandRunner
             var referenceGraphHeartbeat = StartFullScanJsonPhaseHeartbeat(options, "finalizing reference graph");
             try
             {
-                writer.RefreshMutualRecursionFlags(cancellationToken);
+                writer.RefreshMutualRecursionFlags(
+                    cancellationToken,
+                    stampReferenceIdentityContractReady:
+                        writer.CSharpFamilyTrustAllowsReferenceIdentityReady());
             }
             finally
             {

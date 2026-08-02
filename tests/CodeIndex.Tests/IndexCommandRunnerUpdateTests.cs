@@ -6056,7 +6056,7 @@ public partial class IndexCommandRunnerTests
     }
 
     [ProductionRuntimeFact]
-    public void Run_Update_WhenHotspotFamilyMetadataCannotBeRestamped_ReportsDegradedReadiness()
+    public void Run_Update_WhenHotspotFamilyMetadataCannotBeRestamped_KeepsReferenceIdentityStale_Issue4914()
     {
         var projectRoot = CreateTempProject();
         try
@@ -6078,6 +6078,10 @@ public partial class IndexCommandRunnerTests
                 var writer = new DbWriter(db.Connection);
                 writer.SetMeta(DbContext.GetHotspotFamilyVersionMetaKey("csharp"), null);
                 writer.SetMeta(DbContext.GetHotspotFamilyMarkerFingerprintMetaKey("csharp"), null);
+                writer.SetMeta(
+                    DbContext.ReferenceIdentityContractVersionMetaKey,
+                    (DbContext.ReferenceIdentityContractVersion - 1).ToString(
+                        CultureInfo.InvariantCulture));
             }
 
             File.WriteAllText(callerPath, "public class Caller { public void Call(Api api) { api.Run(); api.Run(1); api.Run(); } }");
@@ -6087,6 +6091,13 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, updateExitCode);
             Assert.False(updateJson.GetProperty("hotspot_family_ready").GetBoolean());
             Assert.Contains("hotspot_family_support_not_indexed=csharp", updateJson.GetProperty("hotspot_family_degraded_reason").GetString());
+
+            using (var verifyDb = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                Assert.NotEqual(
+                    DbContext.ReferenceIdentityContractVersion.ToString(CultureInfo.InvariantCulture),
+                    verifyDb.GetMetaString(DbContext.ReferenceIdentityContractVersionMetaKey));
+            }
 
             File.WriteAllText(callerPath, "public class Caller { public void Call(Api api) { api.Run(); api.Run(1); api.Run(); api.Run(1); } }");
             File.SetLastWriteTimeUtc(callerPath, DateTime.UtcNow.AddSeconds(4));

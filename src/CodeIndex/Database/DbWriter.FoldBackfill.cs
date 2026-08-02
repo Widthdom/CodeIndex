@@ -373,7 +373,10 @@ public partial class DbWriter
             // Refresh them before advertising the rewritten rows as current.
             // candidate と解決済み identity は永続化 folded key に依存するため、
             // 書換え後の key を current と公開する前に graph を再解決する。
-            RefreshMutualRecursionFlags(cancellationToken);
+            RefreshMutualRecursionFlags(
+                cancellationToken,
+                stampReferenceIdentityContractReady:
+                    CSharpFamilyTrustAllowsReferenceIdentityReady());
             SetMeta(FoldBackfillGraphRefreshPendingMetaKey, null);
         }
         if (rewriteAll)

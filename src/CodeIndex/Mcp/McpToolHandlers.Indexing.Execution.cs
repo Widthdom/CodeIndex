@@ -1759,7 +1759,10 @@ public partial class McpServer
         {
             requestToken.ThrowIfCancellationRequested();
             await EmitProgressNotificationAsync(progressToken, processed, files.Count, "Finalizing reference graph.").ConfigureAwait(false);
-            writer.RefreshMutualRecursionFlags(requestToken);
+            writer.RefreshMutualRecursionFlags(
+                requestToken,
+                stampReferenceIdentityContractReady:
+                    writer.CSharpFamilyTrustAllowsReferenceIdentityReady());
         }
 
         if (ftsBulkLoad != null)
@@ -1914,8 +1917,6 @@ public partial class McpServer
             writer.MarkHdlGraphContractReady();
             if (csharpSourceEvidenceComplete && !preservePriorPositiveCSharpSourceNoOp)
                 writer.SetCSharpStaticInterfaceSourceEvidence(csharpSourceEvidenceForStamp);
-            if (!mutualRecursionRefreshNeeded && referenceIdentityContractMatchedBeforeMutation)
-                writer.MarkReferenceIdentityContractReady();
             csharpSymbolNameReadyAfter = true;
             if (hasCSharpFilesAfter)
             {
@@ -1958,6 +1959,10 @@ public partial class McpServer
                 indexSnapshot.HotspotFamilyVersions,
                 indexSnapshot.HotspotFamilyMarkerFingerprints,
                 currentHotspotFamilyMarkerFingerprints);
+            if (writer.CSharpFamilyTrustAllowsReferenceIdentityReady())
+                writer.MarkReferenceIdentityContractReady();
+            else
+                writer.ClearReferenceIdentityContractReady();
             // A successful refresh can stamp the languages it regenerated even when the
             // independent fold-key contract remains stale.
             // 成功した refresh で再生成した言語は、独立した fold-key 契約が stale の

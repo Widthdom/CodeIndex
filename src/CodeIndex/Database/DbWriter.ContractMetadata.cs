@@ -113,6 +113,28 @@ public partial class DbWriter
             DbContext.ReferenceIdentityContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
             StringComparison.Ordinal);
 
+    /// <summary>
+    /// Return whether reference identity v7 may trust every persisted C# family row.
+    /// A partial upgrade cannot publish v7 while untouched pre-v7 C# symbols remain.
+    /// reference identity v7 が全 C# family row を信頼できるかを返す。
+    /// 未更新の旧 C# symbol が残る部分 upgrade では v7 を公開しない。
+    /// </summary>
+    internal bool CSharpFamilyTrustAllowsReferenceIdentityReady()
+    {
+        if (!HasAnyFilesWithLanguage("csharp"))
+            return true;
+
+        var version = GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp"));
+        var fingerprint = GetMetaString(DbContext.GetHotspotFamilyMarkerFingerprintMetaKey("csharp"));
+        return string.Equals(
+                   version,
+                   DbContext.GetHotspotFamilyVersion("csharp").ToString(
+                       System.Globalization.CultureInfo.InvariantCulture),
+                   StringComparison.Ordinal)
+               && !string.IsNullOrWhiteSpace(fingerprint)
+               && !DbContext.IsIncompleteHotspotFamilyMarkerFingerprint(fingerprint);
+    }
+
     public void MarkReferenceIdentityContractReady()
     {
         SetMeta(

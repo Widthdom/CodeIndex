@@ -654,6 +654,7 @@ public static partial class SymbolExtractor
         var pendingAttributeEvidence = false;
         var pendingAttributeIsGlobal = false;
         var closedConditionalDirectiveDepth = 0;
+        var skippingConditionalSiblingBranch = false;
 
         // Standalone modifiers, attributes, and documentation on preceding lines bind to
         // the first declaration occurrence on the next line. Later same-line declarations
@@ -703,30 +704,32 @@ public static partial class SymbolExtractor
                         break;
                     case "if" when closedConditionalDirectiveDepth > 0:
                         closedConditionalDirectiveDepth--;
+                        if (closedConditionalDirectiveDepth == 0)
+                            skippingConditionalSiblingBranch = false;
                         break;
                     case "else" or "elif" when closedConditionalDirectiveDepth == 0:
-                        // Do not cross into a sibling conditional branch while looking for
-                        // modifiers belonging to the current declaration.
-                        // 現在の declaration に属する modifier を探す際、兄弟の条件分岐へ
-                        // 遡らない。
-                        return new CSharpLeadingDeclarationEvidence(
-                            hasPartialModifier,
-                            hasFileModifier,
-                            hasAttribute,
-                            hasDocumentation);
+                        // Skip the sibling branch, then resume before its matching `#if`.
+                        // A standalone modifier before that conditional still belongs to
+                        // every declaration alternative inside it.
+                        // 兄弟分岐を読み飛ばし、対応する `#if` より前から走査を再開する。
+                        // conditional より前の standalone modifier は各宣言候補に属する。
+                        closedConditionalDirectiveDepth = 1;
+                        skippingConditionalSiblingBranch = true;
+                        break;
                 }
                 continue;
             }
 
             if (closedConditionalDirectiveDepth > 0)
             {
-                // Only an empty, trivia-only conditional block can sit between a modifier
-                // and its declaration. Code in any branch is a declaration boundary; in
-                // particular, never treat an inactive branch's modifier as active evidence.
-                // modifier と declaration の間をまたげるのは、trivia だけの空の条件block
-                // に限る。いずれかの branch に code があれば declaration 境界とし、特に
-                // inactive branch の modifier を有効な evidence として扱わない。
-                if (trimmed.IsEmpty)
+                // A sibling branch must be ignored through its matching `#if`, but code in
+                // a completed conditional before the declaration is still a declaration
+                // boundary. This keeps an outer modifier bound to the declaration inside
+                // that completed block instead of lending it to the following declaration.
+                // 兄弟分岐は対応する `#if` まで無視する一方、宣言前に完了した conditional
+                // 内の code は declaration 境界とする。外側 modifier を block 内の宣言から
+                // 後続宣言へ貸し出さない。
+                if (skippingConditionalSiblingBranch || trimmed.IsEmpty)
                     continue;
                 break;
             }

@@ -2086,6 +2086,34 @@ public partial class QueryCommandRunnerTests
                 class DirectiveBranchDecoy { }
                 partial class DirectiveBranchDecoy { }
                 """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.DirectiveBranchPartial.cs",
+                "csharp",
+                """
+                partial
+                #if FIRST
+                class DirectiveBranchPartial { }
+                #else
+                class DirectiveBranchPartial { }
+                #endif
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/B.DirectiveBranchPartial.cs",
+                "csharp",
+                "partial class DirectiveBranchPartial { }");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/DirectiveClosedBoundary.cs",
+                "csharp",
+                """
+                partial
+                #if FIRST
+                class DirectiveClosedBoundary { }
+                #endif
+                class DirectiveClosedBoundary { }
+                """);
             MarkGraphAndFoldReady(dbPath);
 
             var (localExitCode, localStdout, localStderr) = CaptureConsole(() =>
@@ -2102,6 +2130,24 @@ public partial class QueryCommandRunnerTests
 
             var directivePartial = RunGroupedSymbol(dbPath, "DirectivePartial", "class");
             Assert.Equal(2, directivePartial.GetProperty("definition_sites").GetInt32());
+
+            var directiveBranchPartial = RunGroupedSymbol(
+                dbPath,
+                "DirectiveBranchPartial",
+                "class");
+            Assert.Equal(3, directiveBranchPartial.GetProperty("definition_sites").GetInt32());
+
+            var (closedExitCode, closedStdout, closedStderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunSymbols(
+                    ["DirectiveClosedBoundary", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "class", "--group-partials", "--limit", "10"],
+                    _jsonOptions));
+            using var closedDocument = ParseJsonOutput(closedStdout);
+            var closedRows = closedDocument.RootElement.EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, closedExitCode);
+            Assert.Equal(string.Empty, closedStderr);
+            Assert.Equal(2, closedRows.Count);
+            Assert.All(closedRows, row => Assert.False(row.TryGetProperty("definition_sites", out _)));
 
             var (decoyExitCode, decoyStdout, decoyStderr) = CaptureConsole(() =>
                 QueryCommandRunner.RunSymbols(
