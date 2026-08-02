@@ -44,10 +44,15 @@ public partial class DbContext : IDisposable
     // (`family_key` / `container_qualified_name` are authoritative for the whole DB), not
     // low-level table availability.
     // hotspots family grouping 用 readiness。table の有無ではなく query 意味論の trust を表す。
+    public const int LegacyHotspotFamilyVersion = 2;
     public const int HotspotFamilyVersion = 13;
     public const string HotspotFamilyVersionMetaKey = "hotspot_family_version";
     public const string HotspotFamilyMarkerFingerprintMetaKey = "hotspot_family_marker_fingerprint";
     public const string HotspotFamilyIncompleteMarkerFingerprintPrefix = "incomplete:";
+    public static int GetHotspotFamilyVersion(string lang)
+        => string.Equals(lang, "csharp", StringComparison.Ordinal)
+            ? HotspotFamilyVersion
+            : LegacyHotspotFamilyVersion;
     public static string GetHotspotFamilyVersionMetaKey(string lang) => $"hotspot_family_version_{lang}";
     public static string GetHotspotFamilyMarkerFingerprintMetaKey(string lang) => $"hotspot_family_marker_fingerprint_{lang}";
     public static bool IsIncompleteHotspotFamilyMarkerFingerprint(string? fingerprint)

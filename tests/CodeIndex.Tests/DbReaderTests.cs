@@ -2996,6 +2996,22 @@ public partial class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void HotspotFamilyVersion_ChangesOnlyForCSharp_Issue4914()
+    {
+        Assert.Equal(13, DbContext.GetHotspotFamilyVersion("csharp"));
+        Assert.Equal(2, DbContext.GetHotspotFamilyVersion("vb"));
+        Assert.Equal(2, DbContext.GetHotspotFamilyVersion("fsharp"));
+        Assert.Equal(2, DbContext.GetHotspotFamilyVersion("msbuild"));
+
+        foreach (var lang in FileIndexer.GetHotspotFamilyMarkerLanguages())
+        {
+            Assert.Equal(
+                DbContext.GetHotspotFamilyVersion(lang).ToString(System.Globalization.CultureInfo.InvariantCulture),
+                _db.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey(lang)));
+        }
+    }
+
+    [Fact]
     public void GetHotspotFamilySignal_GroupedReadinessDetectsPartialRowsAcrossLanguages()
     {
         InsertIndexedFile("src/csharp/Api.Part1.cs", "csharp",

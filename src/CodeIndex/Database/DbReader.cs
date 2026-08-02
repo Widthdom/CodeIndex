@@ -815,7 +815,7 @@ public partial class DbReader : IDisposable
                 newerContracts);
         }
         foreach (var lang in FileIndexer.GetHotspotFamilyMarkerLanguages())
-            AppendIfStoredGreater(conn, DbContext.GetHotspotFamilyVersionMetaKey(lang), DbContext.HotspotFamilyVersion, $"hotspot_family_version_{lang}", newerContracts);
+            AppendIfStoredGreater(conn, DbContext.GetHotspotFamilyVersionMetaKey(lang), DbContext.GetHotspotFamilyVersion(lang), $"hotspot_family_version_{lang}", newerContracts);
 
         // PRAGMA user_version is a bitmap of readiness flags. A bit outside the known
         // `CurrentSchemaVersion` mask means a newer cdidx introduced a readiness flag this
@@ -897,7 +897,7 @@ public partial class DbReader : IDisposable
             return DegradationReasonCodes.HotspotFamilySupportNotIndexed;
 
         if (!int.TryParse(raw, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var version)
-            || version != DbContext.HotspotFamilyVersion)
+            || version != DbContext.GetHotspotFamilyVersion(lang))
         {
             return DegradationReasonCodes.HotspotFamilyMetadataStale;
         }
@@ -1068,7 +1068,7 @@ public partial class DbReader : IDisposable
             var fingerprint = TryGetMetaString(conn, DbContext.GetHotspotFamilyMarkerFingerprintMetaKey(lang));
             if (raw is string s
                 && int.TryParse(s, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var version)
-                && version == DbContext.HotspotFamilyVersion
+                && version == DbContext.GetHotspotFamilyVersion(lang)
                 && !string.IsNullOrWhiteSpace(fingerprint)
                 && !DbContext.IsIncompleteHotspotFamilyMarkerFingerprint(fingerprint))
             {

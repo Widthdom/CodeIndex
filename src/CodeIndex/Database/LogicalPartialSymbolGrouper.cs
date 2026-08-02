@@ -361,12 +361,13 @@ internal static class LogicalPartialSymbolGrouper
         if (string.IsNullOrWhiteSpace(signature))
             return 0;
 
-        var declaration = ExtractCSharpDeclarationHeader(RemoveCSharpComments(signature));
+        var declaration = ExtractCSharpDeclarationHeader(
+            SymbolExtractor.SanitizeCSharpDeclarationSignature(signature));
         var score = 0;
         if (declaration.Contains('['))
             score += 2;
         if (IsLogicalPartialTypeKind(kind ?? string.Empty)
-            && declaration.Contains(':', StringComparison.Ordinal))
+            && SymbolExtractor.ContainsCSharpTypeBaseList(declaration))
         {
             score += 4;
         }

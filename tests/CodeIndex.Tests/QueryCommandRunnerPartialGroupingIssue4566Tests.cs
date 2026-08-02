@@ -426,6 +426,21 @@ public partial class QueryCommandRunnerTests
     public void PartialCanonicalRepresentative_UsesSemanticRulesAndExposesFamilyNavigation_Issue4914()
     {
         Assert.Equal(13, DbContext.HotspotFamilyVersion);
+        var constraintOnlyType = Assert.Single(
+            SymbolExtractor.Extract(
+                1,
+                "csharp",
+                "namespace Demo;\npublic partial class ConstraintRank<T> where T : class { }")
+                .Where(symbol => symbol.Kind == "class" && symbol.Name == "ConstraintRank"));
+        var baseListType = Assert.Single(
+            SymbolExtractor.Extract(
+                2,
+                "csharp",
+                "namespace Demo;\npublic partial class ConstraintRank<T> : ConstraintBase { }")
+                .Where(symbol => symbol.Kind == "class" && symbol.Name == "ConstraintRank"));
+        Assert.Equal(1, constraintOnlyType.DeclarationSemanticScore);
+        Assert.Equal(4, baseListType.DeclarationSemanticScore);
+
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_canonical_issue4914");
         try
         {
@@ -453,6 +468,22 @@ public partial class QueryCommandRunnerTests
                 public partial class Widget
                 {
                 }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.ConstraintOnly.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class ConstraintRank<T> where T : class { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Z.BaseList.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class ConstraintRank<T> : ConstraintBase { }
                 """);
             TestProjectHelper.InsertIndexedFile(
                 dbPath,
@@ -695,6 +726,25 @@ public partial class QueryCommandRunnerTests
             Assert.All(widgetMembers, member => Assert.Equal(21, member.GetProperty("start_column").GetInt32()));
             Assert.Contains(widgetMembers, member => member.GetProperty("path").GetString() == "src/A.Widget.Split.cs" && member.GetProperty("generated").GetBoolean());
             Assert.Single(widgetMembers, member => member.TryGetProperty("representative", out var representative) && representative.GetBoolean());
+
+            var constraintRank = RunGroupedSymbol(dbPath, "ConstraintRank", "class");
+            Assert.Equal("src/Z.BaseList.cs", constraintRank.GetProperty("path").GetString());
+            Assert.Equal("semantic_declaration", constraintRank.GetProperty("representative_reason").GetString());
+            Assert.Equal(
+                1,
+                LogicalPartialSymbolGrouper.GetSemanticScore(
+                    "public partial class ConstraintRank<T> where T : class { }",
+                    "class"));
+            Assert.Equal(
+                4,
+                LogicalPartialSymbolGrouper.GetSemanticScore(
+                    "public partial class ConstraintRank<T> : ConstraintBase { }",
+                    "class"));
+            Assert.Equal(
+                1,
+                LogicalPartialSymbolGrouper.GetSemanticScore(
+                    "public partial record @class<T> where T : class { }",
+                    "record"));
 
             var customer = RunGroupedSymbol(dbPath, "Customer", "class");
             Assert.Equal("src/Z.Customer.cs", customer.GetProperty("path").GetString());

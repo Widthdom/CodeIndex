@@ -71,7 +71,7 @@ public static partial class SymbolExtractor
             if (leading.HasDocumentation)
                 semanticScore += 1;
             if (symbol.Kind is "class" or "struct" or "interface" or "record"
-                && declarationHeader.Contains(':', StringComparison.Ordinal))
+                && ContainsCSharpTypeBaseList(declarationHeader))
             {
                 semanticScore += 4;
             }
@@ -114,7 +114,7 @@ public static partial class SymbolExtractor
         if (ContainsCSharpAttributeEvidence(declarationHeader))
             semanticScore += 2;
         if (symbol.Kind is "class" or "struct" or "interface" or "record"
-            && declarationHeader.Contains(':', StringComparison.Ordinal))
+            && ContainsCSharpTypeBaseList(declarationHeader))
         {
             semanticScore += 4;
         }
@@ -309,6 +309,105 @@ public static partial class SymbolExtractor
         return lastAttributeEnd >= 0
             ? prefix[(lastAttributeEnd + 1)..]
             : prefix;
+    }
+
+    internal static bool ContainsCSharpTypeBaseList(string declarationHeader)
+    {
+        var bracketDepth = 0;
+        var parenthesisDepth = 0;
+        var angleDepth = 0;
+        var declarationKeywordSeen = false;
+        var declarationNameSeen = false;
+        var recordMayHaveExplicitKind = false;
+
+        for (var index = 0; index < declarationHeader.Length;)
+        {
+            var character = declarationHeader[index];
+            switch (character)
+            {
+                case '[':
+                    bracketDepth++;
+                    index++;
+                    continue;
+                case ']' when bracketDepth > 0:
+                    bracketDepth--;
+                    index++;
+                    continue;
+                case '(' when bracketDepth == 0:
+                    parenthesisDepth++;
+                    index++;
+                    continue;
+                case ')' when bracketDepth == 0 && parenthesisDepth > 0:
+                    parenthesisDepth--;
+                    index++;
+                    continue;
+                case '<' when bracketDepth == 0 && parenthesisDepth == 0:
+                    angleDepth++;
+                    index++;
+                    continue;
+                case '>' when bracketDepth == 0 && parenthesisDepth == 0 && angleDepth > 0:
+                    angleDepth--;
+                    index++;
+                    continue;
+                case ':' when declarationNameSeen
+                              && bracketDepth == 0
+                              && parenthesisDepth == 0
+                              && angleDepth == 0:
+                    return true;
+            }
+
+            if (bracketDepth != 0
+                || parenthesisDepth != 0
+                || angleDepth != 0
+                || !(character is '@' or '_' || char.IsLetter(character)))
+            {
+                index++;
+                continue;
+            }
+
+            var tokenStart = index;
+            var tokenIsVerbatim = character == '@';
+            index++;
+            while (index < declarationHeader.Length && IsCSharpIdentifierPart(declarationHeader[index]))
+                index++;
+            var token = declarationHeader.AsSpan(tokenStart, index - tokenStart).TrimStart('@');
+
+            if (!declarationKeywordSeen)
+            {
+                if (!tokenIsVerbatim
+                    && (token.SequenceEqual("class")
+                    || token.SequenceEqual("struct")
+                    || token.SequenceEqual("interface")))
+                {
+                    declarationKeywordSeen = true;
+                }
+                else if (!tokenIsVerbatim && token.SequenceEqual("record"))
+                {
+                    declarationKeywordSeen = true;
+                    recordMayHaveExplicitKind = true;
+                }
+                continue;
+            }
+
+            if (!declarationNameSeen)
+            {
+                if (recordMayHaveExplicitKind
+                    && !tokenIsVerbatim
+                    && (token.SequenceEqual("class") || token.SequenceEqual("struct")))
+                {
+                    recordMayHaveExplicitKind = false;
+                    continue;
+                }
+
+                declarationNameSeen = true;
+                continue;
+            }
+
+            if (!tokenIsVerbatim && token.SequenceEqual("where"))
+                return false;
+        }
+
+        return false;
     }
 
     private static bool IsCSharpExplicitRecordSuffix(

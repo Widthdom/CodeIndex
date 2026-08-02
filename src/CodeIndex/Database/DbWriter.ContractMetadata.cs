@@ -152,7 +152,7 @@ public partial class DbWriter
         // Clear the superseded global keys so mixed-version DBs don't leave confusing stale metadata behind.
         // 廃止した global key を掃除し、混在 DB に紛らわしい古い metadata を残さない。
         SetMetaValues(
-            (DbContext.GetHotspotFamilyVersionMetaKey(lang), DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            (DbContext.GetHotspotFamilyVersionMetaKey(lang), DbContext.GetHotspotFamilyVersion(lang).ToString(System.Globalization.CultureInfo.InvariantCulture)),
             (DbContext.GetHotspotFamilyMarkerFingerprintMetaKey(lang), markerFingerprint),
             (DbContext.HotspotFamilyVersionMetaKey, null),
             (DbContext.HotspotFamilyMarkerFingerprintMetaKey, null));
@@ -161,7 +161,7 @@ public partial class DbWriter
     public void MarkHotspotFamilyMarkerFingerprintIncomplete(string lang, string? markerFingerprint)
     {
         SetMetaValues(
-            (DbContext.GetHotspotFamilyVersionMetaKey(lang), DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            (DbContext.GetHotspotFamilyVersionMetaKey(lang), DbContext.GetHotspotFamilyVersion(lang).ToString(System.Globalization.CultureInfo.InvariantCulture)),
             (DbContext.GetHotspotFamilyMarkerFingerprintMetaKey(lang), DbContext.BuildIncompleteHotspotFamilyMarkerFingerprint(markerFingerprint)),
             (DbContext.HotspotFamilyVersionMetaKey, null),
             (DbContext.HotspotFamilyMarkerFingerprintMetaKey, null));
