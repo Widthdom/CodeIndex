@@ -261,6 +261,13 @@ public static partial class SymbolExtractor
                 if (keywordIndex < 0)
                     break;
 
+                if (keyword is "class" or "struct"
+                    && IsCSharpExplicitRecordSuffix(header, keywordIndex))
+                {
+                    searchStart = keywordIndex + keyword.Length;
+                    continue;
+                }
+
                 var nameIndex = FindCSharpIdentifierToken(
                     header,
                     name,
@@ -302,6 +309,21 @@ public static partial class SymbolExtractor
         return lastAttributeEnd >= 0
             ? prefix[(lastAttributeEnd + 1)..]
             : prefix;
+    }
+
+    private static bool IsCSharpExplicitRecordSuffix(
+        ReadOnlySpan<char> declarationHeader,
+        int keywordIndex)
+    {
+        var cursor = keywordIndex - 1;
+        while (cursor >= 0 && char.IsWhiteSpace(declarationHeader[cursor]))
+            cursor--;
+
+        const string RecordKeyword = "record";
+        var recordStart = cursor - RecordKeyword.Length + 1;
+        return recordStart >= 0
+            && declarationHeader.Slice(recordStart, RecordKeyword.Length).SequenceEqual(RecordKeyword)
+            && (recordStart == 0 || !IsCSharpIdentifierPart(declarationHeader[recordStart - 1]));
     }
 
     private static string ExtractCSharpDeclarationModifierPrefix(

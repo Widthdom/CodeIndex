@@ -275,6 +275,7 @@ public static partial class SymbolExtractor
             var builder = new StringBuilder();
             var containerIdentity = BuildHookCSharpContainerFamilyIdentity(
                 symbol.ContainerQualifiedName,
+                symbol,
                 symbols);
             if (!string.IsNullOrWhiteSpace(containerIdentity))
                 builder.Append(containerIdentity);
@@ -296,6 +297,7 @@ public static partial class SymbolExtractor
         {
             symbol.FamilyKey = BuildHookCSharpContainerFamilyIdentity(
                 symbol.ContainerQualifiedName,
+                symbol,
                 symbols);
         }
     }
@@ -333,6 +335,7 @@ public static partial class SymbolExtractor
 
     private static string BuildHookCSharpContainerFamilyIdentity(
         string? containerQualifiedName,
+        SymbolRecord symbol,
         IReadOnlyList<SymbolRecord> symbols)
     {
         if (string.IsNullOrWhiteSpace(containerQualifiedName))
@@ -350,12 +353,10 @@ public static partial class SymbolExtractor
                 familyIdentity.Append('.');
             familyIdentity.Append(segment);
 
-            var type = symbols.FirstOrDefault(candidate =>
-                IsCSharpTypeFamilyKind(candidate.Kind)
-                && string.Equals(
-                    BuildDeclaredQualifiedName(candidate),
-                    sourcePrefix.ToString(),
-                    StringComparison.Ordinal));
+            var type = FindHookCSharpContainerSymbol(
+                sourcePrefix.ToString(),
+                symbol,
+                symbols);
             var arity = type == null
                 ? null
                 : CSharpTypeReferenceArity.GetDefinitionArity(

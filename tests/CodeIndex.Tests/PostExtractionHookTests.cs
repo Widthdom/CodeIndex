@@ -248,6 +248,65 @@ public class PostExtractionHookTests
         });
     }
 
+    [Fact]
+    public void HookMutation_NestedTypeUsesContainingGenericArity_Issue4914()
+    {
+        const string content = """
+            class Outer<T>
+            {
+                partial class Inner { }
+            }
+            class Outer<T, U>
+            {
+                partial class Inner { }
+            }
+            """;
+        var symbols = new List<SymbolRecord>
+        {
+            new()
+            {
+                Kind = "class", Name = "Outer", Signature = "class Outer<T>",
+                Line = 1, StartLine = 1, EndLine = 4, BodyStartLine = 2, BodyEndLine = 4,
+            },
+            new()
+            {
+                Kind = "class", Name = "Inner", Signature = "partial class Inner { }",
+                IsPartialDeclaration = true,
+                ContainerKind = "class", ContainerName = "Outer", ContainerQualifiedName = "Outer",
+                Line = 3, StartLine = 3, EndLine = 3,
+            },
+            new()
+            {
+                Kind = "class", Name = "Outer", Signature = "class Outer<T, U>",
+                Line = 5, StartLine = 5, EndLine = 8, BodyStartLine = 6, BodyEndLine = 8,
+            },
+            new()
+            {
+                Kind = "class", Name = "Inner", Signature = "partial class Inner { }",
+                IsPartialDeclaration = true,
+                ContainerKind = "class", ContainerName = "Outer", ContainerQualifiedName = "Outer",
+                DeclarationStructureMutatedByHook = true,
+                Line = 7, StartLine = 7, EndLine = 7,
+            },
+        };
+
+        SymbolExtractor.RefreshCSharpContainerAndFamilyScopeAfterHookMutation(
+            symbols,
+            content,
+            "/project/src/App.cs",
+            "/project",
+            "project");
+
+        var innerFamilies = symbols
+            .Where(symbol => symbol.Name == "Inner")
+            .Select(symbol => symbol.FamilyKey)
+            .OrderBy(family => family, StringComparer.Ordinal)
+            .ToList();
+        Assert.Equal(
+            ["project|Outer`1.Inner", "project|Outer`2.Inner"],
+            innerFamilies);
+    }
+
     [ProductionRuntimeFact]
     public void Discover_UsesWorkerWithoutParentLoadContext_Issue4600()
     {

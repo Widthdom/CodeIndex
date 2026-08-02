@@ -1501,19 +1501,108 @@ internal static class LogicalPartialSymbolGrouper
         // 以降の全 `<` を generic とみなすと `1 < 2` を壊すため、member access へ閉じる
         // angle list だけを追跡する。
         var depth = 0;
+        var quote = '\0';
+        var rawQuoteLength = 0;
+        var escaped = false;
+        var verbatim = false;
+        var lineComment = false;
+        var blockComment = false;
         for (var cursor = openAngleOffset; cursor < value.Length; cursor++)
         {
-            if (value[cursor] == '<')
+            var ch = value[cursor];
+            if (lineComment)
+            {
+                if (ch is '\r' or '\n')
+                    lineComment = false;
+                continue;
+            }
+            if (blockComment)
+            {
+                if (ch == '*' && cursor + 1 < value.Length && value[cursor + 1] == '/')
+                {
+                    blockComment = false;
+                    cursor++;
+                }
+                continue;
+            }
+            if (rawQuoteLength > 0)
+            {
+                if (ch == '"' && CountRepeatedCharacter(value, cursor, '"') >= rawQuoteLength)
+                {
+                    cursor += rawQuoteLength - 1;
+                    rawQuoteLength = 0;
+                }
+                continue;
+            }
+            if (quote != '\0')
+            {
+                if (verbatim && ch == '"' && cursor + 1 < value.Length && value[cursor + 1] == '"')
+                {
+                    cursor++;
+                    continue;
+                }
+                if (escaped)
+                {
+                    escaped = false;
+                    continue;
+                }
+                if (!verbatim && ch == '\\')
+                {
+                    escaped = true;
+                    continue;
+                }
+                if (ch == quote)
+                {
+                    quote = '\0';
+                    verbatim = false;
+                }
+                continue;
+            }
+            if (ch == '"')
+            {
+                var quoteLength = CountRepeatedCharacter(value, cursor, '"');
+                if (quoteLength >= 3)
+                {
+                    rawQuoteLength = quoteLength;
+                    cursor += quoteLength - 1;
+                }
+                else
+                {
+                    quote = ch;
+                    verbatim = IsVerbatimStringStart(value, cursor);
+                }
+                continue;
+            }
+            if (ch == '\'')
+            {
+                quote = ch;
+                continue;
+            }
+            if (ch == '/' && cursor + 1 < value.Length)
+            {
+                if (value[cursor + 1] == '/')
+                {
+                    lineComment = true;
+                    cursor++;
+                    continue;
+                }
+                if (value[cursor + 1] == '*')
+                {
+                    blockComment = true;
+                    cursor++;
+                    continue;
+                }
+            }
+
+            if (ch == '<')
             {
                 depth++;
                 continue;
             }
-            if (value[cursor] != '>' || --depth != 0)
+            if (ch != '>' || --depth != 0)
                 continue;
 
-            cursor++;
-            while (cursor < value.Length && char.IsWhiteSpace(value[cursor]))
-                cursor++;
+            cursor = SkipCSharpDeclarationTrivia(value, cursor + 1);
             return cursor < value.Length && value[cursor] == '.';
         }
 

@@ -3121,7 +3121,7 @@ public partial class QueryCommandRunnerTests
                 "csharp",
                 """
                 namespace Demo;
-                public partial record Item<T>;
+                public partial record class Item<T>;
                 """);
             MarkGraphAndFoldReady(dbPath);
 
@@ -3301,6 +3301,8 @@ public partial class QueryCommandRunnerTests
                     partial void NamedTuple<U>((int T, string S) value) { }
                     partial void GenericDefault(int value = GenericDefaults<int, string>.Value, int other = 0);
                     partial void GenericDefault(int value, int other) { }
+                    partial void CommentedGenericDefault(int value = GenericDefaults</* > */ int, string> /* > */ .Value, int other = 0);
+                    partial void CommentedGenericDefault(int value, int other) { }
                     partial void RelationalDefault(bool value = 1 < 2, int other = 0);
                     partial void RelationalDefault(bool value, int other) { }
                 }
@@ -3316,6 +3318,7 @@ public partial class QueryCommandRunnerTests
                          "LongTupleEquivalent",
                          "NamedTuple",
                          "GenericDefault",
+                         "CommentedGenericDefault",
                          "RelationalDefault",
                      })
             {
@@ -3350,6 +3353,15 @@ public partial class QueryCommandRunnerTests
                 LogicalPartialSymbolGrouper.BuildCallableIdentity(
                     "partial void GenericDefault(int value, int other) { }",
                     "GenericDefault",
+                    "void"));
+            Assert.Equal(
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void CommentedGenericDefault(int value = GenericDefaults</* > */ int, string> /* > */ .Value, int other = 0);",
+                    "CommentedGenericDefault",
+                    "void"),
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void CommentedGenericDefault(int value, int other) { }",
+                    "CommentedGenericDefault",
                     "void"));
             Assert.Equal(
                 LogicalPartialSymbolGrouper.BuildCallableIdentity(
