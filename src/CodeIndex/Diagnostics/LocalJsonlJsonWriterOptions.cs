@@ -17,6 +17,7 @@ internal static class LocalJsonlJsonWriterOptions
         return new JsonWriterOptions
         {
             Indented = false,
+            // cdidx-audit: json-trust origin=private_local direction=write sensitivity=diagnostic trust=controlled rationale=operator_only_local_jsonl
             Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
         };
     }

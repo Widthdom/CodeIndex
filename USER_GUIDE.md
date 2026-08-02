@@ -1501,6 +1501,49 @@ inferring freshness from match counts. Text recipe output summarizes the same
 states, and SARIF recipe runs expose the same `query_freshness` object in run
 properties. Output-limited recipe runs use matched-count metadata for this
 summary, so queries with known omitted matches are not reported as zero-match.
+The `relaxed-json-encoder` query and JSON read/write queries also publish the
+`json_trust_boundary` classifier. Place a source-proximate annotation immediately
+before the operation when the trust boundary is known:
+
+```text
+// cdidx-audit: json-trust origin=private_local direction=write sensitivity=diagnostic trust=controlled rationale=operator_only_local_jsonl
+```
+
+`origin` accepts `private_local`, `public_api`, `network`, `file`, `external`, or
+`unknown`; `direction` is `read` or `write`; `sensitivity` accepts `diagnostic`,
+`public`, `untrusted`, `confidential`, or `unknown`; and `trust` accepts
+`controlled`, `untrusted`, or `review_required`. `rationale` is a stable token
+of up to 80 ASCII letters, digits, `_`, `-`, or `.`. A valid annotation can
+classify a controlled private writer, an external/public writer, or an untrusted
+parser. The marker must be a real C# line comment; annotation-shaped text inside
+regular, verbatim, or raw strings is ignored. Annotations inside conditional-compilation
+regions, or separated from the operation by a preprocessor directive, are not trust
+evidence. Missing, malformed, lexically invalid, directionally inconsistent, or `review_required` evidence remains
+`ambiguous_trust`. Every match line is checked from indexed source even when
+guard filtering projects the result to one line. If one result contains matches
+with distinct trust evidence, it is conservatively reported as
+`ambiguous_trust` with `annotation_status:mixed_boundaries`. An annotation binds
+only to the next operation: intervening executable code, including an earlier
+statement, evaluated operand, completed expression, control-flow block, or comma-separated operation on the matched line, leaves the later match
+`ambiguous_trust` with `annotation_status:not_adjacent`. The annotation only enriches `audit_classifications`; it never
+suppresses the underlying recipe result, so external parsing remains visible.
+An incomplete declaration or assignment prefix may continue through the bounded
+indexed-source statement onto the audited operation line without breaking adjacency;
+annotation lookup is not limited to a fixed three-line gap.
+Across all selected JSON child queries, the first lexical audited match consumes
+the annotation; later matches on the line remain ambiguous even when they belong
+to a different API family or overlap the first match as another child-query
+substring of the same call.
+The C# syntax check distinguishes nullable declaration punctuation such as
+`JsonNode? value = ...` and first arguments of nested-generic calls from
+conditional/comparison operands, evaluated indexer targets, or property-valued
+assignment and invocation receivers before the JSON operation. Even an unresolved bare receiver
+or a one-hop member receiver remains conservative when its local/type identity cannot be proven
+from the audited declaration prefix. Direct casts are part of the
+audited operation, and declaration-type occurrences—including expression-bodied
+method or local-function return types, fully qualified local declaration types,
+and types at any position in generic return wrappers—before a constructor in the
+same containing statement do not consume the annotation, even across line breaks.
 Add `--show-excluded` to a recipe run when you need the effective path scope and
 exclusion diagnostics in JSON output.
 Recipe runs support text output, aggregate JSON with `--json` / `--format json`,
@@ -1513,7 +1556,9 @@ recipe discovery, use `cdidx recipes --names --json` for a deterministic name
 list or `cdidx recipes --summary-only --json` for compact metadata. Recipe row
 streams can be projected with `--search-fields` including `query_name` and
 `recipe`, bounded across child queries with `--total-limit`, and byte-bounded
-with `--max-json-bytes` for NDJSON. Recipe count output can use
+with `--max-json-bytes` for NDJSON. Because the projection whitelist does not
+include classification fields, `--search-fields` skips source-backed classification.
+Recipe count output can use
 `--format count --summary-only --max-json-bytes <n>` to emit only recipe/scope
 names, aggregate counts, per-query counts, and query freshness. Recipe count
 aggregations support `--count-by path|file|symbol|origin|return-type|subsystem`,
@@ -4888,6 +4933,34 @@ recipe definition と query definition の version により、cache consumer �
 を推測せず drift を検出できます。text の recipe output も同じ状態を要約し、SARIF recipe run は
 run properties の `query_freshness` に同じ object を出力します。出力制限された recipe run では
 matched-count metadata を使うため、省略済みの match がある query は zero-match として報告されません。
+`relaxed-json-encoder` query と JSON の read / write query は
+`json_trust_boundary` classifier も公開します。trust boundary が判明している場合は、対象操作の
+直前に source-proximate な注釈を置きます。
+
+```text
+// cdidx-audit: json-trust origin=private_local direction=write sensitivity=diagnostic trust=controlled rationale=operator_only_local_jsonl
+```
+
+`origin` は `private_local`、`public_api`、`network`、`file`、`external`、`unknown`、
+`direction` は `read` または `write`、`sensitivity` は `diagnostic`、`public`、
+`untrusted`、`confidential`、`unknown`、`trust` は `controlled`、`untrusted`、
+`review_required` を受け付けます。`rationale` は ASCII の英数字、`_`、`-`、`.` からなる
+80文字以下の安定した token です。有効な注釈は controlled private writer、external / public
+writer、untrusted parser を分類できます。marker は実際の C# line comment でなければならず、
+regular / verbatim / raw string 内にある注釈形式の text は無視します。条件コンパイル領域内の注釈、
+または preprocessor directive をまたいで対象操作へ到達する注釈は trust evidence にしません。注釈の欠落、不正、
+lexical context 不正、read / write の不一致、または `review_required` の evidence は
+`ambiguous_trust` のままです。guard filter により result が1行へ投影される場合も、各 match line を
+indexed source から検査します。1つの result に異なる trust evidence を持つ match が含まれる場合は、
+`annotation_status:mixed_boundaries` を伴う `ambiguous_trust` として保守的に報告します。
+注釈は次の操作1件だけに束縛され、途中の実行コードや、match と同じ行の先行 statement、評価済み operand、完了済み expression、control-flow block、カンマ区切りの操作がある後続 match は
+`annotation_status:not_adjacent` を伴う `ambiguous_trust` のままです。
+この注釈は `audit_classifications` に根拠を追加するだけで、
+元の recipe result を抑制しないため、external parsing は引き続き表示されます。
+未完了の宣言または代入 prefix が上限付き indexed-source statement 内で audit 対象操作の行まで継続する場合は、隣接性を失いません。注釈探索は固定の3行差に制限されません。
+選択されたすべての JSON child query を横断して、最初の lexical な audit 対象 match が注釈を消費します。後続 match は別の API family に属する場合や、同じ呼び出しに対する別の child-query substring として最初の match に重なる場合も曖昧なままです。
+C# 構文検査では `JsonNode? value = ...` のような nullable 宣言の記号や nested-generic 呼び出しの first argument と、JSON 操作より前に評価される条件式・比較式の operand、indexer 代入先、property-valued な代入 / 呼び出し receiver を区別します。audited declaration prefix から local / type と証明できない単純名 receiver や1段の member receiver も保守的に扱います。
+直接 cast は audit 対象操作の一部として扱い、expression-bodied method / local function の戻り型、完全修飾された local 宣言型、generic return wrapper 内の任意位置にある型を含め、同じ containing statement の constructor より前にある宣言型 occurrence は改行をまたいでも注釈を消費しません。
 `--show-excluded` を recipe と併用すると、有効な path scope と除外診断を出力に含めます。
 recipe run が対応する形式は text output、`--json` / `--format json` の aggregate JSON、
 `--json=ndjson` または `--results-only` の NDJSON row stream、`--format count` の
@@ -4898,6 +4971,8 @@ automation 向けの recipe 発見では、決定的な名前一覧だけなら 
 compact metadata が必要なら `cdidx recipes --summary-only --json` を使います。recipe row stream は
 `query_name` と `recipe` を含む `--search-fields` で投影でき、`--total-limit` で
 child query 全体の emitted row 数を制限でき、NDJSON では `--max-json-bytes` で byte 数を制限できます。
+projection の allowlist は classification field を含まないため、`--search-fields` は
+source-backed 分類を実行しません。
 recipe count output は `--format count --summary-only --max-json-bytes <n>` により、recipe / scope 名、
 aggregate count、query ごとの count、query freshness だけを出力できます。recipe の count aggregation は `--count-by path|file|symbol|origin|return-type|subsystem`、
 `--group-by file|symbol|origin|return-type|subsystem --count`、`--unique path|file|symbol|origin|return-type|subsystem` に対応します。
