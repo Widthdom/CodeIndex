@@ -51,7 +51,8 @@ internal sealed class CSharpCallableTypeKindLookup
         IReadOnlySet<string> fileColumns,
         IReadOnlySet<string> symbolColumns,
         IReadOnlyList<string>? candidateQueries = null,
-        bool exact = false)
+        bool exact = false,
+        bool useFoldedNames = false)
     {
         if (!fileColumns.Contains("lang")
             || !symbolColumns.Contains("name")
@@ -66,7 +67,7 @@ internal sealed class CSharpCallableTypeKindLookup
         {
             var totalChanges = ReadTotalChanges(connection);
             var dataVersion = ReadDataVersion(connection);
-            var scopeKey = BuildScopeKey(candidateQueries, exact);
+            var scopeKey = BuildScopeKey(candidateQueries, exact, useFoldedNames);
             if (_loadedTotalChanges == totalChanges
                 && _loadedDataVersion == dataVersion
                 && string.Equals(_loadedScopeKey, scopeKey, StringComparison.Ordinal))
@@ -84,6 +85,7 @@ internal sealed class CSharpCallableTypeKindLookup
                 symbolColumns,
                 candidateQueries,
                 exact,
+                useFoldedNames,
                 callableFileIds);
             var useFullScan = candidateTypeNames == null
                               || candidateTypeNames.Count > CandidateTypeNameLimit;
@@ -179,16 +181,20 @@ internal sealed class CSharpCallableTypeKindLookup
         }
     }
 
-    private static string BuildScopeKey(IReadOnlyList<string>? candidateQueries, bool exact)
+    private static string BuildScopeKey(
+        IReadOnlyList<string>? candidateQueries,
+        bool exact,
+        bool useFoldedNames)
         => candidateQueries is not { Count: > 0 }
             ? "*"
-            : $"{(exact ? 'e' : 'l')}:{string.Join('\u001f', candidateQueries)}";
+            : $"{(useFoldedNames ? 'f' : 'n')}{(exact ? 'e' : 'l')}:{string.Join('\u001f', candidateQueries)}";
 
     private static HashSet<string>? LoadCandidateCallables(
         SqliteConnection connection,
         IReadOnlySet<string> symbolColumns,
         IReadOnlyList<string>? candidateQueries,
         bool exact,
+        bool useFoldedNames,
         IDictionary<long, long> callableFileIds)
     {
         if (candidateQueries is not { Count: > 0 })
@@ -204,17 +210,22 @@ internal sealed class CSharpCallableTypeKindLookup
             if (leaf.Length == 0)
                 continue;
 
+            var useFoldedColumn = useFoldedNames && symbolColumns.Contains("name_folded");
+            var nameSql = useFoldedColumn ? "s.name_folded" : "s.name";
+            var candidate = useFoldedColumn ? NameFold.Fold(leaf) ?? leaf : leaf;
+            var collation = useFoldedColumn ? "BINARY" : "NOCASE";
+
             if (exact)
             {
                 var explicitParameterName = $"@candidateExplicit{index}";
-                clauses.Add($"(s.name = {parameterName} COLLATE NOCASE OR s.name LIKE {explicitParameterName} ESCAPE '\\')");
-                SqliteCommandPolicy.Add(command, parameterName, leaf);
-                SqliteCommandPolicy.Add(command, explicitParameterName, $"%.{EscapeLike(leaf)}");
+                clauses.Add($"({nameSql} = {parameterName} COLLATE {collation} OR {nameSql} LIKE {explicitParameterName} ESCAPE '\\')");
+                SqliteCommandPolicy.Add(command, parameterName, candidate);
+                SqliteCommandPolicy.Add(command, explicitParameterName, $"%.{EscapeLike(candidate)}");
             }
             else
             {
-                clauses.Add($"s.name LIKE {parameterName} ESCAPE '\\'");
-                SqliteCommandPolicy.Add(command, parameterName, $"%{EscapeLike(leaf)}%");
+                clauses.Add($"{nameSql} LIKE {parameterName} ESCAPE '\\'");
+                SqliteCommandPolicy.Add(command, parameterName, $"%{EscapeLike(candidate)}%");
             }
         }
 

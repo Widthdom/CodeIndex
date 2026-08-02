@@ -2810,6 +2810,82 @@ public partial class QueryCommandRunnerTests
         }
     }
 
+    [Fact]
+    public void PartialCallableGrouping_UsesFoldedCandidateNames_Issue4914()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_folded_candidate_issue4914");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Container.cs",
+                "csharp",
+                """
+                #nullable enable
+                namespace Demo;
+                public class Node { }
+                public partial class Container
+                {
+                    partial void MÉTHODE(Node? value);
+                    partial void MÉTHODE(Node value) { }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var grouped = RunGroupedSymbol(dbPath, "méthode", "function");
+
+            Assert.Equal(2, grouped.GetProperty("definition_sites").GetInt32());
+            Assert.Equal("implementation_body", grouped.GetProperty("representative_reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PartialCallableGrouping_NormalizesNullableTupleShorthand_Issue4914()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_nullable_tuple_issue4914");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Container.cs",
+                "csharp",
+                """
+                #nullable enable
+                namespace Demo;
+                public partial class Container
+                {
+                    partial void M((int, int)? value);
+                    partial void M(global::System.Nullable<(int, int)> value) { }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var grouped = RunGroupedSymbol(dbPath, "M", "function");
+
+            Assert.Equal(2, grouped.GetProperty("definition_sites").GetInt32());
+            Assert.Equal("implementation_body", grouped.GetProperty("representative_reason").GetString());
+            Assert.Equal(
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void M((int, int)? value);",
+                    "M",
+                    "void"),
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void M(global::System.Nullable<(int, int)> value) { }",
+                    "M",
+                    "void"));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     private JsonElement RunGroupedSymbol(string dbPath, string name, string kind)
     {
         var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(

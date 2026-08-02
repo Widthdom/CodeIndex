@@ -2945,6 +2945,36 @@ public partial class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetHotspotFamilySignal_SeparatesFileLocalAndContainingArityFamilies_Issue4914()
+    {
+        InsertIndexedFile("src/A.Host.cs", "csharp",
+            """
+            namespace Demo;
+            file partial class Host { }
+            file partial class Host { }
+            partial class Outer<T> { public partial class Child { } }
+            """);
+        InsertIndexedFile("src/B.Host.cs", "csharp",
+            """
+            namespace Demo;
+            class Host { }
+            partial class Outer<T> { public partial class Child { } }
+            """);
+        InsertIndexedFile("src/C.Host.cs", "csharp",
+            """
+            namespace Demo;
+            class Outer<T1, T2> { public class Child { } }
+            """);
+
+        var reader = new DbReader(_db.Connection);
+        var signal = reader.GetHotspotFamilySignal("csharp");
+
+        Assert.True(signal.Relevant);
+        Assert.True(signal.Ready, signal.DegradedReason);
+        Assert.DoesNotContain("partial_family_key_population=csharp", signal.DegradedReason);
+    }
+
+    [Fact]
     public void GetHotspotFamilySignal_GroupedReadinessDetectsPartialRowsAcrossLanguages()
     {
         InsertIndexedFile("src/csharp/Api.Part1.cs", "csharp",

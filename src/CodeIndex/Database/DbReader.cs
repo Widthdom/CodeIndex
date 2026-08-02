@@ -696,7 +696,8 @@ public partial class DbReader : IDisposable
             _fileColumns,
             _symbolColumns,
             candidateQueries,
-            exact);
+            exact,
+            _foldReady);
     }
 
     private static void RecoverInterruptedFtsBulkLoadForRead(SqliteConnection conn, bool isReadOnly)
@@ -1073,35 +1074,20 @@ public partial class DbReader : IDisposable
 
         HotspotFamilyReadinessBatchForTesting?.Invoke(candidateLangs);
 
-        // Detect every mixed NULL/non-NULL family in one grouped scan. C# type arity is
-        // part of the family identity: a valid non-partial Item and partial Item<T> must
-        // not make the language look partially backfilled merely because their leaf name
-        // and container match. The previous
-        // correlated EXISTS probe rescanned symbols for every stamped language (including
-        // languages absent from the workspace), making reader construction grow toward
-        // O(language-count * symbol-count^2) on large indexes.
-        // NULL/non-NULL が混在する family を全言語まとめて一度の group scan で検出する。C# の
-        // type arity は family identity の一部なので、Item と Item<T> は別 group として扱う。
-        // 旧 correlated EXISTS は未使用言語まで symbols を反復走査していた。
-        // DbReader also accepts an already-open caller-owned connection. Such a connection
-        // has not necessarily passed through DbContext's function registration, so install
-        // this bounded readiness dependency locally before the grouped scan.
-        // DbReader は caller 所有の open 済み connection も受け取る。その connection は
-        // DbContext の関数登録を通っていない場合があるため、この readiness scan が使う
-        // bounded な依存関数をここで登録する。
-        // SQLite resolves every function named by the statement when preparing it,
-        // even when the candidate-language predicate means the C# CASE branch cannot
-        // execute. Register the helper for non-C# readiness batches too.
-        // SQLite は candidate language に C# がなく CASE branch が実行されない場合でも、
-        // statement の prepare 時に参照関数を解決する。そのため非 C# batch でも登録する。
-        if (!HasSqliteFunction(conn, "csharp_definition_type_arity", arity: 3))
-        {
-            conn.CreateFunction(
-                "csharp_definition_type_arity",
-                (string? signature, string? identifier, string? symbolKind) =>
-                    CSharpTypeReferenceArity.GetDefinitionArity(signature, identifier, symbolKind),
-                isDeterministic: true);
-        }
+        // C# has an explicit declaration-level partial fact, so readiness can test the
+        // actual rows that require a family key. Reconstructing a family with only leaf,
+        // container, and arity incorrectly joins file-local types and nested types whose
+        // containing arities differ. Other languages retain the bounded mixed-population
+        // scan until they expose an equivalent declaration fact.
+        // C# には declaration 単位の partial 情報があるため、family key が必要な実際の行を
+        // 直接検査する。leaf・container・arity だけで family を再構築すると、file-local type
+        // や containing arity が異なる nested type を誤って結合する。ほかの言語は同等の
+        // declaration 情報を持つまで bounded な混在 population scan を維持する。
+        const string normalizedSignatureSql =
+            "LOWER(REPLACE(REPLACE(REPLACE(COALESCE(s.signature, ''), CHAR(9), ' '), CHAR(10), ' '), CHAR(13), ' '))";
+        var csharpPartialSql = _symbolColumns.Contains("is_partial_declaration")
+            ? "s.is_partial_declaration = 1"
+            : $"INSTR(' ' || {normalizedSignatureSql} || ' ', ' partial ') > 0";
         using (var cmd = conn.CreateCommand())
         {
             var parameterNames = new string[candidateLangs.Count];
@@ -1112,26 +1098,32 @@ public partial class DbReader : IDisposable
                 SqliteCommandPolicy.Add(cmd, parameterName, candidateLangs[index]);
             }
             cmd.CommandText = $"""
-                SELECT DISTINCT grouped.lang
+                SELECT DISTINCT incomplete.lang
                 FROM (
                     SELECT f.lang
                     FROM symbols s
                     JOIN files f ON f.id = s.file_id
+                    WHERE f.lang = 'csharp'
+                      AND f.lang IN ({string.Join(", ", parameterNames)})
+                      AND {csharpPartialSql}
+                      AND NULLIF(TRIM(s.family_key), '') IS NULL
+
+                    UNION ALL
+
+                    SELECT f.lang
+                    FROM symbols s
+                    JOIN files f ON f.id = s.file_id
                     WHERE f.lang IN ({string.Join(", ", parameterNames)})
+                      AND f.lang <> 'csharp'
                       AND s.name IS NOT NULL
                     GROUP BY
                         f.lang,
                         s.name,
                         s.kind,
-                        COALESCE(s.container_qualified_name, ''),
-                        CASE
-                            WHEN f.lang = 'csharp'
-                                THEN COALESCE(csharp_definition_type_arity(s.signature, s.name, s.kind), -1)
-                            ELSE -1
-                        END
+                        COALESCE(s.container_qualified_name, '')
                     HAVING COUNT(s.family_key) > 0
                        AND COUNT(s.family_key) < COUNT(*)
-                ) grouped
+                ) incomplete
                 """;
             using var reader = cmd.ExecuteTrackedReader();
             while (reader.TrackedRead())
@@ -1145,24 +1137,6 @@ public partial class DbReader : IDisposable
         }
 
         return (readyLangs, incompleteLangs);
-    }
-
-    private static bool HasSqliteFunction(SqliteConnection connection, string name, int arity)
-    {
-        using var command = connection.CreateCommand();
-        command.CommandText = """
-            SELECT EXISTS(
-                SELECT 1
-                FROM pragma_function_list
-                WHERE name = @name
-                  AND narg = @arity
-            )
-            """;
-        SqliteCommandPolicy.Add(command, "@name", name);
-        SqliteCommandPolicy.Add(command, "@arity", arity);
-        return Convert.ToInt64(
-            command.ExecuteScalar(),
-            System.Globalization.CultureInfo.InvariantCulture) != 0;
     }
 
     /// <summary>

@@ -265,7 +265,8 @@ public partial class DbContext : IDisposable
         IReadOnlySet<string> fileColumns,
         IReadOnlySet<string> symbolColumns,
         IReadOnlyList<string>? candidateQueries = null,
-        bool exact = false)
+        bool exact = false,
+        bool useFoldedNames = false)
     {
         var lookup = CSharpCallableTypeKindLookups.GetValue(
             connection,
@@ -275,7 +276,8 @@ public partial class DbContext : IDisposable
             fileColumns,
             symbolColumns,
             candidateQueries,
-            exact);
+            exact,
+            useFoldedNames);
     }
 
     internal static int CountCSharpIdentifierOccurrences(string? text, string? identifier)

@@ -618,6 +618,32 @@ internal static class LogicalPartialSymbolGrouper
                 offset++;
                 continue;
             }
+            if (token == "?" && offset > 0 && tokens[offset - 1] == ")")
+            {
+                // A nullable tuple shorthand is a known value type even without indexed
+                // source facts. Normalize it to the same CLR identity as System.Nullable<T>.
+                // nullable tuple shorthand は indexed source 情報がなくても value type と
+                // 確定できるため、System.Nullable<T> と同じ CLR identity に正規化する。
+                var sourceIdentity = ReadNullableTupleSourceIdentity(tokens, offset);
+                var normalizedSourceIdentity = NormalizeCallableTypeIdentity(
+                    sourceIdentity,
+                    genericParameterNames,
+                    valueConstrainedGenericParameters,
+                    containerQualifiedName,
+                    typeKinds,
+                    symbolId);
+                var currentIdentity = builder.ToString();
+                if (normalizedSourceIdentity.Length > 0
+                    && currentIdentity.EndsWith(normalizedSourceIdentity, StringComparison.Ordinal))
+                {
+                    builder.Length -= normalizedSourceIdentity.Length;
+                    builder.Append("global::System.Nullable<");
+                    builder.Append(normalizedSourceIdentity);
+                    builder.Append('>');
+                    offset++;
+                    continue;
+                }
+            }
             if (token == "?")
             {
                 var sourceIdentity = ReadCustomNullableSourceIdentity(tokens, offset);
@@ -837,6 +863,29 @@ internal static class LogicalPartialSymbolGrouper
         }
 
         return string.Concat(tokens.Skip(nameStart).Take(identityEnd - nameStart + 1));
+    }
+
+    private static string ReadNullableTupleSourceIdentity(
+        IReadOnlyList<string> tokens,
+        int nullableOffset)
+    {
+        var depth = 0;
+        for (var offset = nullableOffset - 1; offset >= 0; offset--)
+        {
+            if (tokens[offset] == ")")
+            {
+                depth++;
+                continue;
+            }
+            if (tokens[offset] != "(")
+                continue;
+
+            depth--;
+            if (depth == 0)
+                return string.Concat(tokens.Skip(offset).Take(nullableOffset - offset));
+        }
+
+        return string.Empty;
     }
 
     private static int FindCustomTypeSegmentStart(
