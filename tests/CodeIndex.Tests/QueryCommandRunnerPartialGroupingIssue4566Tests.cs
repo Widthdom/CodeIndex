@@ -2040,6 +2040,88 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void PartialCanonicalRepresentative_SkipsPreprocessorTriviaWithoutCrossingBranches_Issue4914()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_directive_trivia_issue4914");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            foreach (var path in new[] { "src/A.DirectiveLocal.cs", "src/B.DirectiveLocal.cs" })
+            {
+                TestProjectHelper.InsertIndexedFile(
+                    dbPath,
+                    path,
+                    "csharp",
+                    """
+                    file
+                    #if true
+                    #endif
+                    partial class DirectiveLocal { }
+                    """);
+            }
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.DirectivePartial.cs",
+                "csharp",
+                """
+                partial
+                #nullable enable
+                #if true
+                #endif
+                class DirectivePartial { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/B.DirectivePartial.cs",
+                "csharp",
+                "partial class DirectivePartial { }");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/DirectiveBranchDecoy.cs",
+                "csharp",
+                """
+                #if false
+                partial
+                #endif
+                class DirectiveBranchDecoy { }
+                partial class DirectiveBranchDecoy { }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (localExitCode, localStdout, localStderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunSymbols(
+                    ["DirectiveLocal", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "class", "--group-partials", "--limit", "10"],
+                    _jsonOptions));
+            using var localDocument = ParseJsonOutput(localStdout);
+            var localFamilies = localDocument.RootElement.EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, localExitCode);
+            Assert.Equal(string.Empty, localStderr);
+            Assert.Equal(2, localFamilies.Count);
+            Assert.All(localFamilies, family => Assert.False(family.TryGetProperty("definition_sites", out _)));
+
+            var directivePartial = RunGroupedSymbol(dbPath, "DirectivePartial", "class");
+            Assert.Equal(2, directivePartial.GetProperty("definition_sites").GetInt32());
+
+            var (decoyExitCode, decoyStdout, decoyStderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunSymbols(
+                    ["DirectiveBranchDecoy", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "class", "--group-partials", "--limit", "10"],
+                    _jsonOptions));
+            using var decoyDocument = ParseJsonOutput(decoyStdout);
+            var decoyRows = decoyDocument.RootElement.EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, decoyExitCode);
+            Assert.Equal(string.Empty, decoyStderr);
+            Assert.Equal(2, decoyRows.Count);
+            Assert.All(decoyRows, row => Assert.False(row.TryGetProperty("definition_sites", out _)));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void PartialCanonicalRepresentative_RespectsFileLocalAndLexedEvidence_Issue4914()
     {
         const string definingLine = "    [M()] partial /* M( */ void M();";

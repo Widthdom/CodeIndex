@@ -653,6 +653,7 @@ public static partial class SymbolExtractor
         var attributeDepth = 0;
         var pendingAttributeEvidence = false;
         var pendingAttributeIsGlobal = false;
+        var closedConditionalDirectiveDepth = 0;
 
         // Standalone modifiers, attributes, and documentation on preceding lines bind to
         // the first declaration occurrence on the next line. Later same-line declarations
@@ -690,6 +691,46 @@ public static partial class SymbolExtractor
 
             var startsInDeclarationCode = lineStartState.Mode == CSharpLexMode.Code
                 && lineStartState.InterpolationBraceDepth == 0;
+            var sanitizedLine = LexCSharpLine(lines[lineIndex], lineStartState).SanitizedLine;
+            var trimmed = sanitizedLine.AsSpan().Trim();
+            if (startsInDeclarationCode
+                && TryReadCSharpDirectiveKeyword(trimmed, out var directiveKeyword))
+            {
+                switch (directiveKeyword)
+                {
+                    case "endif":
+                        closedConditionalDirectiveDepth++;
+                        break;
+                    case "if" when closedConditionalDirectiveDepth > 0:
+                        closedConditionalDirectiveDepth--;
+                        break;
+                    case "else" or "elif" when closedConditionalDirectiveDepth == 0:
+                        // Do not cross into a sibling conditional branch while looking for
+                        // modifiers belonging to the current declaration.
+                        // 現在の declaration に属する modifier を探す際、兄弟の条件分岐へ
+                        // 遡らない。
+                        return new CSharpLeadingDeclarationEvidence(
+                            hasPartialModifier,
+                            hasFileModifier,
+                            hasAttribute,
+                            hasDocumentation);
+                }
+                continue;
+            }
+
+            if (closedConditionalDirectiveDepth > 0)
+            {
+                // Only an empty, trivia-only conditional block can sit between a modifier
+                // and its declaration. Code in any branch is a declaration boundary; in
+                // particular, never treat an inactive branch's modifier as active evidence.
+                // modifier と declaration の間をまたげるのは、trivia だけの空の条件block
+                // に限る。いずれかの branch に code があれば declaration 境界とし、特に
+                // inactive branch の modifier を有効な evidence として扱わない。
+                if (trimmed.IsEmpty)
+                    continue;
+                break;
+            }
+
             if (startsInDeclarationCode && raw.StartsWith("///", StringComparison.Ordinal))
             {
                 hasDocumentation |= documentationEvidenceAdjacent;
@@ -702,8 +743,6 @@ public static partial class SymbolExtractor
                 continue;
             }
 
-            var sanitizedLine = LexCSharpLine(lines[lineIndex], lineStartState).SanitizedLine;
-            var trimmed = sanitizedLine.AsSpan().Trim();
             if (trimmed.IsEmpty)
                 continue;
 
@@ -757,6 +796,35 @@ public static partial class SymbolExtractor
             hasFileModifier,
             hasAttribute,
             hasDocumentation);
+    }
+
+    private static bool TryReadCSharpDirectiveKeyword(
+        ReadOnlySpan<char> line,
+        out string keyword)
+    {
+        keyword = string.Empty;
+        if (line.IsEmpty || line[0] != '#')
+            return false;
+
+        var directive = line[1..].TrimStart();
+        foreach (var candidate in new[] { "endif", "elif", "else", "if" })
+        {
+            if (!directive.StartsWith(candidate, StringComparison.Ordinal)
+                || (directive.Length > candidate.Length
+                    && IsCSharpIdentifierPart(directive[candidate.Length])))
+            {
+                continue;
+            }
+
+            keyword = candidate;
+            return true;
+        }
+
+        // Other directives (`#nullable`, `#pragma`, `#line`, and so on) are also
+        // declaration trivia, but do not change the conditional-branch depth.
+        // `#nullable`、`#pragma`、`#line` などのほかの directive も declaration
+        // trivia だが、条件分岐の深さは変更しない。
+        return true;
     }
 
     private static bool HasCSharpDeclarationLineLeadingAttribute(
