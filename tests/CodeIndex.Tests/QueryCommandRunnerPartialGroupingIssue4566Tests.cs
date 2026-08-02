@@ -2231,6 +2231,125 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void PartialCanonicalRepresentative_PreservesProjectScopeForNullableTypeFacts_Issue4914()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_project_nullable_issue4914");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "A/A.csproj",
+                "msbuild",
+                "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "A/Types.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public class Node { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "A/Partials.cs",
+                "csharp",
+                """
+                #nullable enable
+                namespace Demo;
+                public partial class Container
+                {
+                    partial void Scoped(Node? value);
+                    partial void Scoped(Node value) { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "B/B.csproj",
+                "msbuild",
+                "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "B/Types.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public struct Node { }
+                """);
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            using (var command = db.Connection.CreateCommand())
+            {
+                command.CommandText =
+                    """
+                    UPDATE symbols
+                    SET family_key = 'A|' || family_key
+                    WHERE family_key IS NOT NULL
+                      AND file_id IN (SELECT id FROM files WHERE path LIKE 'A/%');
+                    UPDATE symbols
+                    SET family_key = 'B|' || family_key
+                    WHERE family_key IS NOT NULL
+                      AND file_id IN (SELECT id FROM files WHERE path LIKE 'B/%');
+                    """;
+                command.ExecuteNonQuery();
+            }
+            MarkGraphAndFoldReady(dbPath);
+
+            var grouped = RunGroupedSymbol(dbPath, "Scoped", "function");
+
+            Assert.Equal(2, grouped.GetProperty("definition_sites").GetInt32());
+            Assert.Contains("Node value", grouped.GetProperty("signature").GetString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PartialCanonicalRepresentative_CanonicalizesExplicitNullableValueType_Issue4914()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_explicit_nullable_issue4914");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Container.cs",
+                "csharp",
+                """
+                #nullable enable
+                public struct Token { }
+                public partial class Container
+                {
+                    partial void NullableValue(Token? value);
+                    partial void NullableValue(global::System.Nullable<Token> value) { }
+                    partial void NullableGeneric<T>(T? value) where T : struct;
+                    partial void NullableGeneric<T>(global::System.Nullable<T> value) where T : struct { }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var grouped = RunGroupedSymbol(dbPath, "NullableValue", "function");
+            var groupedGeneric = RunGroupedSymbol(dbPath, "NullableGeneric", "function");
+
+            Assert.Equal(2, grouped.GetProperty("definition_sites").GetInt32());
+            Assert.Contains(
+                "global::System.Nullable<Token>",
+                grouped.GetProperty("signature").GetString(),
+                StringComparison.Ordinal);
+            Assert.Equal(2, groupedGeneric.GetProperty("definition_sites").GetInt32());
+            Assert.Contains(
+                "global::System.Nullable<T>",
+                groupedGeneric.GetProperty("signature").GetString(),
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void PartialCanonicalRepresentative_ResolvesScopedAndGenericNullableIdentities_Issue4914()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_scoped_nullable_issue4914");

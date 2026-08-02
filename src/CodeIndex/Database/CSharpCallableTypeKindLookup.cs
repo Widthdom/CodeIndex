@@ -27,6 +27,7 @@ internal sealed class CSharpCallableTypeKindLookup
     private static readonly AsyncLocal<Action<CandidateScanStats>?> CandidateScanObserver = new();
     private readonly object _gate = new();
     private Dictionary<string, int> _identityKinds = new(StringComparer.Ordinal);
+    private Dictionary<ScopedTypeIdentity, int> _scopedIdentityKinds = new();
     private Dictionary<FileTypeIdentity, int> _fileIdentityKinds = new();
     private Dictionary<long, long> _callableFileIds = new();
     private long? _loadedTotalChanges;
@@ -75,6 +76,7 @@ internal sealed class CSharpCallableTypeKindLookup
 
             ScanForTesting?.Invoke();
             var identityKinds = new Dictionary<string, int>(StringComparer.Ordinal);
+            var scopedIdentityKinds = new Dictionary<ScopedTypeIdentity, int>();
             var fileIdentityKinds = new Dictionary<FileTypeIdentity, int>();
             var callableFileIds = new Dictionary<long, long>();
             var candidateTypeNames = LoadCandidateCallables(
@@ -90,7 +92,8 @@ internal sealed class CSharpCallableTypeKindLookup
             var facts = LoadTypeFacts(
                 connection,
                 symbolColumns,
-                useFullScan ? null : candidateTypeNames);
+                useFullScan ? null : candidateTypeNames,
+                LoadCSharpProjectMarkerCounts(connection));
             CandidateScanForTesting?.Invoke(new CandidateScanStats(
                 useFullScan,
                 callableFileIds.Count,
@@ -113,11 +116,18 @@ internal sealed class CSharpCallableTypeKindLookup
                 {
                     Add(fileIdentityKinds, new FileTypeIdentity(fact.FileId, identity), fact.Kind);
                     if (!fact.IsFileLocal)
+                    {
                         Add(identityKinds, identity, fact.Kind);
+                        Add(
+                            scopedIdentityKinds,
+                            new ScopedTypeIdentity(fact.ProjectScope, identity),
+                            fact.Kind);
+                    }
                 }
             }
 
             _identityKinds = identityKinds;
+            _scopedIdentityKinds = scopedIdentityKinds;
             _fileIdentityKinds = fileIdentityKinds;
             _callableFileIds = callableFileIds;
             _loadedTotalChanges = totalChanges;
@@ -137,18 +147,19 @@ internal sealed class CSharpCallableTypeKindLookup
 
         lock (_gate)
         {
+            var projectScope = ExtractProjectScope(containerQualifiedName);
             var fileId = symbolId.HasValue
                 && _callableFileIds.TryGetValue(symbolId.Value, out var resolvedFileId)
                     ? resolvedFileId
                     : (long?)null;
             if (sourceIdentity.StartsWith("global::", StringComparison.Ordinal))
-                return ResolveIdentity(normalizedSource, fileId);
+                return ResolveIdentity(normalizedSource, fileId, projectScope);
 
             var container = NormalizeFamilyIdentity(containerQualifiedName);
             while (container.Length > 0)
             {
                 var qualified = $"{container}.{normalizedSource}";
-                var resolved = ResolveIdentity(qualified, fileId);
+                var resolved = ResolveIdentity(qualified, fileId, projectScope);
                 if (resolved != TypeKind.Unknown)
                     return resolved;
 
@@ -156,7 +167,7 @@ internal sealed class CSharpCallableTypeKindLookup
                 container = separator < 0 ? string.Empty : container[..separator];
             }
 
-            var direct = ResolveIdentity(normalizedSource, fileId);
+            var direct = ResolveIdentity(normalizedSource, fileId, projectScope);
             if (direct != TypeKind.Unknown)
                 return direct;
             // A same-leaf declaration elsewhere in the index does not prove C# binding.
@@ -244,7 +255,8 @@ internal sealed class CSharpCallableTypeKindLookup
     private static List<TypeFact> LoadTypeFacts(
         SqliteConnection connection,
         IReadOnlySet<string> symbolColumns,
-        IReadOnlySet<string>? typeNames)
+        IReadOnlySet<string>? typeNames,
+        IReadOnlyDictionary<string, int> projectMarkerCounts)
     {
         var facts = new List<TypeFact>();
         if (typeNames is { Count: 0 })
@@ -286,7 +298,8 @@ internal sealed class CSharpCallableTypeKindLookup
                    {startLineSql},
                    {endLineSql},
                    {isPartialSql},
-                   {isFileLocalSql}
+                   {isFileLocalSql},
+                   f.path
             FROM symbols AS s
             JOIN files AS f ON f.id = s.file_id
             WHERE f.lang = 'csharp'
@@ -313,6 +326,10 @@ internal sealed class CSharpCallableTypeKindLookup
             var isFileLocal = reader.IsDBNull(9)
                 ? ContainsDeclarationModifier(signature, "file") || IsFileLocalFamily(familyKey)
                 : reader.GetBoolean(9) || IsFileLocalFamily(familyKey);
+            var filePath = reader.GetString(10);
+            var projectScope = ExtractProjectScope(familyKey);
+            if (projectScope.Length == 0)
+                projectScope = ResolveProjectScope(filePath, projectMarkerCounts);
             facts.Add(new TypeFact(
                 NormalizeIdentity(name),
                 NormalizeIdentity(container),
@@ -320,11 +337,74 @@ internal sealed class CSharpCallableTypeKindLookup
                 IsValueTypeDeclaration(signature, kind) ? TypeKind.Value : TypeKind.Reference,
                 isPartial && ownsFamilyIdentity ? NormalizeFamilyIdentity(familyKey) : string.Empty,
                 isFileLocal,
+                projectScope,
                 fileId,
                 startLine,
                 endLine));
         }
         return facts;
+    }
+
+    private static Dictionary<string, int> LoadCSharpProjectMarkerCounts(SqliteConnection connection)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT path FROM files WHERE path LIKE '%.csproj' COLLATE NOCASE";
+        var markerCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            var directory = GetPathDirectory(NormalizeIndexedPath(reader.GetString(0)));
+            markerCounts.TryGetValue(directory, out var count);
+            markerCounts[directory] = count + 1;
+        }
+        return markerCounts;
+    }
+
+    private static string ResolveProjectScope(
+        string filePath,
+        IReadOnlyDictionary<string, int> projectMarkerCounts)
+    {
+        var normalizedPath = NormalizeIndexedPath(filePath);
+        var directory = GetPathDirectory(normalizedPath);
+        while (true)
+        {
+            if (projectMarkerCounts.TryGetValue(directory, out var markerCount))
+            {
+                if (markerCount == 1)
+                    return directory;
+                return DeriveAmbiguousProjectScope(normalizedPath, directory);
+            }
+
+            if (directory == ".")
+                break;
+            directory = GetPathDirectory(directory);
+        }
+
+        return FileIndexer.DeriveFallbackFamilyScopeKey(normalizedPath);
+    }
+
+    private static string DeriveAmbiguousProjectScope(string filePath, string anchorScope)
+    {
+        var relativeFromAnchor = anchorScope == "."
+            ? filePath
+            : filePath[(anchorScope.Length + 1)..];
+        var firstSeparator = relativeFromAnchor.IndexOf('/');
+        var childScope = firstSeparator < 0
+            ? $"__file__/{relativeFromAnchor}"
+            : relativeFromAnchor[..firstSeparator];
+        return anchorScope == "." ? childScope : $"{anchorScope}/{childScope}";
+    }
+
+    private static string NormalizeIndexedPath(string path)
+    {
+        var normalized = path.Replace('\\', '/').Trim('/');
+        return normalized.Length == 0 ? "." : normalized;
+    }
+
+    private static string GetPathDirectory(string path)
+    {
+        var separator = path.LastIndexOf('/');
+        return separator < 0 ? "." : path[..separator];
     }
 
     private static void LoadAllCallableFileIds(
@@ -388,7 +468,7 @@ internal sealed class CSharpCallableTypeKindLookup
             .Replace("%", "\\%", StringComparison.Ordinal)
             .Replace("_", "\\_", StringComparison.Ordinal);
 
-    private TypeKind ResolveIdentity(string identity, long? fileId)
+    private TypeKind ResolveIdentity(string identity, long? fileId, string projectScope)
     {
         if (fileId.HasValue)
         {
@@ -397,6 +477,15 @@ internal sealed class CSharpCallableTypeKindLookup
                 new FileTypeIdentity(fileId.Value, identity));
             if (fileKind != TypeKind.Unknown)
                 return fileKind;
+        }
+
+        if (projectScope.Length > 0)
+        {
+            var scopedKind = GetUnambiguousKind(
+                _scopedIdentityKinds,
+                new ScopedTypeIdentity(projectScope, identity));
+            if (scopedKind != TypeKind.Unknown)
+                return scopedKind;
         }
 
         return GetUnambiguousKind(_identityKinds, identity);
@@ -507,6 +596,16 @@ internal sealed class CSharpCallableTypeKindLookup
             : normalized;
     }
 
+    private static string ExtractProjectScope(string? familyKey)
+    {
+        if (string.IsNullOrWhiteSpace(familyKey))
+            return string.Empty;
+
+        var normalized = familyKey.Trim();
+        var scopeSeparator = normalized.IndexOf('|');
+        return scopeSeparator > 0 ? normalized[..scopeSeparator] : string.Empty;
+    }
+
     private static bool IsFileLocalFamily(string? familyKey)
     {
         if (string.IsNullOrWhiteSpace(familyKey))
@@ -602,6 +701,7 @@ internal sealed class CSharpCallableTypeKindLookup
         TypeKind Kind,
         string FamilyIdentity,
         bool IsFileLocal,
+        string ProjectScope,
         long FileId,
         int StartLine,
         int EndLine);
@@ -612,4 +712,5 @@ internal sealed class CSharpCallableTypeKindLookup
         int TypeFactCount);
 
     private readonly record struct FileTypeIdentity(long FileId, string Identity);
+    private readonly record struct ScopedTypeIdentity(string ProjectScope, string Identity);
 }

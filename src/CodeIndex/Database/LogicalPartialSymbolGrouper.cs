@@ -618,21 +618,44 @@ internal static class LogicalPartialSymbolGrouper
                 offset++;
                 continue;
             }
-            if (token == "?"
-                && typeKinds?.Resolve(
-                    ReadCustomNullableSourceIdentity(tokens, offset),
-                    containerQualifiedName,
-                    symbolId) == CSharpCallableTypeKindLookup.TypeKind.Reference)
+            if (token == "?")
             {
-                // Nullable reference annotations do not participate in a C# callable
-                // signature. Remove one only when the indexed source type facts resolve
-                // the annotated custom type as a reference type; unknown and value types
-                // retain `?` so overloads such as M(S) / M(S?) remain distinct.
-                // nullable reference annotation は C# callable signature の一部ではない。
-                // indexed source type 情報で custom type が reference type と確定した場合
-                // だけ除去し、unknown / value type の `?` は保持する。
-                offset++;
-                continue;
+                var sourceIdentity = ReadCustomNullableSourceIdentity(tokens, offset);
+                var resolvedKind = typeKinds?.Resolve(
+                    sourceIdentity,
+                    containerQualifiedName,
+                    symbolId);
+                if (resolvedKind == CSharpCallableTypeKindLookup.TypeKind.Reference)
+                {
+                    // Nullable reference annotations do not participate in a C# callable
+                    // signature. Remove one only when indexed source facts resolve the
+                    // annotated custom type as a reference type.
+                    // nullable reference annotation は C# callable signature の一部ではない。
+                    // indexed source 情報で reference type と確定した場合だけ除去する。
+                    offset++;
+                    continue;
+                }
+                if (resolvedKind == CSharpCallableTypeKindLookup.TypeKind.Value)
+                {
+                    var normalizedSourceIdentity = NormalizeCallableTypeIdentity(
+                        sourceIdentity,
+                        genericParameterNames,
+                        valueConstrainedGenericParameters,
+                        containerQualifiedName,
+                        typeKinds,
+                        symbolId);
+                    var currentIdentity = builder.ToString();
+                    if (normalizedSourceIdentity.Length > 0
+                        && currentIdentity.EndsWith(normalizedSourceIdentity, StringComparison.Ordinal))
+                    {
+                        builder.Length -= normalizedSourceIdentity.Length;
+                        builder.Append("global::System.Nullable<");
+                        builder.Append(normalizedSourceIdentity);
+                        builder.Append('>');
+                        offset++;
+                        continue;
+                    }
+                }
             }
             if (!IsIdentifierCharacter(token[0]))
             {
@@ -664,8 +687,19 @@ internal static class LogicalPartialSymbolGrouper
                 || (offset + 1 < tokens.Count && tokens[offset + 1] is "." or ":");
             if (genericParameterIndex >= 0 && !isQualifiedTypeSegment)
             {
-                builder.Append('`');
-                builder.Append(genericParameterIndex.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                var genericIdentity = $"`{genericParameterIndex.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+                var hasNullableSuffix = offset + 1 < tokens.Count && tokens[offset + 1] == "?";
+                if (hasNullableSuffix
+                    && valueConstrainedGenericParameters?.Contains(genericParameterIndex) == true)
+                {
+                    builder.Append("global::System.Nullable<");
+                    builder.Append(genericIdentity);
+                    builder.Append('>');
+                    offset += 2;
+                    continue;
+                }
+
+                builder.Append(genericIdentity);
                 offset++;
                 if (offset < tokens.Count
                     && tokens[offset] == "?"
