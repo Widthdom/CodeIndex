@@ -402,8 +402,9 @@ public partial class DbReader
     public QueryCountResult CountSearchSymbolsTotal(IReadOnlyList<string>? queries, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null, bool groupPartials = false)
     {
         lang = DbReader.NormalizeQueryLanguage(lang);
+        var effectiveQueries = NormalizeSymbolSearchQueries(queries, lang, exact);
         if (groupPartials)
-            EnsureCSharpCallableTypeKinds(lang);
+            EnsureCSharpCallableTypeKinds(lang, effectiveQueries, exact);
         using var cmd = _conn.CreateCommand();
 
         var logicalPartialKeySql = LogicalPartialSymbolGrouper.BuildSqlKeyExpression(
@@ -428,7 +429,6 @@ public partial class DbReader
             JOIN files f ON s.file_id = f.id
             WHERE 1=1";
 
-        var effectiveQueries = NormalizeSymbolSearchQueries(queries, lang, exact);
         if (effectiveQueries != null && effectiveQueries.Count > 0)
         {
             var orClauses = exact
@@ -606,7 +606,7 @@ public partial class DbReader
         }
 
         if (groupPartials)
-            EnsureCSharpCallableTypeKinds(lang);
+            EnsureCSharpCallableTypeKinds(lang, validQueries, exact);
         using var cmd = _conn.CreateCommand();
 
         var startLineSql = GetSymbolColumnSql("start_line", "s.line");

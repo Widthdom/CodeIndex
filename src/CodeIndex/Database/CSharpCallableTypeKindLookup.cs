@@ -21,15 +21,17 @@ internal sealed class CSharpCallableTypeKindLookup
 
     private const int ReferenceKindFlag = 1;
     private const int ValueKindFlag = 2;
+    private const int CandidateTypeNameLimit = 512;
+    private const int CandidateCallableLimit = 4_096;
     private static readonly AsyncLocal<Action?> ScanObserver = new();
+    private static readonly AsyncLocal<Action<CandidateScanStats>?> CandidateScanObserver = new();
     private readonly object _gate = new();
     private Dictionary<string, int> _identityKinds = new(StringComparer.Ordinal);
-    private Dictionary<string, int> _leafKinds = new(StringComparer.Ordinal);
     private Dictionary<FileTypeIdentity, int> _fileIdentityKinds = new();
-    private Dictionary<FileTypeIdentity, int> _fileLeafKinds = new();
     private Dictionary<long, long> _callableFileIds = new();
     private long? _loadedTotalChanges;
     private long? _loadedDataVersion;
+    private string? _loadedScopeKey;
 
     internal static Action? ScanForTesting
     {
@@ -37,10 +39,18 @@ internal sealed class CSharpCallableTypeKindLookup
         set => ScanObserver.Value = value;
     }
 
+    internal static Action<CandidateScanStats>? CandidateScanForTesting
+    {
+        get => CandidateScanObserver.Value;
+        set => CandidateScanObserver.Value = value;
+    }
+
     internal void RefreshIfChanged(
         SqliteConnection connection,
         IReadOnlySet<string> fileColumns,
-        IReadOnlySet<string> symbolColumns)
+        IReadOnlySet<string> symbolColumns,
+        IReadOnlyList<string>? candidateQueries = null,
+        bool exact = false)
     {
         if (!fileColumns.Contains("lang")
             || !symbolColumns.Contains("name")
@@ -55,80 +65,36 @@ internal sealed class CSharpCallableTypeKindLookup
         {
             var totalChanges = ReadTotalChanges(connection);
             var dataVersion = ReadDataVersion(connection);
-            if (_loadedTotalChanges == totalChanges && _loadedDataVersion == dataVersion)
+            var scopeKey = BuildScopeKey(candidateQueries, exact);
+            if (_loadedTotalChanges == totalChanges
+                && _loadedDataVersion == dataVersion
+                && string.Equals(_loadedScopeKey, scopeKey, StringComparison.Ordinal))
+            {
                 return;
+            }
 
             ScanForTesting?.Invoke();
             var identityKinds = new Dictionary<string, int>(StringComparer.Ordinal);
-            var leafKinds = new Dictionary<string, int>(StringComparer.Ordinal);
             var fileIdentityKinds = new Dictionary<FileTypeIdentity, int>();
-            var fileLeafKinds = new Dictionary<FileTypeIdentity, int>();
             var callableFileIds = new Dictionary<long, long>();
-            var facts = new List<TypeFact>();
-            using var command = connection.CreateCommand();
-            var startLineSql = symbolColumns.Contains("start_line")
-                ? "COALESCE(s.start_line, s.line)"
-                : "s.line";
-            var endLineSql = symbolColumns.Contains("end_line")
-                ? "COALESCE(s.end_line, s.line)"
-                : "s.line";
-            var familyKeySql = symbolColumns.Contains("family_key") ? "s.family_key" : "NULL";
-            var isPartialSql = symbolColumns.Contains("is_partial_declaration")
-                ? "s.is_partial_declaration"
-                : "NULL";
-            var isFileLocalSql = symbolColumns.Contains("is_file_local_declaration")
-                ? "s.is_file_local_declaration"
-                : "NULL";
-            command.CommandText = $"""
-                SELECT s.name,
-                       s.container_qualified_name,
-                       s.signature,
-                       s.kind,
-                       {familyKeySql},
-                       s.file_id,
-                       {startLineSql},
-                       {endLineSql},
-                       {isPartialSql},
-                       {isFileLocalSql}
-                FROM symbols AS s
-                JOIN files AS f ON f.id = s.file_id
-                WHERE f.lang = 'csharp'
-                  AND s.name IS NOT NULL
-                  AND s.kind IN ('class', 'struct', 'interface', 'record', 'enum', 'delegate')
-                """;
-            using var reader = command.ExecuteReader();
-            while (reader.Read())
-            {
-                var name = reader.GetString(0);
-                var container = reader.IsDBNull(1) ? null : reader.GetString(1);
-                var signature = reader.IsDBNull(2) ? null : reader.GetString(2);
-                var kind = reader.GetString(3);
-                var familyKey = reader.IsDBNull(4) ? null : reader.GetString(4);
-                var fileId = reader.GetInt64(5);
-                var startLine = reader.GetInt32(6);
-                var endLine = reader.GetInt32(7);
-                var arity = CSharpTypeReferenceArity.GetDefinitionArity(signature, name, kind) ?? 0;
-                var ownsFamilyIdentity = OwnsFamilyIdentity(familyKey, name, arity);
-                var isPartial = reader.IsDBNull(8)
-                    ? ownsFamilyIdentity
-                    : reader.GetBoolean(8);
-                var isFileLocal = reader.IsDBNull(9)
-                    ? ContainsDeclarationModifier(signature, "file") || IsFileLocalFamily(familyKey)
-                    : reader.GetBoolean(9) || IsFileLocalFamily(familyKey);
-                var typeKind = IsValueTypeDeclaration(signature, kind)
-                    ? TypeKind.Value
-                    : TypeKind.Reference;
-                facts.Add(new TypeFact(
-                    NormalizeIdentity(name),
-                    NormalizeIdentity(container),
-                    arity,
-                    typeKind,
-                    isPartial && ownsFamilyIdentity ? NormalizeFamilyIdentity(familyKey) : string.Empty,
-                    isFileLocal,
-                    fileId,
-                    startLine,
-                    endLine));
-            }
+            var candidateTypeNames = LoadCandidateCallables(
+                connection,
+                symbolColumns,
+                candidateQueries,
+                exact,
+                callableFileIds);
+            var useFullScan = candidateTypeNames == null
+                              || candidateTypeNames.Count > CandidateTypeNameLimit;
+            if (useFullScan)
+                LoadAllCallableFileIds(connection, callableFileIds);
+            var facts = LoadTypeFacts(
+                connection,
+                symbolColumns,
+                useFullScan ? null : candidateTypeNames);
+            CandidateScanForTesting?.Invoke(new CandidateScanStats(
+                useFullScan,
+                callableFileIds.Count,
+                facts.Count));
 
             var factsByIdentity = facts
                 .GroupBy(BuildUnqualifiedIdentity, StringComparer.Ordinal)
@@ -139,10 +105,6 @@ internal sealed class CSharpCallableTypeKindLookup
             var resolvedIdentities = new Dictionary<TypeFact, IReadOnlyList<string>>();
             foreach (var fact in facts)
             {
-                var arityName = AppendArity(fact.Name, fact.Arity);
-                Add(fileLeafKinds, new FileTypeIdentity(fact.FileId, arityName), fact.Kind);
-                if (!fact.IsFileLocal)
-                    Add(leafKinds, arityName, fact.Kind);
                 foreach (var identity in ResolveIdentities(
                              fact,
                              containingFacts,
@@ -155,27 +117,12 @@ internal sealed class CSharpCallableTypeKindLookup
                 }
             }
 
-            using (var callableCommand = connection.CreateCommand())
-            {
-                callableCommand.CommandText = """
-                    SELECT s.id, s.file_id
-                    FROM symbols AS s
-                    JOIN files AS f ON f.id = s.file_id
-                    WHERE f.lang = 'csharp'
-                      AND s.kind IN ('function', 'test.method')
-                    """;
-                using var callableReader = callableCommand.ExecuteReader();
-                while (callableReader.Read())
-                    callableFileIds[callableReader.GetInt64(0)] = callableReader.GetInt64(1);
-            }
-
             _identityKinds = identityKinds;
-            _leafKinds = leafKinds;
             _fileIdentityKinds = fileIdentityKinds;
-            _fileLeafKinds = fileLeafKinds;
             _callableFileIds = callableFileIds;
             _loadedTotalChanges = totalChanges;
             _loadedDataVersion = dataVersion;
+            _loadedScopeKey = scopeKey;
         }
     }
 
@@ -212,20 +159,234 @@ internal sealed class CSharpCallableTypeKindLookup
             var direct = ResolveIdentity(normalizedSource, fileId);
             if (direct != TypeKind.Unknown)
                 return direct;
-
-            var leafSeparator = normalizedSource.LastIndexOf('.');
-            var leaf = leafSeparator < 0 ? normalizedSource : normalizedSource[(leafSeparator + 1)..];
-            if (fileId.HasValue)
-            {
-                var fileKind = GetUnambiguousKind(
-                    _fileLeafKinds,
-                    new FileTypeIdentity(fileId.Value, leaf));
-                if (fileKind != TypeKind.Unknown)
-                    return fileKind;
-            }
-            return GetUnambiguousKind(_leafKinds, leaf);
+            // A same-leaf declaration elsewhere in the index does not prove C# binding.
+            // Keep unqualified/import-dependent names unresolved unless a qualified container
+            // identity above established the target.
+            // index 内の同名 leaf だけでは C# binding の根拠にならない。上記の qualified
+            // container identity で対象を確定できない名前は unresolved のまま保持する。
+            return TypeKind.Unknown;
         }
     }
+
+    private static string BuildScopeKey(IReadOnlyList<string>? candidateQueries, bool exact)
+        => candidateQueries is not { Count: > 0 }
+            ? "*"
+            : $"{(exact ? 'e' : 'l')}:{string.Join('\u001f', candidateQueries)}";
+
+    private static HashSet<string>? LoadCandidateCallables(
+        SqliteConnection connection,
+        IReadOnlySet<string> symbolColumns,
+        IReadOnlyList<string>? candidateQueries,
+        bool exact,
+        IDictionary<long, long> callableFileIds)
+    {
+        if (candidateQueries is not { Count: > 0 })
+            return null;
+
+        using var command = connection.CreateCommand();
+        var clauses = new List<string>(candidateQueries.Count);
+        for (var index = 0; index < candidateQueries.Count; index++)
+        {
+            var parameterName = $"@candidate{index}";
+            var query = candidateQueries[index];
+            var leaf = SqlNameResolver.GetLeafName(query).TrimStart('@');
+            if (leaf.Length == 0)
+                continue;
+
+            if (exact)
+            {
+                var explicitParameterName = $"@candidateExplicit{index}";
+                clauses.Add($"(s.name = {parameterName} COLLATE NOCASE OR s.name LIKE {explicitParameterName} ESCAPE '\\')");
+                SqliteCommandPolicy.Add(command, parameterName, leaf);
+                SqliteCommandPolicy.Add(command, explicitParameterName, $"%.{EscapeLike(leaf)}");
+            }
+            else
+            {
+                clauses.Add($"s.name LIKE {parameterName} ESCAPE '\\'");
+                SqliteCommandPolicy.Add(command, parameterName, $"%{EscapeLike(leaf)}%");
+            }
+        }
+
+        if (clauses.Count == 0)
+            return [];
+
+        var returnTypeSql = symbolColumns.Contains("return_type") ? "s.return_type" : "NULL";
+        command.CommandText = $"""
+            SELECT s.id,
+                   s.file_id,
+                   s.signature,
+                   s.container_qualified_name,
+                   {returnTypeSql}
+            FROM symbols AS s
+            JOIN files AS f ON f.id = s.file_id
+            WHERE f.lang = 'csharp'
+              AND s.kind IN ('function', 'test.method')
+              AND ({string.Join(" OR ", clauses)})
+            LIMIT {CandidateCallableLimit + 1}
+            """;
+        var typeNames = new HashSet<string>(StringComparer.Ordinal);
+        using var reader = command.ExecuteReader();
+        var count = 0;
+        while (reader.Read())
+        {
+            if (++count > CandidateCallableLimit)
+                return null;
+            callableFileIds[reader.GetInt64(0)] = reader.GetInt64(1);
+            AddIdentifiers(typeNames, reader.IsDBNull(2) ? null : reader.GetString(2));
+            AddIdentifiers(typeNames, reader.IsDBNull(3) ? null : reader.GetString(3));
+            AddIdentifiers(typeNames, reader.IsDBNull(4) ? null : reader.GetString(4));
+            if (typeNames.Count > CandidateTypeNameLimit)
+                return null;
+        }
+        return typeNames;
+    }
+
+    private static List<TypeFact> LoadTypeFacts(
+        SqliteConnection connection,
+        IReadOnlySet<string> symbolColumns,
+        IReadOnlySet<string>? typeNames)
+    {
+        var facts = new List<TypeFact>();
+        if (typeNames is { Count: 0 })
+            return facts;
+
+        using var command = connection.CreateCommand();
+        var startLineSql = symbolColumns.Contains("start_line")
+            ? "COALESCE(s.start_line, s.line)"
+            : "s.line";
+        var endLineSql = symbolColumns.Contains("end_line")
+            ? "COALESCE(s.end_line, s.line)"
+            : "s.line";
+        var familyKeySql = symbolColumns.Contains("family_key") ? "s.family_key" : "NULL";
+        var isPartialSql = symbolColumns.Contains("is_partial_declaration")
+            ? "s.is_partial_declaration"
+            : "NULL";
+        var isFileLocalSql = symbolColumns.Contains("is_file_local_declaration")
+            ? "s.is_file_local_declaration"
+            : "NULL";
+        var typeNameFilter = string.Empty;
+        if (typeNames is { Count: > 0 })
+        {
+            var orderedNames = typeNames.OrderBy(name => name, StringComparer.Ordinal).ToArray();
+            var parameters = new string[orderedNames.Length];
+            for (var index = 0; index < orderedNames.Length; index++)
+            {
+                parameters[index] = $"@typeName{index}";
+                SqliteCommandPolicy.Add(command, parameters[index], orderedNames[index]);
+            }
+            typeNameFilter = $" AND s.name IN ({string.Join(", ", parameters)})";
+        }
+        command.CommandText = $"""
+            SELECT s.name,
+                   s.container_qualified_name,
+                   s.signature,
+                   s.kind,
+                   {familyKeySql},
+                   s.file_id,
+                   {startLineSql},
+                   {endLineSql},
+                   {isPartialSql},
+                   {isFileLocalSql}
+            FROM symbols AS s
+            JOIN files AS f ON f.id = s.file_id
+            WHERE f.lang = 'csharp'
+              AND s.name IS NOT NULL
+              AND s.kind IN ('class', 'struct', 'interface', 'record', 'enum', 'delegate')
+              {typeNameFilter}
+            """;
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            var name = reader.GetString(0);
+            var container = reader.IsDBNull(1) ? null : reader.GetString(1);
+            var signature = reader.IsDBNull(2) ? null : reader.GetString(2);
+            var kind = reader.GetString(3);
+            var familyKey = reader.IsDBNull(4) ? null : reader.GetString(4);
+            var fileId = reader.GetInt64(5);
+            var startLine = reader.GetInt32(6);
+            var endLine = reader.GetInt32(7);
+            var arity = CSharpTypeReferenceArity.GetDefinitionArity(signature, name, kind) ?? 0;
+            var ownsFamilyIdentity = OwnsFamilyIdentity(familyKey, name, arity);
+            var isPartial = reader.IsDBNull(8)
+                ? ownsFamilyIdentity
+                : reader.GetBoolean(8);
+            var isFileLocal = reader.IsDBNull(9)
+                ? ContainsDeclarationModifier(signature, "file") || IsFileLocalFamily(familyKey)
+                : reader.GetBoolean(9) || IsFileLocalFamily(familyKey);
+            facts.Add(new TypeFact(
+                NormalizeIdentity(name),
+                NormalizeIdentity(container),
+                arity,
+                IsValueTypeDeclaration(signature, kind) ? TypeKind.Value : TypeKind.Reference,
+                isPartial && ownsFamilyIdentity ? NormalizeFamilyIdentity(familyKey) : string.Empty,
+                isFileLocal,
+                fileId,
+                startLine,
+                endLine));
+        }
+        return facts;
+    }
+
+    private static void LoadAllCallableFileIds(
+        SqliteConnection connection,
+        IDictionary<long, long> callableFileIds)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT s.id, s.file_id
+            FROM symbols AS s
+            JOIN files AS f ON f.id = s.file_id
+            WHERE f.lang = 'csharp'
+              AND s.kind IN ('function', 'test.method')
+            """;
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+            callableFileIds[reader.GetInt64(0)] = reader.GetInt64(1);
+    }
+
+    private static void AddIdentifiers(ISet<string> names, string? text)
+    {
+        if (string.IsNullOrEmpty(text))
+            return;
+
+        for (var index = 0; index < text.Length;)
+        {
+            if (!IsIdentifierStart(text[index]))
+            {
+                index++;
+                continue;
+            }
+
+            var start = index++;
+            while (index < text.Length && IsIdentifierPart(text[index]))
+                index++;
+            names.Add(text[start..index].TrimStart('@'));
+        }
+    }
+
+    private static bool IsIdentifierStart(char value)
+        => value == '_'
+           || char.GetUnicodeCategory(value) is
+               System.Globalization.UnicodeCategory.UppercaseLetter or
+               System.Globalization.UnicodeCategory.LowercaseLetter or
+               System.Globalization.UnicodeCategory.TitlecaseLetter or
+               System.Globalization.UnicodeCategory.ModifierLetter or
+               System.Globalization.UnicodeCategory.OtherLetter or
+               System.Globalization.UnicodeCategory.LetterNumber;
+
+    private static bool IsIdentifierPart(char value)
+        => IsIdentifierStart(value)
+           || char.GetUnicodeCategory(value) is
+               System.Globalization.UnicodeCategory.NonSpacingMark or
+               System.Globalization.UnicodeCategory.SpacingCombiningMark or
+               System.Globalization.UnicodeCategory.DecimalDigitNumber or
+               System.Globalization.UnicodeCategory.ConnectorPunctuation or
+               System.Globalization.UnicodeCategory.Format;
+
+    private static string EscapeLike(string value)
+        => value.Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace("%", "\\%", StringComparison.Ordinal)
+            .Replace("_", "\\_", StringComparison.Ordinal);
 
     private TypeKind ResolveIdentity(string identity, long? fileId)
     {
@@ -444,6 +605,11 @@ internal sealed class CSharpCallableTypeKindLookup
         long FileId,
         int StartLine,
         int EndLine);
+
+    internal sealed record CandidateScanStats(
+        bool UsedFullScan,
+        int CallableCount,
+        int TypeFactCount);
 
     private readonly record struct FileTypeIdentity(long FileId, string Identity);
 }

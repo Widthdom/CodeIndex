@@ -174,7 +174,7 @@ public partial class DbReader
             return new ReferencePositionResolution(false, false, []);
         }
 
-        EnsureCSharpCallableTypeKinds();
+        EnsureCSharpCallableTypeKinds(candidateQueries: [symbolName], exact: true);
         using var txn = _conn.BeginTransaction(deferred: true);
         using var cmd = _conn.CreateCommand();
         var startLineSql = GetSymbolColumnSql("start_line", "s.line");

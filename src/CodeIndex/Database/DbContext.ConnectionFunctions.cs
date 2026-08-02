@@ -263,12 +263,19 @@ public partial class DbContext : IDisposable
     internal static void RefreshCSharpCallableTypeKinds(
         SqliteConnection connection,
         IReadOnlySet<string> fileColumns,
-        IReadOnlySet<string> symbolColumns)
+        IReadOnlySet<string> symbolColumns,
+        IReadOnlyList<string>? candidateQueries = null,
+        bool exact = false)
     {
         var lookup = CSharpCallableTypeKindLookups.GetValue(
             connection,
             static _ => new CSharpCallableTypeKindLookup());
-        lookup.RefreshIfChanged(connection, fileColumns, symbolColumns);
+        lookup.RefreshIfChanged(
+            connection,
+            fileColumns,
+            symbolColumns,
+            candidateQueries,
+            exact);
     }
 
     internal static int CountCSharpIdentifierOccurrences(string? text, string? identifier)

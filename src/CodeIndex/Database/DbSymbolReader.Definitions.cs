@@ -306,7 +306,10 @@ public partial class DbReader
     {
         var normalizedQuery = NormalizeSymbolSearchQueryForSymbolSearch(query, lang, exact);
         if (groupPartials)
-            EnsureCSharpCallableTypeKinds(DbReader.NormalizeQueryLanguage(lang));
+            EnsureCSharpCallableTypeKinds(
+                DbReader.NormalizeQueryLanguage(lang),
+                normalizedQuery == null ? null : [normalizedQuery],
+                exact);
         using var cmd = _conn.CreateCommand();
 
         var logicalPartialKeySql = LogicalPartialSymbolGrouper.BuildSqlKeyExpression(

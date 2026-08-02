@@ -2243,6 +2243,7 @@ public partial class QueryCommandRunnerTests
                 "csharp",
                 """
                 #nullable enable
+                using External;
                 namespace Demo;
                 public struct Node { }
                 public partial class Outer<T>
@@ -2263,7 +2264,19 @@ public partial class QueryCommandRunnerTests
                     partial void Generic<T>(T value) where T : class { }
                     partial void Combining(int á);
                     partial void Combining(int b́) { }
+                    partial void Imported(ImportedNode value);
+                    partial void Imported(ImportedNode? value);
+                    partial void Imported(ImportedNode value) { }
+                    partial void Imported(ImportedNode? value) { }
                 }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/UnrelatedLeaf.cs",
+                "csharp",
+                """
+                namespace Other;
+                public class ImportedNode { }
                 """);
             TestProjectHelper.InsertIndexedFile(
                 dbPath,
@@ -2295,6 +2308,19 @@ public partial class QueryCommandRunnerTests
                 Assert.True(grouped.TryGetProperty("definition_sites", out var definitionSites), grouped.GetRawText());
                 Assert.Equal(2, definitionSites.GetInt32());
             }
+
+            var (importedExitCode, importedStdout, importedStderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunSymbols(
+                    ["Imported", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "function", "--group-partials", "--limit", "10"],
+                    _jsonOptions));
+            using var importedDocument = ParseJsonOutput(importedStdout);
+            var importedFamilies = importedDocument.RootElement.EnumerateArray().ToList();
+            Assert.Equal(CommandExitCodes.Success, importedExitCode);
+            Assert.Equal(string.Empty, importedStderr);
+            Assert.Equal(2, importedFamilies.Count);
+            Assert.All(
+                importedFamilies,
+                family => Assert.Equal(2, family.GetProperty("definition_sites").GetInt32()));
 
             Assert.Equal(
                 LogicalPartialSymbolGrouper.BuildCallableIdentity(
@@ -2345,7 +2371,9 @@ public partial class QueryCommandRunnerTests
             MarkGraphAndFoldReady(dbPath);
 
             var scans = 0;
+            var candidateScans = new List<CSharpCallableTypeKindLookup.CandidateScanStats>();
             CSharpCallableTypeKindLookup.ScanForTesting = () => scans++;
+            CSharpCallableTypeKindLookup.CandidateScanForTesting = candidateScans.Add;
             try
             {
                 using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
@@ -2371,6 +2399,10 @@ public partial class QueryCommandRunnerTests
                     groupPartials: true));
                 Assert.Equal(2, initial.DefinitionSites);
                 Assert.Equal(1, scans);
+                var initialScan = Assert.Single(candidateScans);
+                Assert.False(initialScan.UsedFullScan);
+                Assert.Equal(2, initialScan.CallableCount);
+                Assert.InRange(initialScan.TypeFactCount, 1, 4);
 
                 TestProjectHelper.InsertIndexedFile(
                     dbPath,
@@ -2396,10 +2428,16 @@ public partial class QueryCommandRunnerTests
                     groupPartials: true));
                 Assert.Equal(2, late.DefinitionSites);
                 Assert.Equal(2, scans);
+                Assert.Equal(2, candidateScans.Count);
+                var lateScan = candidateScans[^1];
+                Assert.False(lateScan.UsedFullScan);
+                Assert.Equal(2, lateScan.CallableCount);
+                Assert.InRange(lateScan.TypeFactCount, 1, 5);
             }
             finally
             {
                 CSharpCallableTypeKindLookup.ScanForTesting = null;
+                CSharpCallableTypeKindLookup.CandidateScanForTesting = null;
             }
         }
         finally

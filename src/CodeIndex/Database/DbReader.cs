@@ -683,12 +683,20 @@ public partial class DbReader : IDisposable
         (_indexNewerThanReader, _indexNewerThanReaderReason) = DetectNewerThanReaderContracts(_conn, userVersion);
     }
 
-    private void EnsureCSharpCallableTypeKinds(string? lang = null)
+    private void EnsureCSharpCallableTypeKinds(
+        string? lang = null,
+        IReadOnlyList<string>? candidateQueries = null,
+        bool exact = false)
     {
         if (lang != null && !string.Equals(lang, "csharp", StringComparison.OrdinalIgnoreCase))
             return;
 
-        DbContext.RefreshCSharpCallableTypeKinds(_conn, _fileColumns, _symbolColumns);
+        DbContext.RefreshCSharpCallableTypeKinds(
+            _conn,
+            _fileColumns,
+            _symbolColumns,
+            candidateQueries,
+            exact);
     }
 
     private static void RecoverInterruptedFtsBulkLoadForRead(SqliteConnection conn, bool isReadOnly)
