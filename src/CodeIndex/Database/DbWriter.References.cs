@@ -1981,11 +1981,13 @@ public partial class DbWriter
 
     internal void RefreshMutualRecursionFlags(
         CancellationToken cancellationToken = default,
-        bool stampReferenceIdentityContractReady = true)
+        bool? stampReferenceIdentityContractReady = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         MutualRecursionRefreshForTesting?.Invoke();
         cancellationToken.ThrowIfCancellationRequested();
+        var stampReferenceIdentityContract = stampReferenceIdentityContractReady
+            ?? CSharpFamilyTrustAllowsReferenceIdentityReady();
         var graphScope = _referenceGraphRefreshScope;
         using var transaction = BeginTransaction(cancellationToken, "refresh reference identities");
         if (graphScope != null)
@@ -2054,7 +2056,7 @@ public partial class DbWriter
             // High-level indexing defers v7 while untouched legacy C# family rows remain.
             // 同一 transaction 内で先に marker を調整して公開 changes() を維持する。
             // high-level index は未更新の旧 C# family row が残る間 v7 を保留する。
-            if (stampReferenceIdentityContractReady)
+            if (stampReferenceIdentityContract)
                 MarkReferenceIdentityContractReady();
             else
                 ClearReferenceIdentityContractReady();

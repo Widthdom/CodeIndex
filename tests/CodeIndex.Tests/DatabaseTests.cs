@@ -1274,6 +1274,57 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void ReferenceIdentityRefresh_UnstampedFreshCSharpRowsRemainReady_Issue4914Review()
+    {
+        const string path = "src/FreshPartial.cs";
+        const string content = "public partial class FreshPartial { public partial void Run(); }";
+        var fileId = UpsertTestFileWithLanguage(path, "csharp", "fresh-partial");
+        var symbols = SymbolExtractor.Extract(fileId, "csharp", content, filePath: path);
+        SymbolExtractor.ApplyFamilyScope(
+            symbols,
+            FileIndexer.DeriveFallbackFamilyScopeKey(path));
+        _writer.InsertSymbols(symbols);
+        _writer.ClearReferenceIdentityContractReady();
+
+        _writer.BackfillFoldedColumns(rewriteAll: true);
+
+        Assert.Equal(
+            DbContext.ReferenceIdentityContractVersion.ToString(CultureInfo.InvariantCulture),
+            _db.GetMetaString(DbContext.ReferenceIdentityContractVersionMetaKey));
+    }
+
+    [Fact]
+    public void ReferenceIdentityRefresh_UnstampedLegacyCSharpRowsRemainStale_Issue4914Review()
+    {
+        var fileId = UpsertTestFileWithLanguage(
+            "src/LegacyPartial.cs",
+            "csharp",
+            "legacy-partial");
+        _writer.InsertSymbols([
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = "LegacyPartial",
+                Signature = "public partial class LegacyPartial",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 1,
+            },
+        ]);
+        _writer.MarkReferenceIdentityContractReady();
+
+        _writer.RefreshMutualRecursionFlags();
+
+        Assert.Null(_db.GetMetaString(DbContext.ReferenceIdentityContractVersionMetaKey));
+
+        _writer.MarkReferenceIdentityContractReady();
+        _writer.BackfillFoldedColumns(rewriteAll: true);
+
+        Assert.Null(_db.GetMetaString(DbContext.ReferenceIdentityContractVersionMetaKey));
+    }
+
+    [Fact]
     public void ReferenceGraph_NimBackfillRewritesLegacyKeysAndRefreshesCandidates_Issue4738()
     {
         var fileId = UpsertTestFileWithLanguage(

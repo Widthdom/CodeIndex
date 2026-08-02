@@ -131,7 +131,7 @@ public partial class DbWriter
         out bool referenceIdentityChanged,
         bool cleanExistingData = true)
     {
-        TrackCSharpFamilyFileBeforeWrite(file, cleanExistingData ? file.Path : null);
+        TrackCSharpFamilyFileBeforeWrite(file);
         var typeScriptDirtyNameScope = _typeScriptAugmentationDirtyNameScope;
         var wasExistingTypeScript = cleanExistingData
             && typeScriptDirtyNameScope?.TrackExistingFile(file.Path) == true;
@@ -205,7 +205,7 @@ public partial class DbWriter
     /// </summary>
     public long InsertNewFile(FileRecord file)
     {
-        TrackCSharpFamilyFileBeforeWrite(file, excludedCleanPath: null);
+        TrackCSharpFamilyFileBeforeWrite(file);
         var cmd = RentCommand(
             @"
             INSERT INTO files (path, lang, size, lines, checksum, modified, generated, indexed_at)
@@ -246,7 +246,7 @@ public partial class DbWriter
         return fileId;
     }
 
-    private void TrackCSharpFamilyFileBeforeWrite(FileRecord file, string? excludedCleanPath)
+    private void TrackCSharpFamilyFileBeforeWrite(FileRecord file)
     {
         if (!string.Equals(file.Lang, "csharp", StringComparison.Ordinal)
             || _currentWriterOwnsAllCSharpFamilyRows.HasValue)
@@ -256,24 +256,13 @@ public partial class DbWriter
 
         using var cmd = _conn.CreateCommand();
         cmd.Transaction = _activeTransaction;
-        cmd.CommandText = excludedCleanPath == null
-            ? """
-              SELECT 1
-              FROM symbols s
-              JOIN files f ON f.id = s.file_id
-              WHERE f.lang = 'csharp'
-              LIMIT 1
-              """
-            : """
-              SELECT 1
-              FROM symbols s
-              JOIN files f ON f.id = s.file_id
-              WHERE f.lang = 'csharp'
-                AND f.path <> @excludedCleanPath
-              LIMIT 1
-              """;
-        if (excludedCleanPath != null)
-            SqliteCommandPolicy.Add(cmd, "@excludedCleanPath", excludedCleanPath);
+        cmd.CommandText = """
+            SELECT 1
+            FROM symbols s
+            JOIN files f ON f.id = s.file_id
+            WHERE f.lang = 'csharp'
+            LIMIT 1
+            """;
         _currentWriterOwnsAllCSharpFamilyRows = cmd.ExecuteScalar() == null;
     }
 
