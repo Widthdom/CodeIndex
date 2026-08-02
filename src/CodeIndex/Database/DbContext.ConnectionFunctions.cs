@@ -14,6 +14,9 @@ public partial class DbContext : IDisposable
 {
     private static readonly ConditionalWeakTable<SqliteConnection, CSharpCallableTypeKindLookup>
         CSharpCallableTypeKindLookups = new();
+    private static readonly ConditionalWeakTable<SqliteConnection, object>
+        CSharpPartialDeclarationFunctionRegistrations = new();
+    private static readonly object CSharpPartialDeclarationFunctionRegistrationLock = new();
 
     private static SqliteConnection OpenArtifactPreservingQueryOnly(string dbPath)
     {
@@ -263,11 +266,24 @@ public partial class DbContext : IDisposable
 
     internal static void RegisterCSharpPartialDeclarationFunction(SqliteConnection connection)
     {
-        connection.CreateFunction(
-            "csharp_is_partial_declaration",
-            (string? signature, string? kind, string? name) =>
-                LogicalPartialSymbolGrouper.ContainsPartialModifier(signature, kind, name),
-            isDeterministic: true);
+        lock (CSharpPartialDeclarationFunctionRegistrationLock)
+        {
+            // DbReader also accepts caller-owned raw connections, so it must ensure this
+            // function exists. DbContext connections already registered it, however, and
+            // SQLite rejects replacing a function while any statement is active.
+            // DbReader は caller-owned raw connection も受け付けるため、この function を
+            // 保証する。一方 DbContext connection では登録済みであり、active statement 中の
+            // 再登録を SQLite が拒否するため、connection 単位で一度だけ登録する。
+            if (CSharpPartialDeclarationFunctionRegistrations.TryGetValue(connection, out _))
+                return;
+
+            connection.CreateFunction(
+                "csharp_is_partial_declaration",
+                (string? signature, string? kind, string? name) =>
+                    LogicalPartialSymbolGrouper.ContainsPartialModifier(signature, kind, name),
+                isDeterministic: true);
+            CSharpPartialDeclarationFunctionRegistrations.Add(connection, new object());
+        }
     }
 
     internal static void RefreshCSharpCallableTypeKinds(
