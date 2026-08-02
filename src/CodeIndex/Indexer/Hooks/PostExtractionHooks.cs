@@ -398,6 +398,10 @@ public sealed class PostExtractionHookRunner : IDisposable
                     null,
                     cancellationToken))
             {
+                PostExtractionHookMutationMaterializer.RefreshCSharpDeclarationMetadataAfterHookMutation(
+                    context.Language,
+                    symbols as IReadOnlyList<SymbolRecord> ?? symbols.ToList(),
+                    workingSymbols);
                 PostExtractionHookMutationMaterializer.ReplaceList(symbols, workingSymbols);
                 acceptedHookMutation = true;
             }

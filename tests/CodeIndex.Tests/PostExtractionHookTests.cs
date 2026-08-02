@@ -19,6 +19,7 @@ public class PostExtractionHookTests
     internal const string StatefulHookEnvironmentVariable = "CDIDX_TEST_STATEFUL_POST_EXTRACTION_HOOK";
     internal const string ThrowingConstructorHookEnvironmentVariable = "CDIDX_TEST_THROWING_CTOR_POST_EXTRACTION_HOOK";
     internal const string ExpandingHookEnvironmentVariable = "CDIDX_TEST_EXPANDING_POST_EXTRACTION_HOOK";
+    internal const string CSharpDeclarationMutationEnvironmentVariable = "CDIDX_TEST_CSHARP_DECLARATION_MUTATION_HOOK";
     internal const string ModuleInitializerDelayEnvironmentVariable = "CDIDX_TEST_HOOK_MODULE_INITIALIZER_DELAY_MS";
     internal const string PersistentDiscoveryWorkerPidPathEnvironmentVariable = "CDIDX_TEST_HOOK_DISCOVERY_PERSISTENT_PID_PATH";
     internal const string PersistentDiscoveryDescendantPidPathEnvironmentVariable = "CDIDX_TEST_HOOK_DISCOVERY_DESCENDANT_PID_PATH";
@@ -97,6 +98,60 @@ public class PostExtractionHookTests
         finally
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [ProductionRuntimeFact]
+    public void Discover_RecomputesCSharpDeclarationMetadataAfterHookMutation_Issue4914()
+    {
+        var projectRoot = TestProjectHelper.CreateExecutableExtensionTestProject("post-extraction-hooks-csharp-metadata-4914");
+        lock (TestConsoleLock.Gate)
+        {
+            using var mutation = EnvironmentVariableScope.Capture(CSharpDeclarationMutationEnvironmentVariable);
+            try
+            {
+                var hooksDir = Path.Combine(projectRoot, "hooks");
+                Directory.CreateDirectory(hooksDir);
+                File.Copy(Assembly.GetExecutingAssembly().Location, Path.Combine(hooksDir, "CodeIndex.Tests.dll"));
+                mutation.Set(CSharpDeclarationMutationEnvironmentVariable, "1");
+
+                using var runner = PostExtractionHookRunner.Discover(hooksDir);
+                var context = new FileContext(projectRoot, "src/App.cs", Path.Combine(projectRoot, "src", "App.cs"), "csharp");
+                var symbols = new List<SymbolRecord>
+                {
+                    new()
+                    {
+                        FileId = 10,
+                        Kind = "function",
+                        Name = "HookPartial",
+                        Signature = "[Obsolete] partial void HookPartial();",
+                        IsPartialDeclaration = true,
+                        DeclarationSemanticScore = 2,
+                        IdentifierStartColumn = 24,
+                        Line = 1,
+                        StartLine = 1,
+                        EndLine = 1,
+                    },
+                };
+
+                runner.OnSymbolsExtracted(context, symbols);
+
+                var mutated = Assert.Single(symbols, symbol => symbol.Name == "HookOrdinary");
+                Assert.False(mutated.IsPartialDeclaration);
+                Assert.False(mutated.IsFileLocalDeclaration);
+                Assert.Equal(0, mutated.DeclarationSemanticScore);
+                Assert.Null(mutated.IdentifierStartColumn);
+                var addedPartial = Assert.Single(symbols, symbol => symbol.Name == "HookAddedPartial");
+                Assert.True(addedPartial.IsPartialDeclaration);
+                Assert.Equal(2, addedPartial.DeclarationSemanticScore);
+                Assert.Null(addedPartial.IdentifierStartColumn);
+                var addedFileType = Assert.Single(symbols, symbol => symbol.Name == "HookFileType");
+                Assert.True(addedFileType.IsFileLocalDeclaration);
+            }
+            finally
+            {
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
         }
     }
 
@@ -1126,6 +1181,36 @@ public sealed class SamplePostExtractionHook : IPostExtractionHook
 {
     public void OnSymbolsExtracted(FileContext context, IList<SymbolRecord> symbols)
     {
+        if (Environment.GetEnvironmentVariable(PostExtractionHookTests.CSharpDeclarationMutationEnvironmentVariable) == "1")
+        {
+            var existing = symbols.FirstOrDefault(symbol => symbol.Name == "HookPartial");
+            if (existing != null)
+            {
+                existing.Name = "HookOrdinary";
+                existing.Signature = "void HookOrdinary();";
+            }
+            symbols.Add(new SymbolRecord
+            {
+                FileId = existing?.FileId ?? 0,
+                Kind = "function",
+                Name = "HookAddedPartial",
+                Signature = "[Obsolete] partial void HookAddedPartial();",
+                Line = 2,
+                StartLine = 2,
+                EndLine = 2,
+            });
+            symbols.Add(new SymbolRecord
+            {
+                FileId = existing?.FileId ?? 0,
+                Kind = "class",
+                Name = "HookFileType",
+                Signature = "file class HookFileType { }",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 3,
+            });
+        }
+
         symbols.Add(new SymbolRecord
         {
             FileId = symbols.FirstOrDefault()?.FileId ?? 0,

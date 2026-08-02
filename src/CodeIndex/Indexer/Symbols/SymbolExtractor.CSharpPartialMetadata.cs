@@ -80,6 +80,46 @@ public static partial class SymbolExtractor
         }
     }
 
+    internal static void RefreshCSharpPartialDeclarationMetadataFromHookSignature(
+        SymbolRecord symbol)
+    {
+        symbol.IsPartialDeclaration = null;
+        symbol.IsFileLocalDeclaration = false;
+        symbol.DeclarationSemanticScore = null;
+        symbol.IdentifierStartColumn = null;
+
+        if (symbol.Kind is not ("function" or "test.method" or "class" or "struct" or "interface" or "record" or "enum" or "delegate"))
+            return;
+
+        var sanitizedSignature = SanitizeCSharpDeclarationEvidence(symbol.Signature ?? string.Empty);
+        var declarationHeader = ExtractCSharpDeclarationHeader(sanitizedSignature);
+        var declarationModifierPrefix = ExtractCSharpDeclarationModifierPrefix(
+            declarationHeader,
+            symbol);
+        var supportsPartialDeclaration = symbol.Kind is
+            "function" or "test.method" or "class" or "struct" or "interface" or "record";
+        symbol.IsPartialDeclaration = supportsPartialDeclaration
+            && ContainsCSharpLeadingModifier(
+                declarationModifierPrefix,
+                "partial",
+                requireTrailingDeclarationType: symbol.Kind is "function" or "test.method");
+        symbol.IsFileLocalDeclaration =
+            symbol.Kind is "class" or "struct" or "interface" or "record" or "enum" or "delegate"
+            && ContainsCSharpLeadingModifier(declarationModifierPrefix, "file");
+
+        var semanticScore = 0;
+        if (ContainsCSharpAttributeEvidence(declarationHeader))
+            semanticScore += 2;
+        if (symbol.Kind is "class" or "struct" or "interface" or "record"
+            && declarationHeader.Contains(':', StringComparison.Ordinal))
+        {
+            semanticScore += 4;
+        }
+        if (declarationHeader.Contains(" where ", StringComparison.Ordinal))
+            semanticScore += 1;
+        symbol.DeclarationSemanticScore = semanticScore;
+    }
+
     private static Dictionary<int, int> GetFirstCSharpDeclarationColumns(
         IReadOnlyList<string> lines,
         IReadOnlyList<SymbolRecord> symbols,

@@ -794,8 +794,10 @@ internal sealed class CSharpCallableTypeKindLookup
             var scopedKind = GetUnambiguousKind(
                 _scopedIdentityKinds,
                 new ScopedTypeIdentity(projectScope, identity));
-            if (scopedKind != TypeKind.Unknown)
-                return scopedKind;
+            // A scoped miss or ambiguity must not borrow a declaration from another
+            // project through the repository-global map.
+            // scoped lookup の miss/ambiguity を別 project の宣言で補完しない。
+            return scopedKind;
         }
 
         return GetUnambiguousKind(_identityKinds, identity);

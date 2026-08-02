@@ -2421,6 +2421,10 @@ public partial class QueryCommandRunnerTests
                 {
                     partial void Scoped(Node? value);
                     partial void Scoped(Node value) { }
+                    partial void ExternalScoped(External.Foo? value);
+                    partial void ExternalScoped(External.Foo? value) { }
+                    partial void ExternalScoped(External.Foo value);
+                    partial void ExternalScoped(External.Foo value) { }
                 }
                 """);
             TestProjectHelper.InsertIndexedFile(
@@ -2436,6 +2440,11 @@ public partial class QueryCommandRunnerTests
                 namespace Demo;
                 public struct Node { }
                 """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "B/ExternalTypes.cs",
+                "csharp",
+                "namespace External; public class Foo { }");
             using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             using (var command = db.Connection.CreateCommand())
             {
@@ -2458,6 +2467,19 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal(2, grouped.GetProperty("definition_sites").GetInt32());
             Assert.Contains("Node value", grouped.GetProperty("signature").GetString(), StringComparison.Ordinal);
+
+            var (externalExitCode, externalStdout, externalStderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunSymbols(
+                    ["ExternalScoped", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "function", "--group-partials", "--limit", "10"],
+                    _jsonOptions));
+            using var externalDocument = ParseJsonOutput(externalStdout);
+            var externalFamilies = externalDocument.RootElement.EnumerateArray().ToList();
+            Assert.Equal(CommandExitCodes.Success, externalExitCode);
+            Assert.Equal(string.Empty, externalStderr);
+            Assert.Equal(2, externalFamilies.Count);
+            Assert.All(
+                externalFamilies,
+                family => Assert.Equal(2, family.GetProperty("definition_sites").GetInt32()));
         }
         finally
         {

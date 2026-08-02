@@ -96,6 +96,39 @@ internal static class PostExtractionHookMutationMaterializer
         }
     }
 
+    internal static void RefreshCSharpDeclarationMetadataAfterHookMutation(
+        string? language,
+        IReadOnlyList<SymbolRecord> sourceSymbols,
+        IReadOnlyList<SymbolRecord> mutatedSymbols)
+    {
+        if (!string.Equals(language, "csharp", StringComparison.Ordinal))
+            return;
+
+        var sourceFacts = new Dictionary<HookSymbolDeclarationState, Queue<CSharpDeclarationFacts>>();
+        foreach (var symbol in sourceSymbols)
+        {
+            var state = HookSymbolDeclarationState.From(symbol);
+            if (!sourceFacts.TryGetValue(state, out var facts))
+            {
+                facts = new Queue<CSharpDeclarationFacts>();
+                sourceFacts[state] = facts;
+            }
+            facts.Enqueue(CSharpDeclarationFacts.From(symbol));
+        }
+
+        foreach (var symbol in mutatedSymbols)
+        {
+            var state = HookSymbolDeclarationState.From(symbol);
+            if (sourceFacts.TryGetValue(state, out var facts) && facts.Count > 0)
+            {
+                facts.Dequeue().Apply(symbol);
+                continue;
+            }
+
+            SymbolExtractor.RefreshCSharpPartialDeclarationMetadataFromHookSignature(symbol);
+        }
+    }
+
     internal static void RefreshLanguageIdentity(string? language, IEnumerable<ReferenceRecord> references)
     {
         if (!string.Equals(language, "nim", StringComparison.Ordinal))
@@ -160,4 +193,54 @@ internal static class PostExtractionHookMutationMaterializer
             IsSelfReference = reference.IsSelfReference,
             IsMutualRecursion = reference.IsMutualRecursion,
         };
+
+    private readonly record struct HookSymbolDeclarationState(
+        long Id,
+        long FileId,
+        string Kind,
+        string? SubKind,
+        string Name,
+        int Line,
+        int StartLine,
+        int? StartColumn,
+        int EndLine,
+        string? Signature,
+        int? SameLineSignatureOccurrenceIndex)
+    {
+        internal static HookSymbolDeclarationState From(SymbolRecord symbol)
+            => new(
+                symbol.Id,
+                symbol.FileId,
+                symbol.Kind,
+                symbol.SubKind,
+                symbol.Name,
+                symbol.Line,
+                symbol.StartLine,
+                symbol.StartColumn,
+                symbol.EndLine,
+                symbol.Signature,
+                symbol.SameLineSignatureOccurrenceIndex);
+    }
+
+    private readonly record struct CSharpDeclarationFacts(
+        bool? IsPartialDeclaration,
+        bool IsFileLocalDeclaration,
+        int? DeclarationSemanticScore,
+        int? IdentifierStartColumn)
+    {
+        internal static CSharpDeclarationFacts From(SymbolRecord symbol)
+            => new(
+                symbol.IsPartialDeclaration,
+                symbol.IsFileLocalDeclaration,
+                symbol.DeclarationSemanticScore,
+                symbol.IdentifierStartColumn);
+
+        internal void Apply(SymbolRecord symbol)
+        {
+            symbol.IsPartialDeclaration = IsPartialDeclaration;
+            symbol.IsFileLocalDeclaration = IsFileLocalDeclaration;
+            symbol.DeclarationSemanticScore = DeclarationSemanticScore;
+            symbol.IdentifierStartColumn = IdentifierStartColumn;
+        }
+    }
 }
