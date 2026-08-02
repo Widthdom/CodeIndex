@@ -2464,6 +2464,14 @@ public partial class QueryCommandRunnerTests
                     partial void Aliased(@global::Target value) { }
                     partial void Aliased(@global::Target? value);
                     partial void Aliased(@global::Target? value) { }
+                    partial void TupleEquivalent((int, string) value);
+                    partial void TupleEquivalent(global::System.ValueTuple<int, string> value) { }
+                    partial void NestedTupleEquivalent((int, (string, bool)) value);
+                    partial void NestedTupleEquivalent(global::System.ValueTuple<int, global::System.ValueTuple<string, bool>> value) { }
+                    partial void NullableTupleEquivalent((int, (string, bool))? value);
+                    partial void NullableTupleEquivalent(global::System.Nullable<global::System.ValueTuple<int, global::System.ValueTuple<string, bool>>> value) { }
+                    partial void LongTupleEquivalent((int, int, int, int, int, int, int, int) value);
+                    partial void LongTupleEquivalent(global::System.ValueTuple<int, int, int, int, int, int, int, global::System.ValueTuple<int>> value) { }
                     partial void Combining(int á);
                     partial void Combining(int b́) { }
                     partial void Imported(ImportedNode value);
@@ -2556,6 +2564,10 @@ public partial class QueryCommandRunnerTests
                          "Qualified",
                          "Generic",
                          "EscapedMethodConstraint",
+                         "TupleEquivalent",
+                         "NestedTupleEquivalent",
+                         "NullableTupleEquivalent",
+                         "LongTupleEquivalent",
                          "Combining",
                          "Local",
                      })
@@ -2608,6 +2620,15 @@ public partial class QueryCommandRunnerTests
                 LogicalPartialSymbolGrouper.BuildCallableIdentity(
                     "partial void Value<T>(T value) where T : struct { }",
                     "Value",
+                    "void"));
+            Assert.NotEqual(
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void NamedTuple((int x, string y) value);",
+                    "NamedTuple",
+                    "void"),
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void NamedTuple(global::System.ValueTuple<int, string> value) { }",
+                    "NamedTuple",
                     "void"));
         }
         finally

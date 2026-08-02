@@ -593,6 +593,22 @@ internal static class LogicalPartialSymbolGrouper
         var builder = new StringBuilder(value.Length);
         for (var offset = 0; offset < tokens.Count;)
         {
+            if (TryReadTupleTypeIdentity(
+                    tokens,
+                    offset,
+                    genericParameterNames,
+                    valueConstrainedGenericParameters,
+                    containerQualifiedName,
+                    typeKinds,
+                    symbolId,
+                    out var tupleIdentity,
+                    out var tupleConsumedTokens))
+            {
+                builder.Append(tupleIdentity);
+                offset += tupleConsumedTokens;
+                continue;
+            }
+
             if (TryReadFrameworkNullableTypeIdentity(tokens, offset, out var nullableConsumedTokens))
             {
                 builder.Append("global::System.Nullable");
@@ -778,6 +794,132 @@ internal static class LogicalPartialSymbolGrouper
             offset++;
         }
         return builder.ToString();
+    }
+
+    private static bool TryReadTupleTypeIdentity(
+        IReadOnlyList<string> tokens,
+        int offset,
+        IReadOnlyList<string> genericParameterNames,
+        IReadOnlySet<int>? valueConstrainedGenericParameters,
+        string? containerQualifiedName,
+        CSharpCallableTypeKindLookup? typeKinds,
+        long? symbolId,
+        out string identity,
+        out int consumedTokens)
+    {
+        identity = string.Empty;
+        consumedTokens = 0;
+        if (offset >= tokens.Count || tokens[offset] != "(")
+            return false;
+
+        var elementRanges = new List<(int Start, int End)>();
+        var elementStart = offset + 1;
+        var parenthesisDepth = 0;
+        var angleDepth = 0;
+        var bracketDepth = 0;
+        var closeOffset = -1;
+        for (var current = elementStart; current < tokens.Count; current++)
+        {
+            switch (tokens[current])
+            {
+                case "(":
+                    parenthesisDepth++;
+                    break;
+                case ")" when parenthesisDepth > 0:
+                    parenthesisDepth--;
+                    break;
+                case ")" when angleDepth == 0 && bracketDepth == 0:
+                    closeOffset = current;
+                    current = tokens.Count;
+                    break;
+                case "<":
+                    angleDepth++;
+                    break;
+                case ">" when angleDepth > 0:
+                    angleDepth--;
+                    break;
+                case "[":
+                    bracketDepth++;
+                    break;
+                case "]" when bracketDepth > 0:
+                    bracketDepth--;
+                    break;
+                case "," when parenthesisDepth == 0 && angleDepth == 0 && bracketDepth == 0:
+                    elementRanges.Add((elementStart, current));
+                    elementStart = current + 1;
+                    break;
+            }
+        }
+
+        if (closeOffset < 0 || elementRanges.Count == 0 || elementStart >= closeOffset)
+            return false;
+
+        elementRanges.Add((elementStart, closeOffset));
+        if (elementRanges.Any(range =>
+                range.Start >= range.End || TupleElementHasExplicitName(tokens, range.Start, range.End)))
+        {
+            // Tuple element names are part of the partial declaration contract even though
+            // they are absent from the CLR ValueTuple type. Preserve named tuple syntax so
+            // it cannot collapse into an explicitly unnamed ValueTuple spelling.
+            // tuple element name は CLR ValueTuple type には含まれないが partial 宣言の
+            // contract には含まれるため、明示的に unnamed な ValueTuple と統合しない。
+            return false;
+        }
+
+        var elementIdentities = new List<string>(elementRanges.Count);
+        foreach (var range in elementRanges)
+        {
+            var elementSource = string.Concat(tokens.Skip(range.Start).Take(range.End - range.Start));
+            elementIdentities.Add(NormalizeCallableTypeIdentity(
+                elementSource,
+                genericParameterNames,
+                valueConstrainedGenericParameters,
+                containerQualifiedName,
+                typeKinds,
+                symbolId));
+        }
+
+        var tupleIdentity = BuildValueTupleIdentity(elementIdentities);
+        consumedTokens = closeOffset - offset + 1;
+        if (closeOffset + 1 < tokens.Count && tokens[closeOffset + 1] == "?")
+        {
+            identity = $"global::System.Nullable<{tupleIdentity}>";
+            consumedTokens++;
+        }
+        else
+        {
+            identity = tupleIdentity;
+        }
+
+        return true;
+    }
+
+    private static bool TupleElementHasExplicitName(
+        IReadOnlyList<string> tokens,
+        int start,
+        int end)
+    {
+        var last = end - 1;
+        if (last <= start || !IsIdentifierCharacter(tokens[last][0]))
+            return false;
+
+        // A final identifier preceded by member/alias qualification is the leaf type name.
+        // Every other final identifier following a complete tokenized type is a tuple element
+        // name (for example `int value`, `T[] values`, or `(int, int) pair`).
+        // member / alias qualifier 直後の末尾 identifier は型名。それ以外で完全な型の
+        // 後ろに続く末尾 identifier は tuple element name とみなす。
+        return tokens[last - 1] is not "." and not ":";
+    }
+
+    private static string BuildValueTupleIdentity(IReadOnlyList<string> elementIdentities)
+    {
+        const int directElementLimit = 7;
+        if (elementIdentities.Count <= directElementLimit)
+            return $"global::System.ValueTuple<{string.Join(',', elementIdentities)}>";
+
+        var directElements = elementIdentities.Take(directElementLimit).ToList();
+        directElements.Add(BuildValueTupleIdentity(elementIdentities.Skip(directElementLimit).ToList()));
+        return $"global::System.ValueTuple<{string.Join(',', directElements)}>";
     }
 
     private static IReadOnlySet<int> ReadValueConstrainedGenericParameters(
