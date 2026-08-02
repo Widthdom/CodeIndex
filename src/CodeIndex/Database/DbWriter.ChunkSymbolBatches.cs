@@ -58,7 +58,7 @@ public partial class DbWriter
         TrackReferenceGraphInsertedSymbols(symbols);
         InvalidateReferenceIdentityContractForMutation();
 
-        int rowsPerStatement = GetRowsPerInsertStatement(columnCount: 24);
+        int rowsPerStatement = GetRowsPerInsertStatement(columnCount: 25);
         var foldedNameCache = CreateFoldedNameCache(
             Math.Min(symbols.Count, rowsPerStatement),
             namesPerRow: 1);

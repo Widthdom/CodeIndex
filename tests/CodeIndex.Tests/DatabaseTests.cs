@@ -6992,10 +6992,25 @@ public class DatabaseTests : IDisposable
             })
             .ToList();
 
-        _writer.InsertSymbols(symbols);
+        var checkpoints = new List<int>();
+        var previousProgressHook = DbWriter.BatchProgressCheckpointForTesting;
+        try
+        {
+            DbWriter.BatchProgressCheckpointForTesting = progress =>
+            {
+                if (progress.Operation == "insert_symbols")
+                    checkpoints.Add(progress.RowsProcessed);
+            };
+            _writer.InsertSymbols(symbols);
+        }
+        finally
+        {
+            DbWriter.BatchProgressCheckpointForTesting = previousProgressHook;
+        }
 
         var (_, _, symbolCount, _) = _writer.GetCounts();
         Assert.Equal(120, symbolCount);
+        Assert.Equal([0, 39, 78, 117, 120], checkpoints);
     }
 
     [Fact]

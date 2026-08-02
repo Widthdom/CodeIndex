@@ -82,14 +82,15 @@ public class SymbolRecord
     internal bool? IsPartialDeclaration { get; set; }
 
     /// <summary>
-    /// Extraction-only marker for a C# top-level type declared with the <c>file</c>
+    /// Extraction-owned marker for a C# top-level type declared with the <c>file</c>
     /// modifier or belonging to the same-file partial family of such a declaration.
-    /// Container assignment uses it to keep inherited partial-family keys scoped to one
-    /// source file; the marker itself does not need database persistence.
+    /// It crosses worker and hook boundaries, is persisted for callable type-kind lookup,
+    /// and keeps inherited partial-family keys and type facts scoped to one source file.
     /// <c>file</c> 修飾子を持つ C# top-level type、またはその同一ファイル partial family
-    /// に属する type の抽出時専用 marker。container assignment が配下の partial-family
-    /// key を同一 source file 内に制限するために使い、marker 自体は DB に永続化しない。
+    /// に属する type の extraction-owned marker。worker と hook の境界を越えて DB に保存し、
+    /// callable type-kind lookup と配下の partial-family key を同一 source file 内に制限する。
     /// </summary>
+    [JsonInclude]
     internal bool IsFileLocalDeclaration { get; set; }
 
     [JsonInclude]

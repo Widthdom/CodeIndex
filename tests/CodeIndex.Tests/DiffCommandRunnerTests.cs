@@ -1318,6 +1318,7 @@ public class DiffCommandRunnerTests
                 """
                 UPDATE symbols
                 SET is_partial_declaration = 1,
+                    is_file_local_declaration = 1,
                     declaration_semantic_score = 7,
                     identifier_start_column = 19
                 WHERE id = (SELECT MIN(id) FROM symbols)
@@ -1332,6 +1333,7 @@ public class DiffCommandRunnerTests
             Assert.Equal("different", root.GetProperty("status").GetString());
             var rightSymbol = Assert.Single(GetRecords(root, "symbol", "right"));
             Assert.Equal("1", GetField(rightSymbol, "is_partial_declaration").GetProperty("value").GetString());
+            Assert.Equal("1", GetField(rightSymbol, "is_file_local_declaration").GetProperty("value").GetString());
             Assert.Equal("7", GetField(rightSymbol, "declaration_semantic_score").GetProperty("value").GetString());
             Assert.Equal("19", GetField(rightSymbol, "identifier_start_column").GetProperty("value").GetString());
         }
@@ -1900,6 +1902,7 @@ public class DiffCommandRunnerTests
                 visibility      TEXT,
                 return_type     TEXT,
                 is_partial_declaration INTEGER,
+                is_file_local_declaration INTEGER,
                 declaration_semantic_score INTEGER,
                 identifier_start_column INTEGER,
                 is_metadata_target INTEGER
@@ -1909,7 +1912,8 @@ public class DiffCommandRunnerTests
                 start_column, end_line, body_start_line,
                 body_end_line, signature, container_kind, container_name,
                 container_qualified_name, family_key, visibility, return_type,
-                is_partial_declaration, declaration_semantic_score, identifier_start_column,
+                is_partial_declaration, is_file_local_declaration,
+                declaration_semantic_score, identifier_start_column,
                 is_metadata_target
             )
             SELECT
@@ -1917,7 +1921,8 @@ public class DiffCommandRunnerTests
                 start_column, end_line, body_start_line,
                 body_end_line, signature, container_kind, container_name,
                 container_qualified_name, family_key, visibility, return_type,
-                is_partial_declaration, declaration_semantic_score, identifier_start_column,
+                is_partial_declaration, is_file_local_declaration,
+                declaration_semantic_score, identifier_start_column,
                 is_metadata_target
             FROM symbols_old;
             DROP TABLE symbols_old;
@@ -1931,6 +1936,7 @@ public class DiffCommandRunnerTests
             dbPath,
             """
             ALTER TABLE symbols DROP COLUMN is_partial_declaration;
+            ALTER TABLE symbols DROP COLUMN is_file_local_declaration;
             ALTER TABLE symbols DROP COLUMN declaration_semantic_score;
             ALTER TABLE symbols DROP COLUMN identifier_start_column;
             """);

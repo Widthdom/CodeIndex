@@ -1265,6 +1265,7 @@ public partial class QueryCommandRunnerTests
                 {
                 }
             }
+            file class WorkerLocal { }
             """;
         var symbols = SymbolExtractor.Extract(
             1,
@@ -1276,6 +1277,9 @@ public partial class QueryCommandRunnerTests
         Assert.Equal(3, method.DeclarationSemanticScore);
         Assert.Equal(9, method.IdentifierStartColumn);
         Assert.DoesNotContain("partial", method.Signature, StringComparison.Ordinal);
+        var fileLocalType = Assert.Single(
+            symbols.Where(symbol => symbol.Kind == "class" && symbol.Name == "WorkerLocal"));
+        Assert.True(fileLocalType.IsFileLocalDeclaration);
 
         var persistedFamily = new SymbolResult
         {
@@ -1341,6 +1345,8 @@ public partial class QueryCommandRunnerTests
                 SymbolExtractionWorker.JsonOptions);
             var transportedMethod = Assert.Single(
                 response!.Symbols!.Where(symbol => symbol.Kind == "function" && symbol.Name == "OnReady"));
+            var transportedFileLocalType = Assert.Single(
+                response.Symbols!.Where(symbol => symbol.Kind == "class" && symbol.Name == "WorkerLocal"));
 
             Assert.True(handled);
             Assert.Equal(CommandExitCodes.Success, exitCode);
@@ -1348,6 +1354,7 @@ public partial class QueryCommandRunnerTests
             Assert.True(transportedMethod.IsPartialDeclaration);
             Assert.Equal(3, transportedMethod.DeclarationSemanticScore);
             Assert.Equal(9, transportedMethod.IdentifierStartColumn);
+            Assert.True(transportedFileLocalType.IsFileLocalDeclaration);
         }
         finally
         {

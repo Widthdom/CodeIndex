@@ -132,6 +132,7 @@ internal static class PostExtractionHookMutationMaterializer
             Visibility = symbol.Visibility,
             ReturnType = symbol.ReturnType,
             IsPartialDeclaration = symbol.IsPartialDeclaration,
+            IsFileLocalDeclaration = symbol.IsFileLocalDeclaration,
             DeclarationSemanticScore = symbol.DeclarationSemanticScore,
             IdentifierStartColumn = symbol.IdentifierStartColumn,
             IsMetadataTarget = symbol.IsMetadataTarget,

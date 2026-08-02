@@ -237,6 +237,7 @@ public static class DiffCommandRunner
             "visibility",
             "return_type",
             "is_partial_declaration",
+            "is_file_local_declaration",
             "declaration_semantic_score",
             "identifier_start_column",
             "is_metadata_target",
@@ -1458,6 +1459,9 @@ public static class DiffCommandRunner
         var isPartialDeclarationExpr = ColumnExists(connection, "symbols", "is_partial_declaration")
             ? "symbols.is_partial_declaration"
             : "NULL";
+        var isFileLocalDeclarationExpr = ColumnExists(connection, "symbols", "is_file_local_declaration")
+            ? "symbols.is_file_local_declaration"
+            : "NULL";
         var declarationSemanticScoreExpr = ColumnExists(connection, "symbols", "declaration_semantic_score")
             ? "symbols.declaration_semantic_score"
             : "NULL";
@@ -1487,6 +1491,7 @@ public static class DiffCommandRunner
                 symbols.visibility,
                 symbols.return_type,
                 {{isPartialDeclarationExpr}},
+                {{isFileLocalDeclarationExpr}},
                 {{declarationSemanticScoreExpr}},
                 {{identifierStartColumnExpr}},
                 {{metadataTargetExpr}},
@@ -1514,6 +1519,7 @@ public static class DiffCommandRunner
                 symbols.visibility,
                 symbols.return_type,
                 {{isPartialDeclarationExpr}},
+                {{isFileLocalDeclarationExpr}},
                 {{declarationSemanticScoreExpr}},
                 {{identifierStartColumnExpr}},
                 {{metadataTargetExpr}},
