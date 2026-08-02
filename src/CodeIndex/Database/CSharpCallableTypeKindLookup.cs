@@ -267,6 +267,7 @@ internal sealed class CSharpCallableTypeKindLookup
         var endLineSql = symbolColumns.Contains("end_line")
             ? "COALESCE(s.end_line, s.line)"
             : "s.line";
+        var partialDeclarationSql = BuildPartialDeclarationPredicateSql(symbolColumns);
         command.CommandText = $"""
             SELECT s.id,
                    s.file_id,
@@ -279,6 +280,7 @@ internal sealed class CSharpCallableTypeKindLookup
             JOIN files AS f ON f.id = s.file_id
             WHERE f.lang = 'csharp'
               AND s.kind IN ('function', 'test.method')
+              AND {partialDeclarationSql}
               AND ({string.Join(" OR ", clauses)})
             LIMIT {CandidateCallableLimit + 1}
             """;
@@ -476,6 +478,7 @@ internal sealed class CSharpCallableTypeKindLookup
         var endLineSql = symbolColumns.Contains("end_line")
             ? "COALESCE(s.end_line, s.line)"
             : "s.line";
+        var partialDeclarationSql = BuildPartialDeclarationPredicateSql(symbolColumns);
         command.CommandText = $"""
             SELECT s.id,
                    s.file_id,
@@ -486,6 +489,7 @@ internal sealed class CSharpCallableTypeKindLookup
             JOIN files AS f ON f.id = s.file_id
             WHERE f.lang = 'csharp'
               AND s.kind IN ('function', 'test.method')
+              AND {partialDeclarationSql}
             """;
         using var reader = command.ExecuteReader();
         while (reader.Read())
@@ -500,6 +504,16 @@ internal sealed class CSharpCallableTypeKindLookup
                 reader.GetInt32(3),
                 NormalizeIdentity(reader.IsDBNull(4) ? null : reader.GetString(4))));
         }
+    }
+
+    private static string BuildPartialDeclarationPredicateSql(
+        IReadOnlySet<string> symbolColumns)
+    {
+        const string fallbackSql =
+            "CASE WHEN csharp_is_partial_declaration(s.signature, s.kind, s.name) THEN 1 ELSE 0 END";
+        return symbolColumns.Contains("is_partial_declaration")
+            ? $"COALESCE(s.is_partial_declaration, {fallbackSql}) <> 0"
+            : $"{fallbackSql} <> 0";
     }
 
     private static Dictionary<CallableTypeParameterIdentity, TypeKind> BuildCallableTypeParameterKinds(

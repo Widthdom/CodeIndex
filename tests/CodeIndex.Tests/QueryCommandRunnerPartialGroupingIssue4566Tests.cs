@@ -2903,6 +2903,78 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void PartialCanonicalRepresentative_CandidateCapIgnoresOrdinarySameNameMethods_Issue4914()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_candidate_cap_issue4914");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var source = new System.Text.StringBuilder("namespace Demo;\n");
+            for (var index = 0; index <= 4_096; index++)
+            {
+                source.Append("public class Ordinary")
+                    .Append(index)
+                    .Append(" { public void Run() { } }\n");
+            }
+            source.Append(
+                """
+                public partial class Container
+                {
+                    partial void Run(int value);
+                    partial void Run(int value) { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/CandidateCap.cs",
+                "csharp",
+                source.ToString());
+            using (var connection = new SqliteConnection($"Data Source={dbPath}"))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = """
+                    UPDATE symbols
+                    SET is_partial_declaration = NULL
+                    WHERE signature LIKE 'partial %'
+                    """;
+                Assert.Equal(2, command.ExecuteNonQuery());
+            }
+            MarkGraphAndFoldReady(dbPath);
+
+            var candidateScans = new List<CSharpCallableTypeKindLookup.CandidateScanStats>();
+            CSharpCallableTypeKindLookup.CandidateScanForTesting = candidateScans.Add;
+            try
+            {
+                using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+                using var reader = new DbReader(db);
+                var results = reader.SearchSymbols(
+                    ["Run"],
+                    limit: 5_000,
+                    kind: "function",
+                    lang: "csharp",
+                    exact: true,
+                    groupPartials: true);
+
+                Assert.Equal(4_098, results.Count);
+                var grouped = Assert.Single(results.Where(result => result.DefinitionSites == 2));
+                Assert.Equal(2, grouped.DefinitionSites);
+                var scan = Assert.Single(candidateScans);
+                Assert.False(scan.UsedFullScan);
+                Assert.Equal(2, scan.CallableCount);
+            }
+            finally
+            {
+                CSharpCallableTypeKindLookup.CandidateScanForTesting = null;
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void PartialCanonicalRepresentative_RawConnectionReaderRegistersGroupingFunctions_Issue4914()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_raw_reader_issue4914");
