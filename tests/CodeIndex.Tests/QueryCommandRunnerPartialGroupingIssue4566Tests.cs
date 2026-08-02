@@ -2615,6 +2615,10 @@ public partial class QueryCommandRunnerTests
                 {
                     partial void ContainingValue(T? value);
                 }
+                public partial class SplitConstraintContainer<T>
+                {
+                    partial void SplitContainingValue(T? value);
+                }
                 public partial class EscapedConstraintContainer<T> where T : @struct
                 {
                     partial void ContainingEscapedConstraint(T? value);
@@ -2665,6 +2669,10 @@ public partial class QueryCommandRunnerTests
                 public partial class ValueContainer<T> where T : struct
                 {
                     partial void ContainingValue(global::System.Nullable<T> value) { }
+                }
+                public partial class SplitConstraintContainer<T> where T : struct
+                {
+                    partial void SplitContainingValue(global::System.Nullable<T> value) { }
                 }
                 public partial class EscapedConstraintContainer<T> where T : @struct
                 {
@@ -2729,6 +2737,7 @@ public partial class QueryCommandRunnerTests
                          "Nested",
                          "ContainingReference",
                          "ContainingValue",
+                         "SplitContainingValue",
                          "ContainingEscapedConstraint",
                          "Shadowed",
                          "Qualified",
@@ -3345,6 +3354,8 @@ public partial class QueryCommandRunnerTests
                     partial void NestedTupleEquivalent(global::System.ValueTuple<int, global::System.ValueTuple<string, bool>> value) { }
                     partial void NullableTupleEquivalent((int, (string, bool))? value);
                     partial void NullableTupleEquivalent(global::System.Nullable<global::System.ValueTuple<int, global::System.ValueTuple<string, bool>>> value) { }
+                    partial void NullableFrameworkTuple((int, int)? value);
+                    partial void NullableFrameworkTuple(global::System.ValueTuple<int, int>? value) { }
                     partial void LongTupleEquivalent((int, int, int, int, int, int, int, int) value);
                     partial void LongTupleEquivalent(global::System.ValueTuple<int, int, int, int, int, int, int, global::System.ValueTuple<int>> value) { }
                     partial void NamedTuple<T>((int T, string S) value);
@@ -3365,6 +3376,7 @@ public partial class QueryCommandRunnerTests
                          "TupleEquivalent",
                          "NestedTupleEquivalent",
                          "NullableTupleEquivalent",
+                         "NullableFrameworkTuple",
                          "LongTupleEquivalent",
                          "NamedTuple",
                          "GenericDefault",

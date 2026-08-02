@@ -2042,6 +2042,7 @@ public class ReportCommandRunnerTests
     [Theory]
     [InlineData("vb", true)]
     [InlineData("csharp", false)]
+    [InlineData("python", true)]
     public void Run_WithLegacyGlobalHotspotVersion_UsesIndexedLanguageContract_Issue4914(
         string language,
         bool expectedReady)

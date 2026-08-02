@@ -621,13 +621,11 @@ public static class ReportCommandRunner
         Dictionary<string, string?> meta)
     {
         var legacyGlobalVersion = GetMeta(meta, DbContext.HotspotFamilyVersionMetaKey);
-        var indexedLanguageCount = 0;
         foreach (var language in FileIndexer.GetHotspotFamilyMarkerLanguages())
         {
             if (CountFilesByLanguage(connection, language) == 0)
                 continue;
 
-            indexedLanguageCount++;
             var perLanguageVersion = GetMeta(
                 meta,
                 DbContext.GetHotspotFamilyVersionMetaKey(language));
@@ -650,11 +648,13 @@ public static class ReportCommandRunner
             }
         }
 
-        return indexedLanguageCount > 0
-            || string.Equals(
-                legacyGlobalVersion,
-                DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                StringComparison.Ordinal);
+        // All indexed family-aware languages passed above. If none were indexed, the
+        // contract is irrelevant; this matches DbReader.GetHotspotFamilySignal and keeps
+        // legacy non-family-language indexes ready.
+        // indexed 済みの family-aware 言語はすべて上で検証済み。該当言語がなければ
+        // contract は非該当なので、DbReader の signal と揃え、family 非対象言語だけを
+        // 含む旧 index も ready のままにする。
+        return true;
     }
 
     private static ReportDiagnosticSummary BuildDiagnosticSummary()

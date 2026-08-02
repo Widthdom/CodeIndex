@@ -509,6 +509,10 @@ internal sealed class CSharpCallableTypeKindLookup
         var result = new Dictionary<CallableTypeParameterIdentity, TypeKind>();
         var factsByFile = facts.GroupBy(fact => fact.FileId)
             .ToDictionary(group => group.Key, group => group.ToArray());
+        var factsByPartialFamily = facts
+            .Where(fact => fact.FamilyIdentity.Length > 0)
+            .GroupBy(BuildPartialTypeFamilyIdentity)
+            .ToDictionary(group => group.Key, group => group.ToArray());
         foreach (var callable in callables)
         {
             if (!factsByFile.TryGetValue(callable.FileId, out var fileFacts))
@@ -527,9 +531,34 @@ internal sealed class CSharpCallableTypeKindLookup
                          .OrderByDescending(fact => fact.EndLine - fact.StartLine)
                          .ThenBy(fact => fact.StartLine))
             {
-                foreach (var parameter in ReadTypeParameterKinds(fact))
+                var parameters = ReadTypeParameterKinds(fact).ToArray();
+                if (factsByPartialFamily.TryGetValue(
+                        BuildPartialTypeFamilyIdentity(fact),
+                        out var familyFacts))
                 {
-                    result[new CallableTypeParameterIdentity(callable.SymbolId, parameter.Key)] = parameter.Value;
+                    // C# permits a generic partial type constraint to appear on only one
+                    // declaration. Merge constraints by ordinal across the logical family,
+                    // while the key keeps project and file-local scopes isolated.
+                    // generic partial type の constraint は一方の宣言だけにも記述できる。
+                    // project / file-local scope を保った logical family 内で ordinal ごとに
+                    // constraint を統合する。
+                    foreach (var familyFact in familyFacts)
+                    {
+                        var familyParameters = ReadTypeParameterKinds(familyFact);
+                        if (familyParameters.Count != parameters.Length)
+                            continue;
+
+                        for (var index = 0; index < parameters.Length; index++)
+                        {
+                            if (familyParameters[index].Kind == TypeKind.Value)
+                                parameters[index] = parameters[index] with { Kind = TypeKind.Value };
+                        }
+                    }
+                }
+
+                foreach (var parameter in parameters)
+                {
+                    result[new CallableTypeParameterIdentity(callable.SymbolId, parameter.Name)] = parameter.Kind;
                 }
             }
         }
@@ -541,9 +570,15 @@ internal sealed class CSharpCallableTypeKindLookup
         => callableContainer.Equals(typeIdentity, StringComparison.Ordinal)
            || callableContainer.StartsWith($"{typeIdentity}.", StringComparison.Ordinal);
 
-    private static IReadOnlyDictionary<string, TypeKind> ReadTypeParameterKinds(TypeFact fact)
+    private static PartialTypeFamilyIdentity BuildPartialTypeFamilyIdentity(TypeFact fact)
+        => new(
+            fact.ProjectScope,
+            fact.FamilyIdentity,
+            fact.IsFileLocal ? fact.FileId : null);
+
+    private static IReadOnlyList<TypeParameterKind> ReadTypeParameterKinds(TypeFact fact)
     {
-        var result = new Dictionary<string, TypeKind>(StringComparer.Ordinal);
+        var result = new List<TypeParameterKind>();
         if (string.IsNullOrWhiteSpace(fact.Signature))
             return result;
 
@@ -555,7 +590,7 @@ internal sealed class CSharpCallableTypeKindLookup
         {
             var name = ReadLastIdentifier(parameter);
             if (name.Length > 0)
-                result[name] = TypeKind.Reference;
+                result.Add(new TypeParameterKind(name, TypeKind.Reference));
         }
 
         var constraintTokens = ReadIdentifierTokens(declaration[(close + 1)..]);
@@ -565,7 +600,9 @@ internal sealed class CSharpCallableTypeKindLookup
                 continue;
 
             var parameterName = constraintTokens[index + 1].TrimStart('@');
-            if (!result.ContainsKey(parameterName))
+            var parameterIndex = result.FindIndex(
+                parameter => parameter.Name.Equals(parameterName, StringComparison.Ordinal));
+            if (parameterIndex < 0)
                 continue;
 
             // T? on an unconstrained or reference-constrained type parameter is a
@@ -591,7 +628,7 @@ internal sealed class CSharpCallableTypeKindLookup
                 if (constraint == "class")
                     kind = TypeKind.Reference;
             }
-            result[parameterName] = kind;
+            result[parameterIndex] = result[parameterIndex] with { Kind = kind };
         }
 
         return result;
@@ -1034,4 +1071,9 @@ internal sealed class CSharpCallableTypeKindLookup
     private readonly record struct FileTypeIdentity(long FileId, string Identity);
     private readonly record struct ScopedTypeIdentity(string ProjectScope, string Identity);
     private readonly record struct CallableTypeParameterIdentity(long SymbolId, string ParameterName);
+    private readonly record struct PartialTypeFamilyIdentity(
+        string ProjectScope,
+        string FamilyIdentity,
+        long? FileId);
+    private readonly record struct TypeParameterKind(string Name, TypeKind Kind);
 }

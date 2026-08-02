@@ -685,10 +685,12 @@ internal static class LogicalPartialSymbolGrouper
             if (token == "?")
             {
                 var sourceIdentity = ReadCustomNullableSourceIdentity(tokens, offset);
-                var resolvedKind = typeKinds?.Resolve(
-                    sourceIdentity,
-                    containerQualifiedName,
-                    symbolId);
+                var resolvedKind = IsExplicitFrameworkValueTupleIdentity(sourceIdentity)
+                    ? CSharpCallableTypeKindLookup.TypeKind.Value
+                    : typeKinds?.Resolve(
+                        sourceIdentity,
+                        containerQualifiedName,
+                        symbolId);
                 if (resolvedKind == CSharpCallableTypeKindLookup.TypeKind.Reference)
                 {
                     // Nullable reference annotations do not participate in a C# callable
@@ -1044,6 +1046,19 @@ internal static class LogicalPartialSymbolGrouper
         }
 
         return string.Concat(tokens.Skip(nameStart).Take(identityEnd - nameStart + 1));
+    }
+
+    private static bool IsExplicitFrameworkValueTupleIdentity(string sourceIdentity)
+    {
+        var tokens = TokenizeCallableType(sourceIdentity);
+        return tokens.Count >= 6
+            && tokens[0] == "global"
+            && tokens[1] == ":"
+            && tokens[2] == ":"
+            && tokens[3].TrimStart('@') == "System"
+            && tokens[4] == "."
+            && tokens[5].TrimStart('@') == "ValueTuple"
+            && (tokens.Count == 6 || tokens[6] == "<");
     }
 
     private static string ReadNullableTupleSourceIdentity(
