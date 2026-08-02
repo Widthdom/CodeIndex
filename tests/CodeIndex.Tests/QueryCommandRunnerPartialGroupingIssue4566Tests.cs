@@ -3161,6 +3161,85 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void Impact_QualifiedPartialMethodTraversesDeclarationAndImplementationIds_Issue4914()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_qualified_impact_issue4914");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.Container.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class Container
+                {
+                    partial void M();
+                    public void Invoke() { M(); }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/B.Container.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class Container
+                {
+                    partial void M() { }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.MarkReferenceIdentityContractReady();
+            }
+
+            long declarationSymbolId;
+            using (var connection = new SqliteConnection($"Data Source={dbPath}"))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = """
+                    SELECT target.id, reference.target_symbol_id
+                    FROM symbol_references reference
+                    JOIN files source_file ON source_file.id = reference.file_id
+                    JOIN symbols target ON target.name = reference.symbol_name
+                    JOIN files target_file ON target_file.id = target.file_id
+                    WHERE source_file.path = 'src/A.Container.cs'
+                      AND target_file.path = 'src/A.Container.cs'
+                      AND reference.symbol_name = 'M'
+                      AND reference.reference_kind = 'call'
+                    LIMIT 1
+                    """;
+                using var row = command.ExecuteReader();
+                Assert.True(row.Read());
+                declarationSymbolId = row.GetInt64(0);
+                Assert.Equal(declarationSymbolId, row.GetInt64(1));
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["Container.M", "--db", dbPath, "--json", "--lang", "csharp", "--max-hops", "1", "--limit", "10"],
+                _jsonOptions));
+            using var document = ParseJsonOutput(stdout);
+            var impact = document.RootElement;
+            var caller = Assert.Single(impact.GetProperty("callers").EnumerateArray());
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("src/B.Container.cs", impact.GetProperty("definitions")[0].GetProperty("path").GetString());
+            Assert.Equal("Invoke", caller.GetProperty("caller_name").GetString());
+            Assert.Equal(declarationSymbolId, caller.GetProperty("callee_symbol_id").GetInt64());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void PartialCanonicalRepresentative_DistinguishesNestedTypeNamesAndArities_Issue4914()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_nested_identity_issue4914");

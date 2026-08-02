@@ -1412,9 +1412,7 @@ public partial class DbReader
             && rootDefinitions.All(definition => definition.Lang == "csharp")
             && rootDefinitions.All(definition => definition.SymbolId != null)
             && rootDefinitionResolution.LogicalCount == rootDefinitions.Count
-                ? rootDefinitions
-                    .Select(definition => definition.SymbolId!.Value)
-                    .ToHashSet()
+                ? rootDefinitionResolution.PhysicalSymbolIds.ToHashSet()
                 : [];
         if (hasResolvedIdentityGraph
             && rootDefinitionPaths.Count > 1
@@ -1457,7 +1455,8 @@ public partial class DbReader
             queue.Enqueue((resolvedName, null, rootTraversalNodeKey, 0));
         }
         visited.Add(resolvedName);
-        var truncated = false;
+        var truncated = qualifiedCSharpRootSymbolIds.Count > 0
+                        && rootDefinitionResolution.PhysicalSymbolIdsTruncated;
         var maxDepthReached = false;
         var cycles = new List<ImpactCycleResult>();
         var cycleKeys = new HashSet<string>(StringComparer.Ordinal);
@@ -1467,7 +1466,7 @@ public partial class DbReader
         // (the input graph is likely pathological). See Issue #1533.
         // truncatedReason は強い方の信号を保持する: safety_cap は --limit を緩和しても解消しない
         // ことを示すため、user_limit より優先する (#1533)。
-        string? truncatedReason = null;
+        string? truncatedReason = truncated ? ImpactTruncatedReasons.SafetyCap : null;
         // Safety cap to prevent infinite loops on pathological graphs / 病的グラフでの無限ループ防止
         const int maxFetchIterations = 1000;
         var graphStateEntryBudget = GetImpactGraphStateEntryBudget(resultWindowEnd);
@@ -2440,7 +2439,9 @@ public partial class DbReader
         int PreciseDefinitionCount,
         int PreciseDefinitionFileCount,
         int NonCallableDefinitionCount,
-        SymbolResult? SinglePreciseDefinition);
+        SymbolResult? SinglePreciseDefinition,
+        HashSet<long> PhysicalSymbolIds,
+        bool PhysicalSymbolIdsTruncated);
 
     private ImpactDefinitionResolution ResolveImpactDefinitions(
         string resolvedName,
@@ -2764,6 +2765,49 @@ public partial class DbReader
                 results.Add(result);
         }
 
+        // Qualified C# graph traversal is identity-scoped. Keep the representative-only
+        // definition payload, but retain every selected physical family ID internally so a
+        // call resolved to a partial declaration reaches the same graph as its implementation.
+        // qualified C# のグラフ探索は identity 単位で行う。definition の出力は代表1件のまま
+        // としつつ、partial 宣言側へ解決された call も実装側と同じグラフへ到達できるよう、
+        // 選択された family の全 physical ID を内部的に保持する。
+        reader.Dispose();
+        var physicalSymbolIds = new HashSet<long>();
+        var physicalSymbolIdsTruncated = false;
+        foreach (var definition in results)
+        {
+            AddPhysicalSymbolId(definition.SymbolId!.Value);
+            if (physicalSymbolIdsTruncated || definition.DefinitionSites is not > 1)
+                continue;
+
+            if (!definition.FamilyMembersTruncated)
+            {
+                foreach (var member in definition.FamilyMembers ?? [])
+                {
+                    if (member.SymbolId is long memberSymbolId)
+                        AddPhysicalSymbolId(memberSymbolId);
+                    if (physicalSymbolIdsTruncated)
+                        break;
+                }
+                continue;
+            }
+
+            var (familySymbolIds, familyIdsTruncated) = ResolveImpactPhysicalFamilySymbolIds(
+                definition,
+                logicalPartialKeySql,
+                lang,
+                pathPatterns,
+                excludePathPatterns,
+                excludeTests);
+            foreach (var familySymbolId in familySymbolIds)
+            {
+                AddPhysicalSymbolId(familySymbolId);
+                if (physicalSymbolIdsTruncated)
+                    break;
+            }
+            physicalSymbolIdsTruncated |= familyIdsTruncated;
+        }
+
         return new ImpactDefinitionResolution(
             results,
             physicalCount,
@@ -2772,7 +2816,66 @@ public partial class DbReader
             preciseCount,
             preciseFileCount,
             nonCallableCount,
-            preciseCount == 1 ? preciseDefinition : null);
+            preciseCount == 1 ? preciseDefinition : null,
+            physicalSymbolIds,
+            physicalSymbolIdsTruncated);
+
+        void AddPhysicalSymbolId(long symbolId)
+        {
+            if (physicalSymbolIds.Contains(symbolId))
+                return;
+            if (physicalSymbolIds.Count >= DefaultImpactGraphStateEntryBudget)
+            {
+                physicalSymbolIdsTruncated = true;
+                return;
+            }
+            physicalSymbolIds.Add(symbolId);
+        }
+    }
+
+    private (List<long> SymbolIds, bool Truncated) ResolveImpactPhysicalFamilySymbolIds(
+        SymbolResult definition,
+        string logicalPartialKeySql,
+        string? lang,
+        IReadOnlyList<string>? pathPatterns,
+        IReadOnlyList<string>? excludePathPatterns,
+        bool excludeTests)
+    {
+        using var cmd = _conn.CreateCommand();
+        var supportedLangFilter = BuildGraphSupportedLanguagePredicate(cmd, "f", "impactFamilyLang");
+        var sql = $@"
+            SELECT s.id
+            FROM symbols s
+            JOIN files f ON s.file_id = f.id
+            WHERE f.lang = @familyLang
+              AND s.kind = @familyKind
+              AND s.name = @familyName COLLATE BINARY
+              AND ({logicalPartialKeySql}) = @logicalPartialKey
+              AND {supportedLangFilter}";
+        if (lang != null)
+            sql += " AND f.lang = @lang";
+        AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
+        sql += " ORDER BY s.id LIMIT @familyMemberLimit";
+
+        cmd.CommandText = sql;
+        SqliteCommandPolicy.Add(cmd, "@familyLang", definition.Lang!);
+        SqliteCommandPolicy.Add(cmd, "@familyKind", definition.Kind);
+        SqliteCommandPolicy.Add(cmd, "@familyName", definition.Name);
+        SqliteCommandPolicy.Add(cmd, "@logicalPartialKey", definition.LogicalPartialKey!);
+        if (lang != null)
+            SqliteCommandPolicy.Add(cmd, "@lang", lang);
+        SqliteCommandPolicy.Add(cmd, "@familyMemberLimit", DefaultImpactGraphStateEntryBudget + 1);
+        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+
+        var symbolIds = new List<long>();
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+        {
+            if (symbolIds.Count >= DefaultImpactGraphStateEntryBudget)
+                return (symbolIds, true);
+            symbolIds.Add(reader.GetInt64(0));
+        }
+        return (symbolIds, false);
     }
 
     // C# convention: a class `FooAttribute` is used in source as `[Foo]`, so the reference
