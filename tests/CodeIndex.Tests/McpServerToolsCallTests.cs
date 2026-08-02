@@ -13407,10 +13407,10 @@ public partial class McpServerTests
         if (OperatingSystem.IsWindows())
             return;
 
-        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_unreadable_marker_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(fixtureDir);
+        var fixtureDir = TestProjectHelper.CreateTempProject("mcp_index_unreadable_marker");
         var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_unreadable_marker");
         var unreadableDir = Path.Combine(fixtureDir, "secret");
+        var originalCurrentDirectory = Environment.CurrentDirectory;
         UnixFileMode? originalMode = null;
         try
         {
@@ -13421,6 +13421,7 @@ public partial class McpServerTests
             originalMode = File.GetUnixFileMode(unreadableDir);
             File.SetUnixFileMode(unreadableDir, UnixFileMode.None);
 
+            Environment.CurrentDirectory = fixtureDir;
             using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
             var request = new JsonObject
             {
@@ -13444,6 +13445,7 @@ public partial class McpServerTests
         }
         finally
         {
+            Environment.CurrentDirectory = originalCurrentDirectory;
             if (originalMode.HasValue && Directory.Exists(unreadableDir))
                 File.SetUnixFileMode(unreadableDir, originalMode.Value);
             TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
