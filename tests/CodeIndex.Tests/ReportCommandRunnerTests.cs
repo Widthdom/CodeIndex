@@ -2091,6 +2091,66 @@ public class ReportCommandRunnerTests
         }
     }
 
+    [Theory]
+    [InlineData(null, false)]
+    [InlineData("incomplete:marker_scan_cap", false)]
+    [InlineData("complete-fingerprint", true)]
+    public void Run_WithPerLanguageHotspotVersion_RequiresCompleteMarkerFingerprint_Issue4914(
+        string? markerFingerprint,
+        bool expectedReady)
+    {
+        var workDir = CreateWorkDir();
+        var dbPath = Path.Combine(workDir, "per-language-hotspot-family.db");
+        try
+        {
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+                db.InitializeSchema();
+            using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
+            {
+                connection.Open();
+                using var cmd = connection.CreateCommand();
+                cmd.CommandText = $"""
+                    INSERT INTO files (path, lang, size, lines, checksum, modified)
+                    VALUES ('src/Current.cs', 'csharp', 1, 1, 'current', '2026-01-01T00:00:00Z');
+                    INSERT OR REPLACE INTO codeindex_meta (key, value)
+                    VALUES (
+                        '{DbContext.GetHotspotFamilyVersionMetaKey("csharp")}',
+                        '{DbContext.GetHotspotFamilyVersion("csharp")}');
+                    INSERT OR REPLACE INTO codeindex_meta (key, value)
+                    VALUES (
+                        '{DbContext.GetHotspotFamilyMarkerFingerprintMetaKey("csharp")}',
+                        @markerFingerprint);
+                    """;
+                cmd.Parameters.AddWithValue(
+                    "@markerFingerprint",
+                    (object?)markerFingerprint ?? DBNull.Value);
+                cmd.ExecuteNonQuery();
+            }
+            SqliteConnection.ClearAllPools();
+
+            var output = Path.Combine(workDir, "bundle.tgz");
+            var (exitCode, _, _) = RunAndCaptureStreams([
+                "--output", output,
+                "--db", dbPath,
+                "--no-log",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            var entries = ReadTarGzEntries(output);
+            using var manifest = ReadJsonEntry(entries, "support-manifest.json");
+            var readiness = manifest.RootElement.GetProperty("readiness");
+            Assert.Equal(expectedReady, readiness.GetProperty("hotspot_family_ready").GetBoolean());
+            Assert.Equal(
+                !expectedReady,
+                JsonArrayContains(readiness.GetProperty("degraded_fields"), "hotspot_family_ready"));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            TestProjectHelper.DeleteDirectory(workDir);
+        }
+    }
+
     private (int ExitCode, string StdOut, string StdErr) RunAndCaptureStreams(string[] args)
     {
         lock (TestConsoleLock.Gate)

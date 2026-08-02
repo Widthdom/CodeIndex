@@ -628,12 +628,26 @@ public static class ReportCommandRunner
                 continue;
 
             indexedLanguageCount++;
-            var storedVersion = GetMeta(meta, DbContext.GetHotspotFamilyVersionMetaKey(language))
-                ?? legacyGlobalVersion;
+            var perLanguageVersion = GetMeta(
+                meta,
+                DbContext.GetHotspotFamilyVersionMetaKey(language));
+            var storedVersion = perLanguageVersion ?? legacyGlobalVersion;
             var expectedVersion = DbContext.GetHotspotFamilyVersion(language)
                 .ToString(System.Globalization.CultureInfo.InvariantCulture);
             if (!string.Equals(storedVersion, expectedVersion, StringComparison.Ordinal))
                 return false;
+
+            if (perLanguageVersion != null)
+            {
+                var markerFingerprint = GetMeta(
+                    meta,
+                    DbContext.GetHotspotFamilyMarkerFingerprintMetaKey(language));
+                if (string.IsNullOrWhiteSpace(markerFingerprint)
+                    || DbContext.IsIncompleteHotspotFamilyMarkerFingerprint(markerFingerprint))
+                {
+                    return false;
+                }
+            }
         }
 
         return indexedLanguageCount > 0
