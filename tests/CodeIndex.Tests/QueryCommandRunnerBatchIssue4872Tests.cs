@@ -119,34 +119,38 @@ public partial class QueryCommandRunnerTests
         using var input = new InteractiveBatchTextReader();
         using var stdout = new StringWriter();
         using var stderr = new StringWriter();
-        using var firstWaveCompleted = new CountdownEvent(2);
+        var firstWaveCompleted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
         using var cancellation = new CancellationTokenSource();
         var statusWaveTimeout = TimeSpan.FromMinutes(2);
         Task<int>? runTask = null;
         var openedSessions = 0;
+        var completedFirstWaveCommands = 0;
         QueryCommandRunner.BatchParallelSessionOpenedForTesting =
             () => Interlocked.Increment(ref openedSessions);
         QueryCommandRunner.BatchParallelCommandCompletedForTesting = lineNumber =>
         {
-            if (lineNumber <= 2)
-                firstWaveCompleted.Signal();
+            if (lineNumber <= 2
+                && Interlocked.Increment(ref completedFirstWaveCommands) == 2)
+            {
+                firstWaveCompleted.TrySetResult();
+            }
         };
 
         try
         {
-            runTask = Task.Run(() =>
-            {
-                using var capture = ConsoleCapture.Start(stdout, stderr, input);
-                return QueryCommandRunner.RunBatch(
-                    ["--db", dbPath, "--json-summary", "--parallel", "2"],
-                    _jsonOptions,
-                    cancellationToken: cancellation.Token);
-            });
-            input.WriteLine("""{"command":"status","args":["--json"]}""");
-            input.WriteLine("""{"command":"status","args":["--json"]}""");
-            Assert.True(
-                firstWaveCompleted.Wait(statusWaveTimeout),
-                "The first parallel batch wave did not complete.");
+            runTask = StartIssue4872InteractiveBatch(
+                dbPath,
+                input,
+                stdout,
+                stderr,
+                cancellation.Token);
+            input.WriteLine("""{"command":"files","args":["--format","count","--json"]}""");
+            input.WriteLine("""{"command":"files","args":["--format","count","--json"]}""");
+            await WaitForIssue4872FirstWaveAsync(
+                firstWaveCompleted.Task,
+                runTask,
+                statusWaveTimeout);
 
             using (var update = writer.CreateCommand())
             {
@@ -160,22 +164,24 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(initialDbLength, new FileInfo(dbPath).Length);
             Assert.Equal(0, new FileInfo(dbPath + "-wal").Length);
 
-            input.WriteLine("""{"command":"status","args":["--json"]}""");
-            input.WriteLine("""{"command":"status","args":["--json"]}""");
+            input.WriteLine("""{"command":"files","args":["--format","count","--json"]}""");
+            input.WriteLine("""{"command":"files","args":["--format","count","--json"]}""");
             input.Complete();
 
             var exitCode = await runTask.WaitAsync(statusWaveTimeout);
-            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.True(
+                exitCode == CommandExitCodes.Success,
+                $"Parallel batch exited with code {exitCode}: {stdout}");
             Assert.Equal(string.Empty, stderr.ToString());
 
             var lines = ParseJsonLines(stdout.ToString());
             try
             {
                 Assert.Equal(5, lines.Count);
-                Assert.Equal(1, lines[0].RootElement.GetProperty("result").GetProperty("files").GetInt32());
-                Assert.Equal(1, lines[1].RootElement.GetProperty("result").GetProperty("files").GetInt32());
-                Assert.Equal(2, lines[2].RootElement.GetProperty("result").GetProperty("files").GetInt32());
-                Assert.Equal(2, lines[3].RootElement.GetProperty("result").GetProperty("files").GetInt32());
+                Assert.Equal(1, lines[0].RootElement.GetProperty("result").GetProperty("count").GetInt32());
+                Assert.Equal(1, lines[1].RootElement.GetProperty("result").GetProperty("count").GetInt32());
+                Assert.Equal(2, lines[2].RootElement.GetProperty("result").GetProperty("count").GetInt32());
+                Assert.Equal(2, lines[3].RootElement.GetProperty("result").GetProperty("count").GetInt32());
                 Assert.Equal(4, Volatile.Read(ref openedSessions));
             }
             finally
@@ -198,6 +204,12 @@ public partial class QueryCommandRunnerTests
                 }
                 catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
                 {
+                }
+                catch (TimeoutException exception)
+                {
+                    throw new TimeoutException(
+                        "The dedicated parallel batch test thread did not drain after cancellation.",
+                        exception);
                 }
             }
         }
@@ -240,33 +252,37 @@ public partial class QueryCommandRunnerTests
         using var input = new InteractiveBatchTextReader();
         using var stdout = new StringWriter();
         using var stderr = new StringWriter();
-        using var firstWaveCompleted = new CountdownEvent(2);
+        var firstWaveCompleted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
         using var cancellation = new CancellationTokenSource();
         Task<int>? runTask = null;
         var openedSessions = 0;
+        var completedFirstWaveCommands = 0;
         QueryCommandRunner.BatchParallelSessionOpenedForTesting =
             () => Interlocked.Increment(ref openedSessions);
         QueryCommandRunner.BatchParallelCommandCompletedForTesting = lineNumber =>
         {
-            if (lineNumber <= 2)
-                firstWaveCompleted.Signal();
+            if (lineNumber <= 2
+                && Interlocked.Increment(ref completedFirstWaveCommands) == 2)
+            {
+                firstWaveCompleted.TrySetResult();
+            }
         };
 
         try
         {
-            runTask = Task.Run(() =>
-            {
-                using var capture = ConsoleCapture.Start(stdout, stderr, input);
-                return QueryCommandRunner.RunBatch(
-                    ["--db", dbPath, "--json-summary", "--parallel", "2"],
-                    _jsonOptions,
-                    cancellationToken: cancellation.Token);
-            });
-            input.WriteLine("""{"command":"status","args":["--json"]}""");
-            input.WriteLine("""{"command":"status","args":["--json"]}""");
-            Assert.True(
-                firstWaveCompleted.Wait(TimeSpan.FromSeconds(60)),
-                "The first parallel batch wave did not complete.");
+            runTask = StartIssue4872InteractiveBatch(
+                dbPath,
+                input,
+                stdout,
+                stderr,
+                cancellation.Token);
+            input.WriteLine("""{"command":"files","args":["--format","count","--json"]}""");
+            input.WriteLine("""{"command":"files","args":["--format","count","--json"]}""");
+            await WaitForIssue4872FirstWaveAsync(
+                firstWaveCompleted.Task,
+                runTask,
+                TimeSpan.FromSeconds(60));
 
             using (var update = writer.CreateCommand())
             {
@@ -277,22 +293,24 @@ public partial class QueryCommandRunnerTests
                 Assert.Equal(1, update.ExecuteNonQuery());
             }
 
-            input.WriteLine("""{"command":"status","args":["--json"]}""");
-            input.WriteLine("""{"command":"status","args":["--json"]}""");
+            input.WriteLine("""{"command":"files","args":["--format","count","--json"]}""");
+            input.WriteLine("""{"command":"files","args":["--format","count","--json"]}""");
             input.Complete();
 
             var exitCode = await runTask.WaitAsync(TimeSpan.FromSeconds(60));
-            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.True(
+                exitCode == CommandExitCodes.Success,
+                $"Parallel batch exited with code {exitCode}: {stdout}");
             Assert.Equal(string.Empty, stderr.ToString());
 
             var lines = ParseJsonLines(stdout.ToString());
             try
             {
                 Assert.Equal(5, lines.Count);
-                Assert.Equal(1, lines[0].RootElement.GetProperty("result").GetProperty("files").GetInt32());
-                Assert.Equal(1, lines[1].RootElement.GetProperty("result").GetProperty("files").GetInt32());
-                Assert.Equal(2, lines[2].RootElement.GetProperty("result").GetProperty("files").GetInt32());
-                Assert.Equal(2, lines[3].RootElement.GetProperty("result").GetProperty("files").GetInt32());
+                Assert.Equal(1, lines[0].RootElement.GetProperty("result").GetProperty("count").GetInt32());
+                Assert.Equal(1, lines[1].RootElement.GetProperty("result").GetProperty("count").GetInt32());
+                Assert.Equal(2, lines[2].RootElement.GetProperty("result").GetProperty("count").GetInt32());
+                Assert.Equal(2, lines[3].RootElement.GetProperty("result").GetProperty("count").GetInt32());
                 Assert.Equal(4, Volatile.Read(ref openedSessions));
             }
             finally
@@ -315,6 +333,12 @@ public partial class QueryCommandRunnerTests
                 }
                 catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
                 {
+                }
+                catch (TimeoutException exception)
+                {
+                    throw new TimeoutException(
+                        "The dedicated parallel batch test thread did not drain after cancellation.",
+                        exception);
                 }
             }
         }
@@ -528,5 +552,53 @@ public partial class QueryCommandRunnerTests
         using var command = connection.CreateCommand();
         command.CommandText = "PRAGMA journal_mode";
         return Assert.IsType<string>(command.ExecuteScalar());
+    }
+
+    private Task<int> StartIssue4872InteractiveBatch(
+        string dbPath,
+        InteractiveBatchTextReader input,
+        StringWriter stdout,
+        StringWriter stderr,
+        CancellationToken cancellationToken)
+        => Task.Factory.StartNew(
+            () =>
+            {
+                using (var capture = ConsoleCapture.Start(stdout, stderr, input))
+                {
+                    return QueryCommandRunner.RunBatch(
+                        ["--db", dbPath, "--json-summary", "--parallel", "2"],
+                        _jsonOptions,
+                        cancellationToken: cancellationToken);
+                }
+            },
+            CancellationToken.None,
+            TaskCreationOptions.LongRunning | TaskCreationOptions.DenyChildAttach,
+            TaskScheduler.Default);
+
+    private static async Task WaitForIssue4872FirstWaveAsync(
+        Task firstWaveCompleted,
+        Task<int> runTask,
+        TimeSpan timeout)
+    {
+        Task boundary;
+        try
+        {
+            boundary = await Task.WhenAny(firstWaveCompleted, runTask)
+                .WaitAsync(timeout);
+        }
+        catch (TimeoutException exception)
+        {
+            throw new TimeoutException(
+                "The first parallel batch wave did not complete before its synchronization boundary.",
+                exception);
+        }
+        if (ReferenceEquals(boundary, runTask))
+        {
+            var exitCode = await runTask;
+            Assert.Fail(
+                $"The parallel batch exited with code {exitCode} before the first wave completed.");
+        }
+
+        await firstWaveCompleted;
     }
 }
