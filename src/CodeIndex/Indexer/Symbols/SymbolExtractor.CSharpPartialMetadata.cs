@@ -12,7 +12,7 @@ public static partial class SymbolExtractor
         "ref", "required",
     };
     private static readonly string[] CSharpTypeDeclarationKeywords =
-        ["class", "struct", "interface", "record"];
+        ["class", "struct", "interface", "record", "enum", "delegate"];
 
     private static void PopulateCSharpPartialDeclarationMetadata(
         IReadOnlyList<string> lines,
@@ -20,9 +20,13 @@ public static partial class SymbolExtractor
         Func<CSharpLexState[]>? getCSharpLineStartStates)
     {
         var lineStartStates = getCSharpLineStartStates?.Invoke();
+        var firstDeclarationColumns = GetFirstCSharpDeclarationColumns(
+            lines,
+            symbols,
+            lineStartStates);
         foreach (var symbol in symbols)
         {
-            if (symbol.Kind is not ("function" or "test.method" or "class" or "struct" or "interface" or "record"))
+            if (symbol.Kind is not ("function" or "test.method" or "class" or "struct" or "interface" or "record" or "enum" or "delegate"))
                 continue;
 
             var signature = symbol.Signature ?? string.Empty;
@@ -34,15 +38,22 @@ public static partial class SymbolExtractor
             var leading = ReadCSharpLeadingDeclarationEvidence(
                 lines,
                 symbol,
-                lineStartStates);
-            symbol.IsPartialDeclaration =
-                ContainsCSharpLeadingModifier(
-                    declarationModifierPrefix,
-                    "partial",
-                    requireTrailingDeclarationType: symbol.Kind is "function" or "test.method")
-                || leading.HasPartialModifier;
+                lineStartStates,
+                IsFirstCSharpDeclarationOnLine(
+                    lines,
+                    symbol,
+                    lineStartStates,
+                    firstDeclarationColumns));
+            var supportsPartialDeclaration = symbol.Kind is
+                "function" or "test.method" or "class" or "struct" or "interface" or "record";
+            symbol.IsPartialDeclaration = supportsPartialDeclaration
+                && (ContainsCSharpLeadingModifier(
+                        declarationModifierPrefix,
+                        "partial",
+                        requireTrailingDeclarationType: symbol.Kind is "function" or "test.method")
+                    || leading.HasPartialModifier);
             symbol.IsFileLocalDeclaration =
-                symbol.Kind is "class" or "struct" or "interface" or "record"
+                symbol.Kind is "class" or "struct" or "interface" or "record" or "enum" or "delegate"
                 && (ContainsCSharpLeadingModifier(declarationModifierPrefix, "file")
                     || leading.HasFileModifier);
             if (symbol.IsPartialDeclaration == true)
@@ -67,6 +78,66 @@ public static partial class SymbolExtractor
                 semanticScore += 1;
             symbol.DeclarationSemanticScore = semanticScore;
         }
+    }
+
+    private static Dictionary<int, int> GetFirstCSharpDeclarationColumns(
+        IReadOnlyList<string> lines,
+        IReadOnlyList<SymbolRecord> symbols,
+        IReadOnlyList<CSharpLexState>? lineStartStates)
+    {
+        var firstColumns = new Dictionary<int, int>();
+        foreach (var symbol in symbols)
+        {
+            var declarationLine = symbol.Line > 0 ? symbol.Line : symbol.StartLine;
+            if (declarationLine <= 0 || declarationLine > lines.Count)
+                continue;
+
+            var lineIndex = declarationLine - 1;
+            var lineStartState = lineStartStates != null && lineIndex < lineStartStates.Count
+                ? lineStartStates[lineIndex]
+                : new CSharpLexState();
+            var declarationColumn = FindCSharpDeclarationOccurrenceStartColumn(
+                lines[lineIndex],
+                symbol,
+                lineStartState);
+            if (declarationColumn < 0)
+                declarationColumn = symbol.StartColumn ?? int.MaxValue;
+
+            if (!firstColumns.TryGetValue(declarationLine, out var firstColumn)
+                || declarationColumn < firstColumn)
+            {
+                firstColumns[declarationLine] = declarationColumn;
+            }
+        }
+
+        return firstColumns;
+    }
+
+    private static bool IsFirstCSharpDeclarationOnLine(
+        IReadOnlyList<string> lines,
+        SymbolRecord symbol,
+        IReadOnlyList<CSharpLexState>? lineStartStates,
+        IReadOnlyDictionary<int, int> firstDeclarationColumns)
+    {
+        var declarationLine = symbol.Line > 0 ? symbol.Line : symbol.StartLine;
+        if (declarationLine <= 0
+            || declarationLine > lines.Count
+            || !firstDeclarationColumns.TryGetValue(declarationLine, out var firstColumn))
+        {
+            return true;
+        }
+
+        var lineIndex = declarationLine - 1;
+        var lineStartState = lineStartStates != null && lineIndex < lineStartStates.Count
+            ? lineStartStates[lineIndex]
+            : new CSharpLexState();
+        var declarationColumn = FindCSharpDeclarationOccurrenceStartColumn(
+            lines[lineIndex],
+            symbol,
+            lineStartState);
+        if (declarationColumn < 0)
+            declarationColumn = symbol.StartColumn ?? int.MaxValue;
+        return declarationColumn <= firstColumn;
     }
 
     private static string SanitizeCSharpDeclarationEvidence(string signature)
@@ -193,7 +264,7 @@ public static partial class SymbolExtractor
     private static string ExtractCSharpDeclarationModifierPrefix(
         string declarationHeader,
         SymbolRecord symbol)
-        => symbol.Kind is "class" or "struct" or "interface" or "record"
+        => symbol.Kind is "class" or "struct" or "interface" or "record" or "enum" or "delegate"
             ? ExtractCSharpTypeDeclarationModifierPrefix(declarationHeader, symbol.Name)
             : ExtractCSharpCallableDeclarationModifierPrefix(declarationHeader, symbol.Name);
 
@@ -379,7 +450,8 @@ public static partial class SymbolExtractor
     private static CSharpLeadingDeclarationEvidence ReadCSharpLeadingDeclarationEvidence(
         IReadOnlyList<string> lines,
         SymbolRecord symbol,
-        IReadOnlyList<CSharpLexState>? lineStartStates)
+        IReadOnlyList<CSharpLexState>? lineStartStates,
+        bool consumePreviousLineEvidence)
     {
         var declarationStartLine = symbol.StartLine;
         var lineIndex = Math.Min(lines.Count, Math.Max(1, declarationStartLine)) - 2;
@@ -398,6 +470,20 @@ public static partial class SymbolExtractor
         var attributeDepth = 0;
         var pendingAttributeEvidence = false;
         var pendingAttributeIsGlobal = false;
+
+        // Standalone modifiers, attributes, and documentation on preceding lines bind to
+        // the first declaration occurrence on the next line. Later same-line declarations
+        // must derive evidence only from their own declaration text.
+        // preceding line の standalone modifier・attribute・documentation は次行の最初の
+        // declaration occurrence にだけ属する。同一行の後続宣言は自身の宣言 text だけを使う。
+        if (!consumePreviousLineEvidence)
+        {
+            return new CSharpLeadingDeclarationEvidence(
+                HasPartialModifier: false,
+                HasFileModifier: false,
+                HasAttribute: hasAttribute,
+                HasDocumentation: hasDocumentation);
+        }
 
         for (; lineIndex >= minimumLineIndex; lineIndex--)
         {

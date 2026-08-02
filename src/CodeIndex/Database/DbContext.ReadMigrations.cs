@@ -247,6 +247,7 @@ public partial class DbContext : IDisposable
         yield return ("EnsureColumn symbols.visibility", () => EnsureColumn("symbols", "visibility", "TEXT"));
         yield return ("EnsureColumn symbols.return_type", () => EnsureColumn("symbols", "return_type", "TEXT"));
         yield return ("EnsureColumn symbols.is_partial_declaration", () => EnsureColumn("symbols", "is_partial_declaration", "INTEGER"));
+        yield return ("EnsureColumn symbols.is_file_local_declaration", () => EnsureColumn("symbols", "is_file_local_declaration", "INTEGER"));
         yield return ("EnsureColumn symbols.declaration_semantic_score", () => EnsureColumn("symbols", "declaration_semantic_score", "INTEGER"));
         yield return ("EnsureColumn symbols.identifier_start_column", () => EnsureColumn("symbols", "identifier_start_column", "INTEGER"));
         yield return ("EnsureColumn symbols.is_metadata_target", () => EnsureColumn("symbols", "is_metadata_target", "INTEGER"));

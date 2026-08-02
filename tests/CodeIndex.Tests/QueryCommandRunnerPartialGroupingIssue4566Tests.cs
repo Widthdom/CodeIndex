@@ -1960,6 +1960,55 @@ public partial class QueryCommandRunnerTests
                 "src/Z.Widget.cs",
                 "csharp",
                 "public partial /* [ : where */ class Widget { }");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.Shared.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class Shared { }
+                public partial class Ranked { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Z.LeadingEvidence.cs",
+                "csharp",
+                """
+                namespace Demo;
+                file partial
+                class LocalOnly { } public partial class Shared { }
+                [System.Obsolete]
+                class Decorated { } public partial class Ranked { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.SplitLocalNode.cs",
+                "csharp",
+                """
+                namespace Demo;
+                file
+                class Node { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/B.ProjectNode.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public struct Node { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/C.NullableNode.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class NullableContainer
+                {
+                    partial void NullableNode(Node? value);
+                    partial void NullableNode(global::System.Nullable<Node> value) { }
+                }
+                """);
             MarkGraphAndFoldReady(dbPath);
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
@@ -2061,6 +2110,39 @@ public partial class QueryCommandRunnerTests
             var widget = RunGroupedSymbol(dbPath, "Widget", "class");
             Assert.Equal("src/A.Widget.cs", widget.GetProperty("path").GetString());
             Assert.Equal("stable_path_and_position", widget.GetProperty("representative_reason").GetString());
+
+            var shared = RunGroupedSymbol(dbPath, "Shared", "class");
+            Assert.Equal(2, shared.GetProperty("definition_sites").GetInt32());
+            Assert.Equal("src/A.Shared.cs", shared.GetProperty("path").GetString());
+
+            var ranked = RunGroupedSymbol(dbPath, "Ranked", "class");
+            Assert.Equal(2, ranked.GetProperty("definition_sites").GetInt32());
+            Assert.Equal("src/A.Shared.cs", ranked.GetProperty("path").GetString());
+            Assert.Equal("stable_path_and_position", ranked.GetProperty("representative_reason").GetString());
+
+            var nullableNode = RunGroupedSymbol(dbPath, "NullableNode", "function");
+            Assert.Equal(2, nullableNode.GetProperty("definition_sites").GetInt32());
+            Assert.Equal("implementation_body", nullableNode.GetProperty("representative_reason").GetString());
+
+            using var metadataConnection = new SqliteConnection($"Data Source={dbPath}");
+            metadataConnection.Open();
+            using var fileLocalMetadata = metadataConnection.CreateCommand();
+            fileLocalMetadata.CommandText =
+                """
+                SELECT f.path, s.is_file_local_declaration
+                FROM symbols AS s
+                JOIN files AS f ON f.id = s.file_id
+                WHERE s.name = 'Node'
+                ORDER BY f.path
+                """;
+            using var fileLocalReader = fileLocalMetadata.ExecuteReader();
+            Assert.True(fileLocalReader.Read());
+            Assert.Equal("src/A.SplitLocalNode.cs", fileLocalReader.GetString(0));
+            Assert.True(fileLocalReader.GetBoolean(1));
+            Assert.True(fileLocalReader.Read());
+            Assert.Equal("src/B.ProjectNode.cs", fileLocalReader.GetString(0));
+            Assert.False(fileLocalReader.GetBoolean(1));
+            Assert.False(fileLocalReader.Read());
         }
         finally
         {
