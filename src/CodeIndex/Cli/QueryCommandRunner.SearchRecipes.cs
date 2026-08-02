@@ -3703,7 +3703,7 @@ public static partial class QueryCommandRunner
         for (var index = 0; index < maskedLines.Count; index++)
         {
             var trimmed = maskedLines[index].AsSpan().TrimStart();
-            if (IsJsonTrustConditionalCompilationDirective(trimmed, "if", allowOpeningParenthesis: true))
+            if (IsJsonTrustConditionalCompilationDirective(trimmed, "if", allowExpressionStartWithoutWhitespace: true))
             {
                 depth++;
                 conditionalLines[index] = true;
@@ -3711,7 +3711,7 @@ public static partial class QueryCommandRunner
             }
 
             conditionalLines[index] = depth > 0;
-            if (IsJsonTrustConditionalCompilationDirective(trimmed, "endif", allowOpeningParenthesis: false))
+            if (IsJsonTrustConditionalCompilationDirective(trimmed, "endif", allowExpressionStartWithoutWhitespace: false))
             {
                 depth = Math.Max(0, depth - 1);
             }
@@ -3723,7 +3723,7 @@ public static partial class QueryCommandRunner
     private static bool IsJsonTrustConditionalCompilationDirective(
         ReadOnlySpan<char> line,
         ReadOnlySpan<char> directive,
-        bool allowOpeningParenthesis)
+        bool allowExpressionStartWithoutWhitespace)
     {
         var index = 0;
         while (index < line.Length && char.IsWhiteSpace(line[index]))
@@ -3740,7 +3740,7 @@ public static partial class QueryCommandRunner
         index += directive.Length;
         return index == line.Length
             || char.IsWhiteSpace(line[index])
-            || (allowOpeningParenthesis && line[index] == '(');
+            || (allowExpressionStartWithoutWhitespace && line[index] is '(' or '!');
     }
 
     private static bool TryParseJsonTrustBoundaryAnnotation(
