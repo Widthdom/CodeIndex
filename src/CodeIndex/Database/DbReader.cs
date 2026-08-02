@@ -1073,11 +1073,15 @@ public partial class DbReader : IDisposable
 
         HotspotFamilyReadinessBatchForTesting?.Invoke(candidateLangs);
 
-        // Detect every mixed NULL/non-NULL family in one grouped scan. The previous
+        // Detect every mixed NULL/non-NULL family in one grouped scan. C# type arity is
+        // part of the family identity: a valid non-partial Item and partial Item<T> must
+        // not make the language look partially backfilled merely because their leaf name
+        // and container match. The previous
         // correlated EXISTS probe rescanned symbols for every stamped language (including
         // languages absent from the workspace), making reader construction grow toward
         // O(language-count * symbol-count^2) on large indexes.
-        // NULL/non-NULL が混在する family を全言語まとめて一度の group scan で検出する。
+        // NULL/non-NULL が混在する family を全言語まとめて一度の group scan で検出する。C# の
+        // type arity は family identity の一部なので、Item と Item<T> は別 group として扱う。
         // 旧 correlated EXISTS は未使用言語まで symbols を反復走査していた。
         using (var cmd = conn.CreateCommand())
         {
@@ -1100,7 +1104,12 @@ public partial class DbReader : IDisposable
                         f.lang,
                         s.name,
                         s.kind,
-                        COALESCE(s.container_qualified_name, '')
+                        COALESCE(s.container_qualified_name, ''),
+                        CASE
+                            WHEN f.lang = 'csharp'
+                                THEN COALESCE(csharp_definition_type_arity(s.signature, s.name, s.kind), -1)
+                            ELSE -1
+                        END
                     HAVING COUNT(s.family_key) > 0
                        AND COUNT(s.family_key) < COUNT(*)
                 ) grouped

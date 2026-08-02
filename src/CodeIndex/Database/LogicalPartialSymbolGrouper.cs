@@ -708,7 +708,8 @@ internal static class LogicalPartialSymbolGrouper
         if (genericParameterNames.Count == 0 || closeParenthesis + 1 >= signature.Length)
             return constrained;
 
-        var tokens = TokenizeCallableType(signature[(closeParenthesis + 1)..]);
+        var declarationHeaderEnd = FindCallableDeclarationHeaderEnd(signature, closeParenthesis + 1);
+        var tokens = TokenizeCallableType(signature[(closeParenthesis + 1)..declarationHeaderEnd]);
         for (var offset = 0; offset + 1 < tokens.Count; offset++)
         {
             if (!string.Equals(tokens[offset].TrimStart('@'), "where", StringComparison.Ordinal))
@@ -734,6 +735,25 @@ internal static class LogicalPartialSymbolGrouper
         }
 
         return constrained;
+    }
+
+    private static int FindCallableDeclarationHeaderEnd(string signature, int searchStart)
+    {
+        var sanitizedSignature = SymbolExtractor.SanitizeCSharpDeclarationSignature(signature);
+        for (var offset = Math.Clamp(searchStart, 0, sanitizedSignature.Length);
+             offset < sanitizedSignature.Length;
+             offset++)
+        {
+            if (sanitizedSignature[offset] is '{' or ';'
+                || (sanitizedSignature[offset] == '='
+                    && offset + 1 < sanitizedSignature.Length
+                    && sanitizedSignature[offset + 1] == '>'))
+            {
+                return offset;
+            }
+        }
+
+        return signature.Length;
     }
 
     private static int FindGenericParameterIndex(

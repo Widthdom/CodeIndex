@@ -223,13 +223,29 @@ public static partial class SymbolExtractor
             var familyBody = alreadyFileLocal
                 ? symbol.FamilyKey[CSharpFileLocalFamilyPrefix.Length..]
                 : symbol.FamilyKey;
-            if (!fileLocalFamilyBodies.Contains(familyBody))
+            if (!IsWithinCSharpFileLocalFamily(fileLocalFamilyBodies, familyBody))
                 continue;
 
             symbol.FamilyKey = $"{CSharpFileLocalFamilyPrefix}{fileIdentity}\u001f{familyBody}";
             if (IsCSharpTypeFamilyKind(symbol.Kind) && symbol.IsPartialDeclaration == true)
                 symbol.IsFileLocalDeclaration = true;
         }
+    }
+
+    private static bool IsWithinCSharpFileLocalFamily(
+        IReadOnlySet<string> fileLocalFamilyBodies,
+        string familyBody)
+    {
+        foreach (var fileLocalFamilyBody in fileLocalFamilyBodies)
+        {
+            if (string.Equals(familyBody, fileLocalFamilyBody, StringComparison.Ordinal)
+                || familyBody.StartsWith(fileLocalFamilyBody + ".", StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static string BuildCSharpFileLocalIdentity(
