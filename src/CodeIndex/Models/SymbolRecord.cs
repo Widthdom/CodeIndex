@@ -93,6 +93,26 @@ public class SymbolRecord
     [JsonInclude]
     internal bool IsFileLocalDeclaration { get; set; }
 
+    /// <summary>
+    /// Signature/source-evidence marker before same-file partial-family propagation.
+    /// Hook-time family rebuilding uses it to distinguish the declaration carrying the
+    /// <c>file</c> modifier from sibling parts that merely inherit file-local scope.
+    /// same-file partial-family 伝播前の signature/source-evidence marker。
+    /// hook 後の family 再構築時に、<c>file</c> modifier 自体を持つ宣言と scope を継承した
+    /// sibling part を区別する。
+    /// </summary>
+    [JsonInclude]
+    internal bool? IsExplicitFileLocalDeclaration { get; set; }
+
+    /// <summary>
+    /// Internal hook-pipeline marker used to preserve explicit container mutations while
+    /// derived container metadata is rebuilt for unchanged descendants.
+    /// unchanged descendant の derived container metadata を再構築しつつ、hook が明示的に
+    /// 変更した container 情報を保持するための内部 marker。
+    /// </summary>
+    [JsonInclude]
+    internal bool DeclarationStructureMutatedByHook { get; set; }
+
     [JsonInclude]
     internal int? DeclarationSemanticScore { get; set; }
 

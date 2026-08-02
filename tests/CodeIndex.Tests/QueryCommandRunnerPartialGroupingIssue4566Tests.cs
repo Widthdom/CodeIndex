@@ -1,6 +1,7 @@
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
+using CodeIndex.Indexer.Hooks;
 using Microsoft.Data.Sqlite;
 using System.Text.Json;
 
@@ -2839,6 +2840,151 @@ public partial class QueryCommandRunnerTests
         finally
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PartialCanonicalRepresentative_RawConnectionReaderRegistersGroupingFunctions_Issue4914()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_raw_reader_issue4914");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.Raw.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class RawContainer
+                {
+                    partial void Execute(int value);
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/B.Raw.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class RawContainer
+                {
+                    partial void Execute(int value) { }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            using var connection = new SqliteConnection($"Data Source={dbPath}");
+            connection.Open();
+            for (var readerIndex = 0; readerIndex < 2; readerIndex++)
+            {
+                using var reader = new DbReader(connection, isReadOnly: true);
+                var grouped = Assert.Single(reader.SearchSymbols(
+                    ["Execute"],
+                    limit: 10,
+                    kind: "function",
+                    lang: "csharp",
+                    exact: true,
+                    groupPartials: true));
+                Assert.Equal(2, grouped.DefinitionSites);
+                Assert.Equal("implementation_body", grouped.RepresentativeReason);
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [ProductionRuntimeFact]
+    public void PartialCanonicalRepresentative_IndexPersistsHookRebuiltFamilyScope_Issue4914()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_hook_family_scope_issue4914");
+        lock (TestConsoleLock.Gate)
+        {
+            using var env = EnvironmentVariableScope.Capture(
+                PostExtractionHookRunner.HooksDirectoryEnvironmentVariable,
+                CodeIndex.HookIsolationFixture.HookIsolationFixtureEnvironment
+                    .MutateCSharpPartialFamily);
+            try
+            {
+                var hooksDir = Path.Combine(projectRoot, "hooks");
+                Directory.CreateDirectory(hooksDir);
+                File.Copy(
+                    typeof(CodeIndex.HookIsolationFixture.CSharpPartialFamilyMutationPostExtractionHook)
+                        .Assembly.Location,
+                    Path.Combine(hooksDir, "CodeIndex.HookIsolationFixture.dll"));
+                env.Set(PostExtractionHookRunner.HooksDirectoryEnvironmentVariable, hooksDir);
+                env.Set(
+                    CodeIndex.HookIsolationFixture.HookIsolationFixtureEnvironment
+                        .MutateCSharpPartialFamily,
+                    "1");
+                File.WriteAllText(
+                    Path.Combine(
+                        projectRoot,
+                        CodeIndex.HookIsolationFixture.HookIsolationFixtureEnvironment
+                            .RemoveCSharpStaticInterfaceMemberMarkerFileName),
+                    string.Empty);
+                var sourcePath = Path.Combine(projectRoot, "src", "App.cs");
+                Directory.CreateDirectory(Path.GetDirectoryName(sourcePath)!);
+                File.WriteAllText(
+                    sourcePath,
+                    """
+                    partial class HookContainer
+                    {
+                        [Obsolete] partial void HookPartial();
+                    }
+                    """);
+
+                Assert.Equal(
+                    CommandExitCodes.Success,
+                    IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions));
+                AssertPersistedFamily();
+
+                File.AppendAllText(sourcePath, "\n// update\n");
+                File.SetLastWriteTimeUtc(sourcePath, DateTime.UtcNow.AddSeconds(2));
+                Assert.Equal(
+                    CommandExitCodes.Success,
+                    IndexCommandRunner.Run(
+                        [projectRoot, "--files", "src/App.cs", "--json", "--quiet"],
+                        _jsonOptions));
+                AssertPersistedFamily();
+
+                void AssertPersistedFamily()
+                {
+                    var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+                    using var connection = new SqliteConnection($"Data Source={dbPath}");
+                    connection.Open();
+                    using var command = connection.CreateCommand();
+                    command.CommandText = """
+                        SELECT name, family_key
+                        FROM symbols
+                        WHERE name IN (
+                            'HookContainerRenamed',
+                            'HookOrdinary',
+                            'HookAddedPartial')
+                        ORDER BY name
+                        """;
+                    var families = new Dictionary<string, string>(StringComparer.Ordinal);
+                    using var rows = command.ExecuteReader();
+                    while (rows.Read())
+                        families.Add(rows.GetString(0), rows.GetString(1));
+
+                    Assert.Equal(3, families.Count);
+                    var family = families["HookContainerRenamed"];
+                    Assert.EndsWith(
+                        "|file-local:src/App.cs\u001fHookContainerRenamed`1",
+                        family,
+                        StringComparison.Ordinal);
+                    Assert.Equal(family, families["HookOrdinary"]);
+                    Assert.Equal(family, families["HookAddedPartial"]);
+                }
+            }
+            finally
+            {
+                SqliteConnection.ClearAllPools();
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
         }
     }
 

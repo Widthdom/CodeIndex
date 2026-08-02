@@ -1513,9 +1513,15 @@ public partial class McpServer
                         patternConfigsAlreadyLoaded: true);
                     symbolRegexTimeoutIssue = IndexCommandRunner.BuildRegexTimeoutIssue(record.Path, regexTimeouts);
                 }
-                SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(filePath, record.Lang));
+                var familyScopeKey = indexer.GetFamilyScopeKey(filePath, record.Lang);
+                SymbolExtractor.ApplyFamilyScope(symbols, familyScopeKey);
                 var fileContext = new FileContext(projectPath, record.Path, filePath, record.Lang);
-                postExtractionHooks.Value.OnSymbolsExtracted(fileContext, symbols);
+                postExtractionHooks.Value.ObserveCSharpStaticInterfaceSourceSymbols(fileContext, symbols);
+                postExtractionHooks.Value.OnSymbolsExtractedAfterSourceObservation(
+                    fileContext,
+                    symbols,
+                    content,
+                    familyScopeKey);
                 symbolsDroppedByKindFilter += symbolKindFilter.Apply(symbols);
                 var committedChunkCount = 0;
                 var committedSymbolCount = 0;

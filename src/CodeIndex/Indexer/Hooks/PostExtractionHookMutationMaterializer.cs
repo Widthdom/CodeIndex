@@ -126,6 +126,7 @@ internal static class PostExtractionHookMutationMaterializer
             }
 
             SymbolExtractor.RefreshCSharpPartialDeclarationMetadataFromHookSignature(symbol);
+            symbol.DeclarationStructureMutatedByHook = true;
         }
     }
 
@@ -166,6 +167,8 @@ internal static class PostExtractionHookMutationMaterializer
             ReturnType = symbol.ReturnType,
             IsPartialDeclaration = symbol.IsPartialDeclaration,
             IsFileLocalDeclaration = symbol.IsFileLocalDeclaration,
+            IsExplicitFileLocalDeclaration = symbol.IsExplicitFileLocalDeclaration,
+            DeclarationStructureMutatedByHook = symbol.DeclarationStructureMutatedByHook,
             DeclarationSemanticScore = symbol.DeclarationSemanticScore,
             IdentifierStartColumn = symbol.IdentifierStartColumn,
             IsMetadataTarget = symbol.IsMetadataTarget,
@@ -204,7 +207,12 @@ internal static class PostExtractionHookMutationMaterializer
         int StartLine,
         int? StartColumn,
         int EndLine,
+        int? BodyStartLine,
+        int? BodyEndLine,
         string? Signature,
+        string? ContainerKind,
+        string? ContainerName,
+        string? ContainerQualifiedName,
         int? SameLineSignatureOccurrenceIndex)
     {
         internal static HookSymbolDeclarationState From(SymbolRecord symbol)
@@ -218,13 +226,19 @@ internal static class PostExtractionHookMutationMaterializer
                 symbol.StartLine,
                 symbol.StartColumn,
                 symbol.EndLine,
+                symbol.BodyStartLine,
+                symbol.BodyEndLine,
                 symbol.Signature,
+                symbol.ContainerKind,
+                symbol.ContainerName,
+                symbol.ContainerQualifiedName,
                 symbol.SameLineSignatureOccurrenceIndex);
     }
 
     private readonly record struct CSharpDeclarationFacts(
         bool? IsPartialDeclaration,
         bool IsFileLocalDeclaration,
+        bool? IsExplicitFileLocalDeclaration,
         int? DeclarationSemanticScore,
         int? IdentifierStartColumn)
     {
@@ -232,6 +246,7 @@ internal static class PostExtractionHookMutationMaterializer
             => new(
                 symbol.IsPartialDeclaration,
                 symbol.IsFileLocalDeclaration,
+                symbol.IsExplicitFileLocalDeclaration,
                 symbol.DeclarationSemanticScore,
                 symbol.IdentifierStartColumn);
 
@@ -239,6 +254,7 @@ internal static class PostExtractionHookMutationMaterializer
         {
             symbol.IsPartialDeclaration = IsPartialDeclaration;
             symbol.IsFileLocalDeclaration = IsFileLocalDeclaration;
+            symbol.IsExplicitFileLocalDeclaration = IsExplicitFileLocalDeclaration;
             symbol.DeclarationSemanticScore = DeclarationSemanticScore;
             symbol.IdentifierStartColumn = IdentifierStartColumn;
         }

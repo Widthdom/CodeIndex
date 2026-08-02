@@ -239,7 +239,12 @@ public static partial class IndexCommandRunner
                                     references!,
                                     issues!,
                                     generatedSuppressionIssue,
-                                    generatedSuppressionChecked: true)
+                                    generatedSuppressionChecked: true,
+                                    content: postExtractionHooks.HasHooks ? content : null,
+                                    hasOversizeLine: postExtractionHooks.HasHooks ? hasOversizeLine : null,
+                                    conflictMarkerLine: postExtractionHooks.HasHooks
+                                        ? loaded.ConflictMarkerLine
+                                        : null)
                                 : FullScanFileWorkItem.Success(
                                     fileIndex,
                                     filePath,

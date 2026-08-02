@@ -3,6 +3,7 @@ using System.Reflection;
 using System.Runtime.Loader;
 using System.Text.Json;
 using CodeIndex.HookIsolationFixture;
+using CodeIndex.Indexer;
 using CodeIndex.Indexer.Hooks;
 using CodeIndex.Models;
 
@@ -117,8 +118,29 @@ public class PostExtractionHookTests
 
                 using var runner = PostExtractionHookRunner.Discover(hooksDir);
                 var context = new FileContext(projectRoot, "src/App.cs", Path.Combine(projectRoot, "src", "App.cs"), "csharp");
+                const string content = """
+                    partial class HookContainer
+                    {
+                        [Obsolete] partial void HookPartial();
+                    }
+                    """;
                 var symbols = new List<SymbolRecord>
                 {
+                    new()
+                    {
+                        FileId = 10,
+                        Kind = "class",
+                        Name = "HookContainer",
+                        Signature = "partial class HookContainer",
+                        IsPartialDeclaration = true,
+                        IsExplicitFileLocalDeclaration = false,
+                        FamilyKey = "stale-project|HookContainer",
+                        Line = 1,
+                        StartLine = 1,
+                        EndLine = 4,
+                        BodyStartLine = 2,
+                        BodyEndLine = 4,
+                    },
                     new()
                     {
                         FileId = 10,
@@ -128,31 +150,102 @@ public class PostExtractionHookTests
                         IsPartialDeclaration = true,
                         DeclarationSemanticScore = 2,
                         IdentifierStartColumn = 24,
-                        Line = 1,
-                        StartLine = 1,
-                        EndLine = 1,
+                        ContainerKind = "class",
+                        ContainerName = "HookContainer",
+                        ContainerQualifiedName = "HookContainer",
+                        FamilyKey = "stale-project|HookContainer",
+                        Line = 3,
+                        StartLine = 3,
+                        EndLine = 3,
                     },
                 };
 
-                runner.OnSymbolsExtracted(context, symbols);
+                runner.ObserveCSharpStaticInterfaceSourceSymbols(context, symbols);
+                runner.OnSymbolsExtractedAfterSourceObservation(
+                    context,
+                    symbols,
+                    content,
+                    "hook-project");
 
+                var container = Assert.Single(symbols, symbol => symbol.Name == "HookContainerRenamed");
+                var expectedContainerFamily =
+                    "hook-project|file-local:src/App.cs\u001fHookContainerRenamed`1";
+                Assert.Equal(expectedContainerFamily, container.FamilyKey);
+                Assert.True(container.IsFileLocalDeclaration);
                 var mutated = Assert.Single(symbols, symbol => symbol.Name == "HookOrdinary");
                 Assert.False(mutated.IsPartialDeclaration);
                 Assert.False(mutated.IsFileLocalDeclaration);
                 Assert.Equal(0, mutated.DeclarationSemanticScore);
                 Assert.Null(mutated.IdentifierStartColumn);
+                Assert.Equal("HookContainerRenamed", mutated.ContainerQualifiedName);
+                Assert.Equal(expectedContainerFamily, mutated.FamilyKey);
                 var addedPartial = Assert.Single(symbols, symbol => symbol.Name == "HookAddedPartial");
                 Assert.True(addedPartial.IsPartialDeclaration);
                 Assert.Equal(2, addedPartial.DeclarationSemanticScore);
                 Assert.Null(addedPartial.IdentifierStartColumn);
+                Assert.Equal("HookContainerRenamed", addedPartial.ContainerQualifiedName);
+                Assert.Equal(expectedContainerFamily, addedPartial.FamilyKey);
                 var addedFileType = Assert.Single(symbols, symbol => symbol.Name == "HookFileType");
                 Assert.True(addedFileType.IsFileLocalDeclaration);
+                Assert.Equal(
+                    "hook-project|file-local:src/App.cs\u001fHookFileType",
+                    addedFileType.FamilyKey);
             }
             finally
             {
                 TestProjectHelper.DeleteDirectory(projectRoot);
             }
         }
+    }
+
+    [Fact]
+    public void HookMutation_RemovingFileModifierClearsInheritedFamilyScope_Issue4914()
+    {
+        var symbols = new List<SymbolRecord>
+        {
+            new()
+            {
+                FileId = 10,
+                Kind = "class",
+                Name = "Part",
+                Signature = "partial class Part { }",
+                IsPartialDeclaration = true,
+                IsFileLocalDeclaration = false,
+                IsExplicitFileLocalDeclaration = false,
+                DeclarationStructureMutatedByHook = true,
+                FamilyKey = "stale|file-local:src/App.cs\u001fPart",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 1,
+            },
+            new()
+            {
+                FileId = 10,
+                Kind = "class",
+                Name = "Part",
+                Signature = "partial class Part { }",
+                IsPartialDeclaration = true,
+                IsFileLocalDeclaration = true,
+                IsExplicitFileLocalDeclaration = false,
+                FamilyKey = "stale|file-local:src/App.cs\u001fPart",
+                Line = 2,
+                StartLine = 2,
+                EndLine = 2,
+            },
+        };
+
+        SymbolExtractor.RefreshCSharpContainerAndFamilyScopeAfterHookMutation(
+            symbols,
+            "partial class Part { }\npartial class Part { }",
+            "/project/src/App.cs",
+            "/project",
+            "project");
+
+        Assert.All(symbols, symbol =>
+        {
+            Assert.False(symbol.IsFileLocalDeclaration);
+            Assert.Equal("project|Part", symbol.FamilyKey);
+        });
     }
 
     [ProductionRuntimeFact]
@@ -1183,11 +1276,19 @@ public sealed class SamplePostExtractionHook : IPostExtractionHook
     {
         if (Environment.GetEnvironmentVariable(PostExtractionHookTests.CSharpDeclarationMutationEnvironmentVariable) == "1")
         {
+            var container = symbols.FirstOrDefault(symbol => symbol.Name == "HookContainer");
+            if (container != null)
+            {
+                container.Name = "HookContainerRenamed";
+                container.Signature = "file partial class HookContainerRenamed<T>";
+            }
             var existing = symbols.FirstOrDefault(symbol => symbol.Name == "HookPartial");
             if (existing != null)
             {
                 existing.Name = "HookOrdinary";
                 existing.Signature = "void HookOrdinary();";
+                existing.ContainerName = "HookContainerRenamed";
+                existing.ContainerQualifiedName = "HookContainerRenamed";
             }
             symbols.Add(new SymbolRecord
             {
@@ -1195,20 +1296,24 @@ public sealed class SamplePostExtractionHook : IPostExtractionHook
                 Kind = "function",
                 Name = "HookAddedPartial",
                 Signature = "[Obsolete] partial void HookAddedPartial();",
-                Line = 2,
-                StartLine = 2,
-                EndLine = 2,
+                ContainerKind = "class",
+                ContainerName = "HookContainerRenamed",
+                ContainerQualifiedName = "HookContainerRenamed",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 3,
             });
             symbols.Add(new SymbolRecord
             {
                 FileId = existing?.FileId ?? 0,
                 Kind = "class",
                 Name = "HookFileType",
-                Signature = "file class HookFileType { }",
-                Line = 3,
-                StartLine = 3,
-                EndLine = 3,
+                Signature = "file partial class HookFileType { }",
+                Line = 4,
+                StartLine = 4,
+                EndLine = 4,
             });
+            return;
         }
 
         symbols.Add(new SymbolRecord

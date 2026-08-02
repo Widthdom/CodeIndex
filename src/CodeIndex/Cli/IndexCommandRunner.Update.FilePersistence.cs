@@ -194,12 +194,13 @@ public static partial class IndexCommandRunner
                 $"  [SKIP] {context.RelativePath} ({issue.Message})");
         }
 
-        SymbolExtractor.ApplyFamilyScope(
-            symbols,
-            context.Indexer.GetFamilyScopeKey(context.AbsolutePath, record.Lang));
+        var familyScopeKey = context.Indexer.GetFamilyScopeKey(context.AbsolutePath, record.Lang);
+        SymbolExtractor.ApplyFamilyScope(symbols, familyScopeKey);
         context.PostExtractionHooks.OnSymbolsExtractedAfterSourceObservation(
             fileContext,
-            symbols);
+            symbols,
+            loaded.Content,
+            familyScopeKey);
         symbolsDroppedByKindFilter = options.SymbolKindFilter.Apply(symbols);
         if (symbols.Count > options.MaxSymbolsPerFile)
         {

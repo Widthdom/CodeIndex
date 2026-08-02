@@ -81,7 +81,9 @@ public static partial class SymbolExtractor
         string[]? rawLines = null,
         Func<CSharpLexState[]>? getCSharpLineStartStates = null,
         string? filePath = null,
-        string? projectRoot = null)
+        string? projectRoot = null,
+        Func<SymbolRecord, bool>? preserveExistingContainerAssignment = null,
+        bool finalizeCSharpFileLocalFamilies = true)
     {
         if (symbols.Count == 0)
             return;
@@ -89,7 +91,8 @@ public static partial class SymbolExtractor
         if (symbols.Count == 1)
         {
             AssignTopLevelFamilyKey(symbols[0]);
-            FinalizeCSharpFileLocalFamilyKeys(symbols, filePath, projectRoot);
+            if (finalizeCSharpFileLocalFamilies)
+                FinalizeCSharpFileLocalFamilyKeys(symbols, filePath, projectRoot);
             return;
         }
 
@@ -98,7 +101,8 @@ public static partial class SymbolExtractor
         {
             foreach (var symbol in symbols)
                 AssignTopLevelFamilyKey(symbol);
-            FinalizeCSharpFileLocalFamilyKeys(symbols, filePath, projectRoot);
+            if (finalizeCSharpFileLocalFamilies)
+                FinalizeCSharpFileLocalFamilyKeys(symbols, filePath, projectRoot);
             return;
         }
 
@@ -119,7 +123,8 @@ public static partial class SymbolExtractor
                 rawLines,
                 getCSharpLineStartStates);
 
-            if (containerPath.Count > 0)
+            if (containerPath.Count > 0
+                && preserveExistingContainerAssignment?.Invoke(symbol) != true)
             {
                 var effectiveContainer = containerPath[^1];
                 if (symbol.ContainerKind != null && symbol.ContainerName != null)
@@ -188,8 +193,190 @@ public static partial class SymbolExtractor
                 stack.Push(symbol);
         }
 
-        FinalizeCSharpFileLocalFamilyKeys(symbols, filePath, projectRoot);
+        if (finalizeCSharpFileLocalFamilies)
+            FinalizeCSharpFileLocalFamilyKeys(symbols, filePath, projectRoot);
     }
+
+    internal static void RefreshCSharpContainerAndFamilyScopeAfterHookMutation(
+        IList<SymbolRecord> symbols,
+        string? content,
+        string? filePath,
+        string? projectRoot,
+        string familyScopeKey)
+    {
+        if (symbols.Count == 0)
+            return;
+
+        var materialized = symbols as List<SymbolRecord> ?? symbols.ToList();
+        foreach (var symbol in materialized)
+        {
+            symbol.FamilyKey = null;
+            symbol.IsFileLocalDeclaration =
+                symbol.IsExplicitFileLocalDeclaration ?? symbol.IsFileLocalDeclaration;
+            if (symbol.DeclarationStructureMutatedByHook)
+                continue;
+
+            // Container fields emitted by extraction are derived state. Clear them on
+            // unchanged records so a hook rename/arity change on an enclosing declaration
+            // propagates to descendants. Explicit hook mutations retain their public values.
+            // extraction が設定した container field は derived state なので、unchanged record
+            // では消去し、hook による enclosing declaration の rename/arity 変更を descendant
+            // へ伝播する。hook が明示変更した record の public value は保持する。
+            symbol.ContainerKind = null;
+            symbol.ContainerName = null;
+            symbol.ContainerQualifiedName = null;
+        }
+
+        var lines = content == null ? null : SplitContentLines(content);
+        CSharpLexState[]? lineStartStates = null;
+        Func<CSharpLexState[]>? getLineStartStates = lines == null
+            ? null
+            : () => lineStartStates ??= BuildCSharpLineStartStates(lines);
+        AssignContainers(
+            materialized,
+            lines,
+            getLineStartStates,
+            filePath,
+            projectRoot,
+            static symbol => symbol.DeclarationStructureMutatedByHook,
+            finalizeCSharpFileLocalFamilies: false);
+
+        // AssignContainers uses positional containment. A hook may intentionally move a
+        // declaration by editing its public container fields, so rebuild those records from
+        // the accepted container identity after unchanged descendants have been refreshed.
+        // AssignContainers は位置包含を使うが、hook は public container field の変更で宣言を
+        // 明示的に移動できる。unchanged descendant 更新後、accepted container identity から
+        // 変更 record の family を再構築する。
+        foreach (var symbol in materialized.Where(
+                     symbol => symbol.DeclarationStructureMutatedByHook
+                               && IsCSharpTypeFamilyKind(symbol.Kind)))
+        {
+            RefreshHookMutatedCSharpFamilyKey(symbol, materialized);
+        }
+        foreach (var symbol in materialized.Where(
+                     symbol => symbol.DeclarationStructureMutatedByHook
+                               && !IsCSharpTypeFamilyKind(symbol.Kind)))
+        {
+            RefreshHookMutatedCSharpFamilyKey(symbol, materialized);
+        }
+
+        FinalizeCSharpFileLocalFamilyKeys(materialized, filePath, projectRoot);
+        ApplyFamilyScope(materialized, familyScopeKey);
+        foreach (var symbol in materialized)
+            symbol.DeclarationStructureMutatedByHook = false;
+    }
+
+    private static void RefreshHookMutatedCSharpFamilyKey(
+        SymbolRecord symbol,
+        IReadOnlyList<SymbolRecord> symbols)
+    {
+        if (IsCSharpTypeFamilyKind(symbol.Kind) && symbol.IsPartialDeclaration == true)
+        {
+            var builder = new StringBuilder();
+            var containerIdentity = BuildHookCSharpContainerFamilyIdentity(
+                symbol.ContainerQualifiedName,
+                symbols);
+            if (!string.IsNullOrWhiteSpace(containerIdentity))
+                builder.Append(containerIdentity);
+            AppendFamilySegment(builder, symbol);
+            symbol.FamilyKey = symbol.IsFileLocalDeclaration
+                ? CSharpFileLocalFamilyPrefix + builder.ToString()
+                : builder.ToString();
+            return;
+        }
+
+        var container = FindHookCSharpContainerSymbol(
+            symbol.ContainerQualifiedName,
+            symbol,
+            symbols);
+        symbol.FamilyKey = container?.FamilyKey;
+        if (symbol.FamilyKey == null
+            && symbol.IsPartialDeclaration == true
+            && !string.IsNullOrWhiteSpace(symbol.ContainerQualifiedName))
+        {
+            symbol.FamilyKey = BuildHookCSharpContainerFamilyIdentity(
+                symbol.ContainerQualifiedName,
+                symbols);
+        }
+    }
+
+    private static SymbolRecord? FindHookCSharpContainerSymbol(
+        string? containerQualifiedName,
+        SymbolRecord symbol,
+        IReadOnlyList<SymbolRecord> symbols)
+    {
+        if (string.IsNullOrWhiteSpace(containerQualifiedName))
+            return null;
+
+        SymbolRecord? fallback = null;
+        foreach (var candidate in symbols)
+        {
+            if (!IsCSharpTypeFamilyKind(candidate.Kind)
+                || !string.Equals(
+                    BuildDeclaredQualifiedName(candidate),
+                    containerQualifiedName,
+                    StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            fallback ??= candidate;
+            if (candidate.StartLine <= symbol.StartLine
+                && candidate.EndLine >= symbol.EndLine)
+            {
+                return candidate;
+            }
+        }
+
+        return fallback;
+    }
+
+    private static string BuildHookCSharpContainerFamilyIdentity(
+        string? containerQualifiedName,
+        IReadOnlyList<SymbolRecord> symbols)
+    {
+        if (string.IsNullOrWhiteSpace(containerQualifiedName))
+            return string.Empty;
+
+        var segments = containerQualifiedName.Split('.', StringSplitOptions.RemoveEmptyEntries);
+        var sourcePrefix = new StringBuilder();
+        var familyIdentity = new StringBuilder();
+        foreach (var segment in segments)
+        {
+            if (sourcePrefix.Length > 0)
+                sourcePrefix.Append('.');
+            sourcePrefix.Append(segment);
+            if (familyIdentity.Length > 0)
+                familyIdentity.Append('.');
+            familyIdentity.Append(segment);
+
+            var type = symbols.FirstOrDefault(candidate =>
+                IsCSharpTypeFamilyKind(candidate.Kind)
+                && string.Equals(
+                    BuildDeclaredQualifiedName(candidate),
+                    sourcePrefix.ToString(),
+                    StringComparison.Ordinal));
+            var arity = type == null
+                ? null
+                : CSharpTypeReferenceArity.GetDefinitionArity(
+                    type.Signature,
+                    type.Name,
+                    type.Kind);
+            if (arity > 0)
+            {
+                familyIdentity.Append('`');
+                familyIdentity.Append(
+                    arity.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            }
+        }
+
+        return familyIdentity.ToString();
+    }
+
+    private static string BuildDeclaredQualifiedName(SymbolRecord symbol)
+        => string.IsNullOrWhiteSpace(symbol.ContainerQualifiedName)
+            ? symbol.Name
+            : $"{symbol.ContainerQualifiedName}.{symbol.Name}";
 
     private static void FinalizeCSharpFileLocalFamilyKeys(
         IReadOnlyList<SymbolRecord> symbols,

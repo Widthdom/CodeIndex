@@ -484,7 +484,8 @@ public partial class DbReader : IDisposable
                context.DatabasePermissionPolicyName,
                context.DatabasePermissionDiagnostics,
                context.QueryOnlySnapshotRequiresRefresh
-                   || (context.ImmutableReadOnly && !context.ImmutableReadOnlyWalRisk))
+                   || (context.ImmutableReadOnly && !context.ImmutableReadOnlyWalRisk),
+               connectionFunctionsAlreadyRegistered: true)
     {
     }
 
@@ -516,7 +517,8 @@ public partial class DbReader : IDisposable
                context.DatabasePermissionPolicyName,
                context.DatabasePermissionDiagnostics,
                context.QueryOnlySnapshotRequiresRefresh
-                   || (context.ImmutableReadOnly && !context.ImmutableReadOnlyWalRisk))
+                   || (context.ImmutableReadOnly && !context.ImmutableReadOnlyWalRisk),
+               connectionFunctionsAlreadyRegistered: true)
     {
     }
 
@@ -563,16 +565,25 @@ public partial class DbReader : IDisposable
         long? walCheckpointRemainingPageCount = null,
         string databasePermissionPolicy = DatabasePermissionPolicy.BestEffortName,
         IReadOnlyList<StatusDatabasePermissionDiagnostic>? databasePermissionDiagnostics = null,
-        bool databaseFileSnapshotStable = false)
+        bool databaseFileSnapshotStable = false,
+        bool connectionFunctionsAlreadyRegistered = false)
     {
         _conn = connection;
         _commandCache = commandCache;
         RecoverInterruptedFtsBulkLoadForRead(_conn, isReadOnly);
-        // SQL user functions are registered once per connection by `DbContext` when the
-        // connection is opened. Re-registering on every `DbReader` construction wasted CPU
-        // on hot MCP/CLI paths that build a short-lived reader per request (#1564).
-        // SQL ユーザー関数は接続オープン時に `DbContext` が一度だけ登録するため、
-        // ここでの再登録は不要 (#1564)。
+        // DbContext registers every SQL user function when it opens a connection. Public
+        // raw-connection constructors do not have that guarantee, so register the same full
+        // set before any reader query can prepare a statement. The explicit flag preserves
+        // the no-reregistration hot path for DbContext-backed readers (#1564/#4914).
+        // DbContext は接続開始時に全 SQL user function を登録するが、public な raw connection
+        // constructor にはその保証がない。reader query が statement を prepare する前に同じ
+        // 完全な集合を登録し、DbContext-backed reader は明示 flag で再登録を避ける (#1564/#4914)。
+        if (!connectionFunctionsAlreadyRegistered)
+        {
+            DbContext.RegisterConnectionFunctionsWithRetry(
+                connection,
+                cancellationToken: cancellation);
+        }
         _isReadOnly = isReadOnly;
         _readOnlyFallback = readOnlyFallback;
         _walCheckpointAttempted = walCheckpointAttempted;

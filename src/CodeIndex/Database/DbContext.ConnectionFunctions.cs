@@ -15,6 +15,9 @@ public partial class DbContext : IDisposable
     private static readonly ConditionalWeakTable<SqliteConnection, CSharpCallableTypeKindLookup>
         CSharpCallableTypeKindLookups = new();
     private static readonly ConditionalWeakTable<SqliteConnection, object>
+        ConnectionFunctionRegistrations = new();
+    private static readonly object ConnectionFunctionRegistrationLock = new();
+    private static readonly ConditionalWeakTable<SqliteConnection, object>
         CSharpPartialDeclarationFunctionRegistrations = new();
     private static readonly object CSharpPartialDeclarationFunctionRegistrationLock = new();
 
@@ -31,6 +34,18 @@ public partial class DbContext : IDisposable
     }
 
     internal static void RegisterConnectionFunctions(SqliteConnection connection)
+    {
+        lock (ConnectionFunctionRegistrationLock)
+        {
+            if (ConnectionFunctionRegistrations.TryGetValue(connection, out _))
+                return;
+
+            RegisterConnectionFunctionsCore(connection);
+            ConnectionFunctionRegistrations.Add(connection, new object());
+        }
+    }
+
+    private static void RegisterConnectionFunctionsCore(SqliteConnection connection)
     {
         static int? ToNullableInt(long? value)
             => value is null || value < int.MinValue || value > int.MaxValue ? null : (int)value.Value;

@@ -167,16 +167,19 @@ public static partial class IndexCommandRunner
                 $"  [SKIP] {record.Path} ({issue.Message})");
         }
 
+        var familyScopeKey = context.Indexer.GetFamilyScopeKey(item.FilePath, record.Lang);
         if (item.Symbols == null)
         {
             SymbolExtractor.ApplyFamilyScope(
                 symbols,
-                context.Indexer.GetFamilyScopeKey(item.FilePath, record.Lang));
+                familyScopeKey);
         }
         var mutableSymbols = symbols as IList<SymbolRecord> ?? symbols.ToList();
         context.PostExtractionHooks.OnSymbolsExtractedAfterSourceObservation(
             fileContext,
-            mutableSymbols);
+            mutableSymbols,
+            item.Content,
+            familyScopeKey);
         symbolsDroppedByKindFilter = options.SymbolKindFilter.Apply(mutableSymbols);
         symbols = (IReadOnlyList<SymbolRecord>)mutableSymbols;
         if (symbols.Count > options.MaxSymbolsPerFile)

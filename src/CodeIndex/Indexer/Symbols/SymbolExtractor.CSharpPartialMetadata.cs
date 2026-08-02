@@ -52,10 +52,11 @@ public static partial class SymbolExtractor
                         "partial",
                         requireTrailingDeclarationType: symbol.Kind is "function" or "test.method")
                     || leading.HasPartialModifier);
-            symbol.IsFileLocalDeclaration =
+            symbol.IsExplicitFileLocalDeclaration =
                 symbol.Kind is "class" or "struct" or "interface" or "record" or "enum" or "delegate"
                 && (ContainsCSharpLeadingModifier(declarationModifierPrefix, "file")
                     || leading.HasFileModifier);
+            symbol.IsFileLocalDeclaration = symbol.IsExplicitFileLocalDeclaration == true;
             if (symbol.IsPartialDeclaration == true)
             {
                 symbol.IdentifierStartColumn = FindCSharpDeclarationIdentifierColumn(
@@ -85,6 +86,7 @@ public static partial class SymbolExtractor
     {
         symbol.IsPartialDeclaration = null;
         symbol.IsFileLocalDeclaration = false;
+        symbol.IsExplicitFileLocalDeclaration = null;
         symbol.DeclarationSemanticScore = null;
         symbol.IdentifierStartColumn = null;
 
@@ -103,9 +105,10 @@ public static partial class SymbolExtractor
                 declarationModifierPrefix,
                 "partial",
                 requireTrailingDeclarationType: symbol.Kind is "function" or "test.method");
-        symbol.IsFileLocalDeclaration =
+        symbol.IsExplicitFileLocalDeclaration =
             symbol.Kind is "class" or "struct" or "interface" or "record" or "enum" or "delegate"
             && ContainsCSharpLeadingModifier(declarationModifierPrefix, "file");
+        symbol.IsFileLocalDeclaration = symbol.IsExplicitFileLocalDeclaration == true;
 
         var semanticScore = 0;
         if (ContainsCSharpAttributeEvidence(declarationHeader))

@@ -312,6 +312,8 @@ public sealed class PostExtractionHookRunner : IDisposable
     public IReadOnlyList<PostExtractionHookInfo> Hooks
         => hooks.Count == 0 ? [] : hooks.Select(hook => hook.Info).ToList();
 
+    internal bool HasHooks => hooks.Count > 0;
+
     internal int ParentLoadContextCountForTests => 0;
 
     internal bool SawCSharpStaticInterfaceSourceContract
@@ -344,22 +346,30 @@ public sealed class PostExtractionHookRunner : IDisposable
             context,
             symbols,
             sourceSymbolsAlreadyObserved: false,
+            content: null,
+            familyScopeKey: null,
             cancellationToken);
 
     internal void OnSymbolsExtractedAfterSourceObservation(
         FileContext context,
         IList<SymbolRecord> symbols,
+        string? content = null,
+        string? familyScopeKey = null,
         CancellationToken cancellationToken = default)
         => OnSymbolsExtractedCore(
             context,
             symbols,
             sourceSymbolsAlreadyObserved: true,
+            content,
+            familyScopeKey,
             cancellationToken);
 
     private void OnSymbolsExtractedCore(
         FileContext context,
         IList<SymbolRecord> symbols,
         bool sourceSymbolsAlreadyObserved,
+        string? content,
+        string? familyScopeKey,
         CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
@@ -405,6 +415,18 @@ public sealed class PostExtractionHookRunner : IDisposable
                 PostExtractionHookMutationMaterializer.ReplaceList(symbols, workingSymbols);
                 acceptedHookMutation = true;
             }
+        }
+
+        if (acceptedHookMutation
+            && string.Equals(context.Language, "csharp", StringComparison.Ordinal)
+            && !string.IsNullOrWhiteSpace(familyScopeKey))
+        {
+            SymbolExtractor.RefreshCSharpContainerAndFamilyScopeAfterHookMutation(
+                symbols,
+                content,
+                context.FullPath,
+                context.ProjectRoot,
+                familyScopeKey);
         }
 
         // Hooks can rename or add records but cannot set the internal persisted identity key.
