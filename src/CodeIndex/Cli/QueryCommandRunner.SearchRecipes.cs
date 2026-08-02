@@ -3198,8 +3198,12 @@ public static partial class QueryCommandRunner
         if (tokens.Count == 0)
             return false;
 
+        var expressionStart = 0;
+        if (TryGetJsonTrustExpressionBodiedMethodStart(tokens, out var expressionBodyStart))
+            expressionStart = expressionBodyStart;
+
         var assignmentIndex = -1;
-        for (var index = tokens.Count - 1; index >= 0; index--)
+        for (var index = tokens.Count - 1; index >= expressionStart; index--)
         {
             if (tokens[index] == "=")
             {
@@ -3209,17 +3213,13 @@ public static partial class QueryCommandRunner
         }
 
         if (assignmentIndex >= 0
-            && HasEvaluatedJsonTrustAssignmentTarget(tokens, assignmentIndex))
+            && HasEvaluatedJsonTrustAssignmentTarget(tokens, expressionStart, assignmentIndex))
         {
             return true;
         }
 
-        var expressionStart = assignmentIndex + 1;
-        if (assignmentIndex < 0
-            && TryGetJsonTrustExpressionBodiedMethodStart(tokens, out var expressionBodyStart))
-        {
-            expressionStart = expressionBodyStart;
-        }
+        if (assignmentIndex >= 0)
+            expressionStart = assignmentIndex + 1;
         if (HasEvaluatedJsonTrustInvocationReceiver(tokens, expressionStart))
             return true;
 
@@ -3576,13 +3576,14 @@ public static partial class QueryCommandRunner
 
     private static bool HasEvaluatedJsonTrustAssignmentTarget(
         IReadOnlyList<string> tokens,
+        int expressionStart,
         int assignmentIndex)
     {
         if (IsJsonTrustDeclarationAssignmentTarget(tokens, assignmentIndex))
             return false;
 
         var genericDepth = 0;
-        for (var index = 0; index < assignmentIndex; index++)
+        for (var index = expressionStart; index < assignmentIndex; index++)
         {
             var token = tokens[index];
             if (token == "<")
@@ -3604,13 +3605,14 @@ public static partial class QueryCommandRunner
 
             if (token is "." or "?.")
                 return true;
-            if (token is "::" or "?" or "[")
+            if (token is "::" or "[")
                 continue;
 
-            if (token is ";" or "," or "{" or "}" or ")" or "=>"
+            if (token is ";" or "," or "{" or "}" or ")" or "=>" or "?" or ":"
                 or "==" or "!=" or "<=" or ">=" or "++" or "--"
                 or "+" or "-" or "*" or "/" or "%" or "&" or "|" or "^"
-                or "&&" or "||" or "??" or "<<" or ">>")
+                or "&&" or "||" or "??" or "<<" or ">>"
+                or "is" or "as" or "and" or "or")
             {
                 return true;
             }
