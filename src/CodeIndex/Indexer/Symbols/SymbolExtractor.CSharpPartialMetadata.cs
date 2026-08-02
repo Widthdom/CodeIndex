@@ -75,7 +75,7 @@ public static partial class SymbolExtractor
             {
                 semanticScore += 4;
             }
-            if (declarationHeader.Contains(" where ", StringComparison.Ordinal))
+            if (ContainsCSharpWhereConstraint(declarationHeader))
                 semanticScore += 1;
             symbol.DeclarationSemanticScore = semanticScore;
         }
@@ -118,7 +118,7 @@ public static partial class SymbolExtractor
         {
             semanticScore += 4;
         }
-        if (declarationHeader.Contains(" where ", StringComparison.Ordinal))
+        if (ContainsCSharpWhereConstraint(declarationHeader))
             semanticScore += 1;
         symbol.DeclarationSemanticScore = semanticScore;
     }
@@ -611,6 +611,9 @@ public static partial class SymbolExtractor
         return false;
     }
 
+    internal static bool ContainsCSharpWhereConstraint(string declarationHeader)
+        => ContainsCSharpModifier(declarationHeader, "where");
+
     private static CSharpLeadingDeclarationEvidence ReadCSharpLeadingDeclarationEvidence(
         IReadOnlyList<string> lines,
         SymbolRecord symbol,
@@ -620,6 +623,22 @@ public static partial class SymbolExtractor
         var declarationStartLine = symbol.StartLine;
         var lineIndex = Math.Min(lines.Count, Math.Max(1, declarationStartLine)) - 2;
         var minimumLineIndex = Math.Max(0, lineIndex - CSharpLeadingDeclarationLookbackLines + 1);
+        if (lineStartStates != null)
+        {
+            // Keep the ordinary evidence scan bounded, but if its boundary lands inside
+            // one delimited comment, extend only to that comment's lexer-confirmed opener.
+            // This preserves adjacent long `/** ... */` documentation without allowing
+            // unrelated modifiers or attributes arbitrarily far above the declaration.
+            // 通常の evidence scan は上限を維持する。ただし境界が delimited comment
+            // 内なら lexer が確認した opener までだけ延長し、離れた modifier / attribute
+            // を拾わずに長い `/** ... */` documentation の隣接性を保持する。
+            while (minimumLineIndex > 0
+                   && minimumLineIndex < lineStartStates.Count
+                   && lineStartStates[minimumLineIndex].Mode == CSharpLexMode.BlockComment)
+            {
+                minimumLineIndex--;
+            }
+        }
         var hasPartialModifier = false;
         var hasFileModifier = false;
         var hasAttribute = HasCSharpDeclarationLineLeadingAttribute(

@@ -1674,6 +1674,53 @@ public partial class QueryCommandRunnerTests
                 """);
             TestProjectHelper.InsertIndexedFile(
                 dbPath,
+                "src/A.CommentedMethod.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class CommentedMethodHost
+                {
+                    partial
+                    void /* partial */ CommentedMethod();
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Z.CommentedMethod.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class CommentedMethodHost
+                {
+                    partial
+                    void /* partial */ CommentedMethod() { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.TabConstraint.cs",
+                "csharp",
+                "namespace Demo;\npublic partial class TabConstraint<T> { }");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Z.TabConstraint.cs",
+                "csharp",
+                "namespace Demo;\npublic partial class TabConstraint<T>\twhere\tT : class { }");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.LongDocumented.cs",
+                "csharp",
+                "namespace Demo;\npublic partial class LongDocumented { }");
+            var longDocumentedSource = "namespace Demo;\n/**\n"
+                + string.Concat(Enumerable.Repeat(" * documentation\n", 70))
+                + " */\npublic partial class LongDocumented { }";
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Z.LongDocumented.cs",
+                "csharp",
+                longDocumentedSource);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
                 "src/A.Documented.cs",
                 "csharp",
                 """
@@ -1892,6 +1939,19 @@ public partial class QueryCommandRunnerTests
                 member => member.GetProperty("path").GetString() == "src/Z.Split.cs"
                     && member.GetProperty("start_column").GetInt32() == 9);
             Assert.Equal(9, split.GetProperty("start_column").GetInt32());
+
+            var commentedMethod = RunGroupedSymbol(dbPath, "CommentedMethod", "function");
+            Assert.Equal(2, commentedMethod.GetProperty("definition_sites").GetInt32());
+            Assert.Equal("src/Z.CommentedMethod.cs", commentedMethod.GetProperty("path").GetString());
+            Assert.Equal("implementation_body", commentedMethod.GetProperty("representative_reason").GetString());
+
+            var tabConstraint = RunGroupedSymbol(dbPath, "TabConstraint", "class");
+            Assert.Equal("src/Z.TabConstraint.cs", tabConstraint.GetProperty("path").GetString());
+            Assert.Equal("semantic_declaration", tabConstraint.GetProperty("representative_reason").GetString());
+
+            var longDocumented = RunGroupedSymbol(dbPath, "LongDocumented", "class");
+            Assert.Equal("src/Z.LongDocumented.cs", longDocumented.GetProperty("path").GetString());
+            Assert.Equal("semantic_declaration", longDocumented.GetProperty("representative_reason").GetString());
 
             var documented = RunGroupedSymbol(dbPath, "Documented", "class");
             Assert.Equal("src/Z.Documented.cs", documented.GetProperty("path").GetString());

@@ -80,7 +80,13 @@ internal static class LogicalPartialSymbolGrouper
         var typeIdentitySql = $"{nameSql} || CASE WHEN {typeAritySql} > 0 THEN '`' || {typeAritySql} ELSE '' END";
         var reconstructedSelfFamilySql = $"{projectPrefixSql} || CASE WHEN {fallbackContainerSql} = '' THEN {typeIdentitySql} ELSE {fallbackContainerSql} || '.' || {typeIdentitySql} END";
         var selfFamilySql = $"COALESCE({scopedPersistedFamilySql}, {reconstructedSelfFamilySql})";
-        var callableSignatureSql = $"CASE WHEN {signaturePartialDeclarationSql} THEN {signatureSql} WHEN {partialDeclarationSql} THEN 'partial ' || COALESCE({signatureSql}, '') ELSE {signatureSql} END";
+        // Persisted partial evidence is lexer-aware. Always supply an explicit modifier
+        // to the callable parser for those rows; a raw `partial` substring may be comment
+        // trivia, while a duplicated real modifier is harmless to identity extraction.
+        // 永続化した partial evidence は lexer-aware である。その row では callable
+        // parser に明示的な modifier を常に渡す。raw な `partial` substring は comment
+        // trivia の可能性があり、実 modifier の重複は identity 抽出に影響しない。
+        var callableSignatureSql = $"CASE WHEN {partialDeclarationSql} THEN 'partial ' || COALESCE({signatureSql}, '') ELSE {signatureSql} END";
         var callableContainerSql = $"COALESCE({scopedPersistedFamilySql}, NULLIF({fallbackContainerSql}, ''))";
         var callableIdentitySql = returnTypeSql == null
             ? "NULL"
@@ -371,7 +377,7 @@ internal static class LogicalPartialSymbolGrouper
         {
             score += 4;
         }
-        if (declaration.Contains(" where ", StringComparison.Ordinal))
+        if (SymbolExtractor.ContainsCSharpWhereConstraint(declaration))
             score += 1;
         return score;
     }
