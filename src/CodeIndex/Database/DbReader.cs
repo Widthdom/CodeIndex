@@ -1089,8 +1089,12 @@ public partial class DbReader : IDisposable
         // DbReader は caller 所有の open 済み connection も受け取る。その connection は
         // DbContext の関数登録を通っていない場合があるため、この readiness scan が使う
         // bounded な依存関数をここで登録する。
-        if (candidateLangs.Contains("csharp", StringComparer.Ordinal)
-            && !HasSqliteFunction(conn, "csharp_definition_type_arity", arity: 3))
+        // SQLite resolves every function named by the statement when preparing it,
+        // even when the candidate-language predicate means the C# CASE branch cannot
+        // execute. Register the helper for non-C# readiness batches too.
+        // SQLite は candidate language に C# がなく CASE branch が実行されない場合でも、
+        // statement の prepare 時に参照関数を解決する。そのため非 C# batch でも登録する。
+        if (!HasSqliteFunction(conn, "csharp_definition_type_arity", arity: 3))
         {
             conn.CreateFunction(
                 "csharp_definition_type_arity",
