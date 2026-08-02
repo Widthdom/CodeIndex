@@ -1083,6 +1083,20 @@ public partial class DbReader : IDisposable
         // NULL/non-NULL が混在する family を全言語まとめて一度の group scan で検出する。C# の
         // type arity は family identity の一部なので、Item と Item<T> は別 group として扱う。
         // 旧 correlated EXISTS は未使用言語まで symbols を反復走査していた。
+        // DbReader also accepts an already-open caller-owned connection. Such a connection
+        // has not necessarily passed through DbContext's function registration, so install
+        // this bounded readiness dependency locally before the grouped scan.
+        // DbReader は caller 所有の open 済み connection も受け取る。その connection は
+        // DbContext の関数登録を通っていない場合があるため、この readiness scan が使う
+        // bounded な依存関数をここで登録する。
+        if (candidateLangs.Contains("csharp", StringComparer.Ordinal))
+        {
+            conn.CreateFunction(
+                "csharp_definition_type_arity",
+                (string? signature, string? identifier, string? symbolKind) =>
+                    CSharpTypeReferenceArity.GetDefinitionArity(signature, identifier, symbolKind),
+                isDeterministic: true);
+        }
         using (var cmd = conn.CreateCommand())
         {
             var parameterNames = new string[candidateLangs.Count];
