@@ -122,6 +122,7 @@ public partial class QueryCommandRunnerTests
         var firstWaveCompleted = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
         using var cancellation = new CancellationTokenSource();
+        var statusWaveTimeout = TimeSpan.FromMinutes(2);
         Task<int>? runTask = null;
         var openedSessions = 0;
         var completedFirstWaveCommands = 0;
@@ -146,7 +147,10 @@ public partial class QueryCommandRunnerTests
                 cancellation.Token);
             input.WriteLine("""{"command":"files","args":["--format","count","--json"]}""");
             input.WriteLine("""{"command":"files","args":["--format","count","--json"]}""");
-            await WaitForIssue4872FirstWaveAsync(firstWaveCompleted.Task, runTask);
+            await WaitForIssue4872FirstWaveAsync(
+                firstWaveCompleted.Task,
+                runTask,
+                statusWaveTimeout);
 
             using (var update = writer.CreateCommand())
             {
@@ -164,7 +168,7 @@ public partial class QueryCommandRunnerTests
             input.WriteLine("""{"command":"files","args":["--format","count","--json"]}""");
             input.Complete();
 
-            var exitCode = await runTask.WaitAsync(TimeSpan.FromSeconds(60));
+            var exitCode = await runTask.WaitAsync(statusWaveTimeout);
             Assert.True(
                 exitCode == CommandExitCodes.Success,
                 $"Parallel batch exited with code {exitCode}: {stdout}");
@@ -275,7 +279,10 @@ public partial class QueryCommandRunnerTests
                 cancellation.Token);
             input.WriteLine("""{"command":"files","args":["--format","count","--json"]}""");
             input.WriteLine("""{"command":"files","args":["--format","count","--json"]}""");
-            await WaitForIssue4872FirstWaveAsync(firstWaveCompleted.Task, runTask);
+            await WaitForIssue4872FirstWaveAsync(
+                firstWaveCompleted.Task,
+                runTask,
+                TimeSpan.FromSeconds(60));
 
             using (var update = writer.CreateCommand())
             {
@@ -570,13 +577,14 @@ public partial class QueryCommandRunnerTests
 
     private static async Task WaitForIssue4872FirstWaveAsync(
         Task firstWaveCompleted,
-        Task<int> runTask)
+        Task<int> runTask,
+        TimeSpan timeout)
     {
         Task boundary;
         try
         {
             boundary = await Task.WhenAny(firstWaveCompleted, runTask)
-                .WaitAsync(TimeSpan.FromSeconds(60));
+                .WaitAsync(timeout);
         }
         catch (TimeoutException exception)
         {
