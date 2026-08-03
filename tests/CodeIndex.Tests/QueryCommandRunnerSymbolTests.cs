@@ -234,6 +234,7 @@ public partial class QueryCommandRunnerTests
                 {
                 }
                 """);
+            MarkGraphAndFoldReady(dbPath);
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunGoto(
                 ["McpServer", "--db", dbPath, "--kind", "class", "--lang", "csharp"],
@@ -283,6 +284,7 @@ public partial class QueryCommandRunnerTests
                     public Widget(int value) { }
                 }
                 """);
+            MarkGraphAndFoldReady(dbPath);
 
             var (definitionExit, definitionStdout, definitionStderr) = CaptureConsole(() =>
                 QueryCommandRunner.RunDefinition(

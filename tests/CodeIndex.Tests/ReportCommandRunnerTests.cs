@@ -2039,6 +2039,146 @@ public class ReportCommandRunnerTests
         }
     }
 
+    [Theory]
+    [InlineData("vb", true)]
+    [InlineData("csharp", false)]
+    [InlineData("python", true)]
+    public void Run_WithLegacyGlobalHotspotVersion_UsesIndexedLanguageContract_Issue4914(
+        string language,
+        bool expectedReady)
+    {
+        var workDir = CreateWorkDir();
+        var dbPath = Path.Combine(workDir, "legacy-hotspot-family.db");
+        try
+        {
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+                db.InitializeSchema();
+            using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
+            {
+                connection.Open();
+                using var cmd = connection.CreateCommand();
+                cmd.CommandText = $"""
+                    INSERT INTO files (path, lang, size, lines, checksum, modified)
+                    VALUES ('src/Legacy', '{language}', 1, 1, 'legacy', '2026-01-01T00:00:00Z');
+                    DELETE FROM codeindex_meta
+                    WHERE key = '{DbContext.GetHotspotFamilyVersionMetaKey(language)}';
+                    INSERT OR REPLACE INTO codeindex_meta (key, value)
+                    VALUES ('{DbContext.HotspotFamilyVersionMetaKey}', '{DbContext.LegacyHotspotFamilyVersion}');
+                    """;
+                cmd.ExecuteNonQuery();
+            }
+            SqliteConnection.ClearAllPools();
+
+            var output = Path.Combine(workDir, "bundle.tgz");
+            var (exitCode, _, _) = RunAndCaptureStreams([
+                "--output", output,
+                "--db", dbPath,
+                "--no-log",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            var entries = ReadTarGzEntries(output);
+            using var manifest = ReadJsonEntry(entries, "support-manifest.json");
+            var readiness = manifest.RootElement.GetProperty("readiness");
+            Assert.Equal(expectedReady, readiness.GetProperty("hotspot_family_ready").GetBoolean());
+            Assert.Equal(
+                !expectedReady,
+                JsonArrayContains(readiness.GetProperty("degraded_fields"), "hotspot_family_ready"));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            TestProjectHelper.DeleteDirectory(workDir);
+        }
+    }
+
+    [Theory]
+    [InlineData(null, false, false)]
+    [InlineData("incomplete:marker_scan_cap", false, false)]
+    [InlineData("complete-fingerprint", true, false)]
+    [InlineData("complete-fingerprint", false, true)]
+    public void Run_WithPerLanguageHotspotVersion_RequiresCompleteMarkerFingerprint_Issue4914(
+        string? markerFingerprint,
+        bool expectedReady,
+        bool insertIncompletePartialFamily)
+    {
+        var workDir = CreateWorkDir();
+        var dbPath = Path.Combine(workDir, "per-language-hotspot-family.db");
+        try
+        {
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+                db.InitializeSchema();
+            using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
+            {
+                connection.Open();
+                using var cmd = connection.CreateCommand();
+                cmd.CommandText = $"""
+                    INSERT INTO files (path, lang, size, lines, checksum, modified)
+                    VALUES ('src/Current.cs', 'csharp', 1, 1, 'current', '2026-01-01T00:00:00Z');
+                    INSERT OR REPLACE INTO codeindex_meta (key, value)
+                    VALUES (
+                        '{DbContext.GetHotspotFamilyVersionMetaKey("csharp")}',
+                        '{DbContext.GetHotspotFamilyVersion("csharp")}');
+                    INSERT OR REPLACE INTO codeindex_meta (key, value)
+                    VALUES (
+                        '{DbContext.GetHotspotFamilyMarkerFingerprintMetaKey("csharp")}',
+                        @markerFingerprint);
+                    INSERT INTO symbols (
+                        file_id,
+                        kind,
+                        name,
+                        line,
+                        start_line,
+                        end_line,
+                        signature,
+                        is_partial_declaration,
+                        family_key)
+                    SELECT
+                        id,
+                        'class',
+                        'IncompletePartial',
+                        1,
+                        1,
+                        1,
+                        'public partial class IncompletePartial',
+                        1,
+                        NULL
+                    FROM files
+                    WHERE @insertIncompletePartialFamily = 1;
+                    """;
+                cmd.Parameters.AddWithValue(
+                    "@markerFingerprint",
+                    (object?)markerFingerprint ?? DBNull.Value);
+                cmd.Parameters.AddWithValue(
+                    "@insertIncompletePartialFamily",
+                    insertIncompletePartialFamily ? 1 : 0);
+                cmd.ExecuteNonQuery();
+            }
+            SqliteConnection.ClearAllPools();
+
+            var output = Path.Combine(workDir, "bundle.tgz");
+            var (exitCode, _, _) = RunAndCaptureStreams([
+                "--output", output,
+                "--db", dbPath,
+                "--no-log",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            var entries = ReadTarGzEntries(output);
+            using var manifest = ReadJsonEntry(entries, "support-manifest.json");
+            var readiness = manifest.RootElement.GetProperty("readiness");
+            Assert.Equal(expectedReady, readiness.GetProperty("hotspot_family_ready").GetBoolean());
+            Assert.Equal(
+                !expectedReady,
+                JsonArrayContains(readiness.GetProperty("degraded_fields"), "hotspot_family_ready"));
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            TestProjectHelper.DeleteDirectory(workDir);
+        }
+    }
+
     private (int ExitCode, string StdOut, string StdErr) RunAndCaptureStreams(string[] args)
     {
         lock (TestConsoleLock.Gate)

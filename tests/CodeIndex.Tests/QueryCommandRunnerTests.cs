@@ -9003,6 +9003,7 @@ public partial class QueryCommandRunnerTests
         writer.MarkGraphReady();
         writer.MarkFoldReady();
         writer.MarkCSharpSymbolNameContractReady();
+        writer.MarkHotspotFamilyReady("csharp", "test-fixture-csharp-family");
         writer.MarkIssuesReady();
     }
 

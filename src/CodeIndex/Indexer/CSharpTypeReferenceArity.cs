@@ -1,3 +1,5 @@
+using System.Text;
+
 namespace CodeIndex.Indexer;
 
 internal static class CSharpTypeReferenceArity
@@ -70,8 +72,13 @@ internal static class CSharpTypeReferenceArity
         if (string.IsNullOrWhiteSpace(signature))
             return 0;
 
-        var searchStart = FindDeclarationKeywordEnd(signature, symbolKind);
-        var occurrence = FindDefinitionIdentifierOccurrence(signature, symbolName, searchStart, symbolKind);
+        var declarationSignature = SymbolExtractor.SanitizeCSharpDeclarationSignature(signature);
+        var searchStart = FindDeclarationKeywordEnd(declarationSignature, symbolKind, symbolName);
+        var occurrence = FindDefinitionIdentifierOccurrence(
+            declarationSignature,
+            symbolName,
+            searchStart,
+            symbolKind);
         return occurrence < 0 ? null : ReadArityAfterIdentifier(signature, occurrence, symbolName.Length);
     }
 
@@ -88,15 +95,20 @@ internal static class CSharpTypeReferenceArity
         if (!typeDeclaration && !constructorFunction)
             return null;
 
-        var searchStart = typeDeclaration ? FindDeclarationKeywordEnd(signature, symbolKind) : 0;
-        for (var searchAt = Math.Clamp(searchStart, 0, signature.Length);
-             searchAt <= signature.Length - symbolName.Length;)
+        var searchableSignature = typeDeclaration
+            ? SymbolExtractor.SanitizeCSharpDeclarationSignature(signature)
+            : signature;
+        var searchStart = typeDeclaration
+            ? FindDeclarationKeywordEnd(searchableSignature, symbolKind, symbolName)
+            : 0;
+        for (var searchAt = Math.Clamp(searchStart, 0, searchableSignature.Length);
+             searchAt <= searchableSignature.Length - symbolName.Length;)
         {
-            var occurrence = signature.IndexOf(symbolName, searchAt, StringComparison.Ordinal);
+            var occurrence = searchableSignature.IndexOf(symbolName, searchAt, StringComparison.Ordinal);
             if (occurrence < 0)
                 return null;
             searchAt = occurrence + Math.Max(1, symbolName.Length);
-            if (!IsIdentifierOccurrence(signature, occurrence, symbolName.Length))
+            if (!IsIdentifierOccurrence(searchableSignature, occurrence, symbolName.Length))
                 continue;
 
             if (constructorFunction)
@@ -143,6 +155,59 @@ internal static class CSharpTypeReferenceArity
            || (string.Equals(symbolKind, "record", StringComparison.Ordinal)
                && !string.IsNullOrWhiteSpace(signature)
                && ContainsIdentifier(signature, "struct", signature.Length));
+
+    internal static string NormalizeTypeIdentityArity(string? identity)
+    {
+        if (string.IsNullOrWhiteSpace(identity))
+            return string.Empty;
+
+        var value = identity.Trim();
+        if (value.StartsWith("global::", StringComparison.Ordinal))
+            value = value["global::".Length..];
+
+        var normalized = new StringBuilder(value.Length);
+        for (var index = 0; index < value.Length;)
+        {
+            var current = value[index];
+            if (char.IsWhiteSpace(current) || current == '@')
+            {
+                index++;
+                continue;
+            }
+
+            if (!IsIdentifierPart(current) || char.IsDigit(current))
+            {
+                if (current != '?')
+                    normalized.Append(current);
+                index++;
+                continue;
+            }
+
+            var identifierStart = index;
+            while (index < value.Length && IsIdentifierPart(value[index]))
+                index++;
+            normalized.Append(value, identifierStart, index - identifierStart);
+
+            var genericStart = index;
+            SkipWhitespace(value, ref genericStart);
+            if (genericStart >= value.Length || value[genericStart] != '<')
+                continue;
+            if (!TryCountTopLevelTypeArguments(
+                    value,
+                    genericStart,
+                    out var arity,
+                    out var closeAngleIndex))
+            {
+                return string.Empty;
+            }
+
+            normalized.Append('`');
+            normalized.Append(arity.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            index = closeAngleIndex + 1;
+        }
+
+        return normalized.ToString();
+    }
 
     private static int FindClosestIdentifierOccurrence(string text, string identifier, long? columnNumber)
     {
@@ -248,35 +313,91 @@ internal static class CSharpTypeReferenceArity
         return -1;
     }
 
-    private static int FindDeclarationKeywordEnd(string signature, string? symbolKind)
+    private static int FindDeclarationKeywordEnd(
+        string signature,
+        string? symbolKind,
+        string? symbolName = null)
     {
         if (string.IsNullOrWhiteSpace(symbolKind))
             return 0;
 
-        var keyword = symbolKind switch
+        string[]? keywords = symbolKind switch
         {
-            "class" => "class",
-            "struct" => "struct",
-            "record" => "record",
-            "interface" => "interface",
-            "enum" => "enum",
-            "delegate" => "delegate",
+            // Plain records are emitted through the existing class kind, while record
+            // structs use the struct kind. Accept the source declaration keyword for
+            // both representations so earlier same-name attribute arguments cannot be
+            // mistaken for the declaration identifier.
+            // plain record は既存の class kind、record struct は struct kind で出力される。
+            // source 上の record keyword も候補にし、先行 attribute 内の同名参照を
+            // declaration identifier と誤認しない。
+            "class" => ["class", "record"],
+            "struct" => ["struct", "record"],
+            "record" => ["record"],
+            "interface" => ["interface"],
+            "enum" => ["enum"],
+            "delegate" => ["delegate"],
             _ => null,
         };
-        if (keyword == null)
+        if (keywords == null)
             return 0;
 
-        for (var searchAt = 0; searchAt <= signature.Length - keyword.Length;)
+        var bestDeclarationStart = int.MaxValue;
+        foreach (var keyword in keywords)
         {
-            var occurrence = signature.IndexOf(keyword, searchAt, StringComparison.Ordinal);
-            if (occurrence < 0)
-                return 0;
-            if (IsIdentifierOccurrence(signature, occurrence, keyword.Length))
-                return occurrence + keyword.Length;
-            searchAt = occurrence + keyword.Length;
+            for (var searchAt = 0; searchAt <= signature.Length - keyword.Length;)
+            {
+                var occurrence = signature.IndexOf(keyword, searchAt, StringComparison.Ordinal);
+                if (occurrence < 0)
+                    break;
+                searchAt = occurrence + keyword.Length;
+                if (!IsIdentifierOccurrence(signature, occurrence, keyword.Length))
+                    continue;
+
+                var declarationStart = searchAt;
+                if (!SkipCSharpTrivia(signature, ref declarationStart))
+                    continue;
+                if (keyword == "record")
+                    SkipOptionalRecordTypeKeyword(signature, ref declarationStart);
+                if (!string.IsNullOrWhiteSpace(symbolName)
+                    && !IsDeclarationIdentifierAt(signature, declarationStart, symbolName))
+                {
+                    continue;
+                }
+
+                bestDeclarationStart = Math.Min(bestDeclarationStart, declarationStart);
+            }
         }
 
-        return 0;
+        return bestDeclarationStart == int.MaxValue ? 0 : bestDeclarationStart;
+    }
+
+    private static void SkipOptionalRecordTypeKeyword(string signature, ref int cursor)
+    {
+        foreach (var keyword in new[] { "class", "struct" })
+        {
+            if (cursor + keyword.Length > signature.Length
+                || !signature.AsSpan(cursor, keyword.Length).SequenceEqual(keyword)
+                || !IsIdentifierOccurrence(signature, cursor, keyword.Length))
+            {
+                continue;
+            }
+
+            cursor += keyword.Length;
+            SkipCSharpTrivia(signature, ref cursor);
+            return;
+        }
+    }
+
+    private static bool IsDeclarationIdentifierAt(
+        string signature,
+        int cursor,
+        string symbolName)
+    {
+        if (cursor < signature.Length && signature[cursor] == '@')
+            cursor++;
+        return cursor + symbolName.Length <= signature.Length
+               && signature.AsSpan(cursor, symbolName.Length).SequenceEqual(symbolName)
+               && IsIdentifierOccurrence(signature, cursor, symbolName.Length);
     }
 
     private static int? ReadArityAfterIdentifier(string text, int occurrence, int identifierLength)

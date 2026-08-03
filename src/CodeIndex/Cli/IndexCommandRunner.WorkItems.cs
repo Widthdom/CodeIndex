@@ -130,16 +130,19 @@ public static partial class IndexCommandRunner
             IReadOnlyList<ReferenceRecord> references,
             IReadOnlyList<FileIssue> issues,
             FileIssue? generatedSuppressionIssue = null,
-            bool generatedSuppressionChecked = false)
+            bool generatedSuppressionChecked = false,
+            string? content = null,
+            bool? hasOversizeLine = null,
+            int? conflictMarkerLine = null)
         {
             return new FullScanFileWorkItem(
                 fileIndex,
                 filePath,
                 relativePath,
                 record,
-                null,
-                null,
-                null,
+                content,
+                hasOversizeLine,
+                conflictMarkerLine,
                 warning,
                 chunks,
                 symbols,

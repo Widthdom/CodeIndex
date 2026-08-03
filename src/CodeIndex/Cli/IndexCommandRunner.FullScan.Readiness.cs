@@ -157,6 +157,13 @@ public static partial class IndexCommandRunner
                 context.PriorHotspotFamilyVersions,
                 context.PriorHotspotFamilyMarkerFingerprints,
                 context.CurrentHotspotFamilyMarkerFingerprints);
+            if (!options.SymbolsOnly)
+            {
+                if (writer.CSharpFamilyTrustAllowsReferenceIdentityReady(context.HasCSharpFilesAfter))
+                    writer.MarkReferenceIdentityContractReady();
+                else
+                    writer.ClearReferenceIdentityContractReady();
+            }
             writer.StampSymbolExtractorVersions(context.IndexedSymbolExtractorLanguages);
             writer.StampDynamicReferenceGraphContracts(context.IndexedSymbolExtractorLanguages);
 

@@ -171,7 +171,8 @@ internal static class ProjectionFieldRegistry
                     "disambiguator", "api_version", "path", "symbol_id", "lang", "kind", "sub_kind",
                     "name", "line", "start_line", "start_column", "end_line", "body_start_line",
                     "body_end_line", "signature", "container_kind", "container_name", "visibility",
-                    "return_type", "definition_sites", "exact_index_available", "degraded_reason",
+                    "return_type", "definition_sites", "partial_family_id", "representative_reason",
+                    "family_members", "family_members_truncated", "exact_index_available", "degraded_reason",
                     "content_omitted", "content_omitted_reason", "body_content", "body_content_start_line",
                     "body_content_end_line", "body_requested_start_line", "body_requested_end_line",
                     "body_effective_start_line", "body_effective_end_line", "body_content_truncated",
@@ -295,7 +296,8 @@ internal static class ProjectionFieldRegistry
             "api_version", "path", "symbol_id", "lang", "kind", "sub_kind", "name", "line",
             "start_line", "start_column", "end_line", "body_start_line", "body_end_line",
             "signature", "container_kind", "container_name", "visibility", "return_type",
-            "definition_sites",
+            "definition_sites", "partial_family_id", "representative_reason", "family_members",
+            "family_members_truncated",
         };
         return Create(
             "impact",

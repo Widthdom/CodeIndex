@@ -684,15 +684,36 @@ public static partial class SymbolExtractor
     // Java 識別子の先頭: Unicode の letter / letter-number / underscore / dollar。
     // 継続文字は数字・connector punctuation・結合文字も許可し、`RÉSUMÉ` のような enum member を切らない。
     public static void ApplyFamilyScope(IEnumerable<SymbolRecord> symbols, string scopeKey)
+        => ApplyFamilyScope(symbols, scopeKey, lang: null);
+
+    public static void ApplyFamilyScope(
+        IEnumerable<SymbolRecord> symbols,
+        string scopeKey,
+        string? lang)
     {
+        // The current C# family contract owns encoded scopes. Other languages retain their v2 raw
+        // family keys so incremental updates cannot mix two key formats under one ready stamp.
+        // encoded scope は current C# family contract でのみ使用する。他言語は v2 の raw family key を
+        // 維持し、増分更新で異なる形式が ready 状態に混在することを防ぐ。
+        var persistedScopeKey = string.Equals(lang, "csharp", StringComparison.Ordinal)
+            ? EncodeFamilyScopeKey(scopeKey)
+            : scopeKey;
         foreach (var symbol in symbols)
         {
             if (string.IsNullOrWhiteSpace(symbol.FamilyKey))
                 continue;
 
-            symbol.FamilyKey = $"{scopeKey}|{symbol.FamilyKey}";
+            symbol.FamilyKey = $"{persistedScopeKey}|{symbol.FamilyKey}";
         }
     }
+
+    internal static string EncodeFamilyScopeKey(string scopeKey)
+        // `%` is escaped first so a literal `%7C` path cannot collide with an encoded pipe.
+        // `%` を先に escape し、literal な `%7C` path と encoded pipe の衝突を防ぐ。
+        => scopeKey
+            .Replace("%", "%25", StringComparison.Ordinal)
+            .Replace("|", "%7C", StringComparison.Ordinal)
+            .Replace("\u001f", "%1F", StringComparison.Ordinal);
 
     private static bool TryAddRPacmanPackageLoaderSymbols(
         long fileId,

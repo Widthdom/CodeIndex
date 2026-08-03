@@ -5,6 +5,7 @@ namespace CodeIndex.Indexer;
 
 public static partial class SymbolExtractor
 {
+    private const string CSharpFileLocalFamilyPrefix = "file-local:";
     private readonly record struct DeclaredContainerIdentity(long FileId, string Kind, string Name);
 
     private static void PopulateDeclaredContainerQualifiedNames(List<SymbolRecord> symbols)
@@ -78,7 +79,11 @@ public static partial class SymbolExtractor
     private static void AssignContainers(
         List<SymbolRecord> symbols,
         string[]? rawLines = null,
-        Func<CSharpLexState[]>? getCSharpLineStartStates = null)
+        Func<CSharpLexState[]>? getCSharpLineStartStates = null,
+        string? filePath = null,
+        string? projectRoot = null,
+        Func<SymbolRecord, bool>? preserveExistingContainerAssignment = null,
+        bool finalizeCSharpFileLocalFamilies = true)
     {
         if (symbols.Count == 0)
             return;
@@ -86,6 +91,8 @@ public static partial class SymbolExtractor
         if (symbols.Count == 1)
         {
             AssignTopLevelFamilyKey(symbols[0]);
+            if (finalizeCSharpFileLocalFamilies)
+                FinalizeCSharpFileLocalFamilyKeys(symbols, filePath, projectRoot);
             return;
         }
 
@@ -94,6 +101,8 @@ public static partial class SymbolExtractor
         {
             foreach (var symbol in symbols)
                 AssignTopLevelFamilyKey(symbol);
+            if (finalizeCSharpFileLocalFamilies)
+                FinalizeCSharpFileLocalFamilyKeys(symbols, filePath, projectRoot);
             return;
         }
 
@@ -114,7 +123,8 @@ public static partial class SymbolExtractor
                 rawLines,
                 getCSharpLineStartStates);
 
-            if (containerPath.Count > 0)
+            if (containerPath.Count > 0
+                && preserveExistingContainerAssignment?.Invoke(symbol) != true)
             {
                 var effectiveContainer = containerPath[^1];
                 if (symbol.ContainerKind != null && symbol.ContainerName != null)
@@ -162,16 +172,541 @@ public static partial class SymbolExtractor
                     symbol.ContainerName ??= effectiveContainer.Name;
                     var qualifiedContainerName = BuildQualifiedContainerName(containerPath);
                     symbol.ContainerQualifiedName = qualifiedContainerName;
-                    symbol.FamilyKey = BuildInheritedFamilyKey(effectiveContainer, qualifiedContainerName);
+                    symbol.FamilyKey = BuildInheritedFamilyKey(effectiveContainer, containerPath);
                 }
             }
 
-            symbol.FamilyKey ??= BuildSelfFamilyKey(symbol, containerPath);
+            // Type declarations own their family identity. A nested partial type must
+            // not retain the inherited key of its nearest partial container, because
+            // sibling names and generic arities would then collapse into that parent.
+            // type declaration は自身の family identity を持つ。nested partial type が
+            // 親 partial container の key を保持すると sibling / arity を誤集約する。
+            symbol.FamilyKey = BuildSelfFamilyKey(symbol, containerPath) ?? symbol.FamilyKey;
+            if (symbol.FamilyKey == null
+                && symbol.Kind is "function" or "test.method"
+                && ContainsFileLocalType(containerPath))
+            {
+                symbol.FamilyKey = BuildFileLocalContainerFamilyKey(containerPath);
+            }
 
             if (CanContainSymbols(symbol, includeCallableContainers))
                 stack.Push(symbol);
         }
+
+        if (finalizeCSharpFileLocalFamilies)
+            FinalizeCSharpFileLocalFamilyKeys(symbols, filePath, projectRoot);
     }
+
+    internal static void RefreshCSharpContainerAndFamilyScopeAfterHookMutation(
+        IList<SymbolRecord> symbols,
+        string? content,
+        string? filePath,
+        string? projectRoot,
+        string familyScopeKey)
+    {
+        if (symbols.Count == 0)
+            return;
+
+        var materialized = symbols as List<SymbolRecord> ?? symbols.ToList();
+        var derivedRecordComponentContainers = CaptureDerivedCSharpRecordComponentContainers(materialized);
+        var hookMutatedTypeContainers = materialized
+            .Where(symbol => symbol.DeclarationStructureMutatedByHook
+                             && IsCSharpTypeFamilyKind(symbol.Kind))
+            .Select(symbol => new HookMutatedCSharpTypeContainer(
+                symbol,
+                symbol.ContainerKind,
+                symbol.ContainerName,
+                symbol.ContainerQualifiedName))
+            .ToList();
+        var hookMutatedTypeSymbols = hookMutatedTypeContainers
+            .Select(assignment => assignment.Symbol)
+            .ToHashSet();
+        foreach (var symbol in materialized)
+        {
+            symbol.FamilyKey = null;
+            symbol.IsFileLocalDeclaration =
+                symbol.IsExplicitFileLocalDeclaration ?? symbol.IsFileLocalDeclaration;
+            if (symbol.DeclarationStructureMutatedByHook
+                && !hookMutatedTypeSymbols.Contains(symbol))
+            {
+                continue;
+            }
+
+            // Container fields emitted by extraction are derived state. Clear them on
+            // unchanged records so a hook rename/arity change on an enclosing declaration
+            // propagates to descendants. Mutated type declarations are also cleared for
+            // this positional pass; their accepted public values are restored below.
+            // extraction が設定した container field は derived state なので、unchanged record
+            // では消去し、hook による enclosing declaration の rename/arity 変更を descendant
+            // へ伝播する。変更された type declaration もこの位置ベースの pass では消去し、
+            // 受理済みの public value は後段で復元する。
+            symbol.ContainerKind = null;
+            symbol.ContainerName = null;
+            symbol.ContainerQualifiedName = null;
+        }
+
+        var lines = content == null ? null : SplitContentLines(content);
+        CSharpLexState[]? lineStartStates = null;
+        Func<CSharpLexState[]>? getLineStartStates = lines == null
+            ? null
+            : () => lineStartStates ??= BuildCSharpLineStartStates(lines);
+        AssignContainers(
+            materialized,
+            lines,
+            getLineStartStates,
+            filePath,
+            projectRoot,
+            symbol => symbol.DeclarationStructureMutatedByHook
+                      && !hookMutatedTypeSymbols.Contains(symbol),
+            finalizeCSharpFileLocalFamilies: false);
+
+        foreach (var assignment in hookMutatedTypeContainers)
+        {
+            assignment.PositionalDeclaredQualifiedName = BuildDeclaredQualifiedName(assignment.Symbol);
+            assignment.RestoreAcceptedContainer();
+        }
+
+        // AssignContainers uses positional containment. A hook may intentionally move a
+        // declaration by editing its public container fields, so rebuild those records from
+        // the accepted container identity after unchanged descendants have been refreshed.
+        // AssignContainers は位置包含を使うが、hook は public container field の変更で宣言を
+        // 明示的に移動できる。unchanged descendant 更新後、accepted container identity から
+        // 変更 record の family を再構築する。
+        foreach (var symbol in materialized.Where(
+                     symbol => symbol.DeclarationStructureMutatedByHook
+                               && IsCSharpTypeFamilyKind(symbol.Kind)))
+        {
+            RefreshHookMutatedCSharpFamilyKey(symbol, materialized);
+        }
+        RefreshCSharpDescendantsAfterHookContainerMoves(
+            hookMutatedTypeContainers,
+            materialized);
+        foreach (var symbol in materialized.Where(
+                     symbol => symbol.DeclarationStructureMutatedByHook
+                               && !IsCSharpTypeFamilyKind(symbol.Kind)))
+        {
+            RefreshHookMutatedCSharpFamilyKey(symbol, materialized);
+        }
+        RestoreDerivedCSharpRecordComponentContainers(derivedRecordComponentContainers);
+
+        FinalizeCSharpFileLocalFamilyKeys(materialized, filePath, projectRoot);
+        ApplyFamilyScope(materialized, familyScopeKey, "csharp");
+        foreach (var symbol in materialized)
+            symbol.DeclarationStructureMutatedByHook = false;
+    }
+
+    private sealed class HookMutatedCSharpTypeContainer(
+        SymbolRecord symbol,
+        string? acceptedContainerKind,
+        string? acceptedContainerName,
+        string? acceptedContainerQualifiedName)
+    {
+        internal SymbolRecord Symbol { get; } = symbol;
+        internal string? PositionalDeclaredQualifiedName { get; set; }
+
+        internal void RestoreAcceptedContainer()
+        {
+            Symbol.ContainerKind = acceptedContainerKind;
+            Symbol.ContainerName = acceptedContainerName;
+            Symbol.ContainerQualifiedName = acceptedContainerQualifiedName;
+        }
+    }
+
+    private readonly record struct HookMutatedCSharpContainerMove(
+        SymbolRecord Symbol,
+        string PositionalDeclaredQualifiedName,
+        string AcceptedDeclaredQualifiedName);
+
+    private static void RefreshCSharpDescendantsAfterHookContainerMoves(
+        IReadOnlyList<HookMutatedCSharpTypeContainer> assignments,
+        IReadOnlyList<SymbolRecord> symbols)
+    {
+        var moves = assignments
+            .Select(assignment => new HookMutatedCSharpContainerMove(
+                assignment.Symbol,
+                assignment.PositionalDeclaredQualifiedName ?? assignment.Symbol.Name,
+                BuildDeclaredQualifiedName(assignment.Symbol)))
+            .Where(move => !string.Equals(
+                move.PositionalDeclaredQualifiedName,
+                move.AcceptedDeclaredQualifiedName,
+                StringComparison.Ordinal))
+            .OrderByDescending(move => move.PositionalDeclaredQualifiedName.Length)
+            .ToList();
+        if (moves.Count == 0)
+            return;
+
+        var refreshedDescendants = new List<SymbolRecord>();
+        foreach (var symbol in symbols)
+        {
+            if (symbol.DeclarationStructureMutatedByHook)
+                continue;
+
+            var positionalContainer = symbol.ContainerQualifiedName;
+            if (string.IsNullOrWhiteSpace(positionalContainer))
+                continue;
+
+            foreach (var move in moves)
+            {
+                if (!IsPositionallyWithinHookContainer(move.Symbol, symbol)
+                    || !TryReplaceCSharpContainerPrefix(
+                        positionalContainer,
+                        move.PositionalDeclaredQualifiedName,
+                        move.AcceptedDeclaredQualifiedName,
+                        out var acceptedContainer))
+                {
+                    continue;
+                }
+
+                if (string.Equals(
+                        positionalContainer,
+                        move.PositionalDeclaredQualifiedName,
+                        StringComparison.Ordinal))
+                {
+                    symbol.ContainerKind = move.Symbol.Kind;
+                    symbol.ContainerName = move.Symbol.Name;
+                }
+                symbol.ContainerQualifiedName = acceptedContainer;
+                symbol.FamilyKey = null;
+                refreshedDescendants.Add(symbol);
+                break;
+            }
+        }
+
+        foreach (var symbol in refreshedDescendants.Where(
+                     symbol => IsCSharpTypeFamilyKind(symbol.Kind)))
+        {
+            RefreshHookMutatedCSharpFamilyKey(symbol, symbols);
+        }
+        foreach (var symbol in refreshedDescendants.Where(
+                     symbol => !IsCSharpTypeFamilyKind(symbol.Kind)))
+        {
+            RefreshHookMutatedCSharpFamilyKey(symbol, symbols);
+        }
+    }
+
+    private static bool IsPositionallyWithinHookContainer(
+        SymbolRecord container,
+        SymbolRecord symbol)
+        => !ReferenceEquals(container, symbol)
+           && container.FileId == symbol.FileId
+           && container.StartLine <= symbol.StartLine
+           && container.EndLine >= symbol.EndLine;
+
+    private static bool TryReplaceCSharpContainerPrefix(
+        string value,
+        string oldPrefix,
+        string newPrefix,
+        out string replaced)
+    {
+        if (string.Equals(value, oldPrefix, StringComparison.Ordinal))
+        {
+            replaced = newPrefix;
+            return true;
+        }
+
+        if (value.StartsWith(oldPrefix + ".", StringComparison.Ordinal))
+        {
+            replaced = newPrefix + value[oldPrefix.Length..];
+            return true;
+        }
+
+        replaced = value;
+        return false;
+    }
+
+    private readonly record struct DerivedCSharpRecordComponentContainer(
+        SymbolRecord Component,
+        SymbolRecord Container);
+
+    private static List<DerivedCSharpRecordComponentContainer> CaptureDerivedCSharpRecordComponentContainers(
+        IReadOnlyList<SymbolRecord> symbols)
+    {
+        var captured = new List<DerivedCSharpRecordComponentContainer>();
+        var containersByIdentity = new Dictionary<DeclaredContainerIdentity, List<SymbolRecord>>();
+        var bodylessRecordContainers = new List<SymbolRecord>();
+        foreach (var candidate in symbols)
+        {
+            if (candidate.BodyStartLine != null
+                || candidate.BodyEndLine != null
+                || !IsBodylessCSharpRecordDeclaration(candidate))
+            {
+                continue;
+            }
+
+            bodylessRecordContainers.Add(candidate);
+            var identity = new DeclaredContainerIdentity(
+                candidate.FileId,
+                candidate.Kind,
+                candidate.Name);
+            if (!containersByIdentity.TryGetValue(identity, out var candidates))
+            {
+                candidates = [];
+                containersByIdentity.Add(identity, candidates);
+            }
+            candidates.Add(candidate);
+        }
+
+        if (bodylessRecordContainers.Count == 0)
+            return captured;
+
+        foreach (var component in symbols)
+        {
+            if (component.DeclarationStructureMutatedByHook
+                || component.Kind != "property"
+                || component.ContainerKind is not ("class" or "struct")
+                || string.IsNullOrWhiteSpace(component.ContainerName))
+            {
+                continue;
+            }
+
+            containersByIdentity.TryGetValue(
+                new DeclaredContainerIdentity(
+                    component.FileId,
+                    component.ContainerKind,
+                    component.ContainerName),
+                out var exactCandidates);
+            var container = exactCandidates == null
+                ? null
+                : FindDeclaredContainerSymbol(exactCandidates, component);
+            container ??= FindDeclaredContainerSymbol(
+                bodylessRecordContainers.Where(candidate =>
+                    candidate.FileId == component.FileId
+                    && candidate.Kind == component.ContainerKind
+                    && component.Signature != null
+                    && candidate.Signature?.Contains(component.Signature, StringComparison.Ordinal) == true).ToList(),
+                component);
+            if (container != null)
+                captured.Add(new DerivedCSharpRecordComponentContainer(component, container));
+        }
+
+        return captured;
+    }
+
+    private static bool IsBodylessCSharpRecordDeclaration(SymbolRecord symbol)
+    {
+        if (symbol.Signature == null || symbol.Kind is not ("class" or "struct"))
+            return false;
+
+        var declarationHeader = ExtractCSharpDeclarationHeader(
+            SanitizeCSharpDeclarationEvidence(symbol.Signature));
+        var recordKeywordColumn = FindCSharpIdentifierToken(
+            declarationHeader.AsSpan(),
+            "record".AsSpan(),
+            0);
+        if (recordKeywordColumn < 0)
+            return false;
+
+        return FindCSharpIdentifierToken(
+            declarationHeader.AsSpan(),
+            symbol.Name.AsSpan().TrimStart('@'),
+            recordKeywordColumn + "record".Length) >= 0;
+    }
+
+    private static void RestoreDerivedCSharpRecordComponentContainers(
+        IReadOnlyList<DerivedCSharpRecordComponentContainer> captured)
+    {
+        foreach (var assignment in captured)
+        {
+            assignment.Component.ContainerKind = assignment.Container.Kind;
+            assignment.Component.ContainerName = assignment.Container.Name;
+            assignment.Component.ContainerQualifiedName = BuildDeclaredQualifiedName(assignment.Container);
+            assignment.Component.FamilyKey = assignment.Container.FamilyKey;
+        }
+    }
+
+    private static void RefreshHookMutatedCSharpFamilyKey(
+        SymbolRecord symbol,
+        IReadOnlyList<SymbolRecord> symbols)
+    {
+        if (IsCSharpTypeFamilyKind(symbol.Kind) && symbol.IsPartialDeclaration == true)
+        {
+            var builder = new StringBuilder();
+            var containerIdentity = BuildHookCSharpContainerFamilyIdentity(
+                symbol.ContainerQualifiedName,
+                symbol,
+                symbols);
+            if (!string.IsNullOrWhiteSpace(containerIdentity))
+                builder.Append(containerIdentity);
+            AppendFamilySegment(builder, symbol);
+            symbol.FamilyKey = symbol.IsFileLocalDeclaration
+                ? CSharpFileLocalFamilyPrefix + builder.ToString()
+                : builder.ToString();
+            return;
+        }
+
+        var container = FindHookCSharpContainerSymbol(
+            symbol.ContainerQualifiedName,
+            symbol,
+            symbols);
+        symbol.FamilyKey = container?.FamilyKey;
+        if (symbol.FamilyKey == null
+            && symbol.IsPartialDeclaration == true
+            && !string.IsNullOrWhiteSpace(symbol.ContainerQualifiedName))
+        {
+            symbol.FamilyKey = BuildHookCSharpContainerFamilyIdentity(
+                symbol.ContainerQualifiedName,
+                symbol,
+                symbols);
+        }
+    }
+
+    private static SymbolRecord? FindHookCSharpContainerSymbol(
+        string? containerQualifiedName,
+        SymbolRecord symbol,
+        IReadOnlyList<SymbolRecord> symbols)
+    {
+        if (string.IsNullOrWhiteSpace(containerQualifiedName))
+            return null;
+
+        SymbolRecord? fallback = null;
+        foreach (var candidate in symbols)
+        {
+            if (!IsCSharpTypeFamilyKind(candidate.Kind)
+                || !string.Equals(
+                    BuildDeclaredQualifiedName(candidate),
+                    containerQualifiedName,
+                    StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            fallback ??= candidate;
+            if (candidate.StartLine <= symbol.StartLine
+                && candidate.EndLine >= symbol.EndLine)
+            {
+                return candidate;
+            }
+        }
+
+        return fallback;
+    }
+
+    private static string BuildHookCSharpContainerFamilyIdentity(
+        string? containerQualifiedName,
+        SymbolRecord symbol,
+        IReadOnlyList<SymbolRecord> symbols)
+    {
+        if (string.IsNullOrWhiteSpace(containerQualifiedName))
+            return string.Empty;
+
+        var segments = containerQualifiedName.Split('.', StringSplitOptions.RemoveEmptyEntries);
+        var sourcePrefix = new StringBuilder();
+        var familyIdentity = new StringBuilder();
+        foreach (var segment in segments)
+        {
+            if (sourcePrefix.Length > 0)
+                sourcePrefix.Append('.');
+            sourcePrefix.Append(segment);
+
+            var type = FindHookCSharpContainerSymbol(
+                sourcePrefix.ToString(),
+                symbol,
+                symbols);
+            if (type != null)
+                familyIdentity.Append('+');
+            else if (familyIdentity.Length > 0)
+                familyIdentity.Append('.');
+            familyIdentity.Append(segment);
+            var arity = type == null
+                ? null
+                : CSharpTypeReferenceArity.GetDefinitionArity(
+                    type.Signature,
+                    type.Name,
+                    type.Kind);
+            if (arity > 0)
+            {
+                familyIdentity.Append('`');
+                familyIdentity.Append(
+                    arity.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            }
+        }
+
+        return familyIdentity.ToString();
+    }
+
+    private static string BuildDeclaredQualifiedName(SymbolRecord symbol)
+        => string.IsNullOrWhiteSpace(symbol.ContainerQualifiedName)
+            ? symbol.Name
+            : $"{symbol.ContainerQualifiedName}.{symbol.Name}";
+
+    private static void FinalizeCSharpFileLocalFamilyKeys(
+        IReadOnlyList<SymbolRecord> symbols,
+        string? filePath,
+        string? projectRoot)
+    {
+        var fileLocalFamilyBodies = symbols
+            .Select(symbol => symbol.FamilyKey)
+            .Where(familyKey => familyKey?.StartsWith(CSharpFileLocalFamilyPrefix, StringComparison.Ordinal) == true)
+            .Select(familyKey => familyKey![CSharpFileLocalFamilyPrefix.Length..])
+            .ToHashSet(StringComparer.Ordinal);
+        if (fileLocalFamilyBodies.Count == 0)
+            return;
+
+        // C# permits the `file` modifier on only one part of a same-file partial type.
+        // Propagate that scope to every matching declaration and inherited member before
+        // persistence, then make the persisted key file-specific so all consumers,
+        // including hotspots, observe the same boundary without reconstructing it.
+        // C# では同一ファイル内の partial type の一部だけに `file` を付けられる。
+        // 永続化前に同じ family の全宣言と配下 member へ scope を伝播し、さらに
+        // 永続 key をファイル固有にして hotspots を含む全 consumer の境界を揃える。
+        var fileIdentity = BuildCSharpFileLocalIdentity(filePath, projectRoot, symbols);
+        foreach (var symbol in symbols)
+        {
+            if (string.IsNullOrWhiteSpace(symbol.FamilyKey))
+                continue;
+
+            var alreadyFileLocal = symbol.FamilyKey.StartsWith(
+                CSharpFileLocalFamilyPrefix,
+                StringComparison.Ordinal);
+            var familyBody = alreadyFileLocal
+                ? symbol.FamilyKey[CSharpFileLocalFamilyPrefix.Length..]
+                : symbol.FamilyKey;
+            if (!IsWithinCSharpFileLocalFamily(fileLocalFamilyBodies, familyBody))
+                continue;
+
+            symbol.FamilyKey = $"{CSharpFileLocalFamilyPrefix}{fileIdentity}\u001f{familyBody}";
+            if (IsCSharpTypeFamilyKind(symbol.Kind) && symbol.IsPartialDeclaration == true)
+                symbol.IsFileLocalDeclaration = true;
+        }
+    }
+
+    private static bool IsWithinCSharpFileLocalFamily(
+        IReadOnlySet<string> fileLocalFamilyBodies,
+        string familyBody)
+    {
+        foreach (var fileLocalFamilyBody in fileLocalFamilyBodies)
+        {
+            if (string.Equals(familyBody, fileLocalFamilyBody, StringComparison.Ordinal)
+                || familyBody.StartsWith(fileLocalFamilyBody + "+", StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static string BuildCSharpFileLocalIdentity(
+        string? filePath,
+        string? projectRoot,
+        IReadOnlyList<SymbolRecord> symbols)
+    {
+        if (!string.IsNullOrWhiteSpace(filePath))
+        {
+            var identity = filePath;
+            if (Path.IsPathRooted(identity) && !string.IsNullOrWhiteSpace(projectRoot))
+                identity = Path.GetRelativePath(projectRoot, identity);
+            return Path.DirectorySeparatorChar == '\\'
+                ? identity.Replace('\\', '/')
+                : identity;
+        }
+
+        var fileId = symbols.Count > 0 ? symbols[0].FileId : 0;
+        return $"file-id:{fileId.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+    }
+
+    private static bool IsCSharpTypeFamilyKind(string kind) =>
+        kind is "class" or "struct" or "interface" or "record";
 
     private static void AssignTopLevelFamilyKey(SymbolRecord symbol)
         => symbol.FamilyKey ??= BuildSelfFamilyKey(symbol, Array.Empty<SymbolRecord>());
@@ -298,47 +833,90 @@ public static partial class SymbolExtractor
         return builder?.ToString();
     }
 
-    private static string? BuildInheritedFamilyKey(SymbolRecord container, string? qualifiedContainerName) =>
-        SupportsCrossFileFamily(container)
-            ? qualifiedContainerName
-            : null;
+    private static string? BuildInheritedFamilyKey(
+        SymbolRecord container,
+        IReadOnlyList<SymbolRecord> containers)
+    {
+        if (!SupportsCrossFileFamily(container))
+            return null;
+
+        var familyName = BuildQualifiedFamilyName(containers);
+        return familyName == null || !ContainsFileLocalType(containers)
+            ? familyName
+            : CSharpFileLocalFamilyPrefix + familyName;
+    }
 
     private static string? BuildSelfFamilyKey(SymbolRecord symbol, IReadOnlyList<SymbolRecord> containers)
     {
         if (!SupportsCrossFileFamily(symbol))
             return null;
 
-        var symbolName = symbol.Name;
-        if (containers.Count == 0)
-            return symbolName;
+        var builder = new StringBuilder();
+        AppendQualifiedFamilySegments(builder, containers);
+        AppendFamilySegment(builder, symbol);
+        return symbol.IsFileLocalDeclaration || ContainsFileLocalType(containers)
+            ? CSharpFileLocalFamilyPrefix + builder.ToString()
+            : builder.ToString();
+    }
 
-        StringBuilder? builder = null;
-        for (var i = 0; i < containers.Count; i++)
+    private static string? BuildFileLocalContainerFamilyKey(IReadOnlyList<SymbolRecord> containers)
+    {
+        var familyName = BuildQualifiedFamilyName(containers);
+        return familyName == null ? null : CSharpFileLocalFamilyPrefix + familyName;
+    }
+
+    private static bool ContainsFileLocalType(IReadOnlyList<SymbolRecord> symbols)
+    {
+        foreach (var symbol in symbols)
         {
-            var name = containers[i].Name;
-            if (string.IsNullOrWhiteSpace(name))
-                continue;
-
-            builder ??= new StringBuilder(name.Length + symbolName.Length + 1);
-            if (builder.Length > 0)
-                builder.Append('.');
-
-            builder.Append(name);
+            if (symbol.IsFileLocalDeclaration)
+                return true;
         }
 
-        builder ??= new StringBuilder(symbolName.Length);
-        if (builder.Length > 0)
+        return false;
+    }
+
+    private static string? BuildQualifiedFamilyName(IReadOnlyList<SymbolRecord> symbols)
+    {
+        var builder = new StringBuilder();
+        AppendQualifiedFamilySegments(builder, symbols);
+        return builder.Length == 0 ? null : builder.ToString();
+    }
+
+    private static void AppendQualifiedFamilySegments(
+        StringBuilder builder,
+        IReadOnlyList<SymbolRecord> symbols)
+    {
+        foreach (var symbol in symbols)
+            AppendFamilySegment(builder, symbol);
+    }
+
+    private static void AppendFamilySegment(StringBuilder builder, SymbolRecord symbol)
+    {
+        if (string.IsNullOrWhiteSpace(symbol.Name))
+            return;
+        if (IsCSharpTypeFamilyKind(symbol.Kind))
+            builder.Append('+');
+        else if (builder.Length > 0)
             builder.Append('.');
-
-        builder.Append(symbolName);
-
-        return builder?.ToString();
+        builder.Append(symbol.Name);
+        var genericArity = CSharpTypeReferenceArity.GetDefinitionArity(
+            symbol.Signature,
+            symbol.Name,
+            symbol.Kind);
+        if (genericArity > 0)
+        {
+            builder.Append('`');
+            builder.Append(genericArity.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        }
     }
 
     private static bool SupportsCrossFileFamily(SymbolRecord symbol) =>
-        symbol.Kind is "class" or "interface" or "struct"
-        && !string.IsNullOrWhiteSpace(symbol.Signature)
-        && PartialModifierRegex.IsMatch(symbol.Signature);
+        symbol.Kind is "class" or "interface" or "struct" or "record"
+        && (symbol.IsPartialDeclaration == true
+            || (symbol.IsPartialDeclaration == null
+                && !string.IsNullOrWhiteSpace(symbol.Signature)
+                && PartialModifierRegex.IsMatch(symbol.Signature)));
 
     private static bool TryGetObjCCategoryDisplayName(string objcDeclaration, string baseName, out string displayName)
     {

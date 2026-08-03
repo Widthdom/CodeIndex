@@ -1,4 +1,10 @@
 using CodeIndex.Cli;
+using CodeIndex.Database;
+using CodeIndex.Indexer;
+using CodeIndex.Indexer.Hooks;
+using CodeIndex.Models;
+using Microsoft.Data.Sqlite;
+using System.Text.Json;
 
 namespace CodeIndex.Tests;
 
@@ -287,12 +293,19 @@ public partial class QueryCommandRunnerTests
                     dbPath,
                     $"src/Wide.{i:D2}.cs",
                     "csharp",
-                    """
-                    namespace Demo.Wide;
-                    public partial class Wide
-                    {
-                    }
-                    """);
+                    i == 50
+                        ? """
+                          namespace Demo.Wide;
+                          public partial class Wide : BaseWide
+                          {
+                          }
+                          """
+                        : """
+                          namespace Demo.Wide;
+                          public partial class Wide
+                          {
+                          }
+                          """);
             }
             MarkGraphAndFoldReady(dbPath);
 
@@ -376,12 +389,4485 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(51, impact.GetProperty("definition_count").GetInt32());
             Assert.Equal(1, impact.GetProperty("logical_definition_count").GetInt32());
             Assert.Equal(1, impact.GetProperty("definition_output_count").GetInt32());
-            Assert.Equal(51, impact.GetProperty("definitions")[0].GetProperty("definition_sites").GetInt32());
+            var impactDefinition = impact.GetProperty("definitions")[0];
+            Assert.Equal(51, impactDefinition.GetProperty("definition_sites").GetInt32());
+            Assert.StartsWith("partial:", impactDefinition.GetProperty("partial_family_id").GetString());
+            Assert.Equal("semantic_declaration", impactDefinition.GetProperty("representative_reason").GetString());
+            Assert.Equal(50, impactDefinition.GetProperty("family_members").GetArrayLength());
+            Assert.True(impactDefinition.GetProperty("family_members_truncated").GetBoolean());
+            Assert.Contains(
+                impactDefinition.GetProperty("family_members").EnumerateArray(),
+                member => member.GetProperty("path").GetString() == "src/Wide.50.cs"
+                    && member.GetProperty("representative").GetBoolean());
             Assert.False(impact.TryGetProperty("definitions_truncated", out _));
+
+            var (wideSymbolsExitCode, wideSymbolsStdout, wideSymbolsStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["Wide", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--group-partials", "--limit", "1"],
+                _jsonOptions));
+            using var wideSymbolsDocument = ParseJsonOutput(wideSymbolsStdout);
+            var wideSymbol = Assert.Single(wideSymbolsDocument.RootElement.EnumerateArray().ToList());
+
+            Assert.Equal(CommandExitCodes.Success, wideSymbolsExitCode);
+            Assert.Equal(string.Empty, wideSymbolsStderr);
+            Assert.Equal(50, wideSymbol.GetProperty("family_members").GetArrayLength());
+            Assert.True(wideSymbol.GetProperty("family_members_truncated").GetBoolean());
+            Assert.Equal("src/Wide.50.cs", wideSymbol.GetProperty("path").GetString());
+            Assert.Contains(
+                wideSymbol.GetProperty("family_members").EnumerateArray(),
+                member => member.GetProperty("path").GetString() == "src/Wide.50.cs"
+                    && member.GetProperty("representative").GetBoolean());
         }
         finally
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
+    }
+
+    [Fact]
+    public void PartialCanonicalRepresentative_UsesSemanticRulesAndExposesFamilyNavigation_Issue4914()
+    {
+        Assert.Equal(14, DbContext.HotspotFamilyVersion);
+        var constraintOnlyType = Assert.Single(
+            SymbolExtractor.Extract(
+                1,
+                "csharp",
+                "namespace Demo;\npublic partial class ConstraintRank<T> where T : class { }")
+                .Where(symbol => symbol.Kind == "class" && symbol.Name == "ConstraintRank"));
+        var baseListType = Assert.Single(
+            SymbolExtractor.Extract(
+                2,
+                "csharp",
+                "namespace Demo;\npublic partial class ConstraintRank<T> : ConstraintBase { }")
+                .Where(symbol => symbol.Kind == "class" && symbol.Name == "ConstraintRank"));
+        Assert.Equal(1, constraintOnlyType.DeclarationSemanticScore);
+        Assert.Equal(4, baseListType.DeclarationSemanticScore);
+
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_canonical_issue4914");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.Widget.Split.cs",
+                "csharp",
+                """
+                namespace Demo;
+
+                [System.Obsolete]
+                public partial class Widget : BaseWidget
+                {
+                }
+                """,
+                isGenerated: true);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Z.Widget.cs",
+                "csharp",
+                """
+                namespace Demo;
+
+                public partial class Widget
+                {
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.ConstraintOnly.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class ConstraintRank<T> where T : class { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Z.BaseList.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class ConstraintRank<T> : ConstraintBase { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.Customer.g.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial record Customer : System.IComparable<Customer>
+                {
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Z.Customer.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial record Customer : System.IComparable<Customer>
+                {
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.Controller.cs",
+                "csharp",
+                """
+                using @global = Demo;
+                namespace Demo;
+                public class Item { }
+                public class item { }
+                public class Result<T> { }
+
+                public partial class Controller
+                {
+                    partial void OnReady([P] int declarationValue = 0);
+                    partial void Alias(int declarationValue);
+                    partial void Defaults(bool flag = 1 < 2, int count = 0);
+                    partial void Quoted(string text = ")", int count = 0);
+                    partial void Escaped(@Item declarationValue);
+                    partial void @event(int declarationValue);
+                    partial void Dynamic(dynamic declarationValue);
+                    partial /* CommentName( */ void CommentName(int declarationValue);
+                    partial void CommentGap /* identity trivia */ (int value);
+                    partial void GenericGap<T> /* identity trivia */ (T value);
+                    partial void AttrString([Marker("/*")] int declarationValue);
+                    partial void Run(Item declarationValue);
+                    partial void Run(item declarationValue);
+                    partial void Rooted(Item declarationValue);
+                    partial void Rooted(global::Item declarationValue);
+                    partial void Shadowed(System.Int32 declarationValue);
+                    partial void Shadowed(int declarationValue);
+                    partial void ReferenceNullable(string? declarationValue);
+                    partial void ValueNullable(int? declarationValue);
+                    partial void QualifiedGeneric<T>(N.T declarationValue);
+                    partial void QualifiedGeneric<U>(N.U declarationValue);
+                    partial void VerbatimGlobal(@global::System.Int32 declarationValue);
+                    partial void VerbatimGlobal(global::System.Int32 declarationValue);
+                    private partial Result<int> Result();
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Root.Item.cs",
+                "csharp",
+                "public class Item { }");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/QualifiedGenericTypes.cs",
+                "csharp",
+                "namespace N { public class T { } public class U { } }");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Z.Controller.cs",
+                "csharp",
+                """
+                using @global = Demo;
+                namespace Demo;
+                public partial class Controller
+                {
+                    partial void OnReady(int implementationValue)
+                    {
+                    }
+
+                    partial void Alias(global::@System.@Int32 implementationValue) { }
+                    partial void Defaults(bool flag, int count) { }
+                    partial void Quoted(string text, int count) { }
+                    partial void Escaped(Item implementationValue) { }
+                    partial void @event(int implementationValue) { }
+                    partial void Dynamic(object implementationValue) { }
+                    partial void CommentName(int implementationValue) { }
+                    partial void CommentGap(int value) { }
+                    partial void GenericGap<T>(T value) { }
+                    partial void AttrString(int implementationValue) { }
+                    partial void Run(Item implementationValue) { }
+                    partial void Run(item implementationValue) { }
+                    partial void Rooted(Item implementationValue) { }
+                    partial void Rooted(global::Item implementationValue) { }
+                    partial void Shadowed(System.Int32 implementationValue) { }
+                    partial void Shadowed(int implementationValue) { }
+                    partial void ReferenceNullable(string implementationValue) { }
+                    partial void ValueNullable(global::System.Nullable<int> implementationValue) { }
+                    partial void QualifiedGeneric<T>(N.T implementationValue) { }
+                    partial void QualifiedGeneric<U>(N.U implementationValue) { }
+                    partial void VerbatimGlobal(@global::System.Int32 implementationValue) { }
+                    partial void VerbatimGlobal(global::System.Int32 implementationValue) { }
+                    private partial Result<global::@System.@Int32> Result() => new();
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Demo.System.Int32.cs",
+                "csharp",
+                """
+                namespace Demo.System;
+                public class Int32 { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "scripts/functions.sh",
+                "shell",
+                """
+                function hello {
+                  echo hi
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.GenericContainers.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public
+                partial // one-arity host modifier
+                class GenericHost<T>
+                {
+                    partial // declaration modifier
+                    void ContainerMethod();
+                }
+
+                public
+                partial /* two-arity host modifier */
+                class GenericHost<T, U>
+                {
+                    partial /* declaration modifier */
+                    void ContainerMethod();
+                }
+
+                public partial class Outer<T>
+                {
+                    public partial class Nested { }
+                }
+
+                public partial class Outer<T, U>
+                {
+                    public partial class Nested { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Z.GenericContainers.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public
+                partial // one-arity host modifier
+                class GenericHost<T>
+                {
+                    partial // implementation modifier
+                    void ContainerMethod() { }
+                }
+
+                public
+                partial /* two-arity host modifier */
+                class GenericHost<T, U>
+                {
+                    partial /* implementation modifier */
+                    void ContainerMethod() { }
+                }
+
+                public partial class Outer<T>
+                {
+                    public partial class Nested { }
+                }
+
+                public partial class Outer<T, U>
+                {
+                    public partial class Nested { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/B.Equal.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class Equal { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.Equal.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class Equal { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Z.Profile.Split.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class Profile { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.Profile.Primary.cs",
+                "csharp",
+                """
+                namespace Demo;
+                [System.Serializable]
+                public partial class Profile : BaseProfile { }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            using (var connection = new SqliteConnection($"Data Source={dbPath}"))
+            {
+                connection.Open();
+                using var rename = connection.CreateCommand();
+                rename.CommandText = "UPDATE files SET path = 'src/ZZZ.Profile.Primary.cs' WHERE path = 'src/A.Profile.Primary.cs'";
+                Assert.Equal(1, rename.ExecuteNonQuery());
+            }
+
+            var widget = RunGroupedSymbol(dbPath, "Widget", "class");
+            Assert.Equal("src/Z.Widget.cs", widget.GetProperty("path").GetString());
+            Assert.Equal("non_generated_source", widget.GetProperty("representative_reason").GetString());
+            Assert.StartsWith("partial:", widget.GetProperty("partial_family_id").GetString());
+            Assert.Equal(2, widget.GetProperty("definition_sites").GetInt32());
+            var widgetMembers = widget.GetProperty("family_members").EnumerateArray().ToList();
+            Assert.Equal(2, widgetMembers.Count);
+            Assert.All(widgetMembers, member => Assert.Equal(21, member.GetProperty("start_column").GetInt32()));
+            Assert.Contains(widgetMembers, member => member.GetProperty("path").GetString() == "src/A.Widget.Split.cs" && member.GetProperty("generated").GetBoolean());
+            Assert.Single(widgetMembers, member => member.TryGetProperty("representative", out var representative) && representative.GetBoolean());
+
+            var constraintRank = RunGroupedSymbol(dbPath, "ConstraintRank", "class");
+            Assert.Equal("src/Z.BaseList.cs", constraintRank.GetProperty("path").GetString());
+            Assert.Equal("semantic_declaration", constraintRank.GetProperty("representative_reason").GetString());
+            Assert.Equal(
+                1,
+                LogicalPartialSymbolGrouper.GetSemanticScore(
+                    "public partial class ConstraintRank<T> where T : class { }",
+                    "class"));
+            Assert.Equal(
+                4,
+                LogicalPartialSymbolGrouper.GetSemanticScore(
+                    "public partial class ConstraintRank<T> : ConstraintBase { }",
+                    "class"));
+            Assert.Equal(
+                1,
+                LogicalPartialSymbolGrouper.GetSemanticScore(
+                    "public partial record @class<T> where T : class { }",
+                    "record"));
+
+            var customer = RunGroupedSymbol(dbPath, "Customer", "class");
+            Assert.Equal("src/Z.Customer.cs", customer.GetProperty("path").GetString());
+            Assert.Equal("non_generated_source", customer.GetProperty("representative_reason").GetString());
+            Assert.Equal(22, customer.GetProperty("start_column").GetInt32());
+            Assert.All(
+                customer.GetProperty("family_members").EnumerateArray(),
+                member => Assert.Equal(22, member.GetProperty("start_column").GetInt32()));
+
+            var onReady = RunGroupedSymbol(dbPath, "OnReady", "function");
+            Assert.Equal("src/Z.Controller.cs", onReady.GetProperty("path").GetString());
+            Assert.Equal("implementation_body", onReady.GetProperty("representative_reason").GetString());
+            Assert.Equal(2, onReady.GetProperty("definition_sites").GetInt32());
+            Assert.All(
+                onReady.GetProperty("family_members").EnumerateArray(),
+                member => Assert.Equal(17, member.GetProperty("start_column").GetInt32()));
+            Assert.Equal(
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void OnReady([P] int declarationValue = 0);",
+                    "OnReady",
+                    "void"),
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void OnReady(int implementationValue) { }",
+                    "OnReady",
+                    "void"));
+            Assert.NotEqual(
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void OnReady(int value);",
+                    "OnReady",
+                    "void"),
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void OnReady(string value);",
+                    "OnReady",
+                    "void"));
+            Assert.Equal(
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial T Transform<T>(T declarationValue);",
+                    "Transform",
+                    "T"),
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial TResult Transform<TResult>(TResult implementationValue) { }",
+                    "Transform",
+                    "TResult"));
+            Assert.NotEqual(
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void QualifiedGeneric<T>(N.T declarationValue);",
+                    "QualifiedGeneric",
+                    "void"),
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void QualifiedGeneric<U>(N.U implementationValue) { }",
+                    "QualifiedGeneric",
+                    "void"));
+            Assert.Equal(
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void Collect(params int[] declarationValues);",
+                    "Collect",
+                    "void"),
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void Collect(int[] implementationValues) { }",
+                    "Collect",
+                    "void"));
+            Assert.NotEqual(
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void Mutate(int value);",
+                    "Mutate",
+                    "void"),
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void Mutate(ref int value);",
+                    "Mutate",
+                    "void"));
+            Assert.Equal(
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void Alias(int value);",
+                    "Alias",
+                    "void"),
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void Alias(global::@System.@Int32 value) { }",
+                    "Alias",
+                    "global::@System.@Void"));
+            Assert.NotEqual(
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void Alias(int value);",
+                    "Alias",
+                    "void"),
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void Alias(System.Int32 value) { }",
+                    "Alias",
+                    "void"));
+            Assert.Equal(
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void ReferenceNullable(string? value);",
+                    "ReferenceNullable",
+                    "void"),
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void ReferenceNullable(string value) { }",
+                    "ReferenceNullable",
+                    "void"));
+            Assert.Equal(
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void ValueNullable(int? value);",
+                    "ValueNullable",
+                    "void"),
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void ValueNullable(global::System.Nullable<int> value) { }",
+                    "ValueNullable",
+                    "void"));
+            Assert.NotEqual(
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void ValueNullable(int value);",
+                    "ValueNullable",
+                    "void"),
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void ValueNullable(int? value) { }",
+                    "ValueNullable",
+                    "void"));
+            Assert.NotEqual(
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void Global(global::System.Uri declarationValue);",
+                    "Global",
+                    "void"),
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void Global(System.Uri implementationValue) { }",
+                    "Global",
+                    "void"));
+            Assert.NotEqual(
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void VerbatimGlobal(@global::System.Int32 declarationValue);",
+                    "VerbatimGlobal",
+                    "void"),
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void VerbatimGlobal(global::System.Int32 implementationValue) { }",
+                    "VerbatimGlobal",
+                    "void"));
+            Assert.NotEqual(
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void Rooted(Item declarationValue);",
+                    "Rooted",
+                    "void"),
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void Rooted(global::Item implementationValue) { }",
+                    "Rooted",
+                    "void"));
+            var (shadowedExitCode, shadowedStdout, shadowedStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["Shadowed", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "function", "--group-partials", "--include-generated", "--limit", "10"],
+                _jsonOptions));
+            using var shadowedDocument = ParseJsonOutput(shadowedStdout);
+            var shadowedFamilies = shadowedDocument.RootElement.EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, shadowedExitCode);
+            Assert.Equal(string.Empty, shadowedStderr);
+            Assert.Equal(2, shadowedFamilies.Count);
+            Assert.All(shadowedFamilies, family => Assert.Equal(2, family.GetProperty("definition_sites").GetInt32()));
+            Assert.Equal(
+                2,
+                shadowedFamilies
+                    .Select(family => family.GetProperty("partial_family_id").GetString())
+                    .Distinct(StringComparer.Ordinal)
+                    .Count());
+            Assert.Equal(
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void Defaults(bool flag = 1 < 2, int count = 0);",
+                    "Defaults",
+                    "void"),
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void Defaults(bool flag, int count) { }",
+                    "Defaults",
+                    "void"));
+            Assert.Equal(
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void Decorated([P(1 < 2)] int declarationValue, string secondValue);",
+                    "Decorated",
+                    "void"),
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void Decorated(int implementationValue, string secondValue) { }",
+                    "Decorated",
+                    "void"));
+            Assert.Equal(
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    """partial void Quoted(string text = ")", int count = 0);""",
+                    "Quoted",
+                    "void"),
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void Quoted(string text, int count) { }",
+                    "Quoted",
+                    "void"));
+            Assert.Equal(
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void Commented(int value = (/* ) */ 0), string text = \"x\");",
+                    "Commented",
+                    "void"),
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void Commented(int value, string text) { }",
+                    "Commented",
+                    "void"));
+            Assert.Equal(
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void Escaped(@Item declarationValue);",
+                    "Escaped",
+                    "void"),
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void Escaped(Item implementationValue) { }",
+                    "Escaped",
+                    "void"));
+            Assert.Equal(
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void @event(int declarationValue);",
+                    "event",
+                    "void"),
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void @event(int implementationValue) { }",
+                    "event",
+                    "void"));
+            Assert.Equal(
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void Dynamic(dynamic declarationValue);",
+                    "Dynamic",
+                    "void"),
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void Dynamic(object implementationValue) { }",
+                    "Dynamic",
+                    "void"));
+            Assert.Equal(
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void CommentTrivia(int /* declaration */ value);",
+                    "CommentTrivia",
+                    "void"),
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void CommentTrivia(int implementationValue /* implementation */) { }",
+                    "CommentTrivia",
+                    "void"));
+            Assert.Equal(
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial /* CommentName( */ void CommentName(int declarationValue);",
+                    "CommentName",
+                    "void"),
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void CommentName(int implementationValue) { }",
+                    "CommentName",
+                    "void"));
+            Assert.Equal(
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void CommentGap /* identity trivia */ (int value);",
+                    "CommentGap",
+                    "void"),
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void CommentGap(int value) { }",
+                    "CommentGap",
+                    "void"));
+            Assert.Equal(
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void GenericGap<T> /* identity trivia */ (T value);",
+                    "GenericGap",
+                    "void"),
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void GenericGap<T>(T value) { }",
+                    "GenericGap",
+                    "void"));
+            Assert.Equal(
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void AttrString([Marker(\"/*\")] int declarationValue);",
+                    "AttrString",
+                    "void"),
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void AttrString(int implementationValue) { }",
+                    "AttrString",
+                    "void"));
+            Assert.Equal(
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void RawDefault(string declarationValue = \"\"\"\"a,b\"\"\"\", int count = 0);",
+                    "RawDefault",
+                    "void"),
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void RawDefault(string implementationValue, int count) { }",
+                    "RawDefault",
+                    "void"));
+            Assert.NotEqual(
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void Run(Item value);",
+                    "Run",
+                    "void"),
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void Run(item value) { }",
+                    "Run",
+                    "void"));
+            Assert.NotNull(
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "private partial Result<int> Result();",
+                    "Result",
+                    "Result<int>"));
+
+            var alias = RunGroupedSymbol(dbPath, "Alias", "function");
+            Assert.Equal(2, alias.GetProperty("definition_sites").GetInt32());
+
+            var defaults = RunGroupedSymbol(dbPath, "Defaults", "function");
+            Assert.Equal(2, defaults.GetProperty("definition_sites").GetInt32());
+
+            var quoted = RunGroupedSymbol(dbPath, "Quoted", "function");
+            Assert.Equal(2, quoted.GetProperty("definition_sites").GetInt32());
+
+            var escaped = RunGroupedSymbol(dbPath, "Escaped", "function");
+            Assert.Equal(2, escaped.GetProperty("definition_sites").GetInt32());
+
+            var verbatim = RunGroupedSymbol(dbPath, "event", "function");
+            Assert.Equal(2, verbatim.GetProperty("definition_sites").GetInt32());
+
+            var (verbatimGotoExitCode, verbatimGotoStdout, verbatimGotoStderr) = CaptureConsole(() => QueryCommandRunner.RunGoto(
+                ["event", "--db", dbPath, "--exact-name", "--lang", "csharp", "--kind", "function", "--include-generated"],
+                _jsonOptions));
+            using var verbatimGotoDocument = ParseJsonOutput(verbatimGotoStdout);
+            var verbatimGoto = verbatimGotoDocument.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, verbatimGotoExitCode);
+            Assert.Equal(string.Empty, verbatimGotoStderr);
+            Assert.Equal(18, verbatimGoto.GetProperty("range").GetProperty("start").GetProperty("character").GetInt32());
+            Assert.Equal(23, verbatimGoto.GetProperty("range").GetProperty("end").GetProperty("character").GetInt32());
+            Assert.All(
+                verbatimGoto.GetProperty("family_members").EnumerateArray(),
+                member =>
+                {
+                    Assert.Equal(18, member.GetProperty("range").GetProperty("start").GetProperty("character").GetInt32());
+                    Assert.Equal(23, member.GetProperty("range").GetProperty("end").GetProperty("character").GetInt32());
+                });
+
+            var dynamicAlias = RunGroupedSymbol(dbPath, "Dynamic", "function");
+            Assert.Equal(2, dynamicAlias.GetProperty("definition_sites").GetInt32());
+
+            var commentName = RunGroupedSymbol(dbPath, "CommentName", "function");
+            Assert.Equal(2, commentName.GetProperty("definition_sites").GetInt32());
+
+            var commentGap = RunGroupedSymbol(dbPath, "CommentGap", "function");
+            Assert.Equal(2, commentGap.GetProperty("definition_sites").GetInt32());
+
+            var genericGap = RunGroupedSymbol(dbPath, "GenericGap", "function");
+            Assert.Equal(2, genericGap.GetProperty("definition_sites").GetInt32());
+
+            var attrString = RunGroupedSymbol(dbPath, "AttrString", "function");
+            Assert.Equal(2, attrString.GetProperty("definition_sites").GetInt32());
+
+            var referenceNullable = RunGroupedSymbol(dbPath, "ReferenceNullable", "function");
+            Assert.Equal(2, referenceNullable.GetProperty("definition_sites").GetInt32());
+
+            var valueNullable = RunGroupedSymbol(dbPath, "ValueNullable", "function");
+            Assert.Equal(2, valueNullable.GetProperty("definition_sites").GetInt32());
+
+            var (qualifiedGenericExitCode, qualifiedGenericStdout, qualifiedGenericStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["QualifiedGeneric", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "function", "--group-partials", "--include-generated", "--limit", "10"],
+                _jsonOptions));
+            using var qualifiedGenericDocument = ParseJsonOutput(qualifiedGenericStdout);
+            var qualifiedGenericFamilies = qualifiedGenericDocument.RootElement.EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, qualifiedGenericExitCode);
+            Assert.Equal(string.Empty, qualifiedGenericStderr);
+            Assert.Equal(2, qualifiedGenericFamilies.Count);
+            Assert.All(qualifiedGenericFamilies, family => Assert.Equal(2, family.GetProperty("definition_sites").GetInt32()));
+            Assert.Contains(qualifiedGenericFamilies, family => family.GetProperty("signature").GetString()!.Contains("N.T", StringComparison.Ordinal));
+            Assert.Contains(qualifiedGenericFamilies, family => family.GetProperty("signature").GetString()!.Contains("N.U", StringComparison.Ordinal));
+
+            var (rootedExitCode, rootedStdout, rootedStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["Rooted", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "function", "--group-partials", "--include-generated", "--limit", "10"],
+                _jsonOptions));
+            using var rootedDocument = ParseJsonOutput(rootedStdout);
+            var rootedFamilies = rootedDocument.RootElement.EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, rootedExitCode);
+            Assert.Equal(string.Empty, rootedStderr);
+            Assert.Equal(2, rootedFamilies.Count);
+            Assert.All(rootedFamilies, family => Assert.Equal(2, family.GetProperty("definition_sites").GetInt32()));
+
+            var (verbatimGlobalExitCode, verbatimGlobalStdout, verbatimGlobalStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["VerbatimGlobal", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "function", "--group-partials", "--include-generated", "--limit", "10"],
+                _jsonOptions));
+            using var verbatimGlobalDocument = ParseJsonOutput(verbatimGlobalStdout);
+            var verbatimGlobalFamilies = verbatimGlobalDocument.RootElement.EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, verbatimGlobalExitCode);
+            Assert.Equal(string.Empty, verbatimGlobalStderr);
+            Assert.Equal(2, verbatimGlobalFamilies.Count);
+            Assert.All(verbatimGlobalFamilies, family => Assert.Equal(2, family.GetProperty("definition_sites").GetInt32()));
+            Assert.Equal(
+                2,
+                verbatimGlobalFamilies
+                    .Select(family => family.GetProperty("partial_family_id").GetString())
+                    .Distinct(StringComparer.Ordinal)
+                    .Count());
+
+            var (shellExitCode, shellStdout, shellStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["hello", "--db", dbPath, "--json=array", "--exact-name", "--lang", "shell", "--kind", "function", "--limit", "1"],
+                _jsonOptions));
+            using var shellDocument = ParseJsonOutput(shellStdout);
+            var shellFunction = Assert.Single(shellDocument.RootElement.EnumerateArray().ToList());
+
+            Assert.Equal(CommandExitCodes.Success, shellExitCode);
+            Assert.Equal(string.Empty, shellStderr);
+            Assert.Equal(9, shellFunction.GetProperty("start_column").GetInt32());
+
+            var (containerExitCode, containerStdout, containerStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["ContainerMethod", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "function", "--group-partials", "--include-generated", "--limit", "10"],
+                _jsonOptions));
+            using var containerDocument = ParseJsonOutput(containerStdout);
+            var containerFamilies = containerDocument.RootElement.EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, containerExitCode);
+            Assert.Equal(string.Empty, containerStderr);
+            Assert.Equal(2, containerFamilies.Count);
+            Assert.All(containerFamilies, family => Assert.Equal(2, family.GetProperty("definition_sites").GetInt32()));
+
+            var (genericTypeExitCode, genericTypeStdout, genericTypeStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["GenericHost", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "class", "--group-partials", "--include-generated", "--limit", "10"],
+                _jsonOptions));
+            using var genericTypeDocument = ParseJsonOutput(genericTypeStdout);
+            var genericTypeFamilies = genericTypeDocument.RootElement.EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, genericTypeExitCode);
+            Assert.Equal(string.Empty, genericTypeStderr);
+            Assert.Equal(2, genericTypeFamilies.Count);
+            Assert.All(genericTypeFamilies, family => Assert.Equal(2, family.GetProperty("definition_sites").GetInt32()));
+            Assert.Equal(
+                2,
+                genericTypeFamilies
+                    .Select(family => family.GetProperty("partial_family_id").GetString())
+                    .Distinct(StringComparer.Ordinal)
+                    .Count());
+
+            var (nestedTypeExitCode, nestedTypeStdout, nestedTypeStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["Nested", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "class", "--group-partials", "--include-generated", "--limit", "10"],
+                _jsonOptions));
+            using var nestedTypeDocument = ParseJsonOutput(nestedTypeStdout);
+            var nestedTypeFamilies = nestedTypeDocument.RootElement.EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, nestedTypeExitCode);
+            Assert.Equal(string.Empty, nestedTypeStderr);
+            Assert.Equal(2, nestedTypeFamilies.Count);
+            Assert.All(nestedTypeFamilies, family => Assert.Equal(2, family.GetProperty("definition_sites").GetInt32()));
+
+            var resultFactory = RunGroupedSymbol(dbPath, "Result", "function");
+            Assert.Equal(2, resultFactory.GetProperty("definition_sites").GetInt32());
+            var resultFactoryMembers = resultFactory.GetProperty("family_members").EnumerateArray().ToList();
+            Assert.Contains(
+                resultFactoryMembers,
+                member => member.GetProperty("path").GetString() == "src/A.Controller.cs"
+                    && member.GetProperty("start_column").GetInt32() == 32);
+            Assert.Contains(
+                resultFactoryMembers,
+                member => member.GetProperty("path").GetString() == "src/Z.Controller.cs"
+                    && member.GetProperty("start_column").GetInt32() == 51);
+
+            var (caseExitCode, caseStdout, caseStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["Run", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "function", "--group-partials", "--include-generated", "--limit", "10"],
+                _jsonOptions));
+            using var caseDocument = ParseJsonOutput(caseStdout);
+            var caseFamilies = caseDocument.RootElement.EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, caseExitCode);
+            Assert.Equal(string.Empty, caseStderr);
+            Assert.Equal(2, caseFamilies.Count);
+            Assert.All(caseFamilies, family => Assert.Equal(2, family.GetProperty("definition_sites").GetInt32()));
+            Assert.Contains(caseFamilies, family => family.GetProperty("signature").GetString()!.Contains("Item implementationValue", StringComparison.Ordinal));
+            Assert.Contains(caseFamilies, family => family.GetProperty("signature").GetString()!.Contains("item implementationValue", StringComparison.Ordinal));
+
+            var equal = RunGroupedSymbol(dbPath, "Equal", "class");
+            Assert.Equal("src/A.Equal.cs", equal.GetProperty("path").GetString());
+            Assert.Equal("stable_path_and_position", equal.GetProperty("representative_reason").GetString());
+
+            var rebuildRoot = TestProjectHelper.CreateDirectory(projectRoot, "rebuild-order");
+            var rebuildDbPath = TestProjectHelper.CreateProjectDb(rebuildRoot);
+            TestProjectHelper.InsertIndexedFile(
+                rebuildDbPath,
+                "src/A.Equal.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class Equal { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                rebuildDbPath,
+                "src/B.Equal.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class Equal { }
+                """);
+            MarkGraphAndFoldReady(rebuildDbPath);
+            var rebuiltEqual = RunGroupedSymbol(rebuildDbPath, "Equal", "class");
+            Assert.Equal("src/A.Equal.cs", rebuiltEqual.GetProperty("path").GetString());
+            Assert.Equal(equal.GetProperty("partial_family_id").GetString(), rebuiltEqual.GetProperty("partial_family_id").GetString());
+
+            var profile = RunGroupedSymbol(dbPath, "Profile", "class");
+            Assert.Equal("src/ZZZ.Profile.Primary.cs", profile.GetProperty("path").GetString());
+            Assert.Equal("semantic_declaration", profile.GetProperty("representative_reason").GetString());
+
+            var (definitionExitCode, definitionStdout, definitionStderr) = CaptureConsole(() => QueryCommandRunner.RunDefinition(
+                ["Widget", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp", "--kind", "class", "--group-partials", "--include-generated", "--limit", "1"],
+                _jsonOptions));
+            using var definitionDocument = ParseJsonOutput(definitionStdout);
+
+            Assert.Equal(CommandExitCodes.Success, definitionExitCode);
+            Assert.Equal(string.Empty, definitionStderr);
+            Assert.Equal(widget.GetProperty("partial_family_id").GetString(), definitionDocument.RootElement.GetProperty("partial_family_id").GetString());
+            Assert.Equal(2, definitionDocument.RootElement.GetProperty("family_members").GetArrayLength());
+
+            var (projectedExitCode, projectedStdout, projectedStderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["definition", "Widget", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp", "--kind", "class", "--group-partials", "--include-generated", "--fields", "family_members"],
+                _jsonOptions,
+                "1.0.0-test"));
+            using var projectedDocument = ParseJsonOutput(projectedStdout);
+            var projectedDefinition = Assert.Single(projectedDocument.RootElement.GetProperty("results").EnumerateArray());
+
+            Assert.Equal(CommandExitCodes.Success, projectedExitCode);
+            Assert.Equal(string.Empty, projectedStderr);
+            Assert.Single(projectedDefinition.EnumerateObject());
+            Assert.Equal(2, projectedDefinition.GetProperty("family_members").GetArrayLength());
+
+            var (nestedFieldExitCode, nestedFieldStdout, nestedFieldStderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["definition", "Widget", "--db", dbPath, "--json", "--fields", "family_members.path"],
+                _jsonOptions,
+                "1.0.0-test"));
+            using var nestedFieldDocument = ParseJsonOutput(nestedFieldStdout);
+
+            Assert.Equal(CommandExitCodes.UsageError, nestedFieldExitCode);
+            Assert.Equal(string.Empty, nestedFieldStderr);
+            Assert.Contains("Unknown --fields value 'family_members.path'", nestedFieldDocument.RootElement.GetProperty("message").GetString(), StringComparison.Ordinal);
+
+            var (gotoExitCode, gotoStdout, gotoStderr) = CaptureConsole(() => QueryCommandRunner.RunGoto(
+                ["Widget", "--db", dbPath, "--exact-name", "--lang", "csharp", "--kind", "class", "--include-generated"],
+                _jsonOptions));
+            using var gotoDocument = ParseJsonOutput(gotoStdout);
+            var gotoLocation = gotoDocument.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, gotoExitCode);
+            Assert.Equal(string.Empty, gotoStderr);
+            Assert.EndsWith("/src/Z.Widget.cs", new Uri(gotoLocation.GetProperty("uri").GetString()!).AbsolutePath, StringComparison.Ordinal);
+            Assert.Equal("non_generated_source", gotoLocation.GetProperty("representative_reason").GetString());
+            Assert.Equal(2, gotoLocation.GetProperty("family_members").GetArrayLength());
+            Assert.All(
+                gotoLocation.GetProperty("family_members").EnumerateArray(),
+                member => Assert.Equal(21, member.GetProperty("range").GetProperty("start").GetProperty("character").GetInt32()));
+
+            var (gotoAllExitCode, gotoAllStdout, gotoAllStderr) = CaptureConsole(() => QueryCommandRunner.RunGoto(
+                ["Widget", "--db", dbPath, "--exact-name", "--lang", "csharp", "--kind", "class", "--include-generated", "--all"],
+                _jsonOptions));
+            using var gotoAllDocument = ParseJsonOutput(gotoAllStdout);
+            var allLocations = gotoAllDocument.RootElement.EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, gotoAllExitCode);
+            Assert.Equal(string.Empty, gotoAllStderr);
+            Assert.Equal(2, allLocations.Count);
+            Assert.Contains(allLocations, location => new Uri(location.GetProperty("uri").GetString()!).AbsolutePath.EndsWith("/src/A.Widget.Split.cs", StringComparison.Ordinal));
+            Assert.Contains(allLocations, location => new Uri(location.GetProperty("uri").GetString()!).AbsolutePath.EndsWith("/src/Z.Widget.cs", StringComparison.Ordinal));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PartialCanonicalRepresentative_PersistsSplitModifierAndLeadingSemanticEvidence_Issue4914()
+    {
+        const string source =
+            """
+            namespace Demo;
+            public partial class Container
+            {
+                /// <summary>Primary declaration.</summary>
+                [System.Obsolete]
+                partial // declaration modifier
+                void OnReady(
+                    int value)
+                {
+                }
+            }
+            file class WorkerLocal { }
+            """;
+        var symbols = SymbolExtractor.Extract(
+            1,
+            "csharp",
+            source);
+
+        var method = Assert.Single(symbols.Where(symbol => symbol.Kind == "function" && symbol.Name == "OnReady"));
+        Assert.True(method.IsPartialDeclaration);
+        Assert.Equal(3, method.DeclarationSemanticScore);
+        Assert.Equal(9, method.IdentifierStartColumn);
+        Assert.DoesNotContain("partial", method.Signature, StringComparison.Ordinal);
+        var fileLocalType = Assert.Single(
+            symbols.Where(symbol => symbol.Kind == "class" && symbol.Name == "WorkerLocal"));
+        Assert.True(fileLocalType.IsFileLocalDeclaration);
+
+        var persistedFamily = new SymbolResult
+        {
+            Lang = "csharp",
+            Kind = "function",
+            Name = "OnReady",
+            Signature = method.Signature,
+            LogicalPartialKey = "family:csharp\u001ffunction\u001fDemo.Container\u001fOnReady/0(System.Int32):System.Void",
+        };
+        Assert.True(LogicalPartialSymbolGrouper.TryBuildKey(persistedFamily, out var persistedFamilyKey));
+        Assert.Equal(persistedFamily.LogicalPartialKey, persistedFamilyKey);
+
+        var persistedPhysical = new SymbolResult
+        {
+            Lang = "csharp",
+            Kind = "function",
+            Name = "OnReady",
+            Signature = "partial void OnReady(int value);",
+            ReturnType = "void",
+            ContainerName = "Container",
+            LogicalPartialKey = "symbol:42",
+        };
+        Assert.False(LogicalPartialSymbolGrouper.TryBuildKey(persistedPhysical, out _));
+
+        var persistedPhysicalType = new SymbolResult
+        {
+            Lang = "csharp",
+            Kind = "class",
+            Name = "Container",
+            Signature = "public partial class Container",
+            ContainerName = "Demo",
+            LogicalPartialKey = "symbol:43",
+        };
+        Assert.False(LogicalPartialSymbolGrouper.TryBuildKey(persistedPhysicalType, out _));
+        Assert.True(
+            LogicalPartialSymbolGrouper.TryBuildTypeFamilyKeyForReferenceResolution(
+                persistedPhysicalType,
+                out var degradedTypeFamilyKey));
+        Assert.Contains("Container", degradedTypeFamilyKey, StringComparison.Ordinal);
+
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_worker_metadata_issue4914");
+        try
+        {
+            var request = new SymbolExtractionWorker.WorkerRequest(
+                1,
+                "csharp",
+                source,
+                Path.Combine(projectRoot, "Container.cs"),
+                projectRoot);
+            using var input = new StringReader(
+                JsonSerializer.Serialize(request, SymbolExtractionWorker.JsonOptions) + "\n");
+            using var output = new StringWriter();
+            using var error = new StringWriter();
+
+            var handled = SymbolExtractionWorker.TryRunCommand(
+                [SymbolExtractionWorker.CommandName],
+                input,
+                output,
+                error,
+                out var exitCode);
+            var response = JsonSerializer.Deserialize<SymbolExtractionWorker.WorkerResponse>(
+                output.ToString(),
+                SymbolExtractionWorker.JsonOptions);
+            var transportedMethod = Assert.Single(
+                response!.Symbols!.Where(symbol => symbol.Kind == "function" && symbol.Name == "OnReady"));
+            var transportedFileLocalType = Assert.Single(
+                response.Symbols!.Where(symbol => symbol.Kind == "class" && symbol.Name == "WorkerLocal"));
+
+            Assert.True(handled);
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, error.ToString());
+            Assert.True(transportedMethod.IsPartialDeclaration);
+            Assert.Equal(3, transportedMethod.DeclarationSemanticScore);
+            Assert.Equal(9, transportedMethod.IdentifierStartColumn);
+            Assert.True(transportedFileLocalType.IsFileLocalDeclaration);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PartialCanonicalRepresentative_IgnoresSameLineBodiesAndCommentedOrdinaryMethods_Issue4914()
+    {
+        const string extractionSource =
+            """
+            namespace Demo;
+            public partial class FileBodyHost { private int file; }
+            public partial class BracketBodyHost { private int[] values = []; }
+            public partial class PrimaryConstructorHost(int file) { }
+            public class ParameterNamedPartial(int partial) { }
+            public class partial { }
+            public class PartialReturnTypeHost
+            {
+                partial M() => new partial();
+            }
+            """;
+        var extractedTypes = SymbolExtractor.Extract(1, "csharp", extractionSource);
+        var fileBodyHost = Assert.Single(
+            extractedTypes.Where(symbol => symbol.Kind == "class" && symbol.Name == "FileBodyHost"));
+        var bracketBodyHost = Assert.Single(
+            extractedTypes.Where(symbol => symbol.Kind == "class" && symbol.Name == "BracketBodyHost"));
+        var primaryConstructorHost = Assert.Single(
+            extractedTypes.Where(symbol => symbol.Kind == "class" && symbol.Name == "PrimaryConstructorHost"));
+        var parameterNamedPartial = Assert.Single(
+            extractedTypes.Where(symbol => symbol.Kind == "class" && symbol.Name == "ParameterNamedPartial"));
+        var partialReturnTypeMethod = Assert.Single(
+            extractedTypes.Where(symbol => symbol.Kind == "function" && symbol.Name == "M"));
+
+        Assert.True(fileBodyHost.IsPartialDeclaration);
+        Assert.False(fileBodyHost.IsFileLocalDeclaration);
+        Assert.Equal(0, fileBodyHost.DeclarationSemanticScore);
+        Assert.True(bracketBodyHost.IsPartialDeclaration);
+        Assert.False(bracketBodyHost.IsFileLocalDeclaration);
+        Assert.Equal(0, bracketBodyHost.DeclarationSemanticScore);
+        Assert.True(primaryConstructorHost.IsPartialDeclaration);
+        Assert.False(primaryConstructorHost.IsFileLocalDeclaration);
+        Assert.False(parameterNamedPartial.IsPartialDeclaration);
+        Assert.False(partialReturnTypeMethod.IsPartialDeclaration);
+        Assert.False(LogicalPartialSymbolGrouper.ContainsPartialModifier(
+            partialReturnTypeMethod.Signature,
+            partialReturnTypeMethod.Kind,
+            partialReturnTypeMethod.Name));
+        Assert.True(LogicalPartialSymbolGrouper.ContainsPartialModifier(
+            "partial (int, int) Pair();",
+            "function",
+            "Pair"));
+
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_header_evidence_issue4914");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.Host.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class Host { private int file; }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Z.Host.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class Host { private int[] values = []; }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/ConditionalMethods.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class MethodHost
+                {
+                #if A
+                    void M(/* partial */ int value) { }
+                    void N(int partial) { }
+                #else
+                    void M(/* partial */ int value) { }
+                    void N(int partial) { }
+                #endif
+                }
+                #if A
+                public class ConstructorHost(int partial) { }
+                #else
+                public class ConstructorHost(int partial) { }
+                #endif
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var groupedHost = RunGroupedSymbol(dbPath, "Host", "class");
+            Assert.Equal(2, groupedHost.GetProperty("definition_sites").GetInt32());
+            Assert.Equal("src/A.Host.cs", groupedHost.GetProperty("path").GetString());
+            Assert.Equal("stable_path_and_position", groupedHost.GetProperty("representative_reason").GetString());
+
+            var (methodsExitCode, methodsStdout, methodsStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["M", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "function", "--group-partials", "--limit", "10"],
+                _jsonOptions));
+            using var methodsDocument = ParseJsonOutput(methodsStdout);
+            var methods = methodsDocument.RootElement.EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, methodsExitCode);
+            Assert.Equal(string.Empty, methodsStderr);
+            Assert.Equal(2, methods.Count);
+            Assert.All(methods, method => Assert.False(method.TryGetProperty("definition_sites", out _)));
+            Assert.All(methods, method => Assert.False(method.TryGetProperty("partial_family_id", out _)));
+
+            var (parameterMethodsExitCode, parameterMethodsStdout, parameterMethodsStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["N", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "function", "--group-partials", "--limit", "10"],
+                _jsonOptions));
+            using var parameterMethodsDocument = ParseJsonOutput(parameterMethodsStdout);
+            var parameterMethods = parameterMethodsDocument.RootElement.EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, parameterMethodsExitCode);
+            Assert.Equal(string.Empty, parameterMethodsStderr);
+            Assert.Equal(2, parameterMethods.Count);
+            Assert.All(parameterMethods, method => Assert.False(method.TryGetProperty("definition_sites", out _)));
+            Assert.All(parameterMethods, method => Assert.False(method.TryGetProperty("partial_family_id", out _)));
+
+            var (constructorsExitCode, constructorsStdout, constructorsStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["ConstructorHost", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "class", "--group-partials", "--limit", "10"],
+                _jsonOptions));
+            using var constructorsDocument = ParseJsonOutput(constructorsStdout);
+            var constructors = constructorsDocument.RootElement.EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, constructorsExitCode);
+            Assert.Equal(string.Empty, constructorsStderr);
+            Assert.Equal(2, constructors.Count);
+            Assert.All(constructors, constructor => Assert.False(constructor.TryGetProperty("definition_sites", out _)));
+            Assert.All(constructors, constructor => Assert.False(constructor.TryGetProperty("partial_family_id", out _)));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PartialCanonicalRepresentative_GroupsTestClassifiedImplementation_Issue4914()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_test_method_issue4914");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.AttributedPartial.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class AttributedPartial
+                {
+                    public partial void Execute();
+                    public partial void InlineExecute();
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Z.AttributedPartial.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class AttributedPartial
+                {
+                    [Fact]
+                    public partial void Execute() { }
+                    [Fact] public partial void InlineExecute() { }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (symbolsExitCode, symbolsStdout, symbolsStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["Execute", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--group-partials", "--limit", "10"],
+                _jsonOptions));
+            using var symbolsDocument = ParseJsonOutput(symbolsStdout);
+            var grouped = Assert.Single(symbolsDocument.RootElement.EnumerateArray().ToList());
+
+            Assert.Equal(CommandExitCodes.Success, symbolsExitCode);
+            Assert.Equal(string.Empty, symbolsStderr);
+            Assert.Equal("test.method", grouped.GetProperty("kind").GetString());
+            Assert.Equal("src/Z.AttributedPartial.cs", grouped.GetProperty("path").GetString());
+            Assert.Equal(2, grouped.GetProperty("definition_sites").GetInt32());
+            Assert.Equal("implementation_body", grouped.GetProperty("representative_reason").GetString());
+
+            var (gotoExitCode, gotoStdout, gotoStderr) = CaptureConsole(() => QueryCommandRunner.RunGoto(
+                ["Execute", "--db", dbPath, "--exact-name", "--lang", "csharp"],
+                _jsonOptions));
+            using var gotoDocument = ParseJsonOutput(gotoStdout);
+            var location = gotoDocument.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, gotoExitCode);
+            Assert.Equal(string.Empty, gotoStderr);
+            Assert.Contains("Z.AttributedPartial.cs", location.GetProperty("uri").GetString(), StringComparison.Ordinal);
+            Assert.Equal(2, location.GetProperty("family_members").GetArrayLength());
+
+            var (inlineExitCode, inlineStdout, inlineStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["InlineExecute", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--group-partials", "--limit", "10"],
+                _jsonOptions));
+            using var inlineDocument = ParseJsonOutput(inlineStdout);
+            var inlineExecute = Assert.Single(inlineDocument.RootElement.EnumerateArray().ToList());
+            Assert.Equal(CommandExitCodes.Success, inlineExitCode);
+            Assert.Equal(string.Empty, inlineStderr);
+            Assert.True(inlineExecute.TryGetProperty("definition_sites", out var inlineDefinitionSites));
+            Assert.Equal(2, inlineDefinitionSites.GetInt32());
+            Assert.Equal(
+                ["src/A.AttributedPartial.cs", "src/Z.AttributedPartial.cs"],
+                inlineExecute.GetProperty("family_members")
+                    .EnumerateArray()
+                    .Select(member => member.GetProperty("path").GetString())
+                    .Order(StringComparer.Ordinal)
+                    .ToArray());
+
+            var (inlineGotoExitCode, inlineGotoStdout, inlineGotoStderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunGoto(
+                    ["InlineExecute", "--db", dbPath, "--exact-name", "--lang", "csharp"],
+                    _jsonOptions));
+            using var inlineGotoDocument = ParseJsonOutput(inlineGotoStdout);
+            Assert.Equal(CommandExitCodes.Success, inlineGotoExitCode);
+            Assert.Equal(string.Empty, inlineGotoStderr);
+            Assert.Equal(2, inlineGotoDocument.RootElement.GetProperty("family_members").GetArrayLength());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PartialCanonicalRepresentative_GroupsSplitModifierAndRanksLeadingEvidence_Issue4914()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_leading_evidence_issue4914");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.Split.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class SplitHost
+                {
+                    partial
+                    void OnSplit(int first, string second);
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Z.Split.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class SplitHost
+                {
+                    partial
+                    void OnSplit(int value, string text) { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.CommentedMethod.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class CommentedMethodHost
+                {
+                    partial
+                    void /* partial */ CommentedMethod();
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Z.CommentedMethod.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class CommentedMethodHost
+                {
+                    partial
+                    void /* partial */ CommentedMethod() { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.TabConstraint.cs",
+                "csharp",
+                "namespace Demo;\npublic partial class TabConstraint<T> { }");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Z.TabConstraint.cs",
+                "csharp",
+                "namespace Demo;\npublic partial class TabConstraint<T>\twhere\tT : class { }");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.LongDocumented.cs",
+                "csharp",
+                "namespace Demo;\npublic partial class LongDocumented { }");
+            var longDocumentedSource = "namespace Demo;\n/**\n"
+                + string.Concat(Enumerable.Repeat(" * documentation\n", 70))
+                + " */\npublic partial class LongDocumented { }";
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Z.LongDocumented.cs",
+                "csharp",
+                longDocumentedSource);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.Documented.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class Documented { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Z.Documented.cs",
+                "csharp",
+                """
+                namespace Demo;
+                /**
+                 * <summary>Primary declaration.</summary>
+
+                 */
+                public partial class Documented { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.CommentDecoy.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class CommentDecoy { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Z.CommentDecoy.cs",
+                "csharp",
+                """
+                namespace Demo;
+                /*
+                /// <summary>Not documentation.</summary>
+                */
+                public partial class CommentDecoy { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.Attributed.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class Attributed { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Z.Attributed.cs",
+                "csharp",
+                """
+                namespace Demo;
+                [System.Obsolete]
+                public partial class Attributed { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.AttributeModifier.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class AttributeModifier { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Z.AttributeModifier.cs",
+                "csharp",
+                """
+                namespace Demo;
+                [System.Obsolete] public partial
+                class AttributeModifier { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.BlankModifier.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class BlankModifier { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Z.BlankModifier.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public
+                partial
+
+                class BlankModifier { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.InlineAttributed.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class InlineAttributed { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Z.InlineAttributed.cs",
+                "csharp",
+                """
+                namespace Demo;
+                [System.Obsolete] public partial class InlineAttributed { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.BlankDocumentation.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class BlankDocumentation { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.InlineDocumented.cs",
+                "csharp",
+                "public partial class InlineDocumented { }");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Z.InlineDocumented.cs",
+                "csharp",
+                "/** <summary>Primary declaration.</summary> */ public partial class InlineDocumented { }");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.InlineDocumentationDecoy.cs",
+                "csharp",
+                "public partial class InlineDocumentationDecoy { }");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Z.InlineDocumentationDecoy.cs",
+                "csharp",
+                "/* /** Not documentation. */ public partial class InlineDocumentationDecoy { }");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.AssemblyTarget.cs",
+                "csharp",
+                "public partial class AssemblyTarget { }");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Z.AssemblyTarget.cs",
+                "csharp",
+                """
+                [assembly: System.CLSCompliant(true)]
+                public partial class AssemblyTarget { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.ModuleTarget.cs",
+                "csharp",
+                "public partial class ModuleTarget { }");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Z.ModuleTarget.cs",
+                "csharp",
+                """
+                [module: System.CLSCompliant(true)]
+                public partial class ModuleTarget { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.InlineAssemblyTarget.cs",
+                "csharp",
+                "public partial class InlineAssemblyTarget { }");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Z.InlineAssemblyTarget.cs",
+                "csharp",
+                "[assembly: System.CLSCompliant(true)] public partial class InlineAssemblyTarget { }");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.InlineModuleTarget.cs",
+                "csharp",
+                "public partial class InlineModuleTarget { }");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Z.InlineModuleTarget.cs",
+                "csharp",
+                "[module: System.CLSCompliant(true)] public partial class InlineModuleTarget { }");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Z.BlankDocumentation.cs",
+                "csharp",
+                """
+                namespace Demo;
+                /// <summary>Detached documentation.</summary>
+
+                public partial class BlankDocumentation { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.UnattributedAfterSibling.cs",
+                "csharp",
+                "public partial class UnattributedAfterSibling { }");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Z.UnattributedAfterSibling.cs",
+                "csharp",
+                "[System.Obsolete] public class AttributeOwner { } public partial class UnattributedAfterSibling { }");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/SameLineDuplicate.cs",
+                "csharp",
+                "public partial class SameLineDuplicate { } public partial class SameLineDuplicate { }");
+            MarkGraphAndFoldReady(dbPath);
+
+            var split = RunGroupedSymbol(dbPath, "OnSplit", "function");
+            Assert.Equal(2, split.GetProperty("definition_sites").GetInt32());
+            Assert.Contains(
+                split.GetProperty("family_members").EnumerateArray(),
+                member => member.GetProperty("path").GetString() == "src/A.Split.cs"
+                    && member.GetProperty("start_column").GetInt32() == 9);
+            Assert.Contains(
+                split.GetProperty("family_members").EnumerateArray(),
+                member => member.GetProperty("path").GetString() == "src/Z.Split.cs"
+                    && member.GetProperty("start_column").GetInt32() == 9);
+            Assert.Equal(9, split.GetProperty("start_column").GetInt32());
+
+            var commentedMethod = RunGroupedSymbol(dbPath, "CommentedMethod", "function");
+            Assert.Equal(2, commentedMethod.GetProperty("definition_sites").GetInt32());
+            Assert.Equal("src/Z.CommentedMethod.cs", commentedMethod.GetProperty("path").GetString());
+            Assert.Equal("implementation_body", commentedMethod.GetProperty("representative_reason").GetString());
+
+            var tabConstraint = RunGroupedSymbol(dbPath, "TabConstraint", "class");
+            Assert.Equal("src/Z.TabConstraint.cs", tabConstraint.GetProperty("path").GetString());
+            Assert.Equal("semantic_declaration", tabConstraint.GetProperty("representative_reason").GetString());
+
+            var longDocumented = RunGroupedSymbol(dbPath, "LongDocumented", "class");
+            Assert.Equal("src/Z.LongDocumented.cs", longDocumented.GetProperty("path").GetString());
+            Assert.Equal("semantic_declaration", longDocumented.GetProperty("representative_reason").GetString());
+
+            var documented = RunGroupedSymbol(dbPath, "Documented", "class");
+            Assert.Equal("src/Z.Documented.cs", documented.GetProperty("path").GetString());
+            Assert.Equal("semantic_declaration", documented.GetProperty("representative_reason").GetString());
+
+            var commentDecoy = RunGroupedSymbol(dbPath, "CommentDecoy", "class");
+            Assert.Equal("src/A.CommentDecoy.cs", commentDecoy.GetProperty("path").GetString());
+            Assert.Equal("stable_path_and_position", commentDecoy.GetProperty("representative_reason").GetString());
+
+            var attributed = RunGroupedSymbol(dbPath, "Attributed", "class");
+            Assert.Equal("src/Z.Attributed.cs", attributed.GetProperty("path").GetString());
+            Assert.Equal("semantic_declaration", attributed.GetProperty("representative_reason").GetString());
+
+            var attributeModifier = RunGroupedSymbol(dbPath, "AttributeModifier", "class");
+            Assert.Equal(2, attributeModifier.GetProperty("definition_sites").GetInt32());
+            Assert.Equal("src/Z.AttributeModifier.cs", attributeModifier.GetProperty("path").GetString());
+            Assert.Equal("semantic_declaration", attributeModifier.GetProperty("representative_reason").GetString());
+
+            var blankModifier = RunGroupedSymbol(dbPath, "BlankModifier", "class");
+            Assert.Equal(2, blankModifier.GetProperty("definition_sites").GetInt32());
+
+            var inlineAttributed = RunGroupedSymbol(dbPath, "InlineAttributed", "class");
+            Assert.Equal("src/Z.InlineAttributed.cs", inlineAttributed.GetProperty("path").GetString());
+            Assert.Equal("semantic_declaration", inlineAttributed.GetProperty("representative_reason").GetString());
+
+            var blankDocumentation = RunGroupedSymbol(dbPath, "BlankDocumentation", "class");
+            Assert.Equal("src/A.BlankDocumentation.cs", blankDocumentation.GetProperty("path").GetString());
+            Assert.Equal("stable_path_and_position", blankDocumentation.GetProperty("representative_reason").GetString());
+
+            var inlineDocumented = RunGroupedSymbol(dbPath, "InlineDocumented", "class");
+            Assert.Equal("src/Z.InlineDocumented.cs", inlineDocumented.GetProperty("path").GetString());
+            Assert.Equal("semantic_declaration", inlineDocumented.GetProperty("representative_reason").GetString());
+
+            var inlineDocumentationDecoy = RunGroupedSymbol(dbPath, "InlineDocumentationDecoy", "class");
+            Assert.Equal("src/A.InlineDocumentationDecoy.cs", inlineDocumentationDecoy.GetProperty("path").GetString());
+            Assert.Equal("stable_path_and_position", inlineDocumentationDecoy.GetProperty("representative_reason").GetString());
+
+            var assemblyTarget = RunGroupedSymbol(dbPath, "AssemblyTarget", "class");
+            Assert.Equal("src/A.AssemblyTarget.cs", assemblyTarget.GetProperty("path").GetString());
+            Assert.Equal("stable_path_and_position", assemblyTarget.GetProperty("representative_reason").GetString());
+
+            var moduleTarget = RunGroupedSymbol(dbPath, "ModuleTarget", "class");
+            Assert.Equal("src/A.ModuleTarget.cs", moduleTarget.GetProperty("path").GetString());
+            Assert.Equal("stable_path_and_position", moduleTarget.GetProperty("representative_reason").GetString());
+
+            foreach (var inlineGlobalTarget in new[] { "InlineAssemblyTarget", "InlineModuleTarget" })
+            {
+                var grouped = RunGroupedSymbol(dbPath, inlineGlobalTarget, "class");
+                Assert.Equal($"src/A.{inlineGlobalTarget}.cs", grouped.GetProperty("path").GetString());
+                Assert.Equal("stable_path_and_position", grouped.GetProperty("representative_reason").GetString());
+            }
+
+            var unattributedAfterSibling = RunGroupedSymbol(dbPath, "UnattributedAfterSibling", "class");
+            Assert.Equal("src/A.UnattributedAfterSibling.cs", unattributedAfterSibling.GetProperty("path").GetString());
+            Assert.Equal("stable_path_and_position", unattributedAfterSibling.GetProperty("representative_reason").GetString());
+
+            var sameLineDuplicate = RunGroupedSymbol(dbPath, "SameLineDuplicate", "class");
+            Assert.Equal(2, sameLineDuplicate.GetProperty("definition_sites").GetInt32());
+            Assert.Equal(
+                [21, 64],
+                sameLineDuplicate.GetProperty("family_members")
+                    .EnumerateArray()
+                    .Select(member => member.GetProperty("start_column").GetInt32())
+                    .Order()
+                    .ToArray());
+
+            var (gotoAllExitCode, gotoAllStdout, gotoAllStderr) = CaptureConsole(() => QueryCommandRunner.RunGoto(
+                ["SameLineDuplicate", "--db", dbPath, "--exact-name", "--lang", "csharp", "--kind", "class", "--all"],
+                _jsonOptions));
+            using var gotoAllDocument = ParseJsonOutput(gotoAllStdout);
+            var allLocations = gotoAllDocument.RootElement.EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, gotoAllExitCode);
+            Assert.Equal(string.Empty, gotoAllStderr);
+            Assert.Equal(
+                [21, 64],
+                allLocations
+                    .Select(location => location.GetProperty("range").GetProperty("start").GetProperty("character").GetInt32())
+                    .Order()
+                    .ToArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PartialCanonicalRepresentative_SkipsPreprocessorTriviaWithoutCrossingBranches_Issue4914()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_directive_trivia_issue4914");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            foreach (var path in new[] { "src/A.DirectiveLocal.cs", "src/B.DirectiveLocal.cs" })
+            {
+                TestProjectHelper.InsertIndexedFile(
+                    dbPath,
+                    path,
+                    "csharp",
+                    """
+                    file
+                    #if true
+                    #endif
+                    partial class DirectiveLocal { }
+                    """);
+            }
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.DirectivePartial.cs",
+                "csharp",
+                """
+                partial
+                #nullable enable
+                #if true
+                #endif
+                class DirectivePartial { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/B.DirectivePartial.cs",
+                "csharp",
+                "partial class DirectivePartial { }");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/DirectiveBranchDecoy.cs",
+                "csharp",
+                """
+                #if false
+                partial
+                #endif
+                class DirectiveBranchDecoy { }
+                partial class DirectiveBranchDecoy { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.DirectiveBranchPartial.cs",
+                "csharp",
+                """
+                partial
+                #if FIRST
+                class DirectiveBranchPartial { }
+                #else
+                class DirectiveBranchPartial { }
+                #endif
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/B.DirectiveBranchPartial.cs",
+                "csharp",
+                "partial class DirectiveBranchPartial { }");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/DirectiveClosedBoundary.cs",
+                "csharp",
+                """
+                partial
+                #if FIRST
+                class DirectiveClosedBoundary { }
+                #endif
+                class DirectiveClosedBoundary { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.DirectiveJoinedPartial.cs",
+                "csharp",
+                """
+                #if FIRST
+                partial
+                #else
+                partial
+                #endif
+                class DirectiveJoinedPartial { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/B.DirectiveJoinedPartial.cs",
+                "csharp",
+                "partial class DirectiveJoinedPartial { }");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.DirectiveConditionalAttribute.cs",
+                "csharp",
+                "partial class DirectiveConditionalAttribute { }");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Z.DirectiveConditionalAttribute.cs",
+                "csharp",
+                """
+                #if FIRST
+                [System.Obsolete]
+                #else
+                [System.Serializable]
+                #endif
+                partial class DirectiveConditionalAttribute { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/DirectiveJoinedDecoy.cs",
+                "csharp",
+                """
+                #if FIRST
+                partial
+                #else
+                public
+                #endif
+                class DirectiveJoinedDecoy { }
+                partial class DirectiveJoinedDecoy { }
+                """);
+            foreach (var path in new[] { "src/A.DirectiveConditionalFile.cs", "src/B.DirectiveConditionalFile.cs" })
+            {
+                TestProjectHelper.InsertIndexedFile(
+                    dbPath,
+                    path,
+                    "csharp",
+                    """
+                    #if FIRST
+                    file
+                    #else
+                    public
+                    #endif
+                    partial class DirectiveConditionalFile { }
+                    """);
+            }
+            MarkGraphAndFoldReady(dbPath);
+
+            var (localExitCode, localStdout, localStderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunSymbols(
+                    ["DirectiveLocal", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "class", "--group-partials", "--limit", "10"],
+                    _jsonOptions));
+            using var localDocument = ParseJsonOutput(localStdout);
+            var localFamilies = localDocument.RootElement.EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, localExitCode);
+            Assert.Equal(string.Empty, localStderr);
+            Assert.Equal(2, localFamilies.Count);
+            Assert.All(localFamilies, family => Assert.False(family.TryGetProperty("definition_sites", out _)));
+
+            var directivePartial = RunGroupedSymbol(dbPath, "DirectivePartial", "class");
+            Assert.Equal(2, directivePartial.GetProperty("definition_sites").GetInt32());
+
+            var directiveBranchPartial = RunGroupedSymbol(
+                dbPath,
+                "DirectiveBranchPartial",
+                "class");
+            Assert.Equal(3, directiveBranchPartial.GetProperty("definition_sites").GetInt32());
+
+            var (closedExitCode, closedStdout, closedStderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunSymbols(
+                    ["DirectiveClosedBoundary", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "class", "--group-partials", "--limit", "10"],
+                    _jsonOptions));
+            using var closedDocument = ParseJsonOutput(closedStdout);
+            var closedRows = closedDocument.RootElement.EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, closedExitCode);
+            Assert.Equal(string.Empty, closedStderr);
+            Assert.Equal(2, closedRows.Count);
+            Assert.All(closedRows, row => Assert.False(row.TryGetProperty("definition_sites", out _)));
+
+            var directiveJoinedPartial = RunGroupedSymbol(
+                dbPath,
+                "DirectiveJoinedPartial",
+                "class");
+            Assert.Equal(2, directiveJoinedPartial.GetProperty("definition_sites").GetInt32());
+
+            var directiveConditionalAttribute = RunGroupedSymbol(
+                dbPath,
+                "DirectiveConditionalAttribute",
+                "class");
+            Assert.Equal(
+                "src/Z.DirectiveConditionalAttribute.cs",
+                directiveConditionalAttribute.GetProperty("path").GetString());
+            Assert.Equal(
+                "semantic_declaration",
+                directiveConditionalAttribute.GetProperty("representative_reason").GetString());
+
+            var (joinedDecoyExitCode, joinedDecoyStdout, joinedDecoyStderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunSymbols(
+                    ["DirectiveJoinedDecoy", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "class", "--group-partials", "--limit", "10"],
+                    _jsonOptions));
+            using var joinedDecoyDocument = ParseJsonOutput(joinedDecoyStdout);
+            var joinedDecoyRows = joinedDecoyDocument.RootElement.EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, joinedDecoyExitCode);
+            Assert.Equal(string.Empty, joinedDecoyStderr);
+            Assert.Equal(2, joinedDecoyRows.Count);
+            Assert.All(joinedDecoyRows, row => Assert.False(row.TryGetProperty("definition_sites", out _)));
+
+            var (conditionalFileExitCode, conditionalFileStdout, conditionalFileStderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunSymbols(
+                    ["DirectiveConditionalFile", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "class", "--group-partials", "--limit", "10"],
+                    _jsonOptions));
+            using var conditionalFileDocument = ParseJsonOutput(conditionalFileStdout);
+            var conditionalFileRows = conditionalFileDocument.RootElement.EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, conditionalFileExitCode);
+            Assert.Equal(string.Empty, conditionalFileStderr);
+            Assert.Equal(2, conditionalFileRows.Count);
+            Assert.All(conditionalFileRows, row => Assert.False(row.TryGetProperty("definition_sites", out _)));
+
+            var (decoyExitCode, decoyStdout, decoyStderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunSymbols(
+                    ["DirectiveBranchDecoy", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "class", "--group-partials", "--limit", "10"],
+                    _jsonOptions));
+            using var decoyDocument = ParseJsonOutput(decoyStdout);
+            var decoyRows = decoyDocument.RootElement.EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, decoyExitCode);
+            Assert.Equal(string.Empty, decoyStderr);
+            Assert.Equal(2, decoyRows.Count);
+            Assert.All(decoyRows, row => Assert.False(row.TryGetProperty("definition_sites", out _)));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PartialCanonicalRepresentative_RespectsFileLocalAndLexedEvidence_Issue4914()
+    {
+        const string definingLine = "    [M()] partial /* M( */ void M();";
+        var publicDefiningLine = definingLine.Replace("partial", "public partial", StringComparison.Ordinal);
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_file_local_issue4914");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            foreach (var path in new[] { "src/A.Local.cs", "src/B.Local.cs" })
+            {
+                TestProjectHelper.InsertIndexedFile(
+                    dbPath,
+                    path,
+                    "csharp",
+                    $$"""
+                    using System;
+                    file sealed class MAttribute : Attribute { }
+                    file partial class Host
+                    {
+                    {{publicDefiningLine}}
+                    }
+                    partial class Host
+                    {
+                        public partial void M() { }
+                    }
+                    file sealed class Use { public void Call() { new Host().M(); } }
+                    """);
+            }
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.Widget.cs",
+                "csharp",
+                "public partial class Widget { }");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Z.Widget.cs",
+                "csharp",
+                "public partial /* [ : where */ class Widget { }");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.Shared.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class Shared { }
+                public partial class Ranked { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Z.LeadingEvidence.cs",
+                "csharp",
+                """
+                namespace Demo;
+                file partial
+                class LocalOnly { } public partial class Shared { }
+                [System.Obsolete]
+                class Decorated { } public partial class Ranked { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.SplitLocalNode.cs",
+                "csharp",
+                """
+                namespace Demo;
+                file
+                class Node { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/B.ProjectNode.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public struct Node { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/C.NullableNode.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class NullableContainer
+                {
+                    partial void NullableNode(Node? value);
+                    partial void NullableNode(global::System.Nullable<Node> value) { }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["M", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "function", "--group-partials", "--include-generated", "--limit", "10"],
+                _jsonOptions));
+            using var document = ParseJsonOutput(stdout);
+            var families = document.RootElement.EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(2, families.Count);
+            Assert.All(families, family => Assert.Equal(2, family.GetProperty("definition_sites").GetInt32()));
+            Assert.Equal(
+                2,
+                families
+                    .Select(family => family.GetProperty("partial_family_id").GetString())
+                    .Distinct(StringComparer.Ordinal)
+                    .Count());
+            Assert.All(
+                families,
+                family =>
+                {
+                    var path = family.GetProperty("path").GetString();
+                    var members = family.GetProperty("family_members").EnumerateArray().ToList();
+                    Assert.All(members, member => Assert.Equal(path, member.GetProperty("path").GetString()));
+                    Assert.Contains(
+                        members,
+                        member => member.GetProperty("line").GetInt32() == 5
+                            && member.GetProperty("start_column").GetInt32()
+                                == publicDefiningLine.LastIndexOf("M", StringComparison.Ordinal));
+                });
+
+            var (hostExitCode, hostStdout, hostStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["Host", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "class", "--group-partials", "--include-generated", "--limit", "10"],
+                _jsonOptions));
+            using var hostDocument = ParseJsonOutput(hostStdout);
+            var hostFamilies = hostDocument.RootElement.EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, hostExitCode);
+            Assert.Equal(string.Empty, hostStderr);
+            Assert.Equal(2, hostFamilies.Count);
+            Assert.All(hostFamilies, family => Assert.Equal(2, family.GetProperty("definition_sites").GetInt32()));
+            Assert.All(
+                hostFamilies,
+                family => Assert.Single(
+                    family.GetProperty("family_members")
+                        .EnumerateArray()
+                        .Select(member => member.GetProperty("path").GetString())
+                        .Distinct(StringComparer.Ordinal)));
+
+            var (hotspotsExitCode, hotspotsStdout, hotspotsStderr) = CaptureConsole(() => QueryCommandRunner.RunHotspots(
+                ["--db", dbPath, "--json", "--lang", "csharp", "--kind", "function", "--limit", "10"],
+                _jsonOptions));
+            using var hotspotsDocument = ParseJsonOutput(hotspotsStdout);
+            var methodHotspots = hotspotsDocument.RootElement.GetProperty("hotspots")
+                .EnumerateArray()
+                .Where(hotspot => hotspot.GetProperty("name").GetString() == "M")
+                .ToList();
+
+            Assert.Equal(CommandExitCodes.Success, hotspotsExitCode);
+            Assert.Equal(string.Empty, hotspotsStderr);
+            Assert.Equal(2, methodHotspots.Count);
+            Assert.All(methodHotspots, hotspot => Assert.Equal(2, hotspot.GetProperty("reference_count").GetInt32()));
+            Assert.Equal(
+                2,
+                methodHotspots
+                    .Select(hotspot => hotspot.GetProperty("path").GetString())
+                    .Distinct(StringComparer.Ordinal)
+                    .Count());
+
+            using (var connection = new SqliteConnection($"Data Source={dbPath}"))
+            {
+                connection.Open();
+                using var candidatePaths = connection.CreateCommand();
+                candidatePaths.CommandText =
+                    """
+                    SELECT source_file.path, target_file.path
+                    FROM symbol_references AS reference
+                    JOIN files AS source_file ON source_file.id = reference.file_id
+                    JOIN symbol_reference_candidates AS candidate ON candidate.reference_id = reference.id
+                    JOIN symbols AS target ON target.id = candidate.symbol_id
+                    JOIN files AS target_file ON target_file.id = target.file_id
+                    WHERE reference.symbol_name IN ('Host', 'M')
+                      AND reference.reference_kind IN ('instantiate', 'call')
+                    ORDER BY source_file.path, target_file.path
+                    """;
+                using var reader = candidatePaths.ExecuteReader();
+                var resolvedPaths = new List<(string Source, string Target)>();
+                while (reader.Read())
+                    resolvedPaths.Add((reader.GetString(0), reader.GetString(1)));
+
+                Assert.NotEmpty(resolvedPaths);
+                Assert.All(resolvedPaths, paths => Assert.Equal(paths.Source, paths.Target));
+                Assert.Equal(
+                    ["src/A.Local.cs", "src/B.Local.cs"],
+                    resolvedPaths.Select(paths => paths.Source).Distinct(StringComparer.Ordinal).ToArray());
+            }
+
+            var widget = RunGroupedSymbol(dbPath, "Widget", "class");
+            Assert.Equal("src/A.Widget.cs", widget.GetProperty("path").GetString());
+            Assert.Equal("stable_path_and_position", widget.GetProperty("representative_reason").GetString());
+
+            var shared = RunGroupedSymbol(dbPath, "Shared", "class");
+            Assert.Equal(2, shared.GetProperty("definition_sites").GetInt32());
+            Assert.Equal("src/A.Shared.cs", shared.GetProperty("path").GetString());
+
+            var ranked = RunGroupedSymbol(dbPath, "Ranked", "class");
+            Assert.Equal(2, ranked.GetProperty("definition_sites").GetInt32());
+            Assert.Equal("src/A.Shared.cs", ranked.GetProperty("path").GetString());
+            Assert.Equal("stable_path_and_position", ranked.GetProperty("representative_reason").GetString());
+
+            var nullableNode = RunGroupedSymbol(dbPath, "NullableNode", "function");
+            Assert.Equal(2, nullableNode.GetProperty("definition_sites").GetInt32());
+            Assert.Equal("implementation_body", nullableNode.GetProperty("representative_reason").GetString());
+
+            using var metadataConnection = new SqliteConnection($"Data Source={dbPath}");
+            metadataConnection.Open();
+            using var fileLocalMetadata = metadataConnection.CreateCommand();
+            fileLocalMetadata.CommandText =
+                """
+                SELECT f.path, s.is_file_local_declaration
+                FROM symbols AS s
+                JOIN files AS f ON f.id = s.file_id
+                WHERE s.name = 'Node'
+                ORDER BY f.path
+                """;
+            using var fileLocalReader = fileLocalMetadata.ExecuteReader();
+            Assert.True(fileLocalReader.Read());
+            Assert.Equal("src/A.SplitLocalNode.cs", fileLocalReader.GetString(0));
+            Assert.True(fileLocalReader.GetBoolean(1));
+            Assert.True(fileLocalReader.Read());
+            Assert.Equal("src/B.ProjectNode.cs", fileLocalReader.GetString(0));
+            Assert.False(fileLocalReader.GetBoolean(1));
+            Assert.False(fileLocalReader.Read());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void GroupPartials_DegradesSafelyWhenCSharpFamilyContractIsStale_Issue4914()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_stale_family_contract_issue4914");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            foreach (var path in new[] { "src/A.Hosts.cs", "src/Z.Hosts.cs" })
+            {
+                TestProjectHelper.InsertIndexedFile(
+                    dbPath,
+                    path,
+                    "csharp",
+                    """
+                    namespace Demo;
+                    public partial class Host<T>
+                    {
+                        partial void OnReady();
+                    }
+                    public partial class Host<T, U>
+                    {
+                        partial void OnReady();
+                    }
+                    """);
+            }
+            MarkGraphAndFoldReady(dbPath);
+
+            using (var connection = new SqliteConnection($"Data Source={dbPath}"))
+            {
+                connection.Open();
+                using (var staleFamilyKeys = connection.CreateCommand())
+                {
+                    staleFamilyKeys.CommandText =
+                        """
+                        UPDATE symbols
+                        SET family_key = REPLACE(REPLACE(family_key, 'Host`1', 'Host'), 'Host`2', 'Host')
+                        WHERE name = 'OnReady'
+                        """;
+                    Assert.Equal(4, staleFamilyKeys.ExecuteNonQuery());
+                }
+
+                using var staleContract = connection.CreateCommand();
+                staleContract.CommandText =
+                    """
+                    INSERT INTO codeindex_meta(key, value)
+                    VALUES ($key, $value)
+                    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                    """;
+                staleContract.Parameters.AddWithValue(
+                    "$key",
+                    DbContext.GetHotspotFamilyVersionMetaKey("csharp"));
+                staleContract.Parameters.AddWithValue(
+                    "$value",
+                    (DbContext.HotspotFamilyVersion - 1).ToString(System.Globalization.CultureInfo.InvariantCulture));
+                Assert.Equal(1, staleContract.ExecuteNonQuery());
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["OnReady", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "function", "--group-partials", "--include-generated", "--limit", "10"],
+                _jsonOptions));
+            using var document = ParseJsonOutput(stdout);
+            var rows = document.RootElement.EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(4, rows.Count);
+            Assert.All(rows, row => Assert.False(row.TryGetProperty("definition_sites", out _)));
+            Assert.All(rows, row => Assert.False(row.TryGetProperty("partial_family_id", out _)));
+
+            var (impactExitCode, impactStdout, impactStderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["Host", "--db", dbPath, "--json", "--lang", "csharp", "--max-hops", "0", "--limit", "10"],
+                _jsonOptions));
+            using var impactDocument = ParseJsonOutput(impactStdout);
+            var impact = impactDocument.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, impactExitCode);
+            Assert.Equal(string.Empty, impactStderr);
+            Assert.Equal(4, impact.GetProperty("definition_count").GetInt32());
+            Assert.Equal(4, impact.GetProperty("logical_definition_count").GetInt32());
+            Assert.Equal(4, impact.GetProperty("definition_output_count").GetInt32());
+            Assert.False(impact.GetProperty("definitions_collapsed").GetBoolean());
+            Assert.All(
+                impact.GetProperty("definitions").EnumerateArray(),
+                definition => Assert.False(definition.TryGetProperty("partial_family_id", out _)));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PartialCanonicalRepresentative_FallsBackToDesignerPathForOldDatabaseMetadata_Issue4914()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_canonical_old_db_issue4914");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.LegacyWidget.Designer.cs",
+                "csharp",
+                """
+                namespace Demo;
+                [System.Obsolete]
+                public partial class LegacyWidget : LegacyBase { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Z.LegacyWidget.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class LegacyWidget { }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            using (var connection = new SqliteConnection($"Data Source={dbPath}"))
+            {
+                connection.Open();
+                using (var dropGeneratedIndex = connection.CreateCommand())
+                {
+                    dropGeneratedIndex.CommandText = "DROP INDEX IF EXISTS idx_files_generated";
+                    dropGeneratedIndex.ExecuteNonQuery();
+                }
+                using var dropGeneratedColumn = connection.CreateCommand();
+                dropGeneratedColumn.CommandText = "ALTER TABLE files DROP COLUMN generated";
+                dropGeneratedColumn.ExecuteNonQuery();
+            }
+
+            var legacyWidget = RunGroupedSymbol(dbPath, "LegacyWidget", "class");
+            Assert.Equal("src/Z.LegacyWidget.cs", legacyWidget.GetProperty("path").GetString());
+            Assert.Equal("non_generated_source", legacyWidget.GetProperty("representative_reason").GetString());
+            Assert.Contains(
+                legacyWidget.GetProperty("family_members").EnumerateArray(),
+                member => member.GetProperty("path").GetString() == "src/A.LegacyWidget.Designer.cs"
+                    && member.GetProperty("generated").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PartialCanonicalRepresentative_UsesIndexedTypeFactsForCustomNullability_Issue4914()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_custom_nullability_issue4914");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.Declarations.cs",
+                "csharp",
+                """
+                #nullable enable
+                namespace Demo;
+                public class Node { }
+                public struct Token { }
+                public class Box<T> { }
+                public struct Box { }
+                public class Outer<T> { public class Nested<TNested> { } }
+                public class Outer { public struct Nested<TNested> { } }
+                public partial class Container
+                {
+                    partial void Reference(Node? value);
+                    partial void Generic(Box<int>? value);
+                    partial void NestedGeneric(Outer<int>.Nested<string>? value);
+                    partial void Value(Token value);
+                    partial void Value(Token? value);
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Z.Implementations.cs",
+                "csharp",
+                """
+                #nullable enable
+                namespace Demo;
+                public partial class Container
+                {
+                    partial void Reference(Node value) { }
+                    partial void Generic(Box<int> value) { }
+                    partial void NestedGeneric(Outer<int>.Nested<string> value) { }
+                    partial void Value(Token value) { }
+                    partial void Value(Token? value) { }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var reference = RunGroupedSymbol(dbPath, "Reference", "function");
+            Assert.Equal(2, reference.GetProperty("definition_sites").GetInt32());
+            Assert.Equal("src/Z.Implementations.cs", reference.GetProperty("path").GetString());
+            Assert.Equal("implementation_body", reference.GetProperty("representative_reason").GetString());
+
+            var generic = RunGroupedSymbol(dbPath, "Generic", "function");
+            Assert.True(generic.TryGetProperty("definition_sites", out var genericDefinitionSites), generic.GetRawText());
+            Assert.Equal(2, genericDefinitionSites.GetInt32());
+            var nestedGeneric = RunGroupedSymbol(dbPath, "NestedGeneric", "function");
+            Assert.Equal(2, nestedGeneric.GetProperty("definition_sites").GetInt32());
+
+            var (valueExitCode, valueStdout, valueStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["Value", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "function", "--group-partials", "--limit", "10"],
+                _jsonOptions));
+            using var valueDocument = ParseJsonOutput(valueStdout);
+            var valueFamilies = valueDocument.RootElement.EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, valueExitCode);
+            Assert.Equal(string.Empty, valueStderr);
+            Assert.Equal(2, valueFamilies.Count);
+            Assert.All(valueFamilies, family => Assert.Equal(2, family.GetProperty("definition_sites").GetInt32()));
+            Assert.Contains(valueFamilies, family => family.GetProperty("signature").GetString()!.Contains("Token value", StringComparison.Ordinal));
+            Assert.Contains(valueFamilies, family => family.GetProperty("signature").GetString()!.Contains("Token? value", StringComparison.Ordinal));
+
+            var (gotoExitCode, gotoStdout, gotoStderr) = CaptureConsole(() => QueryCommandRunner.RunGoto(
+                ["Reference", "--db", dbPath, "--exact-name", "--lang", "csharp", "--kind", "function"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, gotoExitCode);
+            Assert.Equal(string.Empty, gotoStderr);
+            using var gotoDocument = JsonDocument.Parse(gotoStdout);
+            Assert.EndsWith(
+                "/src/Z.Implementations.cs",
+                new Uri(gotoDocument.RootElement.GetProperty("uri").GetString()!).AbsolutePath,
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PartialCanonicalRepresentative_PreservesProjectScopeForNullableTypeFacts_Issue4914()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_project_nullable_issue4914");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "A/A.csproj",
+                "msbuild",
+                "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "A/Types.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public class Node { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "A/Partials.cs",
+                "csharp",
+                """
+                #nullable enable
+                namespace Demo;
+                public partial class Container
+                {
+                    partial void Scoped(Node? value);
+                    partial void Scoped(Node value) { }
+                    partial void ExternalScoped(External.Foo? value);
+                    partial void ExternalScoped(External.Foo? value) { }
+                    partial void ExternalScoped(External.Foo value);
+                    partial void ExternalScoped(External.Foo value) { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "B/B.csproj",
+                "msbuild",
+                "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "B/Types.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public struct Node { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "B/ExternalTypes.cs",
+                "csharp",
+                "namespace External; public class Foo { }");
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            using (var command = db.Connection.CreateCommand())
+            {
+                command.CommandText =
+                    """
+                    UPDATE symbols
+                    SET family_key = 'A|' || family_key
+                    WHERE family_key IS NOT NULL
+                      AND file_id IN (SELECT id FROM files WHERE path LIKE 'A/%');
+                    UPDATE symbols
+                    SET family_key = 'B|' || family_key
+                    WHERE family_key IS NOT NULL
+                      AND file_id IN (SELECT id FROM files WHERE path LIKE 'B/%');
+                    """;
+                command.ExecuteNonQuery();
+            }
+            MarkGraphAndFoldReady(dbPath);
+
+            var grouped = RunGroupedSymbol(dbPath, "Scoped", "function");
+
+            Assert.Equal(2, grouped.GetProperty("definition_sites").GetInt32());
+            Assert.Contains("Node value", grouped.GetProperty("signature").GetString(), StringComparison.Ordinal);
+
+            var (externalExitCode, externalStdout, externalStderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunSymbols(
+                    ["ExternalScoped", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "function", "--group-partials", "--limit", "10"],
+                    _jsonOptions));
+            using var externalDocument = ParseJsonOutput(externalStdout);
+            var externalFamilies = externalDocument.RootElement.EnumerateArray().ToList();
+            Assert.Equal(CommandExitCodes.Success, externalExitCode);
+            Assert.Equal(string.Empty, externalStderr);
+            Assert.Equal(2, externalFamilies.Count);
+            Assert.All(
+                externalFamilies,
+                family => Assert.Equal(2, family.GetProperty("definition_sites").GetInt32()));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PartialCanonicalRepresentative_HonorsCaseSensitiveProjectMarkerCasing_Issue4914Review()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_project_marker_case_issue4914");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "APP.CSPROJ",
+                "msbuild",
+                "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Types.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public class Node { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Partials.cs",
+                "csharp",
+                """
+                #nullable enable
+                namespace Demo;
+                public partial class Container
+                {
+                    partial void Scoped(Node? value);
+                    partial void Scoped(Node value) { }
+                }
+                """);
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.SetMeta(DbContext.WorkspacePathCaseSensitiveMetaKey, "true");
+                using var command = db.Connection.CreateCommand();
+                command.CommandText = """
+                    UPDATE symbols
+                    SET family_key = 'src|' || family_key
+                    WHERE family_key IS NOT NULL
+                      AND file_id IN (SELECT id FROM files WHERE path LIKE 'src/%');
+                    """;
+                command.ExecuteNonQuery();
+            }
+            MarkGraphAndFoldReady(dbPath);
+
+            var grouped = RunGroupedSymbol(dbPath, "Scoped", "function");
+
+            Assert.True(
+                grouped.TryGetProperty("definition_sites", out var definitionSites),
+                grouped.GetRawText());
+            Assert.Equal(2, definitionSites.GetInt32());
+            Assert.Equal("implementation_body", grouped.GetProperty("representative_reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PartialCanonicalRepresentative_CanonicalizesExplicitNullableValueType_Issue4914()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_explicit_nullable_issue4914");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Container.cs",
+                "csharp",
+                """
+                #nullable enable
+                public struct Token { }
+                public partial class Container
+                {
+                    partial void NullableValue(Token? value);
+                    partial void NullableValue(global::System.Nullable<Token> value) { }
+                    partial void NullableGeneric<T>(T? value) where T : struct;
+                    partial void NullableGeneric<T>(global::System.Nullable<T> value) where T : struct { }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var grouped = RunGroupedSymbol(dbPath, "NullableValue", "function");
+            var groupedGeneric = RunGroupedSymbol(dbPath, "NullableGeneric", "function");
+
+            Assert.Equal(2, grouped.GetProperty("definition_sites").GetInt32());
+            Assert.Contains(
+                "global::System.Nullable<Token>",
+                grouped.GetProperty("signature").GetString(),
+                StringComparison.Ordinal);
+            Assert.Equal(2, groupedGeneric.GetProperty("definition_sites").GetInt32());
+            Assert.Contains(
+                "global::System.Nullable<T>",
+                groupedGeneric.GetProperty("signature").GetString(),
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PartialCanonicalRepresentative_ResolvesScopedAndGenericNullableIdentities_Issue4914()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_scoped_nullable_issue4914");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Scoped.cs",
+                "csharp",
+                """
+                #nullable enable
+                using External;
+                using @global = Values;
+                using @struct = External.ConstraintClass;
+                namespace Demo;
+                public struct Node { }
+                public class Target { }
+                public partial class Outer<T>
+                {
+                    public class Node { }
+                    partial void Nested(Node? value);
+                    partial void Nested(Node value) { }
+                }
+                public partial class ReferenceContainer<T> where T : class
+                {
+                    partial void ContainingReference(T? value);
+                }
+                public partial class ValueContainer<T> where T : struct
+                {
+                    partial void ContainingValue(T? value);
+                }
+                public partial class SplitConstraintContainer<T>
+                {
+                    partial void SplitContainingValue(T? value);
+                }
+                public partial class EscapedConstraintContainer<T> where T : @struct
+                {
+                    partial void ContainingEscapedConstraint(T? value);
+                }
+                public partial class ShadowOuter<T> where T : class
+                {
+                    public partial class ShadowInner<T> where T : struct
+                    {
+                        partial void Shadowed(T? value);
+                    }
+                }
+                public class QualifiedOuter<T>
+                {
+                    public class QualifiedNode { }
+                }
+                public partial class Container
+                {
+                    partial void Qualified(QualifiedOuter<int>.QualifiedNode? value);
+                    partial void Qualified(QualifiedOuter<int>.QualifiedNode value) { }
+                    partial void Generic<T>(T? value) where T : class;
+                    partial void Generic<T>(T value) where T : class { }
+                    partial void EscapedMethodConstraint<T>(T? value) where T : @struct;
+                    partial void EscapedMethodConstraint<T>(T value) where T : @struct { }
+                    partial void Aliased(@global::Target value);
+                    partial void Aliased(@global::Target value) { }
+                    partial void Aliased(@global::Target? value);
+                    partial void Aliased(@global::Target? value) { }
+                    partial void Combining(int á);
+                    partial void Combining(int b́) { }
+                    partial void Imported(ImportedNode value);
+                    partial void Imported(ImportedNode? value);
+                    partial void Imported(ImportedNode value) { }
+                    partial void Imported(ImportedNode? value) { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/ScopedImplementations.cs",
+                "csharp",
+                """
+                #nullable enable
+                using @struct = External.ConstraintClass;
+                namespace Demo;
+                public partial class ReferenceContainer<T> where T : class
+                {
+                    partial void ContainingReference(T value) { }
+                }
+                public partial class ValueContainer<T> where T : struct
+                {
+                    partial void ContainingValue(global::System.Nullable<T> value) { }
+                }
+                public partial class SplitConstraintContainer<T> where T : struct
+                {
+                    partial void SplitContainingValue(global::System.Nullable<T> value) { }
+                }
+                public partial class EscapedConstraintContainer<T> where T : @struct
+                {
+                    partial void ContainingEscapedConstraint(T value) { }
+                }
+                public partial class ShadowOuter<T> where T : class
+                {
+                    public partial class ShadowInner<T> where T : struct
+                    {
+                        partial void Shadowed(global::System.Nullable<T> value) { }
+                    }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/UnrelatedLeaf.cs",
+                "csharp",
+                """
+                namespace Other;
+                public class ImportedNode { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/AliasTypes.cs",
+                "csharp",
+                """
+                namespace Values
+                {
+                    public struct Target { }
+                }
+                namespace External
+                {
+                    public class ConstraintClass { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.FileLocal.cs",
+                "csharp",
+                """
+                #nullable enable
+                namespace Demo;
+                file class LocalNode { }
+                file partial class LocalContainer
+                {
+                    partial void Local(LocalNode? value);
+                    partial void Local(LocalNode value) { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/B.FileLocal.cs",
+                "csharp",
+                """
+                namespace Demo;
+                file struct LocalNode { }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            foreach (var name in new[]
+                     {
+                         "Nested",
+                         "ContainingReference",
+                         "ContainingValue",
+                         "SplitContainingValue",
+                         "ContainingEscapedConstraint",
+                         "Shadowed",
+                         "Qualified",
+                         "Generic",
+                         "EscapedMethodConstraint",
+                         "Combining",
+                         "Local",
+                     })
+            {
+                var grouped = RunGroupedSymbol(dbPath, name, "function");
+                Assert.True(grouped.TryGetProperty("definition_sites", out var definitionSites), grouped.GetRawText());
+                Assert.Equal(2, definitionSites.GetInt32());
+            }
+
+            var (importedExitCode, importedStdout, importedStderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunSymbols(
+                    ["Imported", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "function", "--group-partials", "--limit", "10"],
+                    _jsonOptions));
+            using var importedDocument = ParseJsonOutput(importedStdout);
+            var importedFamilies = importedDocument.RootElement.EnumerateArray().ToList();
+            Assert.Equal(CommandExitCodes.Success, importedExitCode);
+            Assert.Equal(string.Empty, importedStderr);
+            Assert.Equal(2, importedFamilies.Count);
+            Assert.All(
+                importedFamilies,
+                family => Assert.Equal(2, family.GetProperty("definition_sites").GetInt32()));
+
+            var (aliasedExitCode, aliasedStdout, aliasedStderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunSymbols(
+                    ["Aliased", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "function", "--group-partials", "--limit", "10"],
+                    _jsonOptions));
+            using var aliasedDocument = ParseJsonOutput(aliasedStdout);
+            var aliasedFamilies = aliasedDocument.RootElement.EnumerateArray().ToList();
+            Assert.Equal(CommandExitCodes.Success, aliasedExitCode);
+            Assert.Equal(string.Empty, aliasedStderr);
+            Assert.Equal(2, aliasedFamilies.Count);
+            Assert.All(
+                aliasedFamilies,
+                family => Assert.Equal(2, family.GetProperty("definition_sites").GetInt32()));
+
+            Assert.Equal(
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial T? Generic<T>(T? value) where T : class;",
+                    "Generic",
+                    "T?"),
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial T Generic<TResult>(TResult value) where TResult : class { }",
+                    "Generic",
+                    "TResult"));
+            Assert.NotEqual(
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void Value<T>(T? value) where T : struct;",
+                    "Value",
+                    "void"),
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void Value<T>(T value) where T : struct { }",
+                    "Value",
+                    "void"));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PartialCanonicalRepresentative_LazilyRefreshesExternalTypeFacts_Issue4914()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_external_type_facts_issue4914");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Initial.cs",
+                "csharp",
+                """
+                #nullable enable
+                namespace Demo;
+                public class InitialNode { }
+                public partial class Container
+                {
+                    partial void Initial(InitialNode? value);
+                    partial void Initial(InitialNode value) { }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var scans = 0;
+            var candidateScans = new List<CSharpCallableTypeKindLookup.CandidateScanStats>();
+            CSharpCallableTypeKindLookup.ScanForTesting = () => scans++;
+            CSharpCallableTypeKindLookup.CandidateScanForTesting = candidateScans.Add;
+            try
+            {
+                using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+                using var reader = new DbReader(db);
+                Assert.Equal(0, scans);
+
+                var physical = reader.SearchSymbols(
+                    ["Initial"],
+                    limit: 10,
+                    kind: "function",
+                    lang: "csharp",
+                    exact: true,
+                    groupPartials: false);
+                Assert.Equal(2, physical.Count);
+                Assert.Equal(0, scans);
+
+                var initial = Assert.Single(reader.SearchSymbols(
+                    ["Initial"],
+                    limit: 10,
+                    kind: "function",
+                    lang: "csharp",
+                    exact: true,
+                    groupPartials: true));
+                Assert.Equal(2, initial.DefinitionSites);
+                Assert.Equal(1, scans);
+                var initialScan = Assert.Single(candidateScans);
+                Assert.False(initialScan.UsedFullScan);
+                Assert.Equal(2, initialScan.CallableCount);
+                Assert.InRange(initialScan.TypeFactCount, 1, 4);
+
+                TestProjectHelper.InsertIndexedFile(
+                    dbPath,
+                    "src/Late.cs",
+                    "csharp",
+                    """
+                    #nullable enable
+                    namespace Demo;
+                    public class LateNode { }
+                    public partial class Container
+                    {
+                        partial void Late(LateNode? value);
+                        partial void Late(LateNode value) { }
+                    }
+                    """);
+
+                var late = Assert.Single(reader.SearchSymbols(
+                    ["Late"],
+                    limit: 10,
+                    kind: "function",
+                    lang: "csharp",
+                    exact: true,
+                    groupPartials: true));
+                Assert.Equal(2, late.DefinitionSites);
+                Assert.Equal(2, scans);
+                Assert.Equal(2, candidateScans.Count);
+                var lateScan = candidateScans[^1];
+                Assert.False(lateScan.UsedFullScan);
+                Assert.Equal(2, lateScan.CallableCount);
+                Assert.InRange(lateScan.TypeFactCount, 1, 5);
+            }
+            finally
+            {
+                CSharpCallableTypeKindLookup.ScanForTesting = null;
+                CSharpCallableTypeKindLookup.CandidateScanForTesting = null;
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PartialCanonicalRepresentative_DiscardsTransactionLocalTypeFactsAfterRollback_Issue4914Review()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_rollback_type_facts_issue4914");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Container.cs",
+                "csharp",
+                """
+                #nullable enable
+                namespace Demo;
+                public partial class Container
+                {
+                    partial void M(Ghost? value);
+                    partial void M(Ghost value) { }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var scans = 0;
+            CSharpCallableTypeKindLookup.ScanForTesting = () => scans++;
+            try
+            {
+                using var connection = new SqliteConnection($"Data Source={dbPath}");
+                connection.Open();
+                using var reader = new DbReader(connection);
+
+                Assert.Equal(2, reader.SearchSymbols(
+                    ["M"], 10, "function", "csharp", exact: true, groupPartials: true).Count);
+
+                using (var transaction = connection.BeginTransaction())
+                {
+                    using var command = connection.CreateCommand();
+                    command.Transaction = transaction;
+                    command.CommandText = """
+                        INSERT INTO symbols(
+                            file_id, kind, name, line, start_line, end_line, signature,
+                            is_partial_declaration, is_file_local_declaration)
+                        SELECT id, 'class', 'Ghost', 20, 20, 20, 'class Ghost', 0, 0
+                        FROM files
+                        WHERE lang = 'csharp'
+                        LIMIT 1
+                        """;
+                    Assert.Equal(1, command.ExecuteNonQuery());
+
+                    var grouped = Assert.Single(reader.SearchSymbols(
+                        ["M"], 10, "function", "csharp", exact: true, groupPartials: true));
+                    Assert.Equal(2, grouped.DefinitionSites);
+                    transaction.Rollback();
+                }
+
+                Assert.Equal(2, reader.SearchSymbols(
+                    ["M"], 10, "function", "csharp", exact: true, groupPartials: true).Count);
+                Assert.Equal(3, scans);
+            }
+            finally
+            {
+                CSharpCallableTypeKindLookup.ScanForTesting = null;
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PartialCanonicalRepresentative_SkipsCallableScansWhenGroupingCannotUseThem_Issue4914()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_callable_scan_gate_issue4914");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Container.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class Container
+                {
+                    partial void Run(int value);
+                    partial void Run(int value) { }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var scans = 0;
+            CSharpCallableTypeKindLookup.ScanForTesting = () => scans++;
+            try
+            {
+                using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+                using (var reader = new DbReader(db))
+                {
+                    Assert.Single(reader.SearchSymbols(
+                        queries: null,
+                        limit: 10,
+                        kind: "class",
+                        lang: "csharp",
+                        groupPartials: true));
+                    Assert.Equal(
+                        1,
+                        reader.CountSearchSymbolsTotal(
+                            queries: (IReadOnlyList<string>?)null,
+                            kind: "class",
+                            lang: "csharp",
+                            groupPartials: true).Count);
+                    Assert.Equal(
+                        1,
+                        reader.CountDefinitionsTotal(
+                            "Container",
+                            kind: "class",
+                            lang: "csharp",
+                            exact: true,
+                            groupPartials: true).Count);
+                    Assert.Equal(0, scans);
+
+                    var callable = Assert.Single(reader.SearchSymbols(
+                        ["Run"],
+                        limit: 10,
+                        kind: "function",
+                        lang: "csharp",
+                        exact: true,
+                        groupPartials: true));
+                    Assert.Equal(2, callable.DefinitionSites);
+                    Assert.Equal(1, scans);
+                }
+
+                using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+                {
+                    var writer = new DbWriter(db.Connection);
+                    writer.ClearHotspotFamilyReady();
+                }
+
+                scans = 0;
+                using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+                using (var reader = new DbReader(db))
+                {
+                    Assert.Equal(
+                        2,
+                        reader.SearchSymbols(
+                            ["Run"],
+                            limit: 10,
+                            kind: "function",
+                            lang: "csharp",
+                            exact: true,
+                            groupPartials: true).Count);
+                    Assert.Equal(
+                        2,
+                        reader.CountSearchSymbolsTotal(
+                            queries: (IReadOnlyList<string>?)null,
+                            kind: "function",
+                            lang: "csharp",
+                            groupPartials: true).Count);
+                    Assert.Equal(
+                        2,
+                        reader.CountDefinitionsTotal(
+                            "Run",
+                            kind: "function",
+                            lang: "csharp",
+                            exact: true,
+                            groupPartials: true).Count);
+                    Assert.Equal(0, scans);
+                }
+            }
+            finally
+            {
+                CSharpCallableTypeKindLookup.ScanForTesting = null;
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PartialCanonicalRepresentative_CandidateCapIgnoresOrdinarySameNameMethods_Issue4914()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_candidate_cap_issue4914");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var source = new System.Text.StringBuilder("namespace Demo;\n");
+            for (var index = 0; index <= 4_096; index++)
+            {
+                source.Append("public class Ordinary")
+                    .Append(index)
+                    .Append(" { public void Run() { } }\n");
+            }
+            source.Append(
+                """
+                public partial class Container
+                {
+                    partial void Run(int value);
+                    partial void Run(int value) { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/CandidateCap.cs",
+                "csharp",
+                source.ToString());
+            using (var connection = new SqliteConnection($"Data Source={dbPath}"))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = """
+                    UPDATE symbols
+                    SET is_partial_declaration = NULL
+                    WHERE signature LIKE 'partial %'
+                    """;
+                Assert.Equal(2, command.ExecuteNonQuery());
+            }
+            MarkGraphAndFoldReady(dbPath);
+
+            var candidateScans = new List<CSharpCallableTypeKindLookup.CandidateScanStats>();
+            CSharpCallableTypeKindLookup.CandidateScanForTesting = candidateScans.Add;
+            try
+            {
+                using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+                using var reader = new DbReader(db);
+                var results = reader.SearchSymbols(
+                    ["Run"],
+                    limit: 5_000,
+                    kind: "function",
+                    lang: "csharp",
+                    exact: true,
+                    groupPartials: true);
+
+                Assert.Equal(4_098, results.Count);
+                var grouped = Assert.Single(results.Where(result => result.DefinitionSites == 2));
+                Assert.Equal(2, grouped.DefinitionSites);
+                var scan = Assert.Single(candidateScans);
+                Assert.False(scan.UsedFullScan);
+                Assert.Equal(2, scan.CallableCount);
+            }
+            finally
+            {
+                CSharpCallableTypeKindLookup.CandidateScanForTesting = null;
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PartialCanonicalRepresentative_RawConnectionReaderRegistersGroupingFunctions_Issue4914()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_raw_reader_issue4914");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.Raw.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class RawContainer
+                {
+                    partial void Execute(int value);
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/B.Raw.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class RawContainer
+                {
+                    partial void Execute(int value) { }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            using var connection = new SqliteConnection($"Data Source={dbPath}");
+            connection.Open();
+            for (var readerIndex = 0; readerIndex < 2; readerIndex++)
+            {
+                using var reader = new DbReader(connection, isReadOnly: true);
+                var grouped = Assert.Single(reader.SearchSymbols(
+                    ["Execute"],
+                    limit: 10,
+                    kind: "function",
+                    lang: "csharp",
+                    exact: true,
+                    groupPartials: true));
+                Assert.Equal(2, grouped.DefinitionSites);
+                Assert.Equal("implementation_body", grouped.RepresentativeReason);
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [ProductionRuntimeFact]
+    public void PartialCanonicalRepresentative_IndexPersistsHookRebuiltFamilyScope_Issue4914()
+    {
+        var projectRoot = TestProjectHelper.CreateExecutableExtensionTestProject(
+            "cdidx_partial_hook_family_scope_issue4914");
+        lock (TestConsoleLock.Gate)
+        {
+            using var env = EnvironmentVariableScope.Capture(
+                PostExtractionHookRunner.HooksDirectoryEnvironmentVariable,
+                CodeIndex.HookIsolationFixture.HookIsolationFixtureEnvironment
+                    .MutateCSharpPartialFamily);
+            try
+            {
+                var hooksDir = Path.Combine(projectRoot, "hooks");
+                Directory.CreateDirectory(hooksDir);
+                File.Copy(
+                    typeof(CodeIndex.HookIsolationFixture.CSharpPartialFamilyMutationPostExtractionHook)
+                        .Assembly.Location,
+                    Path.Combine(hooksDir, "CodeIndex.HookIsolationFixture.dll"));
+                env.Set(PostExtractionHookRunner.HooksDirectoryEnvironmentVariable, hooksDir);
+                env.Set(
+                    CodeIndex.HookIsolationFixture.HookIsolationFixtureEnvironment
+                        .MutateCSharpPartialFamily,
+                    "1");
+                File.WriteAllText(
+                    Path.Combine(
+                        projectRoot,
+                        CodeIndex.HookIsolationFixture.HookIsolationFixtureEnvironment
+                            .RemoveCSharpStaticInterfaceMemberMarkerFileName),
+                    string.Empty);
+                var sourcePath = Path.Combine(projectRoot, "src", "App.cs");
+                Directory.CreateDirectory(Path.GetDirectoryName(sourcePath)!);
+                File.WriteAllText(
+                    sourcePath,
+                    """
+                    partial class HookContainer
+                    {
+                        [Obsolete] partial void HookPartial();
+                    }
+                    """);
+
+                Assert.Equal(
+                    CommandExitCodes.Success,
+                    IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions));
+                AssertPersistedFamily();
+
+                File.AppendAllText(sourcePath, "\n// update\n");
+                File.SetLastWriteTimeUtc(sourcePath, DateTime.UtcNow.AddSeconds(2));
+                Assert.Equal(
+                    CommandExitCodes.Success,
+                    IndexCommandRunner.Run(
+                        [projectRoot, "--files", "src/App.cs", "--json", "--quiet"],
+                        _jsonOptions));
+                AssertPersistedFamily();
+
+                void AssertPersistedFamily()
+                {
+                    var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+                    using var connection = new SqliteConnection($"Data Source={dbPath}");
+                    connection.Open();
+                    using var command = connection.CreateCommand();
+                    command.CommandText = """
+                        SELECT name, family_key
+                        FROM symbols
+                        WHERE name IN (
+                            'HookContainerRenamed',
+                            'HookOrdinary',
+                            'HookAddedPartial')
+                        ORDER BY name
+                        """;
+                    var families = new Dictionary<string, string>(StringComparer.Ordinal);
+                    using var rows = command.ExecuteReader();
+                    while (rows.Read())
+                        families.Add(rows.GetString(0), rows.GetString(1));
+
+                    Assert.Equal(3, families.Count);
+                    var family = families["HookContainerRenamed"];
+                    Assert.EndsWith(
+                        "|file-local:src/App.cs\u001f+HookContainerRenamed`1",
+                        family,
+                        StringComparison.Ordinal);
+                    Assert.Equal(family, families["HookOrdinary"]);
+                    Assert.Equal(family, families["HookAddedPartial"]);
+                }
+            }
+            finally
+            {
+                SqliteConnection.ClearAllPools();
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void Impact_UsesCallableIdentifierColumnForTestMethod_Issue4914()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_test_method_column_issue4914");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/ResultTests.cs",
+                "csharp",
+                """
+                public class Result { }
+                public class ResultTests
+                {
+                    [Fact]
+                    public Result Result() => new();
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["Result", "--db", dbPath, "--json", "--lang", "csharp", "--max-hops", "0", "--limit", "10"],
+                _jsonOptions));
+            using var document = ParseJsonOutput(stdout);
+            var testMethod = Assert.Single(
+                document.RootElement
+                    .GetProperty("definitions")
+                    .EnumerateArray()
+                    .Where(definition => definition.GetProperty("kind").GetString() == "test.method"));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(18, testMethod.GetProperty("start_column").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Impact_QualifiedPartialMethodTraversesDeclarationAndImplementationIds_Issue4914()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_qualified_impact_issue4914");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.Container.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class Container
+                {
+                    partial void M();
+                    public void Invoke() { M(); }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/B.Container.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class Container
+                {
+                    partial void M() { }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.MarkReferenceIdentityContractReady();
+            }
+
+            long declarationSymbolId;
+            using (var connection = new SqliteConnection($"Data Source={dbPath}"))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = """
+                    SELECT target.id, reference.target_symbol_id
+                    FROM symbol_references reference
+                    JOIN files source_file ON source_file.id = reference.file_id
+                    JOIN symbols target ON target.name = reference.symbol_name
+                    JOIN files target_file ON target_file.id = target.file_id
+                    WHERE source_file.path = 'src/A.Container.cs'
+                      AND target_file.path = 'src/A.Container.cs'
+                      AND reference.symbol_name = 'M'
+                      AND reference.reference_kind = 'call'
+                    LIMIT 1
+                    """;
+                using var row = command.ExecuteReader();
+                Assert.True(row.Read());
+                declarationSymbolId = row.GetInt64(0);
+                Assert.Equal(declarationSymbolId, row.GetInt64(1));
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["Container.M", "--db", dbPath, "--json", "--lang", "csharp", "--max-hops", "1", "--limit", "10"],
+                _jsonOptions));
+            using var document = ParseJsonOutput(stdout);
+            var impact = document.RootElement;
+            var caller = Assert.Single(impact.GetProperty("callers").EnumerateArray());
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("src/B.Container.cs", impact.GetProperty("definitions")[0].GetProperty("path").GetString());
+            Assert.Equal("Invoke", caller.GetProperty("caller_name").GetString());
+            Assert.Equal(declarationSymbolId, caller.GetProperty("callee_symbol_id").GetInt64());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Impact_TruncatedMixedCallableFamilyTraversesTestMethodMember_Issue4914Review()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_mixed_kind_impact_issue4914");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            for (var index = 0; index < 49; index++)
+            {
+                TestProjectHelper.InsertIndexedFile(
+                    dbPath,
+                    $"src/{index:D2}.Container.cs",
+                    "csharp",
+                    """
+                    namespace Demo;
+                    public partial class Container
+                    {
+                        partial void M();
+                    }
+                    """);
+            }
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/49.Container.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class Container
+                {
+                    [Fact]
+                    partial void M();
+                    public void InvokeTarget() { M(); }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/50.Container.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class Container
+                {
+                    partial void M() { }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            long targetSymbolId;
+            using (var connection = new SqliteConnection($"Data Source={dbPath}"))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = """
+                    SELECT symbol.id
+                    FROM symbols symbol
+                    JOIN files file ON file.id = symbol.file_id
+                    WHERE file.path = 'src/49.Container.cs'
+                      AND symbol.name = 'M'
+                      AND symbol.kind = 'test.method';
+                    """;
+                targetSymbolId = Assert.IsType<long>(command.ExecuteScalar());
+
+                command.CommandText = """
+                    UPDATE symbol_references
+                    SET target_symbol_id = @targetSymbolId,
+                        resolution_state = 'resolved',
+                        resolution_candidate_count = 1
+                    WHERE file_id = (SELECT id FROM files WHERE path = 'src/49.Container.cs')
+                      AND symbol_name = 'M'
+                      AND reference_kind = 'call';
+                    """;
+                command.Parameters.AddWithValue("@targetSymbolId", targetSymbolId);
+                Assert.Equal(1, command.ExecuteNonQuery());
+            }
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.MarkReferenceIdentityContractReady();
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["Container.M", "--db", dbPath, "--json", "--lang", "csharp", "--max-hops", "1", "--limit", "10"],
+                _jsonOptions));
+            using var document = ParseJsonOutput(stdout);
+            var impact = document.RootElement;
+            var definition = Assert.Single(impact.GetProperty("definitions").EnumerateArray());
+            var caller = Assert.Single(impact.GetProperty("callers").EnumerateArray());
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(51, definition.GetProperty("definition_sites").GetInt32());
+            Assert.True(definition.GetProperty("family_members_truncated").GetBoolean());
+            Assert.Equal("InvokeTarget", caller.GetProperty("caller_name").GetString());
+            Assert.Equal(targetSymbolId, caller.GetProperty("callee_symbol_id").GetInt64());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PartialCanonicalRepresentative_DistinguishesNestedTypeNamesAndArities_Issue4914()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_nested_identity_issue4914");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            foreach (var path in new[] { "src/A.Host.cs", "src/B.Host.cs" })
+            {
+                TestProjectHelper.InsertIndexedFile(
+                    dbPath,
+                    path,
+                    "csharp",
+                    """
+                    namespace Demo;
+                    public partial class Host
+                    {
+                        public partial class Child { }
+                        public partial class Sibling { }
+                        public partial class Nested<T> { }
+                        public partial class Nested<T, U> { }
+                    }
+                    """);
+            }
+            MarkGraphAndFoldReady(dbPath);
+
+            var child = RunGroupedSymbol(dbPath, "Child", "class");
+            var sibling = RunGroupedSymbol(dbPath, "Sibling", "class");
+            Assert.Equal(2, child.GetProperty("definition_sites").GetInt32());
+            Assert.Equal(2, sibling.GetProperty("definition_sites").GetInt32());
+            Assert.NotEqual(
+                child.GetProperty("partial_family_id").GetString(),
+                sibling.GetProperty("partial_family_id").GetString());
+
+            var (symbolsExitCode, symbolsStdout, symbolsStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["Nested", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "class", "--group-partials", "--include-generated", "--limit", "10"],
+                _jsonOptions));
+            using var symbolsDocument = ParseJsonOutput(symbolsStdout);
+            var nestedFamilies = symbolsDocument.RootElement.EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, symbolsExitCode);
+            Assert.Equal(string.Empty, symbolsStderr);
+            Assert.Equal(2, nestedFamilies.Count);
+            Assert.All(nestedFamilies, family => Assert.Equal(2, family.GetProperty("definition_sites").GetInt32()));
+            Assert.Equal(
+                2,
+                nestedFamilies
+                    .Select(family => family.GetProperty("partial_family_id").GetString())
+                    .Distinct(StringComparer.Ordinal)
+                    .Count());
+
+            var (gotoExitCode, gotoStdout, gotoStderr) = CaptureConsole(() => QueryCommandRunner.RunGoto(
+                ["Nested", "--db", dbPath, "--exact-name", "--lang", "csharp", "--kind", "class"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, gotoExitCode);
+            Assert.Equal(string.Empty, gotoStdout);
+            Assert.Contains("goto found 2 matching definitions", gotoStderr, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PartialCanonicalRepresentative_UsesPlainRecordDeclarationArityAfterAttributes_Issue4914()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_record_attribute_arity_issue4914");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.Item.cs",
+                "csharp",
+                """
+                using System;
+                namespace Demo;
+                public sealed class MarkerAttribute : Attribute
+                {
+                    public MarkerAttribute(Type type) { }
+                }
+                public class Item { }
+                [Marker(typeof(Item))] public partial record Item<T>;
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/B.Item.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial record class Item<T>;
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["Item", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "class", "--group-partials", "--include-generated", "--limit", "10"],
+                _jsonOptions));
+            using var document = ParseJsonOutput(stdout);
+            var symbols = document.RootElement.EnumerateArray().ToList();
+            var recordFamily = Assert.Single(
+                symbols.Where(symbol => symbol.TryGetProperty("definition_sites", out _)));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(2, symbols.Count);
+            Assert.Equal(2, recordFamily.GetProperty("definition_sites").GetInt32());
+            Assert.Equal(2, recordFamily.GetProperty("family_members").GetArrayLength());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PartialCanonicalRepresentative_IgnoresRecordLikeAttributesAndEscapedTypeNames_Issue4914()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_record_token_boundaries_issue4914");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.Records.cs",
+                "csharp",
+                """
+                using System;
+                namespace Demo;
+                public class recordAttribute<T> : Attribute { }
+                [record<Collision>] public partial record Collision;
+                public partial class @record<T> where T : @record<T> { }
+                public partial record class @class;
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/B.Records.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial record Collision;
+                public partial class @record<T> where T : @record<T> { }
+                public partial record class @class;
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var collision = RunGroupedSymbol(dbPath, "Collision", "class");
+            Assert.Equal(2, collision.GetProperty("definition_sites").GetInt32());
+            Assert.Equal("src/A.Records.cs", collision.GetProperty("path").GetString());
+            Assert.Equal(42, collision.GetProperty("start_column").GetInt32());
+            Assert.Collection(
+                collision.GetProperty("family_members").EnumerateArray().OrderBy(
+                    member => member.GetProperty("path").GetString(),
+                    StringComparer.Ordinal),
+                member => Assert.Equal(42, member.GetProperty("start_column").GetInt32()),
+                member => Assert.Equal(22, member.GetProperty("start_column").GetInt32()));
+
+            var escapedRecord = RunGroupedSymbol(dbPath, "record", "class");
+            Assert.Equal(2, escapedRecord.GetProperty("definition_sites").GetInt32());
+            Assert.Equal(22, escapedRecord.GetProperty("start_column").GetInt32());
+            Assert.All(
+                escapedRecord.GetProperty("family_members").EnumerateArray(),
+                member => Assert.Equal(22, member.GetProperty("start_column").GetInt32()));
+
+            var escapedRecordClass = RunGroupedSymbol(dbPath, "class", "class");
+            Assert.Equal(2, escapedRecordClass.GetProperty("definition_sites").GetInt32());
+            Assert.Equal(29, escapedRecordClass.GetProperty("start_column").GetInt32());
+            Assert.All(
+                escapedRecordClass.GetProperty("family_members").EnumerateArray(),
+                member => Assert.Equal(29, member.GetProperty("start_column").GetInt32()));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PartialCallableGrouping_PreservesPipeInUnixProjectScope_Issue4914()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        Assert.Equal(
+            "Proj%257C%7COne%1F",
+            SymbolExtractor.EncodeFamilyScopeKey("Proj%7C|One\u001f"));
+
+        var csharpScopeProbe = new SymbolRecord { FamilyKey = "N.Host" };
+        SymbolExtractor.ApplyFamilyScope([csharpScopeProbe], "Proj|One", "csharp");
+        Assert.Equal("Proj%7COne|N.Host", csharpScopeProbe.FamilyKey);
+
+        var legacyScopeProbe = new SymbolRecord { FamilyKey = "N.Host" };
+        SymbolExtractor.ApplyFamilyScope([legacyScopeProbe], "Proj|One", "visualbasic");
+        Assert.Equal("Proj|One|N.Host", legacyScopeProbe.FamilyKey);
+
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_pipe_scope_issue4914");
+        try
+        {
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "Proj|One/Test.csproj",
+                "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup></Project>");
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "Proj|One/Test.cs",
+                """
+                #nullable enable
+                namespace N;
+                partial class Host { partial void M(S value); }
+                partial class Host { partial void M(S? value) { } }
+                """);
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "Proj|One/S.cs",
+                """
+                namespace N;
+                class S { }
+                """);
+
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json", "--quiet"],
+                _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var grouped = RunGroupedSymbol(dbPath, "M", "function");
+            Assert.Equal(2, grouped.GetProperty("definition_sites").GetInt32());
+            Assert.Equal("implementation_body", grouped.GetProperty("representative_reason").GetString());
+
+            using var connection = new SqliteConnection($"Data Source={dbPath}");
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT DISTINCT family_key FROM symbols WHERE name = 'M'";
+            Assert.Equal("Proj%7COne|N+Host", Assert.IsType<string>(command.ExecuteScalar()));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PartialCanonicalRepresentative_PreservesLiteralBackslashInUnixFileLocalIdentity_Issue4914Review()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_file_local_backslash_issue4914");
+        try
+        {
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "Test.csproj",
+                "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup></Project>");
+            const string content = """
+                namespace N;
+                file partial class Hidden { }
+                """;
+            TestProjectHelper.WriteTextFile(projectRoot, "A/B.cs", content);
+            TestProjectHelper.WriteTextFile(projectRoot, "A\\B.cs", content);
+
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json", "--quiet"],
+                _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (symbolsExitCode, symbolsStdout, symbolsStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["Hidden", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "class", "--group-partials", "--limit", "10"],
+                _jsonOptions));
+            using var symbolsDocument = ParseJsonOutput(symbolsStdout);
+            var rows = symbolsDocument.RootElement.EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, symbolsExitCode);
+            Assert.Equal(string.Empty, symbolsStderr);
+            Assert.Equal(2, rows.Count);
+            Assert.All(rows, row => Assert.False(row.TryGetProperty("definition_sites", out _)));
+
+            using var connection = new SqliteConnection($"Data Source={dbPath}");
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT COUNT(DISTINCT family_key) FROM symbols WHERE name = 'Hidden'";
+            Assert.Equal(2L, Assert.IsType<long>(command.ExecuteScalar()));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PartialCanonicalRepresentative_PreservesLiteralBackslashInUnixProjectScope_Issue4914Review()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_project_backslash_issue4914");
+        try
+        {
+            foreach (var projectDirectory in new[] { "A\\B", "A/B" })
+            {
+                TestProjectHelper.WriteTextFile(
+                    projectRoot,
+                    $"{projectDirectory}/Test.csproj",
+                    "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net8.0</TargetFramework><Nullable>enable</Nullable></PropertyGroup></Project>");
+                TestProjectHelper.WriteTextFile(
+                    projectRoot,
+                    $"{projectDirectory}/One.cs",
+                    """
+                    namespace Demo;
+                    public partial class Host
+                    {
+                        partial void M(Node? value);
+                    }
+                    """);
+                TestProjectHelper.WriteTextFile(
+                    projectRoot,
+                    $"{projectDirectory}/Two.cs",
+                    """
+                    namespace Demo;
+                    public partial class Host
+                    {
+                        partial void M(Node value) { }
+                    }
+                    """);
+            }
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "A\\B/Types.cs",
+                """
+                namespace Demo;
+                public class Node { }
+                """);
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "A/B/Types.cs",
+                """
+                namespace Demo;
+                public struct Node { }
+                """);
+
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json", "--quiet"],
+                _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (symbolsExitCode, symbolsStdout, symbolsStderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunSymbols(
+                    ["M", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "function", "--group-partials", "--limit", "10"],
+                    _jsonOptions));
+            using var symbolsDocument = ParseJsonOutput(symbolsStdout);
+            var rows = symbolsDocument.RootElement.EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, symbolsExitCode);
+            Assert.Equal(string.Empty, symbolsStderr);
+            Assert.Equal(3, rows.Count);
+            var grouped = Assert.Single(rows, row => row.TryGetProperty("definition_sites", out _));
+            Assert.Equal(2, grouped.GetProperty("definition_sites").GetInt32());
+            var groupedPaths = grouped.GetProperty("family_members")
+                .EnumerateArray()
+                .Select(member => member.GetProperty("path").GetString())
+                .ToList();
+            Assert.All(groupedPaths, path => Assert.StartsWith("A\\B/", path, StringComparison.Ordinal));
+            Assert.Contains("A\\B/One.cs", groupedPaths);
+            Assert.Contains("A\\B/Two.cs", groupedPaths);
+            Assert.All(
+                rows.Where(row => !row.TryGetProperty("definition_sites", out _)),
+                row => Assert.StartsWith("A/B/", row.GetProperty("path").GetString(), StringComparison.Ordinal));
+
+            using var connection = new SqliteConnection($"Data Source={dbPath}");
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT COUNT(DISTINCT family_key) FROM symbols WHERE name = 'M'";
+            Assert.Equal(2L, Assert.IsType<long>(command.ExecuteScalar()));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PartialCanonicalRepresentative_PreservesPersistedUnixBackslashProjectScopeAcrossHosts_Issue4914Review()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_persisted_backslash_issue4914");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            foreach (var projectDirectory in new[] { "A\\B", "A/B" })
+            {
+                TestProjectHelper.InsertIndexedFile(
+                    dbPath,
+                    $"{projectDirectory}/Test.csproj",
+                    "xml",
+                    "<Project />");
+                TestProjectHelper.InsertIndexedFile(
+                    dbPath,
+                    $"{projectDirectory}/One.cs",
+                    "csharp",
+                    """
+                    #nullable enable
+                    namespace Demo;
+                    public partial class Host
+                    {
+                        partial void M(Node? value);
+                    }
+                    """);
+                TestProjectHelper.InsertIndexedFile(
+                    dbPath,
+                    $"{projectDirectory}/Two.cs",
+                    "csharp",
+                    """
+                    #nullable enable
+                    namespace Demo;
+                    public partial class Host
+                    {
+                        partial void M(Node value) { }
+                    }
+                    """);
+            }
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "A\\B/Types.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public class Node { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "A/B/Types.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public struct Node { }
+                """);
+
+            using (var connection = new SqliteConnection($"Data Source={dbPath}"))
+            {
+                connection.Open();
+                foreach (var projectDirectory in new[] { "A\\B", "A/B" })
+                {
+                    using var command = connection.CreateCommand();
+                    command.CommandText = """
+                        UPDATE symbols
+                        SET family_key = @scope || '|' || family_key
+                        WHERE family_key IS NOT NULL
+                          AND file_id IN (
+                              SELECT id
+                              FROM files
+                              WHERE path = @one OR path = @two OR path = @types)
+                        """;
+                    SqliteCommandPolicy.Add(
+                        command,
+                        "@scope",
+                        SymbolExtractor.EncodeFamilyScopeKey(projectDirectory));
+                    SqliteCommandPolicy.Add(command, "@one", $"{projectDirectory}/One.cs");
+                    SqliteCommandPolicy.Add(command, "@two", $"{projectDirectory}/Two.cs");
+                    SqliteCommandPolicy.Add(command, "@types", $"{projectDirectory}/Types.cs");
+                    Assert.True(command.ExecuteNonQuery() > 0);
+                }
+            }
+            MarkGraphAndFoldReady(dbPath);
+
+            var (symbolsExitCode, symbolsStdout, symbolsStderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunSymbols(
+                    ["M", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "function", "--group-partials", "--limit", "10"],
+                    _jsonOptions));
+            using var symbolsDocument = ParseJsonOutput(symbolsStdout);
+            var rows = symbolsDocument.RootElement.EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, symbolsExitCode);
+            Assert.Equal(string.Empty, symbolsStderr);
+            Assert.Equal(3, rows.Count);
+            var grouped = Assert.Single(rows, row => row.TryGetProperty("definition_sites", out _));
+            Assert.Equal(2, grouped.GetProperty("definition_sites").GetInt32());
+            Assert.All(
+                grouped.GetProperty("family_members").EnumerateArray(),
+                member => Assert.StartsWith(
+                    "A\\B/",
+                    member.GetProperty("path").GetString(),
+                    StringComparison.Ordinal));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PartialCallableGrouping_NormalizesOptionalManagedFunctionPointerConvention_Issue4914Review()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_managed_function_pointer_issue4914");
+        try
+        {
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "Test.csproj",
+                "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net8.0</TargetFramework><AllowUnsafeBlocks>true</AllowUnsafeBlocks></PropertyGroup></Project>");
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "Test.cs",
+                """
+                unsafe partial class Container
+                {
+                    partial void M(delegate* managed<int, void> callback);
+                    partial void M(delegate*<int, void> callback) { }
+                }
+                """);
+
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json", "--quiet"],
+                _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var grouped = RunGroupedSymbol(dbPath, "M", "function");
+            Assert.Equal(2, grouped.GetProperty("definition_sites").GetInt32());
+            Assert.Equal("implementation_body", grouped.GetProperty("representative_reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PartialCallableGrouping_PipeInFileLocalPathDoesNotLeakTypeKind_Issue4914Review()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_file_local_pipe_issue4914");
+        try
+        {
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "Test.csproj",
+                "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net8.0</TargetFramework><Nullable>enable</Nullable></PropertyGroup></Project>");
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "src/A|B.cs",
+                """
+                namespace N;
+                file partial class Outer { public struct Hidden { } }
+                """);
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "src/Global.cs",
+                """
+                namespace N;
+                class Outer { public class Hidden { } }
+                """);
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "src/Host.cs",
+                """
+                #nullable enable
+                namespace N;
+                partial class Host { partial void M(Outer.Hidden value); }
+                partial class Host { partial void M(Outer.Hidden? value) { } }
+                """);
+
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json", "--quiet"],
+                _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var grouped = RunGroupedSymbol(dbPath, "M", "function");
+            Assert.Equal(2, grouped.GetProperty("definition_sites").GetInt32());
+            Assert.Equal("implementation_body", grouped.GetProperty("representative_reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PartialCanonicalRepresentative_PropagatesFileLocalScopeToNestedFamilies_Issue4914()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_nested_file_local_issue4914");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.Host.cs",
+                "csharp",
+                """
+                namespace Demo;
+                file partial class Host { }
+                partial class Host { public partial class Child { } }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/B.Host.cs",
+                "csharp",
+                """
+                namespace Demo;
+                partial class Host { public partial class Child { } }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["Child", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "class", "--group-partials", "--include-generated", "--limit", "10"],
+                _jsonOptions));
+            using var document = ParseJsonOutput(stdout);
+            var families = document.RootElement.EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(2, families.Count);
+            Assert.All(families, family => Assert.False(family.TryGetProperty("definition_sites", out _)));
+            Assert.Equal(
+                ["src/A.Host.cs", "src/B.Host.cs"],
+                families.Select(family => family.GetProperty("path").GetString()).Order().ToArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PartialCanonicalRepresentative_IgnoresConstraintTextInsideImplementationBody_Issue4914()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_constraint_body_text_issue4914");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Container.cs",
+                "csharp",
+                """
+                #nullable enable
+                namespace Demo;
+                public partial class Container
+                {
+                    partial void M<T>(T? value);
+                    partial void M<T>(T? value) { var text = "where T : struct"; }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var grouped = RunGroupedSymbol(dbPath, "M", "function");
+
+            Assert.Equal(2, grouped.GetProperty("definition_sites").GetInt32());
+            Assert.Equal("implementation_body", grouped.GetProperty("representative_reason").GetString());
+            Assert.Equal(
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void M<T>(T? value);",
+                    "M",
+                    "void"),
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void M<T>(T? value) { var text = \"where T : struct\"; }",
+                    "M",
+                    "void"));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PartialCallableGrouping_UsesFoldedCandidateNames_Issue4914()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_folded_candidate_issue4914");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Container.cs",
+                "csharp",
+                """
+                #nullable enable
+                namespace Demo;
+                public class Node { }
+                public partial class Container
+                {
+                    partial void MÉTHODE(Node? value);
+                    partial void MÉTHODE(Node value) { }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var grouped = RunGroupedSymbol(dbPath, "méthode", "function");
+
+            Assert.Equal(2, grouped.GetProperty("definition_sites").GetInt32());
+            Assert.Equal("implementation_body", grouped.GetProperty("representative_reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PartialCallableGrouping_NormalizesTupleAndOptionalDefaultIdentities_Issue4914()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_nullable_tuple_issue4914");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Container.cs",
+                "csharp",
+                """
+                #nullable enable
+                namespace Demo;
+                public class GenericDefaults<T, U>
+                {
+                    public const int Value = 1;
+                }
+                public partial class Container
+                {
+                    partial void M((int, int)? value);
+                    partial void M(global::System.Nullable<(int, int)> value) { }
+                    partial void TupleEquivalent((int, string) value);
+                    partial void TupleEquivalent(global::System.ValueTuple<int, string> value) { }
+                    partial void NestedTupleEquivalent((int, (string, bool)) value);
+                    partial void NestedTupleEquivalent(global::System.ValueTuple<int, global::System.ValueTuple<string, bool>> value) { }
+                    partial void NullableTupleEquivalent((int, (string, bool))? value);
+                    partial void NullableTupleEquivalent(global::System.Nullable<global::System.ValueTuple<int, global::System.ValueTuple<string, bool>>> value) { }
+                    partial void NullableFrameworkTuple((int, int)? value);
+                    partial void NullableFrameworkTuple(global::System.ValueTuple<int, int>? value) { }
+                    partial void LongTupleEquivalent((int, int, int, int, int, int, int, int) value);
+                    partial void LongTupleEquivalent(global::System.ValueTuple<int, int, int, int, int, int, int, global::System.ValueTuple<int>> value) { }
+                    partial void NamedTuple<T>((int T, string S) value);
+                    partial void NamedTuple<U>((int T, string S) value) { }
+                    partial void GenericDefault(int value = GenericDefaults<int, string>.Value, int other = 0);
+                    partial void GenericDefault(int value, int other) { }
+                    partial void CommentedGenericDefault(int value = GenericDefaults</* > */ int, string> /* > */ .Value, int other = 0);
+                    partial void CommentedGenericDefault(int value, int other) { }
+                    partial void RelationalDefault(bool value = 1 < 2, int other = 0);
+                    partial void RelationalDefault(bool value, int other) { }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            foreach (var name in new[]
+                     {
+                         "M",
+                         "TupleEquivalent",
+                         "NestedTupleEquivalent",
+                         "NullableTupleEquivalent",
+                         "NullableFrameworkTuple",
+                         "LongTupleEquivalent",
+                         "NamedTuple",
+                         "GenericDefault",
+                         "CommentedGenericDefault",
+                         "RelationalDefault",
+                     })
+            {
+                var grouped = RunGroupedSymbol(dbPath, name, "function");
+                Assert.Equal(2, grouped.GetProperty("definition_sites").GetInt32());
+                Assert.Equal("implementation_body", grouped.GetProperty("representative_reason").GetString());
+            }
+
+            Assert.Equal(
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void M((int, int)? value);",
+                    "M",
+                    "void"),
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void M(global::System.Nullable<(int, int)> value) { }",
+                    "M",
+                    "void"));
+            Assert.NotEqual(
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void NamedTuple((int x, string y) value);",
+                    "NamedTuple",
+                    "void"),
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void NamedTuple(global::System.ValueTuple<int, string> value) { }",
+                    "NamedTuple",
+                    "void"));
+            Assert.Equal(
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void GenericDefault(int value = GenericDefaults<int, string>.Value, int other = 0);",
+                    "GenericDefault",
+                    "void"),
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void GenericDefault(int value, int other) { }",
+                    "GenericDefault",
+                    "void"));
+            Assert.Equal(
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void CommentedGenericDefault(int value = GenericDefaults</* > */ int, string> /* > */ .Value, int other = 0);",
+                    "CommentedGenericDefault",
+                    "void"),
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void CommentedGenericDefault(int value, int other) { }",
+                    "CommentedGenericDefault",
+                    "void"));
+            Assert.Equal(
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void RelationalDefault(bool value = 1 < 2, int other = 0);",
+                    "RelationalDefault",
+                    "void"),
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    "partial void RelationalDefault(bool value, int other) { }",
+                    "RelationalDefault",
+                    "void"));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PartialCanonicalRepresentative_DistinguishesNamespaceAndNestedTypeBoundaries_Issue4914Review()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_family_boundary_issue4914");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Conditional.cs",
+                "csharp",
+                """
+                #nullable enable
+                #if FLAT
+                namespace A.B { public partial class C { } }
+                #else
+                namespace A { public partial class B { public partial class C { } } }
+                #endif
+                #if ROOT_NAMESPACE
+                namespace Root { public partial class Leaf { } }
+                #else
+                public partial class Root { public partial class Leaf { } }
+                #endif
+                #if FLAT_NULLABLE
+                namespace Kind.A
+                {
+                    public struct Node { }
+                    public partial class Host
+                    {
+                        partial void M(Node? value);
+                        partial void M(global::System.Nullable<Node> value) { }
+                    }
+                }
+                #else
+                namespace Kind
+                {
+                    public class A
+                    {
+                        public class Node { }
+                        public partial class Host
+                        {
+                            partial void M(Node? value);
+                            partial void M(Node value) { }
+                        }
+                    }
+                }
+                #endif
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["C", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "class", "--group-partials", "--include-generated", "--limit", "10"],
+                _jsonOptions));
+            using var document = ParseJsonOutput(stdout);
+            var families = document.RootElement.EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(2, families.Count);
+            Assert.All(families, family => Assert.False(family.TryGetProperty("definition_sites", out _)));
+
+            using var connection = new SqliteConnection($"Data Source={dbPath}");
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT family_key FROM symbols WHERE name = 'C' ORDER BY line";
+            using var reader = command.ExecuteReader();
+            var familyKeys = new List<string>();
+            while (reader.Read())
+                familyKeys.Add(reader.GetString(0));
+            Assert.Collection(
+                familyKeys,
+                family => Assert.Equal("A.B+C", family),
+                family => Assert.Equal("A+B+C", family));
+            reader.Close();
+
+            var (rootExitCode, rootStdout, rootStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["Leaf", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "class", "--group-partials", "--include-generated", "--limit", "10"],
+                _jsonOptions));
+            using var rootDocument = ParseJsonOutput(rootStdout);
+            var rootFamilies = rootDocument.RootElement.EnumerateArray().ToList();
+            Assert.Equal(CommandExitCodes.Success, rootExitCode);
+            Assert.Equal(string.Empty, rootStderr);
+            Assert.Equal(2, rootFamilies.Count);
+            Assert.All(rootFamilies, family => Assert.False(family.TryGetProperty("definition_sites", out _)));
+
+            using var rootCommand = connection.CreateCommand();
+            rootCommand.CommandText = "SELECT family_key FROM symbols WHERE name = 'Leaf' ORDER BY line";
+            using var rootReader = rootCommand.ExecuteReader();
+            var rootFamilyKeys = new List<string>();
+            while (rootReader.Read())
+                rootFamilyKeys.Add(rootReader.GetString(0));
+            Assert.Collection(
+                rootFamilyKeys,
+                family => Assert.Equal("Root+Leaf", family),
+                family => Assert.Equal("+Root+Leaf", family));
+            rootReader.Close();
+
+            var (callableExitCode, callableStdout, callableStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["M", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "function", "--group-partials", "--include-generated", "--limit", "10"],
+                _jsonOptions));
+            using var callableDocument = ParseJsonOutput(callableStdout);
+            var callableFamilies = callableDocument.RootElement.EnumerateArray().ToList();
+            Assert.Equal(CommandExitCodes.Success, callableExitCode);
+            Assert.Equal(string.Empty, callableStderr);
+            Assert.True(callableFamilies.Count == 2, callableStdout);
+            Assert.All(
+                callableFamilies,
+                family => Assert.Equal(2, family.GetProperty("definition_sites").GetInt32()));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PartialCanonicalRepresentative_UsesIdentifierLineForMultilineCallable_Issue4914Review()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_multiline_identifier_issue4914");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Container.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class Container
+                {
+                    partial void
+                    M(int value);
+                    partial void M(int value) { }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var grouped = RunGroupedSymbol(dbPath, "M", "function");
+            Assert.Equal(2, grouped.GetProperty("definition_sites").GetInt32());
+            Assert.Contains(
+                grouped.GetProperty("family_members").EnumerateArray(),
+                member => member.GetProperty("line").GetInt32() == 5
+                          && member.GetProperty("start_column").GetInt32() == 4);
+
+            using var connection = new SqliteConnection($"Data Source={dbPath}");
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText =
+                "SELECT line, start_line, identifier_start_column FROM symbols WHERE name = 'M' ORDER BY line";
+            using var reader = command.ExecuteReader();
+            Assert.True(reader.Read());
+            Assert.Equal(5, reader.GetInt32(0));
+            Assert.Equal(4, reader.GetInt32(1));
+            Assert.Equal(4, reader.GetInt32(2));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    private JsonElement RunGroupedSymbol(string dbPath, string name, string kind)
+    {
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+            [name, "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", kind, "--group-partials", "--include-generated", "--limit", "1"],
+            _jsonOptions));
+        Assert.False(string.IsNullOrWhiteSpace(stdout), stderr);
+        using var document = ParseJsonOutput(stdout);
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        return Assert.Single(document.RootElement.EnumerateArray().ToList()).Clone();
     }
 }

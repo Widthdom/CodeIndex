@@ -151,6 +151,11 @@ public partial class DbReader
             Visibility = symbol.Visibility,
             ReturnType = symbol.ReturnType,
             DefinitionSites = symbol.DefinitionSites,
+            PartialFamilyId = symbol.PartialFamilyId,
+            RepresentativeReason = symbol.RepresentativeReason,
+            FamilyMembers = symbol.FamilyMembers,
+            FamilyMembersTruncated = symbol.FamilyMembersTruncated,
+            IsGeneratedCode = symbol.IsGeneratedCode,
             Disambiguator = BuildDefinitionDisambiguator(symbol),
             Content = definitionExcerpt.Content,
             BodyContent = bodyContent,
@@ -300,6 +305,12 @@ public partial class DbReader
     public QueryCountResult CountDefinitionsTotal(string query, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null, bool groupPartials = false)
     {
         var normalizedQuery = NormalizeSymbolSearchQueryForSymbolSearch(query, lang, exact);
+        if (groupPartials)
+            EnsureCSharpCallableTypeKinds(
+                DbReader.NormalizeQueryLanguage(lang),
+                normalizedQuery == null ? null : [normalizedQuery],
+                exact,
+                kind);
         using var cmd = _conn.CreateCommand();
 
         var logicalPartialKeySql = LogicalPartialSymbolGrouper.BuildSqlKeyExpression(
@@ -307,10 +318,14 @@ public partial class DbReader
             "s.kind",
             "s.name",
             "s.id",
+            "f.path",
             GetSymbolColumnSql("signature"),
             GetSymbolColumnSql("container_name"),
             GetSymbolColumnSql("container_qualified_name"),
-            GetSymbolColumnSql("family_key"));
+            GetSymbolColumnSql("family_key"),
+            GetSymbolColumnSql("return_type"),
+            GetSymbolColumnSql("is_partial_declaration"),
+            _hotspotFamilyReadyLanguages.Contains("csharp"));
         var countSql = groupPartials
             ? $"COUNT(DISTINCT ({logicalPartialKeySql}))"
             : "COUNT(*)";

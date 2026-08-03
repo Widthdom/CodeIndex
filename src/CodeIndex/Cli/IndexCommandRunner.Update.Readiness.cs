@@ -112,12 +112,6 @@ public static partial class IndexCommandRunner
                 writer.MarkGraphReady();
                 graphTableAvailableAfter = true;
             }
-            if (!options.SymbolsOnly
-                && !context.MutualRecursionRefreshNeeded
-                && context.ReferenceIdentityContractMatchedBeforeMutation)
-            {
-                writer.MarkReferenceIdentityContractReady();
-            }
             writer.StampSymbolExtractorVersions(context.FullyRefreshedDynamicGraphLanguages);
             writer.StampDynamicReferenceGraphContracts(context.FullyRefreshedDynamicGraphLanguages);
             if ((context.PriorReadiness & DbContext.IssuesReadyFlag) != 0)
@@ -173,6 +167,13 @@ public static partial class IndexCommandRunner
                     context.CurrentHotspotFamilyMarkerFingerprints);
                 HotspotFamilyUpdateRestampReadyForCommitForTesting?.Invoke();
                 hotspotFamilyTxn.Commit();
+            }
+            if (!options.SymbolsOnly)
+            {
+                if (writer.CSharpFamilyTrustAllowsReferenceIdentityReady(hasCSharpFilesAfter))
+                    writer.MarkReferenceIdentityContractReady();
+                else
+                    writer.ClearReferenceIdentityContractReady();
             }
             if ((context.PriorReadiness & DbContext.FoldReadyFlag) != 0
                 && context.PriorFoldVersion == context.CurrentFoldVersion

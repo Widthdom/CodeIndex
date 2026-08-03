@@ -1093,7 +1093,8 @@ public static partial class IndexCommandRunner
 
         SymbolExtractor.ApplyFamilyScope(
             symbols,
-            indexer.GetFamilyScopeKey(absolutePath, record.Lang));
+            indexer.GetFamilyScopeKey(absolutePath, record.Lang),
+            record.Lang);
         var symbolsDroppedByKindFilter = options.SymbolKindFilter.Apply(symbols);
         if (symbols.Count > options.MaxSymbolsPerFile)
         {

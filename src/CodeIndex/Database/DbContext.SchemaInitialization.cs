@@ -136,6 +136,10 @@ public partial class DbContext : IDisposable
         family_key      TEXT,
         visibility      TEXT,
         return_type     TEXT,
+        is_partial_declaration INTEGER,
+        is_file_local_declaration INTEGER,
+        declaration_semantic_score INTEGER,
+        identifier_start_column INTEGER,
         is_metadata_target INTEGER,
         metadata_target_source TEXT,
         name_folded     TEXT,
@@ -214,6 +218,10 @@ public partial class DbContext : IDisposable
         EnsureColumn("symbols", "family_key", "TEXT");
         EnsureColumn("symbols", "visibility", "TEXT");
         EnsureColumn("symbols", "return_type", "TEXT");
+        EnsureColumn("symbols", "is_partial_declaration", "INTEGER");
+        EnsureColumn("symbols", "is_file_local_declaration", "INTEGER");
+        EnsureColumn("symbols", "declaration_semantic_score", "INTEGER");
+        EnsureColumn("symbols", "identifier_start_column", "INTEGER");
         EnsureColumn("file_issues", "origin", "TEXT");
         EnsureColumn("file_issues", "severity", "TEXT");
         EnsureColumn("symbols", "is_metadata_target", "INTEGER");
@@ -438,13 +446,17 @@ public partial class DbContext : IDisposable
                     family_key      TEXT,
                     visibility      TEXT,
                     return_type     TEXT,
+                    is_partial_declaration INTEGER,
+                    is_file_local_declaration INTEGER,
+                    declaration_semantic_score INTEGER,
+                    identifier_start_column INTEGER,
                     is_metadata_target INTEGER,
                     metadata_target_source TEXT,
                     name_folded     TEXT,
                     display_name_folded TEXT
                 )
                 """,
-                "id, file_id, kind, sub_kind, name, line, start_line, start_column, end_line, body_start_line, body_end_line, signature, container_kind, container_name, container_qualified_name, family_key, visibility, return_type, is_metadata_target, metadata_target_source, name_folded, display_name_folded");
+                "id, file_id, kind, sub_kind, name, line, start_line, start_column, end_line, body_start_line, body_end_line, signature, container_kind, container_name, container_qualified_name, family_key, visibility, return_type, is_partial_declaration, is_file_local_declaration, declaration_semantic_score, identifier_start_column, is_metadata_target, metadata_target_source, name_folded, display_name_folded");
             RebuildReferenceLineTablesWithRequiredFileId();
             RebuildTableWithRequiredFileId(
                 "file_issues",
@@ -733,13 +745,17 @@ public partial class DbContext : IDisposable
                 family_key      TEXT,
                 visibility      TEXT,
                 return_type     TEXT,
+                is_partial_declaration INTEGER,
+                is_file_local_declaration INTEGER,
+                declaration_semantic_score INTEGER,
+                identifier_start_column INTEGER,
                 is_metadata_target INTEGER,
                 metadata_target_source TEXT,
                 name_folded     TEXT,
                 display_name_folded TEXT
             )
             """;
-        const string symbolsColumns = "id, file_id, kind, sub_kind, name, line, start_line, start_column, end_line, body_start_line, body_end_line, signature, container_kind, container_name, container_qualified_name, family_key, visibility, return_type, is_metadata_target, metadata_target_source, name_folded, display_name_folded";
+        const string symbolsColumns = "id, file_id, kind, sub_kind, name, line, start_line, start_column, end_line, body_start_line, body_end_line, signature, container_kind, container_name, container_qualified_name, family_key, visibility, return_type, is_partial_declaration, is_file_local_declaration, declaration_semantic_score, identifier_start_column, is_metadata_target, metadata_target_source, name_folded, display_name_folded";
         var symbolReferencesCreateSql =
             $"""
             CREATE TABLE symbol_references (

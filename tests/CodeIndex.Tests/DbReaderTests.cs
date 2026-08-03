@@ -2945,6 +2945,73 @@ public partial class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetHotspotFamilySignal_SeparatesFileLocalAndContainingArityFamilies_Issue4914()
+    {
+        InsertIndexedFile("src/A.Host.cs", "csharp",
+            """
+            namespace Demo;
+            file partial class Host { }
+            file partial class Host { }
+            partial class Outer<T> { public partial class Child { } }
+            """);
+        InsertIndexedFile("src/B.Host.cs", "csharp",
+            """
+            namespace Demo;
+            class Host { }
+            partial class Outer<T> { public partial class Child { } }
+            """);
+        InsertIndexedFile("src/C.Host.cs", "csharp",
+            """
+            namespace Demo;
+            class Outer<T1, T2> { public class Child { } }
+            """);
+        InsertIndexedFile("src/D.PartialReturnType.cs", "csharp",
+            """
+            namespace Demo;
+            class partial { }
+            class PartialReturnTypeHost
+            {
+                partial M() => new partial();
+            }
+            """);
+        using (var command = _db.Connection.CreateCommand())
+        {
+            command.CommandText = """
+                UPDATE symbols
+                SET is_partial_declaration = NULL
+                WHERE name = 'M'
+                  AND file_id IN (
+                      SELECT id FROM files WHERE path = 'src/D.PartialReturnType.cs'
+                  )
+                """;
+            Assert.Equal(1, command.ExecuteNonQuery());
+        }
+
+        var reader = new DbReader(_db.Connection);
+        var signal = reader.GetHotspotFamilySignal("csharp");
+
+        Assert.True(signal.Relevant);
+        Assert.True(signal.Ready, signal.DegradedReason);
+        Assert.DoesNotContain("partial_family_key_population=csharp", signal.DegradedReason);
+    }
+
+    [Fact]
+    public void HotspotFamilyVersion_ChangesOnlyForCSharp_Issue4914()
+    {
+        Assert.Equal(14, DbContext.GetHotspotFamilyVersion("csharp"));
+        Assert.Equal(2, DbContext.GetHotspotFamilyVersion("vb"));
+        Assert.Equal(2, DbContext.GetHotspotFamilyVersion("fsharp"));
+        Assert.Equal(2, DbContext.GetHotspotFamilyVersion("msbuild"));
+
+        foreach (var lang in FileIndexer.GetHotspotFamilyMarkerLanguages())
+        {
+            Assert.Equal(
+                DbContext.GetHotspotFamilyVersion(lang).ToString(System.Globalization.CultureInfo.InvariantCulture),
+                _db.GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey(lang)));
+        }
+    }
+
+    [Fact]
     public void GetHotspotFamilySignal_GroupedReadinessDetectsPartialRowsAcrossLanguages()
     {
         InsertIndexedFile("src/csharp/Api.Part1.cs", "csharp",
@@ -2964,7 +3031,15 @@ public partial class DbReaderTests : IDisposable
         {
             command.CommandText = """
                 UPDATE symbols
-                SET family_key = NULL
+                SET family_key = NULL,
+                    is_partial_declaration = CASE
+                        WHEN kind = 'class'
+                         AND file_id IN (
+                             SELECT id FROM files WHERE path = 'src/csharp/Api.Part2.cs'
+                         )
+                        THEN NULL
+                        ELSE is_partial_declaration
+                    END
                 WHERE file_id IN (
                     SELECT id
                     FROM files

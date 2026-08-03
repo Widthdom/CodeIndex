@@ -7,6 +7,35 @@ namespace CodeIndex.Indexer;
 
 public static partial class SymbolExtractor
 {
+    internal static string SanitizeCSharpDeclarationSignature(string signature)
+    {
+        if (!signature.Contains('\n', StringComparison.Ordinal))
+            return LexCSharpLine(signature, new CSharpLexState()).SanitizedLine;
+
+        // Preserve offsets while resetting line comments at each newline and carrying
+        // block-comment/raw-string state across lines.
+        // offset を保ったまま、改行ごとに line comment を終了し、block comment / raw string
+        // の state は次行へ引き継ぐ。
+        var sanitized = new StringBuilder(signature.Length);
+        var state = new CSharpLexState();
+        var start = 0;
+        while (start < signature.Length)
+        {
+            var newlineOffset = signature.AsSpan(start).IndexOf('\n');
+            var lineEnd = newlineOffset < 0 ? signature.Length : start + newlineOffset;
+            var lexed = LexCSharpLine(signature[start..lineEnd], state);
+            sanitized.Append(lexed.SanitizedLine);
+            state = lexed.EndState;
+            if (lineEnd >= signature.Length)
+                break;
+
+            sanitized.Append('\n');
+            start = lineEnd + 1;
+        }
+
+        return sanitized.ToString();
+    }
+
     private static CSharpLexedLine LexCSharpLine(string line, CSharpLexState state)
     {
         if (state.Mode == CSharpLexMode.Code

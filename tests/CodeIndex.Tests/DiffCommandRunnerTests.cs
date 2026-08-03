@@ -1303,6 +1303,77 @@ public class DiffCommandRunnerTests
     }
 
     [Fact]
+    public void Run_DetailedJsonIncludesPartialRepresentativeMetadata_Issue4914()
+    {
+        var leftRoot = TestProjectHelper.CreateTempProject("cdidx_diff_partial_metadata_left_issue4914");
+        var rightRoot = TestProjectHelper.CreateTempProject("cdidx_diff_partial_metadata_right_issue4914");
+        try
+        {
+            var leftDb = TestProjectHelper.CreateProjectDb(leftRoot);
+            var rightDb = TestProjectHelper.CreateProjectDb(rightRoot);
+            TestProjectHelper.InsertIndexedFile(leftDb, "src/Same.cs", "csharp", "public partial class Same { }");
+            TestProjectHelper.InsertIndexedFile(rightDb, "src/Same.cs", "csharp", "public partial class Same { }");
+            ExecuteNonQuery(
+                rightDb,
+                """
+                UPDATE symbols
+                SET is_partial_declaration = 1,
+                    is_file_local_declaration = 1,
+                    declaration_semantic_score = 7,
+                    identifier_start_column = 19
+                WHERE id = (SELECT MIN(id) FROM symbols)
+                """);
+
+            var (exitCode, output) = RunWithCapturedOut(
+                [leftDb, rightDb, "--json", "--detailed", "--data-only", "--include-content", "--limit", "10"]);
+
+            Assert.Equal(1, exitCode);
+            using var document = JsonDocument.Parse(output);
+            var root = document.RootElement;
+            Assert.Equal("different", root.GetProperty("status").GetString());
+            var rightSymbol = Assert.Single(GetRecords(root, "symbol", "right"));
+            Assert.Equal("1", GetField(rightSymbol, "is_partial_declaration").GetProperty("value").GetString());
+            Assert.Equal("1", GetField(rightSymbol, "is_file_local_declaration").GetProperty("value").GetString());
+            Assert.Equal("7", GetField(rightSymbol, "declaration_semantic_score").GetProperty("value").GetString());
+            Assert.Equal("19", GetField(rightSymbol, "identifier_start_column").GetProperty("value").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(leftRoot);
+            TestProjectHelper.DeleteDirectory(rightRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DetailedJsonHandlesLegacyRowsWithoutPartialRepresentativeMetadata_Issue4914()
+    {
+        var leftRoot = TestProjectHelper.CreateTempProject("cdidx_diff_partial_legacy_left_issue4914");
+        var rightRoot = TestProjectHelper.CreateTempProject("cdidx_diff_partial_legacy_right_issue4914");
+        try
+        {
+            var leftDb = TestProjectHelper.CreateProjectDb(leftRoot);
+            var rightDb = TestProjectHelper.CreateProjectDb(rightRoot);
+            TestProjectHelper.InsertIndexedFile(leftDb, "src/Same.cs", "csharp", "public partial class Same { }");
+            TestProjectHelper.InsertIndexedFile(rightDb, "src/Same.cs", "csharp", "public partial class Same { }");
+            DropPartialRepresentativeMetadataColumns(leftDb);
+            DropPartialRepresentativeMetadataColumns(rightDb);
+
+            var (exitCode, output) = RunWithCapturedOut(
+                [leftDb, rightDb, "--json", "--detailed", "--data-only", "--limit", "10"]);
+
+            Assert.Equal(0, exitCode);
+            using var document = JsonDocument.Parse(output);
+            Assert.Equal("identical", document.RootElement.GetProperty("status").GetString());
+            Assert.True(document.RootElement.GetProperty("identical").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(leftRoot);
+            TestProjectHelper.DeleteDirectory(rightRoot);
+        }
+    }
+
+    [Fact]
     public void Run_ReturnsSuccessForSeparatelyBuiltIdenticalDatabases_Issue1724()
     {
         var leftRoot = TestProjectHelper.CreateTempProject("cdidx_diff_identical_left");
@@ -1830,22 +1901,44 @@ public class DiffCommandRunnerTests
                 family_key      TEXT,
                 visibility      TEXT,
                 return_type     TEXT,
+                is_partial_declaration INTEGER,
+                is_file_local_declaration INTEGER,
+                declaration_semantic_score INTEGER,
+                identifier_start_column INTEGER,
                 is_metadata_target INTEGER
             );
             INSERT INTO symbols (
                 id, file_id, kind, sub_kind, name, name_folded, line, start_line,
                 start_column, end_line, body_start_line,
                 body_end_line, signature, container_kind, container_name,
-                container_qualified_name, family_key, visibility, return_type, is_metadata_target
+                container_qualified_name, family_key, visibility, return_type,
+                is_partial_declaration, is_file_local_declaration,
+                declaration_semantic_score, identifier_start_column,
+                is_metadata_target
             )
             SELECT
                 id, file_id, kind, sub_kind, name, name_folded, line, start_line,
                 start_column, end_line, body_start_line,
                 body_end_line, signature, container_kind, container_name,
-                container_qualified_name, family_key, visibility, return_type, is_metadata_target
+                container_qualified_name, family_key, visibility, return_type,
+                is_partial_declaration, is_file_local_declaration,
+                declaration_semantic_score, identifier_start_column,
+                is_metadata_target
             FROM symbols_old;
             DROP TABLE symbols_old;
             PRAGMA foreign_keys = ON;
+            """);
+    }
+
+    private static void DropPartialRepresentativeMetadataColumns(string dbPath)
+    {
+        ExecuteNonQuery(
+            dbPath,
+            """
+            ALTER TABLE symbols DROP COLUMN is_partial_declaration;
+            ALTER TABLE symbols DROP COLUMN is_file_local_declaration;
+            ALTER TABLE symbols DROP COLUMN declaration_semantic_score;
+            ALTER TABLE symbols DROP COLUMN identifier_start_column;
             """);
     }
 

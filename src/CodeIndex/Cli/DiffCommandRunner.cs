@@ -236,6 +236,10 @@ public static class DiffCommandRunner
             "family_key",
             "visibility",
             "return_type",
+            "is_partial_declaration",
+            "is_file_local_declaration",
+            "declaration_semantic_score",
+            "identifier_start_column",
             "is_metadata_target",
             "metadata_target_source",
         ]);
@@ -1452,6 +1456,18 @@ public static class DiffCommandRunner
         var displayNameFoldedExpr = ColumnExists(connection, "symbols", "display_name_folded")
             ? "symbols.display_name_folded"
             : "NULL";
+        var isPartialDeclarationExpr = ColumnExists(connection, "symbols", "is_partial_declaration")
+            ? "symbols.is_partial_declaration"
+            : "NULL";
+        var isFileLocalDeclarationExpr = ColumnExists(connection, "symbols", "is_file_local_declaration")
+            ? "symbols.is_file_local_declaration"
+            : "NULL";
+        var declarationSemanticScoreExpr = ColumnExists(connection, "symbols", "declaration_semantic_score")
+            ? "symbols.declaration_semantic_score"
+            : "NULL";
+        var identifierStartColumnExpr = ColumnExists(connection, "symbols", "identifier_start_column")
+            ? "symbols.identifier_start_column"
+            : "NULL";
 
         return $$"""
             SELECT
@@ -1474,6 +1490,10 @@ public static class DiffCommandRunner
                 symbols.family_key,
                 symbols.visibility,
                 symbols.return_type,
+                {{isPartialDeclarationExpr}},
+                {{isFileLocalDeclarationExpr}},
+                {{declarationSemanticScoreExpr}},
+                {{identifierStartColumnExpr}},
                 {{metadataTargetExpr}},
                 {{metadataTargetSourceExpr}}
             FROM symbols
@@ -1498,6 +1518,10 @@ public static class DiffCommandRunner
                 symbols.family_key,
                 symbols.visibility,
                 symbols.return_type,
+                {{isPartialDeclarationExpr}},
+                {{isFileLocalDeclarationExpr}},
+                {{declarationSemanticScoreExpr}},
+                {{identifierStartColumnExpr}},
                 {{metadataTargetExpr}},
                 {{metadataTargetSourceExpr}}
             """;

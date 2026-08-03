@@ -4,6 +4,7 @@ using CodeIndex.Indexer;
 using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using System.Runtime.ExceptionServices;
 using System.Text.Json;
 
@@ -11,6 +12,15 @@ namespace CodeIndex.Database;
 
 public partial class DbContext : IDisposable
 {
+    private static readonly ConditionalWeakTable<SqliteConnection, CSharpCallableTypeKindLookup>
+        CSharpCallableTypeKindLookups = new();
+    private static readonly ConditionalWeakTable<SqliteConnection, object>
+        ConnectionFunctionRegistrations = new();
+    private static readonly object ConnectionFunctionRegistrationLock = new();
+    private static readonly ConditionalWeakTable<SqliteConnection, object>
+        CSharpPartialDeclarationFunctionRegistrations = new();
+    private static readonly object CSharpPartialDeclarationFunctionRegistrationLock = new();
+
     private static SqliteConnection OpenArtifactPreservingQueryOnly(string dbPath)
     {
         var connection = CreateArtifactPreservingQueryOnlyConnection(
@@ -24,6 +34,18 @@ public partial class DbContext : IDisposable
     }
 
     internal static void RegisterConnectionFunctions(SqliteConnection connection)
+    {
+        lock (ConnectionFunctionRegistrationLock)
+        {
+            if (ConnectionFunctionRegistrations.TryGetValue(connection, out _))
+                return;
+
+            RegisterConnectionFunctionsCore(connection);
+            ConnectionFunctionRegistrations.Add(connection, new object());
+        }
+    }
+
+    private static void RegisterConnectionFunctionsCore(SqliteConnection connection)
     {
         static int? ToNullableInt(long? value)
             => value is null || value < int.MinValue || value > int.MaxValue ? null : (int)value.Value;
@@ -105,6 +127,53 @@ public partial class DbContext : IDisposable
             "csharp_constructor_parameter_count",
             (string? signature, string? identifier, string? symbolKind) =>
                 CSharpTypeReferenceArity.GetConstructorParameterCount(signature, identifier, symbolKind));
+        var csharpCallableTypeKinds = CSharpCallableTypeKindLookups.GetValue(
+            connection,
+            static _ => new CSharpCallableTypeKindLookup());
+        connection.CreateFunction(
+            "csharp_partial_callable_identity",
+            (string? signature, string? identifier, string? returnType) =>
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    signature,
+                    identifier,
+                    returnType,
+                    containerQualifiedName: null,
+                    typeKinds: null),
+            isDeterministic: true);
+        connection.CreateFunction(
+            "csharp_partial_callable_identity",
+            (string? signature, string? identifier, string? returnType, string? containerQualifiedName) =>
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    signature,
+                    identifier,
+                    returnType,
+                    containerQualifiedName,
+                    csharpCallableTypeKinds));
+        connection.CreateFunction(
+            "csharp_partial_callable_identity",
+            (string? signature, string? identifier, string? returnType, string? containerQualifiedName, long? symbolId) =>
+                LogicalPartialSymbolGrouper.BuildCallableIdentity(
+                    signature,
+                    identifier,
+                    returnType,
+                    containerQualifiedName,
+                    csharpCallableTypeKinds,
+                    symbolId));
+        connection.CreateFunction(
+            "csharp_partial_semantic_score",
+            (string? signature, string? symbolKind) =>
+                LogicalPartialSymbolGrouper.GetSemanticScore(signature, symbolKind),
+            isDeterministic: true);
+        connection.CreateFunction(
+            "csharp_partial_declaration_identity",
+            (string? signature) =>
+                LogicalPartialSymbolGrouper.BuildCanonicalDeclarationIdentity(signature),
+            isDeterministic: true);
+        RegisterCSharpPartialDeclarationFunction(connection);
+        connection.CreateFunction(
+            "codeindex_generated_file_name",
+            (string? path) => FileIndexer.HasGeneratedCodeFileName(path ?? string.Empty),
+            isDeterministic: true);
         connection.CreateFunction(
             "csharp_invocation_argument_count",
             (string? context, string? identifier, long? columnNumber) =>
@@ -208,6 +277,48 @@ public partial class DbContext : IDisposable
             "sql_allow_leaf_fallback_at",
             (string? symbolName, string? context, string? containerName, long? columnNumber) =>
                 SqlNameResolver.AllowLeafFallbackAtColumn(symbolName, context, containerName, ToNullableInt(columnNumber)) ? 1 : 0);
+    }
+
+    internal static void RegisterCSharpPartialDeclarationFunction(SqliteConnection connection)
+    {
+        lock (CSharpPartialDeclarationFunctionRegistrationLock)
+        {
+            // DbReader also accepts caller-owned raw connections, so it must ensure this
+            // function exists. DbContext connections already registered it, however, and
+            // SQLite rejects replacing a function while any statement is active.
+            // DbReader は caller-owned raw connection も受け付けるため、この function を
+            // 保証する。一方 DbContext connection では登録済みであり、active statement 中の
+            // 再登録を SQLite が拒否するため、connection 単位で一度だけ登録する。
+            if (CSharpPartialDeclarationFunctionRegistrations.TryGetValue(connection, out _))
+                return;
+
+            connection.CreateFunction(
+                "csharp_is_partial_declaration",
+                (string? signature, string? kind, string? name) =>
+                    LogicalPartialSymbolGrouper.ContainsPartialModifier(signature, kind, name),
+                isDeterministic: true);
+            CSharpPartialDeclarationFunctionRegistrations.Add(connection, new object());
+        }
+    }
+
+    internal static void RefreshCSharpCallableTypeKinds(
+        SqliteConnection connection,
+        IReadOnlySet<string> fileColumns,
+        IReadOnlySet<string> symbolColumns,
+        IReadOnlyList<string>? candidateQueries = null,
+        bool exact = false,
+        bool useFoldedNames = false)
+    {
+        var lookup = CSharpCallableTypeKindLookups.GetValue(
+            connection,
+            static _ => new CSharpCallableTypeKindLookup());
+        lookup.RefreshIfChanged(
+            connection,
+            fileColumns,
+            symbolColumns,
+            candidateQueries,
+            exact,
+            useFoldedNames);
     }
 
     internal static int CountCSharpIdentifierOccurrences(string? text, string? identifier)

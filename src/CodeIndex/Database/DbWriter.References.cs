@@ -129,6 +129,18 @@ public partial class DbWriter
     private static string BuildCSharpProjectPrefixSql(string symbolAlias)
         => $"""
             CASE
+                WHEN INSTR(COALESCE({symbolAlias}.family_key, ''), CHAR(31)) > 0
+                     AND (
+                         SUBSTR(COALESCE({symbolAlias}.family_key, ''), 1, 11) = 'file-local:'
+                         OR SUBSTR(
+                                COALESCE({symbolAlias}.family_key, ''),
+                                INSTR(COALESCE({symbolAlias}.family_key, ''), '|') + 1,
+                                11) = 'file-local:'
+                     )
+                    THEN SUBSTR(
+                        {symbolAlias}.family_key,
+                        1,
+                        INSTR({symbolAlias}.family_key, CHAR(31)))
                 WHEN INSTR(COALESCE({symbolAlias}.family_key, ''), '|') > 0
                     THEN SUBSTR(
                         {symbolAlias}.family_key,
@@ -1967,11 +1979,15 @@ public partial class DbWriter
         }
     }
 
-    internal void RefreshMutualRecursionFlags(CancellationToken cancellationToken = default)
+    internal void RefreshMutualRecursionFlags(
+        CancellationToken cancellationToken = default,
+        bool? stampReferenceIdentityContractReady = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         MutualRecursionRefreshForTesting?.Invoke();
         cancellationToken.ThrowIfCancellationRequested();
+        var stampReferenceIdentityContract = stampReferenceIdentityContractReady
+            ?? CSharpFamilyTrustAllowsReferenceIdentityReady(validatePersistedRows: true);
         var graphScope = _referenceGraphRefreshScope;
         using var transaction = BeginTransaction(cancellationToken, "refresh reference identities");
         if (graphScope != null)
@@ -2035,10 +2051,15 @@ public partial class DbWriter
                     ? RefreshMutualRecursionFlagsSql
                     : RefreshScopedMutualRecursionFlagsSql,
                 static _ => { });
-            // Stamp inside the same transaction, but before the graph refresh so the
-            // public SQLite changes() result continues to describe recursion updates.
-            // 同一トランザクション内で先に marker を設定し、公開 changes() は再帰更新件数を維持する。
-            MarkReferenceIdentityContractReady();
+            // Reconcile the marker inside the same transaction, but before the graph refresh
+            // so the public SQLite changes() result continues to describe recursion updates.
+            // High-level indexing defers v7 while untouched legacy C# family rows remain.
+            // 同一 transaction 内で先に marker を調整して公開 changes() を維持する。
+            // high-level index は未更新の旧 C# family row が残る間 v7 を保留する。
+            if (stampReferenceIdentityContract)
+                MarkReferenceIdentityContractReady();
+            else
+                ClearReferenceIdentityContractReady();
             cancellationToken.ThrowIfCancellationRequested();
             refreshIdentityCommand.ExecuteNonQuery();
             cancellationToken.ThrowIfCancellationRequested();

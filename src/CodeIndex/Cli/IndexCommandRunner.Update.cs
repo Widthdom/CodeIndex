@@ -724,7 +724,10 @@ public static partial class IndexCommandRunner
         ThrowIfUpdateCancelled();
         mutualRecursionRefreshNeeded |= !options.SymbolsOnly && (removed > 0 || purgedRefs > 0);
         if (mutualRecursionRefreshNeeded)
-            writer.RefreshMutualRecursionFlags(cancellationToken);
+            writer.RefreshMutualRecursionFlags(
+                cancellationToken,
+                stampReferenceIdentityContractReady:
+                    writer.CSharpFamilyTrustAllowsReferenceIdentityReady());
         if (options.MemoryTrace)
             memorySamples.Add(CaptureMemorySample("reference_graph", stopwatch));
         ThrowIfUpdateCancelled();

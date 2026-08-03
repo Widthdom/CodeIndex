@@ -44,6 +44,17 @@ metadata, unknown-extension counts, filesystem case-sensitivity, MAC profile,
 and DB/WAL/status diagnostics. These stamps let readers distinguish a feature
 that is absent, stale, or newer than the running binary.
 
+The canonical C# partial-declaration change in #4914 raises
+`hotspot_family_version_csharp` from `2` to `14` and the reference-identity
+contract from `6` to `8`. The minimum compatible implementation is therefore a
+binary that understands hotspot-family contract `14` and reference-identity
+contract `8`. Existing databases remain readable, but their C# family and
+reference-identity data is reported as stale until a rebuild with
+`cdidx index <projectPath> --rebuild` refreshes the persisted partial metadata
+and reference candidates.
+Older binaries treat those newer stamps as forward-version data and must retain
+their normal query degradation and write-refusal behavior.
+
 Reference-extraction cap hits use existing per-file `file_issues` rows rather
 than a new schema bit. Current readers aggregate those rows into
 `reference_extraction_cap_hits` and set `reference_graph_complete=false`; a
@@ -120,6 +131,16 @@ contract stamp、hotspot-family readiness、index writer version、indexed HEAD
 metadata、unknown-extension count、filesystem case-sensitivity、MAC profile、
 DB/WAL/status diagnostics が含まれます。reader はこれらの stamp により、feature
 が存在しないのか、stale なのか、実行中 binary より新しいのかを判別できます。
+
+#4914 の canonical C# partial declaration 対応では、
+`hotspot_family_version_csharp` を `2` から `14` へ、reference identity contract
+を `6` から `8` へ更新します。したがって最低互換実装は hotspot-family contract
+`14` と reference-identity contract `8` を理解する binary です。既存 database は
+引き続き読み取り可能ですが、`cdidx index <projectPath> --rebuild` で永続 partial
+metadata と reference candidate を更新するまでは、C# family / reference identity
+data が stale として報告されます。古い binary はこれらの新しい stamp を
+forward-version data として扱い、通常の query degradation と write refusal を
+維持しなければなりません。
 
 reference-extraction cap hit は新しい schema bit ではなく、既存の file ごとの
 `file_issues` row を使います。current reader はそれを `reference_extraction_cap_hits`

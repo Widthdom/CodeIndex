@@ -286,7 +286,7 @@ public partial class IndexCommandRunnerTests
 
             var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
             Assert.Equal(CommandExitCodes.Success, initialExitCode);
-            Assert.Equal(6, DbContext.ReferenceIdentityContractVersion);
+            Assert.Equal(8, DbContext.ReferenceIdentityContractVersion);
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             using (var connection = new SqliteConnection($"Data Source={dbPath}"))
@@ -351,7 +351,7 @@ public partial class IndexCommandRunnerTests
             using var markerCommand = verification.CreateCommand();
             markerCommand.CommandText = "SELECT value FROM codeindex_meta WHERE key = @key";
             markerCommand.Parameters.AddWithValue("@key", DbContext.ReferenceIdentityContractVersionMetaKey);
-            Assert.Equal("6", Convert.ToString(markerCommand.ExecuteScalar(), CultureInfo.InvariantCulture));
+            Assert.Equal("8", Convert.ToString(markerCommand.ExecuteScalar(), CultureInfo.InvariantCulture));
 
             using var resolutionCommand = verification.CreateCommand();
             resolutionCommand.CommandText = """
@@ -6056,7 +6056,7 @@ public partial class IndexCommandRunnerTests
     }
 
     [ProductionRuntimeFact]
-    public void Run_Update_WhenHotspotFamilyMetadataCannotBeRestamped_ReportsDegradedReadiness()
+    public void Run_Update_WhenHotspotFamilyMetadataCannotBeRestamped_KeepsReferenceIdentityStale_Issue4914()
     {
         var projectRoot = CreateTempProject();
         try
@@ -6078,6 +6078,10 @@ public partial class IndexCommandRunnerTests
                 var writer = new DbWriter(db.Connection);
                 writer.SetMeta(DbContext.GetHotspotFamilyVersionMetaKey("csharp"), null);
                 writer.SetMeta(DbContext.GetHotspotFamilyMarkerFingerprintMetaKey("csharp"), null);
+                writer.SetMeta(
+                    DbContext.ReferenceIdentityContractVersionMetaKey,
+                    (DbContext.ReferenceIdentityContractVersion - 1).ToString(
+                        CultureInfo.InvariantCulture));
             }
 
             File.WriteAllText(callerPath, "public class Caller { public void Call(Api api) { api.Run(); api.Run(1); api.Run(); } }");
@@ -6087,6 +6091,13 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, updateExitCode);
             Assert.False(updateJson.GetProperty("hotspot_family_ready").GetBoolean());
             Assert.Contains("hotspot_family_support_not_indexed=csharp", updateJson.GetProperty("hotspot_family_degraded_reason").GetString());
+
+            using (var verifyDb = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                Assert.NotEqual(
+                    DbContext.ReferenceIdentityContractVersion.ToString(CultureInfo.InvariantCulture),
+                    verifyDb.GetMetaString(DbContext.ReferenceIdentityContractVersionMetaKey));
+            }
 
             File.WriteAllText(callerPath, "public class Caller { public void Call(Api api) { api.Run(); api.Run(1); api.Run(); api.Run(1); } }");
             File.SetLastWriteTimeUtc(callerPath, DateTime.UtcNow.AddSeconds(4));

@@ -484,7 +484,8 @@ public partial class DbReader : IDisposable
                context.DatabasePermissionPolicyName,
                context.DatabasePermissionDiagnostics,
                context.QueryOnlySnapshotRequiresRefresh
-                   || (context.ImmutableReadOnly && !context.ImmutableReadOnlyWalRisk))
+                   || (context.ImmutableReadOnly && !context.ImmutableReadOnlyWalRisk),
+               connectionFunctionsAlreadyRegistered: true)
     {
     }
 
@@ -516,7 +517,8 @@ public partial class DbReader : IDisposable
                context.DatabasePermissionPolicyName,
                context.DatabasePermissionDiagnostics,
                context.QueryOnlySnapshotRequiresRefresh
-                   || (context.ImmutableReadOnly && !context.ImmutableReadOnlyWalRisk))
+                   || (context.ImmutableReadOnly && !context.ImmutableReadOnlyWalRisk),
+               connectionFunctionsAlreadyRegistered: true)
     {
     }
 
@@ -563,16 +565,25 @@ public partial class DbReader : IDisposable
         long? walCheckpointRemainingPageCount = null,
         string databasePermissionPolicy = DatabasePermissionPolicy.BestEffortName,
         IReadOnlyList<StatusDatabasePermissionDiagnostic>? databasePermissionDiagnostics = null,
-        bool databaseFileSnapshotStable = false)
+        bool databaseFileSnapshotStable = false,
+        bool connectionFunctionsAlreadyRegistered = false)
     {
         _conn = connection;
         _commandCache = commandCache;
         RecoverInterruptedFtsBulkLoadForRead(_conn, isReadOnly);
-        // SQL user functions are registered once per connection by `DbContext` when the
-        // connection is opened. Re-registering on every `DbReader` construction wasted CPU
-        // on hot MCP/CLI paths that build a short-lived reader per request (#1564).
-        // SQL ユーザー関数は接続オープン時に `DbContext` が一度だけ登録するため、
-        // ここでの再登録は不要 (#1564)。
+        // DbContext registers every SQL user function when it opens a connection. Public
+        // raw-connection constructors do not have that guarantee, so register the same full
+        // set before any reader query can prepare a statement. The explicit flag preserves
+        // the no-reregistration hot path for DbContext-backed readers (#1564/#4914).
+        // DbContext は接続開始時に全 SQL user function を登録するが、public な raw connection
+        // constructor にはその保証がない。reader query が statement を prepare する前に同じ
+        // 完全な集合を登録し、DbContext-backed reader は明示 flag で再登録を避ける (#1564/#4914)。
+        if (!connectionFunctionsAlreadyRegistered)
+        {
+            DbContext.RegisterConnectionFunctionsWithRetry(
+                connection,
+                cancellationToken: cancellation);
+        }
         _isReadOnly = isReadOnly;
         _readOnlyFallback = readOnlyFallback;
         _walCheckpointAttempted = walCheckpointAttempted;
@@ -664,6 +675,11 @@ public partial class DbReader : IDisposable
                 TryGetMetaString(_conn, DbContext.ReferenceIdentityContractVersionMetaKey),
                 DbContext.ReferenceIdentityContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 StringComparison.Ordinal);
+        // Public DbReader constructors accept caller-owned raw connections that have not
+        // necessarily passed through DbContext's full function registration path.
+        // public DbReader は DbContext の function 登録を通っていない caller-owned raw
+        // connection も受け付けるため、readiness が直接使う UDF はここでも保証する。
+        DbContext.RegisterCSharpPartialDeclarationFunction(connection);
         (_hotspotFamilyReadyLanguages, _incompleteHotspotFamilyLanguages) =
             LoadHotspotFamilyReadiness(connection);
         // NOTE: row presence is intentionally NOT used as a fallback. A legacy DB or an
@@ -681,6 +697,30 @@ public partial class DbReader : IDisposable
         // Issue #1515: 旧 cdidx が新 cdidx 製 DB を開いたケースを明示的に検知する。
         _indexWriterVersion = TryGetMetaString(_conn, DbContext.CdidxWriterVersionMetaKey);
         (_indexNewerThanReader, _indexNewerThanReaderReason) = DetectNewerThanReaderContracts(_conn, userVersion);
+    }
+
+    private void EnsureCSharpCallableTypeKinds(
+        string? lang = null,
+        IReadOnlyList<string>? candidateQueries = null,
+        bool exact = false,
+        string? kind = null)
+    {
+        if (!_hotspotFamilyReadyLanguages.Contains("csharp")
+            || (lang != null && !string.Equals(lang, "csharp", StringComparison.OrdinalIgnoreCase))
+            || (kind != null
+                && !string.Equals(kind, "function", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(kind, "test.method", StringComparison.OrdinalIgnoreCase)))
+        {
+            return;
+        }
+
+        DbContext.RefreshCSharpCallableTypeKinds(
+            _conn,
+            _fileColumns,
+            _symbolColumns,
+            candidateQueries,
+            exact,
+            _foldReady);
     }
 
     private static void RecoverInterruptedFtsBulkLoadForRead(SqliteConnection conn, bool isReadOnly)
@@ -782,7 +822,7 @@ public partial class DbReader : IDisposable
                 newerContracts);
         }
         foreach (var lang in FileIndexer.GetHotspotFamilyMarkerLanguages())
-            AppendIfStoredGreater(conn, DbContext.GetHotspotFamilyVersionMetaKey(lang), DbContext.HotspotFamilyVersion, $"hotspot_family_version_{lang}", newerContracts);
+            AppendIfStoredGreater(conn, DbContext.GetHotspotFamilyVersionMetaKey(lang), DbContext.GetHotspotFamilyVersion(lang), $"hotspot_family_version_{lang}", newerContracts);
 
         // PRAGMA user_version is a bitmap of readiness flags. A bit outside the known
         // `CurrentSchemaVersion` mask means a newer cdidx introduced a readiness flag this
@@ -864,7 +904,7 @@ public partial class DbReader : IDisposable
             return DegradationReasonCodes.HotspotFamilySupportNotIndexed;
 
         if (!int.TryParse(raw, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var version)
-            || version != DbContext.HotspotFamilyVersion)
+            || version != DbContext.GetHotspotFamilyVersion(lang))
         {
             return DegradationReasonCodes.HotspotFamilyMetadataStale;
         }
@@ -1035,7 +1075,7 @@ public partial class DbReader : IDisposable
             var fingerprint = TryGetMetaString(conn, DbContext.GetHotspotFamilyMarkerFingerprintMetaKey(lang));
             if (raw is string s
                 && int.TryParse(s, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var version)
-                && version == DbContext.HotspotFamilyVersion
+                && version == DbContext.GetHotspotFamilyVersion(lang)
                 && !string.IsNullOrWhiteSpace(fingerprint)
                 && !DbContext.IsIncompleteHotspotFamilyMarkerFingerprint(fingerprint))
             {
@@ -1057,12 +1097,42 @@ public partial class DbReader : IDisposable
 
         HotspotFamilyReadinessBatchForTesting?.Invoke(candidateLangs);
 
-        // Detect every mixed NULL/non-NULL family in one grouped scan. The previous
-        // correlated EXISTS probe rescanned symbols for every stamped language (including
-        // languages absent from the workspace), making reader construction grow toward
-        // O(language-count * symbol-count^2) on large indexes.
-        // NULL/non-NULL が混在する family を全言語まとめて一度の group scan で検出する。
-        // 旧 correlated EXISTS は未使用言語まで symbols を反復走査していた。
+        // C# has an explicit declaration-level partial fact, so readiness can test the
+        // actual rows that require a family key. Reconstructing a family with only leaf,
+        // container, and arity incorrectly joins file-local types and nested types whose
+        // containing arities differ. Other languages retain the bounded mixed-population
+        // scan until they expose an equivalent declaration fact.
+        // C# には declaration 単位の partial 情報があるため、family key が必要な実際の行を
+        // 直接検査する。leaf・container・arity だけで family を再構築すると、file-local type
+        // や containing arity が異なる nested type を誤って結合する。ほかの言語は同等の
+        // declaration 情報を持つまで bounded な混在 population scan を維持する。
+        incompleteLangs.UnionWith(LoadIncompleteHotspotFamilyLanguages(
+            conn,
+            _symbolColumns,
+            candidateLangs));
+
+        foreach (var lang in candidateLangs)
+        {
+            if (!incompleteLangs.Contains(lang))
+                readyLangs.Add(lang);
+        }
+
+        return (readyLangs, incompleteLangs);
+    }
+
+    internal static HashSet<string> LoadIncompleteHotspotFamilyLanguages(
+        SqliteConnection conn,
+        IReadOnlySet<string> symbolColumns,
+        IReadOnlyList<string> candidateLangs)
+    {
+        var incompleteLangs = new HashSet<string>(StringComparer.Ordinal);
+        if (candidateLangs.Count == 0)
+            return incompleteLangs;
+
+        DbContext.RegisterCSharpPartialDeclarationFunction(conn);
+        var csharpPartialSql = symbolColumns.Contains("is_partial_declaration")
+            ? "(s.is_partial_declaration = 1 OR (s.is_partial_declaration IS NULL AND s.kind IN ('class', 'struct', 'interface', 'record', 'function', 'test.method') AND csharp_is_partial_declaration(s.signature, s.kind, s.name)))"
+            : "(s.kind IN ('class', 'struct', 'interface', 'record', 'function', 'test.method') AND csharp_is_partial_declaration(s.signature, s.kind, s.name))";
         using (var cmd = conn.CreateCommand())
         {
             var parameterNames = new string[candidateLangs.Count];
@@ -1073,12 +1143,23 @@ public partial class DbReader : IDisposable
                 SqliteCommandPolicy.Add(cmd, parameterName, candidateLangs[index]);
             }
             cmd.CommandText = $"""
-                SELECT DISTINCT grouped.lang
+                SELECT DISTINCT incomplete.lang
                 FROM (
                     SELECT f.lang
                     FROM symbols s
                     JOIN files f ON f.id = s.file_id
+                    WHERE f.lang = 'csharp'
+                      AND f.lang IN ({string.Join(", ", parameterNames)})
+                      AND {csharpPartialSql}
+                      AND NULLIF(TRIM(s.family_key), '') IS NULL
+
+                    UNION ALL
+
+                    SELECT f.lang
+                    FROM symbols s
+                    JOIN files f ON f.id = s.file_id
                     WHERE f.lang IN ({string.Join(", ", parameterNames)})
+                      AND f.lang <> 'csharp'
                       AND s.name IS NOT NULL
                     GROUP BY
                         f.lang,
@@ -1087,20 +1168,14 @@ public partial class DbReader : IDisposable
                         COALESCE(s.container_qualified_name, '')
                     HAVING COUNT(s.family_key) > 0
                        AND COUNT(s.family_key) < COUNT(*)
-                ) grouped
+                ) incomplete
                 """;
             using var reader = cmd.ExecuteTrackedReader();
             while (reader.TrackedRead())
                 incompleteLangs.Add(reader.GetString(0));
         }
 
-        foreach (var lang in candidateLangs)
-        {
-            if (!incompleteLangs.Contains(lang))
-                readyLangs.Add(lang);
-        }
-
-        return (readyLangs, incompleteLangs);
+        return incompleteLangs;
     }
 
     /// <summary>

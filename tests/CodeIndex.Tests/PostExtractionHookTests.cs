@@ -3,6 +3,7 @@ using System.Reflection;
 using System.Runtime.Loader;
 using System.Text.Json;
 using CodeIndex.HookIsolationFixture;
+using CodeIndex.Indexer;
 using CodeIndex.Indexer.Hooks;
 using CodeIndex.Models;
 
@@ -19,6 +20,7 @@ public class PostExtractionHookTests
     internal const string StatefulHookEnvironmentVariable = "CDIDX_TEST_STATEFUL_POST_EXTRACTION_HOOK";
     internal const string ThrowingConstructorHookEnvironmentVariable = "CDIDX_TEST_THROWING_CTOR_POST_EXTRACTION_HOOK";
     internal const string ExpandingHookEnvironmentVariable = "CDIDX_TEST_EXPANDING_POST_EXTRACTION_HOOK";
+    internal const string CSharpDeclarationMutationEnvironmentVariable = "CDIDX_TEST_CSHARP_DECLARATION_MUTATION_HOOK";
     internal const string ModuleInitializerDelayEnvironmentVariable = "CDIDX_TEST_HOOK_MODULE_INITIALIZER_DELAY_MS";
     internal const string PersistentDiscoveryWorkerPidPathEnvironmentVariable = "CDIDX_TEST_HOOK_DISCOVERY_PERSISTENT_PID_PATH";
     internal const string PersistentDiscoveryDescendantPidPathEnvironmentVariable = "CDIDX_TEST_HOOK_DISCOVERY_DESCENDANT_PID_PATH";
@@ -98,6 +100,358 @@ public class PostExtractionHookTests
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
+    }
+
+    [ProductionRuntimeFact]
+    public void Discover_RecomputesCSharpDeclarationMetadataAfterHookMutation_Issue4914()
+    {
+        var projectRoot = TestProjectHelper.CreateExecutableExtensionTestProject("post-extraction-hooks-csharp-metadata-4914");
+        lock (TestConsoleLock.Gate)
+        {
+            using var mutation = EnvironmentVariableScope.Capture(CSharpDeclarationMutationEnvironmentVariable);
+            try
+            {
+                var hooksDir = Path.Combine(projectRoot, "hooks");
+                Directory.CreateDirectory(hooksDir);
+                File.Copy(Assembly.GetExecutingAssembly().Location, Path.Combine(hooksDir, "CodeIndex.Tests.dll"));
+                mutation.Set(CSharpDeclarationMutationEnvironmentVariable, "1");
+
+                using var runner = PostExtractionHookRunner.Discover(hooksDir);
+                var context = new FileContext(projectRoot, "src/App.cs", Path.Combine(projectRoot, "src", "App.cs"), "csharp");
+                const string content = """
+                    partial class HookContainer
+                    {
+                        [Obsolete] partial void HookPartial();
+                    }
+                    """;
+                var symbols = new List<SymbolRecord>
+                {
+                    new()
+                    {
+                        FileId = 10,
+                        Kind = "class",
+                        Name = "HookContainer",
+                        Signature = "partial class HookContainer",
+                        IsPartialDeclaration = true,
+                        IsExplicitFileLocalDeclaration = false,
+                        FamilyKey = "stale-project|HookContainer",
+                        Line = 1,
+                        StartLine = 1,
+                        EndLine = 4,
+                        BodyStartLine = 2,
+                        BodyEndLine = 4,
+                    },
+                    new()
+                    {
+                        FileId = 10,
+                        Kind = "function",
+                        Name = "HookPartial",
+                        Signature = "[Obsolete] partial void HookPartial();",
+                        IsPartialDeclaration = true,
+                        DeclarationSemanticScore = 2,
+                        IdentifierStartColumn = 24,
+                        ContainerKind = "class",
+                        ContainerName = "HookContainer",
+                        ContainerQualifiedName = "HookContainer",
+                        FamilyKey = "stale-project|HookContainer",
+                        Line = 3,
+                        StartLine = 3,
+                        EndLine = 3,
+                    },
+                };
+
+                runner.ObserveCSharpStaticInterfaceSourceSymbols(context, symbols);
+                runner.OnSymbolsExtractedAfterSourceObservation(
+                    context,
+                    symbols,
+                    content,
+                    "hook-project");
+
+                var container = Assert.Single(symbols, symbol => symbol.Name == "HookContainerRenamed");
+                var expectedContainerFamily =
+                    "hook-project|file-local:src/App.cs\u001f+HookContainerRenamed`1";
+                Assert.Equal(expectedContainerFamily, container.FamilyKey);
+                Assert.True(container.IsFileLocalDeclaration);
+                var mutated = Assert.Single(symbols, symbol => symbol.Name == "HookOrdinary");
+                Assert.False(mutated.IsPartialDeclaration);
+                Assert.False(mutated.IsFileLocalDeclaration);
+                Assert.Equal(0, mutated.DeclarationSemanticScore);
+                Assert.Null(mutated.IdentifierStartColumn);
+                Assert.Equal("HookContainerRenamed", mutated.ContainerQualifiedName);
+                Assert.Equal(expectedContainerFamily, mutated.FamilyKey);
+                var addedPartial = Assert.Single(symbols, symbol => symbol.Name == "HookAddedPartial");
+                Assert.True(addedPartial.IsPartialDeclaration);
+                Assert.Equal(2, addedPartial.DeclarationSemanticScore);
+                Assert.Null(addedPartial.IdentifierStartColumn);
+                Assert.Equal("HookContainerRenamed", addedPartial.ContainerQualifiedName);
+                Assert.Equal(expectedContainerFamily, addedPartial.FamilyKey);
+                var addedFileType = Assert.Single(symbols, symbol => symbol.Name == "HookFileType");
+                Assert.True(addedFileType.IsFileLocalDeclaration);
+                Assert.Equal(
+                    "hook-project|file-local:src/App.cs\u001f+HookFileType",
+                    addedFileType.FamilyKey);
+            }
+            finally
+            {
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [ProductionRuntimeFact]
+    public void Discover_PreservesSplitModifiersAndRefreshesMovedContainerDescendants_Issue4914()
+    {
+        var projectRoot = TestProjectHelper.CreateExecutableExtensionTestProject("post-extraction-hooks-csharp-moves-4914");
+        lock (TestConsoleLock.Gate)
+        {
+            using var mutation = EnvironmentVariableScope.Capture(CSharpDeclarationMutationEnvironmentVariable);
+            try
+            {
+                var hooksDir = Path.Combine(projectRoot, "hooks");
+                Directory.CreateDirectory(hooksDir);
+                File.Copy(Assembly.GetExecutingAssembly().Location, Path.Combine(hooksDir, "CodeIndex.Tests.dll"));
+                mutation.Set(CSharpDeclarationMutationEnvironmentVariable, "split-and-move");
+
+                using var runner = PostExtractionHookRunner.Discover(hooksDir);
+                var context = new FileContext(projectRoot, "src/App.cs", Path.Combine(projectRoot, "src", "App.cs"), "csharp");
+                const string content = """
+                    partial class RenameContainer
+                    {
+                        partial
+                        void M();
+                    }
+                    class Old
+                    {
+                        class Inner
+                        {
+                            partial void Stay();
+                        }
+                    }
+                    class New { }
+                    file
+                    partial
+                    class SplitType { }
+                    """;
+                var symbols = new List<SymbolRecord>
+                {
+                    new()
+                    {
+                        FileId = 10, Kind = "class", Name = "RenameContainer",
+                        Signature = "partial class RenameContainer", IsPartialDeclaration = true,
+                        IsExplicitFileLocalDeclaration = false,
+                        Line = 1, StartLine = 1, EndLine = 5, BodyStartLine = 2, BodyEndLine = 5,
+                    },
+                    new()
+                    {
+                        FileId = 10, Kind = "function", Name = "M", Signature = "void M();",
+                        IsPartialDeclaration = true, ContainerKind = "class",
+                        ContainerName = "RenameContainer", ContainerQualifiedName = "RenameContainer",
+                        Line = 4, StartLine = 3, EndLine = 4,
+                    },
+                    new()
+                    {
+                        FileId = 10, Kind = "class", Name = "Old", Signature = "class Old",
+                        IsPartialDeclaration = false, IsExplicitFileLocalDeclaration = false,
+                        Line = 6, StartLine = 6, EndLine = 12, BodyStartLine = 7, BodyEndLine = 12,
+                    },
+                    new()
+                    {
+                        FileId = 10, Kind = "class", Name = "Inner", Signature = "class Inner",
+                        IsPartialDeclaration = false, IsExplicitFileLocalDeclaration = false,
+                        ContainerKind = "class", ContainerName = "Old", ContainerQualifiedName = "Old",
+                        Line = 8, StartLine = 8, EndLine = 11, BodyStartLine = 9, BodyEndLine = 11,
+                    },
+                    new()
+                    {
+                        FileId = 10, Kind = "function", Name = "Stay", Signature = "partial void Stay();",
+                        IsPartialDeclaration = true, ContainerKind = "class",
+                        ContainerName = "Inner", ContainerQualifiedName = "Old.Inner",
+                        Line = 10, StartLine = 10, EndLine = 10,
+                    },
+                    new()
+                    {
+                        FileId = 10, Kind = "class", Name = "New", Signature = "class New { }",
+                        IsPartialDeclaration = false, IsExplicitFileLocalDeclaration = false,
+                        Line = 13, StartLine = 13, EndLine = 13,
+                    },
+                    new()
+                    {
+                        FileId = 10, Kind = "class", Name = "SplitType", Signature = "class SplitType { }",
+                        IsPartialDeclaration = true, IsFileLocalDeclaration = true,
+                        IsExplicitFileLocalDeclaration = true,
+                        Line = 16, StartLine = 14, EndLine = 16,
+                    },
+                };
+
+                runner.ObserveCSharpStaticInterfaceSourceSymbols(context, symbols);
+                runner.OnSymbolsExtractedAfterSourceObservation(
+                    context,
+                    symbols,
+                    content,
+                    "hook-project");
+
+                var renamedMethod = Assert.Single(symbols, symbol => symbol.Name == "N");
+                Assert.Equal("test.method", renamedMethod.Kind);
+                Assert.Equal("hook-reclassified", renamedMethod.SubKind);
+                Assert.True(renamedMethod.IsPartialDeclaration);
+                Assert.Equal("hook-project|+RenameContainer", renamedMethod.FamilyKey);
+
+                var movedContainer = Assert.Single(symbols, symbol => symbol.Name == "Inner");
+                Assert.Equal("New", movedContainer.ContainerQualifiedName);
+                var unchangedDescendant = Assert.Single(symbols, symbol => symbol.Name == "Stay");
+                Assert.Equal("Inner", unchangedDescendant.ContainerName);
+                Assert.Equal("New.Inner", unchangedDescendant.ContainerQualifiedName);
+                Assert.Equal("hook-project|+New+Inner", unchangedDescendant.FamilyKey);
+
+                var renamedFileType = Assert.Single(symbols, symbol => symbol.Name == "SplitTypeRenamed");
+                Assert.True(renamedFileType.IsPartialDeclaration);
+                Assert.True(renamedFileType.IsFileLocalDeclaration);
+                Assert.Equal(
+                    "hook-project|file-local:src/App.cs\u001f+SplitTypeRenamed",
+                    renamedFileType.FamilyKey);
+            }
+            finally
+            {
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void HookMutation_RemovingFileModifierClearsInheritedFamilyScope_Issue4914()
+    {
+        var symbols = new List<SymbolRecord>
+        {
+            new()
+            {
+                FileId = 10,
+                Kind = "class",
+                Name = "Part",
+                Signature = "partial class Part { }",
+                IsPartialDeclaration = true,
+                IsFileLocalDeclaration = false,
+                IsExplicitFileLocalDeclaration = false,
+                DeclarationStructureMutatedByHook = true,
+                FamilyKey = "stale|file-local:src/App.cs\u001fPart",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 1,
+            },
+            new()
+            {
+                FileId = 10,
+                Kind = "class",
+                Name = "Part",
+                Signature = "partial class Part { }",
+                IsPartialDeclaration = true,
+                IsFileLocalDeclaration = true,
+                IsExplicitFileLocalDeclaration = false,
+                FamilyKey = "stale|file-local:src/App.cs\u001fPart",
+                Line = 2,
+                StartLine = 2,
+                EndLine = 2,
+            },
+        };
+
+        SymbolExtractor.RefreshCSharpContainerAndFamilyScopeAfterHookMutation(
+            symbols,
+            "partial class Part { }\npartial class Part { }",
+            "/project/src/App.cs",
+            "/project",
+            "project");
+
+        Assert.All(symbols, symbol =>
+        {
+            Assert.False(symbol.IsFileLocalDeclaration);
+            Assert.Equal("project|+Part", symbol.FamilyKey);
+        });
+    }
+
+    [Fact]
+    public void HookMutation_NoOpPreservesPositionalRecordComponentContainer_Issue4914()
+    {
+        const string content = "namespace Demo;\npublic record Person(string Name);";
+        var symbols = SymbolExtractor.ExtractNormalized(
+            10,
+            "csharp",
+            content,
+            hasOversizeLine: false,
+            filePath: "/project/src/App.cs");
+        var component = Assert.Single(symbols, symbol => symbol is { Kind: "property", Name: "Name" });
+
+        Assert.Equal("class", component.ContainerKind);
+        Assert.Equal("Person", component.ContainerName);
+        Assert.Equal("Demo.Person", component.ContainerQualifiedName);
+
+        SymbolExtractor.RefreshCSharpContainerAndFamilyScopeAfterHookMutation(
+            symbols,
+            content,
+            "/project/src/App.cs",
+            "/project",
+            "hook-project");
+
+        Assert.Equal("class", component.ContainerKind);
+        Assert.Equal("Person", component.ContainerName);
+        Assert.Equal("Demo.Person", component.ContainerQualifiedName);
+    }
+
+    [Fact]
+    public void HookMutation_NestedTypeUsesContainingGenericArity_Issue4914()
+    {
+        const string content = """
+            class Outer<T>
+            {
+                partial class Inner { }
+            }
+            class Outer<T, U>
+            {
+                partial class Inner { }
+            }
+            """;
+        var symbols = new List<SymbolRecord>
+        {
+            new()
+            {
+                Kind = "class", Name = "Outer", Signature = "class Outer<T>",
+                Line = 1, StartLine = 1, EndLine = 4, BodyStartLine = 2, BodyEndLine = 4,
+            },
+            new()
+            {
+                Kind = "class", Name = "Inner", Signature = "partial class Inner { }",
+                IsPartialDeclaration = true,
+                ContainerKind = "class", ContainerName = "Outer", ContainerQualifiedName = "Outer",
+                Line = 3, StartLine = 3, EndLine = 3,
+            },
+            new()
+            {
+                Kind = "class", Name = "Outer", Signature = "class Outer<T, U>",
+                Line = 5, StartLine = 5, EndLine = 8, BodyStartLine = 6, BodyEndLine = 8,
+            },
+            new()
+            {
+                Kind = "class", Name = "Inner", Signature = "partial class Inner { }",
+                IsPartialDeclaration = true,
+                ContainerKind = "class", ContainerName = "Outer", ContainerQualifiedName = "Outer",
+                DeclarationStructureMutatedByHook = true,
+                Line = 7, StartLine = 7, EndLine = 7,
+            },
+        };
+
+        SymbolExtractor.RefreshCSharpContainerAndFamilyScopeAfterHookMutation(
+            symbols,
+            content,
+            "/project/src/App.cs",
+            "/project",
+            "project");
+
+        var innerFamilies = symbols
+            .Where(symbol => symbol.Name == "Inner")
+            .Select(symbol => symbol.FamilyKey)
+            .OrderBy(family => family, StringComparer.Ordinal)
+            .ToList();
+        Assert.Equal(
+            ["project|+Outer`1+Inner", "project|+Outer`2+Inner"],
+            innerFamilies);
     }
 
     [ProductionRuntimeFact]
@@ -1126,6 +1480,78 @@ public sealed class SamplePostExtractionHook : IPostExtractionHook
 {
     public void OnSymbolsExtracted(FileContext context, IList<SymbolRecord> symbols)
     {
+        var csharpMutation = Environment.GetEnvironmentVariable(
+            PostExtractionHookTests.CSharpDeclarationMutationEnvironmentVariable);
+        if (csharpMutation == "split-and-move")
+        {
+            var method = symbols.FirstOrDefault(symbol => symbol.Name == "M");
+            if (method != null)
+            {
+                method.Name = "N";
+                method.Kind = "test.method";
+                method.SubKind = "hook-reclassified";
+                method.Signature = "void N();";
+            }
+
+            var movedContainer = symbols.FirstOrDefault(symbol => symbol.Name == "Inner");
+            if (movedContainer != null)
+            {
+                movedContainer.ContainerKind = "class";
+                movedContainer.ContainerName = "New";
+                movedContainer.ContainerQualifiedName = "New";
+            }
+
+            var fileType = symbols.FirstOrDefault(symbol => symbol.Name == "SplitType");
+            if (fileType != null)
+            {
+                fileType.Name = "SplitTypeRenamed";
+                fileType.Signature = "class SplitTypeRenamed { }";
+            }
+            return;
+        }
+
+        if (csharpMutation == "1")
+        {
+            var container = symbols.FirstOrDefault(symbol => symbol.Name == "HookContainer");
+            if (container != null)
+            {
+                container.Name = "HookContainerRenamed";
+                container.Signature = "file partial class HookContainerRenamed<T>";
+            }
+            var existing = symbols.FirstOrDefault(symbol => symbol.Name == "HookPartial");
+            if (existing != null)
+            {
+                existing.Name = "HookOrdinary";
+                existing.Signature = "void HookOrdinary();";
+                existing.ContainerName = "HookContainerRenamed";
+                existing.ContainerQualifiedName = "HookContainerRenamed";
+            }
+            symbols.Add(new SymbolRecord
+            {
+                FileId = existing?.FileId ?? 0,
+                Kind = "function",
+                Name = "HookAddedPartial",
+                Signature = "[Obsolete] partial void HookAddedPartial();",
+                ContainerKind = "class",
+                ContainerName = "HookContainerRenamed",
+                ContainerQualifiedName = "HookContainerRenamed",
+                Line = 3,
+                StartLine = 3,
+                EndLine = 3,
+            });
+            symbols.Add(new SymbolRecord
+            {
+                FileId = existing?.FileId ?? 0,
+                Kind = "class",
+                Name = "HookFileType",
+                Signature = "file partial class HookFileType { }",
+                Line = 4,
+                StartLine = 4,
+                EndLine = 4,
+            });
+            return;
+        }
+
         symbols.Add(new SymbolRecord
         {
             FileId = symbols.FirstOrDefault()?.FileId ?? 0,

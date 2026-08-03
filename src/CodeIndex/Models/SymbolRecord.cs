@@ -71,6 +71,63 @@ public class SymbolRecord
     public string? ReturnType { get; set; }
 
     /// <summary>
+    /// Extraction-owned C# declaration facts used by logical partial-family grouping.
+    /// These values cross the extraction-worker boundary and are persisted, but are
+    /// intentionally omitted from public symbol-query JSON.
+    /// logical partial-family grouping が使う extraction-owned な C# 宣言情報。
+    /// extraction worker 境界を越えて DB には保存するが、public な symbol query
+    /// JSON には公開しない。
+    /// </summary>
+    [JsonInclude]
+    internal bool? IsPartialDeclaration { get; set; }
+
+    /// <summary>
+    /// Extraction-owned marker for a C# top-level type declared with the <c>file</c>
+    /// modifier or belonging to the same-file partial family of such a declaration.
+    /// It crosses worker and hook boundaries, is persisted for callable type-kind lookup,
+    /// and keeps inherited partial-family keys and type facts scoped to one source file.
+    /// <c>file</c> 修飾子を持つ C# top-level type、またはその同一ファイル partial family
+    /// に属する type の extraction-owned marker。worker と hook の境界を越えて DB に保存し、
+    /// callable type-kind lookup と配下の partial-family key を同一 source file 内に制限する。
+    /// </summary>
+    [JsonInclude]
+    internal bool IsFileLocalDeclaration { get; set; }
+
+    /// <summary>
+    /// Signature/source-evidence marker before same-file partial-family propagation.
+    /// Hook-time family rebuilding uses it to distinguish the declaration carrying the
+    /// <c>file</c> modifier from sibling parts that merely inherit file-local scope.
+    /// same-file partial-family 伝播前の signature/source-evidence marker。
+    /// hook 後の family 再構築時に、<c>file</c> modifier 自体を持つ宣言と scope を継承した
+    /// sibling part を区別する。
+    /// </summary>
+    [JsonInclude]
+    internal bool? IsExplicitFileLocalDeclaration { get; set; }
+
+    /// <summary>
+    /// Internal hook-pipeline marker used to preserve explicit container mutations while
+    /// derived container metadata is rebuilt for unchanged descendants.
+    /// unchanged descendant の derived container metadata を再構築しつつ、hook が明示的に
+    /// 変更した container 情報を保持するための内部 marker。
+    /// </summary>
+    [JsonInclude]
+    internal bool DeclarationStructureMutatedByHook { get; set; }
+
+    [JsonInclude]
+    internal int? DeclarationSemanticScore { get; set; }
+
+    /// <summary>
+    /// Zero-based column of the declared identifier on <see cref="Line"/>. For a multiline
+    /// declaration, extraction moves <see cref="Line"/> from the modifier anchor to the
+    /// identifier line while <see cref="StartLine"/> retains the declaration-range start.
+    /// <see cref="Line"/> 上の宣言識別子列（0始まり）。複数行宣言では extraction が
+    /// <see cref="Line"/> を modifier anchor から識別子行へ移し、<see cref="StartLine"/> は
+    /// 宣言 range の開始行を保持する。
+    /// </summary>
+    [JsonInclude]
+    internal int? IdentifierStartColumn { get; set; }
+
+    /// <summary>
     /// Authoritative metadata-target flag (e.g. C# attribute class derived from System.Attribute).
     /// Persisted in `symbols.is_metadata_target` after a per-language resolver pass and gated by
     /// `metadata_target_version_<lang>` in `codeindex_meta`. NULL on legacy DBs and on languages

@@ -113,6 +113,64 @@ public partial class DbWriter
             DbContext.ReferenceIdentityContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
             StringComparison.Ordinal);
 
+    /// <summary>
+    /// Return whether the current reference identity contract may trust every persisted C# family row.
+    /// A partial upgrade cannot publish the current contract while untouched legacy C# symbols remain.
+    /// Callers may supply an authoritative C# presence result to avoid another database probe;
+    /// a writer that started without other C# rows may also trust the current rows it inserted.
+    /// Standalone full graph refreshes may opt into validating unstamped persisted rows directly.
+    /// current reference identity contract が全 C# family row を信頼できるかを返す。
+    /// 未更新の旧 C# symbol が残る部分 upgrade では current contract を公開しない。
+    /// caller は既知の C# presence を渡して再照会を避けられ、既存 C# row がない状態から
+    /// current row を挿入した writer はその session 内の row も信頼できる。standalone の
+    /// full graph refresh は未 stamp の保存済み row を直接検証する方式も選べる。
+    /// </summary>
+    internal bool CSharpFamilyTrustAllowsReferenceIdentityReady(
+        bool? hasCSharpFiles = null,
+        bool validatePersistedRows = false)
+    {
+        if (!(hasCSharpFiles ?? HasAnyFilesWithLanguage("csharp")))
+            return true;
+
+        var version = GetMetaString(DbContext.GetHotspotFamilyVersionMetaKey("csharp"));
+        var fingerprint = GetMetaString(DbContext.GetHotspotFamilyMarkerFingerprintMetaKey("csharp"));
+        var stampedFamilyTrustIsCurrent = string.Equals(
+                   version,
+                   DbContext.GetHotspotFamilyVersion("csharp").ToString(
+                       System.Globalization.CultureInfo.InvariantCulture),
+                   StringComparison.Ordinal)
+               && !string.IsNullOrWhiteSpace(fingerprint)
+               && !DbContext.IsIncompleteHotspotFamilyMarkerFingerprint(fingerprint);
+        if (stampedFamilyTrustIsCurrent || _currentWriterOwnsAllCSharpFamilyRows == true)
+            return true;
+
+        return validatePersistedRows && PersistedCSharpFamilyRowsAreComplete();
+    }
+
+    private bool PersistedCSharpFamilyRowsAreComplete()
+    {
+        DbContext.RegisterCSharpPartialDeclarationFunction(_conn);
+        using var cmd = _conn.CreateCommand();
+        cmd.Transaction = _activeTransaction;
+        cmd.CommandText = """
+            SELECT NOT EXISTS (
+                SELECT 1
+                FROM symbols s
+                JOIN files f ON f.id = s.file_id
+                WHERE f.lang = 'csharp'
+                  AND s.kind IN ('function', 'test.method', 'class', 'struct', 'interface', 'record')
+                  AND (
+                      (s.is_partial_declaration IS NULL
+                       AND csharp_is_partial_declaration(s.signature, s.kind, s.name))
+                      OR (s.is_partial_declaration = 1
+                          AND NULLIF(TRIM(s.family_key), '') IS NULL)
+                  )
+                LIMIT 1
+            )
+            """;
+        return Convert.ToInt64(cmd.ExecuteScalar()) != 0;
+    }
+
     public void MarkReferenceIdentityContractReady()
     {
         SetMeta(
@@ -152,7 +210,7 @@ public partial class DbWriter
         // Clear the superseded global keys so mixed-version DBs don't leave confusing stale metadata behind.
         // 廃止した global key を掃除し、混在 DB に紛らわしい古い metadata を残さない。
         SetMetaValues(
-            (DbContext.GetHotspotFamilyVersionMetaKey(lang), DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            (DbContext.GetHotspotFamilyVersionMetaKey(lang), DbContext.GetHotspotFamilyVersion(lang).ToString(System.Globalization.CultureInfo.InvariantCulture)),
             (DbContext.GetHotspotFamilyMarkerFingerprintMetaKey(lang), markerFingerprint),
             (DbContext.HotspotFamilyVersionMetaKey, null),
             (DbContext.HotspotFamilyMarkerFingerprintMetaKey, null));
@@ -161,7 +219,7 @@ public partial class DbWriter
     public void MarkHotspotFamilyMarkerFingerprintIncomplete(string lang, string? markerFingerprint)
     {
         SetMetaValues(
-            (DbContext.GetHotspotFamilyVersionMetaKey(lang), DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            (DbContext.GetHotspotFamilyVersionMetaKey(lang), DbContext.GetHotspotFamilyVersion(lang).ToString(System.Globalization.CultureInfo.InvariantCulture)),
             (DbContext.GetHotspotFamilyMarkerFingerprintMetaKey(lang), DbContext.BuildIncompleteHotspotFamilyMarkerFingerprint(markerFingerprint)),
             (DbContext.HotspotFamilyVersionMetaKey, null),
             (DbContext.HotspotFamilyMarkerFingerprintMetaKey, null));

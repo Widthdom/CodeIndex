@@ -177,7 +177,10 @@ public static partial class IndexCommandRunner
                                     extractionCancellationToken);
                                 continue;
                             }
-                            SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(filePath, record.Lang));
+                            SymbolExtractor.ApplyFamilyScope(
+                                symbols,
+                                indexer.GetFamilyScopeKey(filePath, record.Lang),
+                                record.Lang);
                             FileIssue? referenceRegexTimeoutIssue = null;
                             ReferenceExtractionResult? referenceExtraction = null;
                             if (options.SymbolsOnly)
@@ -239,7 +242,12 @@ public static partial class IndexCommandRunner
                                     references!,
                                     issues!,
                                     generatedSuppressionIssue,
-                                    generatedSuppressionChecked: true)
+                                    generatedSuppressionChecked: true,
+                                    content: postExtractionHooks.HasHooks ? content : null,
+                                    hasOversizeLine: postExtractionHooks.HasHooks ? hasOversizeLine : null,
+                                    conflictMarkerLine: postExtractionHooks.HasHooks
+                                        ? loaded.ConflictMarkerLine
+                                        : null)
                                 : FullScanFileWorkItem.Success(
                                     fileIndex,
                                     filePath,

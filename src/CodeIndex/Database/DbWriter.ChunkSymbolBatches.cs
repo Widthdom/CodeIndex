@@ -54,11 +54,12 @@ public partial class DbWriter
     {
         if (symbols.Count == 0) return;
         cancellationToken.ThrowIfCancellationRequested();
+        TrackCurrentWriterCSharpFamilyRows(symbols);
         _typeScriptAugmentationDirtyNameScope?.TrackInsertedSymbols(symbols, cancellationToken);
         TrackReferenceGraphInsertedSymbols(symbols);
         InvalidateReferenceIdentityContractForMutation();
 
-        int rowsPerStatement = GetRowsPerInsertStatement(columnCount: 21);
+        int rowsPerStatement = GetRowsPerInsertStatement(columnCount: 25);
         var foldedNameCache = CreateFoldedNameCache(
             Math.Min(symbols.Count, rowsPerStatement),
             namesPerRow: 1);
@@ -80,6 +81,25 @@ public partial class DbWriter
             }
         }
         CheckBatchCancellationAndReportProgress("insert_symbols", symbols.Count, symbols.Count, cancellationToken);
+    }
+
+    private void TrackCurrentWriterCSharpFamilyRows(IReadOnlyList<SymbolRecord> symbols)
+    {
+        if (_currentWriterOwnsAllCSharpFamilyRows != true)
+            return;
+
+        foreach (var symbol in symbols)
+        {
+            if (!_currentWriterCSharpFileIds.Contains(symbol.FileId))
+                continue;
+            if (symbol.Kind is not ("function" or "test.method" or "class" or "struct" or "interface" or "record" or "enum" or "delegate"))
+                continue;
+            if (symbol.IsPartialDeclaration.HasValue)
+                continue;
+
+            _currentWriterOwnsAllCSharpFamilyRows = false;
+            return;
+        }
     }
 
     private void InsertChunksWithRowSkip(IReadOnlyList<ChunkRecord> chunks, int start, int end, SqliteException batchException, CancellationToken cancellationToken)
@@ -240,6 +260,14 @@ public partial class DbWriter
                 cmd.Parameters[parameterIndex++].Value = (object?)symbol.FamilyKey ?? DBNull.Value;
                 cmd.Parameters[parameterIndex++].Value = (object?)symbol.Visibility ?? DBNull.Value;
                 cmd.Parameters[parameterIndex++].Value = (object?)symbol.ReturnType ?? DBNull.Value;
+                cmd.Parameters[parameterIndex++].Value = symbol.IsPartialDeclaration.HasValue
+                    ? (symbol.IsPartialDeclaration.Value ? 1 : 0)
+                    : (object)DBNull.Value;
+                cmd.Parameters[parameterIndex++].Value = symbol.IsFileLocalDeclaration
+                    ? 1
+                    : 0;
+                cmd.Parameters[parameterIndex++].Value = (object?)symbol.DeclarationSemanticScore ?? DBNull.Value;
+                cmd.Parameters[parameterIndex++].Value = (object?)symbol.IdentifierStartColumn ?? DBNull.Value;
                 cmd.Parameters[parameterIndex++].Value = symbol.IsMetadataTarget.HasValue
                     ? (symbol.IsMetadataTarget.Value ? 1 : 0)
                     : (object)DBNull.Value;
@@ -296,6 +324,8 @@ public partial class DbWriter
                     body_start_line, body_end_line, signature,
                     container_kind, container_name, container_qualified_name, family_key,
                     visibility, return_type,
+                    is_partial_declaration, is_file_local_declaration,
+                    declaration_semantic_score, identifier_start_column,
                     is_metadata_target, metadata_target_source,
                     name_folded, display_name_folded
                 )
@@ -305,7 +335,7 @@ public partial class DbWriter
         {
             if (row > 0)
                 sql.Append(", ");
-            AppendBatchParameterTuple(sql, ref parameterIndex, columnCount: 21);
+            AppendBatchParameterTuple(sql, ref parameterIndex, columnCount: 25);
         }
         return sql.ToString();
     }
@@ -332,6 +362,10 @@ public partial class DbWriter
             AddBatchParameter(cmd, ref parameterIndex, SqliteType.Text);
             AddBatchParameter(cmd, ref parameterIndex, SqliteType.Text);
             AddBatchParameter(cmd, ref parameterIndex, SqliteType.Text);
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Integer);
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Integer);
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Integer);
+            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Integer);
             AddBatchParameter(cmd, ref parameterIndex, SqliteType.Integer);
             AddBatchParameter(cmd, ref parameterIndex, SqliteType.Text);
             AddBatchParameter(cmd, ref parameterIndex, SqliteType.Text);

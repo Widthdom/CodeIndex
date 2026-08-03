@@ -28,7 +28,7 @@ public partial class FileIndexer
             }
             : null;
 
-    private static bool HasGeneratedCodeFileName(string relativePath)
+    internal static bool HasGeneratedCodeFileName(string relativePath)
     {
         var fileName = Path.GetFileName(relativePath.AsSpan());
         return fileName.EndsWith(".Designer.cs".AsSpan(), StringComparison.OrdinalIgnoreCase)

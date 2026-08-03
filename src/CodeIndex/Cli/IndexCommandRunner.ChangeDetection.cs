@@ -61,9 +61,9 @@ public static partial class IndexCommandRunner
         IReadOnlyDictionary<string, string?> priorFingerprints,
         IReadOnlyDictionary<string, FileIndexer.ProjectMarkerFingerprintResult> currentFingerprints)
     {
-        var currentVersion = DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
         foreach (var lang in FileIndexer.GetHotspotFamilyMarkerLanguages())
         {
+            var currentVersion = DbContext.GetHotspotFamilyVersion(lang).ToString(System.Globalization.CultureInfo.InvariantCulture);
             if (!currentFingerprints.TryGetValue(lang, out var currentFingerprint))
                 continue;
 
@@ -90,9 +90,9 @@ public static partial class IndexCommandRunner
         IReadOnlyDictionary<string, string?> priorFingerprints,
         IReadOnlyDictionary<string, FileIndexer.ProjectMarkerFingerprintResult> currentFingerprints)
     {
-        var currentVersion = DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
         foreach (var lang in FileIndexer.GetHotspotFamilyMarkerLanguages())
         {
+            var currentVersion = DbContext.GetHotspotFamilyVersion(lang).ToString(System.Globalization.CultureInfo.InvariantCulture);
             if (!currentFingerprints.TryGetValue(lang, out var currentFingerprint))
                 continue;
 
@@ -114,10 +114,10 @@ public static partial class IndexCommandRunner
         IReadOnlyDictionary<string, string?> priorFingerprints,
         IReadOnlyDictionary<string, FileIndexer.ProjectMarkerFingerprintResult> currentFingerprints)
     {
-        var currentVersion = DbContext.HotspotFamilyVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var values = new Dictionary<string, bool>(StringComparer.Ordinal);
         foreach (var lang in FileIndexer.GetHotspotFamilyMarkerLanguages())
         {
+            var currentVersion = DbContext.GetHotspotFamilyVersion(lang).ToString(System.Globalization.CultureInfo.InvariantCulture);
             currentFingerprints.TryGetValue(lang, out var currentFingerprint);
             priorVersions.TryGetValue(lang, out var priorVersion);
             priorFingerprints.TryGetValue(lang, out var priorFingerprint);

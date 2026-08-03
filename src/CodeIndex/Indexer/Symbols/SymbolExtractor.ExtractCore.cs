@@ -1264,10 +1264,18 @@ public static partial class SymbolExtractor
                 pythonModulePrefix,
                 prologMultilineHeads);
         }
+        if (lang == "csharp")
+        {
+            PopulateCSharpPartialDeclarationMetadata(
+                lines,
+                symbols,
+                getCSharpLineStartStates);
+        }
         FinalizePatternSymbols(
             fileId,
             lang,
             filePath,
+            projectRoot,
             lines,
             symbols,
             extractionState,
