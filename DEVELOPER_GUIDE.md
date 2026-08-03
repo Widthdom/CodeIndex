@@ -282,9 +282,62 @@ valid encoded U+FFFD literal, while `origin: decode_replacement` means the
 decoder inserted U+FFFD for invalid bytes. `severity: info` is used for source
 literals, and `severity: warning` is used for likely encoding damage.
 
-Scoped `--files` / `--commits` refreshes reuse the same path filter as full scans. Before scanning a nested project root, `FileIndexer` loads ignore files from the resolved ignore-rule root through each existing ancestor directory down to the project root's parent, then loads the project directory's own rules during the normal walk. Within each directory, `FileIndexer` loads `.gitignore` before `.cdidxignore`, appends both rule sets in that order, and honors later `!` patterns as re-includes. If an ancestor ignore directory cannot be read, scanning fails closed with a scan error instead of silently skipping those rules; `ScanFilesResult.AncestorIgnoreDirectories` records the resolved ancestor list for troubleshooting. If a commit-scoped refresh includes `.gitignore` or `.cdidxignore` changes, `IndexCommandRunner` falls back to a full scan so newly ignored files are purged safely. Malformed ignore lines are reported as scan errors and skipped instead of aborting the whole run. Symlinks default to `--follow-symlinks none`; `internal` follows file and directory targets that resolve under the workspace root, and `all` follows all resolvable targets. Discovery, dry-run, C# workspace preflight, and content loading use the same resolved file target identity, so a stable allowed external file target is indexed while a link retargeted after preflight is rejected as source drift. Dangling symlinks are counted and warned separately; index dry-run reports them through `warnings_total` / `warnings`, matching execution severity and successful exit behavior. Permission failures resolving directory targets are also reported as scan warnings. On Windows, files and directories with Hidden or System attributes are rejected before language detection; clear those attributes before indexing project-owned sources because ignore rules cannot re-include them.
+### Scoped refresh path rules
 
-Incremental refreshes that mutate `fts_chunks` increment both `codeindex_meta.fts_incremental_writes_since_merge` and `codeindex_meta.fts_incremental_writes_since_optimize`. When the merge counter reaches 25 writes, index runners issue `INSERT INTO fts_chunks(fts_chunks, rank) VALUES('merge', -1000)`: 1,000 pages is a minimum work target, and SQLite's complete-segment granularity may process more pages. The merge resets only its dedicated counter, while the optimize counter continues to support the `cdidx optimize --dry-run` recommendation. Full CLI scans and MCP refreshes switch to trigger-free bulk rewrite, FTS rebuild, and full optimize when dirty source bytes are at least three-fifths of known workspace source bytes; fresh indexes and explicit rebuilds always use that path. Dirty bytes include the larger of the current and persisted sizes for each file that will be rewritten, plus persisted byte sizes for indexed rows planned for deletion, including the old side of a rename. The comparison total includes known readable current-workspace bytes, those planned-deletion bytes, and the positive persisted-minus-current excess for rewritten files that shrank, so both sides describe the same pre-update footprint. A scan error, invalid persisted size, or byte-count overflow makes the estimate incomplete and conservatively keeps trigger synchronization. Stale-file IDs are planned without mutation before selecting the FTS policy, then deleted inside the selected bulk guard. The plan keeps IDs ascending so the C# static-interface workspace prepass can skip purge-planned rows with a binary search and no duplicate deletion set; the reusable-stat snapshot instead loads the IDs into an indexed temporary SQL filter before running eligibility subqueries. This prevents a path that reappears between MCP planning and scanning from reusing a row that the same run will purge. The separate pre-purge contract-presence query runs only for a non-empty plan and still forces C# re-extraction when deletion may remove implicit implementation references. When such contracts exist, MCP also invalidates the C# symbol-name contract at its first mutation; if a scan error leaves an implementer unprocessed after the purge, the next clean run disables stat reuse, repairs its implicit references, and only then restamps the contract. The batched delete transaction checks cancellation throughout and rolls back every delete if cancellation arrives before commit; if cancellation arrives after a committed bulk purge, guard abandonment rebuilds FTS from the surviving chunks and restores its triggers before the run exits. Full scans and MCP refreshes filter reusable-row snapshots with a current-target path set only when non-purged indexed rows unused by the current target set outnumber the current targets; other runs use sorted-ID exclusion without duplicating every current path in a second large set. Scoped `--files` / `--commits` refreshes stay on trigger synchronization and incremental merge maintenance. `cdidx optimize --db <path>` and `cdidx index <projectPath> --optimize` still run an explicit full optimize, reset both counters, and stamp `fts_last_optimized_at`; this may briefly hold the writer lock on large indexes.
+Scoped `--files` and `--commits` refreshes use the same path policy as full
+scans.
+
+| Area | Contract |
+|---|---|
+| Nested project roots | `FileIndexer` loads ignore files from the resolved rule root through each existing ancestor to the project root's parent. Project-directory rules are loaded during the normal walk. |
+| Rule order | Each directory loads `.gitignore` before `.cdidxignore`; later `!` patterns can re-include paths. |
+| Unreadable ancestor | Scanning fails closed with a scan error. `ScanFilesResult.AncestorIgnoreDirectories` records the resolved ancestor list for diagnostics. |
+| Changed ignore file | A commit-scoped refresh that includes `.gitignore` or `.cdidxignore` falls back to a full scan so newly ignored files are purged. |
+| Malformed rule | Reports a scan error, skips that line, and continues the run. |
+| Symlink modes | `none` is the default. `internal` follows targets under the workspace root; `all` follows every resolvable target. |
+| Target identity | Discovery, dry-run, C# preflight, and content loading share one resolved identity. Stable allowed external targets are indexed; links retargeted after preflight are rejected as source drift. |
+| Symlink warnings | Dangling links and directory-target permission failures are scan warnings. Dry-run exposes them through `warnings_total` and `warnings` while retaining successful exit behavior. |
+| Windows attributes | Hidden or System paths are rejected before language detection. Clear those attributes on project-owned source because ignore rules cannot re-include the path. |
+
+### FTS maintenance during indexing
+
+| Situation | FTS policy |
+|---|---|
+| Every incremental write | Increment both `fts_incremental_writes_since_merge` and `fts_incremental_writes_since_optimize`. |
+| Merge counter reaches 25 | Run `INSERT INTO fts_chunks(fts_chunks, rank) VALUES('merge', -1000)`. The 1,000-page value is a minimum work target; SQLite may process complete segments beyond it. Reset only the merge counter; the optimize counter keeps accumulating for the `cdidx optimize --dry-run` recommendation. |
+| Dirty bytes reach 3/5 of known workspace bytes | Full CLI scans and MCP refreshes use a trigger-free bulk rewrite, FTS rebuild, and full optimize. |
+| Fresh index or explicit rebuild | Always use the bulk path. |
+| Scoped `--files` / `--commits` refresh | Keep trigger synchronization and incremental merge maintenance. |
+| Explicit optimize | `cdidx optimize --db <path>` and `cdidx index <projectPath> --optimize` run a full optimize, reset both counters, and stamp `fts_last_optimized_at`. This may briefly hold the writer lock on large indexes. |
+
+Bulk-path estimation and purge safety follow these rules:
+
+- Dirty bytes use the larger current/persisted size for each rewritten file,
+  plus persisted sizes for planned deletions, including the old side of a
+  rename.
+- The comparison total includes readable current-workspace bytes, planned
+  deletion bytes, and the positive persisted-minus-current difference for
+  rewritten files that shrank. Both sides therefore describe the same
+  pre-update footprint.
+- A scan error, invalid persisted size, or byte-count overflow makes the
+  estimate incomplete and conservatively keeps trigger synchronization.
+- Stale-file IDs are planned without mutation before policy selection and are
+  deleted only inside the selected bulk guard. Sorted IDs let the C# prepass
+  exclude purge-planned rows by binary search; reusable-stat eligibility uses
+  an indexed temporary SQL filter instead.
+- A path that reappears between MCP planning and scanning cannot reuse a row
+  that the same run plans to purge.
+- The pre-purge contract-presence query runs only for a non-empty plan. If a
+  deletion may remove implicit implementation references, C# is re-extracted
+  and MCP invalidates the symbol-name contract at its first mutation. After a
+  purge followed by a scan error, the next clean run disables stat reuse,
+  repairs those references, and only then restamps the contract.
+- Cancellation before the batched delete commits rolls back every deletion.
+  Cancellation after a committed bulk purge makes guard abandonment rebuild
+  FTS from surviving chunks and restore triggers before exit.
+- Full scans and MCP refreshes use a current-target path filter for reusable
+  rows only when unused, non-purged indexed rows outnumber current targets.
+  Other runs use sorted-ID exclusion to avoid duplicating every current path.
 
 The C# pre-purge contract preflight probes sorted planned IDs in uncached batches of at most 500 SQLite parameters and applies managed keyword-boundary validation before forcing re-extraction. A prior symbol-kind policy that could have omitted a contract-member kind makes an interface declaration conservative evidence. For scoped updates, a false source-evidence marker is authoritative, so the hot path does not restore a repository-wide exact-member scan; transition-path probes instead start from exact indexed `files(path)` rows, join through `symbols(file_id, kind)`, and remain cancellation-aware and cache-neutral in batches of at most 500 paths. Plain interfaces and LIKE-only decoys therefore do not invalidate reusable C# rows. Persisted workspace materialization likewise starts from `files(lang)` and probes only member-capable `symbols(file_id, kind)` rows, validates exact signatures in managed code, then loads interface declarations only for retained contract container names through bounded, cache-neutral `symbols(name)` batches. A negative or LIKE-decoy-only read stops after the first phase and never materializes the repository's plain interfaces. A tri-state source-evidence marker observes built-in C# symbols before post-extraction hooks, kind filters, and row caps, so a hook-hidden contract still forces safe implicit-reference refreshes. Full CLI and MCP scans preserve either authoritative true or false source evidence without rereading source only when the prior index is explicitly complete, GraphReady was already stamped, symbols-only omission and filter/version/root/hotspot contracts remain compatible, no persisted C# path changed language, and every C# target is stat-reusable. This strict known-evidence no-op also skips persisted C# symbol loading and workspace-lookup construction; missing legacy completeness or readiness metadata deliberately falls back to a raw workspace prepass.
 
@@ -3334,41 +3387,59 @@ test or constant that proves the maximum byte budget.
 ## Custom Language Extraction
 
 Downstream users can add lightweight language support without rebuilding
-`cdidx`:
+`cdidx`.
 
-- extension aliases are read from `~/.config/cdidx/langmap.yaml` and the first
-  workspace ancestor `.cdidx-langmap.yaml`; workspace entries override user
-  entries. A trusted suffix override is evaluated before built-in exact-filename,
-  filename-prefix, and extension rules. If the closest workspace map cannot be
-  probed or read, ancestor workspace lookup stops for that subtree instead of
-  reusing a parent map; `languages --json` and the MCP `languages` tool expose
-  the sanitized failure in `language_map_diagnostics` and publish the effective
-  order in `detection_policy.precedence`;
-- regex-backed symbol patterns are read from `.cdidx/patterns/*.yaml` and
-  `~/.config/cdidx/patterns/*.yaml`; sidecars must be regular files under
-  non-symlink pattern directories, discovery accepts at most 128 candidates per
-  pattern directory, each file is capped at 64 KiB / 128 rules, each immutable
-  workspace snapshot loads at most 128 configured rules total, and regex matches use a 100 ms
-  timeout. Each sidecar is parsed, compiled, and checked against
-  `SymbolKindCatalog` before its path, rules, or budget are committed. Rejected
-  content is fingerprinted to suppress duplicate diagnostics, while content or
-  metadata changes and transient read recovery are retried without restarting.
-    Workspace discovery requires an explicit trust root and stops after checking
-    that root; it never probes ancestors above it. Nested sidecars inside that
-    boundary are loaded for the current file in the bounded extraction worker.
-    Path identity follows the
-  active filesystem's case-sensitivity, so case-distinct sidecars remain
-  distinct on case-sensitive volumes. `status --json` reports accepted files in
-  `extractors.pattern_configs[]` with sanitized path, workspace/user provenance,
-  normalized language, and rule count. Reindexing atomically replaces the
-  workspace snapshot so the old rule budget and timeout state become
-  collectible without changing other workspaces. A timed-out rule is suppressed
-  by a bounded one-minute cooldown in its owning workspace snapshot and emits a
-  workspace-scoped diagnostic;
-- `cdidx test-extractor --language <lang> --file <path> --json` runs symbol
-  extraction without building an index, and `--expect-symbols <json>` compares
-  the extracted JSON to a fixture. The source and expectation files are capped
-  at 4 MiB each.
+| Capability | Configuration |
+|---|---|
+| Extension aliases | `~/.config/cdidx/langmap.yaml` and the nearest workspace-ancestor `.cdidx-langmap.yaml` |
+| Regex-backed symbols | Workspace `.cdidx/patterns/*.yaml` and user `~/.config/cdidx/patterns/*.yaml` |
+| Standalone verification | `cdidx test-extractor --language <lang> --file <path> --json` |
+
+### Extension alias precedence
+
+- Workspace entries override user entries.
+- A trusted suffix override is evaluated before built-in exact-filename,
+  filename-prefix, and extension rules.
+- If the closest workspace map cannot be probed or read, lookup stops for that
+  subtree instead of reusing a parent map.
+- `languages --json` and the MCP `languages` tool expose sanitized failures in
+  `language_map_diagnostics` and the effective order in
+  `detection_policy.precedence`.
+
+### Pattern sidecar safeguards
+
+| Limit | Value |
+|---|---|
+| Discovery candidates | 128 per pattern directory |
+| Sidecar size | 64 KiB per file |
+| Rules per sidecar | 128 |
+| Configured rules | 128 per immutable workspace snapshot |
+| Regex match timeout | 100 ms |
+| Timed-out rule cooldown | At most one minute in the owning workspace snapshot |
+
+- Sidecars must be regular files inside non-symlink pattern directories.
+- Each sidecar is parsed, compiled, and checked against `SymbolKindCatalog`
+  before its path, rules, or budget are committed.
+- Rejected content is fingerprinted to suppress duplicate diagnostics. Content
+  or metadata changes and recovery from a transient read failure trigger a retry
+  without restarting the process.
+- Workspace discovery requires an explicit trust root and never probes above
+  it. Nested sidecars inside that boundary are loaded for the current file by
+  the bounded extraction worker.
+- Path identity follows the active filesystem's case-sensitivity, so
+  case-distinct sidecars remain distinct on case-sensitive volumes.
+- `status --json` reports accepted files in `extractors.pattern_configs[]`,
+  including sanitized path, workspace/user provenance, normalized language,
+  and rule count.
+- Reindexing atomically replaces the workspace snapshot. The old rule budget
+  and timeout state can then be collected without affecting other workspaces.
+  A timed-out rule emits a workspace-scoped diagnostic before entering cooldown.
+
+### Extractor testing
+
+`cdidx test-extractor --language <lang> --file <path> --json` runs extraction
+without building an index. Add `--expect-symbols <json>` to compare the result
+with a fixture. Source and expectation files are each capped at 4 MiB.
 
 Query-side `--lang` resolution uses this same workspace-aware extension and
 extractor registry rather than a separate built-in list. Registered language
@@ -3741,7 +3812,21 @@ literal、`origin: decode_replacement` が不正 byte に対して decoder が�
 を意味する。source literal は `severity: info`、エンコーディング破損の可能性は
 `severity: warning` として返す。
 
-`--files` / `--commits` の部分更新も、フルスキャンと同じパスフィルタを再利用する。各ディレクトリでは `FileIndexer` が `.gitignore` を `.cdidxignore` より先に読み、この順序でルールを追加し、後続の `!` パターンを再包含として扱う。commit 単位更新に `.gitignore` または `.cdidxignore` の変更が含まれる場合、`IndexCommandRunner` は newly ignored file を安全に purge するため自動でフルスキャンへフォールバックする。malformed な ignore 行は走査エラーとして報告し、その行だけをスキップして index 全体は継続する。symlink は既定で `--follow-symlinks none` とし、`internal` は workspace root 内へ解決される file / directory target、`all` は解決可能なすべての target を追跡する。discovery、dry-run、C# workspace preflight、content loading は同じ解決済み file target identity を使うため、許可された静的な外部 file target は索引し、preflight 後に retarget された link は source drift として拒否する。dangling symlink は個別に集計して warning とし、index dry-run も実行時と同じく `warnings_total` / `warnings` で報告して成功終了する。directory target の解決時に発生した permission failure も scan warning として報告する。Windows では Hidden または System 属性が付いたファイルとディレクトリを言語検出前に拒否する。プロジェクト所有のソースを索引したい場合、ignore ルールでは再包含できないため先にそれらの属性を外す。
+### 部分更新の path rule
+
+`--files` / `--commits` の部分更新は、full scan と同じ path policy を使います。
+
+| 項目 | 契約 |
+|---|---|
+| nested project root | `FileIndexer` は解決済み rule root から project root の parent まで、既存 ancestor の ignore file を読みます。project directory 自身の rule は通常 walk 中に読みます。 |
+| rule 順序 | 各 directory で `.gitignore`、`.cdidxignore` の順に読み、後続の `!` pattern による再包含を認めます。 |
+| 読めない ancestor | rule を黙って落とさず scan error で fail closed します。`ScanFilesResult.AncestorIgnoreDirectories` が解決済み ancestor list を診断用に保持します。 |
+| ignore file の変更 | commit-scoped refresh に `.gitignore` または `.cdidxignore` の変更が含まれる場合、newly ignored file を purge するため full scan へ fallback します。 |
+| malformed rule | scan error を報告してその行だけを skip し、run は継続します。 |
+| symlink mode | 既定は `none` です。`internal` は workspace root 内の target、`all` は解決可能な全 target を追跡します。 |
+| target identity | discovery、dry-run、C# preflight、content loading は同じ解決済み identity を使います。安定した許可済み外部 target は index し、preflight 後に retarget された link は source drift として拒否します。 |
+| symlink warning | dangling link と directory target の permission failure は scan warning です。dry-run は `warnings_total` / `warnings` に出し、成功終了を維持します。 |
+| Windows 属性 | Hidden / System path は言語検出前に拒否します。ignore rule では再包含できないため、project 所有 source では先に属性を外してください。 |
 
 ### メタデータ不変条件
 
@@ -5184,7 +5269,41 @@ source membership は `FileIndexer` で共有し、full scan、workspace freshne
 
 watcher は startup reconciliation scan より先に有効化する。`FileChangeBatcher.TryDrainImmediately` は通常の debounce interval を待たずに buffer 済み startup generation を閉じ、その path を `watching` event より前に適用する一方、snapshot 後に到着した event は通常の live update として queue に残す。すべての startup reconciliation sub-run が成功した場合だけ `watching` を出力し、失敗した generation は batch を捨てて ready を宣言せず non-zero exit を返す。この generation boundary により、初回 scan と subscribe の間の gap と、変更が連続する workspace で ready が無期限に遅れる問題の両方を防ぐ。
 
-FTS5 を変更する差分更新は `codeindex_meta.fts_incremental_writes_since_merge` と `codeindex_meta.fts_incremental_writes_since_optimize` の両方を増やします。merge counter が 25 write に達すると、index runner は `INSERT INTO fts_chunks(fts_chunks, rank) VALUES('merge', -1000)` を実行します。1,000 page は最小 work target であり、SQLite が完全な segment 単位で処理するため実際の page 数は target を超える場合があります。merge では専用 counter のみをリセットし、optimize counter は `cdidx optimize --dry-run` の推奨判定用に累積を続けます。CLI の full scan と MCP refresh は dirty source byte が既知 workspace source byte の 5 分の 3 以上なら、trigger を停止した bulk rewrite、FTS rebuild、full optimize に切り替えます。fresh index と明示的 rebuild は常にこの経路を使います。dirty byte は今回書き換える各 file の current size と永続化済み size の大きい方に、rename の旧 path を含む削除予定 indexed row の永続化済み byte size を加算します。比較対象の total には読み取り可能と判明した current workspace byte、削除予定 byte、および縮小した書き換え file の永続化済み size が current size を上回る差分を含め、更新前 footprint と同じ基準で比較します。scan error、永続化 size の不正値、または byte 加算 overflow がある場合は estimate を incomplete として保守的に trigger 同期を維持します。stale file ID は FTS policy の選択前に mutation なしで plan し、選択した bulk guard の内側で削除します。plan の ID は昇順に保つため、C# static-interface workspace prepass は削除 set を複製せず二分探索で purge 予定 row を除外します。一方、reusable-stat snapshot は eligibility subquery より前に ID を index 付き一時 SQL filter へ読み込みます。これにより MCP の plan 後から scan までに同じ path が再出現しても、この run が purge する旧 row を reuse せず、現存 file を再indexします。purge 前の contract 存在 query は plan が非空の場合だけ実行し、削除によって obsolete になる implicit implementation reference を除くための C# 再抽出判定に使用します。そのような contract が存在する場合、MCP は最初の mutation で C# symbol-name contract も invalid にします。purge 後の scan error で implementer を未処理のまま残しても、次の clean run は stat reuse を無効化して implicit reference を修復し、その後にだけ contract を再 stamp します。batch delete transaction は処理中も cancellation を確認し、commit 前の cancellation では全削除を rollback します。bulk purge の commit 後に cancellation された場合は、guard の abandon 処理が残存 chunk から FTS を rebuild し、trigger を復元してから run を終了します。full scan と MCP refresh は、current target に使われない非 purge indexed row の数が current target 数を上回る場合だけ、current-target path set で reusable-row snapshot を filter します。それ以外は全 current path を第2の大きな set に複製せず、昇順 ID 除外を使います。scoped `--files` / `--commits` refresh は trigger 同期と incremental merge maintenance を維持します。`cdidx optimize --db <path>` と `cdidx index <projectPath> --optimize` は引き続き明示的 full optimize を実行し、両 counter をリセットして `fts_last_optimized_at` を記録します。大きな index では短時間 writer lock を保持する可能性があります。
+### Index 中の FTS maintenance
+
+| 状況 | FTS policy |
+|---|---|
+| 差分 write ごと | `fts_incremental_writes_since_merge` と `fts_incremental_writes_since_optimize` の両方を増やします。 |
+| merge counter が 25 に到達 | `INSERT INTO fts_chunks(fts_chunks, rank) VALUES('merge', -1000)` を実行します。1,000 page は最小 work target で、SQLite は完全な segment 単位でさらに処理する場合があります。merge counter だけを reset し、optimize counter は `cdidx optimize --dry-run` の推奨判定用に累積を続けます。 |
+| dirty byte が既知 workspace byte の 3/5 以上 | CLI full scan と MCP refresh は trigger-free bulk rewrite、FTS rebuild、full optimize を使います。 |
+| fresh index / 明示的 rebuild | 常に bulk path を使います。 |
+| scoped `--files` / `--commits` refresh | trigger 同期と incremental merge maintenance を維持します。 |
+| 明示的 optimize | `cdidx optimize --db <path>` と `cdidx index <projectPath> --optimize` は full optimize を実行し、両 counter を reset して `fts_last_optimized_at` を記録します。大きな index では短時間 writer lock を保持する場合があります。 |
+
+bulk path の見積もりと purge の安全性は次の規則に従います。
+
+- dirty byte は書き換える各 file の current / persisted size の大きい方に、rename の
+  旧 path を含む削除予定 row の persisted size を加えます。
+- 比較対象の total は、読み取り可能な current workspace byte、削除予定 byte、縮小した
+  file の persisted-minus-current の正の差分を含みます。両辺を同じ更新前 footprint で
+  比較するためです。
+- scan error、persisted size の不正値、byte 加算 overflow がある場合は estimate を
+  incomplete とし、保守的に trigger 同期を維持します。
+- stale file ID は policy 選択前に mutation なしで plan し、選択した bulk guard 内だけで
+  削除します。昇順 ID により C# prepass は二分探索で purge 予定 row を除外し、
+  reusable-stat eligibility は代わりに index 付き一時 SQL filter を使います。
+- MCP の plan 後から scan までに path が再出現しても、同じ run が purge 予定の row は
+  reuse しません。
+- purge 前の contract 存在 query は plan が非空の場合だけ実行します。削除で implicit
+  implementation reference が失われる可能性があれば C# を再抽出し、MCP は最初の
+  mutation で symbol-name contract を invalid にします。purge 後の scan error では、次の
+  clean run が stat reuse を無効化して reference を修復し、その後に contract を stamp します。
+- batch delete の commit 前に cancellation された場合は全削除を rollback します。bulk
+  purge の commit 後なら、guard の abandon 処理が残存 chunk から FTS を rebuild し、
+  trigger を復元してから終了します。
+- full scan と MCP refresh は、current target に使われない非 purge row が current target
+  より多い場合だけ current-target path filter を使います。それ以外は全 current path の
+  複製を避け、昇順 ID 除外を使います。
 
 C# の purge 前 contract preflight は、昇順の削除予定 ID を SQLite parameter 最大 500 件の uncached batch で調べ、managed 側の keyword-boundary 判定を通してから再抽出を強制する。以前の symbol-kind policy が contract member kind を落とし得る場合は interface 宣言を保守的 evidence とする。scoped update では false の source-evidence marker を authoritative とし、repository 全体の exact-member scan を hot path に戻さない。transition path の probe は正確な `files(path)` row から開始して `symbols(file_id, kind)` へ join し、最大 500 path の cancellation-aware かつ cache-neutral な batch で実行するため、通常の interface と LIKE だけ一致する decoy で再利用可能な C# row を無効化しない。永続 workspace の materialize も `files(lang)` から開始して member 候補 kind の `symbols(file_id, kind)` だけを probe し、managed 側で signature を厳密検証してから、保持 contract の container 名に一致する interface 宣言だけを bounded かつ cache-neutral な `symbols(name)` batch で取得する。negative または LIKE decoy だけの読込は第1段階で終了し、repository 内の通常 interface を materialize しない。tri-state の source-evidence marker は post-extraction hook、kind filter、row cap より前の built-in C# symbol を観測するため、hook で隠された contract も安全な implicit-reference refresh を強制できる。CLI full scan と MCP は、以前の index が明示的に complete、GraphReady 済みで、symbols-only omission、filter/version/root/hotspot の contract が互換、永続 C# path の language transition がなく、全 C# target が stat-reusable な場合だけ authoritative な true / false の source evidence を source 再読込なしで維持する。この厳密な known-evidence no-op は永続 C# symbol の load と workspace lookup 構築も省略し、legacy completeness/readiness metadata が欠ける場合は保守的に raw workspace prepass へ戻る。
 
@@ -6189,33 +6308,54 @@ cleared range を証明するテストが必要です。Bounded accumulation pat
 
 下流ユーザーは `cdidx` を再ビルドせずに軽量な言語対応を追加できます。
 
-- 拡張子 alias は `~/.config/cdidx/langmap.yaml` と、最初に見つかった workspace
-  祖先の `.cdidx-langmap.yaml` から読み込まれ、workspace 側が user 側を上書きします。
-  信頼済み suffix override は built-in の完全一致 filename、filename-prefix、extension rule
-  より先に評価されます。最も近い workspace map を probe または read できない場合、その subtree
-  では親 map を再利用せず ancestor workspace 探索を停止します。`languages --json` と MCP の
-  `languages` tool は sanitization 済み失敗を `language_map_diagnostics` に公開し、実効順序を
-  `detection_policy.precedence` で示します。
-- regex ベースのシンボルパターンは `.cdidx/patterns/*.yaml` と
-  `~/.config/cdidx/patterns/*.yaml` から読み込まれます。sidecar は symlink ではない
-  pattern directory 配下の通常ファイルのみが対象で、探索候補は pattern directory ごとに
-  128 件まで、各ファイルは 64 KiB / 128 ルール、immutable な workspace snapshot ごとに
-  configured rule 128 件に制限され、
-  regex match には 100 ms の timeout が付きます。各 sidecar は path・rule・budget を commit する前に
-  一時状態で parse / compile され、`SymbolKindCatalog` に対して kind が検証されます。拒否された内容は
-  fingerprint によって重複診断を抑制し、内容または metadata の変更時、および一時的な read failure の
-  回復後にはプロセスを再起動せず再試行されます。workspace 探索には明示的な trust root が必要で、
-    その root を確認した時点で停止し、それより上の ancestor は探索しません。その境界内の nested
-    sidecar は、対象 file の上限付き extraction worker 内で読み込まれます。path identity は実際の
-  filesystem の case-sensitivity に従うため、case-sensitive volume では大小文字だけが異なる sidecar も
-  別々に扱われます。`status --json` の `extractors.pattern_configs[]` は、受理済み file の
-  sanitization 済み path、workspace/user provenance、正規化済み language、rule count を報告します。
-  reindex は workspace snapshot を atomically に置換するため、以前の rule budget と timeout state は
-  他 workspace を変更せず回収可能になります。timeout した rule は所有する workspace snapshot 内だけで
-  上限付きの1分間 cooldown に入り、workspace-scoped diagnostic を出します。
-- `cdidx test-extractor --language <lang> --file <path> --json` は index を作らずに
-  symbol extraction だけを実行し、`--expect-symbols <json>` で fixture JSON と比較できます。
-  source と expectation file はそれぞれ 4 MiB に制限されます。
+| 機能 | 設定 |
+|---|---|
+| 拡張子 alias | `~/.config/cdidx/langmap.yaml` と、最も近い workspace ancestor の `.cdidx-langmap.yaml` |
+| regex ベースの symbol | workspace の `.cdidx/patterns/*.yaml` と user の `~/.config/cdidx/patterns/*.yaml` |
+| 単独検証 | `cdidx test-extractor --language <lang> --file <path> --json` |
+
+### 拡張子 alias の優先順位
+
+- workspace entry が user entry を上書きします。
+- 信頼済み suffix override は built-in の完全一致 filename、filename-prefix、
+  extension rule より先に評価されます。
+- 最も近い workspace map を probe または read できない場合、その subtree では
+  parent map を再利用せず探索を停止します。
+- `languages --json` と MCP の `languages` tool は sanitization 済み失敗を
+  `language_map_diagnostics`、実効順序を `detection_policy.precedence` に公開します。
+
+### Pattern sidecar の安全策
+
+| 上限 | 値 |
+|---|---|
+| 探索候補 | pattern directory ごとに 128 件 |
+| sidecar size | 1 file あたり 64 KiB |
+| sidecar 内の rule | 128 件 |
+| configured rule | immutable workspace snapshot ごとに 128 件 |
+| regex match timeout | 100 ms |
+| timeout rule の cooldown | 所有する workspace snapshot 内で最大 1 分 |
+
+- sidecar は symlink ではない pattern directory 配下の通常 file に限定します。
+- 各 sidecar は path・rule・budget を commit する前に parse / compile し、
+  `SymbolKindCatalog` に対して kind を検証します。
+- 拒否された内容は fingerprint で重複診断を抑制します。内容や metadata の変更、
+  一時的な read failure からの回復後は、process を再起動せず再試行します。
+- workspace 探索には明示的な trust root が必要で、それより上は探索しません。
+  境界内の nested sidecar は対象 file の上限付き extraction worker で読み込みます。
+- path identity は実際の filesystem の case-sensitivity に従うため、case-sensitive
+  volume では大小文字だけが異なる sidecar も別々に扱います。
+- `status --json` の `extractors.pattern_configs[]` は、受理済み file の
+  sanitization 済み path、workspace/user provenance、正規化済み language、rule count を
+  報告します。
+- reindex は workspace snapshot を atomically に置換します。以前の rule budget と
+  timeout state は他 workspace に影響せず回収でき、timeout rule は
+  workspace-scoped diagnostic を出してから cooldown に入ります。
+
+### Extractor のテスト
+
+`cdidx test-extractor --language <lang> --file <path> --json` は index を作らずに
+extraction を実行します。`--expect-symbols <json>` を加えると fixture と比較できます。
+source と expectation file はそれぞれ 4 MiB が上限です。
 
 query 側の `--lang` 解決は、別の組み込み一覧ではなく、この workspace-aware な
 extension / extractor registry を共有します。登録済み language ID、alias、拡張子形式の
