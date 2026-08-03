@@ -653,6 +653,20 @@ internal static class LogicalPartialSymbolGrouper
             }
 
             var token = tokens[offset];
+            if (token == "managed"
+                && offset >= 2
+                && tokens[offset - 2] == "delegate"
+                && tokens[offset - 1] == "*"
+                && offset + 1 < tokens.Count
+                && tokens[offset + 1] == "<")
+            {
+                // `managed` is the default function-pointer calling convention, so
+                // `delegate* managed<T>` and `delegate*<T>` have the same C# identity.
+                // `managed` は function pointer の既定 calling convention なので、
+                // `delegate* managed<T>` と `delegate*<T>` は同じ C# identity になる。
+                offset++;
+                continue;
+            }
             if (token == "?" && offset > 0 && tokens[offset - 1] == "]")
             {
                 // Arrays are reference types; their nullable annotation does not

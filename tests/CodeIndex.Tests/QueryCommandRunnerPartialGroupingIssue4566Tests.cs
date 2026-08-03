@@ -4098,6 +4098,44 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void PartialCallableGrouping_NormalizesOptionalManagedFunctionPointerConvention_Issue4914Review()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_managed_function_pointer_issue4914");
+        try
+        {
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "Test.csproj",
+                "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net8.0</TargetFramework><AllowUnsafeBlocks>true</AllowUnsafeBlocks></PropertyGroup></Project>");
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "Test.cs",
+                """
+                unsafe partial class Container
+                {
+                    partial void M(delegate* managed<int, void> callback);
+                    partial void M(delegate*<int, void> callback) { }
+                }
+                """);
+
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json", "--quiet"],
+                _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var grouped = RunGroupedSymbol(dbPath, "M", "function");
+            Assert.Equal(2, grouped.GetProperty("definition_sites").GetInt32());
+            Assert.Equal("implementation_body", grouped.GetProperty("representative_reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void PartialCallableGrouping_PipeInFileLocalPathDoesNotLeakTypeKind_Issue4914Review()
     {
         if (OperatingSystem.IsWindows())
