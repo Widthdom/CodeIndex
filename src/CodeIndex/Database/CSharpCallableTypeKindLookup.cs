@@ -502,7 +502,13 @@ internal sealed class CSharpCallableTypeKindLookup
 
     private static string NormalizeIndexedPath(string path)
     {
-        var normalized = FileIndexer.NormalizePathSeparators(path).Trim('/');
+        // files.path is already persisted with '/' separators by the writer. Any remaining
+        // backslash is a literal filename character from a Unix workspace and must retain that
+        // meaning when the database is later opened on another operating system.
+        // files.path は writer が '/' separator へ正規化して保存済みである。残っている
+        // backslash は Unix workspace の literal filename character なので、別 OS から
+        // database を開いた場合もその意味を保持する。
+        var normalized = path.Trim('/');
         return normalized.Length == 0 ? "." : normalized;
     }
 

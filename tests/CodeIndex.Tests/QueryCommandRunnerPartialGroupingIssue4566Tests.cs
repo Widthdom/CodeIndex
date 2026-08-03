@@ -4260,6 +4260,114 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void PartialCanonicalRepresentative_PreservesPersistedUnixBackslashProjectScopeAcrossHosts_Issue4914Review()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_persisted_backslash_issue4914");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            foreach (var projectDirectory in new[] { "A\\B", "A/B" })
+            {
+                TestProjectHelper.InsertIndexedFile(
+                    dbPath,
+                    $"{projectDirectory}/Test.csproj",
+                    "xml",
+                    "<Project />");
+                TestProjectHelper.InsertIndexedFile(
+                    dbPath,
+                    $"{projectDirectory}/One.cs",
+                    "csharp",
+                    """
+                    #nullable enable
+                    namespace Demo;
+                    public partial class Host
+                    {
+                        partial void M(Node? value);
+                    }
+                    """);
+                TestProjectHelper.InsertIndexedFile(
+                    dbPath,
+                    $"{projectDirectory}/Two.cs",
+                    "csharp",
+                    """
+                    #nullable enable
+                    namespace Demo;
+                    public partial class Host
+                    {
+                        partial void M(Node value) { }
+                    }
+                    """);
+            }
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "A\\B/Types.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public class Node { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "A/B/Types.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public struct Node { }
+                """);
+
+            using (var connection = new SqliteConnection($"Data Source={dbPath}"))
+            {
+                connection.Open();
+                foreach (var projectDirectory in new[] { "A\\B", "A/B" })
+                {
+                    using var command = connection.CreateCommand();
+                    command.CommandText = """
+                        UPDATE symbols
+                        SET family_key = @scope || '|' || family_key
+                        WHERE family_key IS NOT NULL
+                          AND file_id IN (
+                              SELECT id
+                              FROM files
+                              WHERE path = @one OR path = @two OR path = @types)
+                        """;
+                    SqliteCommandPolicy.Add(
+                        command,
+                        "@scope",
+                        SymbolExtractor.EncodeFamilyScopeKey(projectDirectory));
+                    SqliteCommandPolicy.Add(command, "@one", $"{projectDirectory}/One.cs");
+                    SqliteCommandPolicy.Add(command, "@two", $"{projectDirectory}/Two.cs");
+                    SqliteCommandPolicy.Add(command, "@types", $"{projectDirectory}/Types.cs");
+                    Assert.True(command.ExecuteNonQuery() > 0);
+                }
+            }
+            MarkGraphAndFoldReady(dbPath);
+
+            var (symbolsExitCode, symbolsStdout, symbolsStderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunSymbols(
+                    ["M", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "function", "--group-partials", "--limit", "10"],
+                    _jsonOptions));
+            using var symbolsDocument = ParseJsonOutput(symbolsStdout);
+            var rows = symbolsDocument.RootElement.EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, symbolsExitCode);
+            Assert.Equal(string.Empty, symbolsStderr);
+            Assert.Equal(3, rows.Count);
+            var grouped = Assert.Single(rows, row => row.TryGetProperty("definition_sites", out _));
+            Assert.Equal(2, grouped.GetProperty("definition_sites").GetInt32());
+            Assert.All(
+                grouped.GetProperty("family_members").EnumerateArray(),
+                member => Assert.StartsWith(
+                    "A\\B/",
+                    member.GetProperty("path").GetString(),
+                    StringComparison.Ordinal));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void PartialCallableGrouping_NormalizesOptionalManagedFunctionPointerConvention_Issue4914Review()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_managed_function_pointer_issue4914");
