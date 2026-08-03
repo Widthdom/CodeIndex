@@ -697,6 +697,33 @@ public static partial class SymbolExtractor
             if (startsInDeclarationCode
                 && TryReadCSharpDirectiveKeyword(trimmed, out var directiveKeyword))
             {
+                if (directiveKeyword == "endif"
+                    && closedConditionalDirectiveDepth == 0
+                    && TryReadClosedCSharpConditionalDeclarationEvidence(
+                        lines,
+                        lineStartStates,
+                        minimumLineIndex,
+                        lineIndex,
+                        out var conditionalEvidence))
+                {
+                    if (conditionalEvidence.HasCodeBoundary)
+                        break;
+
+                    // A completed conditional contributes `partial` only when every
+                    // possible branch contributes it. Conversely, any branch-local `file`
+                    // is retained because grouping that declaration across files would be
+                    // unsafe in that compilation. Without an explicit `#else`, include an
+                    // implicit empty branch in both decisions.
+                    // 完了した conditional の `partial` は全分岐が供給する場合だけ採用する。
+                    // 一方、branch-local な `file` は、その compilation で別ファイルと
+                    // grouping すると危険なため一分岐だけでも保持する。明示的な `#else`
+                    // がなければ、どちらの判定にも暗黙の空分岐を含める。
+                    hasPartialModifier |= conditionalEvidence.HasPartialModifier;
+                    hasFileModifier |= conditionalEvidence.HasFileModifier;
+                    lineIndex = conditionalEvidence.OpeningDirectiveLineIndex;
+                    continue;
+                }
+
                 switch (directiveKeyword)
                 {
                     case "endif":
@@ -799,6 +826,263 @@ public static partial class SymbolExtractor
             hasFileModifier,
             hasAttribute,
             hasDocumentation);
+    }
+
+    private static bool TryReadClosedCSharpConditionalDeclarationEvidence(
+        IReadOnlyList<string> lines,
+        IReadOnlyList<CSharpLexState>? lineStartStates,
+        int minimumLineIndex,
+        int closingDirectiveLineIndex,
+        out CSharpClosedConditionalDeclarationEvidence evidence)
+    {
+        evidence = default;
+        var depth = 0;
+        for (var lineIndex = closingDirectiveLineIndex;
+             lineIndex >= minimumLineIndex;
+             lineIndex--)
+        {
+            if (!TryReadCSharpDirectiveKeywordAtLine(
+                    lines,
+                    lineStartStates,
+                    lineIndex,
+                    out var directiveKeyword))
+            {
+                continue;
+            }
+
+            if (directiveKeyword == "endif")
+            {
+                depth++;
+                continue;
+            }
+
+            if (directiveKeyword != "if")
+                continue;
+
+            depth--;
+            if (depth != 0)
+                continue;
+
+            var branchEvidence = ReadCSharpConditionalBranchEvidence(
+                lines,
+                lineStartStates,
+                lineIndex,
+                closingDirectiveLineIndex);
+            evidence = new CSharpClosedConditionalDeclarationEvidence(
+                lineIndex,
+                branchEvidence.HasCodeBoundary,
+                branchEvidence.HasPartialModifier,
+                branchEvidence.HasFileModifier);
+            return true;
+        }
+
+        return false;
+    }
+
+    private static CSharpConditionalBranchEvidence ReadCSharpConditionalBranchEvidence(
+        IReadOnlyList<string> lines,
+        IReadOnlyList<CSharpLexState>? lineStartStates,
+        int openingDirectiveLineIndex,
+        int closingDirectiveLineIndex)
+    {
+        var branches = new List<CSharpConditionalBranchEvidence>();
+        var current = new CSharpConditionalBranchEvidence();
+        var hasExplicitElse = false;
+
+        for (var lineIndex = openingDirectiveLineIndex + 1;
+             lineIndex < closingDirectiveLineIndex;
+             lineIndex++)
+        {
+            if (TryReadCSharpDirectiveKeywordAtLine(
+                    lines,
+                    lineStartStates,
+                    lineIndex,
+                    out var directiveKeyword))
+            {
+                if (directiveKeyword == "if")
+                {
+                    if (!TryFindMatchingCSharpEndifDirective(
+                            lines,
+                            lineStartStates,
+                            lineIndex,
+                            closingDirectiveLineIndex,
+                            out var nestedClosingDirectiveLineIndex))
+                    {
+                        return current with { HasCodeBoundary = true };
+                    }
+
+                    var nested = ReadCSharpConditionalBranchEvidence(
+                        lines,
+                        lineStartStates,
+                        lineIndex,
+                        nestedClosingDirectiveLineIndex);
+                    current = current with
+                    {
+                        HasCodeBoundary = current.HasCodeBoundary || nested.HasCodeBoundary,
+                        HasPartialModifier = current.HasPartialModifier || nested.HasPartialModifier,
+                        HasFileModifier = current.HasFileModifier || nested.HasFileModifier,
+                    };
+                    lineIndex = nestedClosingDirectiveLineIndex;
+                    continue;
+                }
+
+                if (directiveKeyword is "else" or "elif")
+                {
+                    branches.Add(CompleteCSharpConditionalBranchEvidence(current));
+                    current = new CSharpConditionalBranchEvidence();
+                    hasExplicitElse |= directiveKeyword == "else";
+                }
+
+                // Non-conditional directives are declaration trivia. Nested `#endif`
+                // directives are consumed together with their matching `#if` above.
+                // conditional 以外の directive は declaration trivia とする。nested
+                // `#endif` は対応する `#if` と一緒に上で消費済みである。
+                continue;
+            }
+
+            current = AccumulateCSharpConditionalBranchLineEvidence(
+                lines,
+                lineStartStates,
+                lineIndex,
+                current);
+        }
+
+        branches.Add(CompleteCSharpConditionalBranchEvidence(current));
+        if (!hasExplicitElse)
+            branches.Add(new CSharpConditionalBranchEvidence());
+
+        return new CSharpConditionalBranchEvidence(
+            HasCodeBoundary: branches.Any(branch => branch.HasCodeBoundary),
+            HasPartialModifier: branches.All(branch => branch.HasPartialModifier),
+            HasFileModifier: branches.Any(branch => branch.HasFileModifier));
+    }
+
+    private static CSharpConditionalBranchEvidence CompleteCSharpConditionalBranchEvidence(
+        CSharpConditionalBranchEvidence evidence)
+        => evidence.AttributeDepth == 0
+            ? evidence
+            : evidence with { HasCodeBoundary = true };
+
+    private static CSharpConditionalBranchEvidence AccumulateCSharpConditionalBranchLineEvidence(
+        IReadOnlyList<string> lines,
+        IReadOnlyList<CSharpLexState>? lineStartStates,
+        int lineIndex,
+        CSharpConditionalBranchEvidence evidence)
+    {
+        var lineStartState = lineStartStates != null && lineIndex < lineStartStates.Count
+            ? lineStartStates[lineIndex]
+            : new CSharpLexState();
+        var trimmed = LexCSharpLine(lines[lineIndex], lineStartState).SanitizedLine.AsSpan().Trim();
+        if (trimmed.IsEmpty)
+            return evidence;
+
+        if (evidence.AttributeDepth > 0 || trimmed[0] == '[')
+        {
+            var attributeDepth = Math.Max(
+                0,
+                evidence.AttributeDepth
+                + CountCharacter(trimmed, '[')
+                - CountCharacter(trimmed, ']'));
+            var updated = evidence with { AttributeDepth = attributeDepth };
+            if (attributeDepth > 0)
+                return updated;
+
+            var lastAttributeClose = trimmed.LastIndexOf(']');
+            var trailing = lastAttributeClose >= 0
+                ? trimmed[(lastAttributeClose + 1)..].Trim()
+                : ReadOnlySpan<char>.Empty;
+            if (trailing.IsEmpty)
+                return updated;
+            if (!TryReadStandaloneCSharpModifiers(
+                    trailing,
+                    out var trailingHasPartial,
+                    out var trailingHasFile))
+            {
+                return updated with { HasCodeBoundary = true };
+            }
+
+            return updated with
+            {
+                HasPartialModifier = updated.HasPartialModifier || trailingHasPartial,
+                HasFileModifier = updated.HasFileModifier || trailingHasFile,
+            };
+        }
+
+        if (!TryReadStandaloneCSharpModifiers(
+                trimmed,
+                out var hasPartial,
+                out var hasFile))
+        {
+            return evidence with { HasCodeBoundary = true };
+        }
+
+        return evidence with
+        {
+            HasPartialModifier = evidence.HasPartialModifier || hasPartial,
+            HasFileModifier = evidence.HasFileModifier || hasFile,
+        };
+    }
+
+    private static bool TryFindMatchingCSharpEndifDirective(
+        IReadOnlyList<string> lines,
+        IReadOnlyList<CSharpLexState>? lineStartStates,
+        int openingDirectiveLineIndex,
+        int exclusiveMaximumLineIndex,
+        out int closingDirectiveLineIndex)
+    {
+        var depth = 0;
+        for (var lineIndex = openingDirectiveLineIndex;
+             lineIndex < exclusiveMaximumLineIndex;
+             lineIndex++)
+        {
+            if (!TryReadCSharpDirectiveKeywordAtLine(
+                    lines,
+                    lineStartStates,
+                    lineIndex,
+                    out var directiveKeyword))
+            {
+                continue;
+            }
+
+            if (directiveKeyword == "if")
+            {
+                depth++;
+                continue;
+            }
+
+            if (directiveKeyword != "endif")
+                continue;
+
+            depth--;
+            if (depth == 0)
+            {
+                closingDirectiveLineIndex = lineIndex;
+                return true;
+            }
+        }
+
+        closingDirectiveLineIndex = -1;
+        return false;
+    }
+
+    private static bool TryReadCSharpDirectiveKeywordAtLine(
+        IReadOnlyList<string> lines,
+        IReadOnlyList<CSharpLexState>? lineStartStates,
+        int lineIndex,
+        out string directiveKeyword)
+    {
+        directiveKeyword = string.Empty;
+        var lineStartState = lineStartStates != null && lineIndex < lineStartStates.Count
+            ? lineStartStates[lineIndex]
+            : new CSharpLexState();
+        if (lineStartState.Mode != CSharpLexMode.Code
+            || lineStartState.InterpolationBraceDepth != 0)
+        {
+            return false;
+        }
+
+        var trimmed = LexCSharpLine(lines[lineIndex], lineStartState).SanitizedLine.AsSpan().Trim();
+        return TryReadCSharpDirectiveKeyword(trimmed, out directiveKeyword);
     }
 
     private static bool TryReadCSharpDirectiveKeyword(
@@ -1162,4 +1446,16 @@ public static partial class SymbolExtractor
         bool HasFileModifier,
         bool HasAttribute,
         bool HasDocumentation);
+
+    private readonly record struct CSharpClosedConditionalDeclarationEvidence(
+        int OpeningDirectiveLineIndex,
+        bool HasCodeBoundary,
+        bool HasPartialModifier,
+        bool HasFileModifier);
+
+    private readonly record struct CSharpConditionalBranchEvidence(
+        bool HasCodeBoundary = false,
+        bool HasPartialModifier = false,
+        bool HasFileModifier = false,
+        int AttributeDepth = 0);
 }

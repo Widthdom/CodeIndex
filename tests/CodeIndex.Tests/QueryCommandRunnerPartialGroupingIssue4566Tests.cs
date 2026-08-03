@@ -2114,6 +2114,51 @@ public partial class QueryCommandRunnerTests
                 #endif
                 class DirectiveClosedBoundary { }
                 """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.DirectiveJoinedPartial.cs",
+                "csharp",
+                """
+                #if FIRST
+                partial
+                #else
+                partial
+                #endif
+                class DirectiveJoinedPartial { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/B.DirectiveJoinedPartial.cs",
+                "csharp",
+                "partial class DirectiveJoinedPartial { }");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/DirectiveJoinedDecoy.cs",
+                "csharp",
+                """
+                #if FIRST
+                partial
+                #else
+                public
+                #endif
+                class DirectiveJoinedDecoy { }
+                partial class DirectiveJoinedDecoy { }
+                """);
+            foreach (var path in new[] { "src/A.DirectiveConditionalFile.cs", "src/B.DirectiveConditionalFile.cs" })
+            {
+                TestProjectHelper.InsertIndexedFile(
+                    dbPath,
+                    path,
+                    "csharp",
+                    """
+                    #if FIRST
+                    file
+                    #else
+                    public
+                    #endif
+                    partial class DirectiveConditionalFile { }
+                    """);
+            }
             MarkGraphAndFoldReady(dbPath);
 
             var (localExitCode, localStdout, localStderr) = CaptureConsole(() =>
@@ -2148,6 +2193,36 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(string.Empty, closedStderr);
             Assert.Equal(2, closedRows.Count);
             Assert.All(closedRows, row => Assert.False(row.TryGetProperty("definition_sites", out _)));
+
+            var directiveJoinedPartial = RunGroupedSymbol(
+                dbPath,
+                "DirectiveJoinedPartial",
+                "class");
+            Assert.Equal(2, directiveJoinedPartial.GetProperty("definition_sites").GetInt32());
+
+            var (joinedDecoyExitCode, joinedDecoyStdout, joinedDecoyStderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunSymbols(
+                    ["DirectiveJoinedDecoy", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "class", "--group-partials", "--limit", "10"],
+                    _jsonOptions));
+            using var joinedDecoyDocument = ParseJsonOutput(joinedDecoyStdout);
+            var joinedDecoyRows = joinedDecoyDocument.RootElement.EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, joinedDecoyExitCode);
+            Assert.Equal(string.Empty, joinedDecoyStderr);
+            Assert.Equal(2, joinedDecoyRows.Count);
+            Assert.All(joinedDecoyRows, row => Assert.False(row.TryGetProperty("definition_sites", out _)));
+
+            var (conditionalFileExitCode, conditionalFileStdout, conditionalFileStderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunSymbols(
+                    ["DirectiveConditionalFile", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "class", "--group-partials", "--limit", "10"],
+                    _jsonOptions));
+            using var conditionalFileDocument = ParseJsonOutput(conditionalFileStdout);
+            var conditionalFileRows = conditionalFileDocument.RootElement.EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, conditionalFileExitCode);
+            Assert.Equal(string.Empty, conditionalFileStderr);
+            Assert.Equal(2, conditionalFileRows.Count);
+            Assert.All(conditionalFileRows, row => Assert.False(row.TryGetProperty("definition_sites", out _)));
 
             var (decoyExitCode, decoyStdout, decoyStderr) = CaptureConsole(() =>
                 QueryCommandRunner.RunSymbols(
