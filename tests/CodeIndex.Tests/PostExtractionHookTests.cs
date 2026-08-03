@@ -291,6 +291,8 @@ public class PostExtractionHookTests
                     "hook-project");
 
                 var renamedMethod = Assert.Single(symbols, symbol => symbol.Name == "N");
+                Assert.Equal("test.method", renamedMethod.Kind);
+                Assert.Equal("hook-reclassified", renamedMethod.SubKind);
                 Assert.True(renamedMethod.IsPartialDeclaration);
                 Assert.Equal("hook-project|+RenameContainer", renamedMethod.FamilyKey);
 
@@ -1486,6 +1488,8 @@ public sealed class SamplePostExtractionHook : IPostExtractionHook
             if (method != null)
             {
                 method.Name = "N";
+                method.Kind = "test.method";
+                method.SubKind = "hook-reclassified";
                 method.Signature = "void N();";
             }
 

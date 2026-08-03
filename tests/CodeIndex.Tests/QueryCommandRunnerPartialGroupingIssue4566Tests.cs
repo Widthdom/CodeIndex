@@ -3257,6 +3257,75 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void PartialCanonicalRepresentative_DiscardsTransactionLocalTypeFactsAfterRollback_Issue4914Review()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_rollback_type_facts_issue4914");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Container.cs",
+                "csharp",
+                """
+                #nullable enable
+                namespace Demo;
+                public partial class Container
+                {
+                    partial void M(Ghost? value);
+                    partial void M(Ghost value) { }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var scans = 0;
+            CSharpCallableTypeKindLookup.ScanForTesting = () => scans++;
+            try
+            {
+                using var connection = new SqliteConnection($"Data Source={dbPath}");
+                connection.Open();
+                using var reader = new DbReader(connection);
+
+                Assert.Equal(2, reader.SearchSymbols(
+                    ["M"], 10, "function", "csharp", exact: true, groupPartials: true).Count);
+
+                using (var transaction = connection.BeginTransaction())
+                {
+                    using var command = connection.CreateCommand();
+                    command.Transaction = transaction;
+                    command.CommandText = """
+                        INSERT INTO symbols(
+                            file_id, kind, name, line, start_line, end_line, signature,
+                            is_partial_declaration, is_file_local_declaration)
+                        SELECT id, 'class', 'Ghost', 20, 20, 20, 'class Ghost', 0, 0
+                        FROM files
+                        WHERE lang = 'csharp'
+                        LIMIT 1
+                        """;
+                    Assert.Equal(1, command.ExecuteNonQuery());
+
+                    var grouped = Assert.Single(reader.SearchSymbols(
+                        ["M"], 10, "function", "csharp", exact: true, groupPartials: true));
+                    Assert.Equal(2, grouped.DefinitionSites);
+                    transaction.Rollback();
+                }
+
+                Assert.Equal(2, reader.SearchSymbols(
+                    ["M"], 10, "function", "csharp", exact: true, groupPartials: true).Count);
+                Assert.Equal(3, scans);
+            }
+            finally
+            {
+                CSharpCallableTypeKindLookup.ScanForTesting = null;
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void PartialCanonicalRepresentative_SkipsCallableScansWhenGroupingCannotUseThem_Issue4914()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_callable_scan_gate_issue4914");
@@ -4089,6 +4158,99 @@ public partial class QueryCommandRunnerTests
             connection.Open();
             using var command = connection.CreateCommand();
             command.CommandText = "SELECT COUNT(DISTINCT family_key) FROM symbols WHERE name = 'Hidden'";
+            Assert.Equal(2L, Assert.IsType<long>(command.ExecuteScalar()));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PartialCanonicalRepresentative_PreservesLiteralBackslashInUnixProjectScope_Issue4914Review()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_project_backslash_issue4914");
+        try
+        {
+            foreach (var projectDirectory in new[] { "A\\B", "A/B" })
+            {
+                TestProjectHelper.WriteTextFile(
+                    projectRoot,
+                    $"{projectDirectory}/Test.csproj",
+                    "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net8.0</TargetFramework><Nullable>enable</Nullable></PropertyGroup></Project>");
+                TestProjectHelper.WriteTextFile(
+                    projectRoot,
+                    $"{projectDirectory}/One.cs",
+                    """
+                    namespace Demo;
+                    public partial class Host
+                    {
+                        partial void M(Node? value);
+                    }
+                    """);
+                TestProjectHelper.WriteTextFile(
+                    projectRoot,
+                    $"{projectDirectory}/Two.cs",
+                    """
+                    namespace Demo;
+                    public partial class Host
+                    {
+                        partial void M(Node value) { }
+                    }
+                    """);
+            }
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "A\\B/Types.cs",
+                """
+                namespace Demo;
+                public class Node { }
+                """);
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "A/B/Types.cs",
+                """
+                namespace Demo;
+                public struct Node { }
+                """);
+
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json", "--quiet"],
+                _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (symbolsExitCode, symbolsStdout, symbolsStderr) = CaptureConsole(() =>
+                QueryCommandRunner.RunSymbols(
+                    ["M", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "function", "--group-partials", "--limit", "10"],
+                    _jsonOptions));
+            using var symbolsDocument = ParseJsonOutput(symbolsStdout);
+            var rows = symbolsDocument.RootElement.EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, symbolsExitCode);
+            Assert.Equal(string.Empty, symbolsStderr);
+            Assert.Equal(3, rows.Count);
+            var grouped = Assert.Single(rows, row => row.TryGetProperty("definition_sites", out _));
+            Assert.Equal(2, grouped.GetProperty("definition_sites").GetInt32());
+            var groupedPaths = grouped.GetProperty("family_members")
+                .EnumerateArray()
+                .Select(member => member.GetProperty("path").GetString())
+                .ToList();
+            Assert.All(groupedPaths, path => Assert.StartsWith("A\\B/", path, StringComparison.Ordinal));
+            Assert.Contains("A\\B/One.cs", groupedPaths);
+            Assert.Contains("A\\B/Two.cs", groupedPaths);
+            Assert.All(
+                rows.Where(row => !row.TryGetProperty("definition_sites", out _)),
+                row => Assert.StartsWith("A/B/", row.GetProperty("path").GetString(), StringComparison.Ordinal));
+
+            using var connection = new SqliteConnection($"Data Source={dbPath}");
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT COUNT(DISTINCT family_key) FROM symbols WHERE name = 'M'";
             Assert.Equal(2L, Assert.IsType<long>(command.ExecuteScalar()));
         }
         finally

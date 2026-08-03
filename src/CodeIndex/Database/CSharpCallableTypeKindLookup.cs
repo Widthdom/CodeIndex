@@ -69,7 +69,9 @@ internal sealed class CSharpCallableTypeKindLookup
             var totalChanges = ReadTotalChanges(connection);
             var dataVersion = ReadDataVersion(connection);
             var scopeKey = BuildScopeKey(candidateQueries, exact, useFoldedNames);
-            if (_loadedTotalChanges == totalChanges
+            var transactionActive = SQLitePCL.raw.sqlite3_get_autocommit(connection.Handle) == 0;
+            if (!transactionActive
+                && _loadedTotalChanges == totalChanges
                 && _loadedDataVersion == dataVersion
                 && string.Equals(_loadedScopeKey, scopeKey, StringComparison.Ordinal))
             {
@@ -140,9 +142,15 @@ internal sealed class CSharpCallableTypeKindLookup
             _fileIdentityKinds = fileIdentityKinds;
             _callableFileIds = callableFileIds;
             _callableTypeParameterKinds = BuildCallableTypeParameterKinds(callables, facts);
-            _loadedTotalChanges = totalChanges;
-            _loadedDataVersion = dataVersion;
-            _loadedScopeKey = scopeKey;
+            // SQLite total_changes() includes rolled-back writes and data_version does not
+            // identify transaction-local snapshots. Never cache facts observed inside a
+            // transaction, so the first query after commit or rollback rebuilds them.
+            // SQLite の total_changes() は rollback 済み write も含み、data_version では
+            // transaction-local snapshot を識別できない。transaction 中の fact は cache
+            // せず、commit / rollback 後の最初の query で必ず再構築する。
+            _loadedTotalChanges = transactionActive ? null : totalChanges;
+            _loadedDataVersion = transactionActive ? null : dataVersion;
+            _loadedScopeKey = transactionActive ? null : scopeKey;
         }
     }
 
@@ -494,7 +502,7 @@ internal sealed class CSharpCallableTypeKindLookup
 
     private static string NormalizeIndexedPath(string path)
     {
-        var normalized = path.Replace('\\', '/').Trim('/');
+        var normalized = FileIndexer.NormalizePathSeparators(path).Trim('/');
         return normalized.Length == 0 ? "." : normalized;
     }
 

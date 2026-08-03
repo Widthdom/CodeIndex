@@ -274,8 +274,6 @@ internal static class PostExtractionHookMutationMaterializer
     private readonly record struct HookSymbolDeclarationLocation(
         long Id,
         long FileId,
-        string Kind,
-        string? SubKind,
         int Line,
         int StartLine,
         int? StartColumn,
@@ -288,8 +286,6 @@ internal static class PostExtractionHookMutationMaterializer
             => new(
                 symbol.Id,
                 symbol.FileId,
-                symbol.Kind,
-                symbol.SubKind,
                 symbol.Line,
                 symbol.StartLine,
                 symbol.StartColumn,
