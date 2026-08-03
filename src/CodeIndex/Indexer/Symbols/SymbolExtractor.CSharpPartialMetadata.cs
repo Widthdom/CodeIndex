@@ -257,7 +257,10 @@ public static partial class SymbolExtractor
             var searchStart = 0;
             while (searchStart < header.Length)
             {
-                var keywordIndex = FindCSharpIdentifierToken(header, keyword, searchStart);
+                var keywordIndex = FindCSharpDeclarationKeywordToken(
+                    header,
+                    keyword,
+                    searchStart);
                 if (keywordIndex < 0)
                     break;
 
@@ -1320,10 +1323,12 @@ public static partial class SymbolExtractor
         {
             // Plain records use the existing class kind. Resolve their declaration
             // keyword before the class-kind lookup can fall through to a later
-            // same-name occurrence in a base list.
+            // same-name occurrence in a base list. Attribute names and escaped
+            // identifiers such as `@record` are not declaration introducers.
             // plain record は既存の class kind を使うため、base list 内の同名参照へ
             // fallback する前に record declaration keyword から宣言名を解決する。
-            var recordKeywordColumn = FindCSharpIdentifierToken(
+            // attribute 名や `@record` のような escaped identifier は introducer ではない。
+            var recordKeywordColumn = FindCSharpDeclarationKeywordToken(
                 line,
                 "record".AsSpan(),
                 declarationSearchStart);
@@ -1340,7 +1345,7 @@ public static partial class SymbolExtractor
 
         if (symbol.Kind is "class" or "struct" or "interface" or "record")
         {
-            var keywordColumn = FindCSharpIdentifierToken(
+            var keywordColumn = FindCSharpDeclarationKeywordToken(
                 line,
                 symbol.Kind.AsSpan(),
                 declarationSearchStart);
@@ -1386,6 +1391,30 @@ public static partial class SymbolExtractor
         }
 
         return depth == 0;
+    }
+
+    private static int FindCSharpDeclarationKeywordToken(
+        ReadOnlySpan<char> line,
+        ReadOnlySpan<char> keyword,
+        int startIndex)
+    {
+        var searchIndex = Math.Clamp(startIndex, 0, line.Length);
+        while (searchIndex <= line.Length - keyword.Length)
+        {
+            var keywordIndex = FindCSharpIdentifierToken(line, keyword, searchIndex);
+            if (keywordIndex < 0)
+                return -1;
+
+            if ((keywordIndex == 0 || line[keywordIndex - 1] != '@')
+                && IsOutsideCSharpAttributeList(line, keywordIndex))
+            {
+                return keywordIndex;
+            }
+
+            searchIndex = keywordIndex + Math.Max(1, keyword.Length);
+        }
+
+        return -1;
     }
 
     private static int FindCSharpIdentifierToken(

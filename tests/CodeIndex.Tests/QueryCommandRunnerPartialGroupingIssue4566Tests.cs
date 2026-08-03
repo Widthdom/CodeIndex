@@ -3647,6 +3647,59 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void PartialCanonicalRepresentative_IgnoresRecordLikeAttributesAndEscapedTypeNames_Issue4914()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_record_token_boundaries_issue4914");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/A.Records.cs",
+                "csharp",
+                """
+                using System;
+                namespace Demo;
+                public class recordAttribute<T> : Attribute { }
+                [record<Collision>] public partial record Collision;
+                public partial class @record<T> where T : @record<T> { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/B.Records.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial record Collision;
+                public partial class @record<T> where T : @record<T> { }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var collision = RunGroupedSymbol(dbPath, "Collision", "class");
+            Assert.Equal(2, collision.GetProperty("definition_sites").GetInt32());
+            Assert.Equal("src/A.Records.cs", collision.GetProperty("path").GetString());
+            Assert.Equal(42, collision.GetProperty("start_column").GetInt32());
+            Assert.Collection(
+                collision.GetProperty("family_members").EnumerateArray().OrderBy(
+                    member => member.GetProperty("path").GetString(),
+                    StringComparer.Ordinal),
+                member => Assert.Equal(42, member.GetProperty("start_column").GetInt32()),
+                member => Assert.Equal(22, member.GetProperty("start_column").GetInt32()));
+
+            var escapedRecord = RunGroupedSymbol(dbPath, "record", "class");
+            Assert.Equal(2, escapedRecord.GetProperty("definition_sites").GetInt32());
+            Assert.Equal(22, escapedRecord.GetProperty("start_column").GetInt32());
+            Assert.All(
+                escapedRecord.GetProperty("family_members").EnumerateArray(),
+                member => Assert.Equal(22, member.GetProperty("start_column").GetInt32()));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void PartialCanonicalRepresentative_PropagatesFileLocalScopeToNestedFamilies_Issue4914()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_nested_file_local_issue4914");
