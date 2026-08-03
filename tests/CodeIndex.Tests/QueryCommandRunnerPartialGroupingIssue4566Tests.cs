@@ -3195,6 +3195,116 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void PartialCanonicalRepresentative_SkipsCallableScansWhenGroupingCannotUseThem_Issue4914()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_callable_scan_gate_issue4914");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Container.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class Container
+                {
+                    partial void Run(int value);
+                    partial void Run(int value) { }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var scans = 0;
+            CSharpCallableTypeKindLookup.ScanForTesting = () => scans++;
+            try
+            {
+                using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+                using (var reader = new DbReader(db))
+                {
+                    Assert.Single(reader.SearchSymbols(
+                        queries: null,
+                        limit: 10,
+                        kind: "class",
+                        lang: "csharp",
+                        groupPartials: true));
+                    Assert.Equal(
+                        1,
+                        reader.CountSearchSymbolsTotal(
+                            queries: (IReadOnlyList<string>?)null,
+                            kind: "class",
+                            lang: "csharp",
+                            groupPartials: true).Count);
+                    Assert.Equal(
+                        1,
+                        reader.CountDefinitionsTotal(
+                            "Container",
+                            kind: "class",
+                            lang: "csharp",
+                            exact: true,
+                            groupPartials: true).Count);
+                    Assert.Equal(0, scans);
+
+                    var callable = Assert.Single(reader.SearchSymbols(
+                        ["Run"],
+                        limit: 10,
+                        kind: "function",
+                        lang: "csharp",
+                        exact: true,
+                        groupPartials: true));
+                    Assert.Equal(2, callable.DefinitionSites);
+                    Assert.Equal(1, scans);
+                }
+
+                using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+                {
+                    var writer = new DbWriter(db.Connection);
+                    writer.ClearHotspotFamilyReady();
+                }
+
+                scans = 0;
+                using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+                using (var reader = new DbReader(db))
+                {
+                    Assert.Equal(
+                        2,
+                        reader.SearchSymbols(
+                            ["Run"],
+                            limit: 10,
+                            kind: "function",
+                            lang: "csharp",
+                            exact: true,
+                            groupPartials: true).Count);
+                    Assert.Equal(
+                        2,
+                        reader.CountSearchSymbolsTotal(
+                            queries: (IReadOnlyList<string>?)null,
+                            kind: "function",
+                            lang: "csharp",
+                            groupPartials: true).Count);
+                    Assert.Equal(
+                        2,
+                        reader.CountDefinitionsTotal(
+                            "Run",
+                            kind: "function",
+                            lang: "csharp",
+                            exact: true,
+                            groupPartials: true).Count);
+                    Assert.Equal(0, scans);
+                }
+            }
+            finally
+            {
+                CSharpCallableTypeKindLookup.ScanForTesting = null;
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void PartialCanonicalRepresentative_CandidateCapIgnoresOrdinarySameNameMethods_Issue4914()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_candidate_cap_issue4914");

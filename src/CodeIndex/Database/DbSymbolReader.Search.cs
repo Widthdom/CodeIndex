@@ -404,7 +404,7 @@ public partial class DbReader
         lang = DbReader.NormalizeQueryLanguage(lang);
         var effectiveQueries = NormalizeSymbolSearchQueries(queries, lang, exact);
         if (groupPartials)
-            EnsureCSharpCallableTypeKinds(lang, effectiveQueries, exact);
+            EnsureCSharpCallableTypeKinds(lang, effectiveQueries, exact, kind);
         using var cmd = _conn.CreateCommand();
 
         var logicalPartialKeySql = LogicalPartialSymbolGrouper.BuildSqlKeyExpression(
@@ -606,7 +606,7 @@ public partial class DbReader
         }
 
         if (groupPartials)
-            EnsureCSharpCallableTypeKinds(lang, validQueries, exact);
+            EnsureCSharpCallableTypeKinds(lang, validQueries, exact, kind);
         using var cmd = _conn.CreateCommand();
 
         var startLineSql = GetSymbolColumnSql("start_line", "s.line");

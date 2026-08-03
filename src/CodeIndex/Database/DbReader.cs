@@ -702,10 +702,17 @@ public partial class DbReader : IDisposable
     private void EnsureCSharpCallableTypeKinds(
         string? lang = null,
         IReadOnlyList<string>? candidateQueries = null,
-        bool exact = false)
+        bool exact = false,
+        string? kind = null)
     {
-        if (lang != null && !string.Equals(lang, "csharp", StringComparison.OrdinalIgnoreCase))
+        if (!_hotspotFamilyReadyLanguages.Contains("csharp")
+            || (lang != null && !string.Equals(lang, "csharp", StringComparison.OrdinalIgnoreCase))
+            || (kind != null
+                && !string.Equals(kind, "function", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(kind, "test.method", StringComparison.OrdinalIgnoreCase)))
+        {
             return;
+        }
 
         DbContext.RefreshCSharpCallableTypeKinds(
             _conn,

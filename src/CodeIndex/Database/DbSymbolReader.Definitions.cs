@@ -309,7 +309,8 @@ public partial class DbReader
             EnsureCSharpCallableTypeKinds(
                 DbReader.NormalizeQueryLanguage(lang),
                 normalizedQuery == null ? null : [normalizedQuery],
-                exact);
+                exact,
+                kind);
         using var cmd = _conn.CreateCommand();
 
         var logicalPartialKeySql = LogicalPartialSymbolGrouper.BuildSqlKeyExpression(
