@@ -1846,113 +1846,30 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void GetLanguageAliases_ReportsSqlDialectAliases()
+    public void GetLanguageAliases_ReportsRegisteredAliases()
     {
-        var aliases = QueryCommandRunner.GetLanguageAliases("sql");
+        (string Language, string[] ExpectedAliases)[] cases =
+        [
+            ("sql", ["tsql", "t-sql", "transact-sql", "transactsql", "sqlserver", "mssql"]),
+            ("csharp", ["cshtml", "razor", "blazor"]),
+            ("typescript", ["ts", "tsx", "cts", "mts"]),
+            ("rust", ["rs"]),
+            ("java", ["jav"]),
+            ("assembly", ["asm", "assembler", "nasm", "gas", "gnuasm", "gnu assembler"]),
+            ("fsharp", ["f#", "fs"]),
+            ("javascript", ["js", "jsx", "cjs", "mjs"]),
+            ("xml", ["xaml", "axaml"]),
+            ("python", ["py", "py3", "python3"]),
+            ("ruby", ["rb"]),
+        ];
 
-        Assert.Contains("tsql", aliases);
-        Assert.Contains("t-sql", aliases);
-        Assert.Contains("transact-sql", aliases);
-        Assert.Contains("transactsql", aliases);
-        Assert.Contains("sqlserver", aliases);
-        Assert.Contains("mssql", aliases);
-    }
+        foreach (var (language, expectedAliases) in cases)
+        {
+            var aliases = QueryCommandRunner.GetLanguageAliases(language);
 
-    [Fact]
-    public void GetLanguageAliases_ReportsRazorBlazorAliases()
-    {
-        var aliases = QueryCommandRunner.GetLanguageAliases("csharp");
-
-        Assert.Contains("cshtml", aliases);
-        Assert.Contains("razor", aliases);
-        Assert.Contains("blazor", aliases);
-    }
-
-    [Fact]
-    public void GetLanguageAliases_ReportsTypeScriptAlias()
-    {
-        var aliases = QueryCommandRunner.GetLanguageAliases("typescript");
-
-        Assert.Contains("ts", aliases);
-        Assert.Contains("tsx", aliases);
-        Assert.Contains("cts", aliases);
-        Assert.Contains("mts", aliases);
-    }
-
-    [Fact]
-    public void GetLanguageAliases_ReportsRustAlias()
-    {
-        var aliases = QueryCommandRunner.GetLanguageAliases("rust");
-
-        Assert.Contains("rs", aliases);
-    }
-
-    [Fact]
-    public void GetLanguageAliases_ReportsJavaAlias()
-    {
-        var aliases = QueryCommandRunner.GetLanguageAliases("java");
-
-        Assert.Contains("jav", aliases);
-    }
-
-    [Fact]
-    public void GetLanguageAliases_ReportsAssemblyAliases()
-    {
-        var aliases = QueryCommandRunner.GetLanguageAliases("assembly");
-
-        Assert.Contains("asm", aliases);
-        Assert.Contains("assembler", aliases);
-        Assert.Contains("nasm", aliases);
-        Assert.Contains("gas", aliases);
-        Assert.Contains("gnuasm", aliases);
-        Assert.Contains("gnu assembler", aliases);
-    }
-
-    [Fact]
-    public void GetLanguageAliases_ReportsFsharpAliases()
-    {
-        var aliases = QueryCommandRunner.GetLanguageAliases("fsharp");
-
-        Assert.Contains("f#", aliases);
-        Assert.Contains("fs", aliases);
-    }
-
-    [Fact]
-    public void GetLanguageAliases_ReportsJavascriptAliases()
-    {
-        var aliases = QueryCommandRunner.GetLanguageAliases("javascript");
-
-        Assert.Contains("js", aliases);
-        Assert.Contains("jsx", aliases);
-        Assert.Contains("cjs", aliases);
-        Assert.Contains("mjs", aliases);
-    }
-
-    [Fact]
-    public void GetLanguageAliases_ReportsXmlAliases()
-    {
-        var aliases = QueryCommandRunner.GetLanguageAliases("xml");
-
-        Assert.Contains("xaml", aliases);
-        Assert.Contains("axaml", aliases);
-    }
-
-    [Fact]
-    public void GetLanguageAliases_ReportsPythonAliases()
-    {
-        var aliases = QueryCommandRunner.GetLanguageAliases("python");
-
-        Assert.Contains("py", aliases);
-        Assert.Contains("py3", aliases);
-        Assert.Contains("python3", aliases);
-    }
-
-    [Fact]
-    public void GetLanguageAliases_ReportsRubyAliases()
-    {
-        var aliases = QueryCommandRunner.GetLanguageAliases("ruby");
-
-        Assert.Contains("rb", aliases);
+            foreach (var expectedAlias in expectedAliases)
+                Assert.Contains(expectedAlias, aliases);
+        }
     }
 
     [Theory]
