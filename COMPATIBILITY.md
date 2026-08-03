@@ -45,10 +45,10 @@ and DB/WAL/status diagnostics. These stamps let readers distinguish a feature
 that is absent, stale, or newer than the running binary.
 
 The canonical C# partial-declaration change in #4914 raises
-`hotspot_family_version_csharp` from `2` to `13` and the reference-identity
-contract from `6` to `7`. The minimum compatible implementation is therefore a
-binary that understands hotspot-family contract `13` and reference-identity
-contract `7`. Existing databases remain readable, but their C# family and
+`hotspot_family_version_csharp` from `2` to `14` and the reference-identity
+contract from `6` to `8`. The minimum compatible implementation is therefore a
+binary that understands hotspot-family contract `14` and reference-identity
+contract `8`. Existing databases remain readable, but their C# family and
 reference-identity data is reported as stale until a rebuild with
 `cdidx index <projectPath> --rebuild` refreshes the persisted partial metadata
 and reference candidates.
@@ -133,9 +133,9 @@ DB/WAL/status diagnostics が含まれます。reader はこれらの stamp に�
 が存在しないのか、stale なのか、実行中 binary より新しいのかを判別できます。
 
 #4914 の canonical C# partial declaration 対応では、
-`hotspot_family_version_csharp` を `2` から `13` へ、reference identity contract
-を `6` から `7` へ更新します。したがって最低互換実装は hotspot-family contract
-`13` と reference-identity contract `7` を理解する binary です。既存 database は
+`hotspot_family_version_csharp` を `2` から `14` へ、reference identity contract
+を `6` から `8` へ更新します。したがって最低互換実装は hotspot-family contract
+`14` と reference-identity contract `8` を理解する binary です。既存 database は
 引き続き読み取り可能ですが、`cdidx index <projectPath> --rebuild` で永続 partial
 metadata と reference candidate を更新するまでは、C# family / reference identity
 data が stale として報告されます。古い binary はこれらの新しい stamp を

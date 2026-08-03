@@ -426,7 +426,7 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void PartialCanonicalRepresentative_UsesSemanticRulesAndExposesFamilyNavigation_Issue4914()
     {
-        Assert.Equal(13, DbContext.HotspotFamilyVersion);
+        Assert.Equal(14, DbContext.HotspotFamilyVersion);
         var constraintOnlyType = Assert.Single(
             SymbolExtractor.Extract(
                 1,
@@ -3568,7 +3568,7 @@ public partial class QueryCommandRunnerTests
                     Assert.Equal(3, families.Count);
                     var family = families["HookContainerRenamed"];
                     Assert.EndsWith(
-                        "|file-local:src/App.cs\u001fHookContainerRenamed`1",
+                        "|file-local:src/App.cs\u001f+HookContainerRenamed`1",
                         family,
                         StringComparison.Ordinal);
                     Assert.Equal(family, families["HookOrdinary"]);
@@ -3938,7 +3938,7 @@ public partial class QueryCommandRunnerTests
             connection.Open();
             using var command = connection.CreateCommand();
             command.CommandText = "SELECT DISTINCT family_key FROM symbols WHERE name = 'M'";
-            Assert.Equal("Proj%7COne|N.Host", Assert.IsType<string>(command.ExecuteScalar()));
+            Assert.Equal("Proj%7COne|N+Host", Assert.IsType<string>(command.ExecuteScalar()));
         }
         finally
         {
@@ -4230,6 +4230,167 @@ public partial class QueryCommandRunnerTests
                     "partial void RelationalDefault(bool value, int other) { }",
                     "RelationalDefault",
                     "void"));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PartialCanonicalRepresentative_DistinguishesNamespaceAndNestedTypeBoundaries_Issue4914Review()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_family_boundary_issue4914");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Conditional.cs",
+                "csharp",
+                """
+                #nullable enable
+                #if FLAT
+                namespace A.B { public partial class C { } }
+                #else
+                namespace A { public partial class B { public partial class C { } } }
+                #endif
+                #if ROOT_NAMESPACE
+                namespace Root { public partial class Leaf { } }
+                #else
+                public partial class Root { public partial class Leaf { } }
+                #endif
+                #if FLAT_NULLABLE
+                namespace Kind.A
+                {
+                    public struct Node { }
+                    public partial class Host
+                    {
+                        partial void M(Node? value);
+                        partial void M(global::System.Nullable<Node> value) { }
+                    }
+                }
+                #else
+                namespace Kind
+                {
+                    public class A
+                    {
+                        public class Node { }
+                        public partial class Host
+                        {
+                            partial void M(Node? value);
+                            partial void M(Node value) { }
+                        }
+                    }
+                }
+                #endif
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["C", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "class", "--group-partials", "--include-generated", "--limit", "10"],
+                _jsonOptions));
+            using var document = ParseJsonOutput(stdout);
+            var families = document.RootElement.EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(2, families.Count);
+            Assert.All(families, family => Assert.False(family.TryGetProperty("definition_sites", out _)));
+
+            using var connection = new SqliteConnection($"Data Source={dbPath}");
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT family_key FROM symbols WHERE name = 'C' ORDER BY line";
+            using var reader = command.ExecuteReader();
+            var familyKeys = new List<string>();
+            while (reader.Read())
+                familyKeys.Add(reader.GetString(0));
+            Assert.Collection(
+                familyKeys,
+                family => Assert.Equal("A.B+C", family),
+                family => Assert.Equal("A+B+C", family));
+            reader.Close();
+
+            var (rootExitCode, rootStdout, rootStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["Leaf", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "class", "--group-partials", "--include-generated", "--limit", "10"],
+                _jsonOptions));
+            using var rootDocument = ParseJsonOutput(rootStdout);
+            var rootFamilies = rootDocument.RootElement.EnumerateArray().ToList();
+            Assert.Equal(CommandExitCodes.Success, rootExitCode);
+            Assert.Equal(string.Empty, rootStderr);
+            Assert.Equal(2, rootFamilies.Count);
+            Assert.All(rootFamilies, family => Assert.False(family.TryGetProperty("definition_sites", out _)));
+
+            using var rootCommand = connection.CreateCommand();
+            rootCommand.CommandText = "SELECT family_key FROM symbols WHERE name = 'Leaf' ORDER BY line";
+            using var rootReader = rootCommand.ExecuteReader();
+            var rootFamilyKeys = new List<string>();
+            while (rootReader.Read())
+                rootFamilyKeys.Add(rootReader.GetString(0));
+            Assert.Collection(
+                rootFamilyKeys,
+                family => Assert.Equal("Root+Leaf", family),
+                family => Assert.Equal("+Root+Leaf", family));
+            rootReader.Close();
+
+            var (callableExitCode, callableStdout, callableStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["M", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "function", "--group-partials", "--include-generated", "--limit", "10"],
+                _jsonOptions));
+            using var callableDocument = ParseJsonOutput(callableStdout);
+            var callableFamilies = callableDocument.RootElement.EnumerateArray().ToList();
+            Assert.Equal(CommandExitCodes.Success, callableExitCode);
+            Assert.Equal(string.Empty, callableStderr);
+            Assert.True(callableFamilies.Count == 2, callableStdout);
+            Assert.All(
+                callableFamilies,
+                family => Assert.Equal(2, family.GetProperty("definition_sites").GetInt32()));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PartialCanonicalRepresentative_UsesIdentifierLineForMultilineCallable_Issue4914Review()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_multiline_identifier_issue4914");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Container.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class Container
+                {
+                    partial void
+                    M(int value);
+                    partial void M(int value) { }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var grouped = RunGroupedSymbol(dbPath, "M", "function");
+            Assert.Equal(2, grouped.GetProperty("definition_sites").GetInt32());
+            Assert.Contains(
+                grouped.GetProperty("family_members").EnumerateArray(),
+                member => member.GetProperty("line").GetInt32() == 5
+                          && member.GetProperty("start_column").GetInt32() == 4);
+
+            using var connection = new SqliteConnection($"Data Source={dbPath}");
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText =
+                "SELECT line, start_line, identifier_start_column FROM symbols WHERE name = 'M' ORDER BY line";
+            using var reader = command.ExecuteReader();
+            Assert.True(reader.Read());
+            Assert.Equal(5, reader.GetInt32(0));
+            Assert.Equal(4, reader.GetInt32(1));
+            Assert.Equal(4, reader.GetInt32(2));
         }
         finally
         {

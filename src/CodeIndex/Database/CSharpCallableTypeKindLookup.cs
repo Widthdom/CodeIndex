@@ -187,12 +187,20 @@ internal sealed class CSharpCallableTypeKindLookup
             var container = NormalizeFamilyIdentity(containerQualifiedName);
             while (container.Length > 0)
             {
-                var qualified = $"{container}.{normalizedSource}";
-                var resolved = ResolveIdentity(qualified, fileId, projectScope);
+                var familyQualified = CombineFamilyContainerAndType(container, normalizedSource);
+                var resolved = ResolveIdentity(familyQualified, fileId, projectScope);
                 if (resolved != TypeKind.Unknown)
                     return resolved;
 
-                var separator = container.LastIndexOf('.');
+                var sourceQualified = $"{ConvertFamilyIdentityToSourceIdentity(container)}.{normalizedSource}";
+                if (!string.Equals(sourceQualified, familyQualified, StringComparison.Ordinal))
+                {
+                    resolved = ResolveIdentity(sourceQualified, fileId, projectScope);
+                    if (resolved != TypeKind.Unknown)
+                        return resolved;
+                }
+
+                var separator = container.LastIndexOfAny(['.', '+']);
                 container = separator < 0 ? string.Empty : container[..separator];
             }
 
@@ -916,14 +924,18 @@ internal sealed class CSharpCallableTypeKindLookup
         if (fact.FamilyIdentity.Length > 0)
         {
             var familyIdentity = CSharpTypeReferenceArity.NormalizeTypeIdentityArity(fact.FamilyIdentity);
-            var precise = familyIdentity.Length > 0 ? new[] { familyIdentity } : Array.Empty<string>();
+            var precise = familyIdentity.Length == 0
+                ? Array.Empty<string>()
+                : new[] { familyIdentity, ConvertFamilyIdentityToSourceIdentity(familyIdentity) }
+                    .Distinct(StringComparer.Ordinal)
+                    .ToArray();
             cache[fact] = precise;
             return precise;
         }
 
         if (fact.Container.Length == 0 || !visiting.Add(fact))
         {
-            var root = new[] { CombineIdentity(fact.Container, arityName) };
+            var root = BuildRootTypeIdentities(fact.Container, arityName);
             cache[fact] = root;
             return root;
         }
@@ -931,12 +943,17 @@ internal sealed class CSharpCallableTypeKindLookup
         IReadOnlyList<string> resolved;
         if (!containingFacts.TryGetValue(fact, out var parent) || parent == null)
         {
-            resolved = new[] { CombineIdentity(fact.Container, arityName) };
+            resolved = BuildRootTypeIdentities(fact.Container, arityName);
         }
         else
         {
-            resolved = ResolveIdentities(parent, containingFacts, cache, visiting)
-                .Select(parentIdentity => CombineIdentity(parentIdentity, arityName))
+            var parentIdentities = ResolveIdentities(parent, containingFacts, cache, visiting);
+            var canonicalIdentity = $"{parentIdentities[0]}+{arityName}";
+            resolved = new[]
+                {
+                    canonicalIdentity,
+                    ConvertFamilyIdentityToSourceIdentity(canonicalIdentity),
+                }
                 .Distinct(StringComparer.Ordinal)
                 .ToArray();
         }
@@ -994,6 +1011,26 @@ internal sealed class CSharpCallableTypeKindLookup
             : normalized;
     }
 
+    private static string CombineFamilyContainerAndType(string container, string typeIdentity)
+        => $"{container}+{typeIdentity}";
+
+    private static string[] BuildRootTypeIdentities(string container, string arityName)
+    {
+        var canonicalIdentity = container.Length == 0
+            ? $"+{arityName}"
+            : $"{container}+{arityName}";
+        return new[]
+        {
+            canonicalIdentity,
+            ConvertFamilyIdentityToSourceIdentity(canonicalIdentity),
+        }
+        .Distinct(StringComparer.Ordinal)
+        .ToArray();
+    }
+
+    private static string ConvertFamilyIdentityToSourceIdentity(string familyIdentity)
+        => familyIdentity.Replace('+', '.').TrimStart('.');
+
     private static string ExtractProjectScope(string? familyKey)
     {
         if (string.IsNullOrWhiteSpace(familyKey))
@@ -1026,7 +1063,7 @@ internal sealed class CSharpCallableTypeKindLookup
         if (familyIdentity.Length == 0)
             return false;
 
-        var separator = familyIdentity.LastIndexOf('.');
+        var separator = familyIdentity.LastIndexOfAny(['.', '+']);
         var leaf = separator < 0 ? familyIdentity : familyIdentity[(separator + 1)..];
         return string.Equals(
             leaf,

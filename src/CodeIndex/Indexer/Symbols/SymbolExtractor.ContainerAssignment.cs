@@ -451,14 +451,16 @@ public static partial class SymbolExtractor
             if (sourcePrefix.Length > 0)
                 sourcePrefix.Append('.');
             sourcePrefix.Append(segment);
-            if (familyIdentity.Length > 0)
-                familyIdentity.Append('.');
-            familyIdentity.Append(segment);
 
             var type = FindHookCSharpContainerSymbol(
                 sourcePrefix.ToString(),
                 symbol,
                 symbols);
+            if (type != null)
+                familyIdentity.Append('+');
+            else if (familyIdentity.Length > 0)
+                familyIdentity.Append('.');
+            familyIdentity.Append(segment);
             var arity = type == null
                 ? null
                 : CSharpTypeReferenceArity.GetDefinitionArity(
@@ -529,7 +531,7 @@ public static partial class SymbolExtractor
         foreach (var fileLocalFamilyBody in fileLocalFamilyBodies)
         {
             if (string.Equals(familyBody, fileLocalFamilyBody, StringComparison.Ordinal)
-                || familyBody.StartsWith(fileLocalFamilyBody + ".", StringComparison.Ordinal))
+                || familyBody.StartsWith(fileLocalFamilyBody + "+", StringComparison.Ordinal))
             {
                 return true;
             }
@@ -745,7 +747,9 @@ public static partial class SymbolExtractor
     {
         if (string.IsNullOrWhiteSpace(symbol.Name))
             return;
-        if (builder.Length > 0)
+        if (IsCSharpTypeFamilyKind(symbol.Kind))
+            builder.Append('+');
+        else if (builder.Length > 0)
             builder.Append('.');
         builder.Append(symbol.Name);
         var genericArity = CSharpTypeReferenceArity.GetDefinitionArity(

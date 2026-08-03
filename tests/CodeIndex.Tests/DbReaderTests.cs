@@ -2998,7 +2998,7 @@ public partial class DbReaderTests : IDisposable
     [Fact]
     public void HotspotFamilyVersion_ChangesOnlyForCSharp_Issue4914()
     {
-        Assert.Equal(13, DbContext.GetHotspotFamilyVersion("csharp"));
+        Assert.Equal(14, DbContext.GetHotspotFamilyVersion("csharp"));
         Assert.Equal(2, DbContext.GetHotspotFamilyVersion("vb"));
         Assert.Equal(2, DbContext.GetHotspotFamilyVersion("fsharp"));
         Assert.Equal(2, DbContext.GetHotspotFamilyVersion("msbuild"));

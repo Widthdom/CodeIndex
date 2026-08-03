@@ -117,9 +117,12 @@ public class SymbolRecord
     internal int? DeclarationSemanticScore { get; set; }
 
     /// <summary>
-    /// Zero-based column of the declared identifier on <see cref="Line"/> when extraction
-    /// can distinguish it from a preceding-line modifier anchor.
-    /// 前行 modifier の anchor と区別できる場合の、<see cref="Line"/> 上の宣言識別子列（0始まり）。
+    /// Zero-based column of the declared identifier on <see cref="Line"/>. For a multiline
+    /// declaration, extraction moves <see cref="Line"/> from the modifier anchor to the
+    /// identifier line while <see cref="StartLine"/> retains the declaration-range start.
+    /// <see cref="Line"/> 上の宣言識別子列（0始まり）。複数行宣言では extraction が
+    /// <see cref="Line"/> を modifier anchor から識別子行へ移し、<see cref="StartLine"/> は
+    /// 宣言 range の開始行を保持する。
     /// </summary>
     [JsonInclude]
     internal int? IdentifierStartColumn { get; set; }

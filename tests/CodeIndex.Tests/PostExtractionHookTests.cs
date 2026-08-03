@@ -169,7 +169,7 @@ public class PostExtractionHookTests
 
                 var container = Assert.Single(symbols, symbol => symbol.Name == "HookContainerRenamed");
                 var expectedContainerFamily =
-                    "hook-project|file-local:src/App.cs\u001fHookContainerRenamed`1";
+                    "hook-project|file-local:src/App.cs\u001f+HookContainerRenamed`1";
                 Assert.Equal(expectedContainerFamily, container.FamilyKey);
                 Assert.True(container.IsFileLocalDeclaration);
                 var mutated = Assert.Single(symbols, symbol => symbol.Name == "HookOrdinary");
@@ -188,7 +188,7 @@ public class PostExtractionHookTests
                 var addedFileType = Assert.Single(symbols, symbol => symbol.Name == "HookFileType");
                 Assert.True(addedFileType.IsFileLocalDeclaration);
                 Assert.Equal(
-                    "hook-project|file-local:src/App.cs\u001fHookFileType",
+                    "hook-project|file-local:src/App.cs\u001f+HookFileType",
                     addedFileType.FamilyKey);
             }
             finally
@@ -244,7 +244,7 @@ public class PostExtractionHookTests
         Assert.All(symbols, symbol =>
         {
             Assert.False(symbol.IsFileLocalDeclaration);
-            Assert.Equal("project|Part", symbol.FamilyKey);
+            Assert.Equal("project|+Part", symbol.FamilyKey);
         });
     }
 
@@ -331,7 +331,7 @@ public class PostExtractionHookTests
             .OrderBy(family => family, StringComparer.Ordinal)
             .ToList();
         Assert.Equal(
-            ["project|Outer`1.Inner", "project|Outer`2.Inner"],
+            ["project|+Outer`1+Inner", "project|+Outer`2+Inner"],
             innerFamilies);
     }
 

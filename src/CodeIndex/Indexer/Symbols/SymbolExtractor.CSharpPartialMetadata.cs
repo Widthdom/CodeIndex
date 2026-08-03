@@ -59,10 +59,15 @@ public static partial class SymbolExtractor
             symbol.IsFileLocalDeclaration = symbol.IsExplicitFileLocalDeclaration == true;
             if (symbol.IsPartialDeclaration == true)
             {
-                symbol.IdentifierStartColumn = FindCSharpDeclarationIdentifierColumn(
+                var identifierPosition = FindCSharpDeclarationIdentifierPosition(
                     lines,
                     symbol,
                     lineStartStates);
+                if (identifierPosition != null)
+                {
+                    symbol.Line = identifierPosition.Value.Line;
+                    symbol.IdentifierStartColumn = identifierPosition.Value.Column;
+                }
             }
 
             var semanticScore = 0;
@@ -1297,7 +1302,7 @@ public static partial class SymbolExtractor
         return found;
     }
 
-    private static int? FindCSharpDeclarationIdentifierColumn(
+    private static (int Line, int Column)? FindCSharpDeclarationIdentifierPosition(
         IReadOnlyList<string> lines,
         SymbolRecord symbol,
         IReadOnlyList<CSharpLexState>? lineStartStates)
@@ -1305,91 +1310,108 @@ public static partial class SymbolExtractor
         if (symbol.Line <= 0 || symbol.Line > lines.Count || string.IsNullOrWhiteSpace(symbol.Name))
             return null;
 
-        var lineIndex = symbol.Line - 1;
-        var lineStartState = lineStartStates != null && lineIndex < lineStartStates.Count
-            ? lineStartStates[lineIndex]
-            : new CSharpLexState();
-        var line = LexCSharpLine(lines[lineIndex], lineStartState).SanitizedLine.AsSpan();
-        var declarationOccurrenceStart = FindCSharpDeclarationOccurrenceStartColumn(
-            lines[lineIndex],
-            symbol,
-            lineStartState);
-        var declarationSearchStart = Math.Max(0, declarationOccurrenceStart);
         var name = symbol.Name.AsSpan().TrimStart('@');
         if (name.IsEmpty)
             return null;
 
-        if (symbol.Kind == "class")
+        var firstLine = symbol.Line;
+        var lastLine = Math.Clamp(
+            symbol.BodyStartLine ?? symbol.EndLine,
+            firstLine,
+            lines.Count);
+        (int Line, int Column)? fallback = null;
+        for (var lineNumber = firstLine; lineNumber <= lastLine; lineNumber++)
         {
-            // Plain records use the existing class kind. Resolve their declaration
-            // keyword before the class-kind lookup can fall through to a later
-            // same-name occurrence in a base list. Attribute names and escaped
-            // identifiers such as `@record` are not declaration introducers.
-            // plain record は既存の class kind を使うため、base list 内の同名参照へ
-            // fallback する前に record declaration keyword から宣言名を解決する。
-            // attribute 名や `@record` のような escaped identifier は introducer ではない。
-            var recordKeywordColumn = FindCSharpDeclarationKeywordToken(
-                line,
-                "record".AsSpan(),
-                declarationSearchStart);
-            if (recordKeywordColumn >= 0)
+            var lineIndex = lineNumber - 1;
+            var lineStartState = lineStartStates != null && lineIndex < lineStartStates.Count
+                ? lineStartStates[lineIndex]
+                : new CSharpLexState();
+            var line = LexCSharpLine(lines[lineIndex], lineStartState).SanitizedLine.AsSpan();
+            var declarationSearchStart = lineNumber == firstLine
+                ? Math.Max(
+                    0,
+                    FindCSharpDeclarationOccurrenceStartColumn(
+                        lines[lineIndex],
+                        symbol,
+                        lineStartState))
+                : 0;
+
+            if (symbol.Kind == "class")
             {
-                var recordNameSearchStart = recordKeywordColumn + "record".Length;
-                var recordClassSuffixColumn = FindCSharpDeclarationKeywordToken(
+                // Plain records use the existing class kind. Resolve their declaration
+                // keyword before the class-kind lookup can fall through to a later
+                // same-name occurrence in a base list. Attribute names and escaped
+                // identifiers such as `@record` are not declaration introducers.
+                // plain record は既存の class kind を使うため、base list 内の同名参照へ
+                // fallback する前に record declaration keyword から宣言名を解決する。
+                // attribute 名や `@record` のような escaped identifier は introducer ではない。
+                var recordKeywordColumn = FindCSharpDeclarationKeywordToken(
                     line,
-                    "class".AsSpan(),
-                    recordNameSearchStart);
-                if (recordClassSuffixColumn >= 0
-                    && line[recordNameSearchStart..recordClassSuffixColumn].Trim().IsEmpty)
+                    "record".AsSpan(),
+                    declarationSearchStart);
+                if (recordKeywordColumn >= 0)
                 {
-                    // `record class` has an optional contextual-keyword suffix before the
-                    // declaration identifier. In particular, `record class @class` must
-                    // resolve the escaped identifier rather than the suffix itself.
-                    // `record class` では宣言 identifier の前に contextual keyword suffix が
-                    // ある。特に `record class @class` は suffix ではなく escaped identifier
-                    // を宣言位置として解決する。
-                    recordNameSearchStart = recordClassSuffixColumn + "class".Length;
+                    var recordNameSearchStart = recordKeywordColumn + "record".Length;
+                    var recordClassSuffixColumn = FindCSharpDeclarationKeywordToken(
+                        line,
+                        "class".AsSpan(),
+                        recordNameSearchStart);
+                    if (recordClassSuffixColumn >= 0
+                        && line[recordNameSearchStart..recordClassSuffixColumn].Trim().IsEmpty)
+                    {
+                        // `record class` has an optional contextual-keyword suffix before the
+                        // declaration identifier. In particular, `record class @class` must
+                        // resolve the escaped identifier rather than the suffix itself.
+                        // `record class` では宣言 identifier の前に contextual keyword suffix が
+                        // ある。特に `record class @class` は suffix ではなく escaped identifier
+                        // を宣言位置として解決する。
+                        recordNameSearchStart = recordClassSuffixColumn + "class".Length;
+                    }
+                    var recordNameColumn = FindCSharpIdentifierToken(
+                        line,
+                        name,
+                        recordNameSearchStart);
+                    if (recordNameColumn >= 0)
+                        return (lineNumber, recordNameColumn);
                 }
-                var recordNameColumn = FindCSharpIdentifierToken(
-                    line,
-                    name,
-                    recordNameSearchStart);
-                if (recordNameColumn >= 0)
-                    return recordNameColumn;
             }
-        }
 
-        if (symbol.Kind is "class" or "struct" or "interface" or "record")
-        {
-            var keywordColumn = FindCSharpDeclarationKeywordToken(
-                line,
-                symbol.Kind.AsSpan(),
-                declarationSearchStart);
-            if (keywordColumn >= 0)
+            if (symbol.Kind is "class" or "struct" or "interface" or "record")
             {
-                var nameColumn = FindCSharpIdentifierToken(
+                var keywordColumn = FindCSharpDeclarationKeywordToken(
                     line,
-                    name,
-                    keywordColumn + symbol.Kind.Length);
-                if (nameColumn >= 0)
-                    return nameColumn;
+                    symbol.Kind.AsSpan(),
+                    declarationSearchStart);
+                if (keywordColumn >= 0)
+                {
+                    var nameColumn = FindCSharpIdentifierToken(
+                        line,
+                        name,
+                        keywordColumn + symbol.Kind.Length);
+                    if (nameColumn >= 0)
+                        return (lineNumber, nameColumn);
+                }
             }
-        }
 
-        var searchStart = declarationSearchStart;
-        int? fallback = null;
-        while (searchStart < line.Length)
-        {
-            var nameColumn = FindCSharpIdentifierToken(line, name, searchStart);
-            if (nameColumn < 0)
+            var searchStart = declarationSearchStart;
+            while (searchStart < line.Length)
+            {
+                var nameColumn = FindCSharpIdentifierToken(line, name, searchStart);
+                if (nameColumn >= 0)
+                {
+                    fallback ??= (lineNumber, nameColumn);
+                    if (symbol.Kind is "function" or "test.method"
+                        && IsOutsideCSharpAttributeList(line, nameColumn)
+                        && IsCSharpCallableNameOccurrence(line, nameColumn, name.Length))
+                    {
+                        return (lineNumber, nameColumn);
+                    }
+                    searchStart = nameColumn + Math.Max(1, name.Length);
+                    continue;
+                }
+
                 break;
-
-            fallback = nameColumn;
-            if (symbol.Kind is "function" or "test.method"
-                && IsOutsideCSharpAttributeList(line, nameColumn)
-                && IsCSharpCallableNameOccurrence(line, nameColumn, name.Length))
-                return nameColumn;
-            searchStart = nameColumn + Math.Max(1, name.Length);
+            }
         }
 
         return fallback;
