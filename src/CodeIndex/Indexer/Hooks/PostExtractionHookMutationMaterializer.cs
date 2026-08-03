@@ -104,30 +104,66 @@ internal static class PostExtractionHookMutationMaterializer
         if (!string.Equals(language, "csharp", StringComparison.Ordinal))
             return;
 
-        var sourceFacts = new Dictionary<HookSymbolDeclarationState, Queue<CSharpDeclarationFacts>>();
+        var sourceFacts = new Dictionary<HookSymbolDeclarationState, Queue<SourceCSharpDeclarationFacts>>();
+        var sourceFactsByLocation = new Dictionary<HookSymbolDeclarationLocation, Queue<SourceCSharpDeclarationFacts>>();
         foreach (var symbol in sourceSymbols)
         {
+            var sourceFact = new SourceCSharpDeclarationFacts(CSharpDeclarationFacts.From(symbol));
             var state = HookSymbolDeclarationState.From(symbol);
             if (!sourceFacts.TryGetValue(state, out var facts))
             {
-                facts = new Queue<CSharpDeclarationFacts>();
+                facts = new Queue<SourceCSharpDeclarationFacts>();
                 sourceFacts[state] = facts;
             }
-            facts.Enqueue(CSharpDeclarationFacts.From(symbol));
+            facts.Enqueue(sourceFact);
+
+            var location = HookSymbolDeclarationLocation.From(symbol);
+            if (!sourceFactsByLocation.TryGetValue(location, out var locationFacts))
+            {
+                locationFacts = new Queue<SourceCSharpDeclarationFacts>();
+                sourceFactsByLocation[location] = locationFacts;
+            }
+            locationFacts.Enqueue(sourceFact);
         }
 
         foreach (var symbol in mutatedSymbols)
         {
             var state = HookSymbolDeclarationState.From(symbol);
-            if (sourceFacts.TryGetValue(state, out var facts) && facts.Count > 0)
+            var exactSource = sourceFacts.TryGetValue(state, out var facts)
+                ? DequeueUnmatched(facts)
+                : null;
+            if (exactSource != null)
             {
-                facts.Dequeue().Apply(symbol);
+                exactSource.Matched = true;
+                exactSource.Facts.Apply(symbol);
                 continue;
             }
 
             SymbolExtractor.RefreshCSharpPartialDeclarationMetadataFromHookSignature(symbol);
+            var location = HookSymbolDeclarationLocation.From(symbol);
+            var positionalSource = sourceFactsByLocation.TryGetValue(location, out var locationFacts)
+                ? DequeueUnmatched(locationFacts)
+                : null;
+            if (positionalSource != null)
+            {
+                positionalSource.Matched = true;
+                positionalSource.Facts.PreserveLeadingSourceModifiers(symbol);
+            }
             symbol.DeclarationStructureMutatedByHook = true;
         }
+    }
+
+    private static SourceCSharpDeclarationFacts? DequeueUnmatched(
+        Queue<SourceCSharpDeclarationFacts> candidates)
+    {
+        while (candidates.Count > 0)
+        {
+            var candidate = candidates.Dequeue();
+            if (!candidate.Matched)
+                return candidate;
+        }
+
+        return null;
     }
 
     internal static void RefreshLanguageIdentity(string? language, IEnumerable<ReferenceRecord> references)
@@ -235,20 +271,67 @@ internal static class PostExtractionHookMutationMaterializer
                 symbol.SameLineSignatureOccurrenceIndex);
     }
 
+    private readonly record struct HookSymbolDeclarationLocation(
+        long Id,
+        long FileId,
+        string Kind,
+        string? SubKind,
+        int Line,
+        int StartLine,
+        int? StartColumn,
+        int EndLine,
+        int? BodyStartLine,
+        int? BodyEndLine,
+        int? SameLineSignatureOccurrenceIndex)
+    {
+        internal static HookSymbolDeclarationLocation From(SymbolRecord symbol)
+            => new(
+                symbol.Id,
+                symbol.FileId,
+                symbol.Kind,
+                symbol.SubKind,
+                symbol.Line,
+                symbol.StartLine,
+                symbol.StartColumn,
+                symbol.EndLine,
+                symbol.BodyStartLine,
+                symbol.BodyEndLine,
+                symbol.SameLineSignatureOccurrenceIndex);
+    }
+
+    private sealed class SourceCSharpDeclarationFacts(CSharpDeclarationFacts facts)
+    {
+        internal CSharpDeclarationFacts Facts { get; } = facts;
+        internal bool Matched { get; set; }
+    }
+
     private readonly record struct CSharpDeclarationFacts(
         bool? IsPartialDeclaration,
         bool IsFileLocalDeclaration,
         bool? IsExplicitFileLocalDeclaration,
         int? DeclarationSemanticScore,
-        int? IdentifierStartColumn)
+        int? IdentifierStartColumn,
+        bool SignatureDeclaresPartial,
+        bool SignatureDeclaresFileLocal)
     {
         internal static CSharpDeclarationFacts From(SymbolRecord symbol)
-            => new(
+        {
+            var signatureFacts = new SymbolRecord
+            {
+                Kind = symbol.Kind,
+                Name = symbol.Name,
+                Signature = symbol.Signature,
+            };
+            SymbolExtractor.RefreshCSharpPartialDeclarationMetadataFromHookSignature(signatureFacts);
+            return new(
                 symbol.IsPartialDeclaration,
                 symbol.IsFileLocalDeclaration,
                 symbol.IsExplicitFileLocalDeclaration,
                 symbol.DeclarationSemanticScore,
-                symbol.IdentifierStartColumn);
+                symbol.IdentifierStartColumn,
+                signatureFacts.IsPartialDeclaration == true,
+                signatureFacts.IsExplicitFileLocalDeclaration == true);
+        }
 
         internal void Apply(SymbolRecord symbol)
         {
@@ -257,6 +340,17 @@ internal static class PostExtractionHookMutationMaterializer
             symbol.IsExplicitFileLocalDeclaration = IsExplicitFileLocalDeclaration;
             symbol.DeclarationSemanticScore = DeclarationSemanticScore;
             symbol.IdentifierStartColumn = IdentifierStartColumn;
+        }
+
+        internal void PreserveLeadingSourceModifiers(SymbolRecord symbol)
+        {
+            if (IsPartialDeclaration == true && !SignatureDeclaresPartial)
+                symbol.IsPartialDeclaration = true;
+            if (IsExplicitFileLocalDeclaration == true && !SignatureDeclaresFileLocal)
+            {
+                symbol.IsExplicitFileLocalDeclaration = true;
+                symbol.IsFileLocalDeclaration = true;
+            }
         }
     }
 }

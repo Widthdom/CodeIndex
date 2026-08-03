@@ -209,20 +209,37 @@ public static partial class SymbolExtractor
 
         var materialized = symbols as List<SymbolRecord> ?? symbols.ToList();
         var derivedRecordComponentContainers = CaptureDerivedCSharpRecordComponentContainers(materialized);
+        var hookMutatedTypeContainers = materialized
+            .Where(symbol => symbol.DeclarationStructureMutatedByHook
+                             && IsCSharpTypeFamilyKind(symbol.Kind))
+            .Select(symbol => new HookMutatedCSharpTypeContainer(
+                symbol,
+                symbol.ContainerKind,
+                symbol.ContainerName,
+                symbol.ContainerQualifiedName))
+            .ToList();
+        var hookMutatedTypeSymbols = hookMutatedTypeContainers
+            .Select(assignment => assignment.Symbol)
+            .ToHashSet();
         foreach (var symbol in materialized)
         {
             symbol.FamilyKey = null;
             symbol.IsFileLocalDeclaration =
                 symbol.IsExplicitFileLocalDeclaration ?? symbol.IsFileLocalDeclaration;
-            if (symbol.DeclarationStructureMutatedByHook)
+            if (symbol.DeclarationStructureMutatedByHook
+                && !hookMutatedTypeSymbols.Contains(symbol))
+            {
                 continue;
+            }
 
             // Container fields emitted by extraction are derived state. Clear them on
             // unchanged records so a hook rename/arity change on an enclosing declaration
-            // propagates to descendants. Explicit hook mutations retain their public values.
+            // propagates to descendants. Mutated type declarations are also cleared for
+            // this positional pass; their accepted public values are restored below.
             // extraction が設定した container field は derived state なので、unchanged record
             // では消去し、hook による enclosing declaration の rename/arity 変更を descendant
-            // へ伝播する。hook が明示変更した record の public value は保持する。
+            // へ伝播する。変更された type declaration もこの位置ベースの pass では消去し、
+            // 受理済みの public value は後段で復元する。
             symbol.ContainerKind = null;
             symbol.ContainerName = null;
             symbol.ContainerQualifiedName = null;
@@ -239,8 +256,15 @@ public static partial class SymbolExtractor
             getLineStartStates,
             filePath,
             projectRoot,
-            static symbol => symbol.DeclarationStructureMutatedByHook,
+            symbol => symbol.DeclarationStructureMutatedByHook
+                      && !hookMutatedTypeSymbols.Contains(symbol),
             finalizeCSharpFileLocalFamilies: false);
+
+        foreach (var assignment in hookMutatedTypeContainers)
+        {
+            assignment.PositionalDeclaredQualifiedName = BuildDeclaredQualifiedName(assignment.Symbol);
+            assignment.RestoreAcceptedContainer();
+        }
 
         // AssignContainers uses positional containment. A hook may intentionally move a
         // declaration by editing its public container fields, so rebuild those records from
@@ -254,6 +278,9 @@ public static partial class SymbolExtractor
         {
             RefreshHookMutatedCSharpFamilyKey(symbol, materialized);
         }
+        RefreshCSharpDescendantsAfterHookContainerMoves(
+            hookMutatedTypeContainers,
+            materialized);
         foreach (var symbol in materialized.Where(
                      symbol => symbol.DeclarationStructureMutatedByHook
                                && !IsCSharpTypeFamilyKind(symbol.Kind)))
@@ -266,6 +293,125 @@ public static partial class SymbolExtractor
         ApplyFamilyScope(materialized, familyScopeKey, "csharp");
         foreach (var symbol in materialized)
             symbol.DeclarationStructureMutatedByHook = false;
+    }
+
+    private sealed class HookMutatedCSharpTypeContainer(
+        SymbolRecord symbol,
+        string? acceptedContainerKind,
+        string? acceptedContainerName,
+        string? acceptedContainerQualifiedName)
+    {
+        internal SymbolRecord Symbol { get; } = symbol;
+        internal string? PositionalDeclaredQualifiedName { get; set; }
+
+        internal void RestoreAcceptedContainer()
+        {
+            Symbol.ContainerKind = acceptedContainerKind;
+            Symbol.ContainerName = acceptedContainerName;
+            Symbol.ContainerQualifiedName = acceptedContainerQualifiedName;
+        }
+    }
+
+    private readonly record struct HookMutatedCSharpContainerMove(
+        SymbolRecord Symbol,
+        string PositionalDeclaredQualifiedName,
+        string AcceptedDeclaredQualifiedName);
+
+    private static void RefreshCSharpDescendantsAfterHookContainerMoves(
+        IReadOnlyList<HookMutatedCSharpTypeContainer> assignments,
+        IReadOnlyList<SymbolRecord> symbols)
+    {
+        var moves = assignments
+            .Select(assignment => new HookMutatedCSharpContainerMove(
+                assignment.Symbol,
+                assignment.PositionalDeclaredQualifiedName ?? assignment.Symbol.Name,
+                BuildDeclaredQualifiedName(assignment.Symbol)))
+            .Where(move => !string.Equals(
+                move.PositionalDeclaredQualifiedName,
+                move.AcceptedDeclaredQualifiedName,
+                StringComparison.Ordinal))
+            .OrderByDescending(move => move.PositionalDeclaredQualifiedName.Length)
+            .ToList();
+        if (moves.Count == 0)
+            return;
+
+        var refreshedDescendants = new List<SymbolRecord>();
+        foreach (var symbol in symbols)
+        {
+            if (symbol.DeclarationStructureMutatedByHook)
+                continue;
+
+            var positionalContainer = symbol.ContainerQualifiedName;
+            if (string.IsNullOrWhiteSpace(positionalContainer))
+                continue;
+
+            foreach (var move in moves)
+            {
+                if (!IsPositionallyWithinHookContainer(move.Symbol, symbol)
+                    || !TryReplaceCSharpContainerPrefix(
+                        positionalContainer,
+                        move.PositionalDeclaredQualifiedName,
+                        move.AcceptedDeclaredQualifiedName,
+                        out var acceptedContainer))
+                {
+                    continue;
+                }
+
+                if (string.Equals(
+                        positionalContainer,
+                        move.PositionalDeclaredQualifiedName,
+                        StringComparison.Ordinal))
+                {
+                    symbol.ContainerKind = move.Symbol.Kind;
+                    symbol.ContainerName = move.Symbol.Name;
+                }
+                symbol.ContainerQualifiedName = acceptedContainer;
+                symbol.FamilyKey = null;
+                refreshedDescendants.Add(symbol);
+                break;
+            }
+        }
+
+        foreach (var symbol in refreshedDescendants.Where(
+                     symbol => IsCSharpTypeFamilyKind(symbol.Kind)))
+        {
+            RefreshHookMutatedCSharpFamilyKey(symbol, symbols);
+        }
+        foreach (var symbol in refreshedDescendants.Where(
+                     symbol => !IsCSharpTypeFamilyKind(symbol.Kind)))
+        {
+            RefreshHookMutatedCSharpFamilyKey(symbol, symbols);
+        }
+    }
+
+    private static bool IsPositionallyWithinHookContainer(
+        SymbolRecord container,
+        SymbolRecord symbol)
+        => !ReferenceEquals(container, symbol)
+           && container.FileId == symbol.FileId
+           && container.StartLine <= symbol.StartLine
+           && container.EndLine >= symbol.EndLine;
+
+    private static bool TryReplaceCSharpContainerPrefix(
+        string value,
+        string oldPrefix,
+        string newPrefix,
+        out string replaced)
+    {
+        if (string.Equals(value, oldPrefix, StringComparison.Ordinal))
+        {
+            replaced = newPrefix;
+            return true;
+        }
+
+        if (value.StartsWith(oldPrefix + ".", StringComparison.Ordinal))
+        {
+            replaced = newPrefix + value[oldPrefix.Length..];
+            return true;
+        }
+
+        replaced = value;
+        return false;
     }
 
     private readonly record struct DerivedCSharpRecordComponentContainer(
