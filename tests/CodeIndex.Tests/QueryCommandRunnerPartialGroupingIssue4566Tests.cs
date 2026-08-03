@@ -2831,6 +2831,68 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void PartialCanonicalRepresentative_HonorsCaseSensitiveProjectMarkerCasing_Issue4914Review()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_project_marker_case_issue4914");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "APP.CSPROJ",
+                "msbuild",
+                "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Types.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public class Node { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Partials.cs",
+                "csharp",
+                """
+                #nullable enable
+                namespace Demo;
+                public partial class Container
+                {
+                    partial void Scoped(Node? value);
+                    partial void Scoped(Node value) { }
+                }
+                """);
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.SetMeta(DbContext.WorkspacePathCaseSensitiveMetaKey, "true");
+                using var command = db.Connection.CreateCommand();
+                command.CommandText = """
+                    UPDATE symbols
+                    SET family_key = 'src|' || family_key
+                    WHERE family_key IS NOT NULL
+                      AND file_id IN (SELECT id FROM files WHERE path LIKE 'src/%');
+                    """;
+                command.ExecuteNonQuery();
+            }
+            MarkGraphAndFoldReady(dbPath);
+
+            var grouped = RunGroupedSymbol(dbPath, "Scoped", "function");
+
+            Assert.True(
+                grouped.TryGetProperty("definition_sites", out var definitionSites),
+                grouped.GetRawText());
+            Assert.Equal(2, definitionSites.GetInt32());
+            Assert.Equal("implementation_body", grouped.GetProperty("representative_reason").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void PartialCanonicalRepresentative_CanonicalizesExplicitNullableValueType_Issue4914()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_explicit_nullable_issue4914");

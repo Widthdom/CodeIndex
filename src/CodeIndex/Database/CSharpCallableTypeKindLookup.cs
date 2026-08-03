@@ -405,8 +405,37 @@ internal sealed class CSharpCallableTypeKindLookup
 
     private static Dictionary<string, int> LoadCSharpProjectMarkerCounts(SqliteConnection connection)
     {
+        var pathCaseSensitive = false;
+        try
+        {
+            using var metadataCommand = connection.CreateCommand();
+            metadataCommand.CommandText =
+                "SELECT value FROM codeindex_meta WHERE key = @workspacePathCaseSensitive LIMIT 1";
+            SqliteCommandPolicy.Add(
+                metadataCommand,
+                "@workspacePathCaseSensitive",
+                DbContext.WorkspacePathCaseSensitiveMetaKey);
+            var raw = metadataCommand.ExecuteScalar() as string;
+            pathCaseSensitive = bool.TryParse(raw, out var parsed) && parsed;
+        }
+        catch (SqliteException)
+        {
+            // Legacy query-only databases may predate codeindex_meta. Their C# family
+            // contract is not current, so retain the historical insensitive fallback.
+            // codeindex_meta より古い query-only DB では current C# family contract を
+            // 利用できないため、従来の case-insensitive fallback を維持する。
+        }
+
         using var command = connection.CreateCommand();
-        command.CommandText = "SELECT path FROM files WHERE path LIKE '%.csproj' COLLATE NOCASE";
+        // Match the filesystem casing policy that produced the persisted family scopes.
+        // SQLite LIKE is ASCII case-insensitive regardless of COLLATE, so use an explicit
+        // binary suffix comparison when the indexed workspace is case-sensitive.
+        // 永続 family scope を生成した filesystem と同じ大小区別規則で marker を数える。
+        // SQLite LIKE は COLLATE にかかわらず ASCII の大小を無視するため、case-sensitive
+        // workspace では binary suffix 比較を明示する。
+        command.CommandText = pathCaseSensitive
+            ? "SELECT path FROM files WHERE SUBSTR(path, -7) = '.csproj' COLLATE BINARY"
+            : "SELECT path FROM files WHERE LOWER(SUBSTR(path, -7)) = '.csproj'";
         var markerCounts = new Dictionary<string, int>(StringComparer.Ordinal);
         using var reader = command.ExecuteReader();
         while (reader.Read())
