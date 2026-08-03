@@ -332,7 +332,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   Apply the same combined null-comparison fixture to inspect reference-bundle coverage instead of indexing each operator separately.
   Production-runtime switch relational-pattern coverage places less-than and greater-than methods in one source and pays one CLI indexing subprocess.
   Generic switch-arm guard and relational predecessors likewise share one production-runtime fixture and run only on the production `net8.0` target.
-  Search language-alias coverage may place distinct language files in one database and iterate alias filters when each filter isolates one expected result.
+  Search language-alias coverage keeps one indexed file per canonical XML, Rust, C#/Razor, Java, Kotlin, JavaScript, YAML, batch, SQL, Ruby, and F# language in one database; shared query tokens preserve cross-language filter isolation, distinct spelling/casing aliases are iterated once, and Ruby/F# retain exact-search coverage.
   Language-alias catalog coverage queries each canonical language once and iterates its expected aliases in one fact so adding a language does not multiply identical discovery and assertion setup.
   Unfiltered `languages --json` catalog coverage invokes the command once, builds one canonical-language dictionary, and keeps extension, alias, extraction, graph, gap, guidance, and exact-filename contracts together so expanding language coverage does not repeat catalog discovery and serialization.
   Named-query escaping for option-looking literals reuses one indexed Probe fixture across definition, graph, symbols, files, inspect, and impact commands.
@@ -340,10 +340,8 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   Shared bounded-response coverage reuses one graph-ready database across definition, find, status, hotspots, references, callers/callees, impact, and map; keep cursor and UTF-8 byte-budget boundary cases in a separate minimal multi-row fixture so family parity does not multiply indexing setup. Outline keeps one focused deep-hierarchy fixture with long signatures and Unicode to verify exact newline-inclusive byte boundaries, full cursor walks without gaps or duplicates, minimum-budget diagnostics, and unchanged uncapped output. Regression coverage must also exercise aliases and read-only batch dispatch, explicit definition body projections, inactive impact collections, and row-wise map-section pagination with authoritative totals.
   Adversarial bounded-response coverage must also lock parser-failure byte caps, impact definition-page offsets, legacy map compact sections, conflicting map shape controls, compact explicit bodies, and profile/verbose control-record extraction.
   Response-budget preflight coverage must assert parseable stdout and empty stderr for zero and tiny budgets, duplicate and multi-error option parsing, NDJSON terminal and first-results-only-row preflight, exact-minimum retry for stable map/recipe payloads, explicit uncertainty plus recommended headroom for runtime envelopes, size-reduction guidance above the effective maximum, empty and non-empty rows, Unicode/escaping, and the invariant that no normal payload exceeds its requested UTF-8 cap.
-  Search alias variants for JavaScript extensions, YAML, batch, and SQL dialects each reuse one language fixture and iterate casing/spelling forms in a fact.
   Raw FTS syntax coverage reuses one indexed source for a valid control query and all invalid query/hint variants.
   Literal and raw FTS complexity bounds reuse one indexed source across length, token-count, NEAR-count, and lowercase-operator controls.
-  XAML, Rust, common multi-language, and JavaScript alias sets each build their fixture once and iterate all accepted spellings and casing forms.
   Inline comment-marker exclusion places JavaScript line/block and Python line comments in one index and iterates marker queries.
   Search exact-mode conflict coverage shares one empty database for all pairwise and triple flag sets.
   Search path and exclude-path invalid-glob guards share one empty database and iterate option names before query evaluation.
@@ -1302,7 +1300,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   inspect reference-bundle coverageにも同じnull-comparison統合fixtureを適用し、operatorごとの個別indexingを避けてください。
   production-runtime switch relational-pattern coverage はless-thanとgreater-thanのmethodを1 sourceに置き、CLI indexing subprocessを1回だけ実行してください。
   generic switch-arm のguardとrelational predecessorも同様に1つのproduction-runtime fixtureを共有し、production `net8.0` targetだけで実行してください。
-  search language-alias coverage は、各filterが期待結果を1件に分離できる場合、異なる言語fileを1 databaseに置いてalias filterを反復してください。
+  search language-alias coverage は、canonical XML、Rust、C#/Razor、Java、Kotlin、JavaScript、YAML、batch、SQL、Ruby、F# ごとに1つのindexed fileを1 databaseで共有してください。shared query tokenでcross-language filter isolationを維持し、異なるspelling/casing aliasは1回だけ反復し、Ruby/F#のexact-search coverageも保持してください。
   language-alias catalog coverageはcanonical languageごとに1回だけqueryし、期待aliasを1つのfact内で反復してください。言語追加のたびに同一のdiscovery / assertion setupを増やさないようにします。
   filterなしの`languages --json` catalog coverageはcommandを1回だけ実行し、canonical language辞書を1つ構築して、extension、alias、extraction、graph、gap、guidance、exact-filenameの各contractをまとめて検証してください。言語coverageの拡張でcatalog discoveryとserializationを繰り返さないようにします。
   option風literalのnamed-query escapingは、definition、graph、symbols、files、inspect、impact command全体で1つのindexed Probe fixtureを再利用してください。
@@ -1311,10 +1309,8 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   共通 bounded-response coverage は、definition、find、status、hotspots、references、callers / callees、impact、map 全体で1つの graph-ready databaseを再利用してください。cursor と UTF-8 byte-budget の境界 case は別の最小 multi-row fixture にまとめ、family parity のために indexing setup を重複させないでください。outline は、長い signature と Unicode を含む深い階層の focused fixture 1つを使い、最後の改行を含む正確な byte 境界、欠落や重複のない cursor 全 page 走査、最小 budget の diagnostic、上限なし出力の非変更を確認してください。regression coverage では alias と read-only batch dispatch、明示的な definition body projection、inactive な impact collection、authoritative な総件数を持つ map section の row 単位 pagination も確認してください。
   adversarial な bounded-response coverage では、parser failure の byte cap、impact definition page の offset、既存 map compact section、map shape control の競合、compact と明示 body の組み合わせ、profile / verbose control record の抽出も固定してください。
   response-budget preflight coverage では、0 / tiny budget で stdout が解析可能かつ stderr が空であること、重複 option と複数 error の parse、NDJSON terminal と results-only の先頭 row の preflight、安定した map / recipe payload の exact-minimum retry、runtime envelope の明示的な不確実性と余裕を持つ推奨値、有効な最大値を超える場合の size-reduction 案内、空 / 非空 row、Unicode / escape、通常 payload が要求 UTF-8 cap を超えないことを検証してください。
-  JavaScript extension、YAML、batch、SQL dialectのsearch alias variantは、それぞれ1つのlanguage fixtureを再利用し、casing/spelling形式をfact内で反復してください。
   raw FTS syntax coverage はvalid control queryと全invalid query/hint variantで1つのindexed sourceを再利用してください。
   literalとraw FTSのcomplexity boundはlength、token count、NEAR count、lowercase operator control全体で1つのindexed sourceを再利用してください。
-  XAML、Rust、common multi-language、JavaScriptのalias setはそれぞれfixtureを1回だけ構築し、全accepted spelling/casing形式を反復してください。
   inline comment-marker exclusionはJavaScript line/block commentとPython line commentを1 indexに置き、marker queryを反復してください。
   search exact-mode conflict coverageは全pairwise/triple flag setで1つの空databaseを共有してください。
   search path/exclude-pathのinvalid-glob guardは1つの空databaseを共有し、query評価前にoption nameを反復してください。
