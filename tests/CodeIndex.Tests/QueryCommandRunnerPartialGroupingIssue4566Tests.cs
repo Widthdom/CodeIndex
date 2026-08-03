@@ -2133,6 +2133,23 @@ public partial class QueryCommandRunnerTests
                 "partial class DirectiveJoinedPartial { }");
             TestProjectHelper.InsertIndexedFile(
                 dbPath,
+                "src/A.DirectiveConditionalAttribute.cs",
+                "csharp",
+                "partial class DirectiveConditionalAttribute { }");
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Z.DirectiveConditionalAttribute.cs",
+                "csharp",
+                """
+                #if FIRST
+                [System.Obsolete]
+                #else
+                [System.Serializable]
+                #endif
+                partial class DirectiveConditionalAttribute { }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
                 "src/DirectiveJoinedDecoy.cs",
                 "csharp",
                 """
@@ -2199,6 +2216,17 @@ public partial class QueryCommandRunnerTests
                 "DirectiveJoinedPartial",
                 "class");
             Assert.Equal(2, directiveJoinedPartial.GetProperty("definition_sites").GetInt32());
+
+            var directiveConditionalAttribute = RunGroupedSymbol(
+                dbPath,
+                "DirectiveConditionalAttribute",
+                "class");
+            Assert.Equal(
+                "src/Z.DirectiveConditionalAttribute.cs",
+                directiveConditionalAttribute.GetProperty("path").GetString());
+            Assert.Equal(
+                "semantic_declaration",
+                directiveConditionalAttribute.GetProperty("representative_reason").GetString());
 
             var (joinedDecoyExitCode, joinedDecoyStdout, joinedDecoyStderr) = CaptureConsole(() =>
                 QueryCommandRunner.RunSymbols(

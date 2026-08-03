@@ -709,17 +709,18 @@ public static partial class SymbolExtractor
                     if (conditionalEvidence.HasCodeBoundary)
                         break;
 
-                    // A completed conditional contributes `partial` only when every
-                    // possible branch contributes it. Conversely, any branch-local `file`
-                    // is retained because grouping that declaration across files would be
-                    // unsafe in that compilation. Without an explicit `#else`, include an
-                    // implicit empty branch in both decisions.
-                    // 完了した conditional の `partial` は全分岐が供給する場合だけ採用する。
-                    // 一方、branch-local な `file` は、その compilation で別ファイルと
-                    // grouping すると危険なため一分岐だけでも保持する。明示的な `#else`
-                    // がなければ、どちらの判定にも暗黙の空分岐を含める。
+                    // A completed conditional contributes `partial` and declaration-attribute
+                    // evidence only when every possible branch contributes it. Conversely, any
+                    // branch-local `file` is retained because grouping that declaration across
+                    // files would be unsafe in that compilation. Without an explicit `#else`,
+                    // include an implicit empty branch in all decisions.
+                    // 完了した conditional の `partial` と declaration attribute は全分岐が
+                    // 供給する場合だけ採用する。一方、branch-local な `file` は、その
+                    // compilation で別ファイルと grouping すると危険なため一分岐だけでも
+                    // 保持する。明示的な `#else` がなければ全判定に暗黙の空分岐を含める。
                     hasPartialModifier |= conditionalEvidence.HasPartialModifier;
                     hasFileModifier |= conditionalEvidence.HasFileModifier;
+                    hasAttribute |= conditionalEvidence.HasAttribute;
                     lineIndex = conditionalEvidence.OpeningDirectiveLineIndex;
                     continue;
                 }
@@ -872,7 +873,8 @@ public static partial class SymbolExtractor
                 lineIndex,
                 branchEvidence.HasCodeBoundary,
                 branchEvidence.HasPartialModifier,
-                branchEvidence.HasFileModifier);
+                branchEvidence.HasFileModifier,
+                branchEvidence.HasAttribute);
             return true;
         }
 
@@ -921,6 +923,7 @@ public static partial class SymbolExtractor
                         HasCodeBoundary = current.HasCodeBoundary || nested.HasCodeBoundary,
                         HasPartialModifier = current.HasPartialModifier || nested.HasPartialModifier,
                         HasFileModifier = current.HasFileModifier || nested.HasFileModifier,
+                        HasAttribute = current.HasAttribute || nested.HasAttribute,
                     };
                     lineIndex = nestedClosingDirectiveLineIndex;
                     continue;
@@ -954,7 +957,8 @@ public static partial class SymbolExtractor
         return new CSharpConditionalBranchEvidence(
             HasCodeBoundary: branches.Any(branch => branch.HasCodeBoundary),
             HasPartialModifier: branches.All(branch => branch.HasPartialModifier),
-            HasFileModifier: branches.Any(branch => branch.HasFileModifier));
+            HasFileModifier: branches.Any(branch => branch.HasFileModifier),
+            HasAttribute: branches.All(branch => branch.HasAttribute));
     }
 
     private static CSharpConditionalBranchEvidence CompleteCSharpConditionalBranchEvidence(
@@ -978,14 +982,26 @@ public static partial class SymbolExtractor
 
         if (evidence.AttributeDepth > 0 || trimmed[0] == '[')
         {
+            var pendingAttributeIsGlobal = evidence.PendingAttributeIsGlobal
+                || IsCSharpGlobalAttributeTarget(trimmed);
             var attributeDepth = Math.Max(
                 0,
                 evidence.AttributeDepth
                 + CountCharacter(trimmed, '[')
                 - CountCharacter(trimmed, ']'));
-            var updated = evidence with { AttributeDepth = attributeDepth };
+            var updated = evidence with
+            {
+                AttributeDepth = attributeDepth,
+                PendingAttributeIsGlobal = pendingAttributeIsGlobal,
+            };
             if (attributeDepth > 0)
                 return updated;
+
+            updated = updated with
+            {
+                HasAttribute = updated.HasAttribute || !pendingAttributeIsGlobal,
+                PendingAttributeIsGlobal = false,
+            };
 
             var lastAttributeClose = trimmed.LastIndexOf(']');
             var trailing = lastAttributeClose >= 0
@@ -1451,11 +1467,14 @@ public static partial class SymbolExtractor
         int OpeningDirectiveLineIndex,
         bool HasCodeBoundary,
         bool HasPartialModifier,
-        bool HasFileModifier);
+        bool HasFileModifier,
+        bool HasAttribute);
 
     private readonly record struct CSharpConditionalBranchEvidence(
         bool HasCodeBoundary = false,
         bool HasPartialModifier = false,
         bool HasFileModifier = false,
+        bool HasAttribute = false,
+        bool PendingAttributeIsGlobal = false,
         int AttributeDepth = 0);
 }

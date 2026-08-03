@@ -1987,7 +1987,7 @@ public partial class DbWriter
         MutualRecursionRefreshForTesting?.Invoke();
         cancellationToken.ThrowIfCancellationRequested();
         var stampReferenceIdentityContract = stampReferenceIdentityContractReady
-            ?? CSharpFamilyTrustAllowsReferenceIdentityReady();
+            ?? CSharpFamilyTrustAllowsReferenceIdentityReady(validatePersistedRows: true);
         var graphScope = _referenceGraphRefreshScope;
         using var transaction = BeginTransaction(cancellationToken, "refresh reference identities");
         if (graphScope != null)

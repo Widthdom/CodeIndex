@@ -1291,6 +1291,13 @@ public class DatabaseTests : IDisposable
         Assert.Equal(
             DbContext.ReferenceIdentityContractVersion.ToString(CultureInfo.InvariantCulture),
             _db.GetMetaString(DbContext.ReferenceIdentityContractVersionMetaKey));
+
+        var standaloneRefreshWriter = new DbWriter(_db.Connection);
+        standaloneRefreshWriter.ClearReferenceIdentityContractReady();
+
+        standaloneRefreshWriter.RefreshMutualRecursionFlags();
+
+        Assert.True(standaloneRefreshWriter.ReferenceIdentityContractMatchesCurrent());
     }
 
     [Fact]

@@ -118,12 +118,16 @@ public partial class DbWriter
     /// A partial upgrade cannot publish v7 while untouched pre-v7 C# symbols remain.
     /// Callers may supply an authoritative C# presence result to avoid another database probe;
     /// a writer that started without other C# rows may also trust the current rows it inserted.
+    /// Standalone full graph refreshes may opt into validating unstamped persisted rows directly.
     /// reference identity v7 が全 C# family row を信頼できるかを返す。
     /// 未更新の旧 C# symbol が残る部分 upgrade では v7 を公開しない。
     /// caller は既知の C# presence を渡して再照会を避けられ、既存 C# row がない状態から
-    /// current row を挿入した writer はその session 内の row も信頼できる。
+    /// current row を挿入した writer はその session 内の row も信頼できる。standalone の
+    /// full graph refresh は未 stamp の保存済み row を直接検証する方式も選べる。
     /// </summary>
-    internal bool CSharpFamilyTrustAllowsReferenceIdentityReady(bool? hasCSharpFiles = null)
+    internal bool CSharpFamilyTrustAllowsReferenceIdentityReady(
+        bool? hasCSharpFiles = null,
+        bool validatePersistedRows = false)
     {
         if (!(hasCSharpFiles ?? HasAnyFilesWithLanguage("csharp")))
             return true;
@@ -137,8 +141,34 @@ public partial class DbWriter
                    StringComparison.Ordinal)
                && !string.IsNullOrWhiteSpace(fingerprint)
                && !DbContext.IsIncompleteHotspotFamilyMarkerFingerprint(fingerprint);
-        return stampedFamilyTrustIsCurrent
-            || _currentWriterOwnsAllCSharpFamilyRows == true;
+        if (stampedFamilyTrustIsCurrent || _currentWriterOwnsAllCSharpFamilyRows == true)
+            return true;
+
+        return validatePersistedRows && PersistedCSharpFamilyRowsAreComplete();
+    }
+
+    private bool PersistedCSharpFamilyRowsAreComplete()
+    {
+        DbContext.RegisterCSharpPartialDeclarationFunction(_conn);
+        using var cmd = _conn.CreateCommand();
+        cmd.Transaction = _activeTransaction;
+        cmd.CommandText = """
+            SELECT NOT EXISTS (
+                SELECT 1
+                FROM symbols s
+                JOIN files f ON f.id = s.file_id
+                WHERE f.lang = 'csharp'
+                  AND s.kind IN ('function', 'test.method', 'class', 'struct', 'interface', 'record')
+                  AND (
+                      (s.is_partial_declaration IS NULL
+                       AND csharp_is_partial_declaration(s.signature, s.kind, s.name))
+                      OR (s.is_partial_declaration = 1
+                          AND NULLIF(TRIM(s.family_key), '') IS NULL)
+                  )
+                LIMIT 1
+            )
+            """;
+        return Convert.ToInt64(cmd.ExecuteScalar()) != 0;
     }
 
     public void MarkReferenceIdentityContractReady()
