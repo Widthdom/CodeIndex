@@ -51,7 +51,7 @@ case "$task" in
     ;;
   mcp-smoke)
     dotnet build src/CodeIndex/CodeIndex.csproj --configuration "$CONFIGURATION"
-    dotnet run --project src/CodeIndex -- mcp --help > /dev/null
+    dotnet "src/CodeIndex/bin/$CONFIGURATION/net8.0/cdidx.dll" mcp --help > /dev/null
     ;;
   clean)
     dotnet clean CodeIndex.sln --configuration "$CONFIGURATION"

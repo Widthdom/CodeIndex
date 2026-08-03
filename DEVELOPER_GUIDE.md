@@ -22,7 +22,7 @@ Top-level task wrappers:
 | `make test` | Run tests through the repository wrapper. |
 | `make lint` | Run formatting/lint validation. |
 | `make coverage` | Run coverage workflow. |
-| `make mcp-smoke` | Run the MCP smoke workflow. |
+| `make mcp-smoke` | Build once and run MCP help from that configuration's output. |
 
 Use `FRAMEWORK=net9.0 make test` to match the net9 CI lane. On systems without
 `make`, run the same tasks as `./dev.sh build`, `./dev.sh test`, and so on.
@@ -3511,7 +3511,7 @@ For symmetry, the MCP server no longer echoes raw `Exception.Message` content in
 | `make test` | repository wrapper 経由でテスト実行。 |
 | `make lint` | formatting / lint 検証を実行。 |
 | `make coverage` | coverage workflow を実行。 |
-| `make mcp-smoke` | MCP smoke workflow を実行。 |
+| `make mcp-smoke` | 1回ビルドし、そのconfigurationの出力からMCP helpを実行。 |
 
 net9 CI lane に合わせる場合は `FRAMEWORK=net9.0 make test` を使います。`make` がない
 環境では、同じタスクを `./dev.sh build`、`./dev.sh test` などで実行します。
