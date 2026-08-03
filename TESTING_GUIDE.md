@@ -57,6 +57,7 @@ Use the full suite by default. Use targeted filters only while iterating locally
 - Matrix test invocations use both `--no-build` and `--no-restore` because each lane completes its scoped locked restore and Release build before entering the shared test helper.
 - Primary-lane publish also uses `--no-build --no-restore`, reusing the production project output and dependency graph built through the Release test project.
 - Release cross-compile lanes skip the RID-agnostic solution build because they do not run tests and the self-contained RID publish necessarily performs the real build; native lanes retain the solution build before testing.
+- Release setup also skips Windows test-host hardening on the non-testing win-arm64 cross-compile lane, caches the pinned CycloneDX tool independently on linux-x64, and gives the fresh `publish-nuget` job a package cache keyed only by the production and package-normalizer lock files.
 - Release cross-compile lanes likewise use a locked production-project restore instead of restoring test and tool projects they never build; native test lanes retain the locked solution restore.
 - Release cross-compile lanes install only the repository-selected 9.0 SDK because they publish self-contained binaries and never execute the net8 test host; native lanes retain both pinned SDK lines.
 - Release workflow tests use `--no-build --no-restore` after the solution's locked restore and Release build so each runtime lane does not reevaluate dependencies.
@@ -1021,6 +1022,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - matrix test invocation は shared test helper の前に各 lane の scoped locked restore と Release build が完了しているため、`--no-build` と `--no-restore` の両方を使ってください。
 - primary-lane publish も `--no-build --no-restore` を使い、Release test project 経由で build 済みの production project output と dependency graph を再利用してください。
 - release の cross-compile lane は test を実行せず、self-contained RID publish が実 build を必ず行うため、RID 非依存の solution build を省略する。native lane は test 前の solution build を維持する。
+- release setupでは、testを実行しないwin-arm64 cross-compile laneのWindows test-host hardeningも省略し、linux-x64では固定CycloneDX toolを独立cacheし、freshな`publish-nuget` jobにはproduction / package-normalizer lock fileだけをkeyにしたpackage cacheを持たせてください。
 - release の cross-compile lane は build しない test / tool project を復元せず、production project だけを locked restore する。native test lane は locked solution restore を維持する。
 - release の cross-compile lane は self-contained binary を publish し、net8 test host を実行しないため、repository が選択する9.0 SDK だけを install する。native lane はpinされた両 SDK lineを維持する。
 - release workflow の test も solution の locked restore と Release build 後に `--no-build --no-restore` を使い、runtime lane ごとの dependency 再評価を避けてください。

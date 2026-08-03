@@ -245,14 +245,19 @@ public class CiWorkflowTests
         var dotnetWorkflow = RepositoryTestPaths.ReadNormalizedDotnetWorkflow();
         var releaseWorkflow = RepositoryTestPaths.ReadNormalizedReleaseWorkflow();
         var setupScript = RepositoryTestPaths.ReadText(".github", "scripts", "configure-windows-test-host.ps1");
-        const string expectedStep =
+        const string expectedDotnetStep =
             "- name: Configure Windows test host\n" +
             "        if: runner.os == 'Windows'\n" +
             "        shell: pwsh\n" +
             "        run: ./.github/scripts/configure-windows-test-host.ps1 -Workspace \"${{ github.workspace }}\"";
+        const string expectedReleaseStep =
+            "- name: Configure Windows test host\n" +
+            "        if: runner.os == 'Windows' && !matrix.cross_compile\n" +
+            "        shell: pwsh\n" +
+            "        run: ./.github/scripts/configure-windows-test-host.ps1 -Workspace \"${{ github.workspace }}\"";
 
-        AssertContainsAll(dotnetWorkflow, expectedStep);
-        AssertContainsAll(releaseWorkflow, expectedStep);
+        AssertContainsAll(dotnetWorkflow, expectedDotnetStep);
+        AssertContainsAll(releaseWorkflow, expectedReleaseStep);
         AssertDoesNotContainAny(dotnetWorkflow, "Add-MpPreference", "Get-MpPreference");
         AssertDoesNotContainAny(releaseWorkflow, "Add-MpPreference", "Get-MpPreference");
         AssertContainsAll(
@@ -403,11 +408,15 @@ public class CiWorkflowTests
 
         foreach (var cacheBlock in FindStepBlocks(stepBlocks, "actions/cache@"))
         {
-            AssertContainsAll(
-                cacheBlock.Text,
-                StringComparison.Ordinal,
-                "hashFiles('**/packages.lock.json', 'global.json')");
             AssertDoesNotContainAny(cacheBlock.Text, StringComparison.Ordinal, "restore-keys:", "'**/*.csproj'");
+
+            if (cacheBlock.Text.Contains("~/.nuget/packages", StringComparison.Ordinal))
+            {
+                AssertContainsAll(
+                    cacheBlock.Text,
+                    StringComparison.Ordinal,
+                    "hashFiles('**/packages.lock.json', 'global.json')");
+            }
         }
 
         AssertContainsAll(

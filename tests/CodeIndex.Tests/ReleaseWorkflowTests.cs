@@ -140,7 +140,14 @@ public partial class ReleaseWorkflowTests
         // 系のモダンフラグを備える。
         AssertContainsAll(
             workflow,
+            "Cache CycloneDX SBOM tool (linux-x64 only)",
+            "id: cyclonedx-tool-cache",
+            "path: ~/.dotnet/tools",
+            "key: ${{ runner.os }}-cyclonedx-6.2.0",
+            "steps.cyclonedx-tool-cache.outputs.cache-hit != 'true'",
             "dotnet tool install --global CycloneDX --version 6.2.0",
+            "Add CycloneDX SBOM tool to PATH (linux-x64 only)",
+            "echo \"$HOME/.dotnet/tools\" >> \"$GITHUB_PATH\"",
             "dotnet-CycloneDX src/CodeIndex/CodeIndex.csproj",
             "--output-format Json",
             "--exclude-test-projects",
@@ -270,9 +277,21 @@ public partial class ReleaseWorkflowTests
     public void ReleaseWorkflow_NormalizesNuGetCorePropertiesBeforePublishing()
     {
         var workflow = ReadReleaseWorkflow();
+        const string publishNuGetCache =
+            "- name: Set up .NET\n" +
+            "        uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5.3.0\n" +
+            "        with:\n" +
+            "          dotnet-version: |\n" +
+            "            8.0.413\n" +
+            "            9.0.301\n" +
+            "          cache: true\n" +
+            "          cache-dependency-path: |\n" +
+            "            src/CodeIndex/packages.lock.json\n" +
+            "            tools/CodeIndex.PackageNormalize/packages.lock.json";
 
         AssertContainsAll(
             workflow,
+            publishNuGetCache,
             "Normalize NuGet package metadata part names",
             "dotnet run --project tools/CodeIndex.PackageNormalize --",
             "nupkg/*.nupkg nupkg/*.snupkg",
