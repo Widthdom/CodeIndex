@@ -177,7 +177,10 @@ public static partial class IndexCommandRunner
                                     extractionCancellationToken);
                                 continue;
                             }
-                            SymbolExtractor.ApplyFamilyScope(symbols, indexer.GetFamilyScopeKey(filePath, record.Lang));
+                            SymbolExtractor.ApplyFamilyScope(
+                                symbols,
+                                indexer.GetFamilyScopeKey(filePath, record.Lang),
+                                record.Lang);
                             FileIssue? referenceRegexTimeoutIssue = null;
                             ReferenceExtractionResult? referenceExtraction = null;
                             if (options.SymbolsOnly)

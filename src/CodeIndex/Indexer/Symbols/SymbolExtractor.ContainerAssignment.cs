@@ -263,7 +263,7 @@ public static partial class SymbolExtractor
         RestoreDerivedCSharpRecordComponentContainers(derivedRecordComponentContainers);
 
         FinalizeCSharpFileLocalFamilyKeys(materialized, filePath, projectRoot);
-        ApplyFamilyScope(materialized, familyScopeKey);
+        ApplyFamilyScope(materialized, familyScopeKey, "csharp");
         foreach (var symbol in materialized)
             symbol.DeclarationStructureMutatedByHook = false;
     }

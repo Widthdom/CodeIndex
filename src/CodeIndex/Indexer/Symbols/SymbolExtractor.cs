@@ -684,14 +684,26 @@ public static partial class SymbolExtractor
     // Java 識別子の先頭: Unicode の letter / letter-number / underscore / dollar。
     // 継続文字は数字・connector punctuation・結合文字も許可し、`RÉSUMÉ` のような enum member を切らない。
     public static void ApplyFamilyScope(IEnumerable<SymbolRecord> symbols, string scopeKey)
+        => ApplyFamilyScope(symbols, scopeKey, lang: null);
+
+    public static void ApplyFamilyScope(
+        IEnumerable<SymbolRecord> symbols,
+        string scopeKey,
+        string? lang)
     {
-        var encodedScopeKey = EncodeFamilyScopeKey(scopeKey);
+        // C# v13 owns the encoded-scope contract. Other languages retain their v2 raw
+        // family keys so incremental updates cannot mix two key formats under one ready stamp.
+        // encoded scope は C# v13 の契約でのみ使用する。他言語は v2 の raw family key を
+        // 維持し、増分更新で異なる形式が ready 状態に混在することを防ぐ。
+        var persistedScopeKey = string.Equals(lang, "csharp", StringComparison.Ordinal)
+            ? EncodeFamilyScopeKey(scopeKey)
+            : scopeKey;
         foreach (var symbol in symbols)
         {
             if (string.IsNullOrWhiteSpace(symbol.FamilyKey))
                 continue;
 
-            symbol.FamilyKey = $"{encodedScopeKey}|{symbol.FamilyKey}";
+            symbol.FamilyKey = $"{persistedScopeKey}|{symbol.FamilyKey}";
         }
     }
 

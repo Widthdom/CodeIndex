@@ -195,7 +195,7 @@ public static partial class IndexCommandRunner
         }
 
         var familyScopeKey = context.Indexer.GetFamilyScopeKey(context.AbsolutePath, record.Lang);
-        SymbolExtractor.ApplyFamilyScope(symbols, familyScopeKey);
+        SymbolExtractor.ApplyFamilyScope(symbols, familyScopeKey, record.Lang);
         context.PostExtractionHooks.OnSymbolsExtractedAfterSourceObservation(
             fileContext,
             symbols,

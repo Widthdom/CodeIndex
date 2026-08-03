@@ -950,7 +950,11 @@ internal sealed class CSharpCallableTypeKindLookup
         if (normalized.Length == 0)
             return string.Empty;
 
-        var scopeSeparator = normalized.LastIndexOf('|');
+        // C# v13 encodes pipes in the scope, while a file-local identity may still contain
+        // raw pipes in its source path. Only the first pipe is the scope boundary.
+        // C# v13 では scope 内の pipe は encode 済みだが、file-local identity の source path
+        // には raw pipe が残り得る。scope 境界は最初の pipe だけである。
+        var scopeSeparator = normalized.IndexOf('|');
         if (scopeSeparator >= 0)
             normalized = normalized[(scopeSeparator + 1)..];
         var fileLocalSeparator = normalized.IndexOf('\u001f');
@@ -981,7 +985,7 @@ internal sealed class CSharpCallableTypeKindLookup
             return false;
 
         var normalized = familyKey.Trim();
-        var scopeSeparator = normalized.LastIndexOf('|');
+        var scopeSeparator = normalized.IndexOf('|');
         if (scopeSeparator >= 0)
             normalized = normalized[(scopeSeparator + 1)..];
         return normalized.StartsWith("file-local:", StringComparison.Ordinal);

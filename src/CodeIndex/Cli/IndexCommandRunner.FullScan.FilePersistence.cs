@@ -172,7 +172,8 @@ public static partial class IndexCommandRunner
         {
             SymbolExtractor.ApplyFamilyScope(
                 symbols,
-                familyScopeKey);
+                familyScopeKey,
+                record.Lang);
         }
         var mutableSymbols = symbols as IList<SymbolRecord> ?? symbols.ToList();
         context.PostExtractionHooks.OnSymbolsExtractedAfterSourceObservation(

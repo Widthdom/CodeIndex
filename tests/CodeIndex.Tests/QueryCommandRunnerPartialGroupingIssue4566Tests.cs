@@ -2,6 +2,7 @@ using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
 using CodeIndex.Indexer.Hooks;
+using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
 using System.Text.Json;
 
@@ -3718,6 +3719,14 @@ public partial class QueryCommandRunnerTests
             "Proj%257C%7COne%1F",
             SymbolExtractor.EncodeFamilyScopeKey("Proj%7C|One\u001f"));
 
+        var csharpScopeProbe = new SymbolRecord { FamilyKey = "N.Host" };
+        SymbolExtractor.ApplyFamilyScope([csharpScopeProbe], "Proj|One", "csharp");
+        Assert.Equal("Proj%7COne|N.Host", csharpScopeProbe.FamilyKey);
+
+        var legacyScopeProbe = new SymbolRecord { FamilyKey = "N.Host" };
+        SymbolExtractor.ApplyFamilyScope([legacyScopeProbe], "Proj|One", "visualbasic");
+        Assert.Equal("Proj|One|N.Host", legacyScopeProbe.FamilyKey);
+
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_pipe_scope_issue4914");
         try
         {
@@ -3758,6 +3767,60 @@ public partial class QueryCommandRunnerTests
             using var command = connection.CreateCommand();
             command.CommandText = "SELECT DISTINCT family_key FROM symbols WHERE name = 'M'";
             Assert.Equal("Proj%7COne|N.Host", Assert.IsType<string>(command.ExecuteScalar()));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PartialCallableGrouping_PipeInFileLocalPathDoesNotLeakTypeKind_Issue4914Review()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_file_local_pipe_issue4914");
+        try
+        {
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "Test.csproj",
+                "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net8.0</TargetFramework><Nullable>enable</Nullable></PropertyGroup></Project>");
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "src/A|B.cs",
+                """
+                namespace N;
+                file partial class Outer { public struct Hidden { } }
+                """);
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "src/Global.cs",
+                """
+                namespace N;
+                class Outer { public class Hidden { } }
+                """);
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "src/Host.cs",
+                """
+                #nullable enable
+                namespace N;
+                partial class Host { partial void M(Outer.Hidden value); }
+                partial class Host { partial void M(Outer.Hidden? value) { } }
+                """);
+
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json", "--quiet"],
+                _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var grouped = RunGroupedSymbol(dbPath, "M", "function");
+            Assert.Equal(2, grouped.GetProperty("definition_sites").GetInt32());
+            Assert.Equal("implementation_body", grouped.GetProperty("representative_reason").GetString());
         }
         finally
         {

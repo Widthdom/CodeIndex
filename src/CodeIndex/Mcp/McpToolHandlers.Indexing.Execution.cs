@@ -1514,7 +1514,7 @@ public partial class McpServer
                     symbolRegexTimeoutIssue = IndexCommandRunner.BuildRegexTimeoutIssue(record.Path, regexTimeouts);
                 }
                 var familyScopeKey = indexer.GetFamilyScopeKey(filePath, record.Lang);
-                SymbolExtractor.ApplyFamilyScope(symbols, familyScopeKey);
+                SymbolExtractor.ApplyFamilyScope(symbols, familyScopeKey, record.Lang);
                 var fileContext = new FileContext(projectPath, record.Path, filePath, record.Lang);
                 postExtractionHooks.Value.ObserveCSharpStaticInterfaceSourceSymbols(fileContext, symbols);
                 postExtractionHooks.Value.OnSymbolsExtractedAfterSourceObservation(
