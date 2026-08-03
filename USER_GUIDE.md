@@ -1161,7 +1161,30 @@ small repositories, and minutes or longer on very large monorepos with around
 
 By default, `cdidx index` stores the database in `<projectPath>/.cdidx/codeindex.db`, even if you run the command from another directory.
 
-`--watch` starts `FileSystemWatcher` (FSEvents on macOS, inotify on Linux, ReadDirectoryChangesW on Windows) before the one required baseline scan, then keeps the process alive and rebuilds the index incrementally as files are created, edited, renamed, or deleted. A recoverable macOS EventStream startup failure, or a later fatal EventStream error, switches to a polling backend without repeating a valid baseline. If the failure arrives while the baseline is running or after readiness, the valid baseline is retained and one recovery scan reconciles the backend handoff; stale callbacks from the replaced backend are ignored. Polling applies the same ignored-directory and internal-artifact pruning as indexing instead of repeatedly walking `.git`, `.cdidx`, build outputs, dependencies, or ignored trees. Events buffered during the baseline are drained before `watching`; genuine event loss after the backend is active is coalesced into at most one justified full incremental recovery scan per generation. Bursts of ordinary events are debounced (`--debounce <ms>`, default 500 ms) into a single `--files` update, the per-DB index lock is released between batches so other `cdidx` commands can still query, and a pending path batch that reaches its safety cap also requests one recovery scan. Subdirectory watches monitor ancestor `.gitignore` / `.cdidxignore` files along the repository path. The baseline and startup reconciliation must succeed before `watching` is emitted; a failed startup generation exits instead of declaring a stale watcher ready. With `--json` it streams `status: "backend_fallback" / "watching" / "updated" / "rescanned" / "overflow" / "failed" / "stopped"` lifecycle events to stdout; startup and recovery events expose `backend` (`fsevents` or `polling` on macOS) and machine-readable `recovery_reason`, while update/rescan events include `exit_code`. Human output includes the same backend/recovery context in `[watch] …` summaries. Stop the loop with Ctrl+C (or SIGTERM); cancellation during backend fallback or an active sub-run still emits the terminal `stopped` event, the first Ctrl+C requests cooperative cancellation, and a second Ctrl+C remains available for force exit. The final exit code is `0` when every batch succeeds, or the most recent non-zero sub-run exit code if a watch update/rescan failed before stop. `--watch` cannot be combined with `--commits`, `--files`, or `--dry-run` — the loop already drives continuous incremental updates.
+#### Watch mode
+
+`--watch` starts the platform watcher before the required baseline scan, then
+keeps the process alive and applies file creates, edits, renames, and deletes
+incrementally.
+
+| Stage | Behavior |
+|---|---|
+| Backend | Uses `FileSystemWatcher`: FSEvents on macOS, inotify on Linux, and ReadDirectoryChangesW on Windows. |
+| Startup | Buffers events during the baseline and drains them before emitting `watching`. The baseline and startup reconciliation must both succeed; otherwise the command exits without declaring a stale index ready. |
+| Normal updates | Debounces event bursts into one `--files` update (`--debounce <ms>`, default 500 ms). The per-DB index lock is released between batches, so other `cdidx` commands can query the index. |
+| Recovery | Coalesces genuine event loss or a pending-path safety-cap overflow into at most one justified full incremental recovery scan per generation. |
+| Ignore changes | Subdirectory watches also monitor ancestor `.gitignore` and `.cdidxignore` files along the repository path. Polling uses the same pruning as indexing and avoids `.git`, `.cdidx`, build outputs, dependencies, and ignored trees. |
+| JSON output | Streams `backend_fallback`, `watching`, `updated`, `rescanned`, `overflow`, `failed`, and `stopped` lifecycle statuses. Startup/recovery events include `backend` (`fsevents` or `polling` on macOS) and machine-readable `recovery_reason`; update/rescan events include `exit_code`. |
+| Human output | Includes the same backend and recovery context in `[watch] …` summaries. |
+| Shutdown | Ctrl+C or SIGTERM requests cooperative cancellation and still emits `stopped`, including during fallback or an active sub-run. A second Ctrl+C forces exit. |
+| Exit status | Returns `0` when every batch succeeded; otherwise it returns the latest non-zero update/rescan exit code observed before shutdown. |
+| Incompatible options | Cannot be combined with `--commits`, `--files`, or `--dry-run`; watch mode already drives continuous incremental updates. |
+
+On macOS, a recoverable EventStream startup failure or a later fatal EventStream
+error switches to polling without repeating a valid baseline. A failure during
+the baseline or after readiness keeps that baseline and schedules one recovery
+scan for the backend handoff; callbacks arriving from the replaced backend are
+ignored.
 
 On macOS, a subproject watch running on .NET 8 keeps FSEvents for the project tree and additionally polls only the exact ancestor `.gitignore` / `.cdidxignore` paths because that runtime can silently miss those ancestor events. Full-project polling remains reserved for backend failure recovery; top-level .NET 8 watches, .NET 9 subproject watches, and Linux / Windows backend selection are unchanged.
 
@@ -1837,9 +1860,45 @@ cdidx definition QueryCommandRunner --exact-name --group-partials --count --json
 
 `definition` uses indexed symbol ranges plus chunk reconstruction to return the actual declaration text, and optional body content when the language extractor can infer a body range.
 
-For C# partial types and partial methods, add `--group-partials` to `definition`, `symbols`, or symbol-mode `inspect` to collapse actual `partial` declarations with the same persisted, qualified family identity into one logical family. The default remains one row per physical declaration, and unrelated non-partial or merely same-named types—including nested non-partial types inside a partial host—are never collapsed. A `file partial` type and its partial members remain scoped to their source file, so matching file-local declarations in different files form distinct families. Family identity preserves a partial type's own generic arity, each containing type's generic arity, user-type casing, and meaningful `global::` root qualification, while normalizing C# predefined aliases (including the `dynamic` / `object` runtime identity), explicitly global-rooted `System` predefined aliases (including verbatim `@System` / `@Int32` segments), nullable value-type equivalents such as `int?` / `global::System.Nullable<int>`, predefined reference-type nullable annotations, verbatim identifier escapes, declaration/type-position comments, parameter attributes and names, default values, and comment trivia between a method identifier, its generic parameters, and its parameter list. Method type parameters normalize by ordinal only when used as unqualified type variables; qualified leaves such as `N.T` remain concrete types even when the method declares `<T>`. Unrooted spellings such as `System.Int32` remain distinct from `int` because an enclosing namespace or `using` alias can shadow `System`. Extraction-owned declaration metadata survives post-extraction hook cloning and preserves a `partial` modifier split onto preceding modifier-only lines across blank or comment trivia, including modifiers that trail a balanced leading attribute list. Leading attributes are bound to the declaration occurrence they prefix when multiple declarations share one line, while only adjacent lexer-confirmed XML documentation outside the stored signature contributes semantic rank; documentation-like text inside block comments or strings, and XML documentation detached by a blank line, does not affect representative rank. Repeated same-name partial declarations on one line retain distinct identifier columns for family navigation. The family-key contract is versioned so older C# rows are not interpreted with current grouping rules: a missing or stale contract conservatively returns physical rows until a full reindex republishes current family metadata, while LSP position resolution may still reconstruct a partial-type identity locally to keep type and constructor targets separate without collapsing query output. The canonical representative is chosen deterministically from the matched family: an implementation-bearing partial method precedes a declaration-only method, non-generated source precedes generated/designer source, declarations whose extraction metadata records leading attributes or XML documentation—or whose lexed indexed signature retains attributes, base lists, or constraints—precede otherwise equivalent declarations, and comment-insensitive normalized declaration identity is considered before ordinal path and source position. Generated sites participate when `--include-generated` is set; legacy databases without generated-file metadata fall back to generated/designer filename conventions.
+For C# partial types and partial methods, `--group-partials` collapses matching
+physical declarations into one logical family.
 
-Grouped structured rows report the physical declaration count in `definition_sites` and expose `partial_family_id`, `representative_reason`, and up to 50 stable `family_members`; the bounded list always retains the representative and uses normalized identifier-aligned columns (after a verbatim `@` escape), and `family_members_truncated` is true when more sites exist. `goto` uses the same canonical representative by default and includes that family metadata in its LSP-shaped JSON, while `goto --all` intentionally returns every matching physical location. Grouped count JSON reports both `logical_count` and `physical_count` (plus `physical_file_count`). Human summaries distinguish the logical rows shown after `--limit` from query-wide logical and physical totals. Audit-sorted `symbols` rows use the family's maximum rank metric while retaining the canonical representative, so `--sort` remains monotonic before `--limit` is applied. `impact` uses the same family key and representative ordering automatically, reports `logical_definition_count`, and counts every matching physical site while materializing only the bounded logical representatives needed for output. File-mode `inspect`, whether selected by a positional path or `--path ... --line ...`, remains a physical lookup and rejects `--group-partials`.
+| Area | Contract |
+|---|---|
+| Supported commands | Available on `definition`, `symbols`, and symbol-mode `inspect`. File-mode `inspect` remains a physical lookup and rejects the option. |
+| Default behavior | Without the option, each physical declaration remains a separate row. Non-partial, merely same-named, and nested non-partial types are never grouped. |
+| File-local declarations | A `file partial` type and its partial members are scoped to one source file; same-named declarations in other files form different families. |
+| Identity preserved | The family key retains the partial type's arity, containing-type arities, user-type casing, and meaningful `global::` root qualification. |
+| Equivalent forms normalized | Predefined aliases (including `dynamic` / `object` runtime identity), explicitly global-rooted `System` aliases, nullable value-type equivalents, predefined reference-type nullable annotations, verbatim escapes, declaration/type comments, parameter attributes/names/defaults, and method-signature comment trivia. |
+| Deliberate distinctions | An unrooted `System.Int32` stays distinct from `int` because `System` can be shadowed. Method type parameters normalize by ordinal only as unqualified variables; a qualified leaf such as `N.T` remains a concrete type. |
+| Extraction metadata | Post-extraction hook cloning preserves declaration metadata, including split modifier-only `partial` lines and modifiers following a balanced attribute list. Repeated same-name declarations on one line retain separate identifier columns. |
+| Documentation ranking | A leading attribute binds only to the declaration it prefixes. Only adjacent, lexer-confirmed XML documentation outside the stored signature affects semantic rank; comment/string lookalikes and documentation separated by a blank line do not. |
+
+The family-key contract is versioned. A missing or stale contract returns
+physical rows until a full reindex publishes current metadata. LSP position
+resolution may still rebuild local partial identity to distinguish type and
+constructor targets, but it does not group query output.
+
+The canonical representative is selected in this order:
+
+1. An implementation-bearing partial method before a declaration-only method.
+2. Non-generated source before generated or designer source.
+3. Declarations with recorded attributes or XML documentation, or indexed
+   signatures retaining attributes, base lists, or constraints.
+4. Comment-insensitive normalized declaration identity, then ordinal path and
+   source position.
+
+Generated sites participate with `--include-generated`. Legacy databases that
+lack generated-file metadata use generated/designer filename conventions.
+
+| Grouped output | Meaning |
+|---|---|
+| Family metadata | `definition_sites` is the physical declaration count. Rows also expose `partial_family_id`, `representative_reason`, and up to 50 stable `family_members`. |
+| Member cap | The bounded member list always retains the representative and uses identifier-aligned columns after a verbatim `@`; `family_members_truncated` marks additional sites. |
+| `goto` | Uses the canonical representative and returns family metadata in LSP-shaped JSON by default. Use `goto --all` for every physical location. |
+| Counts | JSON returns `logical_count`, `physical_count`, and `physical_file_count`. Human summaries distinguish rows shown after `--limit` from query-wide logical and physical totals. |
+| Sorted symbols | Uses the family's maximum rank metric while retaining the canonical representative, keeping `--sort` monotonic before `--limit`. |
+| `impact` | Reuses the same family key and representative order, reports `logical_definition_count`, counts every physical site, and materializes only the bounded representatives needed for output. |
 
 ### Inspect one symbol in one round-trip
 
@@ -4593,7 +4652,29 @@ interactive terminal では spinner と progress bar が動き続けます。待
 
 `cdidx index` は、別ディレクトリから実行しても、デフォルトでは `<projectPath>/.cdidx/codeindex.db` にDBを保存します。
 
-`--watch` は必要な baseline scan 1 回より先に `FileSystemWatcher`（macOS は FSEvents、Linux は inotify、Windows は ReadDirectoryChangesW）を開始し、その後もプロセスを残してファイルの作成・編集・リネーム・削除を差分反映します。回復可能な macOS EventStream 起動失敗、または ready 後の致命的な EventStream error は polling backend へ切り替え、有効な baseline を繰り返しません。失敗通知が baseline 実行中または ready 後に届いた場合もその baseline を保持し、backend handoff のための recovery scan を1回だけ実行します。置換済み backend から遅れて届いた callback は無視します。polling は index と同じ ignore-directory / internal-artifact policy で `.git`、`.cdidx`、build output、dependency、ignored tree を剪定し、周期ごとの不要な全ツリー走査を避けます。baseline 中に buffer された event は `watching` の前に drain し、backend 有効化後の本当の event loss だけを generation ごとに最大 1 回の根拠付きフル差分 recovery scan へ集約します。通常 event は `--debounce <ms>`（既定 500 ms）の窓で 1 つの `--files` 更新にまとめ、batch 間ではデータベースごとの index lock を解放するため別の `cdidx` コマンドからの問い合わせも可能です。pending path batch が安全上限に達した場合も recovery scan を 1 回要求します。subdirectory の watch は repository path 上の ancestor `.gitignore` / `.cdidxignore` も監視します。baseline と startup reconciliation が成功するまで `watching` は出力せず、startup generation が失敗した場合は stale なまま ready を宣言せず終了します。`--json` 時は `status: "backend_fallback" / "watching" / "updated" / "rescanned" / "overflow" / "failed" / "stopped"` のライフサイクルイベントを stdout に流します。startup / recovery event は `backend`（macOS では `fsevents` または `polling`）と機械可読な `recovery_reason` を公開し、update/rescan event は `exit_code` を含みます。human 出力も `[watch] …` 要約に同じ backend / recovery context を含めます。backend fallback 中または実行中の sub-run を cancellation した場合も terminal `stopped` event を出力します。最初の Ctrl+C（または SIGTERM）は協調的な cancellation を要求し、2 回目の Ctrl+C は強制終了に利用できます。すべての batch が成功していれば終了コードは `0`、停止前に watch update/rescan が失敗していれば直近の non-zero sub-run exit code です。`--watch` は連続的な差分更新を内蔵しているため `--commits` / `--files` / `--dry-run` と併用できません。
+#### Watch モード
+
+`--watch` は必要な baseline scan より先に platform watcher を開始し、その後も
+プロセスを残して、ファイルの作成・編集・リネーム・削除を差分反映します。
+
+| 段階 | 挙動 |
+|---|---|
+| backend | `FileSystemWatcher` を使用します。macOS は FSEvents、Linux は inotify、Windows は ReadDirectoryChangesW です。 |
+| startup | baseline 中の event を buffer し、`watching` を出す前に drain します。baseline と startup reconciliation の両方が成功するまで ready を宣言せず、失敗時は stale な index のまま終了します。 |
+| 通常更新 | event burst を `--debounce <ms>`（既定 500 ms）で 1 回の `--files` 更新にまとめます。batch 間ではデータベースごとの index lock を解放するため、ほかの `cdidx` コマンドから問い合わせできます。 |
+| recovery | backend 有効化後の実際の event loss、または pending path の安全上限到達を、generation ごとに最大 1 回の根拠付きフル差分 recovery scan へ集約します。 |
+| ignore 変更 | subdirectory watch でも repository path 上の ancestor `.gitignore` / `.cdidxignore` を監視します。polling は index と同じ policy を使い、`.git`、`.cdidx`、build output、dependency、ignored tree を剪定します。 |
+| JSON 出力 | `backend_fallback`、`watching`、`updated`、`rescanned`、`overflow`、`failed`、`stopped` を lifecycle status として流します。startup/recovery event は `backend`（macOS では `fsevents` または `polling`）と機械可読な `recovery_reason`、update/rescan event は `exit_code` を含みます。 |
+| human 出力 | `[watch] …` 要約に同じ backend / recovery context を含めます。 |
+| 停止 | Ctrl+C または SIGTERM は協調的 cancellation を要求し、fallback 中や sub-run 実行中でも `stopped` を出します。2 回目の Ctrl+C で強制終了できます。 |
+| 終了コード | 全 batch が成功した場合は `0`、失敗があった場合は停止前の直近の non-zero update/rescan exit code です。 |
+| 併用不可 | 連続的な差分更新を内蔵するため、`--commits`、`--files`、`--dry-run` とは併用できません。 |
+
+macOS で回復可能な EventStream 起動失敗または ready 後の致命的な
+EventStream error が起きた場合は、有効な baseline を繰り返さず polling へ
+切り替えます。baseline 実行中または ready 後に失敗通知が届いた場合も baseline を
+保持し、backend handoff 用の recovery scan を 1 回だけ実行します。置換済み
+backend から遅れて届いた callback は無視します。
 
 macOS では、.NET 8 の subproject watch は project tree の FSEvents を維持しつつ、この runtime が黙って見落とす可能性のある ancestor `.gitignore` / `.cdidxignore` の exact path だけを追加で polling します。project 全体の polling は backend failure recovery に限定したままです。.NET 8 の top-level watch、.NET 9 の subproject watch、Linux / Windows の backend 選択は変わりません。
 
@@ -5224,9 +5305,45 @@ cdidx definition QueryCommandRunner --exact-name --group-partials --count --json
 
 `definition` は、インデックス済みシンボル範囲とチャンク再構成を使って実際の宣言テキストを返します。言語抽出器が本体範囲を推論できる場合は、`--body` で本体内容も返します。
 
-C# の partial type と partial method では、`definition`、`symbols`、または symbol mode の `inspect` に `--group-partials` を付けると、persist 済みの qualified family identity が同じ実際の `partial` 宣言を1つの論理 family に集約できます。既定は従来どおり物理宣言ごとに1行で、無関係な non-partial type、単に同名の type、partial host 内のネストした non-partial type は集約しません。`file partial` type とその partial member は source file 内に限定されるため、別ファイルにある同名の file-local 宣言は別 family になります。family identity は partial type 自身と各外側 generic type の arity、user type の大文字小文字、意味のある `global::` root 修飾を保持しつつ、`dynamic` / `object` の runtime identity を含む C# predefined alias、明示的に global root を持つ `System` predefined alias（verbatim な `@System` / `@Int32` segment を含む）、`int?` / `global::System.Nullable<int>` のような nullable value type の同値表記、predefined reference type の nullable annotation、verbatim identifier escape、declaration / type 内の comment、parameter attribute・名前・default value、method identifier・generic parameter・parameter list の間にある comment trivia を正規化します。method type parameter は unqualified な type variable として使われた場合だけ ordinal で正規化し、method が `<T>` を宣言していても `N.T` のような qualified leaf は実型として保持します。外側 namespace や `using` alias が `System` を shadow できるため、root のない `System.Int32` は `int` と区別します。抽出器が所有する declaration metadata は post-extraction hook の clone 後も維持され、空行や comment trivia をまたいで modifier-only 行へ分割された `partial` 修飾子を保持します。先行 attribute list の閉じ括弧に続く modifier も認識します。同一行に複数宣言がある場合、先行 attribute は直後の declaration occurrence だけに関連付け、保存済み signature の外側にある lexer 確認済み XML documentation は空行を挟まず隣接する場合だけ semantic rank に使います。block comment・string 内の documentation 風 text や、空行で宣言から切り離された XML documentation は representative rank に影響しません。同一行で反復する同名 partial 宣言は、family navigation 用に別々の identifier column を保持します。family-key 契約は version 管理され、旧 C# row を現行 grouping rule で解釈しません。契約が未登録または stale の場合は、full reindex が現行 family metadata を再公開するまで物理 row を保守的に返します。ただし LSP の位置解決は query 出力を集約せず、type と constructor の target を分離するためだけに partial-type identity を局所的に再構築できます。一致した family 内の canonical representative は決定的に選ばれます。本体を持つ partial method は宣言だけの method より先、非生成 source は generated / designer source より先、抽出 metadata が先行 attribute / XML documentation を記録した宣言、または lexer で解析した indexed signature に attribute・base list・constraint が保持された宣言は、それ以外が同等の宣言より先となり、その後に comment を無視して正規化した declaration identity、ordinal path、source position を使います。generated site は `--include-generated` 指定時に候補へ入り、generated-file metadata を持たない旧 database では generated / designer の filename 規約へ fallback します。
+C# の partial type と partial method では、`--group-partials` により、対応する
+物理宣言を 1 つの論理 family に集約できます。
 
-集約した structured row は、family 内の物理宣言数を `definition_sites` で返し、`partial_family_id`、`representative_reason`、安定順で最大50件の `family_members` を公開します。上限付き list には必ず representative が残り、column は正規化後の identifier（verbatim escape の `@` より後ろ）に揃います。site がさらにある場合は `family_members_truncated` が true になります。`goto` は既定で同じ canonical representative を使い、その family metadata を LSP 形式の JSON に含めます。全物理 location を意図的に取得する場合は `goto --all` を使います。grouped count JSON は `logical_count` と `physical_count`（および `physical_file_count`）を併記し、human summary は `--limit` 適用後に表示した論理行数と query 全体の論理・物理総数を区別します。audit sort を使う `symbols` は family 内の rank metric の最大値で並べつつ canonical representative を維持するため、`--limit` 適用前の `--sort` 順序も単調です。`impact` は同じ family key と代表順を自動的に使い、`logical_definition_count` を返し、出力に必要な上限付き論理代表だけを materialize しながら一致した全物理 site を数えます。positional path または `--path ... --line ...` で選ぶ file mode の `inspect` は物理位置の lookup のままで、`--group-partials` を拒否します。
+| 項目 | 契約 |
+|---|---|
+| 対応コマンド | `definition`、`symbols`、symbol mode の `inspect` で使えます。file mode の `inspect` は物理 lookup のままで、この option を拒否します。 |
+| 既定動作 | option を付けない場合は物理宣言ごとに 1 row です。non-partial、単に同名の type、partial host 内の nested non-partial type は集約しません。 |
+| file-local 宣言 | `file partial` type とその partial member は 1 source file に限定され、別 file の同名宣言は別 family になります。 |
+| 保持する identity | partial type 自身と外側 type の arity、user type の大文字小文字、意味のある `global::` root 修飾を family key に保持します。 |
+| 正規化する同値表記 | `dynamic` / `object` の runtime identity を含む predefined alias、明示的な global-root `System` alias、nullable value type の同値表記、predefined reference type の nullable annotation、verbatim escape、declaration/type comment、parameter attribute・名前・default、method signature 内の comment trivia。 |
+| 意図的に区別する表記 | `System` は shadow 可能なので root のない `System.Int32` と `int` は区別します。method type parameter は unqualified variable の場合だけ ordinal で正規化し、`N.T` のような qualified leaf は実型として保持します。 |
+| extraction metadata | post-extraction hook の clone 後も declaration metadata を維持し、modifier-only 行に分割された `partial` や balanced attribute list 後の modifier を保持します。同一行の反復宣言は別々の identifier column を持ちます。 |
+| documentation rank | 先行 attribute は直後の宣言だけに結び付けます。保存済み signature 外の隣接した lexer 確認済み XML documentation だけが rank に影響し、comment/string 内の類似 text や空行で切り離された documentation は影響しません。 |
+
+family-key 契約は version 管理されます。契約が未登録または stale の場合は、full
+reindex が現行 metadata を公開するまで物理 row を返します。LSP の位置解決は type と
+constructor を区別するために局所的な partial identity を再構築できますが、query 出力は
+集約しません。
+
+canonical representative は次の順序で決定します。
+
+1. 本体を持つ partial method を、宣言だけの method より先にします。
+2. 非生成 source を generated / designer source より先にします。
+3. attribute / XML documentation の metadata、または attribute・base list・constraint
+   を保持する indexed signature がある宣言を優先します。
+4. comment を無視した正規化 declaration identity、ordinal path、source position の
+   順で決定します。
+
+generated site は `--include-generated` 指定時に候補へ入ります。generated-file
+metadata がない旧 database では generated/designer filename 規約へ fallback します。
+
+| 集約後の出力 | 意味 |
+|---|---|
+| family metadata | `definition_sites` は物理宣言数です。row は `partial_family_id`、`representative_reason`、安定順で最大 50 件の `family_members` も公開します。 |
+| member 上限 | 上限付き list は representative を必ず残し、verbatim `@` より後ろの identifier に column を揃えます。追加 site がある場合は `family_members_truncated` が true です。 |
+| `goto` | 既定では canonical representative と family metadata を LSP 形式の JSON で返します。全物理 location には `goto --all` を使います。 |
+| count | JSON は `logical_count`、`physical_count`、`physical_file_count` を返します。human summary は `--limit` 後の表示行数と query 全体の論理・物理総数を区別します。 |
+| sorted `symbols` | family 内の最大 rank metric と canonical representative を使い、`--limit` 前の `--sort` 順序を単調に保ちます。 |
+| `impact` | 同じ family key と代表順を使い、`logical_definition_count` を返します。必要な上限付き論理代表だけを materialize しつつ、全物理 site を数えます。 |
 
 ### 1往復でシンボルを精査する
 

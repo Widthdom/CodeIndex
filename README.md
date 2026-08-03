@@ -300,7 +300,7 @@ text / symbol だけを先に検索する場合、`cdidx . --symbols-only` で�
 | 鮮度管理 | `status --check`、`--files`、`--commits`、`--changed-between`、`--watch` で DB と workspace を揃えます。 |
 | validation | `cdidx validate` が encoding / line-ending 問題を報告します。詳細は [Indexed files を validate する](USER_GUIDE.md#indexed-files-を-validate-する)。 |
 | 対応言語 | `cdidx languages --json` が live capability probe です。詳細は [対応言語](USER_GUIDE.md#対応言語)。 |
-| custom extraction | 拡張子 alias と regex-backed pattern は [Custom Language Extraction](DEVELOPER_GUIDE.md#custom-language-extraction) を参照してください。 |
+| custom extraction | 拡張子 alias と regex-backed pattern は [カスタム言語抽出](DEVELOPER_GUIDE.md#カスタム言語抽出) を参照してください。 |
 | 運用 | install、upgrade、release 検証、troubleshooting、output control は [ユーザーガイド](USER_GUIDE.md#cdidx日本語) にあります。 |
 
 ## ドキュメント
