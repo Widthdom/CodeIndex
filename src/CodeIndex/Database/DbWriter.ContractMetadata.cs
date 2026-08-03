@@ -114,13 +114,13 @@ public partial class DbWriter
             StringComparison.Ordinal);
 
     /// <summary>
-    /// Return whether reference identity v7 may trust every persisted C# family row.
-    /// A partial upgrade cannot publish v7 while untouched pre-v7 C# symbols remain.
+    /// Return whether the current reference identity contract may trust every persisted C# family row.
+    /// A partial upgrade cannot publish the current contract while untouched legacy C# symbols remain.
     /// Callers may supply an authoritative C# presence result to avoid another database probe;
     /// a writer that started without other C# rows may also trust the current rows it inserted.
     /// Standalone full graph refreshes may opt into validating unstamped persisted rows directly.
-    /// reference identity v7 が全 C# family row を信頼できるかを返す。
-    /// 未更新の旧 C# symbol が残る部分 upgrade では v7 を公開しない。
+    /// current reference identity contract が全 C# family row を信頼できるかを返す。
+    /// 未更新の旧 C# symbol が残る部分 upgrade では current contract を公開しない。
     /// caller は既知の C# presence を渡して再照会を避けられ、既存 C# row がない状態から
     /// current row を挿入した writer はその session 内の row も信頼できる。standalone の
     /// full graph refresh は未 stamp の保存済み row を直接検証する方式も選べる。

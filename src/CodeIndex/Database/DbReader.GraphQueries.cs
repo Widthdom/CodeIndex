@@ -2843,12 +2843,15 @@ public partial class DbReader
     {
         using var cmd = _conn.CreateCommand();
         var supportedLangFilter = BuildGraphSupportedLanguagePredicate(cmd, "f", "impactFamilyLang");
+        var familyKindPredicate = definition.Kind is "function" or "test.method"
+            ? "s.kind IN ('function', 'test.method')"
+            : "s.kind = @familyKind";
         var sql = $@"
             SELECT s.id
             FROM symbols s
             JOIN files f ON s.file_id = f.id
             WHERE f.lang = @familyLang
-              AND s.kind = @familyKind
+              AND {familyKindPredicate}
               AND s.name = @familyName COLLATE BINARY
               AND ({logicalPartialKeySql}) = @logicalPartialKey
               AND {supportedLangFilter}";
@@ -2859,7 +2862,8 @@ public partial class DbReader
 
         cmd.CommandText = sql;
         SqliteCommandPolicy.Add(cmd, "@familyLang", definition.Lang!);
-        SqliteCommandPolicy.Add(cmd, "@familyKind", definition.Kind);
+        if (definition.Kind is not ("function" or "test.method"))
+            SqliteCommandPolicy.Add(cmd, "@familyKind", definition.Kind);
         SqliteCommandPolicy.Add(cmd, "@familyName", definition.Name);
         SqliteCommandPolicy.Add(cmd, "@logicalPartialKey", definition.LogicalPartialKey!);
         if (lang != null)

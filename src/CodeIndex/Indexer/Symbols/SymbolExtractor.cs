@@ -691,9 +691,9 @@ public static partial class SymbolExtractor
         string scopeKey,
         string? lang)
     {
-        // C# v13 owns the encoded-scope contract. Other languages retain their v2 raw
+        // The current C# family contract owns encoded scopes. Other languages retain their v2 raw
         // family keys so incremental updates cannot mix two key formats under one ready stamp.
-        // encoded scope は C# v13 の契約でのみ使用する。他言語は v2 の raw family key を
+        // encoded scope は current C# family contract でのみ使用する。他言語は v2 の raw family key を
         // 維持し、増分更新で異なる形式が ready 状態に混在することを防ぐ。
         var persistedScopeKey = string.Equals(lang, "csharp", StringComparison.Ordinal)
             ? EncodeFamilyScopeKey(scopeKey)

@@ -550,7 +550,9 @@ public static partial class SymbolExtractor
             var identity = filePath;
             if (Path.IsPathRooted(identity) && !string.IsNullOrWhiteSpace(projectRoot))
                 identity = Path.GetRelativePath(projectRoot, identity);
-            return identity.Replace('\\', '/');
+            return Path.DirectorySeparatorChar == '\\'
+                ? identity.Replace('\\', '/')
+                : identity;
         }
 
         var fileId = symbols.Count > 0 ? symbols[0].FileId : 0;

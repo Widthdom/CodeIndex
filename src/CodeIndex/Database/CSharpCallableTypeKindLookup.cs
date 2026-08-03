@@ -996,9 +996,9 @@ internal sealed class CSharpCallableTypeKindLookup
         if (normalized.Length == 0)
             return string.Empty;
 
-        // C# v13 encodes pipes in the scope, while a file-local identity may still contain
+        // The current C# family contract encodes pipes in the scope, while a file-local identity may still contain
         // raw pipes in its source path. Only the first pipe is the scope boundary.
-        // C# v13 では scope 内の pipe は encode 済みだが、file-local identity の source path
+        // current C# family contract では scope 内の pipe は encode 済みだが、file-local identity の source path
         // には raw pipe が残り得る。scope 境界は最初の pipe だけである。
         var scopeSeparator = normalized.IndexOf('|');
         if (scopeSeparator >= 0)

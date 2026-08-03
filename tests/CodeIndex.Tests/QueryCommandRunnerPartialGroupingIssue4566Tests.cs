@@ -3704,6 +3704,107 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void Impact_TruncatedMixedCallableFamilyTraversesTestMethodMember_Issue4914Review()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_mixed_kind_impact_issue4914");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            for (var index = 0; index < 49; index++)
+            {
+                TestProjectHelper.InsertIndexedFile(
+                    dbPath,
+                    $"src/{index:D2}.Container.cs",
+                    "csharp",
+                    """
+                    namespace Demo;
+                    public partial class Container
+                    {
+                        partial void M();
+                    }
+                    """);
+            }
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/49.Container.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class Container
+                {
+                    [Fact]
+                    partial void M();
+                    public void InvokeTarget() { M(); }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/50.Container.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class Container
+                {
+                    partial void M() { }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            long targetSymbolId;
+            using (var connection = new SqliteConnection($"Data Source={dbPath}"))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = """
+                    SELECT symbol.id
+                    FROM symbols symbol
+                    JOIN files file ON file.id = symbol.file_id
+                    WHERE file.path = 'src/49.Container.cs'
+                      AND symbol.name = 'M'
+                      AND symbol.kind = 'test.method';
+                    """;
+                targetSymbolId = Assert.IsType<long>(command.ExecuteScalar());
+
+                command.CommandText = """
+                    UPDATE symbol_references
+                    SET target_symbol_id = @targetSymbolId,
+                        resolution_state = 'resolved',
+                        resolution_candidate_count = 1
+                    WHERE file_id = (SELECT id FROM files WHERE path = 'src/49.Container.cs')
+                      AND symbol_name = 'M'
+                      AND reference_kind = 'call';
+                    """;
+                command.Parameters.AddWithValue("@targetSymbolId", targetSymbolId);
+                Assert.Equal(1, command.ExecuteNonQuery());
+            }
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.MarkReferenceIdentityContractReady();
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["Container.M", "--db", dbPath, "--json", "--lang", "csharp", "--max-hops", "1", "--limit", "10"],
+                _jsonOptions));
+            using var document = ParseJsonOutput(stdout);
+            var impact = document.RootElement;
+            var definition = Assert.Single(impact.GetProperty("definitions").EnumerateArray());
+            var caller = Assert.Single(impact.GetProperty("callers").EnumerateArray());
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal(51, definition.GetProperty("definition_sites").GetInt32());
+            Assert.True(definition.GetProperty("family_members_truncated").GetBoolean());
+            Assert.Equal("InvokeTarget", caller.GetProperty("caller_name").GetString());
+            Assert.Equal(targetSymbolId, caller.GetProperty("callee_symbol_id").GetInt64());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void PartialCanonicalRepresentative_DistinguishesNestedTypeNamesAndArities_Issue4914()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_nested_identity_issue4914");
@@ -3939,6 +4040,56 @@ public partial class QueryCommandRunnerTests
             using var command = connection.CreateCommand();
             command.CommandText = "SELECT DISTINCT family_key FROM symbols WHERE name = 'M'";
             Assert.Equal("Proj%7COne|N+Host", Assert.IsType<string>(command.ExecuteScalar()));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PartialCanonicalRepresentative_PreservesLiteralBackslashInUnixFileLocalIdentity_Issue4914Review()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_file_local_backslash_issue4914");
+        try
+        {
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "Test.csproj",
+                "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup></Project>");
+            const string content = """
+                namespace N;
+                file partial class Hidden { }
+                """;
+            TestProjectHelper.WriteTextFile(projectRoot, "A/B.cs", content);
+            TestProjectHelper.WriteTextFile(projectRoot, "A\\B.cs", content);
+
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json", "--quiet"],
+                _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var (symbolsExitCode, symbolsStdout, symbolsStderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                ["Hidden", "--db", dbPath, "--json=array", "--exact-name", "--lang", "csharp", "--kind", "class", "--group-partials", "--limit", "10"],
+                _jsonOptions));
+            using var symbolsDocument = ParseJsonOutput(symbolsStdout);
+            var rows = symbolsDocument.RootElement.EnumerateArray().ToList();
+
+            Assert.Equal(CommandExitCodes.Success, symbolsExitCode);
+            Assert.Equal(string.Empty, symbolsStderr);
+            Assert.Equal(2, rows.Count);
+            Assert.All(rows, row => Assert.False(row.TryGetProperty("definition_sites", out _)));
+
+            using var connection = new SqliteConnection($"Data Source={dbPath}");
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT COUNT(DISTINCT family_key) FROM symbols WHERE name = 'Hidden'";
+            Assert.Equal(2L, Assert.IsType<long>(command.ExecuteScalar()));
         }
         finally
         {
