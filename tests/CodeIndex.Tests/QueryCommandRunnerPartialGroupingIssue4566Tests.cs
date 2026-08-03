@@ -3563,7 +3563,8 @@ public partial class QueryCommandRunnerTests
     [ProductionRuntimeFact]
     public void PartialCanonicalRepresentative_IndexPersistsHookRebuiltFamilyScope_Issue4914()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_hook_family_scope_issue4914");
+        var projectRoot = TestProjectHelper.CreateExecutableExtensionTestProject(
+            "cdidx_partial_hook_family_scope_issue4914");
         lock (TestConsoleLock.Gate)
         {
             using var env = EnvironmentVariableScope.Capture(
