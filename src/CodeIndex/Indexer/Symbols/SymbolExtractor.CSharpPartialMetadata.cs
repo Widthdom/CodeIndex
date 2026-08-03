@@ -1334,10 +1334,26 @@ public static partial class SymbolExtractor
                 declarationSearchStart);
             if (recordKeywordColumn >= 0)
             {
+                var recordNameSearchStart = recordKeywordColumn + "record".Length;
+                var recordClassSuffixColumn = FindCSharpDeclarationKeywordToken(
+                    line,
+                    "class".AsSpan(),
+                    recordNameSearchStart);
+                if (recordClassSuffixColumn >= 0
+                    && line[recordNameSearchStart..recordClassSuffixColumn].Trim().IsEmpty)
+                {
+                    // `record class` has an optional contextual-keyword suffix before the
+                    // declaration identifier. In particular, `record class @class` must
+                    // resolve the escaped identifier rather than the suffix itself.
+                    // `record class` では宣言 identifier の前に contextual keyword suffix が
+                    // ある。特に `record class @class` は suffix ではなく escaped identifier
+                    // を宣言位置として解決する。
+                    recordNameSearchStart = recordClassSuffixColumn + "class".Length;
+                }
                 var recordNameColumn = FindCSharpIdentifierToken(
                     line,
                     name,
-                    recordKeywordColumn + "record".Length);
+                    recordNameSearchStart);
                 if (recordNameColumn >= 0)
                     return recordNameColumn;
             }

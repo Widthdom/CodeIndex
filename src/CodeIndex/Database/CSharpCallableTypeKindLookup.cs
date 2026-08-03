@@ -429,8 +429,9 @@ internal sealed class CSharpCallableTypeKindLookup
             if (projectMarkerCounts.TryGetValue(directory, out var markerCount))
             {
                 if (markerCount == 1)
-                    return directory;
-                return DeriveAmbiguousProjectScope(normalizedPath, directory);
+                    return SymbolExtractor.EncodeFamilyScopeKey(directory);
+                return SymbolExtractor.EncodeFamilyScopeKey(
+                    DeriveAmbiguousProjectScope(normalizedPath, directory));
             }
 
             if (directory == ".")
@@ -438,7 +439,8 @@ internal sealed class CSharpCallableTypeKindLookup
             directory = GetPathDirectory(directory);
         }
 
-        return FileIndexer.DeriveFallbackFamilyScopeKey(normalizedPath);
+        return SymbolExtractor.EncodeFamilyScopeKey(
+            FileIndexer.DeriveFallbackFamilyScopeKey(normalizedPath));
     }
 
     private static string DeriveAmbiguousProjectScope(string filePath, string anchorScope)
@@ -964,6 +966,10 @@ internal sealed class CSharpCallableTypeKindLookup
         if (string.IsNullOrWhiteSpace(familyKey))
             return string.Empty;
 
+        // ApplyFamilyScope percent-encodes delimiter-bearing path characters before
+        // persistence, so the first raw pipe remains the unambiguous scope boundary.
+        // ApplyFamilyScope は delimiter を含む path 文字を永続化前に percent-encode
+        // するため、最初の raw pipe を曖昧さのない scope 境界として扱える。
         var normalized = familyKey.Trim();
         var scopeSeparator = normalized.IndexOf('|');
         return scopeSeparator > 0 ? normalized[..scopeSeparator] : string.Empty;

@@ -3663,6 +3663,7 @@ public partial class QueryCommandRunnerTests
                 public class recordAttribute<T> : Attribute { }
                 [record<Collision>] public partial record Collision;
                 public partial class @record<T> where T : @record<T> { }
+                public partial record class @class;
                 """);
             TestProjectHelper.InsertIndexedFile(
                 dbPath,
@@ -3672,6 +3673,7 @@ public partial class QueryCommandRunnerTests
                 namespace Demo;
                 public partial record Collision;
                 public partial class @record<T> where T : @record<T> { }
+                public partial record class @class;
                 """);
             MarkGraphAndFoldReady(dbPath);
 
@@ -3692,6 +3694,70 @@ public partial class QueryCommandRunnerTests
             Assert.All(
                 escapedRecord.GetProperty("family_members").EnumerateArray(),
                 member => Assert.Equal(22, member.GetProperty("start_column").GetInt32()));
+
+            var escapedRecordClass = RunGroupedSymbol(dbPath, "class", "class");
+            Assert.Equal(2, escapedRecordClass.GetProperty("definition_sites").GetInt32());
+            Assert.Equal(29, escapedRecordClass.GetProperty("start_column").GetInt32());
+            Assert.All(
+                escapedRecordClass.GetProperty("family_members").EnumerateArray(),
+                member => Assert.Equal(29, member.GetProperty("start_column").GetInt32()));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PartialCallableGrouping_PreservesPipeInUnixProjectScope_Issue4914()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        Assert.Equal(
+            "Proj%257C%7COne%1F",
+            SymbolExtractor.EncodeFamilyScopeKey("Proj%7C|One\u001f"));
+
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_partial_pipe_scope_issue4914");
+        try
+        {
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "Proj|One/Test.csproj",
+                "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup></Project>");
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "Proj|One/Test.cs",
+                """
+                #nullable enable
+                namespace N;
+                partial class Host { partial void M(S value); }
+                partial class Host { partial void M(S? value) { } }
+                """);
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "Proj|One/S.cs",
+                """
+                namespace N;
+                class S { }
+                """);
+
+            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
+                [projectRoot, "--json", "--quiet"],
+                _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, indexExitCode);
+            Assert.Equal(string.Empty, indexStderr);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var grouped = RunGroupedSymbol(dbPath, "M", "function");
+            Assert.Equal(2, grouped.GetProperty("definition_sites").GetInt32());
+            Assert.Equal("implementation_body", grouped.GetProperty("representative_reason").GetString());
+
+            using var connection = new SqliteConnection($"Data Source={dbPath}");
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT DISTINCT family_key FROM symbols WHERE name = 'M'";
+            Assert.Equal("Proj%7COne|N.Host", Assert.IsType<string>(command.ExecuteScalar()));
         }
         finally
         {
