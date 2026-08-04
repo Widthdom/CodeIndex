@@ -46,185 +46,116 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_Shell_DetectsCallsInsideCommandSubstitution()
+    public void Extract_Shell_CommandSubstitutions_AcrossSupportedForms_PreserveCalls()
     {
+        // Dollar, backtick, nested, and single-quoted lookalike forms share one function.
+        // Unique callable names plus exact counts make every scanner branch observable.
+        // dollar / backtick / nested / single-quote lookalike を1 function にまとめ、
+        // 固有 callable 名と厳密件数で各 scanner 分岐を観測する。
         const string content = """
-            helper() {
-              echo helper
+            dollar_helper() {
+              echo dollar
             }
 
-            other() {
-              echo other
+            dollar_other() {
+              echo dollar-other
             }
 
-            run() {
-              result=$(helper)
-              count=$(helper arg)
-              if [ -n "$(other)" ]; then
-                :
-              fi
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "shell", content);
-        var references = ReferenceExtractor.Extract(1, "shell", content, symbols);
-
-        Assert.Equal(3, references.Count(reference => reference.ReferenceKind == "call"));
-        Assert.Equal(2, references.Count(reference =>
-            reference.SymbolName == "helper"
-            && reference.ReferenceKind == "call"
-            && reference.ContainerName == "run"));
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "other"
-            && reference.ReferenceKind == "call"
-            && reference.ContainerName == "run");
-    }
-
-    [Fact]
-    public void Extract_Shell_DetectsCallsInsideBackticks()
-    {
-        const string content = """
-            helper() {
-              echo helper
+            backtick_helper() {
+              echo backtick
             }
 
-            run() {
-              output=`helper arg`
-              echo "wrapped `helper`"
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "shell", content);
-        var references = ReferenceExtractor.Extract(1, "shell", content, symbols);
-
-        Assert.Equal(2, references.Count(reference => reference.ReferenceKind == "call"));
-        Assert.Equal(2, references.Count(reference =>
-            reference.SymbolName == "helper"
-            && reference.ReferenceKind == "call"
-            && reference.ContainerName == "run"));
-    }
-
-    [Fact]
-    public void Extract_Shell_DetectsCallsInsideNestedCommandSubstitution()
-    {
-        const string content = """
-            outer() {
+            nested_outer() {
               echo outer
             }
 
-            inner() {
+            nested_inner() {
               echo inner
             }
 
+            quoted_only() {
+              echo quoted
+            }
+
             run() {
-              result=$(outer $(inner))
+              result=$(dollar_helper)
+              count=$(dollar_helper arg)
+              if [ -n "$(dollar_other)" ]; then
+                :
+              fi
+              first=`backtick_helper arg`
+              echo "wrapped `backtick_helper`"
+              nested=$(nested_outer $(nested_inner))
+              literal='$(quoted_only)'
+              also='`quoted_only`'
             }
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "shell", content);
-        var references = ReferenceExtractor.Extract(1, "shell", content, symbols);
+        var (_, references) = ExtractSymbolsAndReferences("shell", content);
 
-        Assert.Equal(2, references.Count(reference => reference.ReferenceKind == "call"));
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "outer"
-            && reference.ReferenceKind == "call"
-            && reference.ContainerName == "run");
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "inner"
-            && reference.ReferenceKind == "call"
-            && reference.ContainerName == "run");
+        Assert.Equal(7, references.Count(reference => reference.ReferenceKind == "call"));
+        AssertCallCount("dollar_helper", 2);
+        AssertCallCount("dollar_other", 1);
+        AssertCallCount("backtick_helper", 2);
+        AssertCallCount("nested_outer", 1);
+        AssertCallCount("nested_inner", 1);
+        AssertReferencesDoNotContain(references, "call", "quoted_only");
+
+        void AssertCallCount(string symbolName, int expectedCount) =>
+            Assert.Equal(expectedCount, references.Count(reference =>
+                reference.SymbolName == symbolName
+                && reference.ReferenceKind == "call"
+                && reference.ContainerName == "run"));
     }
 
     [Fact]
-    public void Extract_Shell_IgnoresSingleQuotedCommandSubstitutionLookAlikes()
+    public void Extract_Shell_Aliases_AcrossDefinitionForms_PreserveCalls()
     {
+        // Separate and grouped alias declarations share one extraction. Unique names distinguish
+        // declaration layouts, while assignment lookalikes remain covered by exact call counts.
+        // 個別 / grouped alias 宣言を1回の抽出にまとめ、固有名と厳密件数で assignment
+        // lookalike が call を増やさないことも維持する。
         const string content = """
-            helper() {
-              echo helper
-            }
+            alias single-list='ls -la'
+            alias single-grep='grep -n'
+            alias -g SINGLE_G='| grep'
+            alias grouped-list='ls -la' grouped-status='git status'
+            alias -g GROUP_G='| grep' GROUP_H='| head'
 
             run() {
-              literal='$(helper)'
-              also='`helper`'
+              single-list /tmp
+              single-grep needle
+              echo foo SINGLE_G bar
+              single_value=SINGLE_G
+              grouped-list /tmp
+              grouped-status
+              echo foo GROUP_G bar
+              GROUP_H pattern
+              grouped_value=GROUP_G
             }
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "shell", content);
-        var references = ReferenceExtractor.Extract(1, "shell", content, symbols);
+        var (_, references) = ExtractSymbolsAndReferences("shell", content);
 
-        Assert.Empty(references.Where(reference => reference.ReferenceKind == "call"));
-    }
-
-    [Fact]
-    public void Extract_Shell_DetectsAliasCalls()
-    {
-        const string content = """
-            alias ll='ls -la'
-            alias my-grep='grep -n'
-            alias -g G='| grep'
-
-            run() {
-              ll /tmp
-              my-grep needle
-              echo foo G bar
-              foo=G
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "shell", content);
-        var references = ReferenceExtractor.Extract(1, "shell", content, symbols);
-
-        Assert.Equal(3, references.Count(reference => reference.ReferenceKind == "call"));
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "ll"
-            && reference.ReferenceKind == "call"
-            && reference.ContainerName == "run");
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "my-grep"
-            && reference.ReferenceKind == "call"
-            && reference.ContainerName == "run");
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "G"
-            && reference.ReferenceKind == "call"
-            && reference.ContainerName == "run");
-    }
-
-    [Fact]
-    public void Extract_Shell_DetectsMultipleAliasDefinitionsAndCalls()
-    {
-        const string content = """
-            alias ll='ls -la' gs='git status'
-            alias -g G='| grep' H='| head'
-
-            run() {
-              ll /tmp
-              gs
-              echo foo G bar
-              H pattern
-              foo=G
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "shell", content);
-        var references = ReferenceExtractor.Extract(1, "shell", content, symbols);
-
-        Assert.Equal(4, references.Count(reference => reference.ReferenceKind == "call"));
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "ll"
-            && reference.ReferenceKind == "call"
-            && reference.ContainerName == "run");
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "gs"
-            && reference.ReferenceKind == "call"
-            && reference.ContainerName == "run");
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "G"
-            && reference.ReferenceKind == "call"
-            && reference.ContainerName == "run");
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "H"
-            && reference.ReferenceKind == "call"
-            && reference.ContainerName == "run");
+        var expectedAliases = new[]
+        {
+            "single-list",
+            "single-grep",
+            "SINGLE_G",
+            "grouped-list",
+            "grouped-status",
+            "GROUP_G",
+            "GROUP_H",
+        };
+        var aliasCalls = references
+            .Where(reference =>
+                reference.ReferenceKind == "call"
+                && reference.ContainerName == "run")
+            .Select(reference => reference.SymbolName)
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToArray();
+        Assert.Equal(7, references.Count(reference => reference.ReferenceKind == "call"));
+        Assert.Equal(expectedAliases.OrderBy(name => name, StringComparer.Ordinal), aliasCalls);
     }
 
     [Fact]

@@ -262,42 +262,90 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_PythonMultilineAnnotations_CapturesSignatureTypeReferences()
+    public void Extract_PythonAnnotations_AcrossSupportedForms_PreserveLinesAndContainers()
     {
+        // Direct/generic return, parameter, variable, multiline, and stringified annotations
+        // share one module. Unique target names prevent one annotation form from satisfying
+        // another, while dynamic line lookup preserves source-location contracts.
+        // direct/generic の return / parameter / variable、multiline、stringified annotation を
+        // 1 module にまとめ、固有 target 名と動的 line 検証で各契約を分離する。
         const string content = """
-            def build(
-                value: int | "User",
+            from __future__ import annotations
+
+            def build_multiline(
+                value: int | "MultilineUser",
                 fallback: list[int | str],
-            ) -> "Result":
+            ) -> "MultilineResult":
                 pass
+
+            def load_stringified(value: StringifiedOptional["StringifiedUser"]) -> "StringifiedResult | None":
+                pass
+
+            def load() -> models.ReturnDirectUser:
+                return get_user()
+
+            def load_many() -> list[models.ReturnGenericUser]:
+                return []
+
+            def save_one(user: models.ParameterDirectUser):
+                persist(user)
+
+            def save_many(users: Sequence[models.ParameterGenericUser]):
+                persist(users)
+
+            def assign_one():
+                user: models.VariableDirectUser = load_user()
+
+            def assign_many():
+                users: Sequence[models.VariableGenericUser] = []
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "python", content);
-        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+        var (_, references) = ExtractSymbolsAndReferences("python", content);
+        var lines = content.Split('\n');
 
         Assert.Contains(references, reference =>
             reference.SymbolName == "int"
             && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "build");
+            && reference.ContainerName == "build_multiline");
         Assert.Contains(references, reference =>
-            reference.SymbolName == "User"
+            reference.SymbolName == "MultilineUser"
             && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "build"
-            && reference.Line == 2);
+            && reference.ContainerName == "build_multiline"
+            && reference.Line == LineContaining("MultilineUser"));
         Assert.Contains(references, reference =>
             reference.SymbolName == "list"
             && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "build"
-            && reference.Line == 3);
+            && reference.ContainerName == "build_multiline"
+            && reference.Line == LineContaining("fallback:"));
         Assert.Contains(references, reference =>
             reference.SymbolName == "str"
             && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "build");
+            && reference.ContainerName == "build_multiline");
         Assert.Contains(references, reference =>
-            reference.SymbolName == "Result"
+            reference.SymbolName == "MultilineResult"
             && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "build"
-            && reference.Line == 4);
+            && reference.ContainerName == "build_multiline"
+            && reference.Line == LineContaining("MultilineResult"));
+
+        AssertAnnotated("StringifiedOptional", "load_stringified");
+        AssertAnnotated("StringifiedUser", "load_stringified");
+        AssertAnnotated("StringifiedResult", "load_stringified");
+        AssertAnnotated("None", "load_stringified");
+        AssertAnnotated("ReturnDirectUser", "load");
+        AssertAnnotated("ReturnGenericUser", "load_many");
+        AssertAnnotated("ParameterDirectUser", "save_one");
+        AssertAnnotated("ParameterGenericUser", "save_many");
+        AssertAnnotated("VariableDirectUser", "assign_one");
+        AssertAnnotated("VariableGenericUser", "assign_many");
+
+        int LineContaining(string marker) =>
+            Array.FindIndex(lines, line => line.Contains(marker, StringComparison.Ordinal)) + 1;
+
+        void AssertAnnotated(string symbolName, string containerName) =>
+            Assert.Contains(references, reference =>
+                reference.SymbolName == symbolName
+                && reference.ReferenceKind == "type_reference"
+                && reference.ContainerName == containerName);
     }
 
     [Fact]
@@ -347,31 +395,42 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_PythonMixedBasesAndMetaclass_EmitsBaseAndMetaclassReferences()
+    public void Extract_PythonClassHeaders_AcrossSupportedForms_PreserveContainers()
     {
+        // Single, multiple, mixed, and metaclass headers share one extraction. Unique target
+        // names and class containers keep every header form independently observable.
+        // single / multiple / mixed / metaclass header を1回の抽出にまとめ、固有 target 名と
+        // class container で各形式を独立して観測する。
         const string content = """
-            class Derived(Base, Mixin, metaclass=Meta):
+            class MixedDerived(MixedBase, MixedMixin, metaclass=MixedMeta):
+                pass
+
+            class SingleView(views.SingleBaseView):
+                pass
+
+            class MultipleView(views.MultipleBaseView, mixins.AuditedMixin):
+                pass
+
+            class Model(metaclass=orm.ModelMeta):
                 pass
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "python", content);
-        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
+        var (_, references) = ExtractSymbolsAndReferences("python", content);
 
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "Base"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "Derived");
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "Mixin"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "Derived");
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "Meta"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "Derived");
-        Assert.DoesNotContain(references, reference =>
-            reference.SymbolName == "metaclass"
-            && reference.ReferenceKind == "type_reference");
+        AssertClassType("MixedBase", "MixedDerived");
+        AssertClassType("MixedMixin", "MixedDerived");
+        AssertClassType("MixedMeta", "MixedDerived");
+        AssertClassType("SingleBaseView", "SingleView");
+        AssertClassType("MultipleBaseView", "MultipleView");
+        AssertClassType("AuditedMixin", "MultipleView");
+        AssertClassType("ModelMeta", "Model");
+        AssertReferencesDoNotContain(references, "type_reference", "metaclass");
+
+        void AssertClassType(string symbolName, string containerName) =>
+            Assert.Contains(references, reference =>
+                reference.SymbolName == symbolName
+                && reference.ReferenceKind == "type_reference"
+                && reference.ContainerName == containerName);
     }
 
     [Fact]
@@ -440,106 +499,6 @@ public partial class ReferenceExtractorTests
             && reference.ReferenceKind == "import");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "not.real");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "commented.out");
-    }
-
-    [Fact]
-    public void Extract_PythonStringifiedAnnotations_CapturesNestedForwardReferences()
-    {
-        const string content = """
-            from __future__ import annotations
-
-            def load(value: Optional["User"]) -> "Result | None":
-                pass
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "python", content);
-        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
-
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "Optional"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "load");
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "User"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "load");
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "Result"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "load");
-        Assert.Contains(references, reference =>
-            reference.SymbolName == "None"
-            && reference.ReferenceKind == "type_reference"
-            && reference.ContainerName == "load");
-    }
-
-    [Fact]
-    public void Extract_PythonClassHeaders_ReuseSingleMultipleAndMetaclassFixture()
-    {
-        const string content = """
-            class SingleView(views.BaseView):
-                pass
-
-            class MultipleView(views.BaseView, mixins.AuditedMixin):
-                pass
-
-            class Model(metaclass=orm.ModelMeta):
-                pass
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "python", content);
-        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
-
-        AssertClassType("BaseView", "SingleView");
-        AssertClassType("BaseView", "MultipleView");
-        AssertClassType("AuditedMixin", "MultipleView");
-        AssertClassType("ModelMeta", "Model");
-
-        void AssertClassType(string symbolName, string containerName) =>
-            Assert.Contains(references, reference =>
-                reference.SymbolName == symbolName
-                && reference.ReferenceKind == "type_reference"
-                && reference.ContainerName == containerName);
-    }
-
-    [Fact]
-    public void Extract_PythonAnnotations_ReuseReturnParameterAndVariableFixture()
-    {
-        const string content = """
-            def load() -> models.User:
-                return get_user()
-
-            def load_many() -> list[models.User]:
-                return []
-
-            def save_one(user: models.User):
-                persist(user)
-
-            def save_many(users: Sequence[models.User]):
-                persist(users)
-
-            def assign_one():
-                user: models.User = load_user()
-
-            def assign_many():
-                users: Sequence[models.User] = []
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "python", content);
-        var references = ReferenceExtractor.Extract(1, "python", content, symbols);
-
-        AssertAnnotated("load");
-        AssertAnnotated("load_many");
-        AssertAnnotated("save_one");
-        AssertAnnotated("save_many");
-        AssertAnnotated("assign_one");
-        AssertAnnotated("assign_many");
-
-        void AssertAnnotated(string containerName) =>
-            Assert.Contains(references, reference =>
-                reference.SymbolName == "User"
-                && reference.ReferenceKind == "type_reference"
-                && reference.ContainerName == containerName);
     }
 
     [Fact]

@@ -38,7 +38,7 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_RustMacroCalls_CaptureDelimitedFormsWithoutMacroRulesDeclaration()
+    public void Extract_RustMacroCalls_AcrossDelimitedAndRawIdentifierForms_PreserveCounts()
     {
         // issue #258: Rust macro invocations need to surface as call-like references so
         // callers / callees / impact can follow both std macros and user-defined macros.
@@ -58,6 +58,8 @@ public partial class ReferenceExtractorTests
                 let y = my_macro!(42);
                 let z = helper(1);
                 dbg!(y + z);
+                r#type!();
+                crate::r#type!();
                 let _ = msg;
             }
             """;
@@ -66,27 +68,20 @@ public partial class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
 
         var callReferences = references.Where(reference => reference.ReferenceKind == "call").ToList();
-        Assert.Equal(6, callReferences.Count);
-        AssertReferencesContain(callReferences, "call", "main", "std::println", "vec", "format", "my_macro", "dbg", "helper");
+        Assert.Equal(8, callReferences.Count);
+        AssertReferencesContain(
+            callReferences,
+            "call",
+            "main",
+            "std::println",
+            "vec",
+            "format",
+            "my_macro",
+            "dbg",
+            "helper",
+            "type",
+            "crate::type");
         AssertReferencesDoNotContain(callReferences, "call", "macro_rules");
-    }
-
-    [Fact]
-    public void Extract_RustMacroCalls_CaptureRawIdentifierNames()
-    {
-        const string content = """
-            fn main() {
-                r#type!();
-                crate::r#type!();
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "rust", content);
-        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
-
-        var callReferences = references.Where(reference => reference.ReferenceKind == "call").ToList();
-        Assert.Equal(2, callReferences.Count);
-        AssertReferencesContain(callReferences, "call", "main", "type", "crate::type");
     }
 
     [Fact]
@@ -1161,91 +1156,126 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_SwiftMultilineStringNestedTripleInHole_DoesNotLeakPhantomCalls()
+    public void Extract_SwiftNestedTriples_AcrossHoleAndDeepForms_PreserveMasking()
     {
-        // Regression for issue #992: a nested `"""..."""` (or `#"""..."""#`) literal
-        // opened inside a Swift `\(...)` interpolation hole must not leak its body
-        // as phantom calls. Both plain and hash-delimited nested forms should be
-        // covered by the hole scanner's nested-triple state.
-        // issue #992 回帰: Swift の `\(...)` ホール内で開いた nested triple の本文を
-        // phantom call として漏らさないこと（plain と hash-delimited の両方）。
+        // Keep plain/hash nested bodies, their real inner interpolation holes, and three-/four-
+        // level depth handling in one extraction. Form-specific call names ensure another nested
+        // region cannot satisfy a missing positive or negative edge.
+        // plain/hash nested body、その内側の実 interpolation hole、3/4 段 depth を1回の抽出で
+        // 検証し、形式固有の call 名で別区画の edge が欠落を隠さないようにする。
         const string content = """"
             import Foundation
 
             class Demo {
-                func m() {
+                func maskNestedBodies() {
                     let sql = """
-                        outer: \( wrap("""
-                            swiftNestedPhantom(99)
+                        outer: \( maskWrap("""
+                            maskPlainNestedPhantom(99)
                             """) )
-                        raw: \( wrap(#"""
-                            swiftHashNestedPhantom(99)
+                        raw: \( maskWrap(#"""
+                            maskHashNestedPhantom(99)
                             """#) )
                         """
-                    realSwiftCall()
+                    maskRealCall()
                 }
 
-                func wrap(_ x: String) -> String { x }
-                func realSwiftCall() {}
-                func swiftNestedPhantom(_ x: Int) -> Int { x }
-                func swiftHashNestedPhantom(_ x: Int) -> Int { x }
-            }
-            """";
-
-        var symbols = SymbolExtractor.Extract(1, "swift", content);
-        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
-
-        Assert.DoesNotContain(references, r => r.SymbolName == "swiftNestedPhantom" && r.ReferenceKind == "call");
-        Assert.DoesNotContain(references, r => r.SymbolName == "swiftHashNestedPhantom" && r.ReferenceKind == "call");
-        Assert.Contains(references, r => r.SymbolName == "wrap" && r.ReferenceKind == "call");
-        Assert.Contains(references, r => r.SymbolName == "realSwiftCall" && r.ReferenceKind == "call");
-    }
-
-    [Fact]
-    public void Extract_SwiftMultilineStringNestedTripleHole_PreservesRealCallReferences()
-    {
-        // Regression for issue #996: a nested `"""..."""` (or `#"""..."""#`) literal
-        // opened inside an outer Swift `\(...)` interpolation hole still has its own
-        // `\(...)` (or `\#(...)` etc.) holes. The masker must preserve real call edges
-        // inside those inner holes while continuing to mask the rest of the body.
-        // issue #996 回帰: Swift の outer `\(...)` 内に開いた nested triple でも
-        // それ自身の `\(expr)` / `\#(expr)` ホール内の本物の call を保持する。
-        const string content = """"
-            import Foundation
-
-            class Demo {
-                func m() {
+                func preserveNestedHoles() {
                     let sql = """
-                        outer: \( wrap("""
-                            inner: \(innerCall())
-                            phantom: swiftNestedPhantom(99)
+                        outer: \( preserveWrap("""
+                            inner: \(plainInnerCall())
+                            phantom: preservePlainPhantom(99)
                             """) )
-                        raw: \( wrap(#"""
+                        raw: \( preserveWrap(#"""
                             inner-raw: \#(rawInnerCall())
-                            phantom-raw: swiftRawNestedPhantom(99)
+                            phantom-raw: preserveRawPhantom(99)
                             """#) )
                         """
-                    realSwiftCall()
+                    preserveRealCall()
                 }
 
-                func wrap(_ x: String) -> String { x }
-                func innerCall() -> Int { 0 }
+                func maskThreeLevels() {
+                    let sql = """
+                        outer: \( depthThreeWrap("""
+                            inner: \( depthThreeHelper("""
+                                depthThreePhantom(99)
+                                """) )
+                            """) )
+                        """
+                    depthThreeRealCall()
+                }
+
+                func maskFourLevels() {
+                    let sql = """
+                        outer: \( depthFourWrap("""
+                            inner: \( depthFourHelper(#"""
+                                deep: \( depthFourDeeper("""
+                                    depthFourDeepestPhantom(99)
+                                """) )
+                                depthFourAfterDeepPhantom()
+                            """#) )
+                        """) )
+                    """
+                    depthFourRealCall()
+                }
+
+                func maskWrap(_ x: String) -> String { x }
+                func maskRealCall() {}
+                func maskPlainNestedPhantom(_ x: Int) -> Int { x }
+                func maskHashNestedPhantom(_ x: Int) -> Int { x }
+                func preserveWrap(_ x: String) -> String { x }
+                func plainInnerCall() -> Int { 0 }
                 func rawInnerCall() -> Int { 0 }
-                func realSwiftCall() {}
-                func swiftNestedPhantom(_ x: Int) -> Int { x }
-                func swiftRawNestedPhantom(_ x: Int) -> Int { x }
+                func preserveRealCall() {}
+                func preservePlainPhantom(_ x: Int) -> Int { x }
+                func preserveRawPhantom(_ x: Int) -> Int { x }
+                func depthThreeWrap(_ x: String) -> String { x }
+                func depthThreeHelper(_ x: String) -> String { x }
+                func depthThreeRealCall() {}
+                func depthThreePhantom(_ x: Int) -> Int { x }
+                func depthFourWrap(_ x: String) -> String { x }
+                func depthFourHelper(_ x: String) -> String { x }
+                func depthFourDeeper(_ x: String) -> String { x }
+                func depthFourAfterDeepPhantom() -> Int { 0 }
+                func depthFourDeepestPhantom(_ x: Int) -> Int { x }
+                func depthFourRealCall() {}
             }
             """";
 
-        var symbols = SymbolExtractor.Extract(1, "swift", content);
-        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
+        var (_, references) = ExtractSymbolsAndReferences("swift", content);
 
-        Assert.Contains(references, r => r.SymbolName == "innerCall" && r.ReferenceKind == "call");
-        Assert.Contains(references, r => r.SymbolName == "rawInnerCall" && r.ReferenceKind == "call");
-        Assert.Contains(references, r => r.SymbolName == "wrap" && r.ReferenceKind == "call");
-        Assert.Contains(references, r => r.SymbolName == "realSwiftCall" && r.ReferenceKind == "call");
-        Assert.DoesNotContain(references, r => r.SymbolName == "swiftNestedPhantom" && r.ReferenceKind == "call");
-        Assert.DoesNotContain(references, r => r.SymbolName == "swiftRawNestedPhantom" && r.ReferenceKind == "call");
+        AssertReferencesContain(references, "call", "maskNestedBodies", "maskWrap", "maskRealCall");
+        AssertReferencesContain(
+            references,
+            "call",
+            "preserveNestedHoles",
+            "plainInnerCall",
+            "rawInnerCall",
+            "preserveWrap",
+            "preserveRealCall");
+        AssertReferencesContain(
+            references,
+            "call",
+            "maskThreeLevels",
+            "depthThreeWrap",
+            "depthThreeHelper",
+            "depthThreeRealCall");
+        AssertReferencesContain(
+            references,
+            "call",
+            "maskFourLevels",
+            "depthFourWrap",
+            "depthFourHelper",
+            "depthFourRealCall");
+        AssertReferencesDoNotContain(
+            references,
+            "call",
+            "maskPlainNestedPhantom",
+            "maskHashNestedPhantom",
+            "preservePlainPhantom",
+            "preserveRawPhantom",
+            "depthThreePhantom",
+            "depthFourDeepestPhantom",
+            "depthFourAfterDeepPhantom");
     }
 
     [Fact]
@@ -1280,87 +1310,6 @@ public partial class ReferenceExtractorTests
 
         Assert.DoesNotContain(references, r => r.SymbolName == "swiftQuotedPhantom" && r.ReferenceKind == "call");
         Assert.DoesNotContain(references, r => r.SymbolName == "anotherSwiftQuotedPhantom" && r.ReferenceKind == "call");
-        Assert.Contains(references, r => r.SymbolName == "realSwiftCall" && r.ReferenceKind == "call");
-    }
-
-    [Fact]
-    public void Extract_SwiftThreeLevelDeepNestedTriple_DoesNotLeakPhantomCalls()
-    {
-        // Regression for codex review #9 finding: same shape for Swift `\(...)` holes.
-        // codex review #9 への回帰: Swift `\(...)` ホールの 3 段深い triple 本文。
-        const string content = """"
-            import Foundation
-
-            class Demo {
-                func m() {
-                    let sql = """
-                        outer: \( wrap("""
-                            inner: \( helper("""
-                                swiftDeepPhantom(99)
-                                """) )
-                            """) )
-                        """
-                    realSwiftCall()
-                }
-
-                func wrap(_ x: String) -> String { x }
-                func helper(_ x: String) -> String { x }
-                func realSwiftCall() {}
-                func swiftDeepPhantom(_ x: Int) -> Int { x }
-            }
-            """";
-
-        var symbols = SymbolExtractor.Extract(1, "swift", content);
-        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
-
-        Assert.DoesNotContain(references, r => r.SymbolName == "swiftDeepPhantom" && r.ReferenceKind == "call");
-        Assert.Contains(references, r => r.SymbolName == "wrap" && r.ReferenceKind == "call");
-        Assert.Contains(references, r => r.SymbolName == "helper" && r.ReferenceKind == "call");
-        Assert.Contains(references, r => r.SymbolName == "realSwiftCall" && r.ReferenceKind == "call");
-    }
-
-    [Fact]
-    public void Extract_SwiftFourLevelDeepNestedTriple_DoesNotLeakPhantomCalls()
-    {
-        // Regression for issue #1002: a 4th nested triple opened inside the deep
-        // Swift body must not unwind the 3-deep frame early, including hash-
-        // delimited nested forms.
-        // issue #1002 回帰: Swift で deep body 内に開いた 4 段目の triple が
-        // 3 段深い frame を早抜けさせず、hash 付き nested 形式も含めて守ること。
-        const string content = """"
-            import Foundation
-
-            class Demo {
-                func m() {
-                    let sql = """
-                        outer: \( wrap("""
-                            inner: \( helper(#"""
-                                deep: \( deeper("""
-                                    swiftDeepestPhantom(99)
-                                """) )
-                                swiftAfterDeep4Phantom()
-                            """#) )
-                        """) )
-                    """
-                    realSwiftCall()
-                }
-
-                func wrap(_ x: String) -> String { x }
-                func helper(_ x: String) -> String { x }
-                func deeper(_ x: String) -> String { x }
-                func swiftAfterDeep4Phantom() -> Int { 0 }
-                func swiftDeepestPhantom(_ x: Int) -> Int { x }
-                func realSwiftCall() {}
-            }
-            """";
-
-        var symbols = SymbolExtractor.Extract(1, "swift", content);
-        var references = ReferenceExtractor.Extract(1, "swift", content, symbols);
-
-        Assert.DoesNotContain(references, r => r.SymbolName == "swiftDeepestPhantom" && r.ReferenceKind == "call");
-        Assert.DoesNotContain(references, r => r.SymbolName == "swiftAfterDeep4Phantom" && r.ReferenceKind == "call");
-        Assert.Contains(references, r => r.SymbolName == "wrap" && r.ReferenceKind == "call");
-        Assert.Contains(references, r => r.SymbolName == "helper" && r.ReferenceKind == "call");
         Assert.Contains(references, r => r.SymbolName == "realSwiftCall" && r.ReferenceKind == "call");
     }
 
@@ -1525,205 +1474,226 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_RustTypedDeclarations_CaptureStructuralTypeReferences()
+    public void Extract_RustStructuralTypeReferences_AcrossSupportedDeclarations_PreserveContracts()
     {
+        // Structural declarations share one extraction, with section-specific names preventing
+        // a reference from one syntax form from satisfying another form's assertions.
+        // structural declaration を1回の抽出にまとめ、区画固有名によって別構文の reference が
+        // assertion を代替しないようにする。
         const string content = """
-            trait Handler: Sendable {
-                fn handle(&self, input: Request) -> Result<Response, Error>;
+            trait StructuralHandler: StructuralSendable {
+                fn handle(&self, input: StructuralRequest) -> StructuralResult<StructuralResponse, StructuralError>;
             }
 
-            struct Service<T: Store> where T: Clone {
-                repo: Repository,
-                current: Option<User>,
+            struct StructuralService<T: StructuralStore> where T: StructuralClone {
+                repo: StructuralRepository,
+                current: StructuralOption<StructuralUser>,
             }
 
-            impl Handler for Service<StoreImpl> {
-                fn handle(&self, input: Request) -> Result<Response, Error> {
-                    let current: Option<User> = None;
-                    let repo: Repository = make_repo();
+            impl StructuralHandler for StructuralService<StructuralStoreImpl> {
+                fn handle(&self, input: StructuralRequest) -> StructuralResult<StructuralResponse, StructuralError> {
+                    let current: StructuralOption<StructuralUser> = None;
+                    let repo: StructuralRepository = make_repo();
                     finish(current, repo)
                 }
             }
-            """;
 
-        var symbols = SymbolExtractor.Extract(1, "rust", content);
-        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
-
-        Assert.Contains(references, r => r.SymbolName == "Sendable" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Request" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Response" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Error" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Store" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Clone" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Repository" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Option" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Handler" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Service" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "StoreImpl" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "self" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_RustAssociatedTypes_CaptureBoundAndDefaultTypeReferences()
-    {
-        const string content = """
-            trait Builder {
-                type Output = ();
-                type BuildFailure: std::error::Error = String;
-                type Item: Display + Debug;
-                type StreamFailure: Into<AppError> = IoError;
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "rust", content);
-        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
-
-        Assert.Contains(references, r => r.SymbolName == "Error" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "String" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Display" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Debug" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Into" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "AppError" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "IoError" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_RustConstGenericDeclarations_CaptureConstGenericReferences()
-    {
-        const string content = """
-            struct Array<const N: usize> {
-                values: [i32; N],
-            }
-
-            fn process<const N: usize>(arr: [i32; N]) where const N: usize {
-                consume(arr);
-            }
-
-            impl<const N: usize> Array<N> {
-                fn len(&self) -> usize { N }
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "rust", content);
-        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
-
-        Assert.Contains(references, r => r.SymbolName == "N" && r.ReferenceKind == "const_generic_reference");
-        Assert.Contains(references, r => r.SymbolName == "usize" && r.ReferenceKind == "annotation");
-        Assert.Contains(references, r => r.SymbolName == "Array" && r.ReferenceKind == "type_reference");
-        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "Array");
-        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "process");
-    }
-
-    [Fact]
-    public void Extract_RustRawIdentifierTypeReferences_NormalizesNames()
-    {
-        const string content = """
             struct r#type;
             struct r#async;
-
-            struct Wrapper {
+            struct RawWrapper {
                 value: crate::r#type,
-                next: Option<r#async>,
+                next: RawOption<r#async>,
                 keyword: r#struct,
             }
+            fn build_raw(input: r#type) -> r#async { todo!() }
 
-            fn build(input: r#type) -> r#async {
-                todo!()
-            }
-            """;
+            const STRUCTURAL_GLOBAL: StaticArc<StaticUser> = StaticArc::new(StaticUser);
+            static mut STRUCTURAL_STATE: StaticOption<StaticState> = None;
+            pub static STRUCTURAL_CACHE: crate::cache::StaticCache = crate::cache::StaticCache::new();
 
-        var symbols = SymbolExtractor.Extract(1, "rust", content);
-        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
+            type AliasUserMap<K: AliasKey> = std::collections::AliasHashMap<K, AliasUser>;
+            pub type AliasCallback = AliasHandler<AliasRequest, AliasResponse>;
 
-        Assert.Contains(references, r => r.SymbolName == "type" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "async" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "struct" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "r" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_RustConstStaticItems_CaptureTypeReferences()
-    {
-        const string content = """
-            const GLOBAL: Arc<User> = Arc::new(User);
-            static mut STATE: Option<State> = None;
-            pub static CACHE: crate::cache::Cache = crate::cache::Cache::new();
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "rust", content);
-        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
-
-        Assert.Contains(references, r => r.SymbolName == "Arc" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Option" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "State" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Cache" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_RustTypeAliases_CaptureTargetTypeReferences()
-    {
-        const string content = """
-            type UserMap<K: Key> = std::collections::HashMap<K, User>;
-            pub type Callback = Handler<Request, Response>;
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "rust", content);
-        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
-
-        Assert.Contains(references, r => r.SymbolName == "Key" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "HashMap" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Handler" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Request" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Response" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_RustStructFieldTypes_CaptureStructContainerReferences()
-    {
-        const string content = """
             struct FieldOnly {
-                repo: Repository,
+                repo: FieldRepository,
             }
+            struct FieldUserId(FieldUuid);
+            pub struct FieldPair(pub FieldUser, FieldPairRepository);
 
-            struct UserId(Uuid);
-            pub struct Pair(pub User, Repository);
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "rust", content);
-        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
-
-        Assert.Contains(references, r =>
-            r.SymbolName == "Repository"
-            && r.ReferenceKind == "type_reference"
-            && r.ContainerKind == "struct"
-            && r.ContainerName == "FieldOnly");
-        Assert.Contains(references, r => r.SymbolName == "Uuid" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Repository" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_RustEnumVariantPayloads_CaptureTypeReferences()
-    {
-        const string content = """
-            enum Event {
-                Created(User),
-                Moved { from: Point, to: Point },
-                Failed(crate::errors::Error),
+            enum StructuralEvent {
+                Created(EventUser),
+                Moved { from: EventPoint, to: EventPoint },
+                Failed(crate::errors::EventError),
                 Empty,
             }
+
+            fn configure_closure() {
+                let handler = |input: ClosureUser, ctx: &ClosureContext| -> ClosureResult<ClosureResponse, ClosureError> {
+                    build_closure(input, ctx)
+                };
+            }
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "rust", content);
-        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
+        var (_, references) = ExtractSymbolsAndReferences("rust", content);
 
-        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference" && r.ContainerName == "Event");
-        Assert.Contains(references, r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference" && r.ContainerName == "Event");
-        Assert.Contains(references, r => r.SymbolName == "Error" && r.ReferenceKind == "type_reference" && r.ContainerName == "Event");
+        AssertReferencesContain(
+            references,
+            "type_reference",
+            null,
+            "StructuralSendable",
+            "StructuralRequest",
+            "StructuralResult",
+            "StructuralResponse",
+            "StructuralError",
+            "StructuralStore",
+            "StructuralClone",
+            "StructuralRepository",
+            "StructuralOption",
+            "StructuralUser",
+            "StructuralHandler",
+            "StructuralService",
+            "StructuralStoreImpl");
+        Assert.DoesNotContain(references, r => r.SymbolName == "self" && r.ReferenceKind == "type_reference");
+
+        AssertReferencesContain(references, "type_reference", null, "type", "async", "struct");
+        AssertReferencesDoNotContain(references, "type_reference", "r");
+
+        AssertReferencesContain(
+            references,
+            "type_reference",
+            null,
+            "StaticArc",
+            "StaticUser",
+            "StaticOption",
+            "StaticState",
+            "StaticCache",
+            "AliasKey",
+            "AliasHashMap",
+            "AliasUser",
+            "AliasHandler",
+            "AliasRequest",
+            "AliasResponse");
+
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "FieldRepository"
+            && reference.ReferenceKind == "type_reference"
+            && reference.ContainerKind == "struct"
+            && reference.ContainerName == "FieldOnly");
+        AssertReferencesContain(
+            references,
+            "type_reference",
+            null,
+            "FieldUuid",
+            "FieldUser",
+            "FieldPairRepository");
+        AssertReferencesContain(
+            references.Where(reference => reference.ContainerName == "StructuralEvent"),
+            "type_reference",
+            "StructuralEvent",
+            "EventUser",
+            "EventPoint",
+            "EventError");
+        AssertReferencesContain(
+            references,
+            "type_reference",
+            null,
+            "ClosureUser",
+            "ClosureContext",
+            "ClosureResult",
+            "ClosureResponse",
+            "ClosureError");
+    }
+
+    [Fact]
+    public void Extract_RustGenericBounds_AcrossSupportedForms_PreserveTypeReferences()
+    {
+        // Associated types, const generics, defaults, higher-ranked bounds, trait aliases,
+        // associated bindings, and function-trait returns share one extraction. Every section
+        // uses unique names so repeated generic vocabulary cannot mask a missing edge.
+        // associated type、const generic、default、higher-ranked bound、trait alias、associated
+        // binding、function-trait return を統合し、区画固有名で edge 欠落を隠さない。
+        const string content = """
+            trait AssociatedBuilder {
+                type AssociatedOutput = ();
+                type AssociatedBuildFailure: std::error::AssociatedError = AssociatedString;
+                type AssociatedItem: AssociatedDisplay + AssociatedDebug;
+                type AssociatedStreamFailure: AssociatedInto<AssociatedAppError> = AssociatedIoError;
+            }
+
+            struct ConstArray<const NConst: usize> {
+                values: [i32; NConst],
+            }
+            fn process_const<const NConst: usize>(arr: [i32; NConst]) where const NConst: usize {
+                consume_const(arr);
+            }
+            impl<const NConst: usize> ConstArray<NConst> {
+                fn len(&self) -> usize { NConst }
+            }
+
+            struct DefaultCache<TDefault = DefaultUser, EDefault: DefaultError = DefaultIoError> {
+                value: TDefault,
+                error: EDefault,
+            }
+
+            trait RankedHandler<F: for<'a> Fn(&'a RankedUser)> {
+                fn handle(&self, f: F);
+            }
+
+            trait AliasService = AliasSend + AliasSync + AliasHandler<AliasBoundUser>;
+
+            fn make_binding() -> impl BindingFuture<BindingOutput = BindingUser> { todo!() }
+
+            fn call_bound<F: FnOnce() -> BoundResult<BoundUser, BoundError>>(f: F) {}
+            fn where_call_bound<F>(f: F) where F: FnOnce() -> BoundResponse {}
+            trait BoundHandler: FnOnce() -> BoundSupertraitUser {}
+            """;
+
+        var (symbols, references) = ExtractSymbolsAndReferences("rust", content);
+
+        AssertReferencesContain(
+            references,
+            "type_reference",
+            null,
+            "AssociatedError",
+            "AssociatedString",
+            "AssociatedDisplay",
+            "AssociatedDebug",
+            "AssociatedInto",
+            "AssociatedAppError",
+            "AssociatedIoError");
+
+        Assert.Contains(references, r => r.SymbolName == "NConst" && r.ReferenceKind == "const_generic_reference");
+        Assert.Contains(references, r => r.SymbolName == "usize" && r.ReferenceKind == "annotation");
+        Assert.Contains(references, r => r.SymbolName == "ConstArray" && r.ReferenceKind == "type_reference");
+        Assert.Contains(symbols, s => s.Kind == "struct" && s.Name == "ConstArray");
+        Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "process_const");
+
+        AssertReferencesContain(
+            references,
+            "type_reference",
+            null,
+            "DefaultUser",
+            "DefaultError",
+            "DefaultIoError",
+            "Fn",
+            "RankedUser",
+            "AliasSend",
+            "AliasSync",
+            "AliasHandler",
+            "AliasBoundUser",
+            "BindingFuture",
+            "BindingOutput",
+            "BindingUser",
+            "BoundResult",
+            "BoundUser",
+            "BoundError",
+            "BoundResponse",
+            "BoundSupertraitUser");
+        AssertReferencesDoNotContain(references, "type_reference", "for", "a");
+
+        Assert.Equal(3, references.Count(reference =>
+            reference.SymbolName == "FnOnce"
+            && reference.ReferenceKind == "type_reference"));
     }
 
     [Fact]
@@ -2012,115 +1982,4 @@ public partial class ReferenceExtractorTests
         Assert.DoesNotContain(references, r => r.SymbolName == "TupleUser" && r.ReferenceKind == "call");
     }
 
-    [Fact]
-    public void Extract_RustGenericDefaults_CaptureDefaultTypeReferences()
-    {
-        const string content = """
-            struct Cache<T = User, E: Error = IoError> {
-                value: T,
-                error: E,
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "rust", content);
-        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
-
-        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Error" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "IoError" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_RustHigherRankedTraitBounds_PreserveBoundTypes()
-    {
-        const string content = """
-            trait Handler<F: for<'a> Fn(&'a User)> {
-                fn handle(&self, f: F);
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "rust", content);
-        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
-
-        Assert.Contains(references, r => r.SymbolName == "Fn" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "for" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "a" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_RustClosureSignatureTypes_CapturesParameterAndReturnTypes()
-    {
-        const string content = """
-            fn configure() {
-                let handler = |input: User, ctx: &Context| -> Result<Response, Error> {
-                    build(input, ctx)
-                };
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "rust", content);
-        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
-
-        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Context" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Response" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Error" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_RustTraitAliasTargetTypes_CapturesAliasedBounds()
-    {
-        const string content = """
-            trait Service = Send + Sync + Handler<User>;
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "rust", content);
-        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
-
-        Assert.Contains(references, r => r.SymbolName == "Send" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Sync" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Handler" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_RustAssociatedTypeBinding_CapturesBindingKey()
-    {
-        const string content = """
-            fn make() -> impl Future<Output = User> {
-                todo!()
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "rust", content);
-        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
-
-        Assert.Contains(references, r => r.SymbolName == "Future" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Output" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_RustFunctionTraitBounds_CaptureDeclarationAndSupertraitReturnTypes()
-    {
-        const string content = """
-            fn call<F: FnOnce() -> Result<User, Error>>(f: F) {}
-            fn where_call<F>(f: F) where F: FnOnce() -> Response {}
-            trait Handler: FnOnce() -> SupertraitUser {}
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "rust", content);
-        var references = ReferenceExtractor.Extract(1, "rust", content, symbols);
-
-        Assert.Equal(3, references.Count(r =>
-            r.SymbolName == "FnOnce"
-            && r.ReferenceKind == "type_reference"));
-        Assert.Contains(references, r => r.SymbolName == "Result" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Error" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Response" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "SupertraitUser" && r.ReferenceKind == "type_reference");
-    }
 }
