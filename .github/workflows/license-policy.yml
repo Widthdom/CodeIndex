@@ -113,7 +113,13 @@ jobs:
             8.0.413
             9.0.301
           cache: true
-          cache-dependency-path: '**/packages.lock.json'
+          cache-dependency-path: |
+            src/CodeIndex/packages.lock.json
+            tests/CodeIndex.HookIsolationFixture/packages.lock.json
+            tests/CodeIndex.Tests/packages.lock.json
+            tools/CodeIndex.Changelog/packages.lock.json
+            tools/CodeIndex.PackageNormalize/packages.lock.json
+            tools/CodeIndex.TestTelemetry/packages.lock.json
 
       - name: Restore license policy test dependencies
         run: dotnet restore tests/CodeIndex.Tests/CodeIndex.Tests.csproj -p:RestoreTargetFrameworks=net8.0 --locked-mode

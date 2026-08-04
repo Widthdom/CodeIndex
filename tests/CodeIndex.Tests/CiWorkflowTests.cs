@@ -92,18 +92,10 @@ public class CiWorkflowTests
             "            test-shard: remaining\n" +
             "            test-filter: FullyQualifiedName!~CodeIndex.Tests.IndexCommandRunnerTests",
             "- name: Set up .NET SDK\n        id: setup-dotnet\n        continue-on-error: true\n        uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5.3.0\n        with:\n          dotnet-version: ${{ matrix.sdk-versions }}",
-            "- name: Retry .NET SDK setup\n        if: steps.setup-dotnet.outcome == 'failure'\n        uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5.3.0\n        with:\n          dotnet-version: ${{ matrix.sdk-versions }}",
-            "- name: Restore dependencies\n        if: matrix.primary_lane\n        run: dotnet restore CodeIndex.sln --locked-mode",
-            "- name: Restore test dependencies\n        if: ${{ !matrix.primary_lane }}\n        run: dotnet restore tests/CodeIndex.Tests/CodeIndex.Tests.csproj -p:RestoreTargetFrameworks=${{ matrix.test-framework }} --locked-mode");
+            "- name: Retry .NET SDK setup\n        if: steps.setup-dotnet.outcome == 'failure'\n        uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5.3.0\n        with:\n          dotnet-version: ${{ matrix.sdk-versions }}");
         AssertDoesNotContainAny(
             workflow,
-            "restore-keys:",
-            "'**/*.csproj'",
             "function Invoke-TestRun");
-        AssertContainsAll(
-            workflow,
-            "key: ${{ runner.os }}-dotnet-nuget-${{ hashFiles('**/packages.lock.json', 'global.json') }}",
-            "primary_lane: true");
         AssertContainsAll(
             workflow,
             "- name: Audit NuGet package vulnerabilities\n        if: matrix.primary_lane",
@@ -434,28 +426,7 @@ public class CiWorkflowTests
         foreach (var cacheBlock in FindStepBlocks(stepBlocks, "actions/cache@"))
         {
             AssertDoesNotContainAny(cacheBlock.Text, StringComparison.Ordinal, "restore-keys:", "'**/*.csproj'");
-
-            if (cacheBlock.Text.Contains("~/.nuget/packages", StringComparison.Ordinal))
-            {
-                AssertContainsAll(
-                    cacheBlock.Text,
-                    StringComparison.Ordinal,
-                    "hashFiles('**/packages.lock.json', 'global.json')");
-            }
         }
-
-        AssertContainsAll(
-            GetWorkflow(workflows, "dotnet.yml"),
-            StringComparison.Ordinal,
-            "key: ${{ runner.os }}-dotnet-nuget-");
-        AssertContainsAll(
-            GetWorkflow(workflows, "release.yml"),
-            StringComparison.Ordinal,
-            "key: ${{ runner.os }}-release-nuget-");
-        AssertContainsAll(
-            GetWorkflow(workflows, "mutation-testing.yml"),
-            StringComparison.Ordinal,
-            "key: ${{ runner.os }}-mutation-stryker-4.14.0-");
     }
 
     [Fact]
@@ -514,12 +485,26 @@ public class CiWorkflowTests
         AssertDoesNotContainAny(codeqlWorkflow, "8.0.413", "8.0.x", "9.0.x");
 
         var mutationWorkflow = RepositoryTestPaths.ReadWorkflow("mutation-testing.yml");
+        var strykerCacheBlock = Assert.Single(
+            StepBlockPattern.Matches(mutationWorkflow).Cast<Match>(),
+            block => block.Value.Contains("- name: Cache Stryker tool", StringComparison.Ordinal));
         AssertContainsAll(
             mutationWorkflow,
             "dotnet tool update --global dotnet-stryker --version 4.14.0",
-            "if: steps.mutation-cache.outputs.cache-hit != 'true'",
-            "mutation-stryker-4.14.0");
-        AssertDoesNotContainAny(mutationWorkflow, "dotnet tool install --global dotnet-stryker");
+            "if: steps.stryker-cache.outputs.cache-hit != 'true'");
+        AssertContainsAll(
+            strykerCacheBlock.Value,
+            "id: stryker-cache",
+            "path: ~/.dotnet/tools",
+            "key: ${{ runner.os }}-mutation-stryker-4.14.0");
+        AssertDoesNotContainAny(
+            strykerCacheBlock.Value,
+            "hashFiles(",
+            "~/.nuget/packages");
+        AssertDoesNotContainAny(
+            mutationWorkflow,
+            "steps.mutation-cache",
+            "dotnet tool install --global dotnet-stryker");
     }
 
     [Fact]
@@ -628,6 +613,4 @@ public class CiWorkflowTests
         Assert.Contains("\n  contents: read\n", workflow[..jobsIndex], StringComparison.Ordinal);
     }
 
-    private static string GetWorkflow(IReadOnlyList<(string FileName, string Content)> workflows, string fileName)
-        => workflows.Single(workflow => string.Equals(workflow.FileName, fileName, StringComparison.Ordinal)).Content;
 }

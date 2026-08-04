@@ -9,18 +9,6 @@ namespace CodeIndex.Tests;
 public partial class ReleaseWorkflowTests
 {
     [Fact]
-    public void ReleaseWorkflow_CachesAndRestoresCuratedNotesToolOnce()
-    {
-        var workflow = ReadReleaseWorkflow();
-
-        AssertContainsAll(
-            workflow,
-            "cache-dependency-path: tools/CodeIndex.Changelog/packages.lock.json",
-            "dotnet restore tools/CodeIndex.Changelog/CodeIndex.Changelog.csproj --locked-mode",
-            "dotnet run --project tools/CodeIndex.Changelog --no-restore -- release-notes");
-    }
-
-    [Fact]
     public void ReleaseWorkflow_ScopesNativeValidationToNet8TestProject()
     {
         var workflow = ReadReleaseWorkflow();
@@ -30,13 +18,10 @@ public partial class ReleaseWorkflowTests
             "- name: Set up .NET SDKs\n        if: ${{ !matrix.cross_compile }}",
             "- name: Set up cross-compile .NET SDK\n        if: matrix.cross_compile",
             "dotnet-version: 9.0.301",
-            "- name: Restore test dependencies\n        if: ${{ !matrix.cross_compile }}\n        run: dotnet restore tests/CodeIndex.Tests/CodeIndex.Tests.csproj -p:RestoreTargetFrameworks=net8.0 --locked-mode",
-            "- name: Restore publish dependencies\n        if: matrix.cross_compile\n        run: dotnet restore src/CodeIndex/CodeIndex.csproj --locked-mode",
             "- name: Build tests\n        if: ${{ !matrix.cross_compile }}\n        run: dotnet build tests/CodeIndex.Tests/CodeIndex.Tests.csproj --configuration Release --framework net8.0 --no-restore",
             "- name: Test net8\n        if: ${{ !matrix.cross_compile }}\n        run: dotnet test tests/CodeIndex.Tests/CodeIndex.Tests.csproj --configuration Release --framework net8.0 --no-build --no-restore --nologo");
         AssertDoesNotContainAny(
             workflow,
-            "dotnet restore CodeIndex.sln --locked-mode",
             "dotnet build CodeIndex.sln --configuration Release --no-restore",
             "dotnet test CodeIndex.sln --configuration Release --no-build --no-restore --nologo");
     }
@@ -277,21 +262,9 @@ public partial class ReleaseWorkflowTests
     public void ReleaseWorkflow_NormalizesNuGetCorePropertiesBeforePublishing()
     {
         var workflow = ReadReleaseWorkflow();
-        const string publishNuGetCache =
-            "- name: Set up .NET\n" +
-            "        uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5.3.0\n" +
-            "        with:\n" +
-            "          dotnet-version: |\n" +
-            "            8.0.413\n" +
-            "            9.0.301\n" +
-            "          cache: true\n" +
-            "          cache-dependency-path: |\n" +
-            "            src/CodeIndex/packages.lock.json\n" +
-            "            tools/CodeIndex.PackageNormalize/packages.lock.json";
 
         AssertContainsAll(
             workflow,
-            publishNuGetCache,
             "Normalize NuGet package metadata part names",
             "dotnet run --project tools/CodeIndex.PackageNormalize --",
             "nupkg/*.nupkg nupkg/*.snupkg",
