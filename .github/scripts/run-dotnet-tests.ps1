@@ -76,10 +76,20 @@ function Invoke-TestRun {
     $runArgs += @("--filter", $TestFilter)
   }
 
-  $capturedOutput = [System.Collections.Generic.List[string]]::new()
+  [int]$failureLogTailLineLimit = 2000
+  $retainedOutputTail = [System.Collections.Generic.Queue[string]]::new($failureLogTailLineLimit)
+  [long]$totalOutputLineCount = 0
+  $testSessionTimedOut = $false
   dotnet @runArgs 2>&1 | ForEach-Object {
     $line = [string]$_
-    $capturedOutput.Add($line)
+    $totalOutputLineCount++
+    if ($line.IndexOf("test run timeout", [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+      $testSessionTimedOut = $true
+    }
+    if ($retainedOutputTail.Count -ge $failureLogTailLineLimit) {
+      [void]$retainedOutputTail.Dequeue()
+    }
+    [void]$retainedOutputTail.Enqueue($line)
     Write-Host $line
   }
 
@@ -87,10 +97,20 @@ function Invoke-TestRun {
   if ($exitCode -ne 0) {
     $logDirectory = Split-Path -Parent $LogPath
     New-Item -ItemType Directory -Force -Path $logDirectory | Out-Null
-    [System.IO.File]::WriteAllLines($LogPath, [string[]]$capturedOutput)
+    $failureLogLines = [System.Collections.Generic.List[string]]::new($retainedOutputTail.Count + 1)
+    $omittedOutputLineCount = $totalOutputLineCount - $retainedOutputTail.Count
+    if ($omittedOutputLineCount -gt 0) {
+      [void]$failureLogLines.Add(
+        "[ci] Test output truncated: retained final $($retainedOutputTail.Count) of $totalOutputLineCount lines; $omittedOutputLineCount earlier line(s) were streamed live and omitted from this artifact.")
+    }
+    [void]$failureLogLines.AddRange($retainedOutputTail.ToArray())
+    [System.IO.File]::WriteAllLines($LogPath, [string[]]$failureLogLines)
   }
 
-  return [int]$exitCode
+  return [pscustomobject]@{
+    ExitCode = [int]$exitCode
+    TestSessionTimedOut = [bool]$testSessionTimedOut
+  }
 }
 
 function Merge-TestFilters {
@@ -168,19 +188,19 @@ function Get-RetryFilterDecision {
 }
 
 $firstLogPath = Join-Path $resultsDirectory "test-output-first.txt"
-$firstExitCode = Invoke-TestRun -LogPath $firstLogPath -ResultFileName "test_results_first.trx" -IncludeCoverage $includeCoverage -IncludeCrashDiagnostics $true -TestFilter $BaseFilter
-if ($firstExitCode -eq 0) {
+$firstRunResult = Invoke-TestRun -LogPath $firstLogPath -ResultFileName "test_results_first.trx" -IncludeCoverage $includeCoverage -IncludeCrashDiagnostics $true -TestFilter $BaseFilter
+if ($firstRunResult.ExitCode -eq 0) {
   exit 0
 }
 
 Write-StepOutput -Name "summarize" -Value "true"
 
-if (Select-String -Path $firstLogPath -SimpleMatch "test run timeout" -Quiet) {
+if ($firstRunResult.TestSessionTimedOut) {
   Write-Warning "Initial test run hit TestSessionTimeout; skipping flaky retry to keep CI bounded. Inspect uploaded TRX/blame artifacts."
-  exit $firstExitCode
+  exit $firstRunResult.ExitCode
 }
 
-Write-Warning "Initial test run failed with exit code $firstExitCode. Rerunning once to classify possible flakiness."
+Write-Warning "Initial test run failed with exit code $($firstRunResult.ExitCode). Rerunning once to classify possible flakiness."
 if ($includeCoverage) {
   Write-Host "Skipping XPlat Code Coverage on the flaky-classification retry."
 }
@@ -200,12 +220,12 @@ else {
   Write-Host "Focused retry is unavailable ($($retryFilterDecision.reason)); using the $fallbackScope retry fallback."
 }
 $retryLogPath = Join-Path $resultsDirectory "test-output-retry.txt"
-$retryExitCode = Invoke-TestRun -LogPath $retryLogPath -ResultFileName "test_results_retry.trx" -IncludeCoverage $false -IncludeCrashDiagnostics $false -TestFilter $retryFilter
-if ($retryExitCode -eq 0) {
+$retryRunResult = Invoke-TestRun -LogPath $retryLogPath -ResultFileName "test_results_retry.trx" -IncludeCoverage $false -IncludeCrashDiagnostics $false -TestFilter $retryFilter
+if ($retryRunResult.ExitCode -eq 0) {
   "Initial test run failed, but the single retry passed. Retry scope: $retryScope. Treat this run as flaky and inspect TRX/blame artifacts." |
     Set-Content -Encoding UTF8 -Path (Join-Path $resultsDirectory "flaky-retry.txt")
   Write-Warning "Tests passed on retry; uploaded TestResults include flaky-retry.txt."
   exit 0
 }
 
-exit $retryExitCode
+exit $retryRunResult.ExitCode

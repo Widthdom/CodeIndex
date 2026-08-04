@@ -124,10 +124,10 @@ public class CiWorkflowTests
             "if ($includeCoverage)",
             "[ValidateSet(\"true\", \"false\")]",
             "Skipping XPlat Code Coverage outside ubuntu-24.04/net8.0",
-            "$firstExitCode = Invoke-TestRun -LogPath $firstLogPath -ResultFileName \"test_results_first.trx\" -IncludeCoverage $includeCoverage -IncludeCrashDiagnostics $true -TestFilter $BaseFilter",
+            "$firstRunResult = Invoke-TestRun -LogPath $firstLogPath -ResultFileName \"test_results_first.trx\" -IncludeCoverage $includeCoverage -IncludeCrashDiagnostics $true -TestFilter $BaseFilter",
             "Skipping XPlat Code Coverage on the flaky-classification retry.",
             "Reusing crash evidence from the initial attempt; the flaky-classification retry skips duplicate crash collection.",
-            "$retryExitCode = Invoke-TestRun -LogPath $retryLogPath -ResultFileName \"test_results_retry.trx\" -IncludeCoverage $false -IncludeCrashDiagnostics $false",
+            "$retryRunResult = Invoke-TestRun -LogPath $retryLogPath -ResultFileName \"test_results_retry.trx\" -IncludeCoverage $false -IncludeCrashDiagnostics $false",
             "\"--no-build\"",
             "\"--no-restore\"",
             "$runArgs += \"--blame-crash\"",
@@ -140,11 +140,24 @@ public class CiWorkflowTests
             "$resultsDirectory = \"./TestResults\"",
             "Join-Path $resultsDirectory \"test-output-first.txt\"",
             "Join-Path $resultsDirectory \"test-output-retry.txt\"",
-            "[System.Collections.Generic.List[string]]::new()",
+            "$failureLogTailLineLimit = 2000",
+            "[System.Collections.Generic.Queue[string]]::new($failureLogTailLineLimit)",
+            "$line.IndexOf(\"test run timeout\", [StringComparison]::OrdinalIgnoreCase) -ge 0",
+            "$testSessionTimedOut = $true",
+            "[void]$retainedOutputTail.Dequeue()",
+            "[void]$retainedOutputTail.Enqueue($line)",
+            "$exitCode = $LASTEXITCODE",
             "if ($exitCode -ne 0)",
             "$logDirectory = Split-Path -Parent $LogPath",
             "New-Item -ItemType Directory -Force -Path $logDirectory",
-            "[System.IO.File]::WriteAllLines($LogPath, [string[]]$capturedOutput)",
+            "Test output truncated: retained final",
+            "were streamed live and omitted from this artifact.",
+            "[System.IO.File]::WriteAllLines($LogPath, [string[]]$failureLogLines)",
+            "ExitCode = [int]$exitCode",
+            "TestSessionTimedOut = [bool]$testSessionTimedOut",
+            "if ($firstRunResult.TestSessionTimedOut)",
+            "exit $firstRunResult.ExitCode",
+            "exit $retryRunResult.ExitCode",
             "Write-StepOutput -Name \"summarize\" -Value \"true\"",
             "$env:GITHUB_OUTPUT",
             "Initial test run hit TestSessionTimeout; skipping flaky retry",
@@ -153,6 +166,12 @@ public class CiWorkflowTests
         AssertDoesNotContainAny(
             testScript,
             "New-Item -ItemType Directory -Force -Path ./TestResults",
+            "Select-String -Path $firstLogPath",
+            "$capturedOutput.Add($line)",
+            "return [int]$exitCode",
+            "[System.IO.File]::WriteAllLines($LogPath, [string[]]$capturedOutput)",
+            "$firstExitCode",
+            "$retryExitCode",
             "Tee-Object",
             "steps.lane.outputs.primary_lane",
             "matrix.test-framework");
@@ -517,7 +536,7 @@ public class CiWorkflowTests
     }
 
     [Fact]
-    public void TestingGuide_DocumentsSharedStateParallelismInventory()
+    public void TestingGuide_DocumentsSharedStateParallelismInventoryAndBoundedCiOutput()
     {
         var guide = RepositoryTestPaths.ReadText("TESTING_GUIDE.md");
 
@@ -533,6 +552,10 @@ public class CiWorkflowTests
             "RUNNER_TEMP",
             ".github/scripts/run-dotnet-tests.ps1",
             ".github/scripts/configure-windows-test-host.ps1",
+            "retain only the final 2,000 lines",
+            "exactly one structured result",
+            "末尾2,000行だけを保持",
+            "単一の構造化結果",
             "共有状態と並列実行の監査");
     }
 
