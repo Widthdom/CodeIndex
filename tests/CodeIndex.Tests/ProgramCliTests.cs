@@ -605,37 +605,9 @@ public class ProgramCliTests
     }
 
     [ProductionRuntimeFact]
-    public void ExportImportArchive_RestoresCodeIndexDatabase()
+    public void ExportImportArchive_SharesMetadataRichPristineAcrossSuccessPaths_Issue3549()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_export_archive");
-        try
-        {
-            var sourceDbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(sourceDbPath, "src/app.cs", "csharp", "class App { void Run() {} }\n");
-            var archivePath = Path.Combine(projectRoot, "codeindex.cdidx.zip");
-            var importedDbPath = Path.Combine(projectRoot, "imported", "codeindex.db");
-
-            var (exportExit, _, exportStderr) = RunCliInSubprocess(["export", archivePath, "--db", sourceDbPath]);
-            var (importExit, importStdout, importStderr) = RunCliInSubprocess(["import", archivePath, "--db", importedDbPath]);
-
-            Assert.True(exportExit == 0, exportStderr);
-            Assert.Equal(string.Empty, exportStderr);
-            Assert.True(importExit == 0, importStderr);
-            Assert.Equal(string.Empty, importStderr);
-            Assert.Contains("Imported CodeIndex database", importStdout);
-            Assert.True(File.Exists(importedDbPath));
-            Assert.True(DbContext.TryValidateExistingCodeIndexDb(importedDbPath, out _, out _));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [ProductionRuntimeFact]
-    public void ExportArchive_ManifestIncludesReadinessAndSummaryMetadata_Issue3549()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_export_manifest_metadata");
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_archive_success_paths");
         try
         {
             var sourceDbPath = TestProjectHelper.CreateProjectDb(projectRoot);
@@ -659,35 +631,120 @@ public class ProgramCliTests
                 writer.SetMeta(DbContext.UnknownExtensionFilePathLimitMetaKey, "50");
             }
 
-            var archivePath = Path.Combine(projectRoot, "codeindex.cdidx.zip");
+            var pristineArchivePath = Path.Combine(projectRoot, "pristine.cdidx.zip");
+            var defaultImportDbPath = Path.Combine(projectRoot, "default-import", "codeindex.db");
+            var legacyArchivePath = Path.Combine(projectRoot, "legacy.cdidx.zip");
+            var legacyImportDbPath = Path.Combine(projectRoot, "legacy-import", "codeindex.db");
+            var noBackupDbPath = Path.Combine(projectRoot, "no-backup-replacement", "codeindex.db");
 
-            var (exportExit, _, exportStderr) = RunCliInSubprocess(["export", archivePath, "--db", sourceDbPath]);
+            var (exportExit, _, exportStderr) = RunCliInSubprocess(["export", pristineArchivePath, "--db", sourceDbPath]);
 
             Assert.True(exportExit == 0, exportStderr);
             Assert.Equal(string.Empty, exportStderr);
-            using var archive = ZipFile.OpenRead(archivePath);
-            var manifestEntry = archive.GetEntry("manifest.json")
-                ?? throw new InvalidOperationException("manifest.json entry was not found");
-            using var document = JsonDocument.Parse(manifestEntry.Open());
-            var root = document.RootElement;
-            Assert.Equal(1, root.GetProperty("file_count").GetInt64());
-            Assert.True(root.GetProperty("chunk_count").GetInt64() >= 1);
-            Assert.True(root.GetProperty("symbol_count").GetInt64() >= 1);
-            Assert.True(root.GetProperty("reference_count").GetInt64() >= 0);
-            Assert.Equal("test-writer", root.GetProperty("index_writer_version").GetString());
-            Assert.Equal("main", root.GetProperty("indexed_head_branch").GetString());
-            Assert.Equal("2026-06-11T00:00:00Z", root.GetProperty("indexed_head_timestamp").GetString());
-            Assert.Equal(1, root.GetProperty("codeindex_meta_schema_version").GetInt32());
-            Assert.Equal(2, root.GetProperty("csharp_symbol_name_contract_version").GetInt32());
-            Assert.Equal(1, root.GetProperty("sql_graph_contract_version").GetInt32());
-            Assert.Equal(2, root.GetProperty("hotspot_family_version").GetInt32());
-            Assert.Equal(2, root.GetProperty("unknown_extension_file_count").GetInt64());
-            Assert.False(root.GetProperty("unknown_extension_files_truncated").GetBoolean());
-            Assert.Equal(50, root.GetProperty("unknown_extension_file_path_limit").GetInt32());
-            Assert.Equal("tools/custom.foo", root.GetProperty("unknown_extension_files")[0].GetString());
-            Assert.Equal(JsonValueKind.True, root.GetProperty("graph_ready").ValueKind);
-            Assert.Equal(JsonValueKind.True, root.GetProperty("issues_ready").ValueKind);
-            Assert.Equal(JsonValueKind.True, root.GetProperty("fold_ready").ValueKind);
+
+            using (var archive = ZipFile.OpenRead(pristineArchivePath))
+            {
+                var manifestEntry = archive.GetEntry("manifest.json")
+                    ?? throw new InvalidOperationException("manifest.json entry was not found");
+                using var manifestStream = manifestEntry.Open();
+                using var document = JsonDocument.Parse(manifestStream);
+                var root = document.RootElement;
+                Assert.Equal(1, root.GetProperty("file_count").GetInt64());
+                Assert.True(root.GetProperty("chunk_count").GetInt64() >= 1);
+                Assert.True(root.GetProperty("symbol_count").GetInt64() >= 1);
+                Assert.True(root.GetProperty("reference_count").GetInt64() >= 0);
+                Assert.Equal("test-writer", root.GetProperty("index_writer_version").GetString());
+                Assert.Equal("main", root.GetProperty("indexed_head_branch").GetString());
+                Assert.Equal("2026-06-11T00:00:00Z", root.GetProperty("indexed_head_timestamp").GetString());
+                Assert.Equal(1, root.GetProperty("codeindex_meta_schema_version").GetInt32());
+                Assert.Equal(2, root.GetProperty("csharp_symbol_name_contract_version").GetInt32());
+                Assert.Equal(1, root.GetProperty("sql_graph_contract_version").GetInt32());
+                Assert.Equal(2, root.GetProperty("hotspot_family_version").GetInt32());
+                Assert.Equal(2, root.GetProperty("unknown_extension_file_count").GetInt64());
+                Assert.False(root.GetProperty("unknown_extension_files_truncated").GetBoolean());
+                Assert.Equal(50, root.GetProperty("unknown_extension_file_path_limit").GetInt32());
+                Assert.Equal("tools/custom.foo", root.GetProperty("unknown_extension_files")[0].GetString());
+                Assert.Equal(JsonValueKind.True, root.GetProperty("graph_ready").ValueKind);
+                Assert.Equal(JsonValueKind.True, root.GetProperty("issues_ready").ValueKind);
+                Assert.Equal(JsonValueKind.True, root.GetProperty("fold_ready").ValueKind);
+            }
+
+            var (defaultImportExit, defaultImportStdout, defaultImportStderr) = RunCliInSubprocess([
+                "import", pristineArchivePath, "--db", defaultImportDbPath
+            ]);
+
+            Assert.True(defaultImportExit == 0, defaultImportStderr);
+            Assert.Equal(string.Empty, defaultImportStderr);
+            Assert.Contains("Imported CodeIndex database", defaultImportStdout);
+            Assert.True(File.Exists(defaultImportDbPath));
+            Assert.True(DbContext.TryValidateExistingCodeIndexDb(defaultImportDbPath, out _, out _));
+
+            File.Copy(pristineArchivePath, legacyArchivePath);
+            RemoveManifestProperties(
+                legacyArchivePath,
+                "file_count",
+                "chunk_count",
+                "symbol_count",
+                "reference_count",
+                "graph_ready",
+                "issues_ready",
+                "fold_ready",
+                "index_writer_version",
+                "indexed_head_branch",
+                "indexed_head_timestamp",
+                "codeindex_meta_schema_version",
+                "csharp_symbol_name_contract_version",
+                "sql_graph_contract_version",
+                "hotspot_family_version",
+                "unknown_extension_file_count",
+                "unknown_extension_files",
+                "unknown_extension_files_truncated",
+                "unknown_extension_file_path_limit",
+                "unknown_extension_file_sample_count",
+                "unknown_extension_file_sample_limit",
+                "unknown_extension_file_sample_truncated");
+            var (legacyImportExit, legacyImportStdout, legacyImportStderr) = RunCliInSubprocess([
+                "import", legacyArchivePath, "--db", legacyImportDbPath, "--json"
+            ]);
+
+            Assert.True(legacyImportExit == CommandExitCodes.Success, legacyImportStdout);
+            Assert.Equal(string.Empty, legacyImportStderr);
+            Assert.True(File.Exists(legacyImportDbPath));
+            using (var legacyDocument = JsonDocument.Parse(legacyImportStdout))
+            {
+                var legacyRoot = legacyDocument.RootElement;
+                Assert.Equal("1", legacyRoot.GetProperty("api_version").GetString());
+                Assert.Equal("success", legacyRoot.GetProperty("status").GetString());
+                Assert.Equal(Path.GetFullPath(legacyArchivePath), legacyRoot.GetProperty("archive_path").GetString());
+                Assert.Equal(Path.GetFullPath(legacyImportDbPath), legacyRoot.GetProperty("db_path").GetString());
+                Assert.Equal("import", legacyRoot.GetProperty("mode").GetString());
+                Assert.False(legacyRoot.GetProperty("dry_run").GetBoolean());
+                var phases = legacyRoot.GetProperty("validation_phases")
+                    .EnumerateArray()
+                    .ToDictionary(
+                        phase => phase.GetProperty("phase").GetString()!,
+                        phase => phase.GetProperty("status").GetString()!,
+                        StringComparer.Ordinal);
+                Assert.Equal("success", phases["open_archive"]);
+                Assert.Equal("success", phases["manifest"]);
+                Assert.Equal("success", phases["database_entry"]);
+                Assert.Equal("success", phases["sha256"]);
+                Assert.Equal("success", phases["sqlite_validate"]);
+                Assert.Equal("success", phases["replace_db"]);
+            }
+
+            Directory.CreateDirectory(Path.GetDirectoryName(noBackupDbPath)!);
+            File.WriteAllText(noBackupDbPath, "old");
+            File.WriteAllText(noBackupDbPath + "-wal", "old wal");
+            File.WriteAllText(noBackupDbPath + "-shm", "old shm");
+            var (noBackupImportExit, _, noBackupImportStderr) = RunCliInSubprocess([
+                "import", pristineArchivePath, "--db", noBackupDbPath, "--no-backup"
+            ]);
+
+            Assert.True(noBackupImportExit == 0, noBackupImportStderr);
+            Assert.False(File.Exists(noBackupDbPath + "-wal"));
+            Assert.False(File.Exists(noBackupDbPath + "-shm"));
+            Assert.True(DbContext.TryValidateExistingCodeIndexDb(noBackupDbPath, out _, out _));
         }
         finally
         {
@@ -760,71 +817,6 @@ public class ProgramCliTests
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
             TestProjectHelper.DeleteDirectory(replacementRoot);
-        }
-    }
-
-    [ProductionRuntimeFact]
-    public void ImportArchive_AcceptsOlderManifestWithoutSummaryMetadata_Issue3549()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_import_old_manifest");
-        try
-        {
-            var sourceDbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(sourceDbPath, "src/app.cs", "csharp", "class App { void Run() {} }\n");
-            var archivePath = Path.Combine(projectRoot, "codeindex.cdidx.zip");
-            var importedDbPath = Path.Combine(projectRoot, "imported", "codeindex.db");
-
-            var (exportExit, _, exportStderr) = RunCliInSubprocess(["export", archivePath, "--db", sourceDbPath]);
-            RemoveManifestProperties(
-                archivePath,
-                "file_count",
-                "chunk_count",
-                "symbol_count",
-                "reference_count",
-                "graph_ready",
-                "issues_ready",
-                "fold_ready",
-                "index_writer_version",
-                "indexed_head_branch",
-                "indexed_head_timestamp",
-                "codeindex_meta_schema_version",
-                "csharp_symbol_name_contract_version",
-                "sql_graph_contract_version",
-                "hotspot_family_version",
-                "unknown_extension_file_count",
-                "unknown_extension_files",
-                "unknown_extension_files_truncated",
-                "unknown_extension_file_path_limit");
-            var (importExit, importStdout, importStderr) = RunCliInSubprocess(["import", archivePath, "--db", importedDbPath, "--json"]);
-
-            Assert.True(exportExit == 0, exportStderr);
-            Assert.Equal(CommandExitCodes.Success, importExit);
-            Assert.Equal(string.Empty, importStderr);
-            Assert.True(File.Exists(importedDbPath));
-            using var document = JsonDocument.Parse(importStdout);
-            var root = document.RootElement;
-            Assert.Equal("1", root.GetProperty("api_version").GetString());
-            Assert.Equal("success", root.GetProperty("status").GetString());
-            Assert.Equal(Path.GetFullPath(archivePath), root.GetProperty("archive_path").GetString());
-            Assert.Equal(Path.GetFullPath(importedDbPath), root.GetProperty("db_path").GetString());
-            Assert.Equal("import", root.GetProperty("mode").GetString());
-            Assert.False(root.GetProperty("dry_run").GetBoolean());
-            var phases = root.GetProperty("validation_phases")
-                .EnumerateArray()
-                .ToDictionary(
-                    phase => phase.GetProperty("phase").GetString()!,
-                    phase => phase.GetProperty("status").GetString()!,
-                    StringComparer.Ordinal);
-            Assert.Equal("success", phases["open_archive"]);
-            Assert.Equal("success", phases["manifest"]);
-            Assert.Equal("success", phases["database_entry"]);
-            Assert.Equal("success", phases["sha256"]);
-            Assert.Equal("success", phases["sqlite_validate"]);
-            Assert.Equal("success", phases["replace_db"]);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }
 
@@ -948,38 +940,6 @@ public class ProgramCliTests
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
             Assert.Contains("must not be the source database", stderr);
             Assert.True(DbContext.TryValidateExistingCodeIndexDb(dbPath, out _, out _));
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [ProductionRuntimeFact]
-    public void ImportArchive_RemovesStaleDestinationSidecars()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_import_sidecars");
-        try
-        {
-            var sourceDbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(sourceDbPath, "src/app.cs", "csharp", "class App { void Run() {} }\n");
-            var archivePath = Path.Combine(projectRoot, "codeindex.cdidx.zip");
-            var destinationDbPath = Path.Combine(projectRoot, "destination", "codeindex.db");
-            Directory.CreateDirectory(Path.GetDirectoryName(destinationDbPath)!);
-            File.WriteAllText(destinationDbPath, "old");
-            File.WriteAllText(destinationDbPath + "-wal", "old wal");
-            File.WriteAllText(destinationDbPath + "-shm", "old shm");
-
-            var (exportExit, _, exportStderr) = RunCliInSubprocess(["export", archivePath, "--db", sourceDbPath]);
-            var (importExit, _, importStderr) = RunCliInSubprocess([
-                "import", archivePath, "--db", destinationDbPath, "--no-backup"
-            ]);
-
-            Assert.True(exportExit == 0, exportStderr);
-            Assert.True(importExit == 0, importStderr);
-            Assert.False(File.Exists(destinationDbPath + "-wal"));
-            Assert.False(File.Exists(destinationDbPath + "-shm"));
-            Assert.True(DbContext.TryValidateExistingCodeIndexDb(destinationDbPath, out _, out _));
         }
         finally
         {
