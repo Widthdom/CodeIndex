@@ -209,66 +209,68 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_JavaGenericCallableSignatures_DoNotEmitTypeParameterReferences()
+    public void Extract_JavaGenericParameters_AcrossSupportedPositions_DoNotEmitTypeReferences()
     {
+        // Keep every generic position in one extraction, but use form-specific names so a
+        // positive from one declaration cannot hide a missing edge or leaked parameter in another.
+        // generic の各位置を1回の抽出で検証しつつ、形式ごとに固有名を使い、別宣言の正例で
+        // edge 欠落や parameter 漏出が隠れないようにする。
         const string content = """
             package demo;
 
-            interface Comparable<T> {}
-            class Payload {}
-
-            class Demo {
-                public <T extends Comparable<T>> T pick(T input, Comparable<T> fallback) {
+            interface CallableComparable<TCallable> {}
+            class CallableDemo {
+                public <TCallable extends CallableComparable<TCallable>> TCallable pick(TCallable input, CallableComparable<TCallable> fallback) {
                     return input;
+                }
+            }
+
+            interface HeritageComparable<THeritage> {}
+            class HeritageBase<THeritage> {}
+            interface HeritageHandler<THeritage> {}
+            class HeritageBox<THeritage extends HeritageComparable<THeritage>> extends HeritageBase<THeritage> implements HeritageHandler<THeritage> {}
+
+            class ThrowsFailure extends Exception {}
+            class ThrowsDemo {
+                public <EThrows extends ThrowsFailure> void run() throws EThrows {}
+            }
+
+            class BoundRoot {}
+            interface BoundMarker {}
+            class BoundWrapper<TClassBound> {}
+            class BoundDemo<TClassBound extends BoundRoot & BoundMarker> {
+                <UMethodBound extends BoundWrapper<BoundRoot>> UMethodBound resolve(UMethodBound value) {
+                    return value;
                 }
             }
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "java", content);
-        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+        var (_, references) = ExtractSymbolsAndReferences("java", content);
 
-        Assert.Contains(references, r => r.SymbolName == "Comparable" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "T" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_JavaGenericHeritage_DoNotEmitTypeParameterReferences()
-    {
-        const string content = """
-            package demo;
-
-            interface Comparable<T> {}
-            class Base<T> {}
-            interface Handler<T> {}
-            class Box<T extends Comparable<T>> extends Base<T> implements Handler<T> {}
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "java", content);
-        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
-
-        Assert.Contains(references, r => r.SymbolName == "Comparable" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Base" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Handler" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "T" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_JavaGenericThrows_DoNotEmitTypeParameterReferences()
-    {
-        const string content = """
-            package demo;
-
-            class Failure extends Exception {}
-            class Demo {
-                public <E extends Failure> void run() throws E {}
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "java", content);
-        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
-
-        Assert.Contains(references, r => r.SymbolName == "Failure" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "E" && r.ReferenceKind == "type_reference");
+        AssertReferencesContain(
+            references,
+            "type_reference",
+            null,
+            "CallableComparable",
+            "HeritageComparable",
+            "HeritageBase",
+            "HeritageHandler",
+            "ThrowsFailure",
+            "BoundRoot",
+            "BoundMarker",
+            "BoundWrapper");
+        var boundRootCount = references.Count(reference =>
+            reference.SymbolName == "BoundRoot"
+            && reference.ReferenceKind == "type_reference");
+        Assert.True(boundRootCount >= 2, $"Expected at least 2 BoundRoot type references, got {boundRootCount}.");
+        AssertReferencesDoNotContain(
+            references,
+            "type_reference",
+            "TCallable",
+            "THeritage",
+            "EThrows",
+            "TClassBound",
+            "UMethodBound");
     }
 
     [Fact]
@@ -858,169 +860,98 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_KotlinBacktickTypeReferences_NormalizesNames()
+    public void Extract_KotlinBacktickReferences_AcrossSupportedForms_NormalizeNames()
     {
-        // Kotlin declaration names already strip source-only backticks; type-position
-        // references need the same canonical name so dependency search joins them.
-        // Kotlin の宣言名は source-only な backtick を外しているため、型位置参照も同じ
-        // canonical 名で発行し、依存検索で宣言と結合できるようにする。
+        // Backticks are source syntax across type positions, class literals, callable
+        // references, constructors, and annotations. Unique names keep each form observable.
+        // backtick は型位置、class literal、callable reference、constructor、annotation に
+        // またがる source syntax である。形式ごとの固有名により各契約を独立して観測する。
         const string content = """
-            class `Display Name`
-            class Holder<T>
+            class `Backtick Type`
+            class BacktickHolder<T>
 
-            class Demo {
-                val first: `Display Name` = TODO()
-                val second: Holder<`Display Name`> = TODO()
-                val third: `Display Name`? = null
+            class `Backtick Literal`
+
+            class `Backtick Owner` {
+                fun ownerRender() {}
+            }
+
+            class CallableOwner {
+                fun `backtick call`() {}
+            }
+
+            class `Backtick Constructor`
+
+            annotation class `Backtick Annotation`(val value: String = "")
+            class AnnotationPayload
+
+            class BacktickDemo {
+                val first: `Backtick Type` = TODO()
+                val second: BacktickHolder<`Backtick Type`> = TODO()
+                val third: `Backtick Type`? = null
+                val literal = `Backtick Literal`::class
+                val ownerHandler = `Backtick Owner`::ownerRender
+                val callableHandler = CallableOwner::`backtick call`
+                val constructed = `Backtick Constructor`()
+            }
+
+            @`Backtick Annotation`
+            class AnnotatedBacktickTarget {
+                @`Backtick Annotation`("x")
+                fun annotated(input: @`Backtick Annotation` AnnotationPayload) {}
             }
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
-        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+        var (symbols, references) = ExtractSymbolsAndReferences("kotlin", content);
 
-        Assert.Contains(symbols, s => s.Name == "Display Name" && s.Kind == "class");
-        var displayNameTypeReferenceCount = references.Count(r => r.SymbolName == "Display Name" && r.ReferenceKind == "type_reference");
-        Assert.True(
-            displayNameTypeReferenceCount >= 3,
-            $"Expected at least 3 Display Name type references, got {displayNameTypeReferenceCount}.");
-        Assert.Contains(references, r => r.SymbolName == "Holder" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "`Display Name`" && r.ReferenceKind == "type_reference");
-    }
+        foreach (var className in new[]
+        {
+            "Backtick Type",
+            "Backtick Literal",
+            "Backtick Owner",
+            "Backtick Constructor",
+            "Backtick Annotation",
+        })
+        {
+            Assert.Contains(symbols, symbol => symbol.Name == className && symbol.Kind == "class");
+        }
+        Assert.Contains(symbols, symbol => symbol.Name == "backtick call" && symbol.Kind == "function");
 
-    [Fact]
-    public void Extract_KotlinBacktickClassLiterals_NormalizesTypeReferenceNames()
-    {
-        // Kotlin class literals can target backticked type names too; keep them aligned with
-        // the declaration's canonical name instead of treating the backticks as a string.
-        // Kotlin の class literal でも backtick 付き型名を対象にできるため、backtick を
-        // 文字列扱いせず、宣言側と同じ canonical 名で参照を発行する。
-        const string content = """
-            class `Display Name`
+        var backtickTypeCount = references.Count(reference =>
+            reference.SymbolName == "Backtick Type"
+            && reference.ReferenceKind == "type_reference");
+        Assert.True(backtickTypeCount >= 3, $"Expected at least 3 Backtick Type references, got {backtickTypeCount}.");
+        AssertReferencesContain(
+            references,
+            "type_reference",
+            null,
+            "BacktickHolder",
+            "Backtick Literal",
+            "Backtick Owner",
+            "CallableOwner");
+        AssertReferencesContain(references, "call", null, "ownerRender");
+        AssertReferencesContain(references, "instantiate", null, "Backtick Constructor");
 
-            class Demo {
-                val token = `Display Name`::class
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
-        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
-
-        Assert.Contains(symbols, s => s.Name == "Display Name" && s.Kind == "class");
-        Assert.Contains(references, r => r.SymbolName == "Display Name" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "`Display Name`" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_KotlinBacktickMethodReferenceOwners_CaptureTypeReference()
-    {
-        // JVM method references already emit owner type edges for Java/Kotlin; Kotlin backtick
-        // owners need the same canonical name handling as declarations and type positions.
-        // JVM method reference の owner 型 edge は Java/Kotlin で発行しているため、
-        // Kotlin の backtick owner でも宣言・型位置と同じ canonical 名に揃える。
-        const string content = """
-            class `Display Name` {
-                fun render() {}
-            }
-
-            class Demo {
-                val handler = `Display Name`::render
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
-        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
-
-        Assert.Contains(symbols, s => s.Name == "Display Name" && s.Kind == "class");
-        Assert.Contains(references, r => r.SymbolName == "Display Name" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "render" && r.ReferenceKind == "call");
-        Assert.DoesNotContain(references, r => r.SymbolName == "`Display Name`" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_KotlinBacktickMethodReferenceNames_NormalizesCallNames()
-    {
-        // Backticked Kotlin callable names are source syntax; method-reference call edges should
-        // use the same canonical name as the callable declaration.
-        // Kotlin callable 名の backtick は source syntax なので、method reference の call edge も
-        // 宣言側と同じ canonical 名で発行する。
-        const string content = """
-            class User {
-                fun `render name`() {}
-            }
-
-            class Demo {
-                val handler = User::`render name`
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
-        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
-
-        Assert.Contains(symbols, s => s.Name == "render name" && s.Kind == "function");
-        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
-        var renderReference = Assert.Single(references.Where(r =>
-            r.SymbolName == "render name"
-            && r.ReferenceKind == "call"));
-        var renderLine = content
+        var callableReference = Assert.Single(references.Where(reference =>
+            reference.SymbolName == "backtick call"
+            && reference.ReferenceKind == "call"));
+        var callableLine = content
             .Split('\n')
-            .Single(line => line.Contains("`render name`", StringComparison.Ordinal)
+            .Single(line => line.Contains("`backtick call`", StringComparison.Ordinal)
                 && line.Contains("::", StringComparison.Ordinal));
         Assert.Equal(
-            renderLine.IndexOf("`render name`", StringComparison.Ordinal) + 1,
-            renderReference.Column);
-        Assert.Equal("`render name`".Length, renderReference.SpanLength);
-        Assert.DoesNotContain(references, r => r.SymbolName == "`render name`" && r.ReferenceKind == "call");
-    }
+            callableLine.IndexOf("`backtick call`", StringComparison.Ordinal) + 1,
+            callableReference.Column);
+        Assert.Equal("`backtick call`".Length, callableReference.SpanLength);
 
-    [Fact]
-    public void Extract_KotlinBacktickConstructorCalls_NormalizesInstantiateNames()
-    {
-        // Backticked Kotlin class names should behave like ordinary constructor calls: the
-        // instantiate edge uses the canonical class symbol name.
-        // backtick 付き Kotlin class 名の constructor call も通常の constructor call と同様に、
-        // canonical class symbol 名で instantiate edge を発行する。
-        const string content = """
-            class `Display Name`
-
-            class Demo {
-                val value = `Display Name`()
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
-        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
-
-        Assert.Contains(symbols, s => s.Name == "Display Name" && s.Kind == "class");
-        Assert.Contains(references, r => r.SymbolName == "Display Name" && r.ReferenceKind == "instantiate");
-        Assert.DoesNotContain(references, r => r.SymbolName == "`Display Name`" && r.ReferenceKind == "instantiate");
-    }
-
-    [Fact]
-    public void Extract_KotlinBacktickAnnotations_NormalizesNames()
-    {
-        // Kotlin annotations can be backticked declarations; metadata references should keep
-        // the canonical annotation symbol name for both no-arg and argument forms.
-        // Kotlin annotation も backtick 付き宣言にできるため、引数なし・引数ありの metadata
-        // reference でも canonical annotation symbol 名を使う。
-        const string content = """
-            annotation class `Fancy Name`(val value: String = "")
-
-            @`Fancy Name`
-            class Demo {
-                @`Fancy Name`("x")
-                fun run(input: @`Fancy Name` Payload) {}
-            }
-
-            class Payload
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
-        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
-
-        Assert.Contains(symbols, s => s.Name == "Fancy Name" && s.Kind == "class");
-        Assert.True(references.Count(r => r.SymbolName == "Fancy Name" && r.ReferenceKind == "annotation") >= 3);
-        Assert.DoesNotContain(references, r => r.SymbolName == "`Fancy Name`" && r.ReferenceKind == "annotation");
-        Assert.DoesNotContain(references, r => r.SymbolName == "Fancy Name" && r.ReferenceKind == "type_reference");
+        var annotationCount = references.Count(reference =>
+            reference.SymbolName == "Backtick Annotation"
+            && reference.ReferenceKind == "annotation");
+        Assert.True(annotationCount >= 3, $"Expected at least 3 Backtick Annotation references, got {annotationCount}.");
+        AssertReferencesDoNotContain(references, "type_reference", "Backtick Annotation");
+        Assert.DoesNotContain(
+            references,
+            reference => reference.SymbolName.Contains("`", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -1048,110 +979,65 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_KotlinVarianceTypeArguments_DoNotBecomeTypeReferences()
+    public void Extract_KotlinGenericPseudoTypes_AcrossSupportedPositions_DoNotEmitTypeReferences()
     {
+        // Variance keywords and generic parameters are syntax, while their real bound/operator/
+        // literal types remain dependencies. Unique names make every position independently visible.
+        // variance keyword と generic parameter は構文であり、実際の bound / operator / literal 型は
+        // 依存として残る。形式ごとの固有名により各位置を独立して観測する。
         const string content = """
-            interface Producer<T>
-            interface Consumer<T>
-            class Payload
+            interface VarianceProducer<TVariance>
+            interface VarianceConsumer<TVariance>
+            class VariancePayload
 
-            class Demo {
-                val produced: Producer<out Payload>? = null
-                val consumed: Consumer<in Payload>? = null
+            class VarianceDemo {
+                val produced: VarianceProducer<out VariancePayload>? = null
+                val consumed: VarianceConsumer<in VariancePayload>? = null
             }
+
+            interface BoundComparable<TBound>
+            interface BoundHandler<TBound>
+            class BoundPayload
+            class BoundBox<out TBound : BoundComparable<TBound>>
+            fun <reified TBound> boundedRun(input: TBound): BoundHandler<TBound> where TBound : BoundPayload, TBound : BoundHandler<TBound> = TODO()
+
+            class OperatorUser
+            inline fun <reified TOperator> accepts(value: Any): Boolean = value is TOperator
+            fun parse(value: Any): OperatorUser = value as OperatorUser
+
+            class LiteralUser
+            inline fun <reified TLiteral> genericKClass() = TLiteral::class
+            fun literalUserKClass() = LiteralUser::class
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
-        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
+        var (_, references) = ExtractSymbolsAndReferences("kotlin", content);
 
-        Assert.Contains(references, r => r.SymbolName == "Producer" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Consumer" && r.ReferenceKind == "type_reference");
-        Assert.True(references.Count(r => r.SymbolName == "Payload" && r.ReferenceKind == "type_reference") >= 2);
-        Assert.DoesNotContain(references, r => (r.SymbolName is "in" or "out") && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_KotlinGenericBounds_DoNotEmitTypeParameterReferences()
-    {
-        const string content = """
-            interface Comparable<T>
-            interface Handler<T>
-            class Payload
-            class Box<out T : Comparable<T>>
-
-            fun <reified T> run(input: T): Handler<T> where T : Payload, T : Handler<T> = TODO()
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
-        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
-
-        Assert.Contains(references, r => r.SymbolName == "Comparable" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Payload" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Handler" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "T" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_KotlinGenericTypeOperators_DoNotEmitTypeParameterReferences()
-    {
-        const string content = """
-            class User
-
-            inline fun <reified T> accepts(value: Any): Boolean = value is T
-            fun parse(value: Any): User = value as User
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
-        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
-
-        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "T" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_KotlinGenericClassLiterals_DoNotEmitTypeParameterReferences()
-    {
-        const string content = """
-            class User
-
-            inline fun <reified T> genericKClass() = T::class
-            fun userKClass() = User::class
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "kotlin", content);
-        var references = ReferenceExtractor.Extract(1, "kotlin", content, symbols);
-
-        Assert.Contains(references, r => r.SymbolName == "User" && r.ReferenceKind == "type_reference");
-        Assert.DoesNotContain(references, r => r.SymbolName == "T" && r.ReferenceKind == "type_reference");
-    }
-
-    [Fact]
-    public void Extract_JavaGenericBounds_CaptureRealBoundsAndIgnoreParameterNames()
-    {
-        // Regression for issue #642: Java generic type-parameter bounds should emit the real
-        // bound types, including nested generic bounds, while keeping the parameter names out
-        // of the type_reference graph.
-        // issue #642 回帰: Java の generic type-parameter bounds は、ネストした generic bound
-        // を含めて実際の bound 型を拾いつつ、parameter 名は type_reference graph に出さないこと。
-        const string content = """
-            class Root {}
-            interface Bound {}
-            class Wrapper<T> {}
-
-            class Demo<T extends Root & Bound> {
-                <U extends Wrapper<Root>> U run(U value) {
-                    return value;
-                }
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "java", content);
-        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
-
-        Assert.Contains(references, r => r.SymbolName == "Root" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Bound" && r.ReferenceKind == "type_reference");
-        Assert.Contains(references, r => r.SymbolName == "Wrapper" && r.ReferenceKind == "type_reference");
-        Assert.True(references.Count(r => r.SymbolName == "Root" && r.ReferenceKind == "type_reference") >= 2);
+        AssertReferencesContain(
+            references,
+            "type_reference",
+            null,
+            "VarianceProducer",
+            "VarianceConsumer",
+            "BoundComparable",
+            "BoundPayload",
+            "BoundHandler",
+            "OperatorUser",
+            "LiteralUser");
+        var variancePayloadCount = references.Count(reference =>
+            reference.SymbolName == "VariancePayload"
+            && reference.ReferenceKind == "type_reference");
+        Assert.True(
+            variancePayloadCount >= 2,
+            $"Expected at least 2 VariancePayload type references, got {variancePayloadCount}.");
+        AssertReferencesDoNotContain(
+            references,
+            "type_reference",
+            "in",
+            "out",
+            "TVariance",
+            "TBound",
+            "TOperator",
+            "TLiteral");
     }
 
     [Fact]
@@ -1226,121 +1112,155 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_JavaCtorChain_SameLineBody_RewritesToBaseClass()
+    public void Extract_JavaSameLineConstructors_AcrossSupportedForms_PreserveChainsAndContainers()
     {
-        // Same-line ctor bodies like `Leaf(int x){super(x);}` do not match
-        // SymbolExtractor's enum-member regex (line ends with `}`, not `{`/`,`/`;`),
-        // so no function symbol is emitted. The chain rewrite must synthesize a
-        // ctor container from the line text and attribute super(x)/this(0) correctly.
-        // 同一行に本体を書くコンストラクタは SymbolExtractor で関数シンボルが作られないため、
-        // chain 書き換えは行テキストから ctor コンテナを合成して super/this を拾う必要がある。
+        // Same-line Java constructors require synthetic function containers across modifiers,
+        // annotations, generic bounds, quoted arguments, and ordinary body calls. Form-specific
+        // base/leaf names keep every chain and suppression contract independently observable.
+        // 同一行 Java ctor は modifier、annotation、generic bound、quote 付き引数、通常 body call
+        // をまたいで合成 function container を必要とする。形式ごとの base / leaf 名で各契約を分離する。
         const string content = """
             package demo;
 
-            public class Root {
-                public Root(int x) {}
-                Root() {}
+            class PlainBase {
+                public PlainBase(int value) {}
+                PlainBase() {}
+            }
+            class PlainPublicLeaf extends PlainBase {
+                public PlainPublicLeaf(int value){super(value);}
+                public PlainPublicLeaf(){this(0);}
+            }
+            class PlainPackageLeaf extends PlainBase {
+                PlainPackageLeaf(int value){super(value);}
+                PlainPackageLeaf(){this(0);}
             }
 
-            class PublicLeaf extends Root {
-                public PublicLeaf(int x){super(x);}
-                public PublicLeaf(){this(0);}
+            class LeadingBase {
+                LeadingBase(int value) {}
+            }
+            class LeadingLeaf extends LeadingBase {
+                @Deprecated LeadingLeaf(int value){super(value);}
+                @SuppressWarnings("unused") LeadingLeaf(long value){super((int) value);}
             }
 
-            class PackageLeaf extends Root {
-                PackageLeaf(int x){super(x);}
-                PackageLeaf(){this(0);}
+            class GenericCtorBase {
+                GenericCtorBase(int value) {}
             }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "java", content);
-        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
-
-        var publicSuper = Assert.Single(references, r =>
-            r.SymbolName == "Root" && r.ContainerName == "PublicLeaf" && r.ContainerKind == "function");
-        Assert.Equal("call", publicSuper.ReferenceKind);
-
-        var publicThis = Assert.Single(references, r =>
-            r.SymbolName == "PublicLeaf" && r.ContainerName == "PublicLeaf" && r.ContainerKind == "function");
-        Assert.Equal("call", publicThis.ReferenceKind);
-
-        var packageSuper = Assert.Single(references, r =>
-            r.SymbolName == "Root" && r.ContainerName == "PackageLeaf" && r.ContainerKind == "function");
-        Assert.Equal("call", packageSuper.ReferenceKind);
-
-        var packageThis = Assert.Single(references, r =>
-            r.SymbolName == "PackageLeaf" && r.ContainerName == "PackageLeaf" && r.ContainerKind == "function");
-        Assert.Equal("call", packageThis.ReferenceKind);
-
-        Assert.DoesNotContain(references, r => r.SymbolName == "super");
-        Assert.DoesNotContain(references, r => r.SymbolName == "this");
-    }
-
-    [Fact]
-    public void Extract_JavaCtorChain_SameLineBody_WithLeadingAnnotation_RewritesToBaseClass()
-    {
-        // Same-line ctor bodies can be preceded by annotations (with or without argument
-        // lists), e.g. `@Deprecated Leaf(int x){super(x);}` or
-        // `@SuppressWarnings("unused") Leaf(int x){super(x);}`.
-        // The synthesis regex must accept the leading annotation so the chain rewrite still
-        // finds a ctor container.
-        // 同一行 ctor 本体の直前にアノテーションが付く形（引数あり/なし）も、合成コンテナ生成で
-        // 取りこぼしてはならない。
-        const string content = """
-            package demo;
-
-            public class Root {
-                public Root(int x) {}
+            class GenericCtorLeaf extends GenericCtorBase {
+                public <TGeneric> GenericCtorLeaf(TGeneric value){super(0);}
+                <TBound extends Number> GenericCtorLeaf(TBound value, int fallback){super(fallback);}
             }
 
-            class Leaf extends Root {
-                @Deprecated Leaf(int x){super(x);}
-                @SuppressWarnings("unused") Leaf(long x){super((int) x);}
+            @interface QualifiedAnn {}
+            class QualifiedBase {
+                QualifiedBase(int value) {}
             }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "java", content);
-        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
-
-        var rootRefs = references.Where(r =>
-            r.SymbolName == "Root" && r.ContainerName == "Leaf" && r.ContainerKind == "function").ToList();
-        Assert.Equal(2, rootRefs.Count);
-        Assert.All(rootRefs, r => Assert.Equal("call", r.ReferenceKind));
-
-        Assert.DoesNotContain(references, r => r.SymbolName == "super");
-        Assert.DoesNotContain(references, r => r.SymbolName == "this");
-    }
-
-    [Fact]
-    public void Extract_JavaCtorChain_SameLineBody_WithGenericCtor_RewritesToBaseClass()
-    {
-        // Generic constructors (`public <T> Leaf(T x){super(0);}`) insert type parameters
-        // between the modifiers and the ctor name. The synthesis regex must accept the
-        // optional `<...>` token before `<name>`.
-        // 型パラメータ付き ctor (`public <T> Leaf(T x){super(0);}`) は修飾子と ctor 名の間に
-        // `<...>` が入る。合成コンテナ生成は名前直前の generic 型パラメータを許容すべし。
-        const string content = """
-            package demo;
-
-            public class Root {
-                public Root(int x) {}
+            class QualifiedLeaf extends QualifiedBase {
+                @demo.QualifiedAnn QualifiedLeaf(int value){super(value);}
+                @SuppressWarnings({"unused", "unchecked"}) QualifiedLeaf(long value){super((int) value);}
             }
 
-            class Leaf extends Root {
-                public <T> Leaf(T x){super(0);}
-                <T extends Number> Leaf(T x, int y){super(y);}
+            class NestedBoundBase {
+                NestedBoundBase(int value) {}
+            }
+            class NestedBoundLeaf extends NestedBoundBase {
+                public <TNested extends Comparable<Integer>> NestedBoundLeaf(TNested value){super(0);}
+                <UWildcard extends java.util.List<? extends Number>> NestedBoundLeaf(UWildcard values, int fallback){super(fallback);}
+            }
+
+            class ModifierBase {
+                ModifierBase(int value) {}
+            }
+            class ModifierLeaf extends ModifierBase {
+                public @Deprecated ModifierLeaf(int value){super(value);}
+            }
+
+            @interface QuotedAnn {
+                String text();
+            }
+            class QuotedBase {
+                QuotedBase(int value) {}
+            }
+            class QuotedLeaf extends QuotedBase {
+                public @QuotedAnn(text=")") QuotedLeaf(){super(0);}
+            }
+
+            class BodyHelper {
+                static void doBodyWork() {}
+            }
+            class BodyBase {
+                BodyBase(int value) {}
+            }
+            class BodyLeaf extends BodyBase {
+                public <TBody> BodyLeaf(TBody value){super(0); BodyHelper.doBodyWork();}
+            }
+
+            class SelfBase {
+                SelfBase(int value) {}
+            }
+            class SelfLeaf extends SelfBase {
+                SelfLeaf(){super(0);}
             }
             """;
 
-        var symbols = SymbolExtractor.Extract(1, "java", content);
-        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
+        var (_, references) = ExtractSymbolsAndReferences("java", content);
 
-        var rootRefs = references.Where(r =>
-            r.SymbolName == "Root" && r.ContainerName == "Leaf" && r.ContainerKind == "function").ToList();
-        Assert.Equal(2, rootRefs.Count);
-        Assert.All(rootRefs, r => Assert.Equal("call", r.ReferenceKind));
+        AssertExactConstructorEdges("PlainBase", "PlainPublicLeaf", 1);
+        AssertExactConstructorEdges("PlainPublicLeaf", "PlainPublicLeaf", 1);
+        AssertExactConstructorEdges("PlainBase", "PlainPackageLeaf", 1);
+        AssertExactConstructorEdges("PlainPackageLeaf", "PlainPackageLeaf", 1);
+        AssertExactConstructorEdges("LeadingBase", "LeadingLeaf", 2);
+        AssertExactConstructorEdges("GenericCtorBase", "GenericCtorLeaf", 2);
+        AssertExactConstructorEdges("QualifiedBase", "QualifiedLeaf", 2);
+        AssertExactConstructorEdges("NestedBoundBase", "NestedBoundLeaf", 2);
 
-        Assert.DoesNotContain(references, r => r.SymbolName == "super");
+        var modifierLine = Array.FindIndex(
+            content.Split('\n'),
+            line => line.Contains("public @Deprecated ModifierLeaf", StringComparison.Ordinal)) + 1;
+        Assert.True(modifierLine > 0);
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "ModifierBase"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerKind == "function"
+            && reference.ContainerName == "ModifierLeaf"
+            && reference.Line == modifierLine);
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "QuotedBase"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerKind == "function"
+            && reference.ContainerName == "QuotedLeaf");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "BodyBase"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerKind == "function"
+            && reference.ContainerName == "BodyLeaf");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "doBodyWork"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerKind == "function"
+            && reference.ContainerName == "BodyLeaf");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "doBodyWork"
+            && reference.ContainerKind == "class");
+        Assert.DoesNotContain(references, reference =>
+            reference.SymbolName == "SelfLeaf"
+            && reference.ReferenceKind == "call");
+        Assert.Contains(references, reference =>
+            reference.SymbolName == "SelfBase"
+            && reference.ReferenceKind == "call"
+            && reference.ContainerKind == "function"
+            && reference.ContainerName == "SelfLeaf");
+        Assert.DoesNotContain(references, reference => reference.SymbolName is "super" or "this");
+
+        void AssertExactConstructorEdges(string targetName, string containerName, int expectedCount)
+        {
+            var edges = references.Where(reference =>
+                reference.SymbolName == targetName
+                && reference.ContainerName == containerName
+                && reference.ContainerKind == "function").ToList();
+            Assert.Equal(expectedCount, edges.Count);
+            Assert.All(edges, edge => Assert.Equal("call", edge.ReferenceKind));
+        }
     }
 
     [Fact]
@@ -1394,68 +1314,6 @@ public partial class ReferenceExtractorTests
         Assert.Contains(references, r =>
             r.SymbolName == "Base" && r.ContainerKind == "function" && r.ContainerName == "Leaf");
         Assert.DoesNotContain(references, r => r.SymbolName == "super");
-    }
-
-    [Fact]
-    public void Extract_JavaCtorChain_SameLineBody_WithQualifiedAnnotation_RewritesToBaseClass()
-    {
-        // Annotations on same-line ctors can be fully qualified (`@demo.Ann`) or carry
-        // nested-paren argument lists. The synthesis scanner must strip both before locating
-        // the ctor name.
-        // 同一行 ctor 本体のアノテーションは `@demo.Ann` のような FQCN や、入れ子の括弧付き
-        // 引数を持つこともある。合成コンテナ生成は両方を剥がして ctor 名へ辿り着く必要がある。
-        const string content = """
-            package demo;
-
-            public class Root {
-                public Root(int x) {}
-            }
-
-            @interface Ann {}
-
-            class Leaf extends Root {
-                @demo.Ann Leaf(int x){super(x);}
-                @SuppressWarnings({"unused", "unchecked"}) Leaf(long x){super((int) x);}
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "java", content);
-        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
-
-        var rootRefs = references.Where(r =>
-            r.SymbolName == "Root" && r.ContainerName == "Leaf" && r.ContainerKind == "function").ToList();
-        Assert.Equal(2, rootRefs.Count);
-        Assert.All(rootRefs, r => Assert.Equal("call", r.ReferenceKind));
-    }
-
-    [Fact]
-    public void Extract_JavaCtorChain_SameLineBody_WithNestedGenericBound_RewritesToBaseClass()
-    {
-        // Generic type parameters can carry nested `<...>` bounds such as
-        // `<T extends Comparable<Integer>>`. A flat regex cannot balance the nested `>`; the
-        // synthesis scanner must handle it.
-        // `<T extends Comparable<Integer>>` のような入れ子 `<...>` を伴う generic 境界も
-        // 合成コンテナ生成で取りこぼしてはならない。
-        const string content = """
-            package demo;
-
-            public class Root {
-                public Root(int x) {}
-            }
-
-            class Leaf extends Root {
-                public <T extends Comparable<Integer>> Leaf(T x){super(0);}
-                <U extends java.util.List<? extends Number>> Leaf(U xs, int y){super(y);}
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "java", content);
-        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
-
-        var rootRefs = references.Where(r =>
-            r.SymbolName == "Root" && r.ContainerName == "Leaf" && r.ContainerKind == "function").ToList();
-        Assert.Equal(2, rootRefs.Count);
-        Assert.All(rootRefs, r => Assert.Equal("call", r.ReferenceKind));
     }
 
     [Fact]
@@ -1883,34 +1741,6 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
-    public void Extract_JavaSuperCall_SameLineCtorWithModifierThenAnnotation_AttributesToRealBase()
-    {
-        // Regression for same-line ctor bodies where an access modifier precedes an annotation,
-        // e.g. `public @Deprecated Leaf(...)`. Before the fix the scanner consumed the modifier
-        // first, hit `@` in ConsumeIdentifier, and returned null, dropping the super(...) edge.
-        // 修正前は modifier の後に annotation が来ると ctor 名抽出が失敗し、super(...) が落ちた。
-        const string content = """
-            package demo;
-
-            class Root {
-                Root(int value) {}
-            }
-
-            class Leaf extends Root {
-                public @Deprecated Leaf(int x){super(x);}
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "java", content);
-        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
-
-        Assert.Contains(references, r =>
-            r.SymbolName == "Root" && r.ReferenceKind == "call"
-            && r.ContainerKind == "function" && r.ContainerName == "Leaf" && r.Line == 8);
-        Assert.DoesNotContain(references, r => r.SymbolName == "super");
-    }
-
-    [Fact]
     public void Extract_JavaSuperChain_BraceAnnotationArgExtends_AttributesSuperEdgeEndToEnd()
     {
         // End-to-end regression for Java type-use annotated `extends` whose annotation argument
@@ -2047,114 +1877,6 @@ public partial class ReferenceExtractorTests
         var symbols = SymbolExtractor.Extract(1, "java", content);
         var references = ReferenceExtractor.Extract(1, "java", content, symbols);
 
-        Assert.Contains(references, r =>
-            r.SymbolName == "Root" && r.ReferenceKind == "call"
-            && r.ContainerKind == "function" && r.ContainerName == "Leaf");
-    }
-
-    [Fact]
-    public void Extract_Java_SameLineCtorWithQuotedAnnotationArg_KeepsSuperEdge()
-    {
-        // Regression: TryExtractJavaCtorNameFromLine walks past annotations using
-        // SkipBalancedParens, which previously counted raw `)` characters. A legal
-        // `@Ann(text=")")` prefix on a same-line ctor truncated annotation scanning at the
-        // string's closing `)` and the ctor name read then started mid-string, so
-        // TrySynthesizeSameLineJavaCtor returned null and the synthesized `super(...)` edge
-        // added for same-line ctors vanished.
-        // 同一行 ctor の annotation 文字列引数内 `)` が ctor 名抽出を壊さないことを固定する。
-        const string content = """
-            package demo;
-
-            class Root {
-                Root(int value) {}
-            }
-
-            @interface Ann {
-                String text();
-            }
-
-            class Leaf extends Root {
-                public @Ann(text=")") Leaf(){super(0);}
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "java", content);
-        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
-
-        Assert.Contains(references, r =>
-            r.SymbolName == "Root" && r.ReferenceKind == "call"
-            && r.ContainerKind == "function" && r.ContainerName == "Leaf");
-    }
-
-    [Fact]
-    public void Extract_Java_SameLineCtorBodyCall_AttributesToCtorContainer()
-    {
-        // Regression: non-chain body calls on a same-line Java ctor (for example the
-        // `Helper.doWork()` statement after `super(0);` in `Leaf(T x){super(0); Helper.doWork();}`)
-        // previously landed on `class:Leaf` because SymbolExtractor does not emit a function
-        // symbol for the same-line ctor shape. The main loop now pre-computes a per-line synthetic
-        // function-kind container covering the body `{ ... }` span so body calls attribute to
-        // `function:Leaf` instead of leaking to the enclosing class.
-        // 同一行 ctor 本体の通常 call が外側 class に吸われず、合成 function コンテナに帰属することを固定する。
-        const string content = """
-            package demo;
-
-            class Helper {
-                static void doWork() {}
-            }
-
-            class Root {
-                Root(int v) {}
-            }
-
-            class Leaf extends Root {
-                public <T> Leaf(T x){super(0); Helper.doWork();}
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "java", content);
-        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
-
-        Assert.Contains(references, r =>
-            r.SymbolName == "doWork" && r.ReferenceKind == "call"
-            && r.ContainerKind == "function" && r.ContainerName == "Leaf");
-        Assert.DoesNotContain(references, r =>
-            r.SymbolName == "doWork" && r.ContainerKind == "class");
-
-        // Chain edge remains on the synthetic function ctor too.
-        // 連鎖エッジも合成 function コンテナに帰属したままであることを確認する。
-        Assert.Contains(references, r =>
-            r.SymbolName == "Root" && r.ReferenceKind == "call"
-            && r.ContainerKind == "function" && r.ContainerName == "Leaf");
-    }
-
-    [Fact]
-    public void Extract_Java_SameLineCtorDeclarator_DoesNotEmitSelfCall()
-    {
-        // Regression: `CallRegex` matches `CtorName(` on the declarator of a same-line Java ctor
-        // and, without suppression, emitted a phantom `Leaf|call|class|Leaf` edge attributing the
-        // declarator to the enclosing class. The main loop now skips the `CtorName(` match at the
-        // declarator's name column when the current line carries a synthesized same-line ctor.
-        // 同一行 ctor の宣言子 `CtorName(` が自己 call として記録されないことを固定する。
-        const string content = """
-            package demo;
-
-            class Root {
-                Root(int v) {}
-            }
-
-            class Leaf extends Root {
-                Leaf(){super(0);}
-            }
-            """;
-
-        var symbols = SymbolExtractor.Extract(1, "java", content);
-        var references = ReferenceExtractor.Extract(1, "java", content, symbols);
-
-        Assert.DoesNotContain(references, r =>
-            r.SymbolName == "Leaf" && r.ReferenceKind == "call");
-        // But the chain rewrite still emits the `Root` edge attributed to `function:Leaf`.
-        // 連鎖書き換えによる `Root` エッジは残っていることを確認する。
         Assert.Contains(references, r =>
             r.SymbolName == "Root" && r.ReferenceKind == "call"
             && r.ContainerKind == "function" && r.ContainerName == "Leaf");

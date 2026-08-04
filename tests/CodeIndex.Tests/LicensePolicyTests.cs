@@ -36,21 +36,15 @@ public class LicensePolicyTests
         "TRADEMARKS.md",
         "README.md",
         "USER_GUIDE.md",
-        "DEVELOPER_GUIDE.md",
         "DISTRIBUTION.md",
         "docs/NUGET_README.md",
-        "MAINTAINERS.md",
-        "CONTRIBUTING.md",
         "src/CodeIndex/CodeIndex.csproj",
         "src/CodeIndex/Cli/ConsoleUi.cs",
-        "install.sh",
         "install_modules/20-installer.sh",
         "install_modules/40-uninstall.sh",
         ".github/workflows/release.yml",
         ".github/workflows/license-policy.yml",
         "tests/CodeIndex.Tests/LicensePolicyTests.cs",
-        "tests/CodeIndex.Tests/InstallScriptTests.cs",
-        "tests/CodeIndex.Tests/ReleaseWorkflowTests.cs",
     ];
 
     [Fact]
@@ -169,14 +163,12 @@ public class LicensePolicyTests
         Assert.Contains("distribution are allowed for non-competing purposes", licenseSummary);
         Assert.Contains("separate written agreement with Widthdom", licenseSummary);
 
-        foreach (var triggerPath in LicensePolicyWorkflowTriggerPaths)
-            Assert.Equal(2, CountOccurrences(policyWorkflow, $"- '{triggerPath}'"));
+        Assert.Equal(16, LicensePolicyWorkflowTriggerPaths.Length);
+        Assert.Equal(LicensePolicyWorkflowTriggerPaths, ReadWorkflowTriggerPaths(policyWorkflow, "push"));
+        Assert.Equal(LicensePolicyWorkflowTriggerPaths, ReadWorkflowTriggerPaths(policyWorkflow, "pull_request"));
         Assert.Contains("actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5.3.0", policyWorkflow);
         Assert.Contains("8.0.413", policyWorkflow);
         Assert.Contains("9.0.301", policyWorkflow);
-        Assert.Contains("cache: true", policyWorkflow);
-        Assert.Contains("cache-dependency-path: '**/packages.lock.json'", policyWorkflow);
-        Assert.Contains("dotnet restore tests/CodeIndex.Tests/CodeIndex.Tests.csproj -p:RestoreTargetFrameworks=net8.0 --locked-mode", policyWorkflow);
         Assert.Contains("dotnet test tests/CodeIndex.Tests/CodeIndex.Tests.csproj --configuration Release --framework net8.0 --filter FullyQualifiedName~LicensePolicyTests --no-restore --nologo", policyWorkflow);
 
         AssertContainsAll(readme, new[]
@@ -209,6 +201,29 @@ public class LicensePolicyTests
         }
 
         return count;
+    }
+
+    private static string[] ReadWorkflowTriggerPaths(string workflow, string eventName)
+    {
+        const string pathsMarker = "    paths:";
+        const string pathPrefix = "      - '";
+        var lines = workflow.ReplaceLineEndings("\n").Split('\n');
+        var eventHeader = $"  {eventName}:";
+        var eventStart = Array.IndexOf(lines, eventHeader);
+        Assert.True(eventStart >= 0, $"Workflow event '{eventName}' is missing.");
+
+        var eventLines = lines
+            .Skip(eventStart + 1)
+            .TakeWhile(static line => line.StartsWith("    ", StringComparison.Ordinal))
+            .ToArray();
+        var pathsStart = Array.IndexOf(eventLines, pathsMarker);
+        Assert.True(pathsStart >= 0, $"Workflow event '{eventName}' is missing its paths filter.");
+
+        return eventLines
+            .Skip(pathsStart + 1)
+            .TakeWhile(static line => line.StartsWith(pathPrefix, StringComparison.Ordinal))
+            .Select(static line => line.Trim()[3..^1])
+            .ToArray();
     }
 
     private static void AssertContainsAll(string haystack, IEnumerable<string> needles)

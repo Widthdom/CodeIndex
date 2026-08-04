@@ -130,7 +130,7 @@ jobs:
             ~\AppData\Local\NuGet\packages
           # Locked restore keeps package inputs honest; avoid evicting the cache for project-only test edits.
           # locked restore がパッケージ入力を検証するため、テスト用 project だけの変更ではキャッシュを失効させない。
-          key: ${{ runner.os }}-dotnet-nuget-${{ hashFiles('**/packages.lock.json', 'global.json') }}
+          key: ${{ runner.os }}-dotnet-nuget-${{ hashFiles('src/CodeIndex/packages.lock.json', 'tests/CodeIndex.HookIsolationFixture/packages.lock.json', 'tests/CodeIndex.Tests/packages.lock.json', 'tools/CodeIndex.Changelog/packages.lock.json', 'tools/CodeIndex.PackageNormalize/packages.lock.json', 'tools/CodeIndex.TestTelemetry/packages.lock.json') }}
 
       # --locked-mode requires every resolved package to match the committed
       # packages.lock.json so an unexpected transitive bump (including silent
@@ -202,6 +202,7 @@ jobs:
             TestResults/**/*.trx
             TestResults/**/*.txt
             TestResults/**/*.xml
+            !TestResults/**/coverage.cobertura.xml
 
       - name: Upload diagnostic dumps
         if: failure() && steps.test.outcome != 'skipped'
@@ -218,7 +219,7 @@ jobs:
             TestResults/**/*.hangdump
 
       - name: Upload coverage reports
-        if: always() && matrix.collect_coverage && steps.test.outcome != 'skipped'
+        if: always() && matrix.collect_coverage && steps.test.outcome != 'skipped' && hashFiles('TestResults/**/coverage.cobertura.xml') != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: Coverage-${{ matrix.os }}-${{ matrix.test-framework }}-${{ matrix.test-shard }}
@@ -228,11 +229,11 @@ jobs:
           path: TestResults/**/coverage.cobertura.xml
 
       - name: Publish
-        if: matrix.primary_lane
+        if: matrix.primary_lane && github.event_name != 'pull_request'
         run: dotnet publish src/CodeIndex/CodeIndex.csproj --configuration Release --no-build --no-restore --output publish
 
       - name: Upload build artifact
-        if: matrix.primary_lane
+        if: matrix.primary_lane && github.event_name != 'pull_request'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: CodeIndex

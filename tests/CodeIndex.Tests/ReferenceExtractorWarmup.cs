@@ -9,6 +9,9 @@ namespace CodeIndex.Tests;
 internal static class ReferenceExtractorWarmup
 {
     private static Process? persistentDiscoveryDescendant;
+    private static readonly Lazy<bool> performanceWarmup = new(
+        RunPerformanceWarmup,
+        LazyThreadSafetyMode.ExecutionAndPublication);
 
     [ModuleInitializer]
     internal static void WarmUp()
@@ -46,10 +49,18 @@ internal static class ReferenceExtractorWarmup
                 persistentDescendantPidPath,
                 persistentDiscoveryDescendant.Id.ToString(System.Globalization.CultureInfo.InvariantCulture));
         }
+    }
 
+    internal static void EnsurePerformanceWarmup()
+    {
         if (!IsContinuousIntegration() || !IsNet8TestAssembly())
             return;
 
+        _ = performanceWarmup.Value;
+    }
+
+    private static bool RunPerformanceWarmup()
+    {
         // Practical budget tests measure steady-state extractor work; keep C# regex/JIT/tiered startup outside the guard.
         var builder = new StringBuilder();
         builder.AppendLine("class Warmup {");
@@ -68,6 +79,7 @@ internal static class ReferenceExtractorWarmup
         GC.Collect();
         GC.WaitForPendingFinalizers();
         GC.Collect();
+        return true;
     }
 
     private static bool IsContinuousIntegration()

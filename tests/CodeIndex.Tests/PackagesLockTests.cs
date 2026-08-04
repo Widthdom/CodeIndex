@@ -16,6 +16,23 @@ public class PackagesLockTests
         "tools/CodeIndex.TestTelemetry/CodeIndex.TestTelemetry.csproj",
     ];
 
+    private static readonly string[] SolutionRestoreLockFiles =
+    [
+        "src/CodeIndex/packages.lock.json",
+        "tests/CodeIndex.HookIsolationFixture/packages.lock.json",
+        "tests/CodeIndex.Tests/packages.lock.json",
+        "tools/CodeIndex.Changelog/packages.lock.json",
+        "tools/CodeIndex.PackageNormalize/packages.lock.json",
+        "tools/CodeIndex.TestTelemetry/packages.lock.json",
+    ];
+
+    private const string SolutionRestoreLockHashExpression =
+        "${{ hashFiles('src/CodeIndex/packages.lock.json', 'tests/CodeIndex.HookIsolationFixture/packages.lock.json', 'tests/CodeIndex.Tests/packages.lock.json', 'tools/CodeIndex.Changelog/packages.lock.json', 'tools/CodeIndex.PackageNormalize/packages.lock.json', 'tools/CodeIndex.TestTelemetry/packages.lock.json') }}";
+
+    private static readonly string SolutionRestoreCacheDependencyPath =
+        "cache-dependency-path: |\n" +
+        string.Join("\n", SolutionRestoreLockFiles.Select(static path => $"            {path}"));
+
     [Fact]
     public void DirectoryBuildProps_EnablesLockFilesWithoutForcingLocalLockedMode()
     {
@@ -80,23 +97,91 @@ public class PackagesLockTests
         var dotnetWorkflow = RepositoryTestPaths.ReadNormalizedDotnetWorkflow();
         var releaseWorkflow = RepositoryTestPaths.ReadNormalizedWorkflow("release.yml");
         var codeqlWorkflow = RepositoryTestPaths.ReadNormalizedWorkflow("codeql.yml");
+        var licenseWorkflow = RepositoryTestPaths.ReadNormalizedWorkflow("license-policy.yml");
         var mutationWorkflow = RepositoryTestPaths.ReadNormalizedWorkflow("mutation-testing.yml");
         var dockerfile = RepositoryTestPaths.ReadNormalizedText("Dockerfile");
 
         Assert.Contains("dotnet restore CodeIndex.sln --locked-mode", dotnetWorkflow, StringComparison.Ordinal);
         Assert.Contains(
+            "dotnet restore tests/CodeIndex.Tests/CodeIndex.Tests.csproj -p:RestoreTargetFrameworks=${{ matrix.test-framework }} --locked-mode",
+            dotnetWorkflow,
+            StringComparison.Ordinal);
+        Assert.Contains(
             "dotnet restore tests/CodeIndex.Tests/CodeIndex.Tests.csproj -p:RestoreTargetFrameworks=net8.0 --locked-mode",
             releaseWorkflow,
             StringComparison.Ordinal);
+        Assert.Contains(
+            "dotnet restore src/CodeIndex/CodeIndex.csproj --locked-mode",
+            releaseWorkflow,
+            StringComparison.Ordinal);
         Assert.Contains("dotnet restore CodeIndex.sln --locked-mode", codeqlWorkflow, StringComparison.Ordinal);
-        Assert.Contains("cache-dependency-path: '**/packages.lock.json'", codeqlWorkflow, StringComparison.Ordinal);
+        Assert.Contains(
+            "dotnet restore tests/CodeIndex.Tests/CodeIndex.Tests.csproj -p:RestoreTargetFrameworks=net8.0 --locked-mode",
+            licenseWorkflow,
+            StringComparison.Ordinal);
         Assert.Contains("dotnet restore CodeIndex.sln --locked-mode", mutationWorkflow, StringComparison.Ordinal);
 
-        Assert.DoesNotContain("restore-keys:", dotnetWorkflow, StringComparison.Ordinal);
-        Assert.DoesNotContain("restore-keys:", releaseWorkflow, StringComparison.Ordinal);
-        Assert.DoesNotContain("restore-keys:", mutationWorkflow, StringComparison.Ordinal);
-        Assert.Contains("key: ${{ runner.os }}-dotnet-nuget-${{ hashFiles('**/packages.lock.json', 'global.json') }}", dotnetWorkflow, StringComparison.Ordinal);
-        Assert.Contains("key: ${{ runner.os }}-mutation-stryker-4.14.0-${{ hashFiles('**/packages.lock.json', 'global.json') }}", mutationWorkflow, StringComparison.Ordinal);
+        foreach (var setupDotnetCachedWorkflow in new[] { codeqlWorkflow, licenseWorkflow })
+        {
+            Assert.Contains("cache: true", setupDotnetCachedWorkflow, StringComparison.Ordinal);
+            Assert.Contains(SolutionRestoreCacheDependencyPath, setupDotnetCachedWorkflow, StringComparison.Ordinal);
+        }
+        Assert.Contains(
+            "key: ${{ runner.os }}-dotnet-nuget-" + SolutionRestoreLockHashExpression,
+            dotnetWorkflow,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "path: ~/.nuget/packages\n" +
+            "          key: ${{ runner.os }}-mutation-nuget-" + SolutionRestoreLockHashExpression,
+            mutationWorkflow,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("Cache Stryker tool and NuGet packages", mutationWorkflow, StringComparison.Ordinal);
+        Assert.Contains(
+            "- name: Cache native NuGet packages\n" +
+            "        if: ${{ !matrix.cross_compile }}",
+            releaseWorkflow,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "key: ${{ runner.os }}-release-nuget-" + SolutionRestoreLockHashExpression,
+            releaseWorkflow,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "- name: Cache cross-compile NuGet packages\n" +
+            "        if: matrix.cross_compile",
+            releaseWorkflow,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "key: ${{ runner.os }}-release-cross-nuget-${{ hashFiles('src/CodeIndex/packages.lock.json') }}",
+            releaseWorkflow,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "cache-dependency-path: tools/CodeIndex.Changelog/packages.lock.json",
+            releaseWorkflow,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "dotnet restore tools/CodeIndex.Changelog/CodeIndex.Changelog.csproj --locked-mode",
+            releaseWorkflow,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "cache-dependency-path: |\n" +
+            "            src/CodeIndex/packages.lock.json\n" +
+            "            tools/CodeIndex.PackageNormalize/packages.lock.json",
+            releaseWorkflow,
+            StringComparison.Ordinal);
+
+        foreach (var workflow in new[]
+        {
+            dotnetWorkflow,
+            releaseWorkflow,
+            codeqlWorkflow,
+            licenseWorkflow,
+            mutationWorkflow,
+        })
+        {
+            Assert.DoesNotContain("'**/packages.lock.json'", workflow, StringComparison.Ordinal);
+            Assert.DoesNotContain("global.json", workflow, StringComparison.Ordinal);
+            Assert.DoesNotContain("examples/hooks/packages.lock.json", workflow, StringComparison.Ordinal);
+        }
 
         Assert.DoesNotContain("dotnet restore src/CodeIndex/CodeIndex.csproj \\\n      --runtime \"$rid\"", dockerfile, StringComparison.Ordinal);
         Assert.DoesNotContain("--runtime \"$rid\" \\\n      --no-restore", dockerfile, StringComparison.Ordinal);

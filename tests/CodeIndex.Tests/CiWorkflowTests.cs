@@ -92,18 +92,10 @@ public class CiWorkflowTests
             "            test-shard: remaining\n" +
             "            test-filter: FullyQualifiedName!~CodeIndex.Tests.IndexCommandRunnerTests",
             "- name: Set up .NET SDK\n        id: setup-dotnet\n        continue-on-error: true\n        uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5.3.0\n        with:\n          dotnet-version: ${{ matrix.sdk-versions }}",
-            "- name: Retry .NET SDK setup\n        if: steps.setup-dotnet.outcome == 'failure'\n        uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5.3.0\n        with:\n          dotnet-version: ${{ matrix.sdk-versions }}",
-            "- name: Restore dependencies\n        if: matrix.primary_lane\n        run: dotnet restore CodeIndex.sln --locked-mode",
-            "- name: Restore test dependencies\n        if: ${{ !matrix.primary_lane }}\n        run: dotnet restore tests/CodeIndex.Tests/CodeIndex.Tests.csproj -p:RestoreTargetFrameworks=${{ matrix.test-framework }} --locked-mode");
+            "- name: Retry .NET SDK setup\n        if: steps.setup-dotnet.outcome == 'failure'\n        uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5.3.0\n        with:\n          dotnet-version: ${{ matrix.sdk-versions }}");
         AssertDoesNotContainAny(
             workflow,
-            "restore-keys:",
-            "'**/*.csproj'",
             "function Invoke-TestRun");
-        AssertContainsAll(
-            workflow,
-            "key: ${{ runner.os }}-dotnet-nuget-${{ hashFiles('**/packages.lock.json', 'global.json') }}",
-            "primary_lane: true");
         AssertContainsAll(
             workflow,
             "- name: Audit NuGet package vulnerabilities\n        if: matrix.primary_lane",
@@ -124,10 +116,10 @@ public class CiWorkflowTests
             "if ($includeCoverage)",
             "[ValidateSet(\"true\", \"false\")]",
             "Skipping XPlat Code Coverage outside ubuntu-24.04/net8.0",
-            "$firstExitCode = Invoke-TestRun -LogPath $firstLogPath -ResultFileName \"test_results_first.trx\" -IncludeCoverage $includeCoverage -IncludeCrashDiagnostics $true -TestFilter $BaseFilter",
+            "$firstRunResult = Invoke-TestRun -LogPath $firstLogPath -ResultFileName \"test_results_first.trx\" -IncludeCoverage $includeCoverage -IncludeCrashDiagnostics $true -TestFilter $BaseFilter",
             "Skipping XPlat Code Coverage on the flaky-classification retry.",
             "Reusing crash evidence from the initial attempt; the flaky-classification retry skips duplicate crash collection.",
-            "$retryExitCode = Invoke-TestRun -LogPath $retryLogPath -ResultFileName \"test_results_retry.trx\" -IncludeCoverage $false -IncludeCrashDiagnostics $false",
+            "$retryRunResult = Invoke-TestRun -LogPath $retryLogPath -ResultFileName \"test_results_retry.trx\" -IncludeCoverage $false -IncludeCrashDiagnostics $false",
             "\"--no-build\"",
             "\"--no-restore\"",
             "$runArgs += \"--blame-crash\"",
@@ -140,11 +132,24 @@ public class CiWorkflowTests
             "$resultsDirectory = \"./TestResults\"",
             "Join-Path $resultsDirectory \"test-output-first.txt\"",
             "Join-Path $resultsDirectory \"test-output-retry.txt\"",
-            "[System.Collections.Generic.List[string]]::new()",
+            "$failureLogTailLineLimit = 2000",
+            "[System.Collections.Generic.Queue[string]]::new($failureLogTailLineLimit)",
+            "$line.IndexOf(\"test run timeout\", [StringComparison]::OrdinalIgnoreCase) -ge 0",
+            "$testSessionTimedOut = $true",
+            "[void]$retainedOutputTail.Dequeue()",
+            "[void]$retainedOutputTail.Enqueue($line)",
+            "$exitCode = $LASTEXITCODE",
             "if ($exitCode -ne 0)",
             "$logDirectory = Split-Path -Parent $LogPath",
             "New-Item -ItemType Directory -Force -Path $logDirectory",
-            "[System.IO.File]::WriteAllLines($LogPath, [string[]]$capturedOutput)",
+            "Test output truncated: retained final",
+            "were streamed live and omitted from this artifact.",
+            "[System.IO.File]::WriteAllLines($LogPath, [string[]]$failureLogLines)",
+            "ExitCode = [int]$exitCode",
+            "TestSessionTimedOut = [bool]$testSessionTimedOut",
+            "if ($firstRunResult.TestSessionTimedOut)",
+            "exit $firstRunResult.ExitCode",
+            "exit $retryRunResult.ExitCode",
             "Write-StepOutput -Name \"summarize\" -Value \"true\"",
             "$env:GITHUB_OUTPUT",
             "Initial test run hit TestSessionTimeout; skipping flaky retry",
@@ -153,6 +158,12 @@ public class CiWorkflowTests
         AssertDoesNotContainAny(
             testScript,
             "New-Item -ItemType Directory -Force -Path ./TestResults",
+            "Select-String -Path $firstLogPath",
+            "$capturedOutput.Add($line)",
+            "return [int]$exitCode",
+            "[System.IO.File]::WriteAllLines($LogPath, [string[]]$capturedOutput)",
+            "$firstExitCode",
+            "$retryExitCode",
             "Tee-Object",
             "steps.lane.outputs.primary_lane",
             "matrix.test-framework");
@@ -167,6 +178,7 @@ public class CiWorkflowTests
             "TestResults/**/*.trx",
             "TestResults/**/*.txt",
             "TestResults/**/*.xml",
+            "!TestResults/**/coverage.cobertura.xml",
             "TestResults/**/*.dmp",
             "TestResults/**/*.dump",
             "TestResults-${{ matrix.os }}-${{ matrix.test-framework }}-${{ matrix.test-shard }}",
@@ -176,8 +188,9 @@ public class CiWorkflowTests
         AssertContainsAll(
             workflow,
             "- name: Upload test results\n        if: always() && steps.test.outcome != 'skipped' && (steps.test.outputs.summarize == 'true' || failure())",
-            "- name: Publish\n        if: matrix.primary_lane\n        run: dotnet publish src/CodeIndex/CodeIndex.csproj --configuration Release --no-build --no-restore --output publish",
-            "- name: Upload build artifact\n        if: matrix.primary_lane");
+            "- name: Publish\n        if: matrix.primary_lane && github.event_name != 'pull_request'\n        run: dotnet publish src/CodeIndex/CodeIndex.csproj --configuration Release --no-build --no-restore --output publish",
+            "- name: Upload build artifact\n        if: matrix.primary_lane && github.event_name != 'pull_request'",
+            "          path: TestResults/**/coverage.cobertura.xml");
         AssertDoesNotContainAny(
             workflow,
             "TestResults/**/*Sequence*.xml",
@@ -191,10 +204,14 @@ public class CiWorkflowTests
             "- name: Upload test results\n        if: always()\n",
             "- name: Upload diagnostic dumps\n        if: failure()\n",
             "- name: Upload coverage reports\n        if: always() && matrix.primary_lane\n");
+        AssertDoesNotContainAny(
+            workflow,
+            "- name: Publish\n        if: matrix.primary_lane\n",
+            "- name: Upload build artifact\n        if: matrix.primary_lane\n");
         AssertContainsAll(
             workflow,
             "- name: Upload diagnostic dumps\n        if: failure() && steps.test.outcome != 'skipped'",
-            "- name: Upload coverage reports\n        if: always() && matrix.collect_coverage && steps.test.outcome != 'skipped'");
+            "- name: Upload coverage reports\n        if: always() && matrix.collect_coverage && steps.test.outcome != 'skipped' && hashFiles('TestResults/**/coverage.cobertura.xml') != ''");
         Assert.Contains("function Invoke-TestRun", testScript);
     }
 
@@ -245,14 +262,19 @@ public class CiWorkflowTests
         var dotnetWorkflow = RepositoryTestPaths.ReadNormalizedDotnetWorkflow();
         var releaseWorkflow = RepositoryTestPaths.ReadNormalizedReleaseWorkflow();
         var setupScript = RepositoryTestPaths.ReadText(".github", "scripts", "configure-windows-test-host.ps1");
-        const string expectedStep =
+        const string expectedDotnetStep =
             "- name: Configure Windows test host\n" +
             "        if: runner.os == 'Windows'\n" +
             "        shell: pwsh\n" +
             "        run: ./.github/scripts/configure-windows-test-host.ps1 -Workspace \"${{ github.workspace }}\"";
+        const string expectedReleaseStep =
+            "- name: Configure Windows test host\n" +
+            "        if: runner.os == 'Windows' && !matrix.cross_compile\n" +
+            "        shell: pwsh\n" +
+            "        run: ./.github/scripts/configure-windows-test-host.ps1 -Workspace \"${{ github.workspace }}\"";
 
-        AssertContainsAll(dotnetWorkflow, expectedStep);
-        AssertContainsAll(releaseWorkflow, expectedStep);
+        AssertContainsAll(dotnetWorkflow, expectedDotnetStep);
+        AssertContainsAll(releaseWorkflow, expectedReleaseStep);
         AssertDoesNotContainAny(dotnetWorkflow, "Add-MpPreference", "Get-MpPreference");
         AssertDoesNotContainAny(releaseWorkflow, "Add-MpPreference", "Get-MpPreference");
         AssertContainsAll(
@@ -403,25 +425,8 @@ public class CiWorkflowTests
 
         foreach (var cacheBlock in FindStepBlocks(stepBlocks, "actions/cache@"))
         {
-            AssertContainsAll(
-                cacheBlock.Text,
-                StringComparison.Ordinal,
-                "hashFiles('**/packages.lock.json', 'global.json')");
             AssertDoesNotContainAny(cacheBlock.Text, StringComparison.Ordinal, "restore-keys:", "'**/*.csproj'");
         }
-
-        AssertContainsAll(
-            GetWorkflow(workflows, "dotnet.yml"),
-            StringComparison.Ordinal,
-            "key: ${{ runner.os }}-dotnet-nuget-");
-        AssertContainsAll(
-            GetWorkflow(workflows, "release.yml"),
-            StringComparison.Ordinal,
-            "key: ${{ runner.os }}-release-nuget-");
-        AssertContainsAll(
-            GetWorkflow(workflows, "mutation-testing.yml"),
-            StringComparison.Ordinal,
-            "key: ${{ runner.os }}-mutation-stryker-4.14.0-");
     }
 
     [Fact]
@@ -480,12 +485,26 @@ public class CiWorkflowTests
         AssertDoesNotContainAny(codeqlWorkflow, "8.0.413", "8.0.x", "9.0.x");
 
         var mutationWorkflow = RepositoryTestPaths.ReadWorkflow("mutation-testing.yml");
+        var strykerCacheBlock = Assert.Single(
+            StepBlockPattern.Matches(mutationWorkflow).Cast<Match>(),
+            block => block.Value.Contains("- name: Cache Stryker tool", StringComparison.Ordinal));
         AssertContainsAll(
             mutationWorkflow,
             "dotnet tool update --global dotnet-stryker --version 4.14.0",
-            "if: steps.mutation-cache.outputs.cache-hit != 'true'",
-            "mutation-stryker-4.14.0");
-        AssertDoesNotContainAny(mutationWorkflow, "dotnet tool install --global dotnet-stryker");
+            "if: steps.stryker-cache.outputs.cache-hit != 'true'");
+        AssertContainsAll(
+            strykerCacheBlock.Value,
+            "id: stryker-cache",
+            "path: ~/.dotnet/tools",
+            "key: ${{ runner.os }}-mutation-stryker-4.14.0");
+        AssertDoesNotContainAny(
+            strykerCacheBlock.Value,
+            "hashFiles(",
+            "~/.nuget/packages");
+        AssertDoesNotContainAny(
+            mutationWorkflow,
+            "steps.mutation-cache",
+            "dotnet tool install --global dotnet-stryker");
     }
 
     [Fact]
@@ -502,7 +521,7 @@ public class CiWorkflowTests
     }
 
     [Fact]
-    public void TestingGuide_DocumentsSharedStateParallelismInventory()
+    public void TestingGuide_DocumentsSharedStateParallelismInventoryAndBoundedCiOutput()
     {
         var guide = RepositoryTestPaths.ReadText("TESTING_GUIDE.md");
 
@@ -518,6 +537,10 @@ public class CiWorkflowTests
             "RUNNER_TEMP",
             ".github/scripts/run-dotnet-tests.ps1",
             ".github/scripts/configure-windows-test-host.ps1",
+            "retain only the final 2,000 lines",
+            "exactly one structured result",
+            "末尾2,000行だけを保持",
+            "単一の構造化結果",
             "共有状態と並列実行の監査");
     }
 
@@ -590,6 +613,4 @@ public class CiWorkflowTests
         Assert.Contains("\n  contents: read\n", workflow[..jobsIndex], StringComparison.Ordinal);
     }
 
-    private static string GetWorkflow(IReadOnlyList<(string FileName, string Content)> workflows, string fileName)
-        => workflows.Single(workflow => string.Equals(workflow.FileName, fileName, StringComparison.Ordinal)).Content;
 }

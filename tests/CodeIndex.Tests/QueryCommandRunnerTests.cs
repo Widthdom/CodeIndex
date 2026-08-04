@@ -1846,113 +1846,30 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void GetLanguageAliases_ReportsSqlDialectAliases()
+    public void GetLanguageAliases_ReportsRegisteredAliases()
     {
-        var aliases = QueryCommandRunner.GetLanguageAliases("sql");
+        (string Language, string[] ExpectedAliases)[] cases =
+        [
+            ("sql", ["tsql", "t-sql", "transact-sql", "transactsql", "sqlserver", "mssql"]),
+            ("csharp", ["cshtml", "razor", "blazor"]),
+            ("typescript", ["ts", "tsx", "cts", "mts"]),
+            ("rust", ["rs"]),
+            ("java", ["jav"]),
+            ("assembly", ["asm", "assembler", "nasm", "gas", "gnuasm", "gnu assembler"]),
+            ("fsharp", ["f#", "fs"]),
+            ("javascript", ["js", "jsx", "cjs", "mjs"]),
+            ("xml", ["xaml", "axaml"]),
+            ("python", ["py", "py3", "python3"]),
+            ("ruby", ["rb"]),
+        ];
 
-        Assert.Contains("tsql", aliases);
-        Assert.Contains("t-sql", aliases);
-        Assert.Contains("transact-sql", aliases);
-        Assert.Contains("transactsql", aliases);
-        Assert.Contains("sqlserver", aliases);
-        Assert.Contains("mssql", aliases);
-    }
+        foreach (var (language, expectedAliases) in cases)
+        {
+            var aliases = QueryCommandRunner.GetLanguageAliases(language);
 
-    [Fact]
-    public void GetLanguageAliases_ReportsRazorBlazorAliases()
-    {
-        var aliases = QueryCommandRunner.GetLanguageAliases("csharp");
-
-        Assert.Contains("cshtml", aliases);
-        Assert.Contains("razor", aliases);
-        Assert.Contains("blazor", aliases);
-    }
-
-    [Fact]
-    public void GetLanguageAliases_ReportsTypeScriptAlias()
-    {
-        var aliases = QueryCommandRunner.GetLanguageAliases("typescript");
-
-        Assert.Contains("ts", aliases);
-        Assert.Contains("tsx", aliases);
-        Assert.Contains("cts", aliases);
-        Assert.Contains("mts", aliases);
-    }
-
-    [Fact]
-    public void GetLanguageAliases_ReportsRustAlias()
-    {
-        var aliases = QueryCommandRunner.GetLanguageAliases("rust");
-
-        Assert.Contains("rs", aliases);
-    }
-
-    [Fact]
-    public void GetLanguageAliases_ReportsJavaAlias()
-    {
-        var aliases = QueryCommandRunner.GetLanguageAliases("java");
-
-        Assert.Contains("jav", aliases);
-    }
-
-    [Fact]
-    public void GetLanguageAliases_ReportsAssemblyAliases()
-    {
-        var aliases = QueryCommandRunner.GetLanguageAliases("assembly");
-
-        Assert.Contains("asm", aliases);
-        Assert.Contains("assembler", aliases);
-        Assert.Contains("nasm", aliases);
-        Assert.Contains("gas", aliases);
-        Assert.Contains("gnuasm", aliases);
-        Assert.Contains("gnu assembler", aliases);
-    }
-
-    [Fact]
-    public void GetLanguageAliases_ReportsFsharpAliases()
-    {
-        var aliases = QueryCommandRunner.GetLanguageAliases("fsharp");
-
-        Assert.Contains("f#", aliases);
-        Assert.Contains("fs", aliases);
-    }
-
-    [Fact]
-    public void GetLanguageAliases_ReportsJavascriptAliases()
-    {
-        var aliases = QueryCommandRunner.GetLanguageAliases("javascript");
-
-        Assert.Contains("js", aliases);
-        Assert.Contains("jsx", aliases);
-        Assert.Contains("cjs", aliases);
-        Assert.Contains("mjs", aliases);
-    }
-
-    [Fact]
-    public void GetLanguageAliases_ReportsXmlAliases()
-    {
-        var aliases = QueryCommandRunner.GetLanguageAliases("xml");
-
-        Assert.Contains("xaml", aliases);
-        Assert.Contains("axaml", aliases);
-    }
-
-    [Fact]
-    public void GetLanguageAliases_ReportsPythonAliases()
-    {
-        var aliases = QueryCommandRunner.GetLanguageAliases("python");
-
-        Assert.Contains("py", aliases);
-        Assert.Contains("py3", aliases);
-        Assert.Contains("python3", aliases);
-    }
-
-    [Fact]
-    public void GetLanguageAliases_ReportsRubyAliases()
-    {
-        var aliases = QueryCommandRunner.GetLanguageAliases("ruby");
-
-        Assert.Contains("rb", aliases);
+            foreach (var expectedAlias in expectedAliases)
+                Assert.Contains(expectedAlias, aliases);
+        }
     }
 
     [Theory]
@@ -3497,31 +3414,6 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunLanguages_JsonListsModernNodeModuleExtensions()
-    {
-        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages(["--json"], _jsonOptions));
-
-        Assert.Equal(CommandExitCodes.Success, exitCode);
-        Assert.Equal(string.Empty, stderr);
-
-        using var document = ParseJsonOutput(stdout);
-        var languages = document.RootElement.GetProperty("languages");
-        var javascript = languages.EnumerateArray().First(lang => lang.GetProperty("lang").GetString() == "javascript");
-        var typescript = languages.EnumerateArray().First(lang => lang.GetProperty("lang").GetString() == "typescript");
-        var objc = languages.EnumerateArray().First(lang => lang.GetProperty("lang").GetString() == "objc");
-        var ambiguousM = languages.EnumerateArray().First(lang => lang.GetProperty("lang").GetString() == "ambiguous_m");
-
-        Assert.Contains(".cjs", javascript.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
-        Assert.Contains(".mjs", javascript.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
-        Assert.Contains("js", javascript.GetProperty("aliases").EnumerateArray().Select(alias => alias.GetString()));
-        Assert.Contains("jsx", javascript.GetProperty("aliases").EnumerateArray().Select(alias => alias.GetString()));
-        Assert.Contains(".cts", typescript.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
-        Assert.Contains(".mts", typescript.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
-        Assert.Contains(".mm", objc.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
-        Assert.Contains(".m", ambiguousM.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
-    }
-
-    [Fact]
     public void RunLanguages_AmbiguousUppercaseExtensionExplainsCandidatesAndOverrides_Issue4901()
     {
         var (exitCode, stdout, stderr) = CaptureConsole(() =>
@@ -3669,95 +3561,6 @@ public partial class QueryCommandRunnerTests
             [firstCandidate, secondCandidate],
             lookup.GetProperty("candidates").EnumerateArray()
                 .Select(candidate => candidate.GetProperty("lang").GetString()));
-    }
-
-    [Fact]
-    public void RunLanguages_JsonReportsCythonAndCudaReferences_Issues4737And4738()
-    {
-        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages(["--json"], _jsonOptions));
-
-        Assert.Equal(CommandExitCodes.Success, exitCode);
-        Assert.Equal(string.Empty, stderr);
-
-        using var document = ParseJsonOutput(stdout);
-        var languages = document.RootElement.GetProperty("languages");
-        var cython = languages.EnumerateArray().Single(lang => lang.GetProperty("lang").GetString() == "cython");
-        var cuda = languages.EnumerateArray().Single(lang => lang.GetProperty("lang").GetString() == "cuda");
-
-        Assert.True(cython.GetProperty("symbol_extraction").GetBoolean());
-        Assert.True(cython.GetProperty("reference_extraction").GetBoolean());
-        Assert.True(cython.GetProperty("graph_queries").GetBoolean());
-        Assert.True(cuda.GetProperty("symbol_extraction").GetBoolean());
-        Assert.True(cuda.GetProperty("reference_extraction").GetBoolean());
-        Assert.True(cuda.GetProperty("graph_queries").GetBoolean());
-        Assert.Empty(cuda.GetProperty("capability_gaps").EnumerateArray());
-        Assert.Empty(cuda.GetProperty("unsupported_guidance").EnumerateArray());
-    }
-
-    [Fact]
-    public void RunLanguages_JsonReportsHdlGraphExtraction_Issue3532_Issue4742()
-    {
-        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages(["--json"], _jsonOptions));
-
-        Assert.Equal(CommandExitCodes.Success, exitCode);
-        Assert.Equal(string.Empty, stderr);
-
-        using var document = ParseJsonOutput(stdout);
-        var languages = document.RootElement.GetProperty("languages");
-        foreach (var language in new[] { "verilog", "systemverilog", "vhdl" })
-        {
-            var entry = languages.EnumerateArray().Single(lang => lang.GetProperty("lang").GetString() == language);
-            Assert.True(entry.GetProperty("symbol_extraction").GetBoolean());
-            Assert.True(entry.GetProperty("reference_extraction").GetBoolean());
-            Assert.True(entry.GetProperty("graph_queries").GetBoolean());
-        }
-    }
-
-    [Fact]
-    public void RunLanguages_JsonReportsShaderReferenceExtraction_Issue4737()
-    {
-        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages(["--json"], _jsonOptions));
-
-        Assert.Equal(CommandExitCodes.Success, exitCode);
-        Assert.Equal(string.Empty, stderr);
-
-        using var document = ParseJsonOutput(stdout);
-        var languages = document.RootElement.GetProperty("languages");
-        foreach (var language in new[] { "glsl", "hlsl", "metal", "wgsl" })
-        {
-            var entry = languages.EnumerateArray().Single(lang => lang.GetProperty("lang").GetString() == language);
-            Assert.True(entry.GetProperty("symbol_extraction").GetBoolean());
-            Assert.True(entry.GetProperty("reference_extraction").GetBoolean());
-            Assert.True(entry.GetProperty("graph_queries").GetBoolean());
-            Assert.Empty(entry.GetProperty("capability_gaps").EnumerateArray());
-            Assert.Empty(entry.GetProperty("unsupported_guidance").EnumerateArray());
-        }
-    }
-
-    [Fact]
-    public void RunLanguages_JsonReportsDependencyPackageSymbolExtraction_Issue3899()
-    {
-        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages(["--json"], _jsonOptions));
-
-        Assert.Equal(CommandExitCodes.Success, exitCode);
-        Assert.Equal(string.Empty, stderr);
-
-        using var document = ParseJsonOutput(stdout);
-        var languages = document.RootElement.GetProperty("languages");
-        var manifest = languages.EnumerateArray().Single(lang => lang.GetProperty("lang").GetString() == "dependency_manifest");
-        var lockfile = languages.EnumerateArray().Single(lang => lang.GetProperty("lang").GetString() == "dependency_lock");
-
-        Assert.True(manifest.GetProperty("symbol_extraction").GetBoolean());
-        Assert.True(manifest.GetProperty("reference_extraction").GetBoolean());
-        Assert.True(manifest.GetProperty("graph_queries").GetBoolean());
-        Assert.DoesNotContain("missing-symbols", manifest.GetProperty("capability_gaps").EnumerateArray().Select(gap => gap.GetString()));
-        Assert.Contains("Directory.Packages.props", manifest.GetProperty("exact_filenames").EnumerateArray().Select(value => value.GetString()));
-
-        Assert.True(lockfile.GetProperty("symbol_extraction").GetBoolean());
-        Assert.True(lockfile.GetProperty("reference_extraction").GetBoolean());
-        Assert.True(lockfile.GetProperty("graph_queries").GetBoolean());
-        Assert.DoesNotContain("missing-symbols", lockfile.GetProperty("capability_gaps").EnumerateArray().Select(gap => gap.GetString()));
-        Assert.Contains("packages.lock.json", lockfile.GetProperty("exact_filenames").EnumerateArray().Select(value => value.GetString()));
     }
 
     [Fact]
@@ -3966,34 +3769,6 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunLanguages_JsonReportsScientificNativeAndPrologReferenceCapabilities_Issues4738And4746()
-    {
-        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages(["--json"], _jsonOptions));
-
-        Assert.Equal(CommandExitCodes.Success, exitCode);
-        Assert.Equal(string.Empty, stderr);
-
-        using var document = ParseJsonOutput(stdout);
-        var languages = document.RootElement.GetProperty("languages").EnumerateArray()
-            .ToDictionary(entry => entry.GetProperty("lang").GetString()!, entry => entry);
-        foreach (var language in new[] { "ada", "ambiguous_m", "cython", "d", "julia", "matlab", "nim" })
-        {
-            Assert.True(languages[language].GetProperty("symbol_extraction").GetBoolean());
-            Assert.True(languages[language].GetProperty("reference_extraction").GetBoolean());
-            Assert.True(languages[language].GetProperty("graph_queries").GetBoolean());
-        }
-
-        foreach (var language in new[] { "prolog", "ambiguous_pl" })
-        {
-            Assert.True(languages[language].GetProperty("symbol_extraction").GetBoolean());
-            Assert.True(languages[language].GetProperty("reference_extraction").GetBoolean());
-            Assert.True(languages[language].GetProperty("graph_queries").GetBoolean());
-        }
-        Assert.Contains(".m", languages["ambiguous_m"].GetProperty("extensions").EnumerateArray().Select(value => value.GetString()));
-        Assert.Contains(".pl", languages["ambiguous_pl"].GetProperty("extensions").EnumerateArray().Select(value => value.GetString()));
-    }
-
-    [Fact]
     public void RunSymbolsAndReferences_AcceptDependencyPackageKinds_Issue3899()
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_dependency_package_kinds");
@@ -4034,84 +3809,12 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunLanguages_JsonListsHtmlWithSymbolExtractionAndAllExtensions()
+    public void RunLanguages_JsonCatalogReportsExtensionsAliasesAndExtractionCapabilities()
     {
-        // Pin the #215 surface: `cdidx languages --json` must report html with
-        // symbol_extraction/reference_extraction=true and list all four extensions
-        // (.html, .htm, .xhtml, .shtml) so AI tools can discover HTML support without indexing first.
-        // #215 の表面契約を pin: `cdidx languages --json` は html を symbol_extraction /
-        // reference_extraction=true で返し、`.html` / `.htm` / `.xhtml` / `.shtml` の 4 拡張子を
-        // 列挙する必要がある。AI ツールがインデックス前でも HTML 対応を検出できるようにするため。
-        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages(["--json"], _jsonOptions));
-
-        Assert.Equal(CommandExitCodes.Success, exitCode);
-        Assert.Equal(string.Empty, stderr);
-
-        using var document = ParseJsonOutput(stdout);
-        var languages = document.RootElement.GetProperty("languages");
-        var html = languages.EnumerateArray().First(lang => lang.GetProperty("lang").GetString() == "html");
-
-        Assert.True(html.GetProperty("symbol_extraction").GetBoolean());
-        Assert.True(html.GetProperty("reference_extraction").GetBoolean());
-        var extensions = html.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()).ToList();
-        Assert.Contains(".html", extensions);
-        Assert.Contains(".htm", extensions);
-        Assert.Contains(".xhtml", extensions);
-        Assert.Contains(".shtml", extensions);
-    }
-
-    [Fact]
-    public void RunLanguages_JsonListsAssemblyWithSymbolExtractionGraphAndAliases()
-    {
-        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages(["--json"], _jsonOptions));
-
-        Assert.Equal(CommandExitCodes.Success, exitCode);
-        Assert.Equal(string.Empty, stderr);
-
-        using var document = ParseJsonOutput(stdout);
-        var languages = document.RootElement.GetProperty("languages");
-        var assembly = languages.EnumerateArray().First(lang => lang.GetProperty("lang").GetString() == "assembly");
-
-        Assert.True(assembly.GetProperty("symbol_extraction").GetBoolean());
-        Assert.True(assembly.GetProperty("reference_extraction").GetBoolean());
-        Assert.True(assembly.GetProperty("graph_queries").GetBoolean());
-
-        var extensions = assembly.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()).ToList();
-        Assert.Contains(".s", extensions);
-        Assert.Contains(".S", extensions);
-        Assert.Contains(".asm", extensions);
-        Assert.Contains(".nasm", extensions);
-
-        var aliases = assembly.GetProperty("aliases").EnumerateArray().Select(alias => alias.GetString()).ToList();
-        Assert.Contains("asm", aliases);
-        Assert.Contains("assembler", aliases);
-        Assert.Contains("gas", aliases);
-        Assert.Contains("gnuasm", aliases);
-        Assert.Contains("gnu assembler", aliases);
-    }
-
-    [Fact]
-    public void RunLanguages_JsonListsCSharpRazorAliases()
-    {
-        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages(["--json"], _jsonOptions));
-
-        Assert.Equal(CommandExitCodes.Success, exitCode);
-        Assert.Equal(string.Empty, stderr);
-
-        using var document = ParseJsonOutput(stdout);
-        var languages = document.RootElement.GetProperty("languages");
-        var csharp = languages.EnumerateArray().First(lang => lang.GetProperty("lang").GetString() == "csharp");
-        var aliases = csharp.GetProperty("aliases").EnumerateArray().Select(alias => alias.GetString()).ToList();
-
-        Assert.Contains("cshtml", aliases);
-        Assert.Contains("razor", aliases);
-    }
-
-    [Fact]
-    public void RunLanguages_Json_ExtractorBucketsAdvertiseAccurateGraphSupport_Issue4743()
-    {
+        // Build and parse the unfiltered catalog once so the language-specific contracts below
+        // stay directly comparable without repeating the same discovery and serialization work.
         // Every extractor bucket must advertise the graph support implemented by its
-        // dedicated reference extractor.
+        // dedicated reference extractor (#4743).
         // 各 extractor bucket は専用 reference extractor の実装どおりに graph 対応を広告する。
         var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunLanguages(["--json"], _jsonOptions));
         Assert.Equal(CommandExitCodes.Success, exitCode);
@@ -4120,6 +3823,116 @@ public partial class QueryCommandRunnerTests
         using var document = ParseJsonOutput(stdout);
         var languages = document.RootElement.GetProperty("languages").EnumerateArray()
             .ToDictionary(entry => entry.GetProperty("lang").GetString()!, entry => entry);
+
+        var javascript = languages["javascript"];
+        var typescript = languages["typescript"];
+        var objc = languages["objc"];
+        var ambiguousM = languages["ambiguous_m"];
+        Assert.Contains(".cjs", javascript.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
+        Assert.Contains(".mjs", javascript.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
+        Assert.Contains("js", javascript.GetProperty("aliases").EnumerateArray().Select(alias => alias.GetString()));
+        Assert.Contains("jsx", javascript.GetProperty("aliases").EnumerateArray().Select(alias => alias.GetString()));
+        Assert.Contains(".cts", typescript.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
+        Assert.Contains(".mts", typescript.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
+        Assert.Contains(".mm", objc.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
+        Assert.Contains(".m", ambiguousM.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()));
+
+        // Cython and CUDA reference support (#4737, #4738).
+        var cython = languages["cython"];
+        var cuda = languages["cuda"];
+        Assert.True(cython.GetProperty("symbol_extraction").GetBoolean());
+        Assert.True(cython.GetProperty("reference_extraction").GetBoolean());
+        Assert.True(cython.GetProperty("graph_queries").GetBoolean());
+        Assert.True(cuda.GetProperty("symbol_extraction").GetBoolean());
+        Assert.True(cuda.GetProperty("reference_extraction").GetBoolean());
+        Assert.True(cuda.GetProperty("graph_queries").GetBoolean());
+        Assert.Empty(cuda.GetProperty("capability_gaps").EnumerateArray());
+        Assert.Empty(cuda.GetProperty("unsupported_guidance").EnumerateArray());
+
+        // HDL graph extraction (#3532, #4742).
+        foreach (var language in new[] { "verilog", "systemverilog", "vhdl" })
+        {
+            var entry = languages[language];
+            Assert.True(entry.GetProperty("symbol_extraction").GetBoolean(), $"{language} must advertise symbol extraction");
+            Assert.True(entry.GetProperty("reference_extraction").GetBoolean(), $"{language} must advertise reference extraction");
+            Assert.True(entry.GetProperty("graph_queries").GetBoolean(), $"{language} must advertise graph queries");
+        }
+
+        // Shader reference extraction (#4737).
+        foreach (var language in new[] { "glsl", "hlsl", "metal", "wgsl" })
+        {
+            var entry = languages[language];
+            Assert.True(entry.GetProperty("symbol_extraction").GetBoolean(), $"{language} must advertise symbol extraction");
+            Assert.True(entry.GetProperty("reference_extraction").GetBoolean(), $"{language} must advertise reference extraction");
+            Assert.True(entry.GetProperty("graph_queries").GetBoolean(), $"{language} must advertise graph queries");
+            Assert.Empty(entry.GetProperty("capability_gaps").EnumerateArray());
+            Assert.Empty(entry.GetProperty("unsupported_guidance").EnumerateArray());
+        }
+
+        // Dependency package symbols and references (#3899).
+        var manifest = languages["dependency_manifest"];
+        var lockfile = languages["dependency_lock"];
+        Assert.True(manifest.GetProperty("symbol_extraction").GetBoolean());
+        Assert.True(manifest.GetProperty("reference_extraction").GetBoolean());
+        Assert.True(manifest.GetProperty("graph_queries").GetBoolean());
+        Assert.DoesNotContain("missing-symbols", manifest.GetProperty("capability_gaps").EnumerateArray().Select(gap => gap.GetString()));
+        Assert.Contains("Directory.Packages.props", manifest.GetProperty("exact_filenames").EnumerateArray().Select(value => value.GetString()));
+        Assert.True(lockfile.GetProperty("symbol_extraction").GetBoolean());
+        Assert.True(lockfile.GetProperty("reference_extraction").GetBoolean());
+        Assert.True(lockfile.GetProperty("graph_queries").GetBoolean());
+        Assert.DoesNotContain("missing-symbols", lockfile.GetProperty("capability_gaps").EnumerateArray().Select(gap => gap.GetString()));
+        Assert.Contains("packages.lock.json", lockfile.GetProperty("exact_filenames").EnumerateArray().Select(value => value.GetString()));
+
+        // Scientific/native and Prolog reference capabilities (#4738, #4746).
+        foreach (var language in new[] { "ada", "ambiguous_m", "cython", "d", "julia", "matlab", "nim" })
+        {
+            Assert.True(languages[language].GetProperty("symbol_extraction").GetBoolean(), $"{language} must advertise symbol extraction");
+            Assert.True(languages[language].GetProperty("reference_extraction").GetBoolean(), $"{language} must advertise reference extraction");
+            Assert.True(languages[language].GetProperty("graph_queries").GetBoolean(), $"{language} must advertise graph queries");
+        }
+
+        foreach (var language in new[] { "prolog", "ambiguous_pl" })
+        {
+            Assert.True(languages[language].GetProperty("symbol_extraction").GetBoolean(), $"{language} must advertise symbol extraction");
+            Assert.True(languages[language].GetProperty("reference_extraction").GetBoolean(), $"{language} must advertise reference extraction");
+            Assert.True(languages[language].GetProperty("graph_queries").GetBoolean(), $"{language} must advertise graph queries");
+        }
+        Assert.Contains(".m", languages["ambiguous_m"].GetProperty("extensions").EnumerateArray().Select(value => value.GetString()));
+        Assert.Contains(".pl", languages["ambiguous_pl"].GetProperty("extensions").EnumerateArray().Select(value => value.GetString()));
+
+        // Pin the #215 surface: HTML must be discoverable before indexing with symbol and
+        // reference extraction plus all four supported extensions.
+        // #215 の表面契約を pin: HTML はインデックス前でも symbol / reference extraction と
+        // 4つの対応拡張子を含む言語として検出できる必要がある。
+        var html = languages["html"];
+        Assert.True(html.GetProperty("symbol_extraction").GetBoolean());
+        Assert.True(html.GetProperty("reference_extraction").GetBoolean());
+        var htmlExtensions = html.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()).ToList();
+        Assert.Contains(".html", htmlExtensions);
+        Assert.Contains(".htm", htmlExtensions);
+        Assert.Contains(".xhtml", htmlExtensions);
+        Assert.Contains(".shtml", htmlExtensions);
+
+        var assembly = languages["assembly"];
+        Assert.True(assembly.GetProperty("symbol_extraction").GetBoolean());
+        Assert.True(assembly.GetProperty("reference_extraction").GetBoolean());
+        Assert.True(assembly.GetProperty("graph_queries").GetBoolean());
+        var assemblyExtensions = assembly.GetProperty("extensions").EnumerateArray().Select(ext => ext.GetString()).ToList();
+        Assert.Contains(".s", assemblyExtensions);
+        Assert.Contains(".S", assemblyExtensions);
+        Assert.Contains(".asm", assemblyExtensions);
+        Assert.Contains(".nasm", assemblyExtensions);
+        var assemblyAliases = assembly.GetProperty("aliases").EnumerateArray().Select(alias => alias.GetString()).ToList();
+        Assert.Contains("asm", assemblyAliases);
+        Assert.Contains("assembler", assemblyAliases);
+        Assert.Contains("gas", assemblyAliases);
+        Assert.Contains("gnuasm", assemblyAliases);
+        Assert.Contains("gnu assembler", assemblyAliases);
+
+        var csharpAliases = languages["csharp"].GetProperty("aliases").EnumerateArray()
+            .Select(alias => alias.GetString()).ToList();
+        Assert.Contains("cshtml", csharpAliases);
+        Assert.Contains("razor", csharpAliases);
 
         foreach (var functionalGraphLanguage in new[] { "clojure", "erlang", "ocaml", "raku" })
         {

@@ -8283,53 +8283,57 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Theory]
-    [InlineData(1, 1)]
-    [InlineData(20_000_000, 16 * 1024 * 1024)]
-    public void WriteJsonObject_ResponseAboveEffectiveMaximumRequiresSizeReduction_Issue4909(
-        int requestedMaxJsonBytes,
-        int expectedEffectiveBytes)
+    [Fact]
+    public void WriteJsonObject_ResponseAboveEffectiveMaximumRequiresSizeReduction_Issue4909()
     {
-        var options = QueryCommandRunner.ParseArgs(
-            [
-                "needle",
-                "--json=array",
-                "--max-json-bytes",
-                requestedMaxJsonBytes.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            ],
-            jsonDefault: false);
-        Assert.Equal(requestedMaxJsonBytes, options.RequestedMaxJsonBytes);
-        Assert.Equal(expectedEffectiveBytes, options.MaxJsonBytes);
         var oversizedJson = JsonSerializer.Serialize(new
         {
             payload = new string('x', QueryCommandRunner.MaxSearchJsonByteLimit + 1),
         });
 
-        var (exitCode, stdout, stderr) = CaptureConsole(() =>
-            QueryCommandRunner.WriteJsonObjectWithOptionalByteLimit(
-                oversizedJson,
-                options,
-                "oversized test payload",
-                "Reduce the test payload.",
-                _jsonOptions,
-                "search"));
+        foreach (var testCase in new[]
+                 {
+                     (RequestedMaxJsonBytes: 1, ExpectedEffectiveBytes: 1),
+                     (RequestedMaxJsonBytes: 20_000_000, ExpectedEffectiveBytes: QueryCommandRunner.MaxSearchJsonByteLimit),
+                 })
+        {
+            var options = QueryCommandRunner.ParseArgs(
+                [
+                    "needle",
+                    "--json=array",
+                    "--max-json-bytes",
+                    testCase.RequestedMaxJsonBytes.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ],
+                jsonDefault: false);
+            Assert.Equal(testCase.RequestedMaxJsonBytes, options.RequestedMaxJsonBytes);
+            Assert.Equal(testCase.ExpectedEffectiveBytes, options.MaxJsonBytes);
 
-        Assert.Equal(CommandExitCodes.UsageError, exitCode);
-        Assert.Equal(string.Empty, stderr);
-        using var document = ParseJsonOutput(stdout);
-        var error = document.RootElement;
-        Assert.Equal(requestedMaxJsonBytes, error.GetProperty("requested_bytes").GetInt64());
-        Assert.Equal(expectedEffectiveBytes, error.GetProperty("effective_bytes").GetInt64());
-        Assert.True(
-            error.GetProperty("minimum_required_bytes").GetInt64()
-            > QueryCommandRunner.MaxSearchJsonByteLimit);
-        var retry = error.GetProperty("retry");
-        Assert.Equal("reduce_response_size", retry.GetProperty("action").GetString());
-        Assert.Equal(JsonValueKind.Null, retry.GetProperty("option").ValueKind);
-        Assert.Equal(JsonValueKind.Null, retry.GetProperty("recommended_bytes").ValueKind);
-        Assert.Equal(
-            QueryCommandRunner.MaxSearchJsonByteLimit,
-            retry.GetProperty("maximum_effective_bytes").GetInt64());
+            var (exitCode, stdout, stderr) = CaptureConsole(() =>
+                QueryCommandRunner.WriteJsonObjectWithOptionalByteLimit(
+                    oversizedJson,
+                    options,
+                    "oversized test payload",
+                    "Reduce the test payload.",
+                    _jsonOptions,
+                    "search"));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var error = document.RootElement;
+            Assert.Equal(testCase.RequestedMaxJsonBytes, error.GetProperty("requested_bytes").GetInt64());
+            Assert.Equal(testCase.ExpectedEffectiveBytes, error.GetProperty("effective_bytes").GetInt64());
+            Assert.True(
+                error.GetProperty("minimum_required_bytes").GetInt64()
+                > QueryCommandRunner.MaxSearchJsonByteLimit);
+            var retry = error.GetProperty("retry");
+            Assert.Equal("reduce_response_size", retry.GetProperty("action").GetString());
+            Assert.Equal(JsonValueKind.Null, retry.GetProperty("option").ValueKind);
+            Assert.Equal(JsonValueKind.Null, retry.GetProperty("recommended_bytes").ValueKind);
+            Assert.Equal(
+                QueryCommandRunner.MaxSearchJsonByteLimit,
+                retry.GetProperty("maximum_effective_bytes").GetInt64());
+        }
     }
 
     [Fact]
@@ -12749,297 +12753,58 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunSearch_RecognizesXamlLanguageAliases()
+    public void RunSearch_NormalizesLanguageAliasesAcrossSharedIndex()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_xaml_lang_alias");
-        try
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_query_runner_language_aliases");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        var markerSuffix = Guid.NewGuid().ToString("N");
+        var sharedQuery = $"shared_language_alias_{markerSuffix}";
+        var cases = new[]
         {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            var queryToken = $"xaml_lang_alias_{Guid.NewGuid():N}";
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
-                "src/MainWindow.xaml",
-                "xml",
-                $$"""
-                <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-                        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-                    <Grid>
-                        <TextBlock Text="{{queryToken}}" />
-                    </Grid>
-                </Window>
-                """);
+            (Path: "src/MainWindow.xaml", Lang: "xml", Query: $"xaml_alias_{markerSuffix}", Exact: false,
+                Aliases: new[] { "xaml", "axaml" }),
+            (Path: "src/lib.rs", Lang: "rust", Query: $"rust_alias_{markerSuffix}", Exact: false,
+                Aliases: new[] { "rs", "r-s", "r s" }),
+            (Path: "src/App.cs", Lang: "csharp", Query: sharedQuery, Exact: false,
+                Aliases: new[] { "c#", "cs", "cshtml", "razor" }),
+            (Path: "src/App.kt", Lang: "kotlin", Query: sharedQuery, Exact: false,
+                Aliases: new[] { "kt", "kts" }),
+            (Path: "src/App.java", Lang: "java", Query: sharedQuery, Exact: false,
+                Aliases: new[] { "Java" }),
+            (Path: "src/App.js", Lang: "javascript", Query: sharedQuery, Exact: false,
+                Aliases: new[] { "js", "jsx", "JS", "JSX", "cjs", "mjs", "CJS", "MJS" }),
+            (Path: "config/workflow.yml", Lang: "yaml", Query: $"yaml_alias_{markerSuffix}", Exact: false,
+                Aliases: new[] { "yml", "YML" }),
+            (Path: "scripts/run.bat", Lang: "batch", Query: $"batch_alias_{markerSuffix}", Exact: false,
+                Aliases: new[] { "bat", "cmd" }),
+            (Path: "sql/repro.sql", Lang: "sql", Query: $"sql_alias_{markerSuffix}", Exact: false,
+                Aliases: new[] { "T-SQL", "transact-sql", "transact sql" }),
+            (Path: "package/example.rb", Lang: "ruby", Query: "public_api", Exact: true,
+                Aliases: new[] { "rb" }),
+            (Path: "Module.fs", Lang: "fsharp", Query: "public_api", Exact: true,
+                Aliases: new[] { "fs" }),
+        };
 
-            foreach (var lang in new[] { "xaml", "axaml" })
+        foreach (var testCase in cases)
+            TestProjectHelper.InsertIndexedFile(dbPath, testCase.Path, testCase.Lang, testCase.Query);
+
+        foreach (var testCase in cases)
+        {
+            foreach (var alias in testCase.Aliases)
             {
+                string[] args = testCase.Exact
+                    ? [testCase.Query, "--db", dbPath, "--lang", alias, "--exact", "--json=array"]
+                    : [testCase.Query, "--db", dbPath, "--lang", alias, "--json=array"];
                 var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                    [queryToken, "--db", dbPath, "--lang", lang, "--count"],
+                    args,
                     _jsonOptions));
 
                 Assert.Equal(CommandExitCodes.Success, exitCode);
-                Assert.Equal("1", stdout.Trim());
                 Assert.Equal(string.Empty, stderr);
+                using var document = ParseJsonOutput(stdout);
+                var result = Assert.Single(document.RootElement.EnumerateArray());
+                Assert.Equal(testCase.Path, result.GetProperty("path").GetString());
             }
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunSearch_RecognizesRustLanguageAliases()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_rust_lang_alias");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            var queryToken = $"rust_lang_alias_{Guid.NewGuid():N}";
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
-                "src/lib.rs",
-                "rust",
-                $$"""
-                pub fn hit() {
-                    let _ = "{{queryToken}}";
-                }
-                """);
-
-            foreach (var lang in new[] { "rs", "r-s", "r s" })
-            {
-                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                    [queryToken, "--db", dbPath, "--lang", lang, "--count"],
-                    _jsonOptions));
-
-                Assert.Equal(CommandExitCodes.Success, exitCode);
-                Assert.Equal("1", stdout.Trim());
-                Assert.Equal(string.Empty, stderr);
-            }
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunSearch_NormalizesCommonLanguageAliases()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_lang_alias");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            var queryToken = "lang_alias_91d4b3";
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
-                "src/App.cs",
-                "csharp",
-                $@"public class App
-{{
-    public void Run()
-    {{
-        var marker = ""{queryToken}"";
-    }}
-}}");
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
-                "src/App.kt",
-                "kotlin",
-                $@"class App {{
-    fun run() {{
-        val marker = ""{queryToken}""
-    }}
-}}");
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
-                "src/App.java",
-                "java",
-                $@"class App {{
-    void run() {{
-        String marker = ""{queryToken}"";
-    }}
-}}");
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
-                "src/App.js",
-                "javascript",
-                $@"function run() {{
-    const marker = ""{queryToken}"";
-}}");
-
-            foreach (var input in new[] { "c#", "cs", "cshtml", "js", "JSX", "cjs", "MJS", "Java", "kt", "kts", "razor" })
-            {
-                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                    [queryToken, "--db", dbPath, "--lang", input, "--count"],
-                    _jsonOptions));
-
-                Assert.Equal(CommandExitCodes.Success, exitCode);
-                Assert.Equal("1", stdout.Trim());
-                Assert.Equal(string.Empty, stderr);
-            }
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunSearch_NormalizesJavascriptLangAliases()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_javascript_lang_alias");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            var queryToken = $"javascript_lang_alias_{Guid.NewGuid():N}";
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
-                "src/App.js",
-                "javascript",
-                $@"const marker = ""{queryToken}"";");
-
-            foreach (var lang in new[] { "js", "jsx", "JS", "JSX" })
-            {
-                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                    [queryToken, "--db", dbPath, "--lang", lang, "--count"],
-                    _jsonOptions));
-
-                Assert.Equal(CommandExitCodes.Success, exitCode);
-                Assert.Equal("1", stdout.Trim());
-                Assert.Equal(string.Empty, stderr);
-            }
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunSearch_NormalizesJavascriptExtensionStyleLangAliases()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_javascript_extension_lang_alias");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            var queryToken = $"javascript_extension_lang_alias_{Guid.NewGuid():N}";
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
-                "src/App.mjs",
-                "javascript",
-                $@"const marker = ""{queryToken}"";");
-
-            foreach (var lang in new[] { "cjs", "mjs", "CJS", "MJS" })
-            {
-                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                    [queryToken, "--db", dbPath, "--lang", lang, "--count"],
-                    _jsonOptions));
-
-                Assert.Equal(CommandExitCodes.Success, exitCode);
-                Assert.Equal("1", stdout.Trim());
-                Assert.Equal(string.Empty, stderr);
-            }
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunSearch_NormalizesYamlLangAliases()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_yaml_lang_alias");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            var queryToken = "yaml_lang_alias_3d5a19";
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
-                "config/workflow.yml",
-                "yaml",
-                $@"name: demo
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - run: echo ""{queryToken}""");
-
-            foreach (var input in new[] { "yml", "YML" })
-            {
-                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                    [queryToken, "--db", dbPath, "--lang", input, "--count"],
-                    _jsonOptions));
-
-                Assert.Equal(CommandExitCodes.Success, exitCode);
-                Assert.Equal("1", stdout.Trim());
-                Assert.Equal(string.Empty, stderr);
-            }
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunSearch_NormalizesBatchLangAliases()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_batch_lang_alias");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            var queryToken = "batch_lang_alias_7a24d1";
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
-                "scripts/run.bat",
-                "batch",
-                $"echo {queryToken}\r\n");
-
-            foreach (var input in new[] { "bat", "cmd" })
-            {
-                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                    [queryToken, "--db", dbPath, "--lang", input, "--count"],
-                    _jsonOptions));
-
-                Assert.Equal(CommandExitCodes.Success, exitCode);
-                Assert.Equal("1", stdout.Trim());
-                Assert.Equal(string.Empty, stderr);
-            }
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunSearch_NormalizesSqlDialectLangAliases()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_sql_lang_alias");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            var queryToken = "sql_lang_alias_3f7d21";
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
-                "sql/repro.sql",
-                "sql",
-                $"SELECT '{queryToken}';");
-
-            foreach (var input in new[] { "T-SQL", "transact-sql", "transact sql" })
-            {
-                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                    [queryToken, "--db", dbPath, "--lang", input, "--count"],
-                    _jsonOptions));
-
-                Assert.Equal(CommandExitCodes.Success, exitCode);
-                Assert.Equal("1", stdout.Trim());
-                Assert.Equal(string.Empty, stderr);
-            }
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
         }
     }
 
@@ -13175,38 +12940,6 @@ jobs:
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal("1", stdout.Trim());
             Assert.Equal(string.Empty, stderr);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunSearch_AcceptsRubyAndFsharpLangAliases()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_ruby_fsharp_lang_aliases");
-        try
-        {
-            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            var cases = new[]
-            {
-                (Alias: "rb", CanonicalLang: "ruby", FilePath: "package/example.rb"),
-                (Alias: "fs", CanonicalLang: "fsharp", FilePath: "Module.fs"),
-            };
-            foreach (var testCase in cases)
-                TestProjectHelper.InsertIndexedFile(dbPath, testCase.FilePath, testCase.CanonicalLang, "public_api\n");
-
-            foreach (var testCase in cases)
-            {
-                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                    ["public_api", "--db", dbPath, "--lang", testCase.Alias, "--exact", "--count"],
-                    _jsonOptions));
-
-                Assert.Equal(CommandExitCodes.Success, exitCode);
-                Assert.Equal("1", stdout.Trim());
-                Assert.Equal(string.Empty, stderr);
-            }
         }
         finally
         {

@@ -1352,72 +1352,26 @@ exit 7
     }
 
     [ExternalProcessFact]
-    public void TryGetHeadCommit_ReturnsHeadCommitForRepo()
+    public void HeadMetadataLifecycle_UnbornResolvedSubdirectoryAndDetached_ReturnsConsistentValues()
     {
         var repoDir = CreateGitRepo();
 
-        File.WriteAllText(Path.Combine(repoDir, "tracked.txt"), "v1\n");
-        RunGit(repoDir, "add", "tracked.txt");
-        RunGit(repoDir, "commit", "-m", "initial");
+        AssertHeadResult(GitHelper.TryGetHeadCommitResult(repoDir), GitHeadCommitState.None, expectedSha: null);
 
+        RunGit(repoDir, "commit", "--allow-empty", "-m", "initial");
+        RunGit(repoDir, "branch", "-M", "cdidx-head-lifecycle");
         var expected = RunGit(repoDir, "rev-parse", "HEAD").Trim();
-        var actual = GitHelper.TryGetHeadCommit(repoDir);
-
-        Assert.Equal(expected, actual);
-    }
-
-    [ExternalProcessFact]
-    public void TryGetHeadCommitResult_ReturnsResolvedForBranchHead()
-    {
-        var repoDir = CreateGitRepo();
-
-        File.WriteAllText(Path.Combine(repoDir, "tracked.txt"), "v1\n");
-        RunGit(repoDir, "add", "tracked.txt");
-        RunGit(repoDir, "commit", "-m", "initial");
-
-        var expected = RunGit(repoDir, "rev-parse", "HEAD").Trim();
-        var actual = GitHelper.TryGetHeadCommitResult(repoDir);
-
-        Assert.Equal(GitHeadCommitState.Resolved, actual.State);
-        Assert.Equal(expected, actual.Sha);
-        Assert.Null(actual.Reason);
-    }
-
-    [ExternalProcessFact]
-    public void TryGetHeadCommitResult_ReturnsResolvedForRepositorySubdirectory()
-    {
-        var repoDir = CreateGitRepo();
-
-        File.WriteAllText(Path.Combine(repoDir, "tracked.txt"), "v1\n");
-        RunGit(repoDir, "add", "tracked.txt");
-        RunGit(repoDir, "commit", "-m", "initial");
         var projectDir = Path.Combine(repoDir, "src", "App");
         Directory.CreateDirectory(projectDir);
 
-        var expected = RunGit(repoDir, "rev-parse", "HEAD").Trim();
-        var actual = GitHelper.TryGetHeadCommitResult(projectDir);
+        Assert.Equal(expected, GitHelper.TryGetHeadCommit(repoDir));
+        AssertHeadResult(GitHelper.TryGetHeadCommitResult(repoDir), GitHeadCommitState.Resolved, expected);
+        AssertHeadResult(GitHelper.TryGetHeadCommitResult(projectDir), GitHeadCommitState.Resolved, expected);
+        Assert.Equal("cdidx-head-lifecycle", GitHelper.TryGetHeadBranch(repoDir));
 
-        Assert.Equal(GitHeadCommitState.Resolved, actual.State);
-        Assert.Equal(expected, actual.Sha);
-        Assert.Null(actual.Reason);
-    }
-
-    [ExternalProcessFact]
-    public void TryGetHeadCommitResult_ReturnsDetachedHeadWithSha()
-    {
-        var repoDir = CreateGitRepo();
-
-        File.WriteAllText(Path.Combine(repoDir, "tracked.txt"), "v1\n");
-        RunGit(repoDir, "add", "tracked.txt");
-        RunGit(repoDir, "commit", "-m", "initial");
-        var sha = RunGit(repoDir, "rev-parse", "HEAD").Trim();
-        RunGit(repoDir, "checkout", "--detach", sha);
-
-        var actual = GitHelper.TryGetHeadCommitResult(repoDir);
-
-        Assert.Equal(GitHeadCommitState.DetachedHead, actual.State);
-        Assert.Equal(sha, actual.Sha);
-        Assert.Null(actual.Reason);
+        RunGit(repoDir, "checkout", "--detach", expected);
+        AssertHeadResult(GitHelper.TryGetHeadCommitResult(repoDir), GitHeadCommitState.DetachedHead, expected);
+        Assert.Null(GitHelper.TryGetHeadBranch(repoDir));
     }
 
     [ExternalProcessFact]
@@ -1499,18 +1453,6 @@ exit 7
     }
 
     [ExternalProcessFact]
-    public void TryGetHeadCommitResult_ReturnsNoneForUnbornHead()
-    {
-        var repoDir = CreateGitRepo();
-
-        var actual = GitHelper.TryGetHeadCommitResult(repoDir);
-
-        Assert.Equal(GitHeadCommitState.None, actual.State);
-        Assert.Null(actual.Sha);
-        Assert.Null(actual.Reason);
-    }
-
-    [ExternalProcessFact]
     public void TryGetHeadCommitResult_ReturnsErrorForCorruptGitDirectory()
     {
         var repoDir = Path.Combine(_tempDir, "corrupt-repo");
@@ -1542,109 +1484,25 @@ exit 7
     }
 
     [ExternalProcessFact]
-    public void TryGetHeadBranch_ReturnsBranchShortName()
+    public void TryCountCommitsAhead_EqualLinearDivergentAndInvalidBases_ReturnsExpectedCounts()
     {
         var repoDir = CreateGitRepo();
-        File.WriteAllText(Path.Combine(repoDir, "tracked.txt"), "v1\n");
-        RunGit(repoDir, "add", "tracked.txt");
-        RunGit(repoDir, "commit", "-m", "initial");
-
-        // Force a deterministic branch name so the assertion isn't sensitive to the
-        // local `init.defaultBranch` setting on the dev machine.
-        // ローカル設定の影響を避けるためブランチを明示的に切り替える。
-        RunGit(repoDir, "switch", "-c", "feature");
-
-        Assert.Equal("feature", GitHelper.TryGetHeadBranch(repoDir));
-    }
-
-    [ExternalProcessFact]
-    public void TryGetHeadBranch_ReturnsNullOnDetachedHead()
-    {
-        var repoDir = CreateGitRepo();
-        File.WriteAllText(Path.Combine(repoDir, "tracked.txt"), "v1\n");
-        RunGit(repoDir, "add", "tracked.txt");
-        RunGit(repoDir, "commit", "-m", "initial");
-        var sha = RunGit(repoDir, "rev-parse", "HEAD").Trim();
-        // `git checkout <sha>` detaches HEAD; rev-parse --abbrev-ref then prints "HEAD".
-        // We must not surface that literal "HEAD" as a real branch name. Issue #1509.
-        // detached HEAD では文字列 "HEAD" を branch 名として誤って返さないことを保証する。
-        RunGit(repoDir, "checkout", "--detach", sha);
-
-        Assert.Null(GitHelper.TryGetHeadBranch(repoDir));
-    }
-
-    [ExternalProcessFact]
-    public void TryCountCommitsAhead_ReturnsZeroWhenIndexedShaEqualsCurrent()
-    {
-        var repoDir = CreateGitRepo();
-        File.WriteAllText(Path.Combine(repoDir, "tracked.txt"), "v1\n");
-        RunGit(repoDir, "add", "tracked.txt");
-        RunGit(repoDir, "commit", "-m", "initial");
-        var sha = RunGit(repoDir, "rev-parse", "HEAD").Trim();
-
-        Assert.Equal(0, GitHelper.TryCountCommitsAhead(repoDir, sha));
-    }
-
-    [ExternalProcessFact]
-    public void TryCountCommitsAhead_CountsCommitsBetweenIndexedAndCurrentHead()
-    {
-        var repoDir = CreateGitRepo();
-        File.WriteAllText(Path.Combine(repoDir, "tracked.txt"), "v1\n");
-        RunGit(repoDir, "add", "tracked.txt");
-        RunGit(repoDir, "commit", "-m", "initial");
+        RunGit(repoDir, "commit", "--allow-empty", "-m", "base");
+        RunGit(repoDir, "branch", "-M", "cdidx-ahead-main");
         var indexedSha = RunGit(repoDir, "rev-parse", "HEAD").Trim();
 
-        File.WriteAllText(Path.Combine(repoDir, "tracked.txt"), "v2\n");
-        RunGit(repoDir, "add", "tracked.txt");
-        RunGit(repoDir, "commit", "-m", "second");
-        File.WriteAllText(Path.Combine(repoDir, "tracked.txt"), "v3\n");
-        RunGit(repoDir, "add", "tracked.txt");
-        RunGit(repoDir, "commit", "-m", "third");
+        Assert.Equal(0, GitHelper.TryCountCommitsAhead(repoDir, indexedSha));
 
-        Assert.Equal(2, GitHelper.TryCountCommitsAhead(repoDir, indexedSha));
-    }
-
-    [ExternalProcessFact]
-    public void TryCountCommitsAhead_ReturnsNullWhenIndexedShaIsNotAncestor()
-    {
-        var repoDir = CreateGitRepo();
-        File.WriteAllText(Path.Combine(repoDir, "tracked.txt"), "base\n");
-        RunGit(repoDir, "add", "tracked.txt");
-        RunGit(repoDir, "commit", "-m", "base");
-        var defaultBranch = RunGit(repoDir, "rev-parse", "--abbrev-ref", "HEAD").Trim();
-
-        // Create a divergent commit, capture its SHA, then switch back to the
-        // original branch so the diverged commit is no longer reachable from HEAD.
-        // "Ahead by N" is not meaningful here, so the helper must report null
-        // instead of a misleading 0.
-        // 非祖先 commit に対しては「N コミット進んでいる」は意味を成さないので null を返す。
-        RunGit(repoDir, "switch", "-c", "divergent");
-        File.WriteAllText(Path.Combine(repoDir, "tracked.txt"), "divergent\n");
-        RunGit(repoDir, "add", "tracked.txt");
-        RunGit(repoDir, "commit", "-m", "divergent");
+        RunGit(repoDir, "switch", "-c", "cdidx-ahead-divergent");
+        RunGit(repoDir, "commit", "--allow-empty", "-m", "divergent");
         var divergentSha = RunGit(repoDir, "rev-parse", "HEAD").Trim();
 
-        // Switch back to the original branch and add another commit on its lineage.
-        RunGit(repoDir, "switch", defaultBranch);
-        File.WriteAllText(Path.Combine(repoDir, "tracked.txt"), "after\n");
-        RunGit(repoDir, "add", "tracked.txt");
-        RunGit(repoDir, "commit", "-m", "after");
+        RunGit(repoDir, "switch", "cdidx-ahead-main");
+        RunGit(repoDir, "commit", "--allow-empty", "-m", "second");
+        RunGit(repoDir, "commit", "--allow-empty", "-m", "third");
 
+        Assert.Equal(2, GitHelper.TryCountCommitsAhead(repoDir, indexedSha));
         Assert.Null(GitHelper.TryCountCommitsAhead(repoDir, divergentSha));
-    }
-
-    [ExternalProcessFact]
-    public void TryCountCommitsAhead_RejectsArgumentInjectionAttempts()
-    {
-        var repoDir = CreateGitRepo();
-        File.WriteAllText(Path.Combine(repoDir, "tracked.txt"), "v1\n");
-        RunGit(repoDir, "add", "tracked.txt");
-        RunGit(repoDir, "commit", "-m", "initial");
-
-        // The helper must reject values that look like git options, mirroring the
-        // existing GetChangedFilesFromCommit validation, so a caller cannot smuggle
-        // `--exec` or similar payloads through the stamped indexed_head_sha.
-        // 永続化された stamp 経由で git オプションが流れ込まないよう dash 始まりを拒否する。
         Assert.Null(GitHelper.TryCountCommitsAhead(repoDir, "--upload-pack=evil"));
         Assert.Null(GitHelper.TryCountCommitsAhead(repoDir, string.Empty));
     }
@@ -1691,42 +1549,20 @@ exit 7
     }
 
     [ExternalProcessFact]
-    public void ResolveIgnoreCase_UsesGitConfigWhenRepositorySetsTrue()
+    public void ResolveIgnoreCase_RootAndSubdirectoryAcrossConfigChanges_ReturnsConfiguredValue()
     {
-        var repoDir = CreateGitRepo();
+        var repoDir = CreateInitializedGitRepo();
+        var subDir = Path.Combine(repoDir, "src", "module");
+        Directory.CreateDirectory(subDir);
+
         RunGit(repoDir, "config", "core.ignorecase", "true");
 
         Assert.True(GitHelper.ResolveIgnoreCase(repoDir));
-    }
+        Assert.True(GitHelper.ResolveIgnoreCase(subDir));
 
-    [ExternalProcessFact]
-    public void ResolveIgnoreCase_UsesGitConfigWhenRepositorySetsFalse()
-    {
-        var repoDir = CreateGitRepo();
         RunGit(repoDir, "config", "core.ignorecase", "false");
 
         Assert.False(GitHelper.ResolveIgnoreCase(repoDir));
-    }
-
-    [ExternalProcessFact]
-    public void ResolveIgnoreCase_UsesGitConfigWhenProjectPathIsSubdirectoryAndRepositorySetsTrue()
-    {
-        var repoDir = CreateGitRepo();
-        var subDir = Path.Combine(repoDir, "src", "module");
-        Directory.CreateDirectory(subDir);
-        RunGit(repoDir, "config", "core.ignorecase", "true");
-
-        Assert.True(GitHelper.ResolveIgnoreCase(subDir));
-    }
-
-    [ExternalProcessFact]
-    public void ResolveIgnoreCase_UsesGitConfigWhenProjectPathIsSubdirectoryAndRepositorySetsFalse()
-    {
-        var repoDir = CreateGitRepo();
-        var subDir = Path.Combine(repoDir, "src", "module");
-        Directory.CreateDirectory(subDir);
-        RunGit(repoDir, "config", "core.ignorecase", "false");
-
         Assert.False(GitHelper.ResolveIgnoreCase(subDir));
     }
 
@@ -1799,16 +1635,34 @@ exit 7
 
     private string CreateGitRepo()
     {
-        var repoDir = Path.Combine(_tempDir, $"repo_{Guid.NewGuid():N}");
-        Directory.CreateDirectory(repoDir);
+        var repoDir = CreateInitializedGitRepo();
 
-        RunGit(repoDir, "init");
         RunGit(repoDir, "config", "user.name", "CodeIndex Tests");
         RunGit(repoDir, "config", "user.email", "tests@example.com");
         RunGit(repoDir, "config", "commit.gpgsign", "false");
         RunGit(repoDir, "config", "tag.gpgsign", "false");
 
         return repoDir;
+    }
+
+    private string CreateInitializedGitRepo()
+    {
+        var repoDir = Path.Combine(_tempDir, $"repo_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(repoDir);
+
+        RunGit(repoDir, "init");
+
+        return repoDir;
+    }
+
+    private static void AssertHeadResult(
+        GitHeadCommitResult actual,
+        GitHeadCommitState expectedState,
+        string? expectedSha)
+    {
+        Assert.Equal(expectedState, actual.State);
+        Assert.Equal(expectedSha, actual.Sha);
+        Assert.Null(actual.Reason);
     }
 
     private static string RunGit(string workDir, params string[] args)

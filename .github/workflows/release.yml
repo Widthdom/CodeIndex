@@ -102,7 +102,7 @@ jobs:
           ref: ${{ needs.preflight.outputs.ref }}
 
       - name: Configure Windows test host
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && !matrix.cross_compile
         shell: pwsh
         run: ./.github/scripts/configure-windows-test-host.ps1 -Workspace "${{ github.workspace }}"
 
@@ -119,13 +119,24 @@ jobs:
         uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5.3.0
         with:
           dotnet-version: 9.0.301
-      - name: Cache NuGet packages
+
+      - name: Cache native NuGet packages
+        if: ${{ !matrix.cross_compile }}
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: |
             ~/.nuget/packages
             ~\AppData\Local\NuGet\packages
-          key: ${{ runner.os }}-release-nuget-${{ hashFiles('**/packages.lock.json', 'global.json') }}
+          key: ${{ runner.os }}-release-nuget-${{ hashFiles('src/CodeIndex/packages.lock.json', 'tests/CodeIndex.HookIsolationFixture/packages.lock.json', 'tests/CodeIndex.Tests/packages.lock.json', 'tools/CodeIndex.Changelog/packages.lock.json', 'tools/CodeIndex.PackageNormalize/packages.lock.json', 'tools/CodeIndex.TestTelemetry/packages.lock.json') }}
+
+      - name: Cache cross-compile NuGet packages
+        if: matrix.cross_compile
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: |
+            ~/.nuget/packages
+            ~\AppData\Local\NuGet\packages
+          key: ${{ runner.os }}-release-cross-nuget-${{ hashFiles('src/CodeIndex/packages.lock.json') }}
 
       # --locked-mode requires every resolved package to match the committed
       # packages.lock.json so an unexpected transitive bump (including silent
@@ -161,21 +172,25 @@ jobs:
       # 依存ツリーと SQLitePCLRaw のネイティブアセットを列挙するので RID 間で
       # 内容は同一)。upstream の major 変更で release workflow が黙って壊れない
       # よう、安定メジャーをピン留めする。
-      - name: Install CycloneDX SBOM tool (linux-x64 only)
+      - name: Cache CycloneDX SBOM tool (linux-x64 only)
         if: matrix.rid == 'linux-x64'
-        # actions/setup-dotnet@v4 does not put $HOME/.dotnet/tools on PATH
-        # automatically, so we append it via $GITHUB_PATH for every subsequent
-        # step. Without this, the next step would fail with
-        # "dotnet-CycloneDX: command not found" on GitHub-hosted runners even
-        # though the tool is installed correctly under $HOME/.dotnet/tools.
-        # actions/setup-dotnet@v4 は $HOME/.dotnet/tools を自動では PATH に
-        # 加えないため、$GITHUB_PATH 経由で明示的に追加して後続 step から
-        # `dotnet-CycloneDX` を直接呼べるようにする。これを忘れると、ツール
-        # 自体は $HOME/.dotnet/tools に正しくインストールされていても、次の
-        # step が `command not found` で落ちる。
-        run: |
-          dotnet tool install --global CycloneDX --version 6.2.0
-          echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
+        id: cyclonedx-tool-cache
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/.dotnet/tools
+          key: ${{ runner.os }}-cyclonedx-6.2.0
+
+      - name: Install CycloneDX SBOM tool (linux-x64 only)
+        if: matrix.rid == 'linux-x64' && steps.cyclonedx-tool-cache.outputs.cache-hit != 'true'
+        run: dotnet tool install --global CycloneDX --version 6.2.0
+
+      # actions/setup-dotnet does not put $HOME/.dotnet/tools on PATH, including
+      # after a cache hit, so publish it for every linux-x64 run.
+      # cache hit 後も actions/setup-dotnet は $HOME/.dotnet/tools を PATH に
+      # 追加しないため、linux-x64 の各 run で明示的に公開する。
+      - name: Add CycloneDX SBOM tool to PATH (linux-x64 only)
+        if: matrix.rid == 'linux-x64'
+        run: echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
 
       - name: Generate CycloneDX SBOM (linux-x64 only)
         if: matrix.rid == 'linux-x64'
@@ -821,6 +836,10 @@ jobs:
           dotnet-version: |
             8.0.413
             9.0.301
+          cache: true
+          cache-dependency-path: |
+            src/CodeIndex/packages.lock.json
+            tools/CodeIndex.PackageNormalize/packages.lock.json
 
       - name: Extract version from tag
         id: version
