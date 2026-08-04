@@ -12793,15 +12793,17 @@ public partial class QueryCommandRunnerTests
             foreach (var alias in testCase.Aliases)
             {
                 string[] args = testCase.Exact
-                    ? [testCase.Query, "--db", dbPath, "--lang", alias, "--exact", "--count"]
-                    : [testCase.Query, "--db", dbPath, "--lang", alias, "--count"];
+                    ? [testCase.Query, "--db", dbPath, "--lang", alias, "--exact", "--json=array"]
+                    : [testCase.Query, "--db", dbPath, "--lang", alias, "--json=array"];
                 var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                     args,
                     _jsonOptions));
 
                 Assert.Equal(CommandExitCodes.Success, exitCode);
-                Assert.Equal("1", stdout.Trim());
                 Assert.Equal(string.Empty, stderr);
+                using var document = ParseJsonOutput(stdout);
+                var result = Assert.Single(document.RootElement.EnumerateArray());
+                Assert.Equal(testCase.Path, result.GetProperty("path").GetString());
             }
         }
     }
