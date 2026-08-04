@@ -8283,53 +8283,57 @@ public partial class QueryCommandRunnerTests
         }
     }
 
-    [Theory]
-    [InlineData(1, 1)]
-    [InlineData(20_000_000, 16 * 1024 * 1024)]
-    public void WriteJsonObject_ResponseAboveEffectiveMaximumRequiresSizeReduction_Issue4909(
-        int requestedMaxJsonBytes,
-        int expectedEffectiveBytes)
+    [Fact]
+    public void WriteJsonObject_ResponseAboveEffectiveMaximumRequiresSizeReduction_Issue4909()
     {
-        var options = QueryCommandRunner.ParseArgs(
-            [
-                "needle",
-                "--json=array",
-                "--max-json-bytes",
-                requestedMaxJsonBytes.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            ],
-            jsonDefault: false);
-        Assert.Equal(requestedMaxJsonBytes, options.RequestedMaxJsonBytes);
-        Assert.Equal(expectedEffectiveBytes, options.MaxJsonBytes);
         var oversizedJson = JsonSerializer.Serialize(new
         {
             payload = new string('x', QueryCommandRunner.MaxSearchJsonByteLimit + 1),
         });
 
-        var (exitCode, stdout, stderr) = CaptureConsole(() =>
-            QueryCommandRunner.WriteJsonObjectWithOptionalByteLimit(
-                oversizedJson,
-                options,
-                "oversized test payload",
-                "Reduce the test payload.",
-                _jsonOptions,
-                "search"));
+        foreach (var testCase in new[]
+                 {
+                     (RequestedMaxJsonBytes: 1, ExpectedEffectiveBytes: 1),
+                     (RequestedMaxJsonBytes: 20_000_000, ExpectedEffectiveBytes: QueryCommandRunner.MaxSearchJsonByteLimit),
+                 })
+        {
+            var options = QueryCommandRunner.ParseArgs(
+                [
+                    "needle",
+                    "--json=array",
+                    "--max-json-bytes",
+                    testCase.RequestedMaxJsonBytes.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ],
+                jsonDefault: false);
+            Assert.Equal(testCase.RequestedMaxJsonBytes, options.RequestedMaxJsonBytes);
+            Assert.Equal(testCase.ExpectedEffectiveBytes, options.MaxJsonBytes);
 
-        Assert.Equal(CommandExitCodes.UsageError, exitCode);
-        Assert.Equal(string.Empty, stderr);
-        using var document = ParseJsonOutput(stdout);
-        var error = document.RootElement;
-        Assert.Equal(requestedMaxJsonBytes, error.GetProperty("requested_bytes").GetInt64());
-        Assert.Equal(expectedEffectiveBytes, error.GetProperty("effective_bytes").GetInt64());
-        Assert.True(
-            error.GetProperty("minimum_required_bytes").GetInt64()
-            > QueryCommandRunner.MaxSearchJsonByteLimit);
-        var retry = error.GetProperty("retry");
-        Assert.Equal("reduce_response_size", retry.GetProperty("action").GetString());
-        Assert.Equal(JsonValueKind.Null, retry.GetProperty("option").ValueKind);
-        Assert.Equal(JsonValueKind.Null, retry.GetProperty("recommended_bytes").ValueKind);
-        Assert.Equal(
-            QueryCommandRunner.MaxSearchJsonByteLimit,
-            retry.GetProperty("maximum_effective_bytes").GetInt64());
+            var (exitCode, stdout, stderr) = CaptureConsole(() =>
+                QueryCommandRunner.WriteJsonObjectWithOptionalByteLimit(
+                    oversizedJson,
+                    options,
+                    "oversized test payload",
+                    "Reduce the test payload.",
+                    _jsonOptions,
+                    "search"));
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var error = document.RootElement;
+            Assert.Equal(testCase.RequestedMaxJsonBytes, error.GetProperty("requested_bytes").GetInt64());
+            Assert.Equal(testCase.ExpectedEffectiveBytes, error.GetProperty("effective_bytes").GetInt64());
+            Assert.True(
+                error.GetProperty("minimum_required_bytes").GetInt64()
+                > QueryCommandRunner.MaxSearchJsonByteLimit);
+            var retry = error.GetProperty("retry");
+            Assert.Equal("reduce_response_size", retry.GetProperty("action").GetString());
+            Assert.Equal(JsonValueKind.Null, retry.GetProperty("option").ValueKind);
+            Assert.Equal(JsonValueKind.Null, retry.GetProperty("recommended_bytes").ValueKind);
+            Assert.Equal(
+                QueryCommandRunner.MaxSearchJsonByteLimit,
+                retry.GetProperty("maximum_effective_bytes").GetInt64());
+        }
     }
 
     [Fact]
