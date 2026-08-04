@@ -374,6 +374,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   Use `ReadDockerfile()` and `ReadDockerIgnore()` for release-container contract tests so canonical fixture paths do not drift across workflow suites.
   `RepositoryTestPaths` caches checked-in text, normalized derived text, and normalized workflow inventories for the lifetime of the test process. Keep it for immutable repository contracts only; tests that rewrite fixtures must use their own temporary paths.
   License-policy contract tests use the same accessor for legal notices, workflow files, and distribution docs instead of rediscovering the repository root and rereading overlapping files.
+  License-policy workflow path filters mirror only the files read by its shell validation and filtered `LicensePolicyTests` run. Documentation and test sources read by neither do not start this focused job. Generated `install.sh` and installer/release test sources remain owned by the full Build/Test workflow.
   Repository-backed documentation, source-audit, JSONL-policy, and trimmed-publish tests reuse `RepositoryTestPaths.Root` instead of maintaining suite-local upward directory walks.
   Large command-runner, installer, and extractor suites also delegate their legacy root helpers to that single cached root.
   Changelog limit tests resolve checked-in files through `RepositoryTestPaths` instead of performing another root walk.
@@ -1347,6 +1348,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   release-container contract test では `ReadDockerfile()` と `ReadDockerIgnore()` を使い、canonical fixture path が workflow suite 間でずれないようにします。
   `RepositoryTestPaths` は checked-in text、normalized derived text、normalized workflow inventory を test process の生命期間 cache します。不変の repository contract だけに使い、fixture を書き換えるテストは独自の一時 path を使ってください。
   license-policy contract test は legal notice、workflow file、distribution doc に同じ accessor を使い、repository root の再検出や重複 file read を行いません。
+  license-policy workflow の path filter は、shell validation または filter 済みの `LicensePolicyTests` が実際に読むファイルだけに揃えます。どちらからも読まれない文書や test source では、この focused job を起動しません。生成物の `install.sh` と installer/release test source は full Build/Test workflow が引き続き所有します。
   repository-backed の documentation、source-audit、JSONL-policy、trimmed-publish test は suite ごとの上位 directory walk を持たず、`RepositoryTestPaths.Root` を再利用します。
   大規模な command-runner、installer、extractor suite の legacy root helper も、その単一の cached root へ委譲します。
   changelog limit test も別の root walk を行わず、`RepositoryTestPaths` 経由で checked-in file を解決します。

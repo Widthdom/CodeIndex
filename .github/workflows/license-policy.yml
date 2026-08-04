@@ -12,21 +12,15 @@ on:
       - 'TRADEMARKS.md'
       - 'README.md'
       - 'USER_GUIDE.md'
-      - 'DEVELOPER_GUIDE.md'
       - 'DISTRIBUTION.md'
       - 'docs/NUGET_README.md'
-      - 'MAINTAINERS.md'
-      - 'CONTRIBUTING.md'
       - 'src/CodeIndex/CodeIndex.csproj'
       - 'src/CodeIndex/Cli/ConsoleUi.cs'
-      - 'install.sh'
       - 'install_modules/20-installer.sh'
       - 'install_modules/40-uninstall.sh'
       - '.github/workflows/release.yml'
       - '.github/workflows/license-policy.yml'
       - 'tests/CodeIndex.Tests/LicensePolicyTests.cs'
-      - 'tests/CodeIndex.Tests/InstallScriptTests.cs'
-      - 'tests/CodeIndex.Tests/ReleaseWorkflowTests.cs'
   pull_request:
     branches:
       - main
@@ -38,21 +32,15 @@ on:
       - 'TRADEMARKS.md'
       - 'README.md'
       - 'USER_GUIDE.md'
-      - 'DEVELOPER_GUIDE.md'
       - 'DISTRIBUTION.md'
       - 'docs/NUGET_README.md'
-      - 'MAINTAINERS.md'
-      - 'CONTRIBUTING.md'
       - 'src/CodeIndex/CodeIndex.csproj'
       - 'src/CodeIndex/Cli/ConsoleUi.cs'
-      - 'install.sh'
       - 'install_modules/20-installer.sh'
       - 'install_modules/40-uninstall.sh'
       - '.github/workflows/release.yml'
       - '.github/workflows/license-policy.yml'
       - 'tests/CodeIndex.Tests/LicensePolicyTests.cs'
-      - 'tests/CodeIndex.Tests/InstallScriptTests.cs'
-      - 'tests/CodeIndex.Tests/ReleaseWorkflowTests.cs'
   workflow_dispatch:
 
 concurrency:
