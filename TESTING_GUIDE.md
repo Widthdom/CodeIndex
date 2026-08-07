@@ -845,6 +845,7 @@ Prefer the existing helper before writing new setup code.
 - `RunGit(...)` executes git without shell quoting issues.
 - `DeleteDirectory(...)` attempts the recursive delete before walking the fixture to normalize attributes. Keep attribute normalization, SQLite pool release, and the bounded retry delay on the failure path so ordinary cleanup pays only one filesystem traversal while read-only or late-released Windows fixtures still recover.
 - `DeleteDirectory(path)` retries temp-project cleanup and normalizes attributes. To avoid process-global cross-test interference, it only requests SQLite pool cleanup through `SqlitePoolCleanup` as a Windows-specific retry fallback after a delete failure.
+- The `IndexCommandRunnerTests` partials rely on that failure-driven cleanup; do not call `SqliteConnection.ClearAllPools()` immediately before `DeleteDirectory(...)`. Retain an explicit pool release only when the scenario itself must reopen, replace, copy, or exclusively lock raw database files before cleanup.
 - Use `DeleteDirectory(path)` in temp-workspace `finally` / `Dispose` cleanup paths, including tests that intentionally remove the workspace earlier in the scenario.
 - Call `DeleteDirectory(path)` directly instead of wrapping it in `Directory.Exists(...)`; the helper already handles missing paths.
 - Apply the same direct-call rule to local `DeleteDirectory` wrappers that only delegate to `TestProjectHelper.DeleteDirectory`.
@@ -1816,6 +1817,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - `InsertIndexedFiles(...)` は、変更しない複数ファイル fixture を 1 つの caller-owned transaction で投入し、遅延した hotspot / reference-identity refresh を batch 全体で 1 回だけ実行します。複数の独立ファイルを作成してから read-only query を行うテストでは、複数言語 fixture も含めてこちらを優先してください。file ごとの commit、failure、cancellation、refresh 境界を観測する場合や、挿入の途中で read / mutation を行う場合は `InsertIndexedFile(...)` を維持してください。
 - `RunGit(...)` は shell の quoting 問題に依存せず git を実行します。
 - `DeleteDirectory(path)` は temp project cleanup のリトライと属性正規化を扱います。プロセス全体への干渉を避けるため、SQLite pool の解放は Windows で削除に失敗した場合のリトライ時だけに限定します。
+- `IndexCommandRunnerTests` の partial 群も、この失敗時解放に委ねます。`DeleteDirectory(...)` の直前で `SqliteConnection.ClearAllPools()` を呼ばないでください。cleanup 前に raw database file を再オープン、置換、コピー、または排他 lock すること自体が scenario の一部である場合だけ、明示的な pool 解放を残します。
 - 一時 workspace の `finally` / `Dispose` cleanup では、そのテストシナリオ内で workspace を意図的に先に削除する場合も含めて、`DeleteDirectory(path)` を使ってください。
 - `DeleteDirectory(path)` は存在しない path を内部で扱うため、`Directory.Exists(...)` で囲まず直接呼び出してください。
 - `TestProjectHelper.DeleteDirectory` に委譲するだけの local `DeleteDirectory` wrapper でも、同じく直接呼び出してください。

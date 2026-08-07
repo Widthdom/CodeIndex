@@ -3307,8 +3307,14 @@ public partial class QueryCommandRunnerTests
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
+            var fixtures = new List<TestProjectHelper.IndexedFileFixture>();
+
+            void AddFixture(string path, string lang, string content)
+            {
+                fixtures.Add(new TestProjectHelper.IndexedFileFixture(path, lang, content));
+            }
+
+            AddFixture(
                 "src/private-writer.cs",
                 "csharp",
                 """
@@ -3323,8 +3329,7 @@ public partial class QueryCommandRunnerTests
                     }
                 }
                 """);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
+            AddFixture(
                 "src/public-writer.cs",
                 "csharp",
                 """
@@ -3339,8 +3344,7 @@ public partial class QueryCommandRunnerTests
                     }
                 }
                 """);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
+            AddFixture(
                 "src/review-required-public-writer.cs",
                 "csharp",
                 """
@@ -3355,8 +3359,7 @@ public partial class QueryCommandRunnerTests
                     }
                 }
                 """);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
+            AddFixture(
                 "src/mixed-boundary-writer.cs",
                 "csharp",
                 """
@@ -3374,8 +3377,7 @@ public partial class QueryCommandRunnerTests
                     }
                 }
                 """);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
+            AddFixture(
                 "src/annotation-bleed-writer.cs",
                 "csharp",
                 """
@@ -3392,8 +3394,7 @@ public partial class QueryCommandRunnerTests
                     }
                 }
                 """);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
+            AddFixture(
                 "src/same-line-intervening-writer.cs",
                 "csharp",
                 """
@@ -3408,8 +3409,7 @@ public partial class QueryCommandRunnerTests
                     }
                 }
                 """);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
+            AddFixture(
                 "src/same-line-block-intervening-writer.cs",
                 "csharp",
                 """
@@ -3424,8 +3424,7 @@ public partial class QueryCommandRunnerTests
                     }
                 }
                 """);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
+            AddFixture(
                 "src/same-line-multiple-writer.cs",
                 "csharp",
                 """
@@ -3440,8 +3439,7 @@ public partial class QueryCommandRunnerTests
                     }
                 }
                 """);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
+            AddFixture(
                 "src/same-line-prior-getter-writer.cs",
                 "csharp",
                 """
@@ -3461,8 +3459,7 @@ public partial class QueryCommandRunnerTests
                     }
                 }
                 """);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
+            AddFixture(
                 "src/first-named-argument-writer.cs",
                 "csharp",
                 """
@@ -3479,8 +3476,7 @@ public partial class QueryCommandRunnerTests
                     private static JavaScriptEncoder Consume(JavaScriptEncoder encoder) => encoder;
                 }
                 """);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
+            AddFixture(
                 "src/nullable-declaration-writer.cs",
                 "csharp",
                 """
@@ -3496,8 +3492,7 @@ public partial class QueryCommandRunnerTests
                     }
                 }
                 """);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
+            AddFixture(
                 "src/comparison-operand-writer.cs",
                 "csharp",
                 """
@@ -3512,8 +3507,7 @@ public partial class QueryCommandRunnerTests
                     }
                 }
                 """);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
+            AddFixture(
                 "src/nested-generic-first-argument-writer.cs",
                 "csharp",
                 """
@@ -3531,8 +3525,7 @@ public partial class QueryCommandRunnerTests
                     private static JavaScriptEncoder Consume<T>(JavaScriptEncoder encoder) => encoder;
                 }
                 """);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
+            AddFixture(
                 "src/indexer-target-writer.cs",
                 "csharp",
                 """
@@ -3553,8 +3546,7 @@ public partial class QueryCommandRunnerTests
                     }
                 }
                 """);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
+            AddFixture(
                 "src/property-receiver-writer.cs",
                 "csharp",
                 """
@@ -3579,8 +3571,7 @@ public partial class QueryCommandRunnerTests
                     }
                 }
                 """);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
+            AddFixture(
                 "src/single-hop-property-receiver-writer.cs",
                 "csharp",
                 """
@@ -3602,8 +3593,7 @@ public partial class QueryCommandRunnerTests
                     }
                 }
                 """);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
+            AddFixture(
                 "src/private-looking-writer.cs",
                 "csharp",
                 """
@@ -3619,8 +3609,7 @@ public partial class QueryCommandRunnerTests
                     }
                 }
                 """);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
+            AddFixture(
                 "src/direction-mismatch-writer.cs",
                 "csharp",
                 """
@@ -3635,8 +3624,7 @@ public partial class QueryCommandRunnerTests
                     }
                 }
                 """);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
+            AddFixture(
                 "src/invalid-annotation-writer.cs",
                 "csharp",
                 """
@@ -3651,8 +3639,7 @@ public partial class QueryCommandRunnerTests
                     }
                 }
                 """);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
+            AddFixture(
                 "src/raw-string-writer.cs",
                 "csharp",
                 """"
@@ -3669,8 +3656,7 @@ public partial class QueryCommandRunnerTests
                     }
                 }
                 """");
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
+            AddFixture(
                 "src/verbatim-string-writer.cs",
                 "csharp",
                 """
@@ -3687,8 +3673,7 @@ public partial class QueryCommandRunnerTests
                     }
                 }
                 """);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
+            AddFixture(
                 "src/nested-serializer-writer.cs",
                 "csharp",
                 """
@@ -3703,8 +3688,7 @@ public partial class QueryCommandRunnerTests
                     }
                 }
                 """);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
+            AddFixture(
                 "src/cast-serializer-writer.cs",
                 "csharp",
                 """
@@ -3719,8 +3703,7 @@ public partial class QueryCommandRunnerTests
                     }
                 }
                 """);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
+            AddFixture(
                 "src/multiline-serializer-writer.cs",
                 "csharp",
                 """
@@ -3737,8 +3720,7 @@ public partial class QueryCommandRunnerTests
                     }
                 }
                 """);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
+            AddFixture(
                 "src/conditional-assignment-serializer-writer.cs",
                 "csharp",
                 """
@@ -3753,8 +3735,7 @@ public partial class QueryCommandRunnerTests
                     }
                 }
                 """);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
+            AddFixture(
                 "src/default-parameter-expression-bodied-serializer-writer.cs",
                 "csharp",
                 """
@@ -3766,8 +3747,7 @@ public partial class QueryCommandRunnerTests
                     public static string Create(object payload, int count = 1) => JsonSerializer.Serialize(payload);
                 }
                 """);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
+            AddFixture(
                 "src/property-invocation-receiver-writer.cs",
                 "csharp",
                 """
@@ -3792,8 +3772,7 @@ public partial class QueryCommandRunnerTests
                     }
                 }
                 """);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
+            AddFixture(
                 "src/direct-invocation-receiver-writer.cs",
                 "csharp",
                 """
@@ -3811,8 +3790,7 @@ public partial class QueryCommandRunnerTests
                         => source.Build(JsonSerializer.Serialize(payload));
                 }
                 """);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
+            AddFixture(
                 "src/bare-property-invocation-receiver-writer.cs",
                 "csharp",
                 """
@@ -3832,8 +3810,7 @@ public partial class QueryCommandRunnerTests
                         => Factory.Build(JsonSerializer.Serialize(payload));
                 }
                 """);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
+            AddFixture(
                 "src/conditional-compilation-writer.cs",
                 "csharp",
                 """
@@ -3847,8 +3824,7 @@ public partial class QueryCommandRunnerTests
                     public static string Create(object payload) => JsonSerializer.Serialize(payload);
                 }
                 """);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
+            AddFixture(
                 "src/parenthesized-conditional-compilation-writer.cs",
                 "csharp",
                 """
@@ -3862,8 +3838,7 @@ public partial class QueryCommandRunnerTests
                     public static string Create(object payload) => JsonSerializer.Serialize(payload);
                 }
                 """);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
+            AddFixture(
                 "src/negated-conditional-compilation-writer.cs",
                 "csharp",
                 """
@@ -3877,8 +3852,7 @@ public partial class QueryCommandRunnerTests
                     public static string Create(object payload) => JsonSerializer.Serialize(payload);
                 }
                 """);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
+            AddFixture(
                 "src/repeated-assignment-property-receiver-writer.cs",
                 "csharp",
                 """
@@ -3900,8 +3874,7 @@ public partial class QueryCommandRunnerTests
                     }
                 }
                 """);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
+            AddFixture(
                 "src/explicit-utf8-writer.cs",
                 "csharp",
                 """
@@ -3917,8 +3890,7 @@ public partial class QueryCommandRunnerTests
                     }
                 }
                 """);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
+            AddFixture(
                 "src/multiline-explicit-utf8-writer.cs",
                 "csharp",
                 """
@@ -3935,8 +3907,7 @@ public partial class QueryCommandRunnerTests
                     }
                 }
                 """);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
+            AddFixture(
                 "src/long-multiline-utf8-writer.cs",
                 "csharp",
                 """
@@ -3957,8 +3928,7 @@ public partial class QueryCommandRunnerTests
                     }
                 }
                 """);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
+            AddFixture(
                 "src/expression-bodied-utf8-writer.cs",
                 "csharp",
                 """
@@ -3971,8 +3941,7 @@ public partial class QueryCommandRunnerTests
                     public static Utf8JsonWriter Create<T>(Stream stream) => new Utf8JsonWriter(stream);
                 }
                 """);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
+            AddFixture(
                 "src/generic-return-utf8-writer.cs",
                 "csharp",
                 """
@@ -3987,8 +3956,7 @@ public partial class QueryCommandRunnerTests
                     public static GenericWriterHolder<Utf8JsonWriter> Create(Stream stream) => new(new Utf8JsonWriter(stream));
                 }
                 """);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
+            AddFixture(
                 "src/outer-generic-return-utf8-writer.cs",
                 "csharp",
                 """
@@ -4002,8 +3970,7 @@ public partial class QueryCommandRunnerTests
                     public static Tuple<Utf8JsonWriter, int> Create(Stream stream) => new(new Utf8JsonWriter(stream), 1);
                 }
                 """);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
+            AddFixture(
                 "src/split-generic-return-utf8-writer.cs",
                 "csharp",
                 """
@@ -4020,8 +3987,7 @@ public partial class QueryCommandRunnerTests
                         new(new Utf8JsonWriter(stream));
                 }
                 """);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
+            AddFixture(
                 "src/qualified-utf8-writer.cs",
                 "csharp",
                 """
@@ -4036,8 +4002,7 @@ public partial class QueryCommandRunnerTests
                     }
                 }
                 """);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
+            AddFixture(
                 "src/cross-query-writer.cs",
                 "csharp",
                 """
@@ -4053,8 +4018,7 @@ public partial class QueryCommandRunnerTests
                     }
                 }
                 """);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
+            AddFixture(
                 "src/overlapping-parser.cs",
                 "csharp",
                 """
@@ -4070,8 +4034,7 @@ public partial class QueryCommandRunnerTests
                     }
                 }
                 """);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
+            AddFixture(
                 "src/composite-cast-parser.cs",
                 "csharp",
                 """
@@ -4095,8 +4058,7 @@ public partial class QueryCommandRunnerTests
                          ("src/file-parser.cs", "file", "user_selected_file"),
                      })
             {
-                TestProjectHelper.InsertIndexedFile(
-                    dbPath,
+                AddFixture(
                     path,
                     "csharp",
                     $$"""
@@ -4112,6 +4074,8 @@ public partial class QueryCommandRunnerTests
                     }
                     """);
             }
+
+            TestProjectHelper.InsertIndexedFiles(dbPath, fixtures);
 
             var (writerExitCode, writerStdout, writerStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 ["--recipe", "dogfood-risk-patterns/relaxed-json-encoder", "--db", dbPath, "--json", "--limit", "30", "--snippet-lines", "1"],

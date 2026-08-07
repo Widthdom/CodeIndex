@@ -535,7 +535,6 @@ public partial class IndexCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -606,7 +605,6 @@ public partial class IndexCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -951,7 +949,6 @@ public partial class IndexCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -1665,7 +1662,6 @@ public partial class IndexCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
             DeleteDirectory(outsideRoot);
         }
@@ -1725,7 +1721,6 @@ public partial class IndexCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
