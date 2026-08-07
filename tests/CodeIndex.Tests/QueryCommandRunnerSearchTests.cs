@@ -216,17 +216,16 @@ public partial class QueryCommandRunnerTests
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             const int minimumGuardedCandidates = 200;
-            for (var i = 0; i <= minimumGuardedCandidates; i++)
-            {
-                var path = $"src/C{i:D4}.cs";
-                var content = $"public sealed class C{i:D4} {{ private string token = \"value\"; }}\n";
-                TestProjectHelper.WriteTextFile(projectRoot, path, content);
-                TestProjectHelper.InsertIndexedFile(
-                    dbPath,
-                    path,
-                    "csharp",
-                    content);
-            }
+            var fixtures = Enumerable.Range(0, minimumGuardedCandidates + 1)
+                .Select(i =>
+                {
+                    var path = $"src/C{i:D4}.cs";
+                    var content = $"public sealed class C{i:D4} {{ private string token = \"value\"; }}\n";
+                    TestProjectHelper.WriteTextFile(projectRoot, path, content);
+                    return new TestProjectHelper.IndexedFileFixture(path, "csharp", content);
+                })
+                .ToArray();
+            TestProjectHelper.InsertIndexedFiles(dbPath, fixtures);
 
             using var env = EnvironmentVariableScope.Capture(SearchAuditRecipes.RecipePathsEnvironmentVariable);
             env.Set(SearchAuditRecipes.RecipePathsEnvironmentVariable, null);
@@ -1984,14 +1983,12 @@ public partial class QueryCommandRunnerTests
                 resultLimit: 20,
                 truncated: false);
 
-            for (var i = 1; i < 126; i++)
-            {
-                TestProjectHelper.InsertIndexedFile(
-                    dbPath,
+            TestProjectHelper.InsertIndexedFiles(
+                dbPath,
+                Enumerable.Range(1, 125).Select(i => new TestProjectHelper.IndexedFileFixture(
                     $"src/app{i:D3}.cs",
                     "csharp",
-                    $"public class App{i:D3} {{ void Run() {{ Authenticate(); }} }}");
-            }
+                    $"public class App{i:D3} {{ void Run() {{ Authenticate(); }} }}")));
 
             var (limitedExitCode, limitedStdout, limitedStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 [
@@ -2083,14 +2080,13 @@ public partial class QueryCommandRunnerTests
                 .GetString();
             Assert.Contains("search --query -TODO", dashReplayCommand, StringComparison.Ordinal);
 
-            for (var i = 0; i <= DbReader.MaxGuardedSearchCandidates; i++)
-            {
-                TestProjectHelper.InsertIndexedFile(
-                    dbPath,
-                    $"src/guard{i:D4}.cs",
-                    "csharp",
-                    $"public class GuardFixture{i:D4} {{ void Run() {{ GuardNeedle(); Continue(); }} }}");
-            }
+            TestProjectHelper.InsertIndexedFiles(
+                dbPath,
+                Enumerable.Range(0, DbReader.MaxGuardedSearchCandidates + 1)
+                    .Select(i => new TestProjectHelper.IndexedFileFixture(
+                        $"src/guard{i:D4}.cs",
+                        "csharp",
+                        $"public class GuardFixture{i:D4} {{ void Run() {{ GuardNeedle(); Continue(); }} }}")));
             var (guardedExitCode, guardedStdout, guardedStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 ["GuardNeedle", "--db", dbPath, "--format", "sarif", "--exact-substring", "--reject-after", "NeverPresent", "--limit", "1"],
                 _jsonOptions));
@@ -5937,8 +5933,12 @@ public partial class QueryCommandRunnerTests
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            for (var i = 0; i < 201; i++)
-                TestProjectHelper.InsertIndexedFile(dbPath, $"src/guard-budget-{i:0000}.cs", "csharp", "public void Run() { GuardStatsNeedle(); }\n");
+            TestProjectHelper.InsertIndexedFiles(
+                dbPath,
+                Enumerable.Range(0, 201).Select(i => new TestProjectHelper.IndexedFileFixture(
+                    $"src/guard-budget-{i:0000}.cs",
+                    "csharp",
+                    "public void Run() { GuardStatsNeedle(); }\n")));
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 ["GuardStatsNeedle", "--db", dbPath, "--require-before", "MissingGuardMarker", "--guard-window", "1", "--limit", "1"],
@@ -12294,15 +12294,13 @@ public partial class QueryCommandRunnerTests
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            for (var i = 0; i < 126; i++)
-            {
-                TestProjectHelper.InsertIndexedFile(
-                    dbPath,
+            TestProjectHelper.InsertIndexedFiles(
+                dbPath,
+                Enumerable.Range(0, 126).Select(i => new TestProjectHelper.IndexedFileFixture(
                     $"src/replay's/match{i:D3}.cs",
                     "csharp",
                     $"public sealed class Issue4838Needle{i:D3} {{ }}\n",
-                    isGenerated: true);
-            }
+                    IsGenerated: true)));
 
             var args = new[]
             {
@@ -12785,8 +12783,12 @@ public partial class QueryCommandRunnerTests
                 Aliases: new[] { "fs" }),
         };
 
-        foreach (var testCase in cases)
-            TestProjectHelper.InsertIndexedFile(dbPath, testCase.Path, testCase.Lang, testCase.Query);
+        TestProjectHelper.InsertIndexedFiles(
+            dbPath,
+            cases.Select(testCase => new TestProjectHelper.IndexedFileFixture(
+                testCase.Path,
+                testCase.Lang,
+                testCase.Query)));
 
         foreach (var testCase in cases)
         {
@@ -14659,32 +14661,33 @@ public partial class QueryCommandRunnerTests
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(
+            TestProjectHelper.InsertIndexedFiles(
                 dbPath,
-                "src/app.cs",
-                "csharp",
-                """
+                [
+                    new TestProjectHelper.IndexedFileFixture(
+                        "src/app.cs",
+                        "csharp",
+                        """
                 namespace Demo;
 
                 using @Foo.@Bar;
-                """);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
-                "src/App.kt",
-                "kotlin",
-                """
+                """),
+                    new TestProjectHelper.IndexedFileFixture(
+                        "src/App.kt",
+                        "kotlin",
+                        """
                 fun `when`() {}
-                """);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
-                "src/App.java",
-                "java",
-                """
+                """),
+                    new TestProjectHelper.IndexedFileFixture(
+                        "src/App.java",
+                        "java",
+                        """
                 public class \u0046oo
                 {
                     void match() {}
                 }
-                """);
+                """),
+                ]);
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 ["Foo.Bar", "--db", dbPath, "--path", "src/app.cs", "--json", "--exact-substring", "--count"],
@@ -17341,14 +17344,12 @@ public partial class QueryCommandRunnerTests
             Assert.Contains(nextSteps, step => step.GetProperty("command").GetString()!.Contains("cdidx inspect", StringComparison.Ordinal));
             Assert.Contains(nextSteps, step => step.GetProperty("command").GetString()!.Contains("cdidx excerpt", StringComparison.Ordinal));
 
-            for (var i = 0; i < 11; i++)
-            {
-                TestProjectHelper.InsertIndexedFile(
-                    dbPath,
+            TestProjectHelper.InsertIndexedFiles(
+                dbPath,
+                Enumerable.Range(0, 11).Select(i => new TestProjectHelper.IndexedFileFixture(
                     $"src/many{i}.cs",
                     "csharp",
-                    $"public class Many{i} {{ void Run() {{ ManyNextStepNeedle(); }} }}\n");
-            }
+                    $"public class Many{i} {{ void Run() {{ ManyNextStepNeedle(); }} }}\n")));
 
             var (manyExitCode, manyStdout, manyStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 ["ManyNextStepNeedle", "--db", dbPath, "--exact-substring", "--json=array", "--next-steps", "--limit", "20"],

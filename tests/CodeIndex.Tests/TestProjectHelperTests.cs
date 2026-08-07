@@ -87,6 +87,65 @@ public class TestProjectHelperTests
     }
 
     [Fact]
+    public void InsertIndexedFiles_CommitsMixedLanguageBatchAndRollsBackFailedEnumeration()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_fixture_database_batch");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        TestProjectHelper.InsertIndexedFiles(
+            dbPath,
+            [
+                new TestProjectHelper.IndexedFileFixture(
+                    "src/App.cs",
+                    "csharp",
+                    "public class App { public void Run() { Target(); } }\n"),
+                new TestProjectHelper.IndexedFileFixture(
+                    "src/app.py",
+                    "python",
+                    "def target():\n    pass\n\ntarget()\n"),
+                new TestProjectHelper.IndexedFileFixture(
+                    "src/app.ts",
+                    "typescript",
+                    "export function target(): void {}\ntarget();\n"),
+            ]);
+
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            TestProjectHelper.InsertIndexedFiles(dbPath, FailingBatch()));
+        Assert.Equal("fixture enumeration failed", exception.Message);
+
+        var connectionString = new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            Mode = SqliteOpenMode.ReadOnly,
+            Pooling = false,
+        }.ToString();
+        using var connection = new SqliteConnection(connectionString);
+        connection.Open();
+
+        Assert.Equal(3, ExecuteScalar("SELECT COUNT(*) FROM files"));
+        Assert.Equal(3, ExecuteScalar("SELECT COUNT(DISTINCT lang) FROM files"));
+        Assert.Equal(3, ExecuteScalar("SELECT COUNT(*) FROM chunks"));
+        Assert.True(ExecuteScalar("SELECT COUNT(*) FROM symbols") >= 3);
+        Assert.True(ExecuteScalar("SELECT COUNT(*) FROM symbol_references") >= 3);
+        Assert.Equal(0, ExecuteScalar("SELECT COUNT(*) FROM files WHERE path = 'src/rolled-back.rb'"));
+
+        long ExecuteScalar(string sql)
+        {
+            using var command = connection.CreateCommand();
+            command.CommandText = sql;
+            return Assert.IsType<long>(command.ExecuteScalar());
+        }
+
+        static IEnumerable<TestProjectHelper.IndexedFileFixture> FailingBatch()
+        {
+            yield return new TestProjectHelper.IndexedFileFixture(
+                "src/rolled-back.rb",
+                "ruby",
+                "def target\nend\ntarget\n");
+            throw new InvalidOperationException("fixture enumeration failed");
+        }
+    }
+
+    [Fact]
     public void InsertIndexedFile_ReleasePoolForFileAccess_AllowsStandaloneRawRead()
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_fixture_database_raw_read");

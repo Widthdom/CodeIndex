@@ -16,6 +16,13 @@ namespace CodeIndex.Tests;
 
 internal static class TestProjectHelper
 {
+    internal sealed record IndexedFileFixture(
+        string Path,
+        string Lang,
+        string Content,
+        DateTime? Modified = null,
+        bool IsGenerated = false);
+
     internal const string TrustedTestRootEnvironmentVariable = "CDIDX_TEST_TRUSTED_TEMP_ROOT";
 
     internal static string RepeatCsvEntry(string value, int count)
@@ -263,44 +270,91 @@ internal static class TestProjectHelper
         bool isGenerated = false,
         bool releasePoolForFileAccess = false)
     {
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+        db.InitializeSchema();
+
+        var writer = new DbWriter(db.Connection);
+        InsertIndexedFile(
+            writer,
+            new IndexedFileFixture(path, lang, content, modified, isGenerated),
+            deferReferenceRefresh: false);
+
+        if (releasePoolForFileAccess)
+            SqliteConnection.ClearPool(db.Connection);
+    }
+
+    internal static void InsertIndexedFiles(
+        string dbPath,
+        IEnumerable<IndexedFileFixture> files,
+        bool releasePoolForFileAccess = false)
+    {
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+        db.InitializeSchema();
+
+        var writer = new DbWriter(db.Connection);
+        using var hotspotAggregateRefresh = writer.BeginDeferredHotspotReferenceAggregateRefresh();
+        using var transaction = writer.BeginTransaction();
+        var hasReferences = false;
+        foreach (var file in files)
+            hasReferences |= InsertIndexedFile(writer, file, deferReferenceRefresh: true);
+        if (hasReferences)
+            writer.RefreshMutualRecursionFlags();
+        hotspotAggregateRefresh.Complete(CancellationToken.None);
+        transaction.Commit();
+
+        if (releasePoolForFileAccess)
+            SqliteConnection.ClearPool(db.Connection);
+    }
+
+    private static bool InsertIndexedFile(
+        DbWriter writer,
+        IndexedFileFixture file,
+        bool deferReferenceRefresh)
+    {
+        var path = file.Path;
+        var lang = file.Lang;
+        var content = file.Content;
         var normalized = content.Replace("\r\n", "\n");
         var lines = normalized.Split('\n');
         var lineCount = FileIndexer.CountPhysicalLines(content);
 
-        using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+        var fileId = writer.UpsertFile(new FileRecord
         {
-            db.InitializeSchema();
+            Path = path,
+            Lang = lang,
+            Size = normalized.Length,
+            Lines = lineCount,
+            Modified = file.Modified ?? new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            Checksum = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalized))).ToLowerInvariant(),
+            Generated = file.IsGenerated,
+        });
 
-            var writer = new DbWriter(db.Connection);
-            var fileId = writer.UpsertFile(new FileRecord
+        writer.InsertChunks([
+            new ChunkRecord
             {
-                Path = path,
-                Lang = lang,
-                Size = normalized.Length,
-                Lines = lineCount,
-                Modified = modified ?? new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
-                Checksum = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalized))).ToLowerInvariant(),
-                Generated = isGenerated,
-            });
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = lines.Length,
+                Content = normalized,
+            }
+        ]);
 
-            writer.InsertChunks([
-                new ChunkRecord
-                {
-                    FileId = fileId,
-                    ChunkIndex = 0,
-                    StartLine = 1,
-                    EndLine = lines.Length,
-                    Content = normalized,
-                }
-            ]);
-
-            var symbols = SymbolExtractor.Extract(fileId, lang, normalized, path);
-            writer.InsertSymbols(symbols);
-            writer.InsertReferences(ReferenceExtractor.Extract(fileId, lang, normalized, symbols, path));
-
-            if (releasePoolForFileAccess)
-                SqliteConnection.ClearPool(db.Connection);
+        var symbols = SymbolExtractor.Extract(fileId, lang, normalized, path);
+        writer.InsertSymbols(symbols);
+        var references = ReferenceExtractor.Extract(fileId, lang, normalized, symbols, path);
+        if (deferReferenceRefresh)
+        {
+            writer.InsertReferencesInAtomicFileScope(
+                references,
+                refreshMutualRecursionFlags: false,
+                CancellationToken.None);
         }
+        else
+        {
+            writer.InsertReferences(references);
+        }
+        return references.Count > 0;
     }
 
     internal static void InsertFreshIndexedFile(

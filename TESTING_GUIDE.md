@@ -839,6 +839,7 @@ Prefer the existing helper before writing new setup code.
 - `InitializeGitRepo(projectRoot)` initializes git and sets repo-local `user.name` and `user.email`.
 - `CreateProjectDb(projectRoot)` creates `<projectRoot>/.cdidx/codeindex.db`, initializes schema, and seeds `codeindex_meta.indexed_project_root` to match the project root.
 - `InsertIndexedFile(...)` inserts a realistic indexed file with content-derived checksum, chunks, symbols, and references, and now passes the file path into Python symbol extraction so `__init__.py`-based re-export tests can exercise qualified package names.
+- `InsertIndexedFiles(...)` seeds an immutable multi-file fixture through one caller-owned transaction and performs deferred hotspot/reference-identity refresh once for the batch. Prefer it when a test builds many independent files before read-only queries, including mixed-language fixtures. Keep `InsertIndexedFile(...)` when the scenario observes per-file commits, failures, cancellation, refresh boundaries, or performs reads or mutations between inserts.
 - `InsertIndexedFile(...)` does not clear process-wide SQLite pools after an ordinary disposed write, and `DeleteSqliteDatabaseFiles(...)` attempts deletion before requesting a pool release. Keep pool clearing as a Windows retry response to an observed deletion failure instead of charging every seeded file and clean database cleanup. When a fixture must immediately read or copy raw database bytes, pass `releasePoolForFileAccess: true` so only that connection pool is invalidated before disposal.
 - `RunGit(...)` executes git without shell quoting issues.
 - `DeleteDirectory(...)` attempts the recursive delete before walking the fixture to normalize attributes. Keep attribute normalization, SQLite pool release, and the bounded retry delay on the failure path so ordinary cleanup pays only one filesystem traversal while read-only or late-released Windows fixtures still recover.
@@ -1810,6 +1811,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - `InitializeGitRepo(projectRoot)` は git を初期化し、repo-local の `user.name` と `user.email` を設定します。
 - `CreateProjectDb(projectRoot)` は `<projectRoot>/.cdidx/codeindex.db` を作成し、スキーマを初期化したうえで `codeindex_meta.indexed_project_root` に project root を書き込みます。
 - `InsertIndexedFile(...)` は内容由来の checksum、chunks、symbols、references を含む現実的なインデックス済みファイルを挿入し、Python の symbol extraction には file path も渡すため、`__init__.py` ベースの再エクスポートテストで package 修飾名を扱えます。
+- `InsertIndexedFiles(...)` は、変更しない複数ファイル fixture を 1 つの caller-owned transaction で投入し、遅延した hotspot / reference-identity refresh を batch 全体で 1 回だけ実行します。複数の独立ファイルを作成してから read-only query を行うテストでは、複数言語 fixture も含めてこちらを優先してください。file ごとの commit、failure、cancellation、refresh 境界を観測する場合や、挿入の途中で read / mutation を行う場合は `InsertIndexedFile(...)` を維持してください。
 - `RunGit(...)` は shell の quoting 問題に依存せず git を実行します。
 - `DeleteDirectory(path)` は temp project cleanup のリトライと属性正規化を扱います。プロセス全体への干渉を避けるため、SQLite pool の解放は Windows で削除に失敗した場合のリトライ時だけに限定します。
 - 一時 workspace の `finally` / `Dispose` cleanup では、そのテストシナリオ内で workspace を意図的に先に削除する場合も含めて、`DeleteDirectory(path)` を使ってください。
