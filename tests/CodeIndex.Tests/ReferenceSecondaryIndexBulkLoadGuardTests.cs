@@ -77,6 +77,39 @@ public sealed class ReferenceSecondaryIndexBulkLoadGuardTests : IDisposable
     }
 
     [Fact]
+    public void BulkLoad_RollsBackRetiredIndexesTransactionallyButNeverRestoresThemRecoverably()
+    {
+        CreateRetiredReferenceIndexes(_db.Connection);
+
+        using (var transaction = _writer.BeginTransaction())
+        {
+            using (var guard = ReferenceSecondaryIndexBulkLoadGuard.StartTransactional(
+                       _writer,
+                       enabled: true))
+            {
+                Assert.NotNull(guard);
+                AssertRetiredIndexesAbsent(_db.Connection);
+            }
+
+            AssertRetiredIndexesAbsent(_db.Connection);
+        }
+
+        AssertRetiredIndexesPresent(_db.Connection);
+
+        using (var guard = ReferenceSecondaryIndexBulkLoadGuard.StartRecoverable(
+                   _writer,
+                   enabled: true))
+        {
+            Assert.NotNull(guard);
+            AssertRetiredIndexesAbsent(_db.Connection);
+            guard.Complete();
+        }
+
+        AssertRetiredIndexesAbsent(_db.Connection);
+        AssertDeferredIndexesPresent(_db.Connection);
+    }
+
+    [Fact]
     public void RecoverableDispose_RestoresDeferredIndexes()
     {
         using (var guard = ReferenceSecondaryIndexBulkLoadGuard.StartRecoverable(
@@ -168,6 +201,39 @@ public sealed class ReferenceSecondaryIndexBulkLoadGuardTests : IDisposable
         var names = ReadReferenceIndexNames(connection);
         foreach (var definition in ReferenceSecondaryIndexSql.RawPersistenceRequired)
             Assert.Contains(definition.Name, names);
+    }
+
+    private static void AssertRetiredIndexesAbsent(SqliteConnection connection)
+    {
+        var names = ReadReferenceIndexNames(connection);
+        foreach (var name in ReferenceSecondaryIndexSql.Retired)
+            Assert.DoesNotContain(name, names);
+    }
+
+    private static void AssertRetiredIndexesPresent(SqliteConnection connection)
+    {
+        var names = ReadReferenceIndexNames(connection);
+        foreach (var name in ReferenceSecondaryIndexSql.Retired)
+            Assert.Contains(name, names);
+    }
+
+    private static void CreateRetiredReferenceIndexes(SqliteConnection connection)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            CREATE INDEX idx_symbol_refs_name ON symbol_references(symbol_name);
+            CREATE INDEX idx_symbol_refs_container ON symbol_references(container_name);
+            CREATE INDEX idx_symbol_refs_name_nocase ON symbol_references(symbol_name COLLATE NOCASE);
+            CREATE INDEX idx_symbol_refs_container_nocase ON symbol_references(container_name COLLATE NOCASE);
+            CREATE INDEX idx_symbol_refs_symbol_name_folded ON symbol_references(symbol_name_folded);
+            CREATE INDEX idx_symbol_refs_container_name_folded ON symbol_references(container_name_folded);
+            CREATE INDEX idx_symbol_refs_mutual_folded ON symbol_references(
+                container_name_folded,
+                symbol_name_folded,
+                reference_kind,
+                is_self_reference);
+            """;
+        command.ExecuteNonQuery();
     }
 
     private static HashSet<string> ReadReferenceIndexNames(SqliteConnection connection)

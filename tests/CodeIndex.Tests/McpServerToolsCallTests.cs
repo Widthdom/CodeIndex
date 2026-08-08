@@ -2100,9 +2100,9 @@ public partial class McpServerTests
         var response = readOnlyServer.HandleMessage(request)!;
 
         Assert.False(response["result"]!["structuredContent"]!["exact_index_available"]!.GetValue<bool>());
-        Assert.Contains("idx_symbol_refs_name_nocase", response["result"]!["structuredContent"]!["degraded_reason"]!.GetValue<string>());
+        Assert.Contains("idx_symbol_refs_name_nocase_file", response["result"]!["structuredContent"]!["degraded_reason"]!.GetValue<string>());
         Assert.False(response["result"]!["structuredContent"]!["exact_index_available"]!.GetValue<bool>());
-        Assert.Contains("idx_symbol_refs_name_nocase", response["result"]!["structuredContent"]!["degraded_reason"]!.GetValue<string>());
+        Assert.Contains("idx_symbol_refs_name_nocase_file", response["result"]!["structuredContent"]!["degraded_reason"]!.GetValue<string>());
     }
 
     [Fact]
@@ -3294,8 +3294,8 @@ public partial class McpServerTests
         var response = readOnlyServer.HandleMessage(request)!;
 
         Assert.False(response["result"]!["structuredContent"]!["exact_index_available"]!.GetValue<bool>());
-        Assert.Contains("idx_symbol_refs_name_nocase", response["result"]!["structuredContent"]!["degraded_reason"]!.GetValue<string>());
-        Assert.Contains("idx_symbol_refs_container_nocase", response["result"]!["structuredContent"]!["degraded_reason"]!.GetValue<string>());
+        Assert.Contains("idx_symbol_refs_name_nocase_file", response["result"]!["structuredContent"]!["degraded_reason"]!.GetValue<string>());
+        Assert.Contains("idx_symbol_refs_container_nocase_kind", response["result"]!["structuredContent"]!["degraded_reason"]!.GetValue<string>());
     }
 
     [Fact]

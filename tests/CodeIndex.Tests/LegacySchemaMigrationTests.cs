@@ -181,8 +181,8 @@ public class LegacySchemaMigrationTests : IDisposable
 
         using var cmd = db.Connection.CreateCommand();
         cmd.CommandText = """
-            DROP INDEX IF EXISTS idx_symbol_refs_name_nocase;
-            DROP INDEX IF EXISTS idx_symbol_refs_container_nocase;
+            DROP INDEX IF EXISTS idx_symbol_refs_name_nocase_file;
+            DROP INDEX IF EXISTS idx_symbol_refs_container_nocase_kind;
             PRAGMA wal_checkpoint(TRUNCATE);
             """;
         cmd.ExecuteNonQuery();
@@ -1344,14 +1344,14 @@ public class LegacySchemaMigrationTests : IDisposable
             var bundle = reader.AnalyzeSymbol("Run", exact: true);
 
             Assert.False(referencesSignal.ExactIndexAvailable);
-            Assert.Contains("idx_symbol_refs_name_nocase", referencesSignal.DegradedReason);
+            Assert.Contains("idx_symbol_refs_name_nocase_file", referencesSignal.DegradedReason);
             Assert.False(callersSignal.ExactIndexAvailable);
-            Assert.Contains("idx_symbol_refs_name_nocase", callersSignal.DegradedReason);
+            Assert.Contains("idx_symbol_refs_name_nocase_file", callersSignal.DegradedReason);
             Assert.False(calleesSignal.ExactIndexAvailable);
-            Assert.Contains("idx_symbol_refs_container_nocase", calleesSignal.DegradedReason);
+            Assert.Contains("idx_symbol_refs_container_nocase_kind", calleesSignal.DegradedReason);
             Assert.False(bundle.ExactIndexAvailable ?? true);
-            Assert.Contains("idx_symbol_refs_name_nocase", bundle.DegradedReason);
-            Assert.Contains("idx_symbol_refs_container_nocase", bundle.DegradedReason);
+            Assert.Contains("idx_symbol_refs_name_nocase_file", bundle.DegradedReason);
+            Assert.Contains("idx_symbol_refs_container_nocase_kind", bundle.DegradedReason);
             Assert.Single(bundle.References);
             Assert.Single(bundle.Callers);
             Assert.Empty(bundle.Callees);

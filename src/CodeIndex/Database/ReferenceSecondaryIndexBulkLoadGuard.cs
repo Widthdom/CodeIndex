@@ -41,8 +41,8 @@ internal sealed class ReferenceSecondaryIndexBulkLoadGuard : IDisposable
     }
 
     /// <summary>
-    /// Index names removed by this guard. Exposed internally so integration tests can verify
-    /// the exact schema contract without duplicating the canonical DDL list.
+    /// Canonical index names deferred and restored by this guard. Exposed internally so
+    /// integration tests can verify the exact schema contract without duplicating the DDL.
     /// </summary>
     internal static IReadOnlyList<string> IndexNames { get; }
         = Array.AsReadOnly(
@@ -113,6 +113,14 @@ public partial class DbWriter
 {
     internal void DropDeferredReferenceSecondaryIndexes(CancellationToken cancellationToken)
     {
+        // Old binaries may have recreated retired indexes after a database was pruned by a
+        // newer version. Drop them as part of setup, but never restore them after the load.
+        foreach (var indexName in ReferenceSecondaryIndexSql.Retired)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Execute($"DROP INDEX IF EXISTS {indexName}", cancellationToken);
+        }
+
         foreach (var definition in ReferenceSecondaryIndexSql.DeferredDuringBulkLoad)
         {
             cancellationToken.ThrowIfCancellationRequested();

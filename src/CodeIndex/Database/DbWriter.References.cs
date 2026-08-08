@@ -43,10 +43,14 @@ public partial class DbWriter
                             AND r.symbol_name_folded <> ''
                             AND EXISTS (
                                 SELECT 1
-                                FROM symbol_references AS reverse
+                                FROM symbol_references AS reverse INDEXED BY idx_symbol_refs_unresolved_mutual_folded
                                 WHERE reverse.source_symbol_id IS NULL
                                   AND reverse.target_symbol_id IS NULL
                                   AND reverse.is_self_reference = 0
+                                  AND reverse.container_name_folded IS NOT NULL
+                                  AND reverse.container_name_folded <> ''
+                                  AND reverse.symbol_name_folded IS NOT NULL
+                                  AND reverse.symbol_name_folded <> ''
                                   AND reverse.reference_kind IN ('call', 'instantiate', 'subscribe', 'unsubscribe', 'razor_event_binding')
                                   AND reverse.container_name_folded = r.symbol_name_folded
                                   AND reverse.symbol_name_folded = r.container_name_folded
@@ -1418,6 +1422,9 @@ public partial class DbWriter
         -- IS NOT により NULL と legacy の非boolean値も安全に正規化する。
         WHERE r.is_mutual_recursion IS NOT ({MutualRecursionValueSql})
         """;
+
+    internal static string RefreshMutualRecursionFlagsSqlForTesting
+        => RefreshMutualRecursionFlagsSql;
 
     internal static void RebuildRetainedReferenceGraph(
         SqliteConnection connection,

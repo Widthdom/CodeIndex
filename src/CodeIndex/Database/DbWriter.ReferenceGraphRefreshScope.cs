@@ -185,6 +185,25 @@ public partial class DbWriter
             RefreshScopedMutualRecursionFlagsSql,
         ];
 
+    internal static IReadOnlyList<(string Scope, string Sql)>
+        ScopedUnresolvedMutualLookupStatementsForTesting
+        =>
+        [
+            .. ExtractUnresolvedMutualLookupStatements("old", ExpandReferenceGraphOldMutualScopeSql),
+            .. ExtractUnresolvedMutualLookupStatements("new", ExpandReferenceGraphNewMutualScopeSql),
+        ];
+
+    private static IEnumerable<(string Scope, string Sql)> ExtractUnresolvedMutualLookupStatements(
+        string scope,
+        string sql)
+        => sql.Split(
+                ';',
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(static statement => statement.Contains(
+                "idx_symbol_refs_unresolved_mutual_folded",
+                StringComparison.Ordinal))
+            .Select(statement => (scope, statement));
+
     private static string BuildScopedReferenceCandidatesSql()
     {
         const string fullDeleteSql = "DELETE FROM symbol_reference_candidates;";
@@ -276,7 +295,7 @@ public partial class DbWriter
         INSERT OR IGNORE INTO temp.{ReferenceGraphDirtyReferencesTable}(reference_id)
         SELECT r.id
         FROM temp.{ReferenceGraphDirtyNamesTable} AS dirty_name
-        CROSS JOIN symbol_references AS r INDEXED BY idx_symbol_refs_symbol_name_folded
+        CROSS JOIN symbol_references AS r INDEXED BY idx_symbol_refs_symbol_name_folded_file
         JOIN files AS source_file ON source_file.id = r.file_id
         WHERE r.symbol_name_folded = dirty_name.name_folded
           AND (
@@ -292,7 +311,7 @@ public partial class DbWriter
         INSERT OR IGNORE INTO temp.{ReferenceGraphDirtyReferencesTable}(reference_id)
         SELECT r.id
         FROM temp.{ReferenceGraphDirtyNamesTable} AS dirty_name
-        CROSS JOIN symbol_references AS r INDEXED BY idx_symbol_refs_symbol_name_folded
+        CROSS JOIN symbol_references AS r INDEXED BY idx_symbol_refs_symbol_name_folded_file
         JOIN files AS source_file ON source_file.id = r.file_id
         WHERE dirty_name.lang = 'markdown'
           AND source_file.lang = 'markdown'
@@ -362,7 +381,7 @@ public partial class DbWriter
         SELECT reverse.id
         FROM temp.{ReferenceGraphDirtyReferencesTable} AS dirty
         JOIN symbol_references AS changed ON changed.id = dirty.reference_id
-        JOIN symbol_references AS reverse INDEXED BY idx_symbol_refs_mutual_folded
+        JOIN symbol_references AS reverse INDEXED BY idx_symbol_refs_unresolved_mutual_folded
           ON reverse.container_name_folded = changed.symbol_name_folded
          AND reverse.symbol_name_folded = changed.container_name_folded
         WHERE changed.source_symbol_id IS NULL
@@ -376,12 +395,16 @@ public partial class DbWriter
           AND reverse.source_symbol_id IS NULL
           AND reverse.target_symbol_id IS NULL
           AND reverse.is_self_reference = 0
+          AND reverse.container_name_folded IS NOT NULL
+          AND reverse.container_name_folded <> ''
+          AND reverse.symbol_name_folded IS NOT NULL
+          AND reverse.symbol_name_folded <> ''
           AND reverse.reference_kind IN ('call', 'instantiate', 'subscribe', 'unsubscribe', 'razor_event_binding');
 
         INSERT OR IGNORE INTO temp.{ReferenceGraphDirtyReferencesTable}(reference_id)
         SELECT reverse.id
         FROM temp.{ReferenceGraphRemovedReferencesTable} AS removed
-        JOIN symbol_references AS reverse INDEXED BY idx_symbol_refs_mutual_folded
+        JOIN symbol_references AS reverse INDEXED BY idx_symbol_refs_unresolved_mutual_folded
           ON reverse.container_name_folded = removed.symbol_name_folded
          AND reverse.symbol_name_folded = removed.container_name_folded
         WHERE removed.source_symbol_id IS NULL
@@ -393,6 +416,10 @@ public partial class DbWriter
           AND reverse.source_symbol_id IS NULL
           AND reverse.target_symbol_id IS NULL
           AND reverse.is_self_reference = 0
+          AND reverse.container_name_folded IS NOT NULL
+          AND reverse.container_name_folded <> ''
+          AND reverse.symbol_name_folded IS NOT NULL
+          AND reverse.symbol_name_folded <> ''
           AND reverse.reference_kind IN ('call', 'instantiate', 'subscribe', 'unsubscribe', 'razor_event_binding');
         """;
 
@@ -414,7 +441,7 @@ public partial class DbWriter
         SELECT reverse.id
         FROM temp.{ReferenceGraphDirtyReferencesTable} AS dirty
         JOIN symbol_references AS changed ON changed.id = dirty.reference_id
-        JOIN symbol_references AS reverse INDEXED BY idx_symbol_refs_mutual_folded
+        JOIN symbol_references AS reverse INDEXED BY idx_symbol_refs_unresolved_mutual_folded
           ON reverse.container_name_folded = changed.symbol_name_folded
          AND reverse.symbol_name_folded = changed.container_name_folded
         WHERE changed.source_symbol_id IS NULL
@@ -428,6 +455,10 @@ public partial class DbWriter
           AND reverse.source_symbol_id IS NULL
           AND reverse.target_symbol_id IS NULL
           AND reverse.is_self_reference = 0
+          AND reverse.container_name_folded IS NOT NULL
+          AND reverse.container_name_folded <> ''
+          AND reverse.symbol_name_folded IS NOT NULL
+          AND reverse.symbol_name_folded <> ''
           AND reverse.reference_kind IN ('call', 'instantiate', 'subscribe', 'unsubscribe', 'razor_event_binding');
         """;
 

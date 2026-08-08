@@ -189,6 +189,12 @@ public partial class DbContext : IDisposable
             () => EnsureColumn("symbol_references", "resolution_state", "TEXT"));
         yield return ("EnsureColumn symbol_references.resolution_candidate_count",
             () => EnsureColumn("symbol_references", "resolution_candidate_count", "INTEGER NOT NULL DEFAULT 0"));
+        foreach (var indexName in ReferenceSecondaryIndexSql.Retired)
+        {
+            var retiredIndexName = indexName;
+            yield return ($"DROP retired reference index {retiredIndexName}",
+                () => Execute($"DROP INDEX IF EXISTS {retiredIndexName}"));
+        }
         yield return ("CREATE TABLE symbol_reference_candidates", () => Execute(@"
             CREATE TABLE IF NOT EXISTS symbol_reference_candidates (
                 reference_id INTEGER NOT NULL,
@@ -314,6 +320,12 @@ public partial class DbContext : IDisposable
         foreach (var index in ReadMigrationRequiredIndexes)
         {
             if (!IndexExists(index))
+                return false;
+        }
+
+        foreach (var retiredIndex in ReferenceSecondaryIndexSql.Retired)
+        {
+            if (IndexExists(retiredIndex))
                 return false;
         }
 

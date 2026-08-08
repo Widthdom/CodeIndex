@@ -162,6 +162,64 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void InitializeSchema_CreatesOnlyCanonicalReferenceSecondaryIndexes()
+    {
+        var expected = ReferenceSecondaryIndexSql.All
+            .Select(static definition => definition.Name)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        var actual = ReadIndexNames(_db.Connection, "symbol_references")
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Equal(expected, actual);
+        Assert.All(
+            ReferenceSecondaryIndexSql.Retired,
+            retiredIndex => Assert.DoesNotContain(retiredIndex, actual));
+        AssertIndexColumns(
+            _db.Connection,
+            "idx_symbol_refs_unresolved_mutual_folded",
+            [("container_name_folded", "BINARY"), ("symbol_name_folded", "BINARY")]);
+        AssertIndexSqlContains(
+            _db.Connection,
+            "idx_symbol_refs_unresolved_mutual_folded",
+            "WHERE source_symbol_id IS NULL AND target_symbol_id IS NULL AND is_self_reference = 0");
+        AssertIndexSqlContains(
+            _db.Connection,
+            "idx_symbol_refs_unresolved_mutual_folded",
+            "reference_kind IN ('call', 'instantiate', 'subscribe', 'unsubscribe', 'razor_event_binding')");
+    }
+
+    [Fact]
+    public void MutualRecursionLookups_UsePartialUnresolvedIndexInFullAndScopedPlans()
+    {
+        const string indexName = "idx_symbol_refs_unresolved_mutual_folded";
+        AssertUsesPartialIndex(
+            "full",
+            ReadQueryPlanDetails(
+                _db.Connection,
+                DbWriter.RefreshMutualRecursionFlagsSqlForTesting));
+
+        using var scope = _writer.BeginReferenceGraphRefreshScope();
+        var scopedLookups = DbWriter.ScopedUnresolvedMutualLookupStatementsForTesting;
+        Assert.Equal(["old", "old", "new"], scopedLookups.Select(static lookup => lookup.Scope));
+        foreach (var (lookupScope, sql) in scopedLookups)
+            AssertUsesPartialIndex($"scoped-{lookupScope}", ReadQueryPlanDetails(_db.Connection, sql));
+
+        static void AssertUsesPartialIndex(string scopeName, IReadOnlyList<string> plan)
+        {
+            Assert.True(plan.Any(detail =>
+                detail.Contains("SEARCH reverse USING INDEX", StringComparison.OrdinalIgnoreCase)
+                && detail.Contains(indexName, StringComparison.Ordinal)),
+                $"Expected {scopeName} plan to search {indexName}:{Environment.NewLine}{string.Join(Environment.NewLine, plan)}");
+            Assert.False(plan.Any(detail =>
+                detail.Equals("SCAN reverse", StringComparison.OrdinalIgnoreCase)
+                || detail.StartsWith("SCAN reverse ", StringComparison.OrdinalIgnoreCase)),
+                $"Unexpected reverse scan in {scopeName} plan:{Environment.NewLine}{string.Join(Environment.NewLine, plan)}");
+        }
+    }
+
+    [Fact]
     public void CSharpGraphFacts_EvaluateManagedScalarsOnceBeforeGraphConsumers()
     {
         var stages = DbWriter.CSharpGraphFactEvaluationSqlForTesting;
@@ -264,12 +322,12 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
-    public void InitializeSchema_CreatesFoldedMutualReferenceIndex()
+    public void InitializeSchema_CreatesPartialFoldedMutualReferenceIndex()
     {
         using var cmd = _db.Connection.CreateCommand();
-        cmd.CommandText = "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_symbol_refs_mutual_folded'";
+        cmd.CommandText = "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_symbol_refs_unresolved_mutual_folded'";
 
-        Assert.Equal("idx_symbol_refs_mutual_folded", (string?)cmd.ExecuteScalar());
+        Assert.Equal("idx_symbol_refs_unresolved_mutual_folded", (string?)cmd.ExecuteScalar());
     }
 
     [Fact]
@@ -4914,6 +4972,12 @@ public class DatabaseTests : IDisposable
             var symbolIndexes = ReadIndexNames(db.Connection, "symbols");
             var indexes = ReadIndexNames(db.Connection, "symbol_references");
 
+            Assert.Equal(
+                ReferenceSecondaryIndexSql.All
+                    .Select(static definition => definition.Name)
+                    .Order(StringComparer.Ordinal),
+                indexes.Order(StringComparer.Ordinal));
+
             Assert.DoesNotContain("idx_files_path_nocase", fileIndexes);
             Assert.Contains("idx_symbols_file_name_folded", symbolIndexes);
             Assert.Contains("idx_symbols_file_name_nocase", symbolIndexes);
@@ -4928,7 +4992,11 @@ public class DatabaseTests : IDisposable
             Assert.Contains("idx_symbol_refs_symbol_name_folded_kind", indexes);
             Assert.Contains("idx_symbol_refs_symbol_name_folded_file", indexes);
             Assert.Contains("idx_symbol_refs_container_name_folded_kind", indexes);
+            Assert.Contains("idx_symbol_refs_unresolved_mutual_folded", indexes);
             Assert.Contains("idx_symbol_refs_resolved_source_target_kind", indexes);
+            Assert.All(
+                ReferenceSecondaryIndexSql.Retired,
+                retiredIndex => Assert.DoesNotContain(retiredIndex, indexes));
 
             AssertIndexColumns(db.Connection, "idx_symbols_file_name_folded", [("file_id", "BINARY"), ("name_folded", "BINARY")]);
             AssertIndexColumns(db.Connection, "idx_symbols_file_name_nocase", [("file_id", "BINARY"), ("name", "NOCASE")]);
@@ -4941,11 +5009,67 @@ public class DatabaseTests : IDisposable
             AssertIndexColumns(db.Connection, "idx_symbols_name_folded_container_qualified_name_nocase", [("name_folded", "BINARY"), ("container_qualified_name", "NOCASE")]);
             AssertIndexColumns(db.Connection, "idx_symbol_refs_container_nocase_kind", [("container_name", "NOCASE"), ("reference_kind", "BINARY")]);
             AssertIndexColumns(db.Connection, "idx_symbol_refs_container_name_folded_kind", [("container_name_folded", "BINARY"), ("reference_kind", "BINARY")]);
+            AssertIndexColumns(db.Connection, "idx_symbol_refs_unresolved_mutual_folded", [("container_name_folded", "BINARY"), ("symbol_name_folded", "BINARY")]);
             AssertIndexColumns(db.Connection, "idx_symbol_refs_resolved_source_target_kind", [("source_symbol_id", "BINARY"), ("target_symbol_id", "BINARY"), ("reference_kind", "BINARY")]);
+            AssertIndexSqlContains(
+                db.Connection,
+                "idx_symbol_refs_unresolved_mutual_folded",
+                "WHERE source_symbol_id IS NULL AND target_symbol_id IS NULL AND is_self_reference = 0");
             AssertIndexSqlContains(
                 db.Connection,
                 "idx_symbol_refs_resolved_source_target_kind",
                 "WHERE source_symbol_id IS NOT NULL AND target_symbol_id IS NOT NULL");
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            TestProjectHelper.DeleteDirectory(dbDir);
+        }
+    }
+
+    [Fact]
+    public void TryMigrateForRead_RetiresLegacyReferenceIndexesWithoutRecreatingThemOnReopen()
+    {
+        var dbDir = TestProjectHelper.CreateTempProject("codeindex_retired_reference_indexes");
+        var dbPath = Path.Combine(dbDir, "codeindex.db");
+        try
+        {
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+                db.InitializeSchema();
+
+            using (var connection = new SqliteConnection(
+                       new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = """
+                    DROP INDEX idx_symbol_refs_unresolved_mutual_folded;
+                    CREATE INDEX idx_symbol_refs_name ON symbol_references(symbol_name);
+                    CREATE INDEX idx_symbol_refs_container ON symbol_references(container_name);
+                    CREATE INDEX idx_symbol_refs_name_nocase ON symbol_references(symbol_name COLLATE NOCASE);
+                    CREATE INDEX idx_symbol_refs_container_nocase ON symbol_references(container_name COLLATE NOCASE);
+                    CREATE INDEX idx_symbol_refs_symbol_name_folded ON symbol_references(symbol_name_folded);
+                    CREATE INDEX idx_symbol_refs_container_name_folded ON symbol_references(container_name_folded);
+                    CREATE INDEX idx_symbol_refs_mutual_folded ON symbol_references(
+                        container_name_folded,
+                        symbol_name_folded,
+                        reference_kind,
+                        is_self_reference);
+                    """;
+                command.ExecuteNonQuery();
+            }
+
+            for (var open = 0; open < 2; open++)
+            {
+                using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+                db.TryMigrateForRead();
+                var indexes = ReadIndexNames(db.Connection, "symbol_references");
+
+                Assert.Contains("idx_symbol_refs_unresolved_mutual_folded", indexes);
+                Assert.All(
+                    ReferenceSecondaryIndexSql.Retired,
+                    retiredIndex => Assert.DoesNotContain(retiredIndex, indexes));
+            }
         }
         finally
         {

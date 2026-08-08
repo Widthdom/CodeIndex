@@ -1273,9 +1273,8 @@ idx_symbols_display_name_folded ON symbols(display_name_folded) WHERE display_na
 idx_symbols_file    ON symbols(file_id)
 idx_symbols_file_kind ON symbols(file_id, kind)
 idx_files_lang_modified ON files(lang, modified)
-idx_symbol_refs_name      ON symbol_references(symbol_name)
 idx_symbol_refs_file      ON symbol_references(file_id)
-idx_symbol_refs_container ON symbol_references(container_name)
+idx_symbol_refs_container_kind ON symbol_references(container_name, reference_kind)
 idx_symbol_refs_name_kind ON symbol_references(symbol_name, reference_kind)
 idx_symbol_refs_name_file ON symbol_references(symbol_name, file_id)
 idx_symbol_refs_name_nocase_kind ON symbol_references(symbol_name COLLATE NOCASE, reference_kind)
@@ -1284,10 +1283,26 @@ idx_symbol_refs_container_nocase_kind ON symbol_references(container_name COLLAT
 idx_symbol_refs_symbol_name_folded_kind ON symbol_references(symbol_name_folded, reference_kind)
 idx_symbol_refs_symbol_name_folded_file ON symbol_references(symbol_name_folded, file_id)
 idx_symbol_refs_container_name_folded_kind ON symbol_references(container_name_folded, reference_kind)
+idx_symbol_refs_unresolved_mutual_folded ON symbol_references(container_name_folded, symbol_name_folded)
+  WHERE source_symbol_id IS NULL AND target_symbol_id IS NULL AND is_self_reference = 0
+    AND container_name_folded IS NOT NULL AND container_name_folded <> ''
+    AND symbol_name_folded IS NOT NULL AND symbol_name_folded <> ''
+    AND reference_kind IN ('call', 'instantiate', 'subscribe', 'unsubscribe', 'razor_event_binding')
 idx_symbol_refs_source_symbol ON symbol_references(source_symbol_id)
 idx_symbol_refs_target_symbol ON symbol_references(target_symbol_id)
+idx_symbol_refs_resolved_source_target_kind ON symbol_references(source_symbol_id, target_symbol_id, reference_kind)
+  WHERE source_symbol_id IS NOT NULL AND target_symbol_id IS NOT NULL
 idx_symbol_ref_candidates_symbol ON symbol_reference_candidates(symbol_id, reference_id)
 ```
+
+Single-column BINARY, NOCASE, and folded reference name/container indexes are
+not part of the canonical schema: the retained `*_kind` / `*_file` composites
+supply the same equality seeks through their leftmost prefixes. Read migration
+removes those six legacy indexes and the former all-row
+`idx_symbol_refs_mutual_folded`; unresolved reciprocal lookup uses the partial
+index above so resolved and non-call reference rows do not inflate graph-index
+rebuilds. Exact-query readiness diagnostics name the retained composite that
+backs each folded or NOCASE path.
 
 ### Query planner expectations
 
@@ -1295,8 +1310,8 @@ Hot graph aggregations that constrain `symbol_references.symbol_name` and a
 small `reference_kind IN (...)` set must stay indexable through
 `idx_symbol_refs_name_kind`. Regression coverage uses `EXPLAIN QUERY PLAN`
 before and after `ANALYZE` so this compound index remains the expected plan for
-`GROUP_CONCAT(DISTINCT r.reference_kind)` summaries instead of falling back to a
-single-column symbol-name probe plus row-by-row kind filtering (#1922).
+`GROUP_CONCAT(DISTINCT r.reference_kind)` summaries instead of using a
+name-only composite-prefix probe plus row-by-row kind filtering (#1922).
 
 Language + symbol-kind definition queries intentionally keep `lang` on
 `files` instead of denormalizing it into `symbols`. Query builders express that
@@ -4826,21 +4841,42 @@ idx_symbols_name    ON symbols(name)
 idx_symbols_file    ON symbols(file_id)
 idx_symbols_file_kind ON symbols(file_id, kind)
 idx_files_lang_modified ON files(lang, modified)
-idx_symbol_refs_name      ON symbol_references(symbol_name)
 idx_symbol_refs_file      ON symbol_references(file_id)
-idx_symbol_refs_container ON symbol_references(container_name)
+idx_symbol_refs_container_kind ON symbol_references(container_name, reference_kind)
+idx_symbol_refs_name_kind ON symbol_references(symbol_name, reference_kind)
+idx_symbol_refs_name_file ON symbol_references(symbol_name, file_id)
+idx_symbol_refs_name_nocase_kind ON symbol_references(symbol_name COLLATE NOCASE, reference_kind)
+idx_symbol_refs_name_nocase_file ON symbol_references(symbol_name COLLATE NOCASE, file_id)
+idx_symbol_refs_container_nocase_kind ON symbol_references(container_name COLLATE NOCASE, reference_kind)
+idx_symbol_refs_symbol_name_folded_kind ON symbol_references(symbol_name_folded, reference_kind)
+idx_symbol_refs_symbol_name_folded_file ON symbol_references(symbol_name_folded, file_id)
+idx_symbol_refs_container_name_folded_kind ON symbol_references(container_name_folded, reference_kind)
+idx_symbol_refs_unresolved_mutual_folded ON symbol_references(container_name_folded, symbol_name_folded)
+  WHERE source_symbol_id IS NULL AND target_symbol_id IS NULL AND is_self_reference = 0
+    AND container_name_folded IS NOT NULL AND container_name_folded <> ''
+    AND symbol_name_folded IS NOT NULL AND symbol_name_folded <> ''
+    AND reference_kind IN ('call', 'instantiate', 'subscribe', 'unsubscribe', 'razor_event_binding')
 idx_symbol_refs_source_symbol ON symbol_references(source_symbol_id)
 idx_symbol_refs_target_symbol ON symbol_references(target_symbol_id)
+idx_symbol_refs_resolved_source_target_kind ON symbol_references(source_symbol_id, target_symbol_id, reference_kind)
+  WHERE source_symbol_id IS NOT NULL AND target_symbol_id IS NOT NULL
 idx_symbol_ref_candidates_symbol ON symbol_reference_candidates(symbol_id, reference_id)
 ```
+
+reference の BINARY / NOCASE / folded name・container 用単一カラム index は
+canonical schema に含めません。保持する `*_kind` / `*_file` composite の左端 prefix が
+同じ equality seek を提供するためです。read migration はこの legacy 6本と、全rowを保持していた
+旧 `idx_symbol_refs_mutual_folded` を削除します。未解決 reciprocal lookup は上記 partial indexを
+使い、resolved rowやcall graph外のreferenceをgraph index rebuildへ含めません。exact queryの
+readiness diagnosticも、folded / NOCASE経路を実際に支える保持済みcomposite名を報告します。
 
 ### クエリプランナー期待値
 
 `symbol_references.symbol_name` と小さな `reference_kind IN (...)` 集合で絞る
 hot graph aggregation は、`idx_symbol_refs_name_kind` で indexable な状態を
 保つ必要があります。回帰テストは `ANALYZE` 前後の `EXPLAIN QUERY PLAN` を使い、
-`GROUP_CONCAT(DISTINCT r.reference_kind)` の要約が単一カラムの symbol-name
-probe と行ごとの kind filtering に戻らず、この compound index を期待計画として
+`GROUP_CONCAT(DISTINCT r.reference_kind)` の要約がname-onlyのcomposite-prefix
+probeと行ごとのkind filteringに戻らず、このcompound indexを期待計画として
 維持することを確認します (#1922)。
 
 言語 + シンボル種別の定義検索では、`lang` を `symbols` に非正規化せず

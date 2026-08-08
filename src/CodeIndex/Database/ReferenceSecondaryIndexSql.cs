@@ -12,6 +12,21 @@ internal readonly record struct ReferenceSecondaryIndexDefinition(
 /// </summary>
 internal static class ReferenceSecondaryIndexSql
 {
+    private static readonly string[] RetiredDefinitions =
+    [
+        // These single-column indexes are strict left prefixes of retained composite
+        // indexes with the same collation. Keeping both multiplies rebuild time and disk
+        // usage without adding a distinct seek path.
+        "idx_symbol_refs_name",
+        "idx_symbol_refs_container",
+        "idx_symbol_refs_name_nocase",
+        "idx_symbol_refs_container_nocase",
+        "idx_symbol_refs_symbol_name_folded",
+        "idx_symbol_refs_container_name_folded",
+        // The replacement partial index contains only unresolved call-graph edges.
+        "idx_symbol_refs_mutual_folded",
+    ];
+
     private static readonly ReferenceSecondaryIndexDefinition[] RawPersistenceRequiredDefinitions =
     [
         new(
@@ -27,12 +42,6 @@ internal static class ReferenceSecondaryIndexSql
     private static readonly ReferenceSecondaryIndexDefinition[] DeferredDuringBulkLoadDefinitions =
     [
         new(
-            "idx_symbol_refs_name",
-            "CREATE INDEX IF NOT EXISTS idx_symbol_refs_name ON symbol_references(symbol_name)"),
-        new(
-            "idx_symbol_refs_container",
-            "CREATE INDEX IF NOT EXISTS idx_symbol_refs_container ON symbol_references(container_name)"),
-        new(
             "idx_symbol_refs_container_kind",
             "CREATE INDEX IF NOT EXISTS idx_symbol_refs_container_kind ON symbol_references(container_name, reference_kind)"),
         new(
@@ -42,17 +51,11 @@ internal static class ReferenceSecondaryIndexSql
             "idx_symbol_refs_name_file",
             "CREATE INDEX IF NOT EXISTS idx_symbol_refs_name_file ON symbol_references(symbol_name, file_id)"),
         new(
-            "idx_symbol_refs_mutual_folded",
-            "CREATE INDEX IF NOT EXISTS idx_symbol_refs_mutual_folded ON symbol_references(container_name_folded, symbol_name_folded, reference_kind, is_self_reference)",
+            "idx_symbol_refs_unresolved_mutual_folded",
+            "CREATE INDEX IF NOT EXISTS idx_symbol_refs_unresolved_mutual_folded ON symbol_references(container_name_folded, symbol_name_folded) WHERE source_symbol_id IS NULL AND target_symbol_id IS NULL AND is_self_reference = 0 AND container_name_folded IS NOT NULL AND container_name_folded <> '' AND symbol_name_folded IS NOT NULL AND symbol_name_folded <> '' AND reference_kind IN ('call', 'instantiate', 'subscribe', 'unsubscribe', 'razor_event_binding')",
             RequiresFoldedColumns: true),
         // NOCASE indexes keep exact reference/caller/callee queries bounded on legacy or
         // partially migrated databases whose Unicode-folded columns are not authoritative.
-        new(
-            "idx_symbol_refs_name_nocase",
-            "CREATE INDEX IF NOT EXISTS idx_symbol_refs_name_nocase ON symbol_references(symbol_name COLLATE NOCASE)"),
-        new(
-            "idx_symbol_refs_container_nocase",
-            "CREATE INDEX IF NOT EXISTS idx_symbol_refs_container_nocase ON symbol_references(container_name COLLATE NOCASE)"),
         new(
             "idx_symbol_refs_name_nocase_kind",
             "CREATE INDEX IF NOT EXISTS idx_symbol_refs_name_nocase_kind ON symbol_references(symbol_name COLLATE NOCASE, reference_kind)"),
@@ -64,14 +67,6 @@ internal static class ReferenceSecondaryIndexSql
             "CREATE INDEX IF NOT EXISTS idx_symbol_refs_container_nocase_kind ON symbol_references(container_name COLLATE NOCASE, reference_kind)"),
         // Folded indexes are the authoritative Unicode-aware exact-match paths once the
         // folded-name readiness contract is stamped.
-        new(
-            "idx_symbol_refs_symbol_name_folded",
-            "CREATE INDEX IF NOT EXISTS idx_symbol_refs_symbol_name_folded ON symbol_references(symbol_name_folded)",
-            RequiresFoldedColumns: true),
-        new(
-            "idx_symbol_refs_container_name_folded",
-            "CREATE INDEX IF NOT EXISTS idx_symbol_refs_container_name_folded ON symbol_references(container_name_folded)",
-            RequiresFoldedColumns: true),
         new(
             "idx_symbol_refs_symbol_name_folded_kind",
             "CREATE INDEX IF NOT EXISTS idx_symbol_refs_symbol_name_folded_kind ON symbol_references(symbol_name_folded, reference_kind)",
@@ -100,6 +95,9 @@ internal static class ReferenceSecondaryIndexSql
 
     internal static IReadOnlyList<ReferenceSecondaryIndexDefinition> RawPersistenceRequired { get; }
         = Array.AsReadOnly(RawPersistenceRequiredDefinitions);
+
+    internal static IReadOnlyList<string> Retired { get; }
+        = Array.AsReadOnly(RetiredDefinitions);
 
     internal static IReadOnlyList<ReferenceSecondaryIndexDefinition> DeferredDuringBulkLoad { get; }
         = Array.AsReadOnly(DeferredDuringBulkLoadDefinitions);

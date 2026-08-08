@@ -297,6 +297,8 @@ public partial class DbContext : IDisposable
         Execute("CREATE INDEX IF NOT EXISTS idx_symbols_name_nocase ON symbols(name COLLATE NOCASE)");
         Execute("CREATE INDEX IF NOT EXISTS idx_symbols_file   ON symbols(file_id)");
         Execute("CREATE INDEX IF NOT EXISTS idx_symbols_start  ON symbols(start_line)");
+        foreach (var indexName in ReferenceSecondaryIndexSql.Retired)
+            Execute($"DROP INDEX IF EXISTS {indexName}");
         foreach (var definition in ReferenceSecondaryIndexSql.All)
             Execute(definition.CreateSql);
         // Compound indexes for common query patterns / よくあるクエリパターン用の複合インデックス
