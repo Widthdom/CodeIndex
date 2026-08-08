@@ -260,6 +260,19 @@ Directory scan / shared path filter (built-in skip lists + `.gitignore` / `.cdid
   → Populate FTS5 index
 ```
 
+Every loaded text file is normalized and analyzed in one UTF-16 walk. The
+resulting `NormalizedContentFacts` is the shared source for normalized line
+count, oversized-line and FTS-token diagnostics, conflict-marker detection,
+replacement-character counts/lines, and 80-line/10-line-overlap chunk slices.
+Full scans, scoped updates, dry runs, and MCP indexing pass those facts through
+the same language-independent loader, validation, extraction, and persistence
+paths instead of rescanning content in each consumer. Keep compatibility
+overloads for callers that do not own normalized facts, but do not route normal
+indexing back through them. Files of 80 lines or fewer retain no chunk-boundary
+array, short files skip impossible FTS-token tracking, and high-ratio invalid
+UTF-8 decode replacements retain only the aggregate count used by
+`non_utf8_likely` rather than a line number for every damaged line.
+
 Scoped updates may also parallelize extraction when the immutable C# prepass is
 authoritative and finds static-interface contracts. This path requires at least
 two snapshotted C# targets, `--parallelism > 1`, no active symbol-kind filter,
@@ -3903,6 +3916,16 @@ query コマンドも JSON profile block 用の `--profile` と command-scoped p
   → チャンク＋シンボル＋参照をバッチ挿入（1トランザクション500件）
   → FTS5インデックス反映
 ```
+
+読み込んだ text file は UTF-16 上の1回の走査で正規化と解析を行います。得られた
+`NormalizedContentFacts` を、正規化後の行数、長すぎる行 / FTS token の診断、conflict
+marker、replacement character の件数 / 行、80行・10行 overlap の chunk slice に対する
+共通の情報源とします。full scan、scoped update、dry-run、MCP indexing は全言語共通の
+loader、validation、extraction、persistence 経路でこの facts を引き回し、consumer ごとの
+content 再走査を避けます。normalized facts を持たない caller 用の互換 overload は維持しますが、
+通常の indexing をその経路へ戻さないでください。80行以下の file は chunk 境界 array を保持せず、
+短い file は発生し得ない FTS token 追跡を省き、高比率の invalid UTF-8 decode replacement は
+破損行ごとの番号ではなく `non_utf8_likely` に必要な集約件数だけを保持します。
 
 scoped update でも、immutable な C# prepass が authoritative で static-interface
 contract を検出した場合は extraction を並列化できます。この経路は snapshot 済み C# target

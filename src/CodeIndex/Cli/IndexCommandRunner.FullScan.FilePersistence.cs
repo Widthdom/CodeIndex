@@ -78,11 +78,13 @@ public static partial class IndexCommandRunner
 
         context.SetPhase(FormatIndexPhasePath(record.Path, "chunking"), "chunking");
         var chunks = item.Chunks == null
-            ? ChunkSplitter.SplitNormalized(
-                fileId,
-                item.Content!,
-                item.HasOversizeLine ?? ChunkSplitter.HasOversizeLine(item.Content!),
-                record.Lines)
+            ? item.ContentFacts is { } contentFacts
+                ? ChunkSplitter.SplitNormalized(fileId, item.Content!, contentFacts)
+                : ChunkSplitter.SplitNormalized(
+                    fileId,
+                    item.Content!,
+                    item.HasOversizeLine ?? ChunkSplitter.HasOversizeLine(item.Content!),
+                    record.Lines)
             : ReassignChunkFileIds(item.Chunks, fileId);
         if (context.GeneratedSuppressionIssue != null)
         {

@@ -902,8 +902,7 @@ public static partial class IndexCommandRunner
             var chunks = ChunkSplitter.SplitNormalized(
                 0,
                 content,
-                loaded.HasOversizeLine,
-                record.Lines);
+                loaded.Facts);
             var generatedSuppressionIssue = request.GeneratedExtractionSuppressed
                 ? indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path)
                 : null;
@@ -918,8 +917,7 @@ public static partial class IndexCommandRunner
                         content,
                         record.Lang,
                         loaded.Inspection,
-                        loaded.HasOversizeLine,
-                        loaded.ConflictMarkerLine),
+                        loaded.Facts),
                     generatedSuppressionIssue);
                 return new UpdateParallelExtractionResult(
                     request.TargetIndex,
@@ -1030,8 +1028,7 @@ public static partial class IndexCommandRunner
                 content,
                 record.Lang,
                 loaded.Inspection,
-                loaded.HasOversizeLine,
-                loaded.ConflictMarkerLine);
+                loaded.Facts);
             if (symbolRegexTimeoutIssue != null)
                 issues = AppendIssue(issues, symbolRegexTimeoutIssue);
             if (referenceRegexTimeoutIssue != null)

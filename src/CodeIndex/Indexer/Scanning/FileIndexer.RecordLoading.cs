@@ -86,8 +86,7 @@ public partial class FileIndexer
             record,
             loaded.Content,
             loaded.RawBytes,
-            loaded.HasOversizeLine,
-            loaded.ConflictMarkerLine,
+            loaded.Facts,
             loaded.Warning,
             loaded.Inspection,
             languageDetection);

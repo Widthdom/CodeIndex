@@ -1031,8 +1031,7 @@ public static partial class IndexCommandRunner
         var chunks = ChunkSplitter.SplitNormalized(
             0,
             loaded.Content,
-            loaded.HasOversizeLine,
-            record.Lines);
+            loaded.Facts);
         var generatedSuppressionIssue = indexer.IsGeneratedCodeExtractionSuppressed(record.Path)
             ? indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path)
             : null;
@@ -1045,8 +1044,7 @@ public static partial class IndexCommandRunner
                     loaded.Content,
                     record.Lang,
                     loaded.Inspection,
-                    loaded.HasOversizeLine,
-                    loaded.ConflictMarkerLine),
+                    loaded.Facts),
                 generatedSuppressionIssue);
             return new DryRunParsedMutationEstimate(
                 chunks.Count,
@@ -1153,8 +1151,7 @@ public static partial class IndexCommandRunner
             loaded.Content,
             record.Lang,
             loaded.Inspection,
-            loaded.HasOversizeLine,
-            loaded.ConflictMarkerLine);
+            loaded.Facts);
         if (symbolExtraction.RegexTimeoutIssue != null)
             issues = AppendIssue(issues, symbolExtraction.RegexTimeoutIssue);
         if (referenceRegexTimeoutIssue != null)

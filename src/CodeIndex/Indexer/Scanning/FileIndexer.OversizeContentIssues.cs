@@ -6,7 +6,12 @@ namespace CodeIndex.Indexer;
 
 public partial class FileIndexer
 {
-    private static void AddOversizeContentIssues(ref List<FileIssue>? issues, string relativePath, string content, bool? hasOversizeLine)
+    private static void AddOversizeContentIssues(
+        ref List<FileIssue>? issues,
+        string relativePath,
+        string content,
+        NormalizedContentFacts? facts,
+        bool? hasOversizeLine)
     {
         // line_too_long — surface the chunk/symbol/reference skip path that
         // triggers when a single physical line exceeds ChunkSplitter.MaxLineLength
@@ -20,22 +25,24 @@ public partial class FileIndexer
         // SymbolExtractor / ReferenceExtractor 側の同等ガードはすでに空を返す
         // ため、本 FileIssue は issue 起票時の「無音停止」を切り分けやすくする
         // 観測点を提供する。Closes #1542.
-        if (hasOversizeLine ?? ChunkSplitter.HasOversizeLine(content))
+        var longLine = facts?.FirstOversizeLine ?? 0;
+        if (facts is null && (hasOversizeLine ?? ChunkSplitter.HasOversizeLine(content)))
         {
-            var longLine = FindOversizeLine(content, ChunkSplitter.MaxLineLength);
-            if (longLine > 0)
+            longLine = FindOversizeLine(content, ChunkSplitter.MaxLineLength);
+        }
+        if (longLine > 0)
+        {
+            AddIssue(ref issues, new FileIssue
             {
-                AddIssue(ref issues, new FileIssue
-                {
-                    Path = relativePath,
-                    Kind = "line_too_long",
-                    Line = longLine,
-                    Message = $"Line {longLine} exceeds {ChunkSplitter.MaxLineLength}-char cap; chunks/symbols/references skipped",
-                });
-            }
+                Path = relativePath,
+                Kind = "line_too_long",
+                Line = longLine,
+                Message = $"Line {longLine} exceeds {ChunkSplitter.MaxLineLength}-char cap; chunks/symbols/references skipped",
+            });
         }
 
-        var longFtsTokenLine = FindOversizeFtsTokenLine(content, CodeIndex.Database.DbReader.FtsUnicode61MaxTokenLength);
+        var longFtsTokenLine = facts?.FirstOversizeFtsTokenLine
+            ?? FindOversizeFtsTokenLine(content, CodeIndex.Database.DbReader.FtsUnicode61MaxTokenLength);
         if (longFtsTokenLine > 0)
         {
             AddIssue(ref issues, new FileIssue
@@ -153,13 +160,13 @@ public partial class FileIndexer
         return 0;
     }
 
-    private static bool IsLikelyUnicode61AsciiTokenChar(char value)
+    internal static bool IsLikelyUnicode61AsciiTokenChar(char value)
         => value == '_'
             || (value >= 'A' && value <= 'Z')
             || (value >= 'a' && value <= 'z')
             || (value >= '0' && value <= '9');
 
-    private static bool IsLikelyUnicode61TokenRune(Rune rune)
+    internal static bool IsLikelyUnicode61TokenRune(Rune rune)
         => rune.Value == '_'
             || Rune.IsLetter(rune)
             || Rune.IsDigit(rune)

@@ -25,9 +25,12 @@ internal sealed partial class FileContentLoader(
 
     internal readonly record struct NormalizedIndexableContent(
         string Content,
-        int LineCount,
-        bool HasOversizeLine,
-        int ConflictMarkerLine);
+        NormalizedContentFacts Facts)
+    {
+        internal int LineCount => Facts.LineCount;
+        internal bool HasOversizeLine => Facts.HasOversizeLine;
+        internal int ConflictMarkerLine => Facts.ConflictMarkerLine;
+    }
 
     internal LoadedFileContent Load(
         string absolutePath,
@@ -47,16 +50,16 @@ internal sealed partial class FileContentLoader(
                 bytes,
                 sizeBytes,
                 modifiedUtc,
-                0,
-                false,
-                0,
+                NormalizedContentFacts.Empty,
                 ComputeChecksum(bytes),
                 null,
                 lfsInspection);
         }
 
-        var (content, warning, inspection) = DecodeIndexableContent(bytes, relativePath);
-        var normalized = NormalizeForIndexing(content);
+        var (content, warning, inspection, hadInvalidUtf8Replacement) = DecodeIndexableContent(bytes, relativePath);
+        var normalized = NormalizeForIndexing(
+            content,
+            discardReplacementLinesWhenNonUtf8Likely: hadInvalidUtf8Replacement);
         var checksum = CanReuseRawBytesForNormalizedChecksum(content, warning, inspection, normalized)
             ? ComputeRawChecksum(bytes)
             : ComputeChecksumFromNormalizedContent(normalized.Content);
@@ -66,9 +69,7 @@ internal sealed partial class FileContentLoader(
             bytes,
             sizeBytes,
             modifiedUtc,
-            normalized.LineCount,
-            normalized.HasOversizeLine,
-            normalized.ConflictMarkerLine,
+            normalized.Facts,
             checksum,
             warning,
             inspection);
@@ -98,7 +99,7 @@ internal sealed partial class FileContentLoader(
         if (IsGitLfsPointer(bytes))
             return string.Empty;
 
-        var (content, _, _) = DecodeIndexableContent(bytes, relativePath, inspectRawByteContent: false);
+        var (content, _, _, _) = DecodeIndexableContent(bytes, relativePath, inspectRawByteContent: false);
         return NormalizeContentForPrepass(content);
     }
 
@@ -160,7 +161,7 @@ internal sealed partial class FileContentLoader(
         if (bytes is null || IsGitLfsPointer(bytes))
             return (null, RequiresRetry: false);
 
-        var (content, _, _) = DecodeIndexableContent(bytes, relativePath, inspectRawByteContent: false);
+        var (content, _, _, _) = DecodeIndexableContent(bytes, relativePath, inspectRawByteContent: false);
         return (NormalizeContentForPrepass(content), RequiresRetry: false);
     }
 
@@ -234,24 +235,33 @@ internal sealed partial class FileContentLoader(
 
     private static bool IsLineLeadingInvisible(char c) => c is '\uFEFF' or '\u200B';
 
-    internal static NormalizedIndexableContent NormalizeForIndexing(string content)
+    internal static NormalizedIndexableContent NormalizeForIndexing(
+        string content,
+        bool discardReplacementLinesWhenNonUtf8Likely = false)
     {
         if (content.Length == 0)
-            return new NormalizedIndexableContent(content, 0, false, 0);
+            return new NormalizedIndexableContent(content, NormalizedContentFacts.Empty);
 
         StringBuilder? builder = null;
         var outputLength = 0;
         var lineCount = 0;
         var currentLineLength = 0;
-        var hasOversizeLine = false;
+        var firstOversizeLine = 0;
         var conflictMarkerLine = 0;
         var conflictScanByteCount = 0;
         var conflictScanComplete = false;
-        var requiresPrepassNormalization = FindFirstPrepassNormalizationIndex(content) >= 0;
-        var trackConflictMarkers = requiresPrepassNormalization || HasConflictMarkerDelimiterCandidate(content);
-        if (!requiresPrepassNormalization)
-            return AnalyzeUnchangedContent(content, trackConflictMarkers);
-
+        var replacementCharacterCount = 0;
+        List<int>? replacementCharacterLines = null;
+        var retainReplacementCharacterLines = true;
+        var firstOversizeFtsTokenLine = 0;
+        var ftsTokenLength = 0;
+        var trackFtsTokens = content.Length
+            > CodeIndex.Database.DbReader.FtsUnicode61MaxTokenLength;
+        var pendingChunkStartOffset = 0;
+        var pendingFullChunkEndOffset = 0;
+        List<int>? additionalChunkStartOffsets = null;
+        List<int>? fullChunkEndOffsets = null;
+        var trackChunkSlices = true;
         var previousOutputWasLineBreak = false;
         var atLineStart = true;
 
@@ -261,50 +271,169 @@ internal sealed partial class FileContentLoader(
             return builder;
         }
 
-        void CountOutputChar(char c)
+        void BeginOutputUnit()
         {
             if (outputLength == 0)
+            {
                 lineCount = 1;
+            }
             else if (previousOutputWasLineBreak)
+            {
                 lineCount++;
 
-            outputLength++;
-            if (c == '\n')
-            {
-                currentLineLength = 0;
+                if (!trackChunkSlices)
+                    return;
+
+                var chunkStep = ChunkSplitter.ChunkSize - ChunkSplitter.Overlap;
+                if (lineCount > ChunkSplitter.ChunkSize
+                    && (lineCount - ChunkSplitter.ChunkSize - 1) % chunkStep == 0)
+                {
+                    (additionalChunkStartOffsets ??= []).Add(pendingChunkStartOffset);
+                    (fullChunkEndOffsets ??= []).Add(pendingFullChunkEndOffset);
+                }
+
+                if (lineCount > 1
+                    && (lineCount - 1) % chunkStep == 0)
+                {
+                    pendingChunkStartOffset = outputLength;
+                }
             }
-            else if (!hasOversizeLine)
-            {
-                currentLineLength++;
-                hasOversizeLine = currentLineLength > ChunkSplitter.MaxLineLength;
-            }
-            previousOutputWasLineBreak = c == '\n';
-            atLineStart = c == '\n';
         }
 
-        void TrackConflictMarker(char c, int sourceIndex)
+        void TrackConflictBytes(int utf8ByteLength, char firstChar = '\0', int sourceIndex = -1)
         {
-            if (!trackConflictMarkers || conflictMarkerLine > 0 || conflictScanComplete)
+            if (conflictMarkerLine > 0 || conflictScanComplete)
                 return;
 
-            conflictScanByteCount += c <= '\u007f'
-                ? 1
-                : Encoding.UTF8.GetByteCount(content.AsSpan(sourceIndex, 1));
+            conflictScanByteCount += utf8ByteLength;
             if (conflictScanByteCount > FileIndexer.ConflictMarkerScanLimitBytes)
             {
                 conflictScanComplete = true;
                 return;
             }
 
-            if (atLineStart && (c == '<' || c == '>')
+            if (atLineStart
+                && sourceIndex >= 0
+                && firstChar is '<' or '>'
                 && FileIndexer.IsConflictMarkerLineStart(content.AsSpan(sourceIndex)))
             {
-                conflictMarkerLine = outputLength == 0
-                    ? 1
-                    : previousOutputWasLineBreak
-                        ? lineCount + 1
-                        : lineCount;
+                conflictMarkerLine = lineCount;
             }
+        }
+
+        void TrackReplacementCharacter(char c)
+        {
+            if (c != '\uFFFD')
+                return;
+
+            replacementCharacterCount++;
+            if (discardReplacementLinesWhenNonUtf8Likely
+                && FileIndexer.MeetsNonUtf8LikelyReplacementThreshold(
+                    replacementCharacterCount,
+                    content.Length))
+            {
+                replacementCharacterLines = null;
+                retainReplacementCharacterLines = false;
+                return;
+            }
+
+            if (!retainReplacementCharacterLines)
+                return;
+
+            if (replacementCharacterLines is null || replacementCharacterLines[^1] != lineCount)
+                (replacementCharacterLines ??= []).Add(lineCount);
+        }
+
+        void TrackFtsRune(Rune rune)
+        {
+            if (firstOversizeFtsTokenLine > 0)
+                return;
+
+            var isTokenRune = rune.Value <= '\u007F'
+                ? FileIndexer.IsLikelyUnicode61AsciiTokenChar((char)rune.Value)
+                : FileIndexer.IsLikelyUnicode61TokenRune(rune);
+            if (isTokenRune)
+            {
+                ftsTokenLength++;
+                if (ftsTokenLength > CodeIndex.Database.DbReader.FtsUnicode61MaxTokenLength)
+                    firstOversizeFtsTokenLine = lineCount;
+            }
+            else
+            {
+                ftsTokenLength = 0;
+            }
+        }
+
+        void TrackInvalidFtsRune()
+        {
+            if (firstOversizeFtsTokenLine == 0)
+                ftsTokenLength = 0;
+        }
+
+        void FinishOutputChars(int charCount)
+        {
+            currentLineLength += charCount;
+            if (firstOversizeLine == 0
+                && currentLineLength > ChunkSplitter.MaxLineLength)
+            {
+                firstOversizeLine = lineCount;
+                trackChunkSlices = false;
+                additionalChunkStartOffsets = null;
+                fullChunkEndOffsets = null;
+            }
+
+            outputLength += charCount;
+            previousOutputWasLineBreak = false;
+            atLineStart = false;
+        }
+
+        void FinishOutputLineBreak()
+        {
+            if (trackChunkSlices
+                && lineCount >= ChunkSplitter.ChunkSize
+                && (lineCount - ChunkSplitter.ChunkSize) % (ChunkSplitter.ChunkSize - ChunkSplitter.Overlap) == 0)
+            {
+                pendingFullChunkEndOffset = outputLength;
+            }
+
+            outputLength++;
+            currentLineLength = 0;
+            ftsTokenLength = 0;
+            previousOutputWasLineBreak = true;
+            atLineStart = true;
+        }
+
+        NormalizedChunkSlice[]? BuildChunkSlices()
+        {
+            if (outputLength == 0
+                || firstOversizeLine > 0
+                || lineCount <= ChunkSplitter.ChunkSize)
+            {
+                return null;
+            }
+
+            var chunkCount = 1 + (lineCount - ChunkSplitter.ChunkSize + (ChunkSplitter.ChunkSize - ChunkSplitter.Overlap) - 1)
+                / (ChunkSplitter.ChunkSize - ChunkSplitter.Overlap);
+            var slices = new NormalizedChunkSlice[chunkCount];
+            var effectiveContentLength = previousOutputWasLineBreak
+                ? outputLength - 1
+                : outputLength;
+            for (var chunkIndex = 0; chunkIndex < chunkCount; chunkIndex++)
+            {
+                var startOffset = chunkIndex == 0
+                    ? 0
+                    : additionalChunkStartOffsets![chunkIndex - 1];
+                var startLineIndex = chunkIndex * (ChunkSplitter.ChunkSize - ChunkSplitter.Overlap);
+                var endLineIndex = Math.Min(startLineIndex + ChunkSplitter.ChunkSize, lineCount);
+                var endOffset = endLineIndex < lineCount
+                    ? fullChunkEndOffsets![chunkIndex]
+                    : effectiveContentLength;
+                slices[chunkIndex] = new NormalizedChunkSlice(
+                    startOffset,
+                    endOffset - startOffset);
+            }
+
+            return slices;
         }
 
         for (var i = 0; i < content.Length; i++)
@@ -319,134 +448,73 @@ internal sealed partial class FileContentLoader(
             if (c == '\r')
             {
                 EnsureBuilder(i).Append('\n');
-                TrackConflictMarker('\n', i);
-                CountOutputChar('\n');
+                BeginOutputUnit();
+                TrackConflictBytes(1);
+                FinishOutputLineBreak();
                 if (i + 1 < content.Length && content[i + 1] == '\n')
                     i++;
                 continue;
             }
 
+            if (char.IsHighSurrogate(c)
+                && i + 1 < content.Length
+                && char.IsLowSurrogate(content[i + 1]))
+            {
+                var lowSurrogate = content[++i];
+                builder?.Append(c).Append(lowSurrogate);
+                BeginOutputUnit();
+                var rune = new Rune(c, lowSurrogate);
+                TrackConflictBytes(rune.Utf8SequenceLength);
+                if (trackFtsTokens)
+                    TrackFtsRune(rune);
+                FinishOutputChars(2);
+                continue;
+            }
+
             builder?.Append(c);
-            TrackConflictMarker(c, i);
-            CountOutputChar(c);
+            BeginOutputUnit();
+            if (char.IsSurrogate(c))
+            {
+                TrackConflictBytes(3);
+                if (trackFtsTokens)
+                    TrackInvalidFtsRune();
+                FinishOutputChars(1);
+                continue;
+            }
+
+            var utf8ByteLength = c <= '\u007F'
+                ? 1
+                : new Rune(c).Utf8SequenceLength;
+            TrackConflictBytes(utf8ByteLength, c, i);
+            TrackReplacementCharacter(c);
+            if (c == '\n')
+            {
+                FinishOutputLineBreak();
+                continue;
+            }
+
+            if (trackFtsTokens)
+                TrackFtsRune(new Rune(c));
+            FinishOutputChars(1);
         }
 
         var normalized = builder?.ToString() ?? content;
+        var replacementLines = discardReplacementLinesWhenNonUtf8Likely
+            && FileIndexer.MeetsNonUtf8LikelyReplacementThreshold(
+                replacementCharacterCount,
+                normalized.Length)
+                ? null
+                : replacementCharacterLines?.ToArray();
         return new NormalizedIndexableContent(
             normalized,
-            lineCount,
-            hasOversizeLine,
-            conflictMarkerLine);
-    }
-
-    private static NormalizedIndexableContent AnalyzeUnchangedContent(string content, bool trackConflictMarkers)
-    {
-        var lineCount = 1;
-        var hasOversizeLine = false;
-        var conflictMarkerLine = 0;
-        var conflictScanByteCount = 0;
-        var conflictScanComplete = !trackConflictMarkers;
-        var lineNumber = 1;
-        var lineStart = 0;
-        while (lineStart < content.Length)
-        {
-            var newlineIndex = content.IndexOf('\n', lineStart);
-            var lineEnd = newlineIndex < 0 ? content.Length : newlineIndex;
-
-            if (!conflictScanComplete
-                && conflictScanByteCount < FileIndexer.ConflictMarkerScanLimitBytes
-                && conflictMarkerLine == 0)
-            {
-                TrackUnchangedContentConflictMarkerLine(content, lineStart, lineEnd, lineNumber, ref conflictMarkerLine);
-            }
-
-            if (!hasOversizeLine && lineEnd - lineStart > ChunkSplitter.MaxLineLength)
-                hasOversizeLine = true;
-            if (!conflictScanComplete)
-            {
-                var scanEnd = newlineIndex < 0 ? lineEnd : newlineIndex + 1;
-                conflictScanComplete = AdvanceUnchangedContentConflictScan(
-                    content,
-                    lineStart,
-                    scanEnd,
-                    ref conflictScanByteCount);
-            }
-            if (newlineIndex < 0)
-                break;
-
-            if (newlineIndex < content.Length - 1)
-            {
-                lineCount++;
-                lineNumber++;
-            }
-            lineStart = newlineIndex + 1;
-        }
-
-        if (!hasOversizeLine && content.Length - lineStart > ChunkSplitter.MaxLineLength)
-            hasOversizeLine = true;
-
-        return new NormalizedIndexableContent(content, lineCount, hasOversizeLine, conflictMarkerLine);
-    }
-
-    private static void TrackUnchangedContentConflictMarkerLine(
-        string content,
-        int lineStart,
-        int lineEnd,
-        int lineNumber,
-        ref int conflictMarkerLine)
-    {
-        var line = content.AsSpan(lineStart, lineEnd - lineStart);
-        if (!line.IsEmpty
-            && (line[0] == '<' || line[0] == '>')
-            && FileIndexer.IsConflictMarkerLineStart(line))
-        {
-            conflictMarkerLine = lineNumber;
-        }
-    }
-
-    private static bool AdvanceUnchangedContentConflictScan(
-        string content,
-        int scanStart,
-        int scanEnd,
-        ref int conflictScanByteCount)
-    {
-        var scanLength = scanEnd - scanStart;
-        if (scanLength <= 0)
-            return false;
-
-        var remainingBytes = FileIndexer.ConflictMarkerScanLimitBytes - conflictScanByteCount;
-        if (remainingBytes <= 0)
-            return true;
-
-        var countedChars = Math.Min(scanLength, remainingBytes + 1);
-        conflictScanByteCount += Encoding.UTF8.GetByteCount(content.AsSpan(scanStart, countedChars));
-        return countedChars < scanLength || conflictScanByteCount > FileIndexer.ConflictMarkerScanLimitBytes;
-    }
-
-    private static bool HasConflictMarkerDelimiterCandidate(string content)
-    {
-        var scanCharLimit = Math.Min(content.Length, FileIndexer.ConflictMarkerScanLimitBytes + 1);
-        var scan = content.AsSpan(0, scanCharLimit);
-        if (scan.IsEmpty)
-            return false;
-        if (scan[0] is '<' or '>')
-            return true;
-
-        var offset = 0;
-        while (offset < scan.Length)
-        {
-            var newlineOffset = scan[offset..].IndexOf('\n');
-            if (newlineOffset < 0)
-                return false;
-
-            offset += newlineOffset + 1;
-            if (offset >= scan.Length)
-                return false;
-            if (scan[offset] is '<' or '>')
-                return true;
-        }
-
-        return false;
+            new NormalizedContentFacts(
+                lineCount,
+                firstOversizeLine,
+                conflictMarkerLine,
+                replacementCharacterCount,
+                replacementLines,
+                firstOversizeFtsTokenLine,
+                BuildChunkSlices()));
     }
 
     internal static string NormalizeContentForPrepass(string content)
@@ -613,9 +681,12 @@ internal readonly record struct LoadedFileContent(
     byte[] RawBytes,
     long SizeBytes,
     DateTime ModifiedUtc,
-    int LineCount,
-    bool HasOversizeLine,
-    int ConflictMarkerLine,
+    NormalizedContentFacts Facts,
     string Checksum,
     string? Warning,
-    FileContentInspection Inspection);
+    FileContentInspection Inspection)
+{
+    internal int LineCount => Facts.LineCount;
+    internal bool HasOversizeLine => Facts.HasOversizeLine;
+    internal int ConflictMarkerLine => Facts.ConflictMarkerLine;
+}
