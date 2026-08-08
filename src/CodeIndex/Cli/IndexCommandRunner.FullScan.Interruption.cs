@@ -114,9 +114,12 @@ public static partial class IndexCommandRunner
         bool? hasOversizeLine,
         int? conflictMarkerLine,
         SymbolExtractionWorkerClient worker,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        TimeSpan? stallTimeoutOverride = null)
     {
-        var timeout = IndexExtractionStallTimeoutForTesting?.Invoke() ?? IndexExtractionStallTimeout;
+        var timeout = stallTimeoutOverride
+            ?? IndexExtractionStallTimeoutForTesting?.Invoke()
+            ?? IndexExtractionStallTimeout;
         if (timeout <= TimeSpan.Zero)
         {
             using var regexTimeouts = BoundedRegex.CaptureTimeouts(lang, "symbol_extraction");

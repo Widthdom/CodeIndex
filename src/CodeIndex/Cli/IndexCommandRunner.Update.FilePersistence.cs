@@ -330,7 +330,9 @@ public static partial class IndexCommandRunner
                 context.AbsolutePath,
                 context.RelativePath,
                 context.KnownLanguage);
-            UpdateSkippedFileRecordBuiltForTesting?.Invoke(context.RelativePath);
+            UpdateSkippedFileRecordBuiltForTesting?.Invoke(
+                context.RelativePath,
+                context.KnownLanguage);
             if (!context.ValidateSkippedRecord(skippedRecord))
             {
                 throw new CSharpWorkspaceChangedException(

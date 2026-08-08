@@ -101,7 +101,12 @@ public static partial class IndexCommandRunner
     internal static Action? UpdateTypeScriptAugmentationRebuildForTesting { get; set; }
     internal static Action? UpdateExtractionWorkStartedForTesting { get; set; }
     internal static Action<string>? UpdateFileContentLoadForTesting { get; set; }
-    internal static Action<string>? UpdateSkippedFileRecordBuiltForTesting { get; set; }
+    internal static Action<bool, string?, int, int>? UpdateParallelExtractionSchedulingForTesting { get; set; }
+    internal static Action<UpdateParallelExtractionTestEvent>? UpdateParallelExtractionEventForTesting { get; set; }
+    internal static Func<string, string, Exception?>? UpdateParallelExtractionFailureForTesting { get; set; }
+    internal static Func<string, Exception?>? UpdateParallelWindowProbeFailureForTesting { get; set; }
+    internal static Action? UpdateParallelExtractionWorkersStoppedForTesting { get; set; }
+    internal static Action<string, string?>? UpdateSkippedFileRecordBuiltForTesting { get; set; }
     internal static Action<int, int>? UpdateFileCommittedForTesting { get; set; }
     internal static Func<TimeSpan>? IndexExtractionStallTimeoutForTesting { get; set; }
     internal static Func<string, Exception?>? DryRunParseEstimateFailureForTesting { get; set; }

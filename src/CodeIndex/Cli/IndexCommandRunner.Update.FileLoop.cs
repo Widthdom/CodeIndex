@@ -98,6 +98,14 @@ public static partial class IndexCommandRunner
         var fileErrorList = context.FileErrorList;
         var warningList = context.WarningList;
         var cancellationToken = context.CancellationToken;
+        var parallelExtractionEventForTesting =
+            UpdateParallelExtractionEventForTesting;
+        var parallelExtractionFailureForTesting =
+            UpdateParallelExtractionFailureForTesting;
+        var extractionStallTimeoutForTesting =
+            IndexExtractionStallTimeoutForTesting;
+        var parallelExtractionWorkersStoppedForTesting =
+            UpdateParallelExtractionWorkersStoppedForTesting;
 
         void RecordScanErrors(
             IEnumerable<FileIndexer.ScanError> scanErrors,
@@ -163,15 +171,460 @@ public static partial class IndexCommandRunner
             () => currentUpdatePath == null
                 ? $"{updated + removed + skipped:N0}/{targetPaths.Count:N0} files processed"
                 : $"{updated + removed + skipped:N0}/{targetPaths.Count:N0} files processed, current {currentUpdatePath}");
+        var updateExtractionWorkStarted = 0;
+        void NotifyUpdateExtractionWorkStarted()
+        {
+            if (Interlocked.Exchange(ref updateExtractionWorkStarted, 1) == 0)
+                UpdateExtractionWorkStartedForTesting?.Invoke();
+        }
+
         using var symbolExtractionWorker = new LazyDisposable<SymbolExtractionWorkerClient>(() =>
         {
-            UpdateExtractionWorkStartedForTesting?.Invoke();
+            NotifyUpdateExtractionWorkStarted();
             return new SymbolExtractionWorkerClient(options.MaxFileSizeBytes);
         });
+        var parallelExtractionFallbackReason = options.Parallelism <= 1
+            ? "parallelism_one"
+            : !csharpWorkspace.HasStaticInterfaceContracts
+                ? "non_authoritative_csharp_workspace"
+                : csharpWorkspaceSnapshots == null
+                    ? "missing_csharp_workspace_snapshots"
+                    : csharpWorkspaceSnapshots.Count < 2
+                        ? "insufficient_authoritative_csharp_targets"
+                        : options.SymbolKindFilter.IsActive
+                            ? "active_symbol_kind_filter"
+                            : UpdateFileContentLoadForTesting != null
+                                ? "content_load_test_hook"
+                                : postExtractionHooks.Value.HasHooks
+                                    ? "post_extraction_hooks"
+                                    : null;
+        var parallelizeAuthoritativeCSharpUpdates =
+            parallelExtractionFallbackReason == null;
+        var parallelExtractionWorkerCount = parallelizeAuthoritativeCSharpUpdates
+            ? Math.Min(options.Parallelism, csharpWorkspaceSnapshots!.Count)
+            : 0;
+        var parallelExtractionWindowCapacity = parallelizeAuthoritativeCSharpUpdates
+            ? checked(parallelExtractionWorkerCount * 2)
+            : 0;
+        UpdateParallelExtractionSchedulingForTesting?.Invoke(
+            parallelizeAuthoritativeCSharpUpdates,
+            parallelExtractionFallbackReason,
+            parallelExtractionWorkerCount,
+            parallelExtractionWindowCapacity);
+        using var parallelExtractionPipeline =
+            new LazyDisposable<UpdateParallelExtractionPipeline>(() =>
+            {
+                NotifyUpdateExtractionWorkStarted();
+                return new UpdateParallelExtractionPipeline(
+                    indexer,
+                    options,
+                    projectRoot,
+                    csharpWorkspace,
+                    csharpWorkspaceSnapshots!,
+                    parallelExtractionWorkerCount,
+                    parallelExtractionEventForTesting,
+                    parallelExtractionFailureForTesting,
+                    extractionStallTimeoutForTesting,
+                    parallelExtractionWorkersStoppedForTesting);
+            });
+
+        var parallelSourceWorkspaceDriftDetected = false;
+        void ConsumeParallelUpdateResult(UpdateParallelExtractionResult item)
+        {
+            var target = item.Target;
+            if (cancellationToken.IsCancellationRequested && item.Record != null)
+            {
+                DemoteReadinessOnce();
+                csharpMetadataTargetsNeedRefresh = true;
+            }
+            ThrowIfUpdateCancelled();
+            updateProgress.Start();
+            var relPath = target.RelativePath;
+            currentUpdatePath = relPath;
+            currentUpdatePhase = item.FailurePhase ?? "preparing";
+            var absPath = target.FilePath;
+            var dbPath = target.IndexPath;
+            var fileBatchMarked = false;
+            var csharpWorkspaceSnapshot = csharpWorkspaceSnapshots![dbPath];
+            try
+            {
+                if (item.Record != null)
+                {
+                    readableFileBytes.Remember(item.TargetIndex, item.Record.Size);
+                    if (item.Warning != null && !options.Json && !options.Quiet)
+                    {
+                        updateProgress.Pause();
+                        ConsoleUi.PrintWarning(item.Warning);
+                        updateProgress.Resume();
+                    }
+                    DemoteReadinessOnce();
+                    csharpMetadataTargetsNeedRefresh = true;
+                }
+                var sourceContractSeenBeforeObservation =
+                    postExtractionHooks.Value.SawCSharpStaticInterfaceSourceContract;
+                postExtractionHooks.Value.ObserveCSharpStaticInterfaceSourceContractEvidence(
+                    item.HasCSharpStaticInterfaceSourceContract);
+                if (!csharpWorkspace.HasSourceStaticInterfaceContracts
+                    && !sourceContractSeenBeforeObservation
+                    && postExtractionHooks.Value.SawCSharpStaticInterfaceSourceContract)
+                {
+                    parallelSourceWorkspaceDriftDetected = true;
+                    RecordCSharpWorkspaceDrift(
+                        relPath,
+                        "A C# static-interface contract appeared after workspace preflight.");
+                    skipped++;
+                    return;
+                }
+                if (item.Exception is IndexExtractionStalledException stalledException)
+                {
+                    if (!string.Equals(
+                            item.FailurePhase,
+                            "reading",
+                            StringComparison.Ordinal))
+                    {
+                        DemoteReadinessOnce();
+                        csharpMetadataTargetsNeedRefresh = true;
+                        writer.MarkBatchInProgress();
+                        fileBatchMarked = true;
+                    }
+                    RethrowPreservingStackTrace(
+                        new IndexExtractionStalledException(
+                            updated + removed,
+                            targetPaths.Count,
+                            stalledException.Timeout,
+                            stalledException.ActivePath,
+                            stalledException.WorkerError));
+                }
+                if (item.Exception is CSharpWorkspaceChangedException
+                    or CSharpWorkspaceSnapshotDriftException)
+                {
+                    RecordCSharpWorkspaceDrift(
+                        relPath,
+                        item.Exception.Message,
+                        "reading");
+                    skipped++;
+                    return;
+                }
+                if (item.Exception is FileIndexer.BinaryFileSkippedException
+                    or FileIndexer.FileTooLargeSkippedException)
+                {
+                    var skippedFile = HandleSkippedUpdateFile(
+                        new SkippedUpdateFileHandlingContext
+                        {
+                            Writer = writer,
+                            Indexer = indexer,
+                            Options = options,
+                            AbsolutePath = absPath,
+                            RelativePath = relPath,
+                            IndexPath = dbPath,
+                            KnownLanguage = item.KnownLanguage,
+                            ProjectRootWritten = context.IsProjectRootWritten(),
+                            TargetIndex = item.TargetIndex,
+                            ReadableFileBytes = readableFileBytes,
+                            HasCSharpWorkspaceSnapshot = true,
+                            CSharpWorkspaceSnapshot = csharpWorkspaceSnapshot,
+                            CSharpWorkspaceSnapshots = csharpWorkspaceSnapshots,
+                            WarningList = warningList,
+                            UpdateProgress = updateProgress,
+                            CancellationToken = cancellationToken,
+                            DemoteReadinessOnce = DemoteReadinessOnce,
+                            SetCurrentUpdatePhase =
+                                phase => currentUpdatePhase = phase,
+                            RecordCSharpWorkspaceDrift =
+                                RecordCSharpWorkspaceDrift,
+                            RecordUpdateFileFailure =
+                                RecordUpdateFileFailure,
+                            PurgeStaleUpdateCleanupPaths =
+                                PurgeStaleUpdateCleanupPaths,
+                            RequireTypeScriptAugmentationRefresh =
+                                RequireTypeScriptAugmentationRefresh,
+                            WriteProjectRootOnce = WriteProjectRootOnce,
+                            RecordDynamicGraphFileRefresh =
+                                RecordDynamicGraphFileRefresh,
+                        },
+                        item.Exception);
+                    updated += skippedFile.Updated;
+                    skipped += skippedFile.Skipped;
+                    warnings += skippedFile.Warnings;
+                    mutualRecursionRefreshNeeded |=
+                        skippedFile.MutualRecursionRefreshNeeded;
+                    if (skippedFile.Updated > 0)
+                    {
+                        ftsMutated = true;
+                        parallelExtractionEventForTesting?.Invoke(
+                            new UpdateParallelExtractionTestEvent(
+                                UpdateParallelExtractionEventKind.PersistenceCompleted,
+                                item.TargetIndex,
+                                target.DisplayRelativePath,
+                                WorkerIndex: -1));
+                    }
+                    return;
+                }
+                if (item.Exception is FileNotFoundException or DirectoryNotFoundException)
+                {
+                    RecordCSharpWorkspaceDrift(
+                        relPath,
+                        "The C# file disappeared during its authoritative update pass.");
+                    skipped++;
+                    return;
+                }
+                if (item.Exception != null)
+                {
+                    if (item.Exception is OperationCanceledException)
+                        ThrowIfUpdateCancelled();
+                    if (!string.Equals(
+                            item.FailurePhase,
+                            "reading",
+                            StringComparison.Ordinal))
+                    {
+                        csharpMetadataTargetsNeedRefresh = true;
+                    }
+                    RecordUpdateFileFailure(
+                        relPath,
+                        item.FailurePhase ?? "reading",
+                        item.Exception);
+                    return;
+                }
+
+                var record = item.Record!;
+                currentUpdatePhase = "validating";
+                if (record.Lang != "csharp"
+                    || !CSharpStaticInterfacePrepass.TryValidateLoadedFileStatSnapshot(
+                        absPath,
+                        dbPath,
+                        target.DisplayRelativePath,
+                        record.Size,
+                        record.Modified,
+                        csharpWorkspaceSnapshots,
+                        out _,
+                        cancellationToken))
+                {
+                    RecordCSharpWorkspaceDrift(
+                        relPath,
+                        "The C# file changed after extraction and before its authoritative update was persisted.",
+                        "reading");
+                    skipped++;
+                    return;
+                }
+
+                currentUpdatePhase = "reading";
+                parallelExtractionEventForTesting?.Invoke(
+                    new UpdateParallelExtractionTestEvent(
+                        UpdateParallelExtractionEventKind.PersistenceStarted,
+                        item.TargetIndex,
+                        target.DisplayRelativePath,
+                        WorkerIndex: -1));
+                var persistence = PersistPrecomputedUpdateFile(
+                    new UpdatePrecomputedFilePersistenceContext
+                    {
+                        Writer = writer,
+                        Options = options,
+                        Item = item,
+                        ProjectRootWritten = context.IsProjectRootWritten(),
+                        CancellationToken = cancellationToken,
+                        RequireTypeScriptAugmentationRefresh =
+                            RequireTypeScriptAugmentationRefresh,
+                        PurgeStaleUpdateCleanupPaths =
+                            PurgeStaleUpdateCleanupPaths,
+                        WriteProjectRootOnce = WriteProjectRootOnce,
+                        RecordDynamicGraphFileRefresh =
+                            RecordDynamicGraphFileRefresh,
+                        SetBatchMarkerOwned = owned => fileBatchMarked = owned,
+                        SetPhase = (path, phase) =>
+                        {
+                            currentUpdatePath = path;
+                            currentUpdatePhase = phase;
+                        },
+                    });
+                symbolsDroppedByKindFilter +=
+                    persistence.SymbolsDroppedByKindFilter;
+                mutualRecursionRefreshNeeded |=
+                    persistence.MutualRecursionRefreshNeeded;
+                updated++;
+                ftsMutated = true;
+                UpdateFileCommittedForTesting?.Invoke(
+                    updated + removed,
+                    targetPaths.Count);
+                parallelExtractionEventForTesting?.Invoke(
+                    new UpdateParallelExtractionTestEvent(
+                        UpdateParallelExtractionEventKind.PersistenceCompleted,
+                        item.TargetIndex,
+                        target.DisplayRelativePath,
+                        WorkerIndex: -1));
+                ThrowIfUpdateCancelled();
+                updateProgress.WriteVerbose(persistence.VerboseMessage);
+            }
+            catch (IndexExtractionStalledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                if (fileBatchMarked)
+                    writer.ClearBatchInProgress();
+                if (ex is CSharpWorkspaceChangedException)
+                {
+                    RecordCSharpWorkspaceDrift(relPath, ex.Message);
+                    skipped++;
+                    return;
+                }
+                if (ex is OperationCanceledException)
+                    ThrowIfUpdateCancelled();
+                RecordUpdateFileFailure(relPath, currentUpdatePhase, ex);
+            }
+        }
         try
         {
             for (var targetIndex = 0; targetIndex < updateTargets.Length; targetIndex++)
             {
+                ThrowIfUpdateCancelled();
+                if (parallelizeAuthoritativeCSharpUpdates
+                    && csharpWorkspaceSnapshots!.ContainsKey(
+                        updateTargets[targetIndex].IndexPath))
+                {
+                    IReadOnlyList<UpdateParallelExtractionRequest> parallelWindow;
+                    try
+                    {
+                        parallelWindow = TryBuildUpdateParallelWindow(
+                            indexer,
+                            updateTargets,
+                            targetIndex,
+                            parallelExtractionWindowCapacity,
+                            csharpWorkspaceSnapshots,
+                            scannedUpdateLanguages,
+                            cancellationToken);
+                    }
+                    catch (OperationCanceledException)
+                        when (cancellationToken.IsCancellationRequested)
+                    {
+                        ThrowIfUpdateCancelled();
+                        throw;
+                    }
+                    catch (Exception)
+                    {
+                        // Probing belongs to the per-file serial error boundary. If a
+                        // speculative window probe fails, let the ordinary consumer
+                        // retry the natural first target and contain any repeat there.
+                        parallelizeAuthoritativeCSharpUpdates = false;
+                        parallelWindow = [];
+                    }
+                    if (parallelWindow.Count > 0)
+                    {
+                        UpdateParallelExtractionWindowResult windowResult;
+                        try
+                        {
+                            windowResult = parallelExtractionPipeline.Value.ExtractWindow(
+                                parallelWindow,
+                                cancellationToken,
+                                (path, phase) =>
+                                {
+                                    currentUpdatePath = FormatIndexPhasePath(path, phase);
+                                    currentUpdatePhase = phase;
+                                });
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            var sawValidatedLoad = false;
+                            foreach (var request in parallelWindow)
+                            {
+                                var loaded = request.Progress.GetLoadedRecord();
+                                if (loaded.Record == null)
+                                    continue;
+
+                                sawValidatedLoad = true;
+                                break;
+                            }
+                            if (sawValidatedLoad)
+                            {
+                                DemoteReadinessOnce();
+                                csharpMetadataTargetsNeedRefresh = true;
+                            }
+                            ThrowIfUpdateCancelled();
+                            throw;
+                        }
+                        var results = windowResult.Results;
+                        parallelSourceWorkspaceDriftDetected = false;
+                        var recoverSerialSuffix = false;
+                        var consumedWindowCount = 0;
+                        var consumableResultCount = windowResult.FatalWasNormalized
+                            ? results.Count - 1
+                            : results.Count;
+                        for (var resultIndex = 0;
+                             resultIndex < consumableResultCount;
+                             resultIndex++)
+                        {
+                            var item = results[resultIndex];
+                            ConsumeParallelUpdateResult(item);
+                            consumedWindowCount++;
+                            if (item.Exception is IndexExtractionStalledException
+                                || parallelSourceWorkspaceDriftDetected)
+                            {
+                                recoverSerialSuffix = true;
+                                break;
+                            }
+                        }
+                        if (windowResult.FatalWasNormalized
+                            && !recoverSerialSuffix)
+                        {
+                            var sourceContractPrecedesFatal =
+                                windowResult
+                                    .UnconsumedSourceContractCandidateBeforeFatal
+                                && !csharpWorkspace
+                                    .HasSourceStaticInterfaceContracts
+                                && !postExtractionHooks.Value
+                                    .SawCSharpStaticInterfaceSourceContract;
+                            if (sourceContractPrecedesFatal)
+                            {
+                                // The natural first unconsumed target must be
+                                // retried before a later extraction fatal can
+                                // become terminal. Keep the fatal's readiness
+                                // and batch effects out of this recovery path.
+                                recoverSerialSuffix = true;
+                            }
+                            else
+                            {
+                                var actualFatal =
+                                    windowResult.ActualFatalResult!;
+                                if (actualFatal.Record != null
+                                    || !string.Equals(
+                                        actualFatal.FailurePhase,
+                                        "reading",
+                                        StringComparison.Ordinal))
+                                {
+                                    DemoteReadinessOnce();
+                                    csharpMetadataTargetsNeedRefresh = true;
+                                }
+                                if (!string.Equals(
+                                        actualFatal.FailurePhase,
+                                        "reading",
+                                        StringComparison.Ordinal))
+                                {
+                                    writer.MarkBatchInProgress();
+                                }
+
+                                var normalizedFatal = results[^1];
+                                ConsumeParallelUpdateResult(normalizedFatal);
+                                consumedWindowCount++;
+                                if (parallelSourceWorkspaceDriftDetected)
+                                    recoverSerialSuffix = true;
+                            }
+                        }
+                        if (recoverSerialSuffix)
+                        {
+                            parallelizeAuthoritativeCSharpUpdates = false;
+                            targetIndex += consumedWindowCount - 1;
+                            continue;
+                        }
+                        if (results.Count != parallelWindow.Count)
+                        {
+                            throw new InvalidOperationException(
+                                "A shortened parallel update window returned without a terminal extraction error.");
+                        }
+                        targetIndex += parallelWindow.Count - 1;
+                        continue;
+                    }
+                }
+
                 var target = updateTargets[targetIndex];
                 ThrowIfUpdateCancelled();
                 updateProgress.Start();

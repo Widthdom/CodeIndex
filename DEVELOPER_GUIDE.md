@@ -260,6 +260,35 @@ Directory scan / shared path filter (built-in skip lists + `.gitignore` / `.cdid
   → Populate FTS5 index
 ```
 
+Scoped updates may also parallelize extraction when the immutable C# prepass is
+authoritative and finds static-interface contracts. This path requires at least
+two snapshotted C# targets, `--parallelism > 1`, no active symbol-kind filter,
+no content-load test seam, and no post-extraction hooks. Each window contains
+only consecutive, snapshot-validated C# targets; ambiguous language reuse stays
+nullable so content-aware detection can still reject a target. A fixed pool of
+at most `min(parallelism, authoritative snapshot count)` workers processes no
+more than `2 * workers` payloads per window. All extraction in that window
+finishes before the single consumer persists results in target order. SQLite
+writes, hooks, readiness changes, byte accounting, and user progress remain on
+that consumer. File stats are checked before scheduling, after loading, and
+immediately before persistence; probe failures or an ineligible boundary fall
+back to the ordinary serial per-file error boundary.
+
+The `2 * workers` limit is a count bound, not a byte bound: a slow tail may hold
+the other extracted chunk/symbol/reference payloads until the ordered write
+barrier completes. Workers do not retain raw file bytes after extraction. An
+over-limit collection is discarded before publication, symbol caps also discard
+downstream payloads, and only the bounded surviving payload, issue, and
+source-contract evidence are retained. Do not enlarge this window or add another
+payload copy without peak-RSS and large-file parity measurements. Cancellation
+aborts queued work and waits asynchronously for already-running workers. A global
+no-progress watchdog observes phase and validated-load progress; terminal stalls
+preserve the active phase and required readiness/batch markers. Before a later
+fatal becomes terminal, source-negative workspaces retry the natural serial
+suffix when an earlier target's source-contract candidate is positive or not yet
+evaluated. Only symbol-confirmed evidence is published as persisted source
+evidence; lexical candidates can cause a conservative serial fallback only.
+
 The single writer reuses multi-row chunk, symbol, reference, and reference-line
 commands by row-count shape through the bounded `PreparedCommandCache`. SQL text
 and typed parameter schemas are created only on a cache miss; each execution
@@ -3861,6 +3890,31 @@ query コマンドも JSON profile block 用の `--profile` と command-scoped p
   → チャンク＋シンボル＋参照をバッチ挿入（1トランザクション500件）
   → FTS5インデックス反映
 ```
+
+scoped update でも、immutable な C# prepass が authoritative で static-interface
+contract を検出した場合は extraction を並列化できます。この経路は snapshot 済み C# target
+が2件以上、`--parallelism > 1`、symbol-kind filter 無効、content-load test seam なし、
+post-extraction hook なしの場合だけ有効です。各 window は連続する snapshot 検証済み C#
+target だけで構成し、ambiguous language の再利用値は nullable のまま保って content-aware
+detection が target を拒否できるようにします。最大
+`min(parallelism, authoritative snapshot count)` の固定 worker pool が、1 window あたり
+`2 * workers` 以下の payload を処理します。window 内の extraction がすべて完了してから、
+single consumer が target 順に永続化します。SQLite write、hook、readiness 変更、byte accounting、
+user progress はすべて consumer 側に残します。file stat は schedule 前、load 後、persist 直前の
+3箇所で検証し、probe failure または対象外境界では通常の serial per-file error boundary へ戻します。
+
+`2 * workers` は件数上限であり byte 上限ではありません。slow tail があると、ordered write
+barrier の完了まで他の抽出済み chunk / symbol / reference payload を保持します。worker は
+extraction 後に raw file byte を保持しません。上限を超えた collection は publish 前に破棄し、
+symbol cap では downstream payload も破棄して、上限内で残る payload、issue、source-contract
+evidence だけを保持します。peak RSS と large-file parity を測定せずに
+window を拡大したり payload copy を増やしたりしないでください。cancellation は queued work を
+中断し、実行中 worker の収束は非同期に待ちます。global no-progress watchdog は phase と validated
+load の進捗を監視し、terminal stall では active phase と必要な readiness / batch marker を保持します。
+後続 fatal を terminal にする前に、source-negative workspace では、それ以前の target の
+source-contract candidate が positive または未評価なら natural serial suffix を再試行します。
+永続 source evidence に反映するのは symbol で確認済みの evidence だけで、lexical candidate は
+保守的な serial fallback の契機にだけ使います。
 
 single writer は、複数行の chunk、symbol、reference、reference-line command を
 row-count shape ごとに bounded な `PreparedCommandCache` で再利用します。SQL text と

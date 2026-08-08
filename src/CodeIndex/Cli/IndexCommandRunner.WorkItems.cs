@@ -187,7 +187,7 @@ public static partial class IndexCommandRunner
         public string? ActualMode { get; }
     }
 
-    private sealed class IndexExtractionStalledException : Exception
+    internal sealed class IndexExtractionStalledException : Exception
     {
         public IndexExtractionStalledException(int filesProcessed, int? filesTotal, TimeSpan timeout, string? activePath, string? workerError = null)
             : base("Index extraction stalled.")
