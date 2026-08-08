@@ -7286,16 +7286,16 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunSymbols_Json_CSharpNestedRawStringInsideInterpolationDoesNotCreatePhantomSymbols()
+    public void RunSymbols_Json_CSharpStringLiteralBoundariesShareIndexedWorkspace()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_csharp_nested_raw_fixture");
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_csharp_string_literal_workspace");
         try
         {
-            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
-            File.WriteAllText(
-                Path.Combine(projectRoot, "src", "app.cs"),
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "src/nested-raw.cs",
                 """"
-                public class App
+                public class NestedRawSymbolsApp
                 {
                     private int Run() => 1;
                     private string Id(string value) => value;
@@ -7304,7 +7304,7 @@ public partial class QueryCommandRunnerTests
                     {
                         return $"""
                             value = {Id("""
-                                public class Phantom
+                                public class NestedRawPhantom
                                 {
                                     public void Go() { }
                                 }
@@ -7313,43 +7313,16 @@ public partial class QueryCommandRunnerTests
                     }
                 }
                 """");
-
-            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json", "--quiet"],
-                _jsonOptions));
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
-                ["Phantom", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
-                _jsonOptions));
-
-            Assert.Equal(CommandExitCodes.Success, indexExitCode);
-            Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stdout);
-            Assert.Equal(string.Empty, stderr);
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunSymbols_Json_CSharpInterpolatedVerbatimStringEscapedBracesDoNotCreatePhantomSymbols()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_symbols_csharp_escaped_verbatim_braces");
-        try
-        {
-            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
-            File.WriteAllText(
-                Path.Combine(projectRoot, "src", "app.cs"),
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "src/escaped-verbatim.cs",
                 """
-                public class App
+                public class EscapedVerbatimSymbolsApp
                 {
                     public string Render()
                     {
                         return $@"{{
-                            public class Phantom
+                            public class EscapedVerbatimPhantom
                         }}";
                     }
                 }
@@ -7359,15 +7332,23 @@ public partial class QueryCommandRunnerTests
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
                 [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
-                ["Phantom", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
-                _jsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
             Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stdout);
-            Assert.Equal(string.Empty, stderr);
+
+            void AssertNoSymbols(string query)
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
+                    [query, "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
+                    _jsonOptions));
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stdout);
+                Assert.Equal(string.Empty, stderr);
+            }
+
+            AssertNoSymbols("NestedRawPhantom");
+            AssertNoSymbols("EscapedVerbatimPhantom");
         }
         finally
         {

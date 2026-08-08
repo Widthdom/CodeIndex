@@ -53,7 +53,6 @@ public partial class IndexCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -74,7 +73,6 @@ public partial class IndexCommandRunnerTests
             finally
             {
                 ExtractorPluginRegistry.ResetForTests();
-                SqliteConnection.ClearAllPools();
                 DeleteDirectory(projectRoot);
             }
         }
@@ -192,7 +190,6 @@ public partial class IndexCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -263,7 +260,6 @@ public partial class IndexCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -387,7 +383,6 @@ public partial class IndexCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -468,7 +463,6 @@ public partial class IndexCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -531,7 +525,6 @@ public partial class IndexCommandRunnerTests
         finally
         {
             DbWriter.ReferenceGraphRefreshScopeForTesting = previousScopeHook;
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -651,7 +644,6 @@ public partial class IndexCommandRunnerTests
         {
             DbWriter.MutualRecursionRefreshForTesting = previousRefreshHook;
             DbWriter.ReferenceGraphRefreshScopeForTesting = previousScopeHook;
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -701,7 +693,6 @@ public partial class IndexCommandRunnerTests
         finally
         {
             DbWriter.MutualRecursionRefreshForTesting = previousRefreshHook;
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -733,7 +724,6 @@ public partial class IndexCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -766,7 +756,6 @@ public partial class IndexCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -807,7 +796,6 @@ public partial class IndexCommandRunnerTests
             IndexCommandRunner.UpdateCSharpPrepassForTesting = null;
             IndexCommandRunner.UpdateCSharpMetadataResolveForTesting = null;
             IndexCommandRunner.UpdateTypeScriptAugmentationRebuildForTesting = null;
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -896,7 +884,6 @@ public partial class IndexCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -1433,7 +1420,6 @@ public partial class IndexCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
             DeleteFile(dbPath);
         }
@@ -1598,7 +1584,6 @@ public partial class IndexCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -1675,7 +1660,6 @@ public partial class IndexCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -1734,7 +1718,6 @@ public partial class IndexCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -1892,7 +1875,6 @@ public partial class IndexCommandRunnerTests
             DbWriter.CSharpContractPreflightForTesting = previousPreflightHook;
             DbWriter.CSharpContractWorkspaceReadForTesting = previousWorkspaceReadHook;
             IndexCommandRunner.UpdateCSharpPrepassForTesting = previousUpdatePrepassHook;
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -1965,7 +1947,6 @@ public partial class IndexCommandRunnerTests
         finally
         {
             IndexCommandRunner.UpdateCSharpPrepassForTesting = previousPrepassHook;
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -2136,7 +2117,6 @@ public partial class IndexCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -2191,7 +2171,6 @@ public partial class IndexCommandRunnerTests
         finally
         {
             IndexCommandRunner.UpdateCleanupChecksumReadForTesting = previousCleanupChecksumHook;
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -2254,7 +2233,6 @@ public partial class IndexCommandRunnerTests
         finally
         {
             _ = DbDebug.EndProfile();
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -2301,7 +2279,6 @@ public partial class IndexCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -2387,7 +2364,6 @@ public partial class IndexCommandRunnerTests
         finally
         {
             IndexCommandRunner.UpdateCleanupChecksumReadForTesting = previousCleanupChecksumHook;
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -2443,7 +2419,6 @@ public partial class IndexCommandRunnerTests
         finally
         {
             IndexCommandRunner.UpdateCleanupChecksumReadForTesting = previousCleanupChecksumHook;
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -2578,7 +2553,6 @@ public partial class IndexCommandRunnerTests
         finally
         {
             IndexCommandRunner.UpdateScanInputSnapshotBarrierForTesting = previousBarrierHook;
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -2663,7 +2637,6 @@ public partial class IndexCommandRunnerTests
         finally
         {
             IndexCommandRunner.UpdateScanInputSnapshotBarrierForTesting = previousBarrierHook;
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -2736,7 +2709,6 @@ public partial class IndexCommandRunnerTests
         finally
         {
             IndexCommandRunner.UpdateScanInputSnapshotBarrierForTesting = previousBarrierHook;
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -2835,7 +2807,6 @@ public partial class IndexCommandRunnerTests
         finally
         {
             DbWriter.CSharpContractWorkspaceReadForTesting = previousWorkspaceReadHook;
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -2901,7 +2872,6 @@ public partial class IndexCommandRunnerTests
         finally
         {
             IndexCommandRunner.UpdateCSharpPrepassForTesting = previousPrepassHook;
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -2963,7 +2933,6 @@ public partial class IndexCommandRunnerTests
         finally
         {
             IndexCommandRunner.UpdateFileCommittedForTesting = previousCommittedHook;
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -3017,7 +2986,6 @@ public partial class IndexCommandRunnerTests
         finally
         {
             IndexCommandRunner.UpdateCSharpPrepassForTesting = previousPrepassHook;
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -3056,7 +3024,6 @@ public partial class IndexCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -3132,7 +3099,6 @@ public partial class IndexCommandRunnerTests
         finally
         {
             IndexCommandRunner.UpdateFileContentLoadForTesting = previousContentLoadHook;
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -3207,7 +3173,6 @@ public partial class IndexCommandRunnerTests
         finally
         {
             IndexCommandRunner.UpdateSkippedFileRecordBuiltForTesting = previousSkippedRecordHook;
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -3270,7 +3235,6 @@ public partial class IndexCommandRunnerTests
         finally
         {
             IndexCommandRunner.UpdateSkippedFileRecordBuiltForTesting = previousSkippedRecordHook;
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -3347,7 +3311,6 @@ public partial class IndexCommandRunnerTests
         finally
         {
             IndexCommandRunner.UpdateCSharpPrepassForTesting = previousPrepassHook;
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -3413,7 +3376,6 @@ public partial class IndexCommandRunnerTests
             IndexCommandRunner.UpdateCleanupChecksumReadForTesting = previousCleanupChecksumHook;
             if (File.Exists(targetPath))
                 File.SetUnixFileMode(targetPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -3490,7 +3452,6 @@ public partial class IndexCommandRunnerTests
         finally
         {
             IndexCommandRunner.FullScanWritePhaseStartedForTesting = null;
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -3564,7 +3525,6 @@ public partial class IndexCommandRunnerTests
         finally
         {
             IndexCommandRunner.UpdateFileCommittedForTesting = null;
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -3626,7 +3586,6 @@ public partial class IndexCommandRunnerTests
         finally
         {
             IndexCommandRunner.UpdateFileCommittedForTesting = null;
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -3668,7 +3627,6 @@ public partial class IndexCommandRunnerTests
         {
             IndexCommandRunner.UpdateTypeScriptAugmentationRebuildForTesting = null;
             DbWriter.TypeScriptAugmentationGroupingForTesting = previousGroupingHook;
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -3721,7 +3679,6 @@ public partial class IndexCommandRunnerTests
         finally
         {
             DbWriter.TypeScriptAugmentationGroupingForTesting = previousGroupingHook;
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -3795,7 +3752,6 @@ public partial class IndexCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -4117,7 +4073,6 @@ public partial class IndexCommandRunnerTests
         {
             if (originalMode.HasValue && File.Exists(ignorePath))
                 SetUnixPermissions(ignorePath, originalMode.Value);
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -4183,7 +4138,6 @@ public partial class IndexCommandRunnerTests
         {
             if (originalMode.HasValue && File.Exists(ignorePath))
                 SetUnixPermissions(ignorePath, originalMode.Value);
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -4236,7 +4190,6 @@ public partial class IndexCommandRunnerTests
         {
             if (originalMode.HasValue && File.Exists(ignorePath))
                 SetUnixPermissions(ignorePath, originalMode.Value);
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -4291,7 +4244,6 @@ public partial class IndexCommandRunnerTests
         {
             if (originalMode.HasValue && File.Exists(ignorePath))
                 SetUnixPermissions(ignorePath, originalMode.Value);
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -4346,7 +4298,6 @@ public partial class IndexCommandRunnerTests
         {
             if (originalMode.HasValue && File.Exists(ignorePath))
                 SetUnixPermissions(ignorePath, originalMode.Value);
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -4390,7 +4341,6 @@ public partial class IndexCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -4447,7 +4397,6 @@ public partial class IndexCommandRunnerTests
         finally
         {
             ExtractorPluginRegistry.ReloadForTests();
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -4489,7 +4438,6 @@ public partial class IndexCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(repoRoot);
         }
     }
@@ -4523,7 +4471,6 @@ public partial class IndexCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(repoRoot);
         }
     }
@@ -4557,7 +4504,6 @@ public partial class IndexCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(repoRoot);
         }
     }
@@ -4589,7 +4535,6 @@ public partial class IndexCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(repoRoot);
         }
     }
@@ -4620,7 +4565,6 @@ public partial class IndexCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(tempRoot);
         }
     }
@@ -4659,7 +4603,6 @@ public partial class IndexCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(repoRoot);
         }
     }
@@ -4697,7 +4640,6 @@ public partial class IndexCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(repoRoot);
         }
     }
@@ -4894,7 +4836,6 @@ public partial class IndexCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -4971,7 +4912,6 @@ public partial class IndexCommandRunnerTests
         finally
         {
             IndexCommandRunner.UpdateCSharpPrepassForTesting = previousPrepassHook;
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -5059,7 +4999,6 @@ public partial class IndexCommandRunnerTests
         {
             IndexCommandRunner.UpdateCSharpExpansionScanStartingForTesting = previousExpansionHook;
             IndexCommandRunner.UpdateFileContentLoadForTesting = previousContentLoadHook;
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -5121,7 +5060,6 @@ public partial class IndexCommandRunnerTests
         finally
         {
             IndexCommandRunner.UpdateScanInputSnapshotBarrierForTesting = previousBarrierHook;
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -5788,7 +5726,6 @@ public partial class IndexCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -5851,7 +5788,6 @@ public partial class IndexCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -5927,7 +5863,6 @@ public partial class IndexCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -5980,7 +5915,6 @@ public partial class IndexCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -6013,7 +5947,6 @@ public partial class IndexCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -6050,7 +5983,6 @@ public partial class IndexCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -6109,7 +6041,6 @@ public partial class IndexCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -6148,7 +6079,6 @@ public partial class IndexCommandRunnerTests
         finally
         {
             IndexCommandRunner.HotspotFamilyUpdateRestampReadyForCommitForTesting = null;
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -6204,7 +6134,6 @@ public partial class IndexCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }
@@ -6243,7 +6172,6 @@ public partial class IndexCommandRunnerTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
             DeleteDirectory(projectRoot);
         }
     }

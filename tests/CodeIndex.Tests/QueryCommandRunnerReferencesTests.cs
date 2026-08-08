@@ -865,146 +865,126 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunReferences_ExactJson_CSharpInterpolatedRawStringPreservesCallSite()
+    public void RunReferences_Json_CSharpInterpolationBoundariesShareIndexedWorkspace()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_references_csharp_interpolated_raw");
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_references_csharp_interpolation_workspace");
         try
         {
-            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
-            File.WriteAllText(
-                Path.Combine(projectRoot, "src", "app.cs"),
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "src/interpolated-raw.cs",
                 """"
-                public class App
+                public class RawApp
                 {
-                    private string Run() => "ok";
+                    private string RunRaw() => "ok";
 
                     public string Render()
                     {
                         return $"""
-                            value = {Run()}
+                            value = {RunRaw()}
                             literal = function main()
                         """;
                     }
                 }
                 """");
-
-            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json", "--quiet"],
-                _jsonOptions));
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
-                ["Run", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
-                _jsonOptions));
-
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-
-            Assert.Equal(CommandExitCodes.Success, indexExitCode);
-            Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal("Run", json.GetProperty("symbol_name").GetString());
-            Assert.Equal("src/app.cs", json.GetProperty("path").GetString());
-            Assert.Equal("call", json.GetProperty("reference_kind").GetString());
-            Assert.Equal("Render", json.GetProperty("container_name").GetString());
-            Assert.Equal(8, json.GetProperty("line").GetInt32());
-            Assert.True(json.GetProperty("exact_index_available").GetBoolean());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunReferences_ExactJson_CSharpNestedInterpolatedStringInsideRawInterpolationPreservesCallSite()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_references_csharp_nested_interpolated_raw");
-        try
-        {
-            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
-            File.WriteAllText(
-                Path.Combine(projectRoot, "src", "app.cs"),
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "src/nested-interpolated-raw.cs",
                 """"
-                public class App
+                public class NestedApp
                 {
-                    private string Run() => "ok";
+                    private string RunNested() => "ok";
 
                     public string Render()
                     {
                         return $"""
-                            value = {$"{Run()}"}
+                            value = {$"{RunNested()}"}
                             literal = function main()
                         """;
                     }
                 }
                 """");
-
-            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json", "--quiet"],
-                _jsonOptions));
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
-                ["Run", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
-                _jsonOptions));
-
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-
-            Assert.Equal(CommandExitCodes.Success, indexExitCode);
-            Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal("Run", json.GetProperty("symbol_name").GetString());
-            Assert.Equal("src/app.cs", json.GetProperty("path").GetString());
-            Assert.Equal("call", json.GetProperty("reference_kind").GetString());
-            Assert.Equal("Render", json.GetProperty("container_name").GetString());
-            Assert.Equal(8, json.GetProperty("line").GetInt32());
-            Assert.True(json.GetProperty("exact_index_available").GetBoolean());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunReferences_Json_CSharpInterpolatedVerbatimStringEscapedBracesDoNotCreatePhantomReference()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_references_csharp_escaped_verbatim_braces");
-        try
-        {
-            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
-            File.WriteAllText(
-                Path.Combine(projectRoot, "src", "app.cs"),
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "src/escaped-verbatim-braces.cs",
                 """
-                public class App
+                public class EscapedApp
                 {
                     public string Render()
                     {
-                        return $@"{{Run()}}";
+                        return $@"{{EscapedOnlyRun()}}";
                     }
                 }
                 """);
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "src/nested-raw-fixture.cs",
+                """"
+                public class NestedRawApp
+                {
+                    private int RunNestedRaw() => 1;
+                    private string IdNestedRaw(string value) => value;
+
+                    public int Render()
+                    {
+                        return $"""
+                            value = {IdNestedRaw("""
+                                ExecuteNestedRaw();
+                                public class PhantomNestedRaw
+                                {
+                                    public void Go() { }
+                                }
+                                """) + RunNestedRaw()}
+                            """.Length;
+                    }
+                }
+                """");
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
                 [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
-                ["Run", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
-                _jsonOptions));
-
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
 
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
             Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(0, json.GetProperty("count").GetInt32());
-            Assert.Equal(0, json.GetProperty("references").GetArrayLength());
-            Assert.True(json.GetProperty("exact_index_available").GetBoolean());
+
+            void AssertSingleCall(string query, string path)
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                    [query, "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
+                    _jsonOptions));
+                using var document = ParseJsonOutput(stdout);
+                var json = document.RootElement;
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                Assert.Equal(query, json.GetProperty("symbol_name").GetString());
+                Assert.Equal(path, json.GetProperty("path").GetString());
+                Assert.Equal("call", json.GetProperty("reference_kind").GetString());
+                Assert.Equal("Render", json.GetProperty("container_name").GetString());
+                Assert.Equal(8, json.GetProperty("line").GetInt32());
+                Assert.True(json.GetProperty("exact_index_available").GetBoolean());
+            }
+
+            void AssertNoReferences(string query)
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                    [query, "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
+                    _jsonOptions));
+                using var document = ParseJsonOutput(stdout);
+                var json = document.RootElement;
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                Assert.Equal(0, json.GetProperty("count").GetInt32());
+                Assert.Equal(0, json.GetProperty("references").GetArrayLength());
+                Assert.True(json.GetProperty("exact_index_available").GetBoolean());
+            }
+
+            AssertSingleCall("RunRaw", "src/interpolated-raw.cs");
+            AssertSingleCall("RunNested", "src/nested-interpolated-raw.cs");
+            AssertNoReferences("EscapedOnlyRun");
+            AssertNoReferences("ExecuteNestedRaw");
         }
         finally
         {
@@ -1177,14 +1157,14 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunCallers_ExactJson_FindsTernaryContinuationCallSite()
+    public void RunCallers_ExactJson_CSharpScopeVariantsShareIndexedWorkspace()
     {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_callers_csharp_ternary");
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_callers_csharp_scope_workspace");
         try
         {
-            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
-            File.WriteAllText(
-                Path.Combine(projectRoot, "src", "dispatcher.cs"),
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "src/ternary.cs",
                 """
                 public class Dispatcher
                 {
@@ -1197,226 +1177,88 @@ public partial class QueryCommandRunnerTests
                     private string RunFullScan() => "full";
                 }
                 """);
-
-            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json", "--quiet"],
-                _jsonOptions));
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
-                ["RunUpdateMode", "--db", Path.Combine(projectRoot, ".cdidx", "codeindex.db"), "--json", "--exact", "--lang", "csharp"],
-                _jsonOptions));
-
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-
-            Assert.Equal(CommandExitCodes.Success, indexExitCode);
-            Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal("src/dispatcher.cs", json.GetProperty("path").GetString());
-            // With #233 fixed, the expression-bodied `Select` method spans its declaration
-            // through the terminating ';' (multi-line ternary on the RHS of `=>`), so the
-            // RunUpdateMode call at line 5 attributes to Select, not the enclosing class.
-            // #233 修正により、`=>` で始まる式本体メソッド `Select` の範囲が宣言行から
-            // 末尾 `;` までに広がり、line 5 の RunUpdateMode 呼び出しは外側クラスではなく
-            // Select に帰属する。
-            Assert.Equal("function", json.GetProperty("caller_kind").GetString());
-            Assert.Equal("Select", json.GetProperty("caller_name").GetString());
-            Assert.Equal("RunUpdateMode", json.GetProperty("callee_name").GetString());
-            Assert.Equal(5, json.GetProperty("first_line").GetInt32());
-            Assert.Equal(1, json.GetProperty("reference_count").GetInt32());
-            Assert.True(json.GetProperty("exact_index_available").GetBoolean());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunCallers_ExactJson_FindsCallerInsideAllmanStyleBlockBodyProperty()
-    {
-        // issue #233 review follow-up: Allman-style (next-line `{`) block-bodied C#
-        // properties were not extracted as symbols, so accessor-internal calls fell
-        // through to the enclosing class. End-to-end verify that `callers` attributes
-        // the call to the property itself once the extraction regex handles this shape.
-        // issue #233 のレビュー指摘: Allman スタイル（次行 `{`）の block-bodied プロパティが
-        // 抽出されておらず、accessor 内部の呼び出しが外側クラスに帰属していた。抽出 regex が
-        // この形を扱えるようになった後、`callers` が property に帰属することを end-to-end で確認する。
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_callers_csharp_allman_prop");
-        try
-        {
-            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
-            File.WriteAllText(
-                Path.Combine(projectRoot, "src", "calc.cs"),
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "src/allman-block-property.cs",
                 """
-                public class Calc
+                public class AllmanCalc
                 {
-                    public int Compute() => 42;
+                    public int ComputeAllman() => 42;
 
-                    public int Wrap
+                    public int WrapAllman
                     {
-                        get { return Compute(); }
+                        get { return ComputeAllman(); }
                     }
                 }
                 """);
-
-            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json", "--quiet"],
-                _jsonOptions));
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
-                ["Compute", "--db", Path.Combine(projectRoot, ".cdidx", "codeindex.db"), "--json", "--exact", "--lang", "csharp"],
-                _jsonOptions));
-
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-
-            Assert.Equal(CommandExitCodes.Success, indexExitCode);
-            Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal("src/calc.cs", json.GetProperty("path").GetString());
-            Assert.Equal("property", json.GetProperty("caller_kind").GetString());
-            Assert.Equal("Wrap", json.GetProperty("caller_name").GetString());
-            Assert.Equal("Compute", json.GetProperty("callee_name").GetString());
-            Assert.Equal(1, json.GetProperty("reference_count").GetInt32());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunCallers_ExactJson_FindsCallerInsideMultiLineExpressionBodiedProperty()
-    {
-        // issue #233 second review follow-up: expression-bodied properties split across
-        // two lines (declaration + `=> expr;` continuation) must still attribute
-        // accessor-internal calls to the property through the CLI `callers` command.
-        // issue #233 の再レビュー指摘: 宣言行の次行に `=> expr;` が続く multi-line 式本体
-        // プロパティでも、CLI `callers` で accessor 内呼び出しが property に帰属すること。
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_callers_csharp_ml_exprprop");
-        try
-        {
-            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
-            File.WriteAllText(
-                Path.Combine(projectRoot, "src", "calc.cs"),
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "src/multiline-expression-property.cs",
                 """
-                public class Calc
+                public class ExpressionCalc
                 {
-                    public int Compute() => 42;
-                    public int Wrap
-                        => Compute();
+                    public int ComputeExpression() => 42;
+                    public int WrapExpression
+                        => ComputeExpression();
                 }
                 """);
-
-            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json", "--quiet"],
-                _jsonOptions));
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
-                ["Compute", "--db", Path.Combine(projectRoot, ".cdidx", "codeindex.db"), "--json", "--exact-name", "--lang", "csharp"],
-                _jsonOptions));
-
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-
-            Assert.Equal(CommandExitCodes.Success, indexExitCode);
-            Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal("src/calc.cs", json.GetProperty("path").GetString());
-            Assert.Equal("property", json.GetProperty("caller_kind").GetString());
-            Assert.Equal("Wrap", json.GetProperty("caller_name").GetString());
-            Assert.Equal("Compute", json.GetProperty("callee_name").GetString());
-            Assert.Equal(5, json.GetProperty("first_line").GetInt32());
-            Assert.Equal(1, json.GetProperty("reference_count").GetInt32());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunCallers_ExactJson_FindsCallerInsideBraceSameLineAccessorNextLineProperty()
-    {
-        // issue #233 fifth review follow-up: the common Microsoft-style block-bodied
-        // property (`{` on the header line, accessor on the following line) must have
-        // CLI `callers` attribute the accessor call to the property itself.
-        // issue #233 第5次レビュー指摘: `{` が宣言行末にあり、accessor が次行にある
-        // 標準的な block-bodied property でも、CLI `callers` は accessor 内部の呼び出しを
-        // property に帰属させなければならない。
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_callers_csharp_brace_same_line");
-        try
-        {
-            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
-            File.WriteAllText(
-                Path.Combine(projectRoot, "src", "calc.cs"),
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "src/same-line-brace-property.cs",
                 """
-                public class Calc
+                public class BraceCalc
                 {
-                    public int Compute() => 42;
+                    public int ComputeBrace() => 42;
 
-                    public int Wrap {
-                        get { return Compute(); }
+                    public int WrapBrace {
+                        get { return ComputeBrace(); }
                     }
                 }
                 """);
-
-            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json", "--quiet"],
-                _jsonOptions));
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
-                ["Compute", "--db", Path.Combine(projectRoot, ".cdidx", "codeindex.db"), "--json", "--exact-name", "--lang", "csharp"],
-                _jsonOptions));
-
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-
-            Assert.Equal(CommandExitCodes.Success, indexExitCode);
-            Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal("src/calc.cs", json.GetProperty("path").GetString());
-            Assert.Equal("property", json.GetProperty("caller_kind").GetString());
-            Assert.Equal("Wrap", json.GetProperty("caller_name").GetString());
-            Assert.Equal("Compute", json.GetProperty("callee_name").GetString());
-            Assert.Equal(1, json.GetProperty("reference_count").GetInt32());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunCallers_ExactJson_FindsCallerInsideAllmanPropertyWithBlockComment()
-    {
-        // issue #233 fourth review follow-up: a multi-line /* ... */ block comment
-        // between the property header line and its `{` must not prevent CLI `callers`
-        // from attributing accessor-internal calls to the property itself.
-        // issue #233 の 4 回目レビュー指摘: property のヘッダ行と `{` の間に複数行の
-        // /* ... */ ブロックコメントが入っていても、CLI `callers` は accessor 内部の
-        // 呼び出しを外側クラスではなく property に帰属させなければならない。
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_callers_csharp_allman_prop_cmt");
-        try
-        {
-            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
-            File.WriteAllText(
-                Path.Combine(projectRoot, "src", "calc.cs"),
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "src/allman-comment-property.cs",
                 """
-                public class Calc
+                public class CommentBlockCalc
                 {
-                    public int Compute() => 42;
+                    public int ComputeCommentBlock() => 42;
 
-                    public int Wrap
+                    public int WrapCommentBlock
                     /* some multi-line
                        block comment */
                     {
-                        get { return Compute(); }
+                        get { return ComputeCommentBlock(); }
+                    }
+                }
+                """);
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "src/expression-comment-property.cs",
+                """
+                public class CommentExpressionCalc
+                {
+                    public int ComputeCommentExpression() => 42;
+
+                    public int WrapCommentExpression
+                    /* multi-line
+                       comment */
+                        => ComputeCommentExpression();
+                }
+                """);
+            TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "src/multiline-switch-arm.cs",
+                """
+                public class SwitchArm
+                {
+                    public string Read(object value)
+                    {
+                        return value switch
+                        {
+                            string text
+                                => text.Trim(),
+                            _ => ""
+                        };
                     }
                 }
                 """);
@@ -1425,76 +1267,47 @@ public partial class QueryCommandRunnerTests
                 [projectRoot, "--json", "--quiet"],
                 _jsonOptions));
 
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
-                ["Compute", "--db", Path.Combine(projectRoot, ".cdidx", "codeindex.db"), "--json", "--exact-name", "--lang", "csharp"],
-                _jsonOptions));
-
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
             Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal("src/calc.cs", json.GetProperty("path").GetString());
-            Assert.Equal("property", json.GetProperty("caller_kind").GetString());
-            Assert.Equal("Wrap", json.GetProperty("caller_name").GetString());
-            Assert.Equal("Compute", json.GetProperty("callee_name").GetString());
-            Assert.Equal(1, json.GetProperty("reference_count").GetInt32());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
 
-    [Fact]
-    public void RunCallers_ExactJson_FindsCallerInsideMultiLineExpressionPropertyWithBlockComment()
-    {
-        // issue #233 fourth review follow-up: a multi-line /* ... */ block comment
-        // between the property header line and its `=>` continuation must not prevent
-        // CLI `callers` from attributing the expression-body call to the property itself.
-        // issue #233 の 4 回目レビュー指摘: property のヘッダ行と `=>` 継続行の間に
-        // 複数行の /* ... */ ブロックコメントが入っていても、CLI `callers` は式本体の
-        // 呼び出しを外側クラスではなく property に帰属させなければならない。
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_callers_csharp_ml_exprprop_cmt");
-        try
-        {
-            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
-            File.WriteAllText(
-                Path.Combine(projectRoot, "src", "calc.cs"),
-                """
-                public class Calc
+            void AssertCaller(
+                string query,
+                string path,
+                string callerKind,
+                string callerName,
+                int? firstLine = null)
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
+                    [query, "--db", Path.Combine(projectRoot, ".cdidx", "codeindex.db"), "--json", "--exact-name", "--lang", "csharp"],
+                    _jsonOptions));
+                using var document = ParseJsonOutput(stdout);
+                var json = document.RootElement;
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                Assert.Equal(path, json.GetProperty("path").GetString());
+                Assert.Equal(callerKind, json.GetProperty("caller_kind").GetString());
+                Assert.Equal(callerName, json.GetProperty("caller_name").GetString());
+                Assert.Equal(query, json.GetProperty("callee_name").GetString());
+                Assert.Equal(1, json.GetProperty("reference_count").GetInt32());
+                Assert.True(json.GetProperty("exact_index_available").GetBoolean());
+                if (firstLine is not null)
                 {
-                    public int Compute() => 42;
-
-                    public int Wrap
-                    /* multi-line
-                       comment */
-                        => Compute();
+                    Assert.Equal(firstLine.Value, json.GetProperty("first_line").GetInt32());
                 }
-                """);
+            }
 
-            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json", "--quiet"],
-                _jsonOptions));
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
-                ["Compute", "--db", Path.Combine(projectRoot, ".cdidx", "codeindex.db"), "--json", "--exact-name", "--lang", "csharp"],
-                _jsonOptions));
-
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-
-            Assert.Equal(CommandExitCodes.Success, indexExitCode);
-            Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal("src/calc.cs", json.GetProperty("path").GetString());
-            Assert.Equal("property", json.GetProperty("caller_kind").GetString());
-            Assert.Equal("Wrap", json.GetProperty("caller_name").GetString());
-            Assert.Equal("Compute", json.GetProperty("callee_name").GetString());
-            Assert.Equal(1, json.GetProperty("reference_count").GetInt32());
+            // These issue #233 regression shapes exercise one immutable graph. Unique callees
+            // keep every assertion isolated while avoiding a full CLI indexing pass per shape.
+            // issue #233 の各回帰形状は同一の不変 graph で検証する。callee を固有名にして
+            // アサーションを分離しつつ、形状ごとの CLI full index を避ける。
+            AssertCaller("RunUpdateMode", "src/ternary.cs", "function", "Select", firstLine: 5);
+            AssertCaller("ComputeAllman", "src/allman-block-property.cs", "property", "WrapAllman");
+            AssertCaller("ComputeExpression", "src/multiline-expression-property.cs", "property", "WrapExpression", firstLine: 5);
+            AssertCaller("ComputeBrace", "src/same-line-brace-property.cs", "property", "WrapBrace");
+            AssertCaller("ComputeCommentBlock", "src/allman-comment-property.cs", "property", "WrapCommentBlock");
+            AssertCaller("ComputeCommentExpression", "src/expression-comment-property.cs", "property", "WrapCommentExpression");
+            AssertCaller("Trim", "src/multiline-switch-arm.cs", "function", "Read");
         }
         finally
         {
@@ -1529,66 +1342,6 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("function", json.GetProperty("caller_kind").GetString());
             Assert.Equal("M", json.GetProperty("caller_name").GetString());
             Assert.Equal("Red", json.GetProperty("callee_name").GetString());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunCallers_ExactJson_MultiLineSwitchArm_AttributesToEnclosingFunction()
-    {
-        // issue #233 third review follow-up: inside a switch expression whose `=>` is
-        // placed on a continuation line, calls from the arm body must still attribute to
-        // the enclosing function. If the switch-expression guard does not cover the
-        // continuation `=>`, the pattern variable is emitted as a phantom property and
-        // `callers Trim` would return caller_kind=property, caller_name=text.
-        // issue #233 第3次レビュー指摘: switch expression arm の `=>` が継続行にある場合でも、
-        // arm 本体の呼び出しは外側関数に帰属しなければならない。継続 `=>` まで switch-expression
-        // ガードを広げないと、パターン変数が phantom property になり、`callers Trim` が
-        // caller_kind=property, caller_name=text を返してしまう。
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_callers_csharp_ml_switch_arm");
-        try
-        {
-            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
-            File.WriteAllText(
-                Path.Combine(projectRoot, "src", "sample.cs"),
-                """
-                class C
-                {
-                    string M(object o)
-                    {
-                        return o switch
-                        {
-                            string text
-                                => text.Trim(),
-                            _ => ""
-                        };
-                    }
-                }
-                """);
-
-            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json", "--quiet"],
-                _jsonOptions));
-
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
-                ["Trim", "--db", Path.Combine(projectRoot, ".cdidx", "codeindex.db"), "--json", "--exact-name", "--lang", "csharp"],
-                _jsonOptions));
-
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-
-            Assert.Equal(CommandExitCodes.Success, indexExitCode);
-            Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal("src/sample.cs", json.GetProperty("path").GetString());
-            Assert.Equal("function", json.GetProperty("caller_kind").GetString());
-            Assert.Equal("M", json.GetProperty("caller_name").GetString());
-            Assert.Equal("Trim", json.GetProperty("callee_name").GetString());
-            Assert.Equal(1, json.GetProperty("reference_count").GetInt32());
         }
         finally
         {
@@ -11178,61 +10931,6 @@ public partial class QueryCommandRunnerTests
             var implementationRow = Assert.Single(implementationRows);
             Assert.Equal("type_reference", implementationRow.GetProperty("reference_kind").GetString());
             Assert.Equal("com.example.app", implementationRow.GetProperty("container_name").GetString());
-        }
-        finally
-        {
-            TestProjectHelper.DeleteDirectory(projectRoot);
-        }
-    }
-
-    [Fact]
-    public void RunReferences_Json_CSharpNestedRawStringInsideInterpolationDoesNotCreatePhantomReference()
-    {
-        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_references_csharp_nested_raw_fixture");
-        try
-        {
-            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
-            File.WriteAllText(
-                Path.Combine(projectRoot, "src", "app.cs"),
-                """"
-                public class App
-                {
-                    private int Run() => 1;
-                    private string Id(string value) => value;
-
-                    public int Render()
-                    {
-                        return $"""
-                            value = {Id("""
-                                Execute();
-                                public class Phantom
-                                {
-                                    public void Go() { }
-                                }
-                                """) + Run()}
-                            """.Length;
-                    }
-                }
-                """");
-
-            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
-                [projectRoot, "--json", "--quiet"],
-                _jsonOptions));
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
-                ["Execute", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
-                _jsonOptions));
-
-            using var document = ParseJsonOutput(stdout);
-            var json = document.RootElement;
-
-            Assert.Equal(CommandExitCodes.Success, indexExitCode);
-            Assert.Equal(string.Empty, indexStderr);
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(string.Empty, stderr);
-            Assert.Equal(0, json.GetProperty("count").GetInt32());
-            Assert.Equal(0, json.GetProperty("references").GetArrayLength());
-            Assert.True(json.GetProperty("exact_index_available").GetBoolean());
         }
         finally
         {

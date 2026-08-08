@@ -391,11 +391,12 @@ public partial class QueryCommandRunnerTests
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
-                "src/GuardBudgetNeedle.cs",
-                "csharp",
-                """
+            var fixtures = new[]
+            {
+                new TestProjectHelper.IndexedFileFixture(
+                    "src/GuardBudgetNeedle.cs",
+                    "csharp",
+                    """
                 public class Guarded
                 {
                     public void Run()
@@ -405,17 +406,17 @@ public partial class QueryCommandRunnerTests
                     }
                 }
                 """,
-                modified: new DateTime(2025, 2, 1, 0, 0, 0, DateTimeKind.Utc));
+                    Modified: new DateTime(2025, 2, 1, 0, 0, 0, DateTimeKind.Utc)),
+            };
 
             const int expectedCandidateLimit = 200;
-            for (var i = 0; i < expectedCandidateLimit; i++)
-            {
-                TestProjectHelper.InsertIndexedFile(
-                    dbPath,
-                    $"src/zzz_noise_{i:000}.cs",
-                    "csharp",
-                    "public class Noise { public void Run() { GuardBudgetNeedle(); } }\n");
-            }
+            TestProjectHelper.InsertIndexedFiles(
+                dbPath,
+                fixtures.Concat(Enumerable.Range(0, expectedCandidateLimit)
+                    .Select(i => new TestProjectHelper.IndexedFileFixture(
+                        $"src/zzz_noise_{i:000}.cs",
+                        "csharp",
+                        "public class Noise { public void Run() { GuardBudgetNeedle(); } }\n"))));
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 ["GuardBudgetNeedle", "--db", dbPath, "--exact-substring", "--require-before", "GuardMarker", "--guard-window", "2", "--exclude-strings", "--limit", "1", "--json=array"],
