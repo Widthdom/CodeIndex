@@ -196,38 +196,17 @@ public partial class DbContext : IDisposable
                 scope_rank   INTEGER NOT NULL,
                  PRIMARY KEY(reference_id, symbol_id)
              )"));
-        yield return ("CREATE INDEX idx_symbol_refs_name",
-            () => Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_name      ON symbol_references(symbol_name)"));
-        yield return ("CREATE INDEX idx_symbol_refs_file",
-            () => Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_file      ON symbol_references(file_id)"));
-        yield return ("CREATE INDEX idx_symbol_refs_container",
-            () => Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_container ON symbol_references(container_name)"));
-        yield return ("CREATE INDEX idx_symbol_refs_container_kind",
-            () => Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_container_kind ON symbol_references(container_name, reference_kind)"));
-        yield return ("CREATE INDEX idx_symbol_refs_name_kind",
-            () => Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_name_kind   ON symbol_references(symbol_name, reference_kind)"));
-        yield return ("CREATE INDEX idx_symbol_refs_name_file",
-            () => Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_name_file   ON symbol_references(symbol_name, file_id)"));
         yield return ("CREATE INDEX idx_reference_lines_file_line",
             () => Execute("CREATE INDEX IF NOT EXISTS idx_reference_lines_file_line ON reference_lines(file_id, line)"));
-        yield return ("CREATE INDEX idx_symbol_refs_reference_line",
-            () => Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_reference_line ON symbol_references(reference_line_id)"));
-        yield return ("CREATE INDEX idx_symbol_refs_name_nocase",
-            () => Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_name_nocase      ON symbol_references(symbol_name COLLATE NOCASE)"));
-        yield return ("CREATE INDEX idx_symbol_refs_container_nocase",
-            () => Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_container_nocase ON symbol_references(container_name COLLATE NOCASE)"));
-        yield return ("CREATE INDEX idx_symbol_refs_name_nocase_kind",
-            () => Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_name_nocase_kind ON symbol_references(symbol_name COLLATE NOCASE, reference_kind)"));
-        yield return ("CREATE INDEX idx_symbol_refs_name_nocase_file",
-            () => Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_name_nocase_file ON symbol_references(symbol_name COLLATE NOCASE, file_id)"));
-        yield return ("CREATE INDEX idx_symbol_refs_container_nocase_kind",
-            () => Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_container_nocase_kind ON symbol_references(container_name COLLATE NOCASE, reference_kind)"));
-        yield return ("CREATE INDEX idx_symbol_refs_source_symbol",
-            () => Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_source_symbol ON symbol_references(source_symbol_id)"));
-        yield return ("CREATE INDEX idx_symbol_refs_target_symbol",
-            () => Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_target_symbol ON symbol_references(target_symbol_id)"));
-        yield return ("CREATE INDEX idx_symbol_refs_resolved_source_target_kind",
-            () => Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_resolved_source_target_kind ON symbol_references(source_symbol_id, target_symbol_id, reference_kind) WHERE source_symbol_id IS NOT NULL AND target_symbol_id IS NOT NULL"));
+        foreach (var definition in ReferenceSecondaryIndexSql.All)
+        {
+            if (definition.RequiresFoldedColumns)
+                continue;
+
+            var indexDefinition = definition;
+            yield return ($"CREATE INDEX {indexDefinition.Name}",
+                () => Execute(indexDefinition.CreateSql));
+        }
         yield return ("CREATE INDEX idx_symbol_ref_candidates_symbol",
             () => Execute("CREATE INDEX IF NOT EXISTS idx_symbol_ref_candidates_symbol ON symbol_reference_candidates(symbol_id, reference_id)"));
 
@@ -274,16 +253,15 @@ public partial class DbContext : IDisposable
             () => Execute("CREATE INDEX IF NOT EXISTS idx_symbols_name_folded_container_name_nocase ON symbols(name_folded, container_name COLLATE NOCASE)"));
         yield return ("CREATE INDEX idx_symbols_name_folded_container_qualified_name_nocase",
             () => Execute("CREATE INDEX IF NOT EXISTS idx_symbols_name_folded_container_qualified_name_nocase ON symbols(name_folded, container_qualified_name COLLATE NOCASE)"));
-        yield return ("CREATE INDEX idx_symbol_refs_symbol_name_folded",
-            () => Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_symbol_name_folded     ON symbol_references(symbol_name_folded)"));
-        yield return ("CREATE INDEX idx_symbol_refs_container_name_folded",
-            () => Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_container_name_folded  ON symbol_references(container_name_folded)"));
-        yield return ("CREATE INDEX idx_symbol_refs_symbol_name_folded_kind",
-            () => Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_symbol_name_folded_kind ON symbol_references(symbol_name_folded, reference_kind)"));
-        yield return ("CREATE INDEX idx_symbol_refs_symbol_name_folded_file",
-            () => Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_symbol_name_folded_file ON symbol_references(symbol_name_folded, file_id)"));
-        yield return ("CREATE INDEX idx_symbol_refs_container_name_folded_kind",
-            () => Execute("CREATE INDEX IF NOT EXISTS idx_symbol_refs_container_name_folded_kind ON symbol_references(container_name_folded, reference_kind)"));
+        foreach (var definition in ReferenceSecondaryIndexSql.All)
+        {
+            if (!definition.RequiresFoldedColumns)
+                continue;
+
+            var indexDefinition = definition;
+            yield return ($"CREATE INDEX {indexDefinition.Name}",
+                () => Execute(indexDefinition.CreateSql));
+        }
         yield return ("Backfill hotspot_reference_counts",
             () => Execute(HotspotReferenceAggregateSql.BuildRefreshSql(singleFile: false)));
         yield return ("Stamp hotspot_reference_counts readiness", MarkHotspotReferenceAggregateReady);

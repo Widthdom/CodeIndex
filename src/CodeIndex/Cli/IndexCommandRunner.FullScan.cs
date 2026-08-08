@@ -857,6 +857,11 @@ public static partial class IndexCommandRunner
                 csharpSourceEvidenceComplete && csharpSourceEvidenceForStamp ? true : null);
         }
 
+        using var referenceSecondaryIndexBulkLoad =
+            ReferenceSecondaryIndexBulkLoadGuard.StartTransactional(
+                writer,
+                enabled: !options.SymbolsOnly && (options.Rebuild || startedWithNoIndexedFiles),
+                cancellationToken);
         using var ftsBulkLoad = FtsBulkLoadTriggerGuard.Start(writer, useFtsBulkLoad);
 
         if (staleFilePurgePlan.Count > 0)
@@ -1021,6 +1026,7 @@ public static partial class IndexCommandRunner
             memorySamples.Add(CaptureMemorySample("extraction", stopwatch));
 
         ThrowIfFullScanCancelled(processed, files.Count);
+        referenceSecondaryIndexBulkLoad?.Complete(cancellationToken);
         if (!deferCSharpMutationsForIncompleteScan && mutualRecursionRefreshNeeded)
         {
             WriteFullScanJsonLiveness(options, "finalizing reference graph...");

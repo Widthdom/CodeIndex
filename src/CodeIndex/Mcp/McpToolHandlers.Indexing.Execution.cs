@@ -1277,6 +1277,11 @@ public partial class McpServer
             writer.MarkBatchInProgress();
 
         using var ftsBulkLoad = FtsBulkLoadTriggerGuard.Start(writer, useFtsBulkLoad, () => ftsMutated);
+        using var referenceSecondaryIndexBulkLoad =
+            ReferenceSecondaryIndexBulkLoadGuard.StartRecoverable(
+                writer,
+                enabled: startedWithNoIndexedFiles,
+                requestToken);
 
         if (staleFilePurgePlan.Count > 0)
         {
@@ -1755,6 +1760,7 @@ public partial class McpServer
             await EmitProgressNotificationAsync(progressToken, processed, files.Count).ConfigureAwait(false);
         }
 
+        referenceSecondaryIndexBulkLoad?.Complete(requestToken);
         if (!deferCSharpMutationsForIncompleteScan && mutualRecursionRefreshNeeded)
         {
             requestToken.ThrowIfCancellationRequested();

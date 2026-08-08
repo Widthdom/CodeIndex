@@ -266,6 +266,16 @@ and typed parameter schemas are created only on a cache miss; each execution
 reassigns parameter values by ordinal. Keep new bulk-write paths on this bounded
 cache so large indexes do not rebuild equivalent SQLite commands per file.
 
+Fresh CLI scans and explicit rebuilds defer the query and graph secondary
+indexes on `symbol_references` until raw reference persistence completes. The
+file and reference-line maintenance indexes remain available during the load,
+and the deferred set is restored once before reference-graph finalization. CLI
+owns this DDL inside the outer scan transaction so cancellation or failure rolls
+the schema back atomically. MCP uses the same optimization only when indexing
+starts from an empty database and restores the indexes on both completion and
+recoverable disposal. Schema initialization and read repair must use the same
+canonical index catalog so every path converges on an identical final schema.
+
 Repository-wide incremental scans load stat-reuse candidates with one SQLite
 statement before the C# contract prepass and parallel extraction. Each candidate
 is still compared with a fresh filesystem size and UTC modification time, and
@@ -3797,6 +3807,15 @@ row-count shape ごとに bounded な `PreparedCommandCache` で再利用しま�
 型付き parameter schema は cache miss 時だけ構築し、各実行では ordinal 順に parameter
 value を再設定します。大規模 index で同じ SQLite command を file ごとに再構築しないよう、
 新しい bulk-write 経路もこの bounded cache に載せてください。
+
+fresh な CLI scan と明示的 rebuild は、raw reference の永続化が完了するまで
+`symbol_references` の query / graph 用 secondary index を遅延します。load 中も file と
+reference-line の保守用 index は残し、遅延した集合は reference-graph finalization の前に
+1 回だけ復元します。CLI はこの DDL を scan 全体の外側 transaction 内で所有するため、
+cancellation や失敗時には schema も原子的に rollback されます。MCP は空 database から
+開始する場合だけ同じ最適化を使い、正常完了時と recoverable な dispose 時の両方で index を
+復元します。schema initialization と read repair は同じ canonical index catalog を使い、
+すべての経路が同一の最終 schema に収束する状態を保ってください。
 
 リポジトリ全体の incremental scan は、C# contract prepass と parallel extraction の前に
 stat-reuse 候補を 1 回の SQLite statement で読みます。各候補は引き続き最新の filesystem
