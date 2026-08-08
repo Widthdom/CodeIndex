@@ -153,7 +153,6 @@ public static partial class IndexCommandRunner
                 priorHdlGraphContractVersion,
                 priorHotspotFamilyVersions,
                 priorHotspotFamilyMarkerFingerprints,
-                currentHotspotFamilyMarkerFingerprints,
                 priorIndexedProjectRoot,
                 priorIndexedHeadCommit,
                 currentHeadCommit,

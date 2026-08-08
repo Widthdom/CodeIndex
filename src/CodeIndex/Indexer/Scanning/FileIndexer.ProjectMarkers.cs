@@ -18,12 +18,16 @@ public partial class FileIndexer
             var currentDir = Path.GetDirectoryName(fullPath);
             while (!string.IsNullOrEmpty(currentDir))
             {
-                var markerCount = CountProjectMarkerFiles(currentDir, primaryProjectMarkerPatterns);
+                var markerCount = CountProjectMarkerFiles(
+                    currentDir,
+                    primaryProjectMarkerPatterns,
+                    lang!);
                 if (markerCount == 1)
                     return NormalizeScopeKey(ToRelativePath(currentDir));
                 if (markerCount > 1)
                     return DeriveAmbiguousProjectScopeKey(fullPath, currentDir);
-                if (!primaryPatternsCoverAllMarkers && CountProjectMarkerFiles(currentDir, projectMarkerPatterns) > 0)
+                if (!primaryPatternsCoverAllMarkers
+                    && CountProjectMarkerFiles(currentDir, projectMarkerPatterns, lang!) > 0)
                     return NormalizeScopeKey(ToRelativePath(currentDir));
 
                 if (PathsEqual(currentDir, _projectRoot))
@@ -117,24 +121,9 @@ public partial class FileIndexer
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var traversalStates = new List<ProjectMarkerFingerprintTraversalState>(budgets.Count);
-        foreach (var language in HotspotFamilyMarkerLanguages)
-        {
-            if (!budgets.TryGetValue(language, out var budget))
-                continue;
-
-            traversalStates.Add(new ProjectMarkerFingerprintTraversalState(
-                language,
-                GetProjectMarkerPatterns(language)!,
-                Math.Max(1, budget.MaxDirectories),
-                Math.Max(1, budget.MaxMarkerFiles)));
-        }
-
-        var results = new Dictionary<string, ProjectMarkerFingerprintResult>(
-            traversalStates.Count,
-            StringComparer.Ordinal);
+        var traversalStates = CreateProjectMarkerFingerprintTraversalStates(budgets);
         if (traversalStates.Count == 0)
-            return results;
+            return new Dictionary<string, ProjectMarkerFingerprintResult>(StringComparer.Ordinal);
 
         var preloadErrors = new List<ScanError>();
         var fullyScanned = true;
@@ -157,6 +146,51 @@ public partial class FileIndexer
             }
         }
 
+        return MaterializeProjectMarkerFingerprintResults(traversalStates);
+    }
+
+    private static List<ProjectMarkerFingerprintTraversalState> CreateDefaultProjectMarkerFingerprintTraversalStates()
+    {
+        var budgets = new Dictionary<string, ProjectMarkerFingerprintBudget>(
+            HotspotFamilyMarkerLanguages.Length,
+            StringComparer.Ordinal);
+        foreach (var language in HotspotFamilyMarkerLanguages)
+        {
+            budgets.Add(
+                language,
+                new ProjectMarkerFingerprintBudget(
+                    ProjectMarkerFingerprintDirectoryBudgetForTesting ?? MaxProjectMarkerFingerprintDirectories,
+                    MaxProjectMarkerFingerprintFiles));
+        }
+
+        return CreateProjectMarkerFingerprintTraversalStates(budgets);
+    }
+
+    private static List<ProjectMarkerFingerprintTraversalState> CreateProjectMarkerFingerprintTraversalStates(
+        IReadOnlyDictionary<string, ProjectMarkerFingerprintBudget> budgets)
+    {
+        var traversalStates = new List<ProjectMarkerFingerprintTraversalState>(budgets.Count);
+        foreach (var language in HotspotFamilyMarkerLanguages)
+        {
+            if (!budgets.TryGetValue(language, out var budget))
+                continue;
+
+            traversalStates.Add(new ProjectMarkerFingerprintTraversalState(
+                language,
+                GetProjectMarkerPatterns(language)!,
+                Math.Max(1, budget.MaxDirectories),
+                Math.Max(1, budget.MaxMarkerFiles)));
+        }
+
+        return traversalStates;
+    }
+
+    private static Dictionary<string, ProjectMarkerFingerprintResult> MaterializeProjectMarkerFingerprintResults(
+        IReadOnlyList<ProjectMarkerFingerprintTraversalState> traversalStates)
+    {
+        var results = new Dictionary<string, ProjectMarkerFingerprintResult>(
+            traversalStates.Count,
+            StringComparer.Ordinal);
         foreach (var traversalState in traversalStates)
         {
             if (traversalState.Truncated)
@@ -326,8 +360,14 @@ public partial class FileIndexer
         return true;
     }
 
-    private int CountProjectMarkerFiles(string dir, IReadOnlyList<string> patterns)
+    private int CountProjectMarkerFiles(
+        string dir,
+        IReadOnlyList<string> patterns,
+        string language)
     {
+        if (TryGetProjectMarkerCountFromScopeSnapshot(dir, patterns, language, out var snapshotCount))
+            return snapshotCount;
+
         _pathAccessValidator?.Invoke(dir);
         var count = 0;
         var prefixedDir = LongPath.EnsureWindowsPrefix(dir);
@@ -349,6 +389,34 @@ public partial class FileIndexer
         return count;
     }
 
+    private bool TryGetProjectMarkerCountFromScopeSnapshot(
+        string directory,
+        IReadOnlyList<string> patterns,
+        string language,
+        out int count)
+    {
+        var snapshot = Volatile.Read(ref _projectMarkerScopeSnapshot);
+        if (snapshot == null)
+        {
+            count = 0;
+            return false;
+        }
+
+        var directoryKey = NormalizeScopeKey(ToRelativePath(directory));
+        snapshot.Directories.TryGetValue(directoryKey, out var counts);
+        count = language switch
+        {
+            "csharp" => counts.CSharp,
+            "vb" => counts.VisualBasic,
+            "fsharp" => counts.FSharp,
+            "msbuild" when ProjectMarkerPatternListsEqual(patterns, MsbuildPrimaryProjectMarkerPatterns) =>
+                counts.MsbuildPrimary,
+            "msbuild" => counts.MsbuildAll,
+            _ => 0,
+        };
+        return true;
+    }
+
     private bool IsProjectMarkerVisible(string markerFile, IgnoreRuleSet? activeIgnoreRules)
     {
         if (HasSkippedAttributes(markerFile))
@@ -357,6 +425,178 @@ public partial class FileIndexer
         return activeIgnoreRules is null
             ? !ShouldSkipPath(markerFile)
             : !activeIgnoreRules.IsIgnored(markerFile, isDirectory: false);
+    }
+
+    private void RecordSharedProjectMarkerDirectoryVisit(
+        IReadOnlyList<ProjectMarkerFingerprintTraversalState> traversalStates,
+        string directory)
+    {
+        foreach (var traversalState in traversalStates)
+        {
+            if (traversalState.TraversalStopped)
+                continue;
+
+            if (traversalState.DirectoriesVisited >= traversalState.MaxDirectories)
+            {
+                TruncateProjectMarkerTraversal(
+                    traversalState,
+                    traversalState.Errors,
+                    directory,
+                    $"directory budget {traversalState.MaxDirectories:N0} exhausted after visiting {traversalState.DirectoriesVisited:N0} directories");
+                traversalState.TraversalStopped = true;
+                continue;
+            }
+
+            traversalState.DirectoriesVisited++;
+        }
+    }
+
+    private void ObserveSharedProjectMarkerFile(
+        IReadOnlyList<ProjectMarkerFingerprintTraversalState> traversalStates,
+        ProjectMarkerScopeCollectionState scopeCollection,
+        string relativeDirectory,
+        string file,
+        FileAttributes attributes,
+        IgnoreRuleSet activeIgnoreRules,
+        bool directoryIgnoreCase)
+    {
+        if (HasSkippedAttributes(attributes)
+            || activeIgnoreRules.IsIgnored(file, isDirectory: false))
+            return;
+
+        var fileName = Path.GetFileName(file.AsSpan());
+        var comparison = directoryIgnoreCase
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+        var isCSharpMarker = MatchesProjectMarkerPattern(fileName, CSharpProjectMarkerPatterns, comparison);
+        var isVisualBasicMarker = MatchesProjectMarkerPattern(fileName, VisualBasicProjectMarkerPatterns, comparison);
+        var isFSharpMarker = MatchesProjectMarkerPattern(fileName, FSharpProjectMarkerPatterns, comparison);
+        var isMsbuildMarker = MatchesProjectMarkerPattern(fileName, MsbuildProjectMarkerPatterns, comparison);
+        if (!isMsbuildMarker)
+            return;
+
+        var normalizedMarkerPath = NormalizeScopeKey(ToRelativePath(file));
+        _pathAccessValidator?.Invoke(file);
+        RecordProjectMarkerScopeCounts(
+            scopeCollection,
+            relativeDirectory,
+            isCSharpMarker,
+            isVisualBasicMarker,
+            isFSharpMarker);
+        foreach (var traversalState in traversalStates)
+        {
+            if (traversalState.TraversalStopped
+                || !MatchesProjectMarkerPattern(fileName, traversalState.Patterns, comparison))
+            {
+                continue;
+            }
+
+            if (traversalState.MarkerFilesCollected >= traversalState.MaxMarkerFiles)
+            {
+                TruncateProjectMarkerTraversal(
+                    traversalState,
+                    traversalState.Errors,
+                    Path.GetDirectoryName(file) ?? _projectRoot,
+                    $"marker file budget {traversalState.MaxMarkerFiles:N0} exhausted after collecting {traversalState.MarkerFilesCollected:N0} marker files");
+                traversalState.TraversalStopped = true;
+                continue;
+            }
+
+            traversalState.ProjectMarkers.Add(normalizedMarkerPath);
+            traversalState.MarkerFilesCollected++;
+        }
+    }
+
+    private static void RecordProjectMarkerScopeCounts(
+        ProjectMarkerScopeCollectionState scopeCollection,
+        string relativeDirectory,
+        bool isCSharpMarker,
+        bool isVisualBasicMarker,
+        bool isFSharpMarker)
+    {
+        var directoryKey = NormalizeScopeKey(relativeDirectory);
+        scopeCollection.Directories.TryGetValue(directoryKey, out var counts);
+        var isPrimaryMsbuildMarker = isCSharpMarker || isVisualBasicMarker || isFSharpMarker;
+        scopeCollection.Directories[directoryKey] = new ProjectMarkerDirectoryCounts(
+            counts.CSharp + (isCSharpMarker ? 1 : 0),
+            counts.VisualBasic + (isVisualBasicMarker ? 1 : 0),
+            counts.FSharp + (isFSharpMarker ? 1 : 0),
+            counts.MsbuildPrimary + (isPrimaryMsbuildMarker ? 1 : 0),
+            counts.MsbuildAll + 1);
+    }
+
+    private static bool MatchesProjectMarkerPattern(
+        ReadOnlySpan<char> fileName,
+        IReadOnlyList<string> patterns,
+        StringComparison comparison)
+    {
+        foreach (var pattern in patterns)
+        {
+            if (pattern.Length > 1
+                && pattern[0] == '*'
+                && fileName.EndsWith(pattern.AsSpan(1), comparison))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private void MarkSharedProjectMarkerTraversalFailure(
+        IReadOnlyList<ProjectMarkerFingerprintTraversalState> traversalStates,
+        string directory,
+        Exception exception)
+    {
+        var activeLanguageMask = GetActiveProjectMarkerLanguageMask(
+            traversalStates,
+            (1 << traversalStates.Count) - 1);
+        if (activeLanguageMask == 0)
+            return;
+
+        MarkProjectMarkerTraversalFailure(
+            traversalStates,
+            activeLanguageMask,
+            directory,
+            FileSystemTraversalFailure.ExceptionTypeName(exception));
+        foreach (var traversalState in traversalStates)
+        {
+            if (!traversalState.TraversalStopped)
+                traversalState.TraversalStopped = true;
+        }
+    }
+
+    private static void MarkSharedProjectMarkerTraversalIncomplete(
+        IReadOnlyList<ProjectMarkerFingerprintTraversalState> traversalStates,
+        string reason)
+    {
+        foreach (var traversalState in traversalStates)
+        {
+            if (traversalState.TraversalStopped)
+                continue;
+
+            MarkProjectMarkerTraversalTruncated(traversalState, reason);
+            traversalState.TraversalStopped = true;
+        }
+    }
+
+    private void TruncateSharedProjectMarkerTraversal(
+        IReadOnlyList<ProjectMarkerFingerprintTraversalState> traversalStates,
+        string directory,
+        string reason)
+    {
+        foreach (var traversalState in traversalStates)
+        {
+            if (traversalState.TraversalStopped)
+                continue;
+
+            TruncateProjectMarkerTraversal(
+                traversalState,
+                traversalState.Errors,
+                directory,
+                reason);
+            traversalState.TraversalStopped = true;
+        }
     }
 
     private void CollectProjectMarkerFiles(

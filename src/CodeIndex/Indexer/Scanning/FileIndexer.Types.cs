@@ -81,6 +81,9 @@ public partial class FileIndexer
     {
         public IReadOnlyDictionary<string, int> LanguageCounts { get; init; } = EmptyLanguageCounts;
 
+        internal IReadOnlyDictionary<string, ProjectMarkerFingerprintResult> ProjectMarkerFingerprints { get; init; } =
+            new Dictionary<string, ProjectMarkerFingerprintResult>(StringComparer.Ordinal);
+
         public bool HadErrors
         {
             get
@@ -183,6 +186,22 @@ public partial class FileIndexer
         IgnoreRuleSet IgnoreRules,
         bool IsProjectRoot,
         int LanguageMask);
+
+    private sealed class ProjectMarkerScopeCollectionState(StringComparer pathComparer)
+    {
+        public Dictionary<string, ProjectMarkerDirectoryCounts> Directories { get; } = new(pathComparer);
+        public bool IsComplete { get; set; } = true;
+    }
+
+    private sealed record ProjectMarkerScopeSnapshot(
+        IReadOnlyDictionary<string, ProjectMarkerDirectoryCounts> Directories);
+
+    private readonly record struct ProjectMarkerDirectoryCounts(
+        int CSharp,
+        int VisualBasic,
+        int FSharp,
+        int MsbuildPrimary,
+        int MsbuildAll);
 
     internal readonly record struct ProjectMarkerFingerprintResult(string? Fingerprint, bool IsComplete)
     {

@@ -46,6 +46,7 @@ public partial class FileIndexer
         cancellationToken.ThrowIfCancellationRequested();
         var previousSuppression = _suppressConfigurationInputObservation;
         _suppressConfigurationInputObservation = !captureDirectoryListingSnapshots;
+        Volatile.Write(ref _projectMarkerScopeSnapshot, null);
         ResetPatternConfigurationDirectoryExistenceCache();
         _nestedGitRepositoryCache.Clear();
         try
@@ -89,6 +90,9 @@ public partial class FileIndexer
         {
             NormalizePathForComparison(_projectRoot),
         };
+        var projectMarkerTraversalStates = CreateDefaultProjectMarkerFingerprintTraversalStates();
+        var projectMarkerScopeCollection = new ProjectMarkerScopeCollectionState(
+            _ignoreCase ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
         var scanState = new DirectoryScanState(
             files,
             fileLanguages,
@@ -99,6 +103,8 @@ public partial class FileIndexer
             fullyScannedDirectories,
             activeCheckpointedDirectories,
             visitedDirectories,
+            projectMarkerTraversalStates,
+            projectMarkerScopeCollection,
             captureDirectoryListingSnapshots);
         errors.AddRange(_submoduleLoadWarnings);
         var fullyScanned = true;
@@ -106,6 +112,13 @@ public partial class FileIndexer
         if (preloadResult.IgnoreRulesAvailable)
         {
             ScanDirectory(_projectRoot, scanState, preloadResult.Rules, isProjectRoot: true, continueOnError, cancellationToken, depth: 0);
+        }
+        else
+        {
+            projectMarkerScopeCollection.IsComplete = false;
+            MarkSharedProjectMarkerTraversalIncomplete(
+                projectMarkerTraversalStates,
+                "ancestor ignore-rule loading failed");
         }
         var inputSnapshot = captureDirectoryListingSnapshots
             ? MaterializeScanInputSnapshot(
@@ -122,6 +135,13 @@ public partial class FileIndexer
                     ? $"{incompleteReason} Reduce or split the indexed workspace before retrying."
                     : "Could not capture every directory listing or configuration input needed for one stable source snapshot; rerun indexing."));
         }
+        if (projectMarkerScopeCollection.IsComplete)
+        {
+            Volatile.Write(
+                ref _projectMarkerScopeSnapshot,
+                new ProjectMarkerScopeSnapshot(projectMarkerScopeCollection.Directories));
+        }
+
         var scanResult = new ScanFilesResult(
             scanState.Results,
             scanState.FileLanguages,
@@ -138,6 +158,7 @@ public partial class FileIndexer
             MaterializeSortedPathSet(scanState.DanglingSymlinks))
         {
             LanguageCounts = MaterializeLanguageCounts(scanState.LanguageCounts),
+            ProjectMarkerFingerprints = MaterializeProjectMarkerFingerprintResults(projectMarkerTraversalStates),
         };
         return new ScanFilesWithDirectoryListingSnapshotsResult(scanResult, inputSnapshot);
     }
@@ -203,6 +224,8 @@ public partial class FileIndexer
         }
         catch (IOException ex)
         {
+            scanState.ProjectMarkerScopeCollection.IsComplete = false;
+            MarkSharedProjectMarkerTraversalFailure(scanState.ProjectMarkerTraversalStates, dir, ex);
             scanState.Errors.Add(new ScanError(
                 relativeDir,
                 $"Could not scan directory due to {FileSystemTraversalFailure.DescribeReason(ex)}."));
@@ -211,6 +234,11 @@ public partial class FileIndexer
 
         if (depth > MaxDirectoryTraversalDepth)
         {
+            scanState.ProjectMarkerScopeCollection.IsComplete = false;
+            TruncateSharedProjectMarkerTraversal(
+                scanState.ProjectMarkerTraversalStates,
+                dir,
+                $"directory traversal depth exceeded {MaxDirectoryTraversalDepth}");
             scanState.Errors.Add(new ScanError(
                 relativeDir,
                 $"Skipped directory because traversal depth exceeded {MaxDirectoryTraversalDepth}. Check for symlink loops or unexpectedly deep generated trees.",
@@ -219,7 +247,14 @@ public partial class FileIndexer
         }
 
         if (scanState.CheckpointedDirectories.Contains(relativeDir))
+        {
+            scanState.ProjectMarkerScopeCollection.IsComplete = false;
+            TruncateSharedProjectMarkerTraversal(
+                scanState.ProjectMarkerTraversalStates,
+                dir,
+                "a checkpointed directory was omitted from this scan");
             return true;
+        }
 
         var filterKind = GetDirectoryFilterKind(dir, relativeDir, activeIgnoreRules, isProjectRoot);
         if (filterKind != PathFilterKind.None)
@@ -228,6 +263,8 @@ public partial class FileIndexer
             scanState.FullyScannedDirectories.Add(relativeDir);
             return true;
         }
+
+        RecordSharedProjectMarkerDirectoryVisit(scanState.ProjectMarkerTraversalStates, dir);
 
         return EnumerateDirectory(
             dir,

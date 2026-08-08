@@ -286,6 +286,17 @@ Rows with missing or invalid legacy stat values are excluded so normal checksum
 reuse or reindexing can repair them, and CLI/MCP cancellation must interrupt the
 snapshot query as well as the later extraction pipeline.
 
+Authoritative full scans collect the C#, VB, F#, and MSBuild project-marker
+fingerprints during the shared source-directory enumeration. The same pass also
+builds a budget-independent directory marker-count snapshot used by
+`GetFamilyScopeKey`, so per-file family assignment does not enumerate marker
+globs again for every ancestor. Fingerprint budgets and scope completeness stay
+independent: an exhausted fingerprint budget may still leave a complete scope
+snapshot, while an incomplete discovery discards the scope snapshot and falls
+back to the live, fail-closed lookup. Scoped update, MCP, and direct pre-scan
+callers retain that fallback because they do not own an authoritative full-tree
+snapshot.
+
 `FileIssue` rows may include nullable `origin` and `severity` metadata.
 For `replacement_char`, `origin: source_literal` means the file contains a
 valid encoded U+FFFD literal, while `origin: decode_replacement` means the
@@ -3824,6 +3835,15 @@ generated-code suppression も snapshot eligibility contract に含めます。C
 この snapshot を file ごとの database probe に戻さないでください。旧 DB の欠損または不正な
 stat 値を持つ row は除外して通常の checksum reuse / 再 index で修復し、CLI/MCP の cancellation は
 後続の extraction pipeline だけでなく snapshot query も中断できる状態を保ってください。
+
+authoritative な full scan は、共有 source-directory enumeration 中に C#、VB、F#、
+MSBuild の project-marker fingerprint を収集します。同じ pass で budget 非依存の
+directory marker-count snapshot も構築し、`GetFamilyScopeKey` が file ごとに各 ancestor の
+marker glob を再列挙しないようにします。fingerprint budget と scope completeness は独立です。
+fingerprint budget を使い切っても scope snapshot は complete になり得ますが、discovery 自体が
+不完全なら scope snapshot を破棄し、従来の fail-closed な live lookup へ fallback します。
+authoritative な full-tree snapshot を所有しない scoped update、MCP、scan 前の直接 caller も
+同じ fallback を維持してください。
 
 `FileIssue` rows には nullable な `origin` / `severity` metadata が入ることがある。
 `replacement_char` では `origin: source_literal` が正規にエンコードされた U+FFFD

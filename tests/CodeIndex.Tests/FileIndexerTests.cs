@@ -1422,6 +1422,149 @@ public partial class FileIndexerTests
     }
 
     [Fact]
+    public void ScanFilesDetailed_CapturesAllProjectMarkerFingerprintsFromOneDirectoryEnumeration()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_marker_scan_snapshot");
+        var tempDir = project.Root;
+        TestProjectHelper.WriteTextFiles(
+            tempDir,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["App.csproj"] = "<Project />",
+                ["Directory.Build.props"] = "<Project />",
+                ["src/Library.vbproj"] = "<Project />",
+                ["src/Tools.fsproj"] = "<Project />",
+                ["src/app.py"] = "print('ok')\n",
+            });
+        var enumerationCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        var indexer = new FileIndexer(
+            tempDir,
+            ignoreCase: false,
+            ignoreRuleRoot: null,
+            maxFileSizeBytes: null,
+            directoryIgnoreCaseProbe: _ => false,
+            enumerateFileSystemEntries: directory =>
+            {
+                var relativePath = FileIndexer.NormalizePathSeparators(Path.GetRelativePath(tempDir, directory));
+                enumerationCounts[relativePath] = enumerationCounts.GetValueOrDefault(relativePath) + 1;
+                return FileSystemTraversalPolicy.EnumerateFileSystemEntries(directory);
+            });
+
+        var scanResult = indexer.ScanFilesDetailed();
+
+        Assert.Equal(2, enumerationCounts.Count);
+        Assert.All(enumerationCounts.Values, count => Assert.Equal(1, count));
+        Assert.Equal(
+            ExpectedProjectMarkerFingerprint("App.csproj"),
+            scanResult.ProjectMarkerFingerprints["csharp"].Fingerprint);
+        Assert.Equal(
+            ExpectedProjectMarkerFingerprint("src/Library.vbproj"),
+            scanResult.ProjectMarkerFingerprints["vb"].Fingerprint);
+        Assert.Equal(
+            ExpectedProjectMarkerFingerprint("src/Tools.fsproj"),
+            scanResult.ProjectMarkerFingerprints["fsharp"].Fingerprint);
+        Assert.Equal(
+            ExpectedProjectMarkerFingerprint(
+                "App.csproj",
+                "Directory.Build.props",
+                "src/Library.vbproj",
+                "src/Tools.fsproj"),
+            scanResult.ProjectMarkerFingerprints["msbuild"].Fingerprint);
+        Assert.All(scanResult.ProjectMarkerFingerprints.Values, result => Assert.True(result.IsComplete));
+    }
+
+    [Fact]
+    public void GetFamilyScopeKey_AfterScanUsesCollectedMarkerCountsWithoutAncestorProbes()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_marker_scope_snapshot");
+        var tempDir = project.Root;
+        TestProjectHelper.WriteTextFiles(
+            tempDir,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["src/First.csproj"] = "<Project />",
+                ["src/Second.csproj"] = "<Project />",
+                ["src/feature/Api.cs"] = "public class Api { }\n",
+                ["vb/App.vbproj"] = "<Project />",
+                ["vb/Module.vb"] = "Public Class [Module]\nEnd Class\n",
+                ["build/Directory.Build.props"] = "<Project />",
+                ["build/Directory.Build.targets"] = "<Project />",
+            });
+        var countPostScanAuthorizations = false;
+        var postScanAuthorizationCount = 0;
+        var indexer = new FileIndexer(
+            tempDir,
+            ignoreCase: false,
+            ignoreRuleRoot: null,
+            maxFileSizeBytes: null,
+            directoryIgnoreCaseProbe: _ => false,
+            pathAccessValidator: _ =>
+            {
+                if (countPostScanAuthorizations)
+                    postScanAuthorizationCount++;
+            });
+
+        indexer.ScanFilesDetailed();
+        countPostScanAuthorizations = true;
+
+        Assert.Equal(
+            "src/feature",
+            indexer.GetFamilyScopeKey(Path.Combine(tempDir, "src", "feature", "Api.cs"), "csharp"));
+        Assert.Equal(
+            "vb",
+            indexer.GetFamilyScopeKey(Path.Combine(tempDir, "vb", "Module.vb"), "vb"));
+        Assert.Equal(
+            "build",
+            indexer.GetFamilyScopeKey(Path.Combine(tempDir, "build", "Directory.Build.props"), "msbuild"));
+        Assert.Equal(0, postScanAuthorizationCount);
+    }
+
+    [Fact]
+    public void GetFamilyScopeKey_ScanSnapshotContinuesBeyondFingerprintDirectoryBudget()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_marker_scope_budget");
+        var tempDir = project.Root;
+        TestProjectHelper.WriteTextFiles(
+            tempDir,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["nested/App.csproj"] = "<Project />",
+                ["nested/Api.cs"] = "public class Api { }\n",
+            });
+        var previousBudget = FileIndexer.ProjectMarkerFingerprintDirectoryBudgetForTesting;
+        var countPostScanAuthorizations = false;
+        var postScanAuthorizationCount = 0;
+        try
+        {
+            FileIndexer.ProjectMarkerFingerprintDirectoryBudgetForTesting = 1;
+            var indexer = new FileIndexer(
+                tempDir,
+                ignoreCase: false,
+                ignoreRuleRoot: null,
+                maxFileSizeBytes: null,
+                directoryIgnoreCaseProbe: _ => false,
+                pathAccessValidator: _ =>
+                {
+                    if (countPostScanAuthorizations)
+                        postScanAuthorizationCount++;
+                });
+
+            var scanResult = indexer.ScanFilesDetailed();
+            countPostScanAuthorizations = true;
+
+            Assert.False(scanResult.ProjectMarkerFingerprints["csharp"].IsComplete);
+            Assert.Equal(
+                "nested",
+                indexer.GetFamilyScopeKey(Path.Combine(tempDir, "nested", "Api.cs"), "csharp"));
+            Assert.Equal(0, postScanAuthorizationCount);
+        }
+        finally
+        {
+            FileIndexer.ProjectMarkerFingerprintDirectoryBudgetForTesting = previousBudget;
+        }
+    }
+
+    [Fact]
     public void GetProjectMarkerFingerprintResults_EnumeratesEachDirectoryOnceForAllLanguages()
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_marker_snapshot_count");

@@ -48,7 +48,6 @@ public static partial class IndexCommandRunner
         string? priorHdlGraphContractVersion,
         IReadOnlyDictionary<string, string?> priorHotspotFamilyVersions,
         IReadOnlyDictionary<string, string?> priorHotspotFamilyMarkerFingerprints,
-        IReadOnlyDictionary<string, FileIndexer.ProjectMarkerFingerprintResult> currentHotspotFamilyMarkerFingerprints,
         string? priorIndexedProjectRoot,
         string? priorIndexedHeadCommit,
         string? currentHeadCommit,
@@ -82,10 +81,6 @@ public static partial class IndexCommandRunner
         var sqlGraphContractMatchesCurrent = priorSqlGraphContractVersion == currentSqlGraphContractVersion;
         var currentHdlGraphContractVersion = DbContext.HdlGraphContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var hdlGraphContractMatchesCurrent = priorHdlGraphContractVersion == currentHdlGraphContractVersion;
-        var hotspotFamilyTrustMatchesCurrent = GetHotspotFamilyTrustMatchesCurrent(
-            priorHotspotFamilyVersions,
-            priorHotspotFamilyMarkerFingerprints,
-            currentHotspotFamilyMarkerFingerprints);
         var symbolKindFilterMatchesPrior = string.Equals(
             priorSymbolKindFilterSignature,
             options.SymbolKindFilter.Signature,
@@ -141,6 +136,11 @@ public static partial class IndexCommandRunner
             initialScanFileCapacity,
             cancellationToken: cancellationToken);
         var scanResult = discovery.ScanResult;
+        var currentHotspotFamilyMarkerFingerprints = scanResult.ProjectMarkerFingerprints;
+        var hotspotFamilyTrustMatchesCurrent = GetHotspotFamilyTrustMatchesCurrent(
+            priorHotspotFamilyVersions,
+            priorHotspotFamilyMarkerFingerprints,
+            currentHotspotFamilyMarkerFingerprints);
         var scanHadErrors = scanResult.HadErrors;
         var files = discovery.Files;
         var languageCounts = scanResult.LanguageCounts;
