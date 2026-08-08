@@ -6,6 +6,14 @@ namespace CodeIndex.Indexer;
 
 internal static class DockerfileReferenceExtractor
 {
+    private enum InstructionKind
+    {
+        Other,
+        From,
+        CopyOrAdd,
+        Run,
+    }
+
     private static readonly Regex StageReferenceRegex = new(
         @"^\s*FROM\s+(?:--platform=\S+\s+)?(?<name>[A-Za-z0-9_.-]+)\s+AS\s+[A-Za-z0-9_.-]+(?:\s+#.*)?\s*$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
@@ -59,58 +67,79 @@ internal static class DockerfileReferenceExtractor
         if (stageNames == null || stageNames.Count == 0)
             return;
 
-        var fromMatch = StageReferenceRegex.Match(originalLine);
-        if (fromMatch.Success)
+        var instruction = ClassifyInstruction(originalLine, out var operandStart);
+        switch (instruction)
         {
-            var name = fromMatch.Groups["name"].Value;
-            if (stageNames.Contains(name))
-            {
-                ReferenceExtractor.AddReference(
+            case InstructionKind.From:
+                {
+                    var fromMatch = StageReferenceRegex.Match(originalLine);
+                    if (fromMatch.Success)
+                    {
+                        var name = fromMatch.Groups["name"].Value;
+                        if (stageNames.Contains(name))
+                        {
+                            ReferenceExtractor.AddReference(
+                                references,
+                                seen,
+                                fileId,
+                                name,
+                                fromMatch.Groups["name"].Index,
+                                "call",
+                                context,
+                                lineNumber,
+                                container);
+                        }
+                    }
+
+                    return;
+                }
+            case InstructionKind.CopyOrAdd:
+                {
+                    if (originalLine.IndexOf("--from", operandStart, StringComparison.OrdinalIgnoreCase) < 0)
+                        return;
+
+                    foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(CopyFromReferenceRegex, originalLine, references))
+                    {
+                        if (ReferenceExtractor.ReferenceLimitReached(references))
+                            break;
+                        var name = match.Groups["name"].Value;
+                        if (!stageNames.Contains(name))
+                            continue;
+
+                        ReferenceExtractor.AddReference(
+                            references,
+                            seen,
+                            fileId,
+                            name,
+                            match.Groups["name"].Index,
+                            "call",
+                            context,
+                            lineNumber,
+                            container);
+                    }
+
+                    return;
+                }
+            case InstructionKind.Run:
+                EmitRunMountReferences(
+                    originalLine,
+                    operandStart,
+                    context,
+                    lineNumber,
                     references,
                     seen,
                     fileId,
-                    name,
-                    fromMatch.Groups["name"].Index,
-                    "call",
-                    context,
-                    lineNumber,
+                    stageNames,
                     container);
-            }
+                return;
+            default:
+                return;
         }
-
-        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(CopyFromReferenceRegex, originalLine, references))
-        {
-            if (ReferenceExtractor.ReferenceLimitReached(references))
-                break;
-            var name = match.Groups["name"].Value;
-            if (!stageNames.Contains(name))
-                continue;
-
-            ReferenceExtractor.AddReference(
-                references,
-                seen,
-                fileId,
-                name,
-                match.Groups["name"].Index,
-                "call",
-                context,
-                lineNumber,
-                container);
-        }
-
-        EmitRunMountReferences(
-            originalLine,
-            context,
-            lineNumber,
-            references,
-            seen,
-            fileId,
-            stageNames,
-            container);
     }
 
     private static void EmitRunMountReferences(
         string line,
+        int operandStart,
         string context,
         int lineNumber,
         List<ReferenceRecord> references,
@@ -119,8 +148,7 @@ internal static class DockerfileReferenceExtractor
         HashSet<string> stageNames,
         SymbolRecord? container)
     {
-        if (!TryGetRunOptionsStart(line, out var index))
-            return;
+        var index = operandStart;
 
         while (index < line.Length)
         {
@@ -164,23 +192,38 @@ internal static class DockerfileReferenceExtractor
         }
     }
 
-    private static bool TryGetRunOptionsStart(string line, out int index)
+    private static InstructionKind ClassifyInstruction(string line, out int operandStart)
     {
-        index = SkipWhitespace(line, 0);
+        var index = SkipWhitespace(line, 0);
         if (StartsWithKeyword(line, index, "ONBUILD"))
-        {
             index = SkipWhitespace(line, index + "ONBUILD".Length);
+
+        if (StartsWithKeyword(line, index, "FROM"))
+        {
+            operandStart = index + "FROM".Length;
+            return InstructionKind.From;
         }
 
-        if (!StartsWith(line, index, "RUN"))
-            return false;
+        if (StartsWithKeyword(line, index, "COPY"))
+        {
+            operandStart = index + "COPY".Length;
+            return InstructionKind.CopyOrAdd;
+        }
 
-        var afterRun = index + "RUN".Length;
-        if (afterRun < line.Length && !char.IsWhiteSpace(line[afterRun]))
-            return false;
+        if (StartsWithKeyword(line, index, "ADD"))
+        {
+            operandStart = index + "ADD".Length;
+            return InstructionKind.CopyOrAdd;
+        }
 
-        index = afterRun;
-        return true;
+        if (StartsWithKeyword(line, index, "RUN"))
+        {
+            operandStart = index + "RUN".Length;
+            return InstructionKind.Run;
+        }
+
+        operandStart = index;
+        return InstructionKind.Other;
     }
 
     private static int ScanOptionToken(string line, int index)
@@ -247,7 +290,9 @@ internal static class DockerfileReferenceExtractor
         HashSet<string>? variableNames,
         SymbolRecord? container)
     {
-        if (variableNames == null || variableNames.Count == 0)
+        if (variableNames == null
+            || variableNames.Count == 0
+            || preparedLine.IndexOf('$') < 0)
             return;
 
         EmitBracedVariableReferences(

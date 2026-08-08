@@ -18,7 +18,9 @@ internal static partial class TypeScriptReferenceExtractor
         Func<int, SymbolRecord?> resolveContainerForColumn,
         IReadOnlyList<NamespaceAliasBinding> namespaceAliases)
     {
-        if (namespaceAliases.Count == 0 || IsImportExportAliasLine(preparedLines, lineIndex, preparedLine))
+        if (namespaceAliases.Count == 0
+            || preparedLine.IndexOf('.') < 0
+            || IsImportExportAliasLine(preparedLines, lineIndex, preparedLine))
             return;
 
         foreach (var binding in namespaceAliases)

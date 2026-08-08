@@ -58,6 +58,13 @@ internal static partial class JavaReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        if (preparedLine.IndexOf('(') < 0
+            || (preparedLine.IndexOf("this", StringComparison.Ordinal) < 0
+                && preparedLine.IndexOf("super", StringComparison.Ordinal) < 0))
+        {
+            return;
+        }
+
         var match = CtorChainRegex.Match(preparedLine);
         if (!match.Success)
             return;
@@ -167,6 +174,9 @@ internal static partial class JavaReferenceExtractor
     /// </summary>
     public static ReferenceExtractor.JavaSameLineCtorSpan? TryExtractSameLineCtorSpan(string line)
     {
+        if (line.IndexOf('(') < 0 || line.IndexOf('{') < 0)
+            return null;
+
         int i = 0;
         int n = line.Length;
 

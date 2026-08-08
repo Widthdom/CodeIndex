@@ -164,12 +164,15 @@ internal static class MarkupSchemaReferenceExtractor
         var declarationMatch = GraphQLDeclarationRegex.Match(scanLine);
         var lineContainer = TryGetGraphQLLineContainer(declarationMatch) ?? TryGetGraphQLStateContainer(state) ?? container;
         var isDirectiveDeclaration = scanLine.TrimStart().StartsWith("directive ", StringComparison.Ordinal);
-        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(GraphQLFragmentSpreadRegex, scanLine, references))
+        if (scanLine.IndexOf("...", StringComparison.Ordinal) >= 0)
         {
-            AddReference(references, seen, fileId, match, "call", context, lineNumber, lineContainer, "graphql");
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(GraphQLFragmentSpreadRegex, scanLine, references))
+            {
+                AddReference(references, seen, fileId, match, "call", context, lineNumber, lineContainer, "graphql");
+            }
         }
 
-        if (!isDirectiveDeclaration)
+        if (!isDirectiveDeclaration && scanLine.IndexOf("on", StringComparison.Ordinal) >= 0)
         {
             foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(GraphQLTypeConditionRegex, scanLine, references))
             {
@@ -177,20 +180,29 @@ internal static class MarkupSchemaReferenceExtractor
             }
         }
 
-        var implementsMatch = GraphQLImplementsRegex.Match(scanLine);
-        if (implementsMatch.Success)
-            EmitGraphQLTypeTokens(implementsMatch.Groups["tail"], context, lineNumber, references, seen, fileId, lineContainer);
-
-        var unionMatch = GraphQLUnionRegex.Match(scanLine);
-        if (unionMatch.Success)
-            EmitGraphQLTypeTokens(unionMatch.Groups["tail"], context, lineNumber, references, seen, fileId, lineContainer);
-
-        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(GraphQLFieldTypeRegex, scanLine, references))
+        if (scanLine.IndexOf("implements", StringComparison.Ordinal) >= 0)
         {
-            AddGraphQLTypeReference(references, seen, fileId, match.Groups["name"], context, lineNumber, lineContainer);
+            var implementsMatch = GraphQLImplementsRegex.Match(scanLine);
+            if (implementsMatch.Success)
+                EmitGraphQLTypeTokens(implementsMatch.Groups["tail"], context, lineNumber, references, seen, fileId, lineContainer);
         }
 
-        if (!isDirectiveDeclaration)
+        if (scanLine.IndexOf("union", StringComparison.Ordinal) >= 0 && scanLine.IndexOf('=') >= 0)
+        {
+            var unionMatch = GraphQLUnionRegex.Match(scanLine);
+            if (unionMatch.Success)
+                EmitGraphQLTypeTokens(unionMatch.Groups["tail"], context, lineNumber, references, seen, fileId, lineContainer);
+        }
+
+        if (scanLine.IndexOf(':') >= 0)
+        {
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(GraphQLFieldTypeRegex, scanLine, references))
+            {
+                AddGraphQLTypeReference(references, seen, fileId, match.Groups["name"], context, lineNumber, lineContainer);
+            }
+        }
+
+        if (!isDirectiveDeclaration && scanLine.IndexOf('@') >= 0)
         {
             foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(GraphQLDirectiveUseRegex, scanLine, references))
             {
@@ -309,6 +321,8 @@ internal static class MarkupSchemaReferenceExtractor
         state ??= new MarkupState();
         if (!TryPrepareHtmlLineForReferenceScan(line, state, out var scanLine))
             return;
+        if (scanLine.IndexOf('<') < 0)
+            return;
 
         foreach (Match tagMatch in ReferenceExtractor.EnumerateReferenceMatches(HtmlTagRegex, scanLine, references))
         {
@@ -405,22 +419,34 @@ internal static class MarkupSchemaReferenceExtractor
             return;
 
         var scanLine = StripMarkdownInlineCode(line);
-        var definitionMatch = MarkdownReferenceDefinitionRegex.Match(scanLine);
-        if (definitionMatch.Success)
+        if (scanLine.IndexOf('[') < 0)
             return;
 
-        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(MarkdownInlineLinkRegex, scanLine, references))
+        if (scanLine.IndexOf(':') >= 0)
         {
-            AddMarkdownTargetReference(
-                match.Groups["target"].Value,
-                match.Groups["target"].Index,
-                context,
-                lineNumber,
-                references,
-                seen,
-                fileId,
-                container);
+            var definitionMatch = MarkdownReferenceDefinitionRegex.Match(scanLine);
+            if (definitionMatch.Success)
+                return;
         }
+
+        if (scanLine.IndexOf('(') >= 0)
+        {
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(MarkdownInlineLinkRegex, scanLine, references))
+            {
+                AddMarkdownTargetReference(
+                    match.Groups["target"].Value,
+                    match.Groups["target"].Index,
+                    context,
+                    lineNumber,
+                    references,
+                    seen,
+                    fileId,
+                    container);
+            }
+        }
+
+        if (scanLine.IndexOf("][", StringComparison.Ordinal) < 0)
+            return;
 
         foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(MarkdownReferenceLinkRegex, scanLine, references))
         {
@@ -546,6 +572,9 @@ internal static class MarkupSchemaReferenceExtractor
             if (TryToggleMarkdownFence(line, scanState) || scanState.InMarkdownFence)
                 continue;
 
+            if (line.IndexOf('[') < 0 || line.IndexOf(':') < 0)
+                continue;
+
             var match = MarkdownReferenceDefinitionRegex.Match(StripMarkdownInlineCode(line));
             if (!match.Success)
                 continue;
@@ -561,6 +590,9 @@ internal static class MarkupSchemaReferenceExtractor
 
     private static string StripGraphQLComment(string line)
     {
+        if (line.IndexOf('#') < 0)
+            return line;
+
         var inString = false;
         for (var i = 0; i < line.Length; i++)
         {

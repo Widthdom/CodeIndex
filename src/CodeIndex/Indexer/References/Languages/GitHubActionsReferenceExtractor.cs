@@ -46,13 +46,16 @@ internal static class GitHubActionsReferenceExtractor
         {
             var line = lines[index];
             var indent = CountLeadingSpaces(line);
-            var mapping = MappingRegex.Match(line);
 
             if (runIndent.HasValue && indent > runIndent.Value)
                 EmitLocalPaths(fileId, line, index + 1, currentJobSymbol, references, seen);
             else if (runIndent.HasValue)
                 runIndent = null;
 
+            if (line.IndexOf(':') < 0)
+                continue;
+
+            var mapping = MappingRegex.Match(line);
             if (!mapping.Success)
                 continue;
 
@@ -136,6 +139,9 @@ internal static class GitHubActionsReferenceExtractor
         ReferenceDedupeSet seen,
         int baseIndex = 0)
     {
+        if (text.IndexOf('.') < 0 || text.IndexOf('/') < 0)
+            return;
+
         foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(LocalPathRegex, text, references))
         {
             var rawPath = match.Groups["path"].Value;

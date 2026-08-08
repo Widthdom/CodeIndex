@@ -96,6 +96,12 @@ internal static partial class TypeScriptReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
+        if (preparedLine.IndexOf('<') < 0
+            || preparedLine.IndexOf("extends", StringComparison.Ordinal) < 0)
+        {
+            return;
+        }
+
         for (var index = 0; index < preparedLine.Length; index++)
         {
             if (preparedLine[index] != '<')
@@ -330,6 +336,9 @@ internal static partial class TypeScriptReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
+        if (preparedLine.IndexOf('(') < 0)
+            return;
+
         var openParen = TypedLanguageReferenceExtractor.FindTopLevelChar(
             preparedLine,
             '(',
@@ -386,6 +395,9 @@ internal static partial class TypeScriptReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
+        if (preparedLine.IndexOf('@') < 0 || preparedLine.IndexOf(':') < 0)
+            return;
+
         var memberStart = SkipLeadingDecorators(preparedLine);
         if (memberStart <= 0 || memberStart >= preparedLine.Length)
             return;
@@ -431,6 +443,9 @@ internal static partial class TypeScriptReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
+        if (preparedLine.IndexOf(':') < 0)
+            return;
+
         var colonIndex = TypedLanguageReferenceExtractor.FindTopLevelChar(preparedLine, ':');
         if (colonIndex < 0)
             return;

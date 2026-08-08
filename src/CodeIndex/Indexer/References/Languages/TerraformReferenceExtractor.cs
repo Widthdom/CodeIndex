@@ -54,6 +54,9 @@ internal static class TerraformReferenceExtractor
         HashSet<string>? definitionNames,
         SymbolRecord? container)
     {
+        if (preparedLine.IndexOf('.') < 0)
+            return;
+
         foreach (var pattern in ReferencePatterns)
             EmitMatches(pattern, preparedLine, context, lineNumber, references, seen, fileId, definitionNames, container);
     }

@@ -7,6 +7,9 @@ public static partial class ReferenceExtractor
 {
     private static void EmitJsxElementReferences(CoreReferenceLineContext line)
     {
+        if (line.PreparedLine.IndexOf('<') < 0)
+            return;
+
         var jsxTypeArgumentSkipUntil = -1;
         foreach (Match match in BoundedRegex.EnumerateMatches(JsxElementOpenRegex, line.PreparedLine))
         {
@@ -157,6 +160,8 @@ public static partial class ReferenceExtractor
 
     private static void EmitParenlessInitializerReferences(CoreReferenceLineContext line)
     {
+        if (line.PreparedLine.IndexOf("new", StringComparison.Ordinal) < 0)
+            return;
 
         HashSet<int>? matchedInitializerIndices = null;
         var mayContainNestedGenericInitializer = line.Language == "csharp" && MayContainNestedGenericSyntax(line.PreparedLine);
