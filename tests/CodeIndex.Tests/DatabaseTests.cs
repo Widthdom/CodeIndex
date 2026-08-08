@@ -4574,6 +4574,33 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void MutualRecursionRefresh_UsesOnlyGraphFinalizationReferenceIndexes()
+    {
+        var plan = ReadQueryPlanDetails(
+            _db.Connection,
+            DbWriter.RefreshMutualRecursionFlagsSqlForTesting);
+
+        Assert.Contains(plan, detail =>
+            detail.Contains("idx_symbol_refs_resolved_source_target_kind", StringComparison.Ordinal));
+        Assert.Contains(plan, detail =>
+            detail.Contains("idx_symbol_refs_unresolved_mutual_folded", StringComparison.Ordinal));
+        Assert.Contains(plan, detail =>
+            detail.Contains("idx_symbol_refs_container_nocase_kind", StringComparison.Ordinal));
+
+        var graphIndexes = ReferenceSecondaryIndexSql.GraphFinalizationRequired
+            .Select(static definition => definition.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        var remainingIndexes = ReferenceSecondaryIndexSql.RemainingQuery
+            .Select(static definition => definition.Name);
+        Assert.All(
+            remainingIndexes,
+            indexName => Assert.DoesNotContain(
+                plan,
+                detail => detail.Contains(indexName, StringComparison.Ordinal)));
+        Assert.Equal(3, graphIndexes.Count);
+    }
+
+    [Fact]
     public void InitializeSchema_CreatesBoundedMaintenanceLookupIndexes()
     {
         Assert.Contains("idx_files_checksum", ReadIndexNames(_db.Connection, "files"));

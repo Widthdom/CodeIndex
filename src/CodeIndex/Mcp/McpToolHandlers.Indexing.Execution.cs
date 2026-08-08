@@ -1280,7 +1280,7 @@ public partial class McpServer
         using var referenceSecondaryIndexBulkLoad =
             ReferenceSecondaryIndexBulkLoadGuard.StartRecoverable(
                 writer,
-                enabled: startedWithNoIndexedFiles,
+                enabled: useFtsBulkLoad,
                 requestToken);
 
         if (staleFilePurgePlan.Count > 0)
@@ -1760,7 +1760,6 @@ public partial class McpServer
             await EmitProgressNotificationAsync(progressToken, processed, files.Count).ConfigureAwait(false);
         }
 
-        referenceSecondaryIndexBulkLoad?.Complete(requestToken);
         if (!deferCSharpMutationsForIncompleteScan && mutualRecursionRefreshNeeded)
         {
             requestToken.ThrowIfCancellationRequested();
@@ -1773,8 +1772,19 @@ public partial class McpServer
                         && !scanHadErrors
                         && errors == 0
                             ? csharpPrepassTargets.Count > 0
-                            : null));
+                            : null),
+                referenceSecondaryIndexBulkLoad: referenceSecondaryIndexBulkLoad);
         }
+        else if (referenceSecondaryIndexBulkLoad != null)
+        {
+            await EmitProgressNotificationAsync(
+                progressToken,
+                processed,
+                files.Count,
+                "Restoring reference query indexes.").ConfigureAwait(false);
+        }
+
+        referenceSecondaryIndexBulkLoad?.Complete(requestToken);
 
         if (ftsBulkLoad != null)
         {

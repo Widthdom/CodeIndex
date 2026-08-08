@@ -738,16 +738,17 @@ public static partial class IndexCommandRunner
             }
         }
 
-        // Graph finalization needs every query index. Recoverable mode restores without
-        // relying on a cross-file transaction, including exception/cancellation unwinding.
-        referenceSecondaryIndexBulkLoad?.Complete(cancellationToken);
         ThrowIfUpdateCancelled();
         mutualRecursionRefreshNeeded |= !options.SymbolsOnly && (removed > 0 || purgedRefs > 0);
         if (mutualRecursionRefreshNeeded)
             writer.RefreshMutualRecursionFlags(
                 cancellationToken,
                 stampReferenceIdentityContractReady:
-                    writer.CSharpFamilyTrustAllowsReferenceIdentityReady());
+                    writer.CSharpFamilyTrustAllowsReferenceIdentityReady(),
+                referenceSecondaryIndexBulkLoad: referenceSecondaryIndexBulkLoad);
+        // Only the three reverse-edge indexes participate in graph finalization. Recoverable
+        // mode restores the remaining query indexes afterwards and repairs all on unwind.
+        referenceSecondaryIndexBulkLoad?.Complete(cancellationToken);
         if (options.MemoryTrace)
             memorySamples.Add(CaptureMemorySample("reference_graph", stopwatch));
         ThrowIfUpdateCancelled();

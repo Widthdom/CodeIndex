@@ -17,6 +17,9 @@ internal sealed class ReferenceSecondaryIndexBulkLoadGuard : IDisposable
         _restoreOnDispose = restoreOnDispose;
         try
         {
+            // Scoped graph planning names deferred indexes explicitly. Force the active
+            // scope onto its full-refresh plan before any of those indexes disappear.
+            writer.RequireFullReferenceGraphRefreshForSecondaryIndexDeferral();
             writer.DropDeferredReferenceSecondaryIndexes(cancellationToken);
             _writer = writer;
         }
@@ -47,6 +50,12 @@ internal sealed class ReferenceSecondaryIndexBulkLoadGuard : IDisposable
     internal static IReadOnlyList<string> IndexNames { get; }
         = Array.AsReadOnly(
             ReferenceSecondaryIndexSql.DeferredDuringBulkLoad
+                .Select(static definition => definition.Name)
+                .ToArray());
+
+    internal static IReadOnlyList<string> GraphFinalizationIndexNames { get; }
+        = Array.AsReadOnly(
+            ReferenceSecondaryIndexSql.GraphFinalizationRequired
                 .Select(static definition => definition.Name)
                 .ToArray());
 
@@ -85,6 +94,15 @@ internal sealed class ReferenceSecondaryIndexBulkLoadGuard : IDisposable
         writer.RestoreDeferredReferenceSecondaryIndexes(cancellationToken);
         _writer = null;
     }
+
+    internal void ReportIdentityRefreshStarted()
+        => _writer?.ReportReferenceSecondaryIndexBulkLoadState("identity_started");
+
+    internal void PrepareForMutualRecursion(CancellationToken cancellationToken = default)
+        => _writer?.RestoreGraphFinalizationRequiredReferenceSecondaryIndexes(cancellationToken);
+
+    internal void ReportMutualRecursionStarted()
+        => _writer?.ReportReferenceSecondaryIndexBulkLoadState("mutual_started");
 
     public void Dispose()
     {
@@ -133,14 +151,40 @@ public partial class DbWriter
     internal void RestoreDeferredReferenceSecondaryIndexes(
         CancellationToken cancellationToken = default)
     {
-        foreach (var definition in ReferenceSecondaryIndexSql.DeferredDuringBulkLoad)
+        // Re-run the graph subset defensively. CREATE IF NOT EXISTS is cheap after a
+        // successful graph transaction and repairs it if a caller abandoned that phase.
+        RestoreReferenceSecondaryIndexes(
+            ReferenceSecondaryIndexSql.GraphFinalizationRequired,
+            cancellationToken);
+        RestoreReferenceSecondaryIndexes(
+            ReferenceSecondaryIndexSql.RemainingQuery,
+            cancellationToken);
+
+        ReportReferenceSecondaryIndexBulkLoadState("restored");
+    }
+
+    internal void RestoreGraphFinalizationRequiredReferenceSecondaryIndexes(
+        CancellationToken cancellationToken = default)
+    {
+        RestoreReferenceSecondaryIndexes(
+            ReferenceSecondaryIndexSql.GraphFinalizationRequired,
+            cancellationToken);
+        ReportReferenceSecondaryIndexBulkLoadState("graph_required_restored");
+    }
+
+    private void RestoreReferenceSecondaryIndexes(
+        IReadOnlyList<ReferenceSecondaryIndexDefinition> definitions,
+        CancellationToken cancellationToken)
+    {
+        foreach (var definition in definitions)
         {
             cancellationToken.ThrowIfCancellationRequested();
             Execute(definition.CreateSql, cancellationToken);
         }
-
-        ReferenceSecondaryIndexBulkLoadStateForTesting?.Invoke(_conn, "restored");
     }
+
+    internal void ReportReferenceSecondaryIndexBulkLoadState(string phase)
+        => ReferenceSecondaryIndexBulkLoadStateForTesting?.Invoke(_conn, phase);
 
     internal void RequireCallerOwnedTransactionForReferenceSecondaryIndexBulkLoad()
         => RequireCallerOwnedTransaction(nameof(ReferenceSecondaryIndexBulkLoadGuard));

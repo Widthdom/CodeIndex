@@ -1026,22 +1026,30 @@ public static partial class IndexCommandRunner
             memorySamples.Add(CaptureMemorySample("extraction", stopwatch));
 
         ThrowIfFullScanCancelled(processed, files.Count);
-        referenceSecondaryIndexBulkLoad?.Complete(cancellationToken);
-        if (!deferCSharpMutationsForIncompleteScan && mutualRecursionRefreshNeeded)
+        if ((!deferCSharpMutationsForIncompleteScan && mutualRecursionRefreshNeeded)
+            || referenceSecondaryIndexBulkLoad != null)
         {
             WriteFullScanJsonLiveness(options, "finalizing reference graph...");
             var referenceGraphHeartbeat = StartFullScanJsonPhaseHeartbeat(options, "finalizing reference graph");
             try
             {
-                writer.RefreshMutualRecursionFlags(
-                    cancellationToken,
-                    stampReferenceIdentityContractReady:
-                        writer.CSharpFamilyTrustAllowsReferenceIdentityReady(
-                            (options.Rebuild || startedWithNoIndexedFiles)
-                            && !scanHadErrors
-                            && errors == 0
-                                ? languageCounts.ContainsKey("csharp")
-                                : null));
+                if (!deferCSharpMutationsForIncompleteScan && mutualRecursionRefreshNeeded)
+                {
+                    writer.RefreshMutualRecursionFlags(
+                        cancellationToken,
+                        stampReferenceIdentityContractReady:
+                            writer.CSharpFamilyTrustAllowsReferenceIdentityReady(
+                                (options.Rebuild || startedWithNoIndexedFiles)
+                                && !scanHadErrors
+                                && errors == 0
+                                    ? languageCounts.ContainsKey("csharp")
+                                    : null),
+                        referenceSecondaryIndexBulkLoad: referenceSecondaryIndexBulkLoad);
+                }
+
+                // Query-only indexes do not participate in graph finalization. Restore them
+                // after mutual-recursion evaluation while this long phase remains heartbeated.
+                referenceSecondaryIndexBulkLoad?.Complete(cancellationToken);
             }
             finally
             {

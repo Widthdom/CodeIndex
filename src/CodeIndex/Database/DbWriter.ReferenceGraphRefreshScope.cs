@@ -534,6 +534,9 @@ public partial class DbWriter
             scope.RequireFullRefresh();
     }
 
+    internal void RequireFullReferenceGraphRefreshForSecondaryIndexDeferral()
+        => RequireFullReferenceGraphRefresh();
+
     private void TrackReferenceGraphFileAtPathBeforeMutation(string path)
     {
         if (!IsTrackingReferenceGraphRefresh)

@@ -21,8 +21,10 @@ public partial class DbWriter
                     AND r.source_symbol_id <> r.target_symbol_id
                     AND EXISTS (
                         SELECT 1
-                        FROM symbol_references AS reverse
-                        WHERE reverse.source_symbol_id = r.target_symbol_id
+                        FROM symbol_references AS reverse INDEXED BY idx_symbol_refs_resolved_source_target_kind
+                        WHERE reverse.source_symbol_id IS NOT NULL
+                          AND reverse.target_symbol_id IS NOT NULL
+                          AND reverse.source_symbol_id = r.target_symbol_id
                           AND reverse.target_symbol_id = r.source_symbol_id
                           AND reverse.reference_kind IN ('call', 'instantiate', 'subscribe', 'unsubscribe', 'razor_event_binding')
                     )
@@ -60,7 +62,7 @@ public partial class DbWriter
                             (r.container_name_folded IS NULL OR r.symbol_name_folded IS NULL)
                             AND EXISTS (
                                 SELECT 1
-                                FROM symbol_references AS reverse
+                                FROM symbol_references AS reverse INDEXED BY idx_symbol_refs_container_nocase_kind
                                 WHERE reverse.source_symbol_id IS NULL
                                   AND reverse.target_symbol_id IS NULL
                                   AND reverse.is_self_reference = 0
@@ -2140,7 +2142,8 @@ public partial class DbWriter
 
     internal void RefreshMutualRecursionFlags(
         CancellationToken cancellationToken = default,
-        bool? stampReferenceIdentityContractReady = null)
+        bool? stampReferenceIdentityContractReady = null,
+        ReferenceSecondaryIndexBulkLoadGuard? referenceSecondaryIndexBulkLoad = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         MutualRecursionRefreshForTesting?.Invoke();
@@ -2211,11 +2214,6 @@ public partial class DbWriter
                 refreshPlan.UseFullRefresh,
                 cancellationToken);
             refreshIdentityCommand = RentCommand(refreshIdentitySql, static _ => { });
-            refreshMutualCommand = RentCommand(
-                refreshPlan.UseFullRefresh
-                    ? RefreshMutualRecursionFlagsSql
-                    : RefreshScopedMutualRecursionFlagsSql,
-                static _ => { });
             // Reconcile the marker inside the same transaction, but before the graph refresh
             // so the public SQLite changes() result continues to describe recursion updates.
             // High-level indexing defers v7 while untouched legacy C# family rows remain.
@@ -2226,6 +2224,7 @@ public partial class DbWriter
             else
                 ClearReferenceIdentityContractReady();
             cancellationToken.ThrowIfCancellationRequested();
+            referenceSecondaryIndexBulkLoad?.ReportIdentityRefreshStarted();
             refreshIdentityCommand.ExecuteNonQuery();
             cancellationToken.ThrowIfCancellationRequested();
             // Resolution changes alter the default C# common-call hotspot projection even
@@ -2236,6 +2235,14 @@ public partial class DbWriter
             // 対象 source file の aggregate を再集計する。
             RefreshHotspotReferenceCounts(hotspotReferenceFileIds, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
+            referenceSecondaryIndexBulkLoad?.PrepareForMutualRecursion(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            referenceSecondaryIndexBulkLoad?.ReportMutualRecursionStarted();
+            refreshMutualCommand = RentCommand(
+                refreshPlan.UseFullRefresh
+                    ? RefreshMutualRecursionFlagsSql
+                    : RefreshScopedMutualRecursionFlagsSql,
+                static _ => { });
             refreshMutualCommand.ExecuteNonQuery();
             cancellationToken.ThrowIfCancellationRequested();
             if (graphScope != null)

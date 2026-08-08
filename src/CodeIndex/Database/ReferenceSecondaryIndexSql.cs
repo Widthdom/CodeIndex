@@ -8,7 +8,8 @@ internal readonly record struct ReferenceSecondaryIndexDefinition(
 /// <summary>
 /// Canonical DDL for secondary indexes on <c>symbol_references</c>.
 /// The raw-persistence set stays available while bulk extraction is writing rows; the
-/// deferred set is safe to rebuild once, before reference-graph finalization begins.
+/// graph-finalization set is restored immediately before mutual-recursion evaluation, and
+/// the remaining query set is restored after graph finalization completes.
 /// </summary>
 internal static class ReferenceSecondaryIndexSql
 {
@@ -39,7 +40,28 @@ internal static class ReferenceSecondaryIndexSql
             "CREATE INDEX IF NOT EXISTS idx_symbol_refs_reference_line ON symbol_references(reference_line_id)"),
     ];
 
-    private static readonly ReferenceSecondaryIndexDefinition[] DeferredDuringBulkLoadDefinitions =
+    private static readonly ReferenceSecondaryIndexDefinition[] GraphFinalizationRequiredDefinitions =
+    [
+        // Mutual-recursion refresh is the first post-persistence phase that needs reverse
+        // unresolved-edge probes. Keep the partial predicate aligned with its explicit plan.
+        new(
+            "idx_symbol_refs_unresolved_mutual_folded",
+            "CREATE INDEX IF NOT EXISTS idx_symbol_refs_unresolved_mutual_folded ON symbol_references(container_name_folded, symbol_name_folded) WHERE source_symbol_id IS NULL AND target_symbol_id IS NULL AND is_self_reference = 0 AND container_name_folded IS NOT NULL AND container_name_folded <> '' AND symbol_name_folded IS NOT NULL AND symbol_name_folded <> '' AND reference_kind IN ('call', 'instantiate', 'subscribe', 'unsubscribe', 'razor_event_binding')",
+            RequiresFoldedColumns: true),
+        // Legacy rows can lack folded values until their backfill contract is authoritative.
+        // Retain the NOCASE reverse-call path during mutual-recursion finalization.
+        new(
+            "idx_symbol_refs_container_nocase_kind",
+            "CREATE INDEX IF NOT EXISTS idx_symbol_refs_container_nocase_kind ON symbol_references(container_name COLLATE NOCASE, reference_kind)"),
+        // Mutual-recursion refresh probes the reverse of each resolved edge. Restrict the
+        // covering index to rows that can participate so unresolved rows add no steady-state
+        // storage cost.
+        new(
+            "idx_symbol_refs_resolved_source_target_kind",
+            "CREATE INDEX IF NOT EXISTS idx_symbol_refs_resolved_source_target_kind ON symbol_references(source_symbol_id, target_symbol_id, reference_kind) WHERE source_symbol_id IS NOT NULL AND target_symbol_id IS NOT NULL"),
+    ];
+
+    private static readonly ReferenceSecondaryIndexDefinition[] RemainingQueryDefinitions =
     [
         new(
             "idx_symbol_refs_container_kind",
@@ -50,10 +72,6 @@ internal static class ReferenceSecondaryIndexSql
         new(
             "idx_symbol_refs_name_file",
             "CREATE INDEX IF NOT EXISTS idx_symbol_refs_name_file ON symbol_references(symbol_name, file_id)"),
-        new(
-            "idx_symbol_refs_unresolved_mutual_folded",
-            "CREATE INDEX IF NOT EXISTS idx_symbol_refs_unresolved_mutual_folded ON symbol_references(container_name_folded, symbol_name_folded) WHERE source_symbol_id IS NULL AND target_symbol_id IS NULL AND is_self_reference = 0 AND container_name_folded IS NOT NULL AND container_name_folded <> '' AND symbol_name_folded IS NOT NULL AND symbol_name_folded <> '' AND reference_kind IN ('call', 'instantiate', 'subscribe', 'unsubscribe', 'razor_event_binding')",
-            RequiresFoldedColumns: true),
         // NOCASE indexes keep exact reference/caller/callee queries bounded on legacy or
         // partially migrated databases whose Unicode-folded columns are not authoritative.
         new(
@@ -62,9 +80,6 @@ internal static class ReferenceSecondaryIndexSql
         new(
             "idx_symbol_refs_name_nocase_file",
             "CREATE INDEX IF NOT EXISTS idx_symbol_refs_name_nocase_file ON symbol_references(symbol_name COLLATE NOCASE, file_id)"),
-        new(
-            "idx_symbol_refs_container_nocase_kind",
-            "CREATE INDEX IF NOT EXISTS idx_symbol_refs_container_nocase_kind ON symbol_references(container_name COLLATE NOCASE, reference_kind)"),
         // Folded indexes are the authoritative Unicode-aware exact-match paths once the
         // folded-name readiness contract is stamped.
         new(
@@ -85,12 +100,12 @@ internal static class ReferenceSecondaryIndexSql
         new(
             "idx_symbol_refs_target_symbol",
             "CREATE INDEX IF NOT EXISTS idx_symbol_refs_target_symbol ON symbol_references(target_symbol_id)"),
-        // Mutual-recursion refresh probes the reverse of each resolved edge. Restrict the
-        // covering index to rows that can participate so unresolved rows add no steady-state
-        // storage cost.
-        new(
-            "idx_symbol_refs_resolved_source_target_kind",
-            "CREATE INDEX IF NOT EXISTS idx_symbol_refs_resolved_source_target_kind ON symbol_references(source_symbol_id, target_symbol_id, reference_kind) WHERE source_symbol_id IS NOT NULL AND target_symbol_id IS NOT NULL"),
+    ];
+
+    private static readonly ReferenceSecondaryIndexDefinition[] DeferredDuringBulkLoadDefinitions =
+    [
+        .. GraphFinalizationRequiredDefinitions,
+        .. RemainingQueryDefinitions,
     ];
 
     internal static IReadOnlyList<ReferenceSecondaryIndexDefinition> RawPersistenceRequired { get; }
@@ -101,6 +116,12 @@ internal static class ReferenceSecondaryIndexSql
 
     internal static IReadOnlyList<ReferenceSecondaryIndexDefinition> DeferredDuringBulkLoad { get; }
         = Array.AsReadOnly(DeferredDuringBulkLoadDefinitions);
+
+    internal static IReadOnlyList<ReferenceSecondaryIndexDefinition> GraphFinalizationRequired { get; }
+        = Array.AsReadOnly(GraphFinalizationRequiredDefinitions);
+
+    internal static IReadOnlyList<ReferenceSecondaryIndexDefinition> RemainingQuery { get; }
+        = Array.AsReadOnly(RemainingQueryDefinitions);
 
     internal static IEnumerable<ReferenceSecondaryIndexDefinition> All
     {

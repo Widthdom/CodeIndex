@@ -269,12 +269,16 @@ cache so large indexes do not rebuild equivalent SQLite commands per file.
 Fresh CLI scans and explicit rebuilds defer the query and graph secondary
 indexes on `symbol_references` until raw reference persistence completes. The
 file and reference-line maintenance indexes remain available during the load,
-and the deferred set is restored once before reference-graph finalization. CLI
-owns this DDL inside the outer scan transaction so cancellation or failure rolls
-the schema back atomically. MCP uses the same optimization only when indexing
-starts from an empty database and restores the indexes on both completion and
-recoverable disposal. Schema initialization and read repair must use the same
-canonical index catalog so every path converges on an identical final schema.
+while identity and resolution finalization continues without query indexes. The
+guard forces any active dirty graph scope onto its full-refresh plan before the
+indexes disappear. Immediately before mutual-recursion evaluation, its graph
+transaction restores only the unresolved-folded, legacy NOCASE, and resolved
+reverse-edge indexes; the remaining query indexes return after the mutual update.
+CLI owns this DDL inside the outer scan transaction so cancellation or failure
+rolls the schema back atomically. MCP uses the same recoverable lifecycle whenever
+its established dirty-byte policy selects FTS bulk loading, and restores every
+index on completion or disposal. Schema initialization and read repair must use
+the same canonical index catalog so every path converges on an identical schema.
 
 Reference context text is normalized into `reference_lines`; the legacy
 `symbol_references.context` column is therefore written as a SQL `NULL` literal
@@ -289,8 +293,10 @@ Use the same secondary-index deferral for an existing-database full scan when
 the established FTS dirty-byte policy selects bulk loading. Scoped updates have
 no authoritative workspace-wide byte estimate, so they use a conservative
 recoverable boundary: at least 64 targets and at least 60% of the indexed file
-count. Restore every query index before graph finalization. Small scoped updates
-must keep them in place so a fixed rebuild cost does not dominate the update.
+count. Keep the query-only set deferred through identity and resolution work,
+restore the three reverse-edge indexes immediately before mutual recursion, then
+restore the remainder after that update. Small scoped updates must keep every
+index in place so a fixed rebuild cost does not dominate the update.
 
 C# reference-graph finalization materializes reference arity, invocation arity,
 member-receiver, definition arity, constructor arity, and value-type facts once
@@ -3860,11 +3866,14 @@ value を再設定します。大規模 index で同じ SQLite command を file 
 
 fresh な CLI scan と明示的 rebuild は、raw reference の永続化が完了するまで
 `symbol_references` の query / graph 用 secondary index を遅延します。load 中も file と
-reference-line の保守用 index は残し、遅延した集合は reference-graph finalization の前に
-1 回だけ復元します。CLI はこの DDL を scan 全体の外側 transaction 内で所有するため、
-cancellation や失敗時には schema も原子的に rollback されます。MCP は空 database から
-開始する場合だけ同じ最適化を使い、正常完了時と recoverable な dispose 時の両方で index を
-復元します。schema initialization と read repair は同じ canonical index catalog を使い、
+reference-line の保守用 index は残し、identity / resolution finalization 中も query index は
+遅延したままにします。guard は index を外す前に active な dirty graph scope を full refresh へ
+昇格します。mutual-recursion 評価の直前に、その graph transaction 内で unresolved-folded、
+legacy NOCASE、resolved reverse-edge の3本だけを復元し、残りの query index は mutual update
+後に戻します。CLI はこの DDL を scan 全体の外側 transaction 内で所有するため、cancellation
+や失敗時には schema も原子的に rollback されます。MCP は既定の dirty-byte policy が FTS bulk
+load を選ぶ場合に同じ recoverable lifecycle を使い、正常完了時と dispose 時の両方で全 index
+を復元します。schema initialization と read repair は同じ canonical index catalog を使い、
 すべての経路が同一の最終 schema に収束する状態を保ってください。
 
 reference の context text は `reference_lines` へ正規化されるため、legacy な
@@ -3878,8 +3887,9 @@ atomic file window を含む全経路でこの契約を維持してください�
 既存DBの full scan でも、既定の FTS dirty-byte policy が bulk load を選ぶ場合は同じ secondary
 index 退避を使います。scoped update には workspace 全体の authoritative な byte estimate が
 ないため、64 target 以上かつ indexed file 数の60%以上という保守的な recoverable 境界を
-使います。graph finalization 前には全 query index を復元してください。小規模 scoped update は
-固定的な再構築 cost が更新時間を支配しないよう、index を維持します。
+使います。identity / resolution 中は query-only 集合を遅延したままにし、mutual recursion の
+直前に reverse-edge 用3本を復元して、その update 後に残りを戻してください。小規模 scoped
+update は固定的な再構築 cost が更新時間を支配しないよう、全 index を維持します。
 
 C# の reference-graph finalization は、reference arity、invocation arity、member receiver、
 definition arity、constructor arity、value-type の fact を、対象 row ごとに TEMP table へ1回だけ
