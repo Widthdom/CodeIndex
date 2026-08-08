@@ -152,20 +152,35 @@ public partial class DbWriter
                 "full",
                 RefreshCSharpReferenceFactsFullSql + "\n"
                 + RefreshCSharpSymbolFactsFullSql + "\n"
+                + RefreshCSharpTypeIdentityFactsSql + "\n"
+                + RefreshCSharpConstructorIdentityFactsSql + "\n"
                 + NormalizeCSharpPropertyReceiverReferencesFullSql + "\n"
                 + RefreshReferenceCandidatesSql),
             (
                 "scoped",
                 RefreshCSharpReferenceFactsScopedSql + "\n"
                 + RefreshCSharpSymbolFactsScopedSql + "\n"
+                + RefreshCSharpTypeIdentityFactsSql + "\n"
+                + RefreshCSharpConstructorIdentityFactsSql + "\n"
                 + NormalizeCSharpPropertyReceiverReferencesScopedSql + "\n"
                 + RefreshScopedReferenceCandidatesSql),
             (
                 "retained",
                 RefreshCSharpReferenceFactsFullSql + "\n"
                 + RefreshCSharpSymbolFactsFullSql + "\n"
+                + RefreshCSharpTypeIdentityFactsSql + "\n"
+                + RefreshCSharpConstructorIdentityFactsSql + "\n"
                 + NormalizeCSharpPropertyReceiverReferencesFullSql + "\n"
                 + RefreshReferenceCandidatesSql),
+        ];
+
+    internal static IReadOnlyList<(string Scope, string Sql)>
+        CSharpGraphCandidateSqlForTesting
+        =>
+        [
+            ("full", RefreshReferenceCandidatesSql),
+            ("scoped", RefreshScopedReferenceCandidatesSql),
+            ("retained", RefreshReferenceCandidatesSql),
         ];
 
     internal static IReadOnlyList<string> ScopedReferenceGraphUpdateStatementsForTesting

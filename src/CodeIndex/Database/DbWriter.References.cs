@@ -143,6 +143,18 @@ public partial class DbWriter
             definition_type_arity       INTEGER,
             constructor_parameter_count INTEGER,
             is_value_type               INTEGER NOT NULL
+        ) WITHOUT ROWID;
+
+        CREATE TEMP TABLE IF NOT EXISTS csharp_type_identity_facts (
+            symbol_id                    INTEGER NOT NULL PRIMARY KEY,
+            unprefixed_type_identity     TEXT COLLATE BINARY,
+            type_identity                TEXT COLLATE BINARY
+        ) WITHOUT ROWID;
+
+        CREATE TEMP TABLE IF NOT EXISTS csharp_constructor_identity_facts (
+            symbol_id     INTEGER NOT NULL PRIMARY KEY,
+            type_identity TEXT COLLATE BINARY,
+            type_arity    INTEGER
         ) WITHOUT ROWID
         """;
 
@@ -315,95 +327,174 @@ public partial class DbWriter
             END
             """;
 
-    private static string BuildCSharpTypeIdentitySql(string symbolAlias, string fileAlias)
+    private static string BuildCSharpTypeIdentityPrefixSql(string symbolAlias, string fileAlias)
         => $"""
-            (
-                COALESCE(
-                    {BuildCSharpProjectPrefixSql(symbolAlias)},
-                    CASE
-                        WHEN INSTR(
-                                 ' ' || LOWER(
+            COALESCE(
+                {BuildCSharpProjectPrefixSql(symbolAlias)},
+                CASE
+                    WHEN INSTR(
+                             ' ' || LOWER(
+                                 REPLACE(
                                      REPLACE(
                                          REPLACE(
-                                             REPLACE(
-                                                 REPLACE(COALESCE({symbolAlias}.signature, ''), '(', ' '),
-                                                 ')',
-                                                 ' '),
-                                             ':',
+                                             REPLACE(COALESCE({symbolAlias}.signature, ''), '(', ' '),
+                                             ')',
                                              ' '),
-                                         CHAR(9),
-                                         ' ')) || ' ',
-                                 ' partial ') > 0
-                            THEN ''
-                        ELSE {fileAlias}.path || char(31)
-                    END
-                ) ||
-                {BuildCSharpUnprefixedTypeIdentitySql(symbolAlias)} ||
-                char(31) ||
-                COALESCE(
-                    {BuildCSharpDefinitionTypeAritySql(symbolAlias)},
-                    -1)
+                                         ':',
+                                         ' '),
+                                     CHAR(9),
+                                     ' ')) || ' ',
+                             ' partial ') > 0
+                        THEN ''
+                    ELSE {fileAlias}.path || char(31)
+                END
             )
             """;
 
-    private static string BuildCSharpConstructorIdentitySql(string symbolAlias, string fileAlias)
+    private static readonly string RefreshCSharpTypeIdentityFactsSql = $"""
+        DELETE FROM temp.csharp_type_identity_facts;
+
+        WITH type_identity_parts(
+            symbol_id,
+            identity_prefix,
+            unprefixed_type_identity,
+            definition_type_arity) AS MATERIALIZED (
+            SELECT symbol.id,
+                   {BuildCSharpTypeIdentityPrefixSql("symbol", "symbol_file")},
+                   {BuildCSharpUnprefixedTypeIdentitySql("symbol")},
+                   symbol_fact.definition_type_arity
+            FROM temp.csharp_symbol_facts AS symbol_fact
+            JOIN symbols AS symbol
+              ON symbol.id = symbol_fact.symbol_id
+            JOIN files AS symbol_file
+              ON symbol_file.id = symbol.file_id
+             AND symbol_file.lang = 'csharp'
+            WHERE symbol.kind IN (
+                'class',
+                'struct',
+                'interface',
+                'record',
+                'enum',
+                'delegate')
+        )
+        INSERT INTO temp.csharp_type_identity_facts(
+            symbol_id,
+            unprefixed_type_identity,
+            type_identity)
+        SELECT symbol_id,
+               unprefixed_type_identity,
+               identity_prefix ||
+                   unprefixed_type_identity ||
+                   char(31) ||
+                   COALESCE(definition_type_arity, -1)
+        FROM type_identity_parts;
+        """;
+
+    private static readonly string RefreshCSharpConstructorIdentityFactsSql = $"""
+        DELETE FROM temp.csharp_constructor_identity_facts;
+
+        WITH ranked_constructor_owners(
+            constructor_symbol_id,
+            type_identity,
+            type_arity,
+            owner_rank) AS MATERIALIZED (
+            SELECT constructor.id,
+                   constructor_type_identity.type_identity,
+                   constructor_type_fact.definition_type_arity,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY constructor.id
+                       ORDER BY
+                           COALESCE(constructor_type.end_line, constructor_type.line)
+                               - COALESCE(constructor_type.start_line, constructor_type.line),
+                           COALESCE(constructor_type.start_line, constructor_type.line) DESC,
+                           constructor_type.id)
+            FROM temp.csharp_symbol_facts AS constructor_fact
+            JOIN symbols AS constructor
+              ON constructor.id = constructor_fact.symbol_id
+            JOIN files AS constructor_file
+              ON constructor_file.id = constructor.file_id
+             AND constructor_file.lang = 'csharp'
+            JOIN symbols AS constructor_type
+              ON constructor_type.file_id = constructor.file_id
+             AND constructor_type.kind IN ('class', 'struct', 'record')
+             AND COALESCE(constructor.start_line, constructor.line)
+                 BETWEEN COALESCE(constructor_type.start_line, constructor_type.line)
+                     AND COALESCE(constructor_type.end_line, constructor_type.line)
+            JOIN temp.csharp_type_identity_facts AS constructor_type_identity
+              ON constructor_type_identity.symbol_id = constructor_type.id
+             AND constructor_type_identity.unprefixed_type_identity =
+                 COALESCE(
+                     NULLIF(constructor.container_qualified_name, ''),
+                     NULLIF(constructor.container_name, ''),
+                     constructor.name) COLLATE BINARY
+            JOIN temp.csharp_symbol_facts AS constructor_type_fact
+              ON constructor_type_fact.symbol_id = constructor_type.id
+            WHERE constructor.kind = 'function'
+              AND constructor_fact.constructor_parameter_count IS NOT NULL
+        )
+        INSERT INTO temp.csharp_constructor_identity_facts(
+            symbol_id,
+            type_identity,
+            type_arity)
+        SELECT constructor_symbol_id,
+               type_identity,
+               type_arity
+        FROM ranked_constructor_owners
+        WHERE owner_rank = 1;
+
+        INSERT OR IGNORE INTO temp.csharp_constructor_identity_facts(
+            symbol_id,
+            type_identity,
+            type_arity)
+        SELECT constructor.id,
+               COALESCE(
+                   {BuildCSharpProjectPrefixSql("constructor")},
+                   constructor_file.path || char(31)) ||
+               COALESCE(
+                   NULLIF(constructor.container_qualified_name, ''),
+                   NULLIF(constructor.container_name, ''),
+                   constructor.name) ||
+               char(31) || '-1',
+               NULL
+        FROM temp.csharp_symbol_facts AS constructor_fact
+        JOIN symbols AS constructor
+          ON constructor.id = constructor_fact.symbol_id
+        JOIN files AS constructor_file
+          ON constructor_file.id = constructor.file_id
+         AND constructor_file.lang = 'csharp'
+        WHERE constructor.kind = 'function'
+          AND constructor_fact.constructor_parameter_count IS NOT NULL
+          AND NOT EXISTS (
+              SELECT 1
+              FROM temp.csharp_constructor_identity_facts AS existing
+              WHERE existing.symbol_id = constructor.id
+          );
+        """;
+
+    private static string BuildCSharpTypeIdentitySql(string symbolAlias)
         => $"""
-            COALESCE(
-                (
-                    SELECT {BuildCSharpTypeIdentitySql("constructor_type", "constructor_type_file")}
-                    FROM symbols AS constructor_type
-                    JOIN files AS constructor_type_file
-                      ON constructor_type_file.id = constructor_type.file_id
-                     AND constructor_type_file.lang = 'csharp'
-                    WHERE constructor_type.file_id = {symbolAlias}.file_id
-                      AND constructor_type.kind IN ('class', 'struct', 'record')
-                      AND COALESCE({symbolAlias}.start_line, {symbolAlias}.line)
-                          BETWEEN COALESCE(constructor_type.start_line, constructor_type.line)
-                              AND COALESCE(constructor_type.end_line, constructor_type.line)
-                      AND {BuildCSharpUnprefixedTypeIdentitySql("constructor_type")}
-                          = COALESCE(
-                              NULLIF({symbolAlias}.container_qualified_name, ''),
-                              NULLIF({symbolAlias}.container_name, ''),
-                              {symbolAlias}.name) COLLATE BINARY
-                    ORDER BY
-                        COALESCE(constructor_type.end_line, constructor_type.line)
-                            - COALESCE(constructor_type.start_line, constructor_type.line),
-                        COALESCE(constructor_type.start_line, constructor_type.line) DESC,
-                        constructor_type.id
-                    LIMIT 1
-                ),
-                COALESCE(
-                    {BuildCSharpProjectPrefixSql(symbolAlias)},
-                    {fileAlias}.path || char(31)) ||
-                COALESCE(
-                    NULLIF({symbolAlias}.container_qualified_name, ''),
-                    NULLIF({symbolAlias}.container_name, ''),
-                    {symbolAlias}.name) ||
-                char(31) || '-1'
+            (
+                SELECT type_identity_fact.type_identity
+                FROM temp.csharp_type_identity_facts AS type_identity_fact
+                WHERE type_identity_fact.symbol_id = {symbolAlias}.id
+            )
+            """;
+
+    private static string BuildCSharpConstructorIdentitySql(string symbolAlias)
+        => $"""
+            (
+                SELECT constructor_identity_fact.type_identity
+                FROM temp.csharp_constructor_identity_facts AS constructor_identity_fact
+                WHERE constructor_identity_fact.symbol_id = {symbolAlias}.id
             )
             """;
 
     private static string BuildCSharpConstructorTypeAritySql(string symbolAlias)
         => $"""
             (
-                SELECT {BuildCSharpDefinitionTypeAritySql("constructor_type")}
-                FROM symbols AS constructor_type
-                WHERE constructor_type.file_id = {symbolAlias}.file_id
-                  AND constructor_type.kind IN ('class', 'struct', 'record')
-                  AND COALESCE({symbolAlias}.start_line, {symbolAlias}.line)
-                      BETWEEN COALESCE(constructor_type.start_line, constructor_type.line)
-                          AND COALESCE(constructor_type.end_line, constructor_type.line)
-                  AND {BuildCSharpUnprefixedTypeIdentitySql("constructor_type")}
-                      = COALESCE(
-                          NULLIF({symbolAlias}.container_qualified_name, ''),
-                          NULLIF({symbolAlias}.container_name, ''),
-                          {symbolAlias}.name) COLLATE BINARY
-                ORDER BY
-                    COALESCE(constructor_type.end_line, constructor_type.line)
-                        - COALESCE(constructor_type.start_line, constructor_type.line),
-                    COALESCE(constructor_type.start_line, constructor_type.line) DESC,
-                    constructor_type.id
-                LIMIT 1
+                SELECT constructor_identity_fact.type_arity
+                FROM temp.csharp_constructor_identity_facts AS constructor_identity_fact
+                WHERE constructor_identity_fact.symbol_id = {symbolAlias}.id
             )
             """;
 
@@ -465,8 +556,8 @@ public partial class DbWriter
                                'record',
                                'enum',
                                'delegate')
-                           AND {BuildCSharpTypeIdentitySql("representative", "representative_file")}
-                               = {BuildCSharpTypeIdentitySql("s", "target_file")} COLLATE BINARY
+                           AND {BuildCSharpTypeIdentitySql("representative")}
+                               = {BuildCSharpTypeIdentitySql("s")} COLLATE BINARY
                          ORDER BY representative_file.path,
                                   COALESCE(representative.start_line, representative.line),
                                   representative.id
@@ -510,8 +601,8 @@ public partial class DbWriter
                                        explicit_constructor.name COLLATE BINARY
                                    AND {BuildCSharpConstructorParameterCountSql("explicit_constructor")}
                                        IS NOT NULL
-                                   AND {BuildCSharpConstructorIdentitySql("explicit_constructor", "constructor_file")}
-                                       = {BuildCSharpTypeIdentitySql("s", "target_file")} COLLATE BINARY
+                                   AND {BuildCSharpConstructorIdentitySql("explicit_constructor")}
+                                       = {BuildCSharpTypeIdentitySql("s")} COLLATE BINARY
                              )
                          )
                          OR (
@@ -533,8 +624,8 @@ public partial class DbWriter
                                        explicit_zero_constructor.name COLLATE BINARY
                                    AND {BuildCSharpConstructorParameterCountSql("explicit_zero_constructor")}
                                        = 0
-                                   AND {BuildCSharpConstructorIdentitySql("explicit_zero_constructor", "zero_constructor_file")}
-                                       = {BuildCSharpTypeIdentitySql("s", "target_file")} COLLATE BINARY
+                                   AND {BuildCSharpConstructorIdentitySql("explicit_zero_constructor")}
+                                       = {BuildCSharpTypeIdentitySql("s")} COLLATE BINARY
                              )
                          )
                      ) THEN 1
@@ -1092,8 +1183,8 @@ public partial class DbWriter
                     AND other_type.kind IN ('class', 'struct', 'record', 'interface', 'enum', 'delegate')
                     AND {BuildCSharpDefinitionTypeAritySql("other_type")}
                         = {BuildCSharpDefinitionTypeAritySql("type_symbol")}
-                    AND {BuildCSharpTypeIdentitySql("other_type", "other_type_file")}
-                        <> {BuildCSharpTypeIdentitySql("type_symbol", "target_file")} COLLATE BINARY
+                    AND {BuildCSharpTypeIdentitySql("other_type")}
+                        <> {BuildCSharpTypeIdentitySql("type_symbol")} COLLATE BINARY
               )
         ) AS unique_target
           ON unique_target.name_folded = r.symbol_name_folded
@@ -1217,7 +1308,7 @@ public partial class DbWriter
                 SELECT s.name_folded,
                        s.name,
                        {BuildCSharpDefinitionTypeAritySql("s")} AS type_arity,
-                       MIN({BuildCSharpTypeIdentitySql("s", "target_file")}) AS type_identity
+                       MIN({BuildCSharpTypeIdentitySql("s")}) AS type_identity
                 FROM symbols AS s
                 JOIN files AS target_file ON target_file.id = s.file_id
                 WHERE target_file.lang = 'csharp'
@@ -1226,7 +1317,7 @@ public partial class DbWriter
                 GROUP BY s.name_folded,
                          s.name,
                          {BuildCSharpDefinitionTypeAritySql("s")}
-                HAVING COUNT(DISTINCT {BuildCSharpTypeIdentitySql("s", "target_file")}) = 1
+                HAVING COUNT(DISTINCT {BuildCSharpTypeIdentitySql("s")}) = 1
             ) AS unique_type
             JOIN symbols AS candidate
               ON candidate.name_folded = unique_type.name_folded
@@ -1238,12 +1329,12 @@ public partial class DbWriter
                 candidate.kind = 'function'
                     AND candidate.container_name = candidate.name COLLATE BINARY
                     AND {BuildCSharpConstructorParameterCountSql("candidate")} IS NOT NULL
-                    AND {BuildCSharpConstructorIdentitySql("candidate", "candidate_file")}
+                    AND {BuildCSharpConstructorIdentitySql("candidate")}
                         = unique_type.type_identity COLLATE BINARY
                 )
                OR (
                     candidate.kind IN ('class', 'struct', 'record', 'enum', 'delegate')
-                    AND {BuildCSharpTypeIdentitySql("candidate", "candidate_file")}
+                    AND {BuildCSharpTypeIdentitySql("candidate")}
                         = unique_type.type_identity COLLATE BINARY
                     AND candidate.id = (
                         SELECT representative.id
@@ -1259,7 +1350,7 @@ public partial class DbWriter
                               'record',
                               'enum',
                               'delegate')
-                          AND {BuildCSharpTypeIdentitySql("representative", "representative_file")}
+                          AND {BuildCSharpTypeIdentitySql("representative")}
                               = unique_type.type_identity COLLATE BINARY
                         ORDER BY representative_file.path,
                                  COALESCE(representative.start_line, representative.line),
@@ -1323,7 +1414,7 @@ public partial class DbWriter
                             explicit_constructor.name COLLATE BINARY
                         AND {BuildCSharpConstructorParameterCountSql("explicit_constructor")}
                             IS NOT NULL
-                        AND {BuildCSharpConstructorIdentitySql("explicit_constructor", "constructor_file")}
+                        AND {BuildCSharpConstructorIdentitySql("explicit_constructor")}
                             = unique_target.type_identity COLLATE BINARY
                   )
               )
@@ -1346,7 +1437,7 @@ public partial class DbWriter
                             explicit_zero_constructor.name COLLATE BINARY
                         AND {BuildCSharpConstructorParameterCountSql("explicit_zero_constructor")}
                             = 0
-                        AND {BuildCSharpConstructorIdentitySql("explicit_zero_constructor", "zero_constructor_file")}
+                        AND {BuildCSharpConstructorIdentitySql("explicit_zero_constructor")}
                             = unique_target.type_identity COLLATE BINARY
                   )
               )
@@ -1441,6 +1532,8 @@ public partial class DbWriter
             RefreshReferenceSourceSymbolsFullSql + ";\n" +
             RefreshCSharpReferenceFactsFullSql + "\n" +
             RefreshCSharpSymbolFactsFullSql + "\n" +
+            RefreshCSharpTypeIdentityFactsSql + "\n" +
+            RefreshCSharpConstructorIdentityFactsSql + "\n" +
             NormalizeCSharpPropertyReceiverReferencesFullSql + "\n" +
             RefreshReferenceUniqueFamiliesSql + "\n" +
             RefreshReferenceCandidatesSql + "\n" +
@@ -2186,6 +2279,8 @@ public partial class DbWriter
                     ? RefreshReferenceSourceSymbolsDifferentialSql + ";\n" +
                       RefreshCSharpReferenceFactsFullSql + "\n" +
                       RefreshCSharpSymbolFactsFullSql + "\n" +
+                      RefreshCSharpTypeIdentityFactsSql + "\n" +
+                      RefreshCSharpConstructorIdentityFactsSql + "\n" +
                       NormalizeCSharpPropertyReceiverReferencesFullSql + "\n" +
                       RefreshReferenceUniqueFamiliesSql + "\n" +
                       RefreshReferenceCandidatesSql + "\n" +
@@ -2193,6 +2288,8 @@ public partial class DbWriter
                     : RefreshReferenceSourceSymbolsFullSql + ";\n" +
                       RefreshCSharpReferenceFactsFullSql + "\n" +
                       RefreshCSharpSymbolFactsFullSql + "\n" +
+                      RefreshCSharpTypeIdentityFactsSql + "\n" +
+                      RefreshCSharpConstructorIdentityFactsSql + "\n" +
                       NormalizeCSharpPropertyReceiverReferencesFullSql + "\n" +
                       RefreshReferenceUniqueFamiliesSql + "\n" +
                       RefreshReferenceCandidatesSql + "\n" +
@@ -2204,6 +2301,8 @@ public partial class DbWriter
                 refreshIdentitySql = RefreshScopedReferenceSourceSymbolsSql + "\n" +
                                      RefreshCSharpReferenceFactsScopedSql + "\n" +
                                      RefreshCSharpSymbolFactsScopedSql + "\n" +
+                                     RefreshCSharpTypeIdentityFactsSql + "\n" +
+                                     RefreshCSharpConstructorIdentityFactsSql + "\n" +
                                      NormalizeCSharpPropertyReceiverReferencesScopedSql + "\n" +
                                      RefreshScopedReferenceUniqueFamiliesSql + "\n" +
                                      RefreshScopedReferenceCandidatesSql + "\n" +

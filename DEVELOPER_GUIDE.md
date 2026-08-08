@@ -301,10 +301,14 @@ index in place so a fixed rebuild cost does not dominate the update.
 C# reference-graph finalization materializes reference arity, invocation arity,
 member-receiver, definition arity, constructor arity, and value-type facts once
 per applicable row in TEMP tables. Full, scoped, and retained-graph rebuilds must
-populate both reference and symbol facts before property-receiver normalization,
-candidate construction, and resolution. Keep candidate SQL on primary-key fact
-lookups instead of re-entering managed SQLite scalar functions for every join
-candidate; scoped refreshes must limit symbol facts to their lookup-name set.
+then materialize project/file-local type identities and constructor-owner identity
+and arity facts from those symbol facts. Populate all four fact tables before
+property-receiver normalization, candidate construction, and resolution. Keep
+candidate SQL on primary-key fact lookups instead of rebuilding identity strings,
+rescanning constructor-owner ranges, or re-entering managed SQLite scalar functions
+for every join candidate. Scoped refreshes must limit symbol facts to their
+lookup-name set and derive identity facts from that bounded population; full and
+retained rebuilds use the complete C# symbol-fact population.
 
 Repository-wide incremental scans load stat-reuse candidates with one SQLite
 statement before the C# contract prepass and parallel extraction. Each candidate
@@ -3893,10 +3897,13 @@ update は固定的な再構築 cost が更新時間を支配しないよう、�
 
 C# の reference-graph finalization は、reference arity、invocation arity、member receiver、
 definition arity、constructor arity、value-type の fact を、対象 row ごとに TEMP table へ1回だけ
-materialize します。full / scoped / retained graph rebuild の全経路で reference と symbol の両 fact を
+materialize し、その symbol fact から project / file-local type identity と constructor-owner の identity / arity
+も materialize します。full / scoped / retained graph rebuild の全経路で4つの fact tableを
 property-receiver normalization、candidate 構築、resolution より前に投入してください。candidate SQL は
-join candidate ごとに managed SQLite scalar function へ再入せず、primary-key の fact lookup を使い、
-scoped refresh の symbol fact は lookup-name 集合だけに限定します。
+join candidate ごとに identity 文字列を再構築したり constructor-owner range を再走査したり managed SQLite
+scalar function へ再入したりせず、primary-key の fact lookup を使います。scoped refresh の symbol fact は
+lookup-name 集合だけに限定し、identity fact もその限定済み集合から作ります。full / retained rebuild は
+C# symbol fact の全対象を使います。
 
 リポジトリ全体の incremental scan は、C# contract prepass と parallel extraction の前に
 stat-reuse 候補を 1 回の SQLite statement で読みます。各候補は引き続き最新の filesystem
