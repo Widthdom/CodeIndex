@@ -403,7 +403,7 @@ public partial class FileIndexer
         }
 
         var directoryKey = NormalizeScopeKey(ToRelativePath(directory));
-        snapshot.Directories.TryGetValue(directoryKey, out var counts);
+        TryGetProjectMarkerDirectoryCounts(snapshot, directoryKey, out var counts);
         count = language switch
         {
             "csharp" => counts.CSharp,
@@ -416,6 +416,121 @@ public partial class FileIndexer
         };
         return true;
     }
+
+    private bool TryMaterializeProjectMarkerScopeSnapshot(
+        ProjectMarkerScopeCollectionState scopeCollection,
+        out ProjectMarkerScopeSnapshot snapshot)
+    {
+        if (!TryGetCachedDirectoryIgnoreCase(".", out var rootIgnoreCase))
+        {
+            snapshot = null!;
+            return false;
+        }
+
+        var root = new ProjectMarkerScopeNode(rootIgnoreCase);
+        foreach (var (directory, counts) in scopeCollection.Directories)
+        {
+            var node = root;
+            if (directory != ".")
+            {
+                var remaining = directory.AsSpan();
+                var relativePath = ".";
+                while (!remaining.IsEmpty)
+                {
+                    var separatorIndex = remaining.IndexOf('/');
+                    var segment = separatorIndex < 0
+                        ? remaining
+                        : remaining[..separatorIndex];
+                    if (segment.IsEmpty)
+                        break;
+
+                    var segmentName = segment.ToString();
+                    relativePath = relativePath == "."
+                        ? segmentName
+                        : $"{relativePath}/{segmentName}";
+                    if (!node.TryGetChild(segment, out var child))
+                    {
+                        if (!TryGetCachedDirectoryIgnoreCase(relativePath, out var childIgnoreCase))
+                        {
+                            snapshot = null!;
+                            return false;
+                        }
+
+                        child = new ProjectMarkerScopeNode(childIgnoreCase);
+                        node.AddChild(segmentName, child);
+                    }
+
+                    node = child;
+                    if (separatorIndex < 0)
+                        break;
+
+                    remaining = remaining[(separatorIndex + 1)..];
+                }
+            }
+
+            node.Counts = AddProjectMarkerDirectoryCounts(node.Counts, counts);
+        }
+
+        snapshot = new ProjectMarkerScopeSnapshot(root);
+        return true;
+    }
+
+    private bool TryGetCachedDirectoryIgnoreCase(string relativeDirectory, out bool ignoreCase)
+    {
+        // Every node represented here was visited by the completed scan, so its policy is
+        // already cached. Never call DirectoryUsesIgnoreCase while publishing the snapshot:
+        // a new filesystem probe would both add I/O and step outside the captured scan input.
+        // ここに現れるnodeは完了scanで訪問済みのためpolicyもcache済み。snapshot publish時に
+        // DirectoryUsesIgnoreCaseを呼ぶと追加I/Oとcaptured scan input外のprobeが生じるため禁止する。
+        var directory = relativeDirectory == "."
+            ? _projectRoot
+            : Path.GetFullPath(Path.Combine(
+                _projectRoot,
+                relativeDirectory.Replace('/', Path.DirectorySeparatorChar)));
+        return _directoryIgnoreCaseCache.TryGetValue(directory, out ignoreCase);
+    }
+
+    private static bool TryGetProjectMarkerDirectoryCounts(
+        ProjectMarkerScopeSnapshot snapshot,
+        string directory,
+        out ProjectMarkerDirectoryCounts counts)
+    {
+        var node = snapshot.Root;
+        if (directory != ".")
+        {
+            var remaining = directory.AsSpan();
+            while (!remaining.IsEmpty)
+            {
+                var separatorIndex = remaining.IndexOf('/');
+                var segment = separatorIndex < 0
+                    ? remaining
+                    : remaining[..separatorIndex];
+                if (segment.IsEmpty || !node.TryGetChild(segment, out node))
+                {
+                    counts = default;
+                    return false;
+                }
+
+                if (separatorIndex < 0)
+                    break;
+
+                remaining = remaining[(separatorIndex + 1)..];
+            }
+        }
+
+        counts = node.Counts;
+        return true;
+    }
+
+    private static ProjectMarkerDirectoryCounts AddProjectMarkerDirectoryCounts(
+        ProjectMarkerDirectoryCounts left,
+        ProjectMarkerDirectoryCounts right) =>
+        new(
+            left.CSharp + right.CSharp,
+            left.VisualBasic + right.VisualBasic,
+            left.FSharp + right.FSharp,
+            left.MsbuildPrimary + right.MsbuildPrimary,
+            left.MsbuildAll + right.MsbuildAll);
 
     private bool IsProjectMarkerVisible(string markerFile, IgnoreRuleSet? activeIgnoreRules)
     {

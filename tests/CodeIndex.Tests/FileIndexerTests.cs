@@ -1520,6 +1520,126 @@ public partial class FileIndexerTests
     }
 
     [Fact]
+    public void GetFamilyScopeKey_AfterScanSeparatesCaseOnlyMarkerDirectoriesUnderCaseSensitiveChild()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_marker_scope_mixed_sensitive");
+        var tempDir = project.Root;
+        var linkedVolume = TestProjectHelper.CreateDirectory(tempDir, "LinkedVolume");
+        var upperDirectory = TestProjectHelper.CreateDirectory(tempDir, "LinkedVolume/Foo");
+        var lowerDirectory = TestProjectHelper.CreateDirectory(tempDir, "LinkedVolume/foo");
+        var upperMarker = TestProjectHelper.WriteTextFile(tempDir, "LinkedVolume/Foo/App.csproj", "<Project />");
+        var upperSource = TestProjectHelper.WriteTextFile(tempDir, "LinkedVolume/Foo/Api.cs", "public class Api { }\n");
+        var lowerMarker = TestProjectHelper.WriteTextFile(tempDir, "LinkedVolume/foo/Other.csproj", "<Project />");
+        var lowerSource = TestProjectHelper.WriteTextFile(tempDir, "LinkedVolume/foo/Other.cs", "public class Other { }\n");
+        var entries = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal)
+        {
+            [Path.GetFullPath(tempDir)] = [linkedVolume],
+            [Path.GetFullPath(linkedVolume)] = [upperDirectory, lowerDirectory],
+            [Path.GetFullPath(upperDirectory)] = [upperMarker, upperSource],
+            [Path.GetFullPath(lowerDirectory)] = [lowerMarker, lowerSource],
+        };
+        var probeCount = 0;
+        var countPostScanAuthorizations = false;
+        var postScanAuthorizationCount = 0;
+
+        bool? ProbeDirectory(string directory)
+        {
+            probeCount++;
+            return string.Equals(Path.GetFullPath(directory), Path.GetFullPath(tempDir), StringComparison.Ordinal);
+        }
+
+        IEnumerable<string> EnumerateEntries(string directory)
+        {
+            var normalizedDirectory = Path.GetFullPath(LongPath.RemoveWindowsPrefix(directory));
+            return entries.GetValueOrDefault(normalizedDirectory) ?? [];
+        }
+
+        var indexer = new FileIndexer(
+            tempDir,
+            ignoreCase: true,
+            ignoreRuleRoot: null,
+            maxFileSizeBytes: null,
+            directoryIgnoreCaseProbe: ProbeDirectory,
+            enumerateFileSystemEntries: EnumerateEntries,
+            pathAccessValidator: _ =>
+            {
+                if (countPostScanAuthorizations)
+                    postScanAuthorizationCount++;
+            });
+
+        indexer.ScanFilesDetailed();
+        Assert.Equal(4, probeCount);
+        countPostScanAuthorizations = true;
+
+        var upperScope = indexer.GetFamilyScopeKey(upperSource, "csharp");
+        var lowerScope = indexer.GetFamilyScopeKey(lowerSource, "csharp");
+
+        Assert.Equal("LinkedVolume/Foo", upperScope);
+        Assert.Equal("LinkedVolume/foo", lowerScope);
+        Assert.NotEqual(upperScope, lowerScope);
+        Assert.DoesNotContain("__file__", upperScope, StringComparison.Ordinal);
+        Assert.DoesNotContain("__file__", lowerScope, StringComparison.Ordinal);
+        Assert.Equal(4, probeCount);
+        Assert.Equal(0, postScanAuthorizationCount);
+    }
+
+    [Fact]
+    public void GetFamilyScopeKey_AfterScanUsesCaseInsensitiveChildAlias()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_marker_scope_mixed_insensitive");
+        var tempDir = project.Root;
+        var linkedVolume = TestProjectHelper.CreateDirectory(tempDir, "LinkedVolume");
+        var markerDirectory = TestProjectHelper.CreateDirectory(tempDir, "LinkedVolume/Foo");
+        var marker = TestProjectHelper.WriteTextFile(tempDir, "LinkedVolume/Foo/App.csproj", "<Project />");
+        var source = TestProjectHelper.WriteTextFile(tempDir, "LinkedVolume/Foo/Api.cs", "public class Api { }\n");
+        var entries = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal)
+        {
+            [Path.GetFullPath(tempDir)] = [linkedVolume],
+            [Path.GetFullPath(linkedVolume)] = [markerDirectory],
+            [Path.GetFullPath(markerDirectory)] = [marker, source],
+        };
+        var probeCount = 0;
+        var countPostScanAuthorizations = false;
+        var postScanAuthorizationCount = 0;
+
+        bool? ProbeDirectory(string directory)
+        {
+            probeCount++;
+            return string.Equals(Path.GetFullPath(directory), Path.GetFullPath(linkedVolume), StringComparison.Ordinal);
+        }
+
+        IEnumerable<string> EnumerateEntries(string directory)
+        {
+            var normalizedDirectory = Path.GetFullPath(LongPath.RemoveWindowsPrefix(directory));
+            return entries.GetValueOrDefault(normalizedDirectory) ?? [];
+        }
+
+        var indexer = new FileIndexer(
+            tempDir,
+            ignoreCase: false,
+            ignoreRuleRoot: null,
+            maxFileSizeBytes: null,
+            directoryIgnoreCaseProbe: ProbeDirectory,
+            enumerateFileSystemEntries: EnumerateEntries,
+            pathAccessValidator: _ =>
+            {
+                if (countPostScanAuthorizations)
+                    postScanAuthorizationCount++;
+            });
+
+        indexer.ScanFilesDetailed();
+        Assert.Equal(3, probeCount);
+        countPostScanAuthorizations = true;
+        var aliasSource = Path.Combine(tempDir, "LinkedVolume", "foo", "Api.cs");
+
+        var scope = indexer.GetFamilyScopeKey(aliasSource, "csharp");
+
+        Assert.Equal("LinkedVolume/foo", scope);
+        Assert.Equal(3, probeCount);
+        Assert.Equal(0, postScanAuthorizationCount);
+    }
+
+    [Fact]
     public void GetFamilyScopeKey_ScanSnapshotContinuesBeyondFingerprintDirectoryBudget()
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_marker_scope_budget");

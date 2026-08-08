@@ -187,14 +187,60 @@ public partial class FileIndexer
         bool IsProjectRoot,
         int LanguageMask);
 
-    private sealed class ProjectMarkerScopeCollectionState(StringComparer pathComparer)
+    private sealed class ProjectMarkerScopeCollectionState
     {
-        public Dictionary<string, ProjectMarkerDirectoryCounts> Directories { get; } = new(pathComparer);
+        public Dictionary<string, ProjectMarkerDirectoryCounts> Directories { get; } =
+            new(StringComparer.Ordinal);
         public bool IsComplete { get; set; } = true;
     }
 
-    private sealed record ProjectMarkerScopeSnapshot(
-        IReadOnlyDictionary<string, ProjectMarkerDirectoryCounts> Directories);
+    private sealed class ProjectMarkerScopeNode(bool ignoreCase)
+    {
+        private readonly StringComparison _childNameComparison = ignoreCase
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+        private Dictionary<int, List<ProjectMarkerScopeChild>>? _children;
+
+        public ProjectMarkerDirectoryCounts Counts { get; set; }
+
+        public bool TryGetChild(ReadOnlySpan<char> name, out ProjectMarkerScopeNode child)
+        {
+            var hashCode = string.GetHashCode(name, _childNameComparison);
+            if (_children != null && _children.TryGetValue(hashCode, out var candidates))
+            {
+                foreach (var candidate in candidates)
+                {
+                    if (name.Equals(candidate.Name.AsSpan(), _childNameComparison))
+                    {
+                        child = candidate.Node;
+                        return true;
+                    }
+                }
+            }
+
+            child = null!;
+            return false;
+        }
+
+        public void AddChild(string name, ProjectMarkerScopeNode child)
+        {
+            var hashCode = string.GetHashCode(name.AsSpan(), _childNameComparison);
+            _children ??= [];
+            if (!_children.TryGetValue(hashCode, out var candidates))
+            {
+                candidates = [];
+                _children.Add(hashCode, candidates);
+            }
+
+            candidates.Add(new ProjectMarkerScopeChild(name, child));
+        }
+    }
+
+    private readonly record struct ProjectMarkerScopeChild(
+        string Name,
+        ProjectMarkerScopeNode Node);
+
+    private sealed record ProjectMarkerScopeSnapshot(ProjectMarkerScopeNode Root);
 
     private readonly record struct ProjectMarkerDirectoryCounts(
         int CSharp,

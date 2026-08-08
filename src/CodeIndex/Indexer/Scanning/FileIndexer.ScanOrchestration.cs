@@ -91,8 +91,7 @@ public partial class FileIndexer
             NormalizePathForComparison(_projectRoot),
         };
         var projectMarkerTraversalStates = CreateDefaultProjectMarkerFingerprintTraversalStates();
-        var projectMarkerScopeCollection = new ProjectMarkerScopeCollectionState(
-            _ignoreCase ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+        var projectMarkerScopeCollection = new ProjectMarkerScopeCollectionState();
         var scanState = new DirectoryScanState(
             files,
             fileLanguages,
@@ -135,11 +134,12 @@ public partial class FileIndexer
                     ? $"{incompleteReason} Reduce or split the indexed workspace before retrying."
                     : "Could not capture every directory listing or configuration input needed for one stable source snapshot; rerun indexing."));
         }
-        if (projectMarkerScopeCollection.IsComplete)
+        if (projectMarkerScopeCollection.IsComplete
+            && TryMaterializeProjectMarkerScopeSnapshot(projectMarkerScopeCollection, out var projectMarkerScopeSnapshot))
         {
             Volatile.Write(
                 ref _projectMarkerScopeSnapshot,
-                new ProjectMarkerScopeSnapshot(projectMarkerScopeCollection.Directories));
+                projectMarkerScopeSnapshot);
         }
 
         var scanResult = new ScanFilesResult(
