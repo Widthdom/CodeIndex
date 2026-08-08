@@ -1500,7 +1500,8 @@ public partial class DbWriter
         // aggregate refresh 前に中断した場合は trust bit を残さず raw fallback に降格する。
         var aggregateWasReady = ClearHotspotReferenceAggregateReady();
 
-        int rowsPerStatement = GetRowsPerInsertStatement(columnCount: 14);
+        int rowsPerStatement = GetRowsPerInsertStatement(
+            columnCount: ReferenceInsertParameterCountPerRow);
         var foldedNameCache = CreateFoldedNameCache(
             Math.Min(references.Count, rowsPerStatement),
             namesPerRow: 2);
@@ -1638,7 +1639,7 @@ public partial class DbWriter
         return windowEndBatch;
     }
 
-    private Dictionary<(long FileId, int Line, string Context), long> MaterializeReferenceLines(
+    private ReferenceLineBatchMap MaterializeReferenceLines(
         IReadOnlyList<ReferenceRecord> references,
         int start,
         int end,
@@ -1653,7 +1654,7 @@ public partial class DbWriter
         IReadOnlyList<ReferenceRecord> references,
         int start,
         int end,
-        Dictionary<(long FileId, int Line, string Context), long> referenceLineIds,
+        ReferenceLineBatchMap referenceLineIds,
         Dictionary<string, string?> foldedNameCache)
     {
         var rowsInBatch = end - start;
@@ -1662,19 +1663,10 @@ public partial class DbWriter
         try
         {
             var parameterIndex = 0;
-            (long FileId, int Line, string Context)? previousReferenceLineKey = null;
-            var previousReferenceLineId = 0L;
             for (int index = start; index < end; index++)
             {
                 var reference = references[index];
                 ValidateReferenceKinds(reference);
-                var referenceLineKey = (reference.FileId, reference.Line, reference.Context);
-                if (previousReferenceLineKey is not { } previousKey
-                    || !ReferenceLineKeysEqual(previousKey, referenceLineKey))
-                {
-                    previousReferenceLineId = referenceLineIds[referenceLineKey];
-                    previousReferenceLineKey = referenceLineKey;
-                }
 
                 cmd.Parameters[parameterIndex++].Value = reference.FileId;
                 cmd.Parameters[parameterIndex++].Value = reference.SymbolName;
@@ -1684,8 +1676,8 @@ public partial class DbWriter
                 cmd.Parameters[parameterIndex++].Value =
                     (object?)(reference.SpanLength > 0 ? reference.SpanLength : null)
                     ?? DBNull.Value;
-                cmd.Parameters[parameterIndex++].Value = DBNull.Value;
-                cmd.Parameters[parameterIndex++].Value = previousReferenceLineId;
+                cmd.Parameters[parameterIndex++].Value =
+                    referenceLineIds.GetReferenceLineId(index);
                 cmd.Parameters[parameterIndex++].Value = (object?)reference.ContainerKind ?? DBNull.Value;
                 cmd.Parameters[parameterIndex++].Value = (object?)reference.ContainerName ?? DBNull.Value;
                 cmd.Parameters[parameterIndex++].Value = FoldedNameDbValue(
@@ -1701,6 +1693,12 @@ public partial class DbWriter
                 cmd.Parameters[parameterIndex++].Value = (object?)ExtractTargetQualifier(reference) ?? DBNull.Value;
             }
 
+            ReferenceInsertBindingWorkForTesting?.Invoke(
+                new ReferenceInsertBindingWork(
+                    rowsInBatch,
+                    cmd.Parameters.Count,
+                    referenceLineIds.ReferenceCount,
+                    referenceLineIds.ReferenceLineCount));
             ReportBatchStatementForTesting("insert_references", rowsInBatch, rowsInBatch);
             cmd.ExecuteNonQuery();
         }
@@ -1736,7 +1734,8 @@ public partial class DbWriter
         if (atomicFileScope)
             return 0;
 
-        int rowsPerStatement = GetRowsPerInsertStatement(columnCount: 14);
+        int rowsPerStatement = GetRowsPerInsertStatement(
+            columnCount: ReferenceInsertParameterCountPerRow);
         long transactionCount = 0;
         foreach (var referenceCount in referenceCountsByFile)
             transactionCount += GetReferenceBatchCount(referenceCount, rowsPerStatement);
@@ -1817,25 +1816,18 @@ public partial class DbWriter
         transaction.Commit();
     }
 
-    private Dictionary<(long FileId, int Line, string Context), long> UpsertReferenceLines(IReadOnlyList<ReferenceRecord> references, int start, int end, CancellationToken cancellationToken)
+    private ReferenceLineBatchMap UpsertReferenceLines(
+        IReadOnlyList<ReferenceRecord> references,
+        int start,
+        int end,
+        CancellationToken cancellationToken)
     {
-        var batchCount = end - start;
-        var referenceLineKeys = new HashSet<(long FileId, int Line, string Context)>(batchCount);
-        (long FileId, int Line, string Context)? previousReferenceLineKey = null;
-        for (int i = start; i < end; i++)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var reference = references[i];
-            var referenceLineKey = (reference.FileId, reference.Line, reference.Context);
-            if (previousReferenceLineKey is not { } previousKey
-                || !ReferenceLineKeysEqual(previousKey, referenceLineKey))
-            {
-                referenceLineKeys.Add(referenceLineKey);
-                previousReferenceLineKey = referenceLineKey;
-            }
-        }
-
-        var rows = referenceLineKeys.ToArray();
+        var lineIds = ReferenceLineBatchMap.Create(
+            references,
+            start,
+            end,
+            cancellationToken);
+        var rows = lineIds.Keys;
         int rowsPerStatement = GetRowsPerInsertStatement(columnCount: 3);
         for (int i = 0; i < rows.Length; i += rowsPerStatement)
         {
@@ -1856,7 +1848,6 @@ public partial class DbWriter
             }
         }
 
-        var lineIds = new Dictionary<(long FileId, int Line, string Context), long>(rows.Length);
         int keysPerStatement = GetRowsPerInsertStatement(columnCount: 3);
         for (int i = 0; i < rows.Length; i += keysPerStatement)
         {
@@ -1879,7 +1870,7 @@ public partial class DbWriter
                     var line = reader.GetInt32(2);
                     var context = reader.GetString(3);
                     var key = (fileId, line, context);
-                    lineIds[key] = id;
+                    lineIds.SetReferenceLineId(key, id);
                 }
             }
             finally
@@ -1888,38 +1879,28 @@ public partial class DbWriter
             }
         }
 
+        lineIds.CompleteMaterialization();
         return lineIds;
     }
 
-    private Dictionary<(long FileId, int Line, string Context), long> InsertNewReferenceLines(
+    private ReferenceLineBatchMap InsertNewReferenceLines(
         IReadOnlyList<ReferenceRecord> references,
         int start,
         int end,
         Dictionary<(long FileId, int Line, string Context), long> knownLineIds,
         CancellationToken cancellationToken)
     {
-        var batchCount = end - start;
-        var referenceLineKeys = new HashSet<(long FileId, int Line, string Context)>(batchCount);
-        (long FileId, int Line, string Context)? previousReferenceLineKey = null;
-        for (int i = start; i < end; i++)
+        var lineIds = ReferenceLineBatchMap.Create(
+            references,
+            start,
+            end,
+            cancellationToken);
+        var rows = new List<(long FileId, int Line, string Context)>(lineIds.ReferenceLineCount);
+        for (var ordinal = 0; ordinal < lineIds.Keys.Length; ordinal++)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            var reference = references[i];
-            var referenceLineKey = (reference.FileId, reference.Line, reference.Context);
-            if (previousReferenceLineKey is not { } previousKey
-                || !ReferenceLineKeysEqual(previousKey, referenceLineKey))
-            {
-                referenceLineKeys.Add(referenceLineKey);
-                previousReferenceLineKey = referenceLineKey;
-            }
-        }
-
-        var lineIds = new Dictionary<(long FileId, int Line, string Context), long>(referenceLineKeys.Count);
-        var rows = new List<(long FileId, int Line, string Context)>(referenceLineKeys.Count);
-        foreach (var key in referenceLineKeys)
-        {
+            var key = lineIds.Keys[ordinal];
             if (knownLineIds.TryGetValue(key, out var knownId))
-                lineIds[key] = knownId;
+                lineIds.SetReferenceLineId(ordinal, knownId);
             else
                 rows.Add(key);
         }
@@ -1944,7 +1925,7 @@ public partial class DbWriter
                     var line = reader.GetInt32(2);
                     var context = reader.GetString(3);
                     var key = (fileId, line, context);
-                    lineIds[key] = id;
+                    lineIds.SetReferenceLineId(key, id);
                     knownLineIds[key] = id;
                 }
             }
@@ -1954,7 +1935,124 @@ public partial class DbWriter
             }
         }
 
+        lineIds.CompleteMaterialization();
         return lineIds;
+    }
+
+    private sealed class ReferenceLineBatchMap
+    {
+        private readonly int _referenceStart;
+        private readonly int[] _referenceLineOrdinals;
+        private readonly long[] _referenceLineIds;
+        private readonly bool[] _hasReferenceLineIds;
+        private Dictionary<(long FileId, int Line, string Context), int>? _keyOrdinals;
+
+        private ReferenceLineBatchMap(
+            int referenceStart,
+            (long FileId, int Line, string Context)[] keys,
+            int[] referenceLineOrdinals,
+            Dictionary<(long FileId, int Line, string Context), int> keyOrdinals)
+        {
+            _referenceStart = referenceStart;
+            Keys = keys;
+            _referenceLineOrdinals = referenceLineOrdinals;
+            _referenceLineIds = new long[keys.Length];
+            _hasReferenceLineIds = new bool[keys.Length];
+            _keyOrdinals = keyOrdinals;
+        }
+
+        internal (long FileId, int Line, string Context)[] Keys { get; }
+        internal int ReferenceCount => _referenceLineOrdinals.Length;
+        internal int ReferenceLineCount => Keys.Length;
+
+        internal static ReferenceLineBatchMap Create(
+            IReadOnlyList<ReferenceRecord> references,
+            int start,
+            int end,
+            CancellationToken cancellationToken)
+        {
+            var referenceCount = end - start;
+            var keys = new List<(long FileId, int Line, string Context)>(referenceCount);
+            var keyOrdinals = new Dictionary<(long FileId, int Line, string Context), int>(
+                referenceCount);
+            var referenceLineOrdinals = new int[referenceCount];
+            (long FileId, int Line, string Context)? previousKey = null;
+            var previousOrdinal = 0;
+            for (var index = start; index < end; index++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var reference = references[index];
+                var key = (reference.FileId, reference.Line, reference.Context);
+                int ordinal;
+                if (previousKey is { } prior && ReferenceLineKeysEqual(prior, key))
+                {
+                    ordinal = previousOrdinal;
+                }
+                else if (!keyOrdinals.TryGetValue(key, out ordinal))
+                {
+                    ordinal = keys.Count;
+                    keys.Add(key);
+                    keyOrdinals.Add(key, ordinal);
+                }
+
+                referenceLineOrdinals[index - start] = ordinal;
+                previousKey = key;
+                previousOrdinal = ordinal;
+            }
+
+            return new ReferenceLineBatchMap(
+                start,
+                keys.ToArray(),
+                referenceLineOrdinals,
+                keyOrdinals);
+        }
+
+        internal void SetReferenceLineId(
+            (long FileId, int Line, string Context) key,
+            long id)
+        {
+            var keyOrdinals = _keyOrdinals
+                ?? throw new InvalidOperationException("Reference-line materialization is already complete.");
+            if (!keyOrdinals.TryGetValue(key, out var ordinal))
+                throw new KeyNotFoundException($"Unexpected materialized reference-line key: {key}.");
+
+            _referenceLineIds[ordinal] = id;
+            _hasReferenceLineIds[ordinal] = true;
+        }
+
+        internal void SetReferenceLineId(int ordinal, long id)
+        {
+            _referenceLineIds[ordinal] = id;
+            _hasReferenceLineIds[ordinal] = true;
+        }
+
+        internal void CompleteMaterialization()
+        {
+            for (var ordinal = 0; ordinal < _referenceLineIds.Length; ordinal++)
+            {
+                if (_hasReferenceLineIds[ordinal])
+                    continue;
+
+                throw new KeyNotFoundException(
+                    $"Reference-line ID was not materialized for key: {Keys[ordinal]}.");
+            }
+
+            // Insert binding is ordinal-only. Release the tuple lookup table before the
+            // symbol_references command walks the batch, so repeated contexts are not rehashed.
+            _keyOrdinals = null;
+        }
+
+        internal long GetReferenceLineId(int referenceIndex)
+        {
+            if (_keyOrdinals != null)
+                throw new InvalidOperationException("Reference-line materialization is incomplete.");
+
+            var offset = referenceIndex - _referenceStart;
+            if ((uint)offset >= (uint)_referenceLineOrdinals.Length)
+                throw new ArgumentOutOfRangeException(nameof(referenceIndex));
+
+            return _referenceLineIds[_referenceLineOrdinals[offset]];
+        }
     }
 
     private static bool ReferenceLineKeysEqual(

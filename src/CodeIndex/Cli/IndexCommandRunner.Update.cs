@@ -11,6 +11,14 @@ namespace CodeIndex.Cli;
 public static partial class IndexCommandRunner
 {
     internal static Action<string>? UpdateScanInputSnapshotBarrierForTesting { get; set; }
+    internal const int UpdateReferenceSecondaryIndexBulkLoadMinimumTargetCount = 64;
+
+    internal static bool ShouldUseUpdateReferenceSecondaryIndexBulkLoad(
+        int targetCount,
+        int indexedFileCount)
+        => targetCount >= UpdateReferenceSecondaryIndexBulkLoadMinimumTargetCount
+           && indexedFileCount > 0
+           && (long)targetCount * 5 >= (long)indexedFileCount * 3;
 
     private static int RunUpdateMode(
         DbContext db,
@@ -622,6 +630,16 @@ public static partial class IndexCommandRunner
             purgeTxn.Commit();
         }
 
+        var useReferenceSecondaryIndexBulkLoad = !options.SymbolsOnly
+            && ShouldUseUpdateReferenceSecondaryIndexBulkLoad(
+                targetPaths.Count,
+                writer.GetIndexedFileCount());
+        using var referenceSecondaryIndexBulkLoad =
+            ReferenceSecondaryIndexBulkLoadGuard.StartRecoverable(
+                writer,
+                useReferenceSecondaryIndexBulkLoad,
+                cancellationToken);
+
         var updateLoop = RunUpdateFileLoop(new UpdateFileLoopContext
         {
             Writer = writer,
@@ -720,6 +738,9 @@ public static partial class IndexCommandRunner
             }
         }
 
+        // Graph finalization needs every query index. Recoverable mode restores without
+        // relying on a cross-file transaction, including exception/cancellation unwinding.
+        referenceSecondaryIndexBulkLoad?.Complete(cancellationToken);
         ThrowIfUpdateCancelled();
         mutualRecursionRefreshNeeded |= !options.SymbolsOnly && (removed > 0 || purgedRefs > 0);
         if (mutualRecursionRefreshNeeded)

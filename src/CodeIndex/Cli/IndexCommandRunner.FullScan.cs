@@ -860,7 +860,7 @@ public static partial class IndexCommandRunner
         using var referenceSecondaryIndexBulkLoad =
             ReferenceSecondaryIndexBulkLoadGuard.StartTransactional(
                 writer,
-                enabled: !options.SymbolsOnly && (options.Rebuild || startedWithNoIndexedFiles),
+                enabled: !options.SymbolsOnly && useFtsBulkLoad,
                 cancellationToken);
         using var ftsBulkLoad = FtsBulkLoadTriggerGuard.Start(writer, useFtsBulkLoad);
 

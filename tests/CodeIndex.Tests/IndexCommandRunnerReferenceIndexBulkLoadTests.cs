@@ -8,6 +8,26 @@ namespace CodeIndex.Tests;
 public partial class IndexCommandRunnerTests
 {
     [Theory]
+    [InlineData(63, 63, false)]
+    [InlineData(64, 106, true)]
+    [InlineData(64, 107, false)]
+    [InlineData(599, 1_000, false)]
+    [InlineData(600, 1_000, true)]
+    [InlineData(int.MaxValue, int.MaxValue, true)]
+    [InlineData(64, 0, false)]
+    public void ShouldUseUpdateReferenceSecondaryIndexBulkLoad_UsesBoundedSixtyPercentThreshold(
+        int targetCount,
+        int indexedFileCount,
+        bool expected)
+    {
+        Assert.Equal(
+            expected,
+            IndexCommandRunner.ShouldUseUpdateReferenceSecondaryIndexBulkLoad(
+                targetCount,
+                indexedFileCount));
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public void Run_FreshAndRebuildFullScan_DefersReferenceIndexesUntilGraphFinalization(bool rebuild)
@@ -138,6 +158,95 @@ public partial class IndexCommandRunnerTests
         finally
         {
             DbWriter.ReferenceSecondaryIndexBulkLoadStateForTesting = previousStateHook;
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Run_HighChurnExistingIndex_DefersReferenceIndexesUntilGraphFinalization(
+        bool scopedUpdate)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_reference_index_update_bulk_load");
+        var previousStateHook = DbWriter.ReferenceSecondaryIndexBulkLoadStateForTesting;
+        var previousStatementHook = DbWriter.BatchStatementExecutingForTesting;
+        var previousGraphHook = DbWriter.MutualRecursionRefreshForTesting;
+        var snapshots = new ConcurrentQueue<ReferenceIndexStageSnapshot>();
+        SqliteConnection? activeConnection = null;
+        try
+        {
+            var relativePaths = Enumerable
+                .Range(
+                    0,
+                    IndexCommandRunner.UpdateReferenceSecondaryIndexBulkLoadMinimumTargetCount)
+                .Select(index => $"source_{index:D2}.py")
+                .ToArray();
+            foreach (var relativePath in relativePaths)
+            {
+                var stem = Path.GetFileNameWithoutExtension(relativePath);
+                File.WriteAllText(
+                    Path.Combine(projectRoot, relativePath),
+                    $"def {stem}():\n    return 1\n\ndef call_{stem}():\n    return {stem}()\n");
+            }
+
+            var (seedExitCode, _) = RunAndCaptureJson([projectRoot, "--json", "--quiet"]);
+            Assert.Equal(CommandExitCodes.Success, seedExitCode);
+            foreach (var relativePath in relativePaths)
+                File.AppendAllText(Path.Combine(projectRoot, relativePath), "\n# changed\n");
+
+            DbWriter.ReferenceSecondaryIndexBulkLoadStateForTesting = (connection, phase) =>
+            {
+                Volatile.Write(ref activeConnection, connection);
+                snapshots.Enqueue(CaptureReferenceIndexSnapshot(phase, connection));
+                previousStateHook?.Invoke(connection, phase);
+            };
+            DbWriter.BatchStatementExecutingForTesting = statement =>
+            {
+                previousStatementHook?.Invoke(statement);
+                if (!string.Equals(statement.Operation, "insert_references", StringComparison.Ordinal))
+                    return;
+
+                var connection = Volatile.Read(ref activeConnection);
+                if (connection != null)
+                    snapshots.Enqueue(CaptureReferenceIndexSnapshot("insert_references", connection));
+            };
+            DbWriter.MutualRecursionRefreshForTesting = () =>
+            {
+                var connection = Volatile.Read(ref activeConnection);
+                if (connection != null)
+                    snapshots.Enqueue(CaptureReferenceIndexSnapshot("reference_graph", connection));
+                previousGraphHook?.Invoke();
+            };
+
+            var args = new List<string>(relativePaths.Length + 5) { projectRoot };
+            if (scopedUpdate)
+            {
+                args.Add("--files");
+                args.AddRange(relativePaths);
+            }
+            args.Add("--json");
+            args.Add("--quiet");
+            var (exitCode, json) = RunAndCaptureJson(args.ToArray());
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            var captured = snapshots.ToArray();
+            Assert.Equal("dropped", captured[0].Stage);
+            Assert.Contains(captured, snapshot => snapshot.Stage == "insert_references");
+            Assert.Equal("restored", captured[^2].Stage);
+            Assert.Equal("reference_graph", captured[^1].Stage);
+            Assert.All(
+                captured.Where(snapshot => snapshot.Stage is "dropped" or "insert_references"),
+                snapshot => Assert.Equal(GetRequiredReferenceIndexNames(), snapshot.Names));
+            Assert.Equal(GetAllReferenceIndexNames(), captured[^2].Names);
+            Assert.Equal(GetAllReferenceIndexNames(), captured[^1].Names);
+        }
+        finally
+        {
+            DbWriter.ReferenceSecondaryIndexBulkLoadStateForTesting = previousStateHook;
+            DbWriter.BatchStatementExecutingForTesting = previousStatementHook;
+            DbWriter.MutualRecursionRefreshForTesting = previousGraphHook;
             DeleteDirectory(projectRoot);
         }
     }

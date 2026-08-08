@@ -276,6 +276,22 @@ starts from an empty database and restores the indexes on both completion and
 recoverable disposal. Schema initialization and read repair must use the same
 canonical index catalog so every path converges on an identical final schema.
 
+Reference context text is normalized into `reference_lines`; the legacy
+`symbol_references.context` column is therefore written as a SQL `NULL` literal
+rather than bound once per reference. Reference-line materialization builds a
+batch-local key-to-ordinal map, resolves each unique line ID, then releases the
+tuple lookup before binding `symbol_references` from ordinal arrays. Preserve
+this path for both new-file inserts and replacement upserts, including atomic
+file windows, so large multi-language reference sets do not rehash file/line/
+context tuples for every persisted edge.
+
+Use the same secondary-index deferral for an existing-database full scan when
+the established FTS dirty-byte policy selects bulk loading. Scoped updates have
+no authoritative workspace-wide byte estimate, so they use a conservative
+recoverable boundary: at least 64 targets and at least 60% of the indexed file
+count. Restore every query index before graph finalization. Small scoped updates
+must keep them in place so a fixed rebuild cost does not dominate the update.
+
 Repository-wide incremental scans load stat-reuse candidates with one SQLite
 statement before the C# contract prepass and parallel extraction. Each candidate
 is still compared with a fresh filesystem size and UTC modification time, and
@@ -3827,6 +3843,20 @@ cancellation や失敗時には schema も原子的に rollback されます。M
 開始する場合だけ同じ最適化を使い、正常完了時と recoverable な dispose 時の両方で index を
 復元します。schema initialization と read repair は同じ canonical index catalog を使い、
 すべての経路が同一の最終 schema に収束する状態を保ってください。
+
+reference の context text は `reference_lines` へ正規化されるため、legacy な
+`symbol_references.context` column は reference ごとの parameter ではなく SQL の `NULL`
+literal として書き込みます。reference-line materialization は batch-local な key-to-ordinal
+map を構築し、unique な line ID を解決した後、`symbol_references` を ordinal array から bind
+する前に tuple lookup を解放します。巨大な multi-language reference 集合で file / line /
+context tuple を edge ごとに再 hash しないよう、新規 file insert と replacement upsert の両方、
+atomic file window を含む全経路でこの契約を維持してください。
+
+既存DBの full scan でも、既定の FTS dirty-byte policy が bulk load を選ぶ場合は同じ secondary
+index 退避を使います。scoped update には workspace 全体の authoritative な byte estimate が
+ないため、64 target 以上かつ indexed file 数の60%以上という保守的な recoverable 境界を
+使います。graph finalization 前には全 query index を復元してください。小規模 scoped update は
+固定的な再構築 cost が更新時間を支配しないよう、index を維持します。
 
 リポジトリ全体の incremental scan は、C# contract prepass と parallel extraction の前に
 stat-reuse 候補を 1 回の SQLite statement で読みます。各候補は引き続き最新の filesystem
