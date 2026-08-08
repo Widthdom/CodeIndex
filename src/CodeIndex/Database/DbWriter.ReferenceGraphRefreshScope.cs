@@ -47,6 +47,18 @@ public partial class DbWriter
           AND r.source_symbol_id IS NOT {ReferenceSourceSymbolValueSql};
         """;
 
+    private static string RefreshCSharpReferenceFactsScopedSql =>
+        BuildRefreshCSharpReferenceFactsSql(
+            $"r.id IN (SELECT reference_id FROM temp.{ReferenceGraphDirtyReferencesTable})");
+
+    private static string RefreshCSharpSymbolFactsScopedSql =>
+        BuildRefreshCSharpSymbolFactsSql(
+            $"""
+            JOIN temp.{ReferenceGraphLookupNamesTable} AS symbol_lookup
+              ON symbol_lookup.lang = 'csharp'
+             AND symbol_lookup.name_folded = symbol.name_folded
+            """);
+
     private static string NormalizeCSharpPropertyReceiverReferencesScopedSql =>
         BuildCSharpPropertyReceiverNormalizationSql(
             $"r.id IN (SELECT reference_id FROM temp.{ReferenceGraphDirtyReferencesTable})");
@@ -131,6 +143,30 @@ public partial class DbWriter
 
     internal static string RefreshScopedReferenceCandidatesSqlForTesting
         => RefreshScopedReferenceCandidatesSql;
+
+    internal static IReadOnlyList<(string Scope, string Sql)>
+        CSharpGraphFactEvaluationSqlForTesting
+        =>
+        [
+            (
+                "full",
+                RefreshCSharpReferenceFactsFullSql + "\n"
+                + RefreshCSharpSymbolFactsFullSql + "\n"
+                + NormalizeCSharpPropertyReceiverReferencesFullSql + "\n"
+                + RefreshReferenceCandidatesSql),
+            (
+                "scoped",
+                RefreshCSharpReferenceFactsScopedSql + "\n"
+                + RefreshCSharpSymbolFactsScopedSql + "\n"
+                + NormalizeCSharpPropertyReceiverReferencesScopedSql + "\n"
+                + RefreshScopedReferenceCandidatesSql),
+            (
+                "retained",
+                RefreshCSharpReferenceFactsFullSql + "\n"
+                + RefreshCSharpSymbolFactsFullSql + "\n"
+                + NormalizeCSharpPropertyReceiverReferencesFullSql + "\n"
+                + RefreshReferenceCandidatesSql),
+        ];
 
     internal static IReadOnlyList<string> ScopedReferenceGraphUpdateStatementsForTesting
         =>

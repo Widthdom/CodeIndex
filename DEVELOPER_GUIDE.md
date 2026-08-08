@@ -292,6 +292,14 @@ recoverable boundary: at least 64 targets and at least 60% of the indexed file
 count. Restore every query index before graph finalization. Small scoped updates
 must keep them in place so a fixed rebuild cost does not dominate the update.
 
+C# reference-graph finalization materializes reference arity, invocation arity,
+member-receiver, definition arity, constructor arity, and value-type facts once
+per applicable row in TEMP tables. Full, scoped, and retained-graph rebuilds must
+populate both reference and symbol facts before property-receiver normalization,
+candidate construction, and resolution. Keep candidate SQL on primary-key fact
+lookups instead of re-entering managed SQLite scalar functions for every join
+candidate; scoped refreshes must limit symbol facts to their lookup-name set.
+
 Repository-wide incremental scans load stat-reuse candidates with one SQLite
 statement before the C# contract prepass and parallel extraction. Each candidate
 is still compared with a fresh filesystem size and UTC modification time, and
@@ -3857,6 +3865,13 @@ index 退避を使います。scoped update には workspace 全体の authorita
 ないため、64 target 以上かつ indexed file 数の60%以上という保守的な recoverable 境界を
 使います。graph finalization 前には全 query index を復元してください。小規模 scoped update は
 固定的な再構築 cost が更新時間を支配しないよう、index を維持します。
+
+C# の reference-graph finalization は、reference arity、invocation arity、member receiver、
+definition arity、constructor arity、value-type の fact を、対象 row ごとに TEMP table へ1回だけ
+materialize します。full / scoped / retained graph rebuild の全経路で reference と symbol の両 fact を
+property-receiver normalization、candidate 構築、resolution より前に投入してください。candidate SQL は
+join candidate ごとに managed SQLite scalar function へ再入せず、primary-key の fact lookup を使い、
+scoped refresh の symbol fact は lookup-name 集合だけに限定します。
 
 リポジトリ全体の incremental scan は、C# contract prepass と parallel extraction の前に
 stat-reuse 候補を 1 回の SQLite statement で読みます。各候補は引き続き最新の filesystem

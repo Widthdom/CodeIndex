@@ -161,6 +161,75 @@ public class DatabaseTests : IDisposable
         Assert.Contains("fts_chunks", tables);
     }
 
+    [Fact]
+    public void CSharpGraphFacts_EvaluateManagedScalarsOnceBeforeGraphConsumers()
+    {
+        var stages = DbWriter.CSharpGraphFactEvaluationSqlForTesting;
+        Assert.Equal(["full", "scoped", "retained"], stages.Select(static stage => stage.Scope));
+
+        string[] managedFunctions =
+        [
+            "csharp_reference_type_arity(",
+            "csharp_invocation_argument_count(",
+            "csharp_reference_is_member_receiver(",
+            "csharp_definition_type_arity(",
+            "csharp_constructor_parameter_count(",
+            "csharp_definition_is_value_type(",
+        ];
+
+        foreach (var (scope, sql) in stages)
+        {
+            foreach (var function in managedFunctions)
+                Assert.Equal(1, CountOccurrences(sql, function));
+
+            var referenceDelete = sql.IndexOf(
+                "DELETE FROM temp.csharp_reference_facts",
+                StringComparison.Ordinal);
+            var referenceInsert = sql.IndexOf(
+                "INSERT INTO temp.csharp_reference_facts",
+                StringComparison.Ordinal);
+            var symbolDelete = sql.IndexOf(
+                "DELETE FROM temp.csharp_symbol_facts",
+                StringComparison.Ordinal);
+            var symbolInsert = sql.IndexOf(
+                "INSERT INTO temp.csharp_symbol_facts",
+                StringComparison.Ordinal);
+            var normalization = sql.IndexOf(
+                "DELETE FROM temp.csharp_type_inheritance",
+                StringComparison.Ordinal);
+            var candidates = sql.IndexOf(
+                "DELETE FROM symbol_reference_candidates",
+                StringComparison.Ordinal);
+
+            Assert.True(
+                referenceDelete >= 0
+                && referenceDelete < referenceInsert
+                && referenceInsert < symbolDelete
+                && symbolDelete < symbolInsert
+                && symbolInsert < normalization
+                && normalization < candidates,
+                $"Unexpected {scope} C# graph fact stage order.");
+        }
+
+        var fullSql = Assert.Single(stages, static stage => stage.Scope == "full").Sql;
+        var scopedSql = Assert.Single(stages, static stage => stage.Scope == "scoped").Sql;
+        Assert.DoesNotContain("reference_graph_lookup_names AS symbol_lookup", fullSql, StringComparison.Ordinal);
+        Assert.Contains("reference_graph_lookup_names AS symbol_lookup", scopedSql, StringComparison.Ordinal);
+
+        static int CountOccurrences(string text, string value)
+        {
+            var count = 0;
+            var offset = 0;
+            while ((offset = text.IndexOf(value, offset, StringComparison.Ordinal)) >= 0)
+            {
+                count++;
+                offset += value.Length;
+            }
+
+            return count;
+        }
+    }
+
     private long InsertSearchFile(IReadOnlyList<ChunkRecord> chunks, IReadOnlyList<SymbolRecord> symbols)
     {
         var fileId = _writer.UpsertFile(new FileRecord
