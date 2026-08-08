@@ -865,6 +865,18 @@ a reference list use `ReferenceExtractor.EnumerateReferenceMatches` so bounded
 lists stop before requesting the next match, and the shared per-line pipeline
   checks the same cap between type, infrastructure, SQL, call, member, metadata,
   Razor, Python, and R phases.
+The BCL-regex overloads of `BoundedRegex.EnumerateMatches` return the concrete
+`MatchEnumerable` / `MatchEnumerator` value types. Direct `foreach`, the
+cap-aware reference wrapper, and SQL match helpers must preserve that static
+type so an empty or already-capped scan allocates no iterator object. Conversion
+to `IEnumerable<Match>` and LINQ remain supported compatibility paths, but box
+the value enumerable and enumerator and therefore do not belong in hot loops.
+Creating the enumerable or enumerator must not invoke the regex engine. The
+first `Regex.Match` runs only on the first `MoveNext`; later steps must use
+`Match.NextMatch` to preserve timeout handling, zero-length progress, `\G`
+continuation, explicit `startAt`, and right-to-left ordering. Cap-aware wrappers
+check capacity before the underlying `MoveNext` and never look ahead after the
+list is full.
 Symbol and dependency extractors follow the same streaming rule across
 scientific/native, Pascal/Ada, SQL, Python, Swift, GraphQL, markup/XAML, shell,
 Ruby, Perl, Elixir, CSS, HDL, C++, and manifest parsing. When only a total is
@@ -4417,6 +4429,16 @@ reference list を所有する regex loop は `ReferenceExtractor.EnumerateRefer
 を使い、bounded list が満杯なら次の match を要求しない。共有の行単位 pipeline も
   type、infrastructure、SQL、call、member、metadata、Razor、Python、R の各 phase 間で
   同じ上限を確認する。
+`BoundedRegex.EnumerateMatches` の BCL regex overload は、value type の concrete
+`MatchEnumerable` / `MatchEnumerator` を返す。direct `foreach`、cap-aware な reference
+wrapper、SQL match helper はこの static type を維持し、空 scan または既に cap 到達済みの
+scan で iterator object を割り当ててはならない。`IEnumerable<Match>` への変換と LINQ は
+互換経路として維持するが、value enumerable / enumerator を box するため hot loop では
+使わない。enumerable / enumerator の作成時には regex engine を呼び出さず、最初の
+`Regex.Match` は最初の `MoveNext` まで遅延する。後続処理は timeout、zero-length の進行、
+`\G` continuation、明示的 `startAt`、right-to-left の順序を保つため必ず
+`Match.NextMatch` を使う。cap-aware wrapper は下位の `MoveNext` より先に capacity を
+確認し、list が満杯になった後は先読みしない。
 symbol / dependency extractor も scientific / native、Pascal / Ada、SQL、Python、
 Swift、GraphQL、markup / XAML、shell、Ruby、Perl、Elixir、CSS、HDL、C++、
 manifest parsing をまたいで同じ逐次走査規則に従う。総数だけが必要な場合は

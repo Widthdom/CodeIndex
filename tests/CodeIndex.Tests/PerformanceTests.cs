@@ -1038,6 +1038,35 @@ public class PerformanceTests : IDisposable
     }
 
     [Fact]
+    public void ReferenceMatchEnumeration_ConcreteRegexDoesNotRequestSuffixAfterCapacity()
+    {
+        var regex = new BoundedRegex(
+            @"token|(?:a+)+$",
+            default,
+            TimeSpan.FromMilliseconds(25));
+        var input = "token " + new string('a', 100_000) + "!";
+        var references = ReferenceExtractor.CreateReferenceList(maxReferenceCount: 1);
+        using var capture = BoundedRegex.CaptureTimeouts("csharp", "bounded_regex_test");
+        var matches = ReferenceExtractor
+            .EnumerateReferenceMatches(regex, input, references)
+            .GetEnumerator();
+
+        try
+        {
+            Assert.True(matches.MoveNext());
+            Assert.Equal("token", matches.Current.Value);
+            references.Add(new ReferenceRecord());
+
+            Assert.False(matches.MoveNext());
+            Assert.False(capture.HasTimeouts);
+        }
+        finally
+        {
+            matches.Dispose();
+        }
+    }
+
+    [Fact]
     public void ReferenceMatchEnumeration_BelowCapacity_DoesNotAllocateWrapperEnumerators()
     {
         const int scanCount = 10_000;
@@ -1061,6 +1090,80 @@ public class PerformanceTests : IDisposable
         void Scan()
         {
             foreach (var _ in ReferenceExtractor.EnumerateReferenceMatches(source, references))
+                observedMatches++;
+        }
+    }
+
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
+    public void BoundedRegexEnumeration_DirectNoMatchScansDoNotAllocateEnumerators()
+    {
+        const int scanCount = 10_000;
+        const string input = "alpha beta gamma";
+        var regex = new BoundedRegex(
+            @"\bmissing\b",
+            RegexOptions.Compiled | RegexOptions.CultureInvariant);
+        var observedMatches = 0;
+
+        for (var index = 0; index < 128; index++)
+            Scan();
+        observedMatches = 0;
+
+        var allocatedBytes = MeasureAllocatedBytes(() =>
+        {
+            for (var index = 0; index < scanCount; index++)
+                Scan();
+        });
+
+        Assert.Equal(0, observedMatches);
+        Assert.True(
+            allocatedBytes < 1_024,
+            $"Direct bounded-regex enumeration allocated {allocatedBytes:N0} bytes");
+
+        void Scan()
+        {
+            foreach (var _ in BoundedRegex.EnumerateMatches(regex, input))
+                observedMatches++;
+        }
+    }
+
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
+    public void ReferenceMatchEnumeration_PrefilledCapacityDoesNotAllocateOrLookAhead()
+    {
+        const int scanCount = 10_000;
+        const string input = "token";
+        var regex = new BoundedRegex(
+            @"token",
+            RegexOptions.Compiled | RegexOptions.CultureInvariant);
+        var references = ReferenceExtractor.CreateReferenceList(maxReferenceCount: 1);
+        references.Add(new ReferenceRecord());
+        var observedMatches = 0;
+
+        for (var index = 0; index < 128; index++)
+            Scan();
+        observedMatches = 0;
+
+        var allocatedBytes = MeasureAllocatedBytes(() =>
+        {
+            for (var index = 0; index < scanCount; index++)
+                Scan();
+        });
+
+        Assert.Equal(0, observedMatches);
+        Assert.True(
+            allocatedBytes < 1_024,
+            $"Prefilled-cap reference match enumeration allocated {allocatedBytes:N0} bytes");
+
+        void Scan()
+        {
+            foreach (var _ in ReferenceExtractor.EnumerateReferenceMatches(regex, input, references))
                 observedMatches++;
         }
     }

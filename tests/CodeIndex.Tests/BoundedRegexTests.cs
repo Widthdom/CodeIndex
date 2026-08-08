@@ -1,5 +1,6 @@
 using CodeIndex.Cli;
 using CodeIndex.Indexer;
+using System.Collections;
 using System.Text.RegularExpressions;
 
 namespace CodeIndex.Tests;
@@ -39,7 +40,7 @@ public sealed class BoundedRegexTests
 
         var matches = BoundedRegex.EnumerateMatches(regex, input);
 
-        Assert.Empty(matches);
+        Assert.Empty(EnumerateConcreteMatches(matches));
     }
 
     [Fact]
@@ -48,12 +49,24 @@ public sealed class BoundedRegexTests
         var regex = new BoundedRegex(
             @"token|(?:a+)+$",
             default,
-            TimeSpan.FromMilliseconds(1));
-        var input = "token " + new string('a', 10_000) + "!";
+            TimeSpan.FromMilliseconds(25));
+        var input = "token " + new string('a', 100_000) + "!";
+        using var capture = BoundedRegex.CaptureTimeouts("csharp", "bounded_regex_test");
+        var matches = BoundedRegex.EnumerateMatches(regex, input).GetEnumerator();
 
-        var match = BoundedRegex.EnumerateMatches(regex, input).Take(1).Single();
+        try
+        {
+            Assert.True(matches.MoveNext());
+            Assert.Equal("token", matches.Current.Value);
+            matches.Dispose();
+            Assert.False(matches.MoveNext());
+        }
+        finally
+        {
+            matches.Dispose();
+        }
 
-        Assert.Equal("token", match.Value);
+        Assert.False(capture.HasTimeouts);
     }
 
     [Fact]
@@ -104,13 +117,13 @@ public sealed class BoundedRegexTests
     {
         var regex = new BoundedRegex(@"\w+");
 
-        var matches = BoundedRegex
-            .EnumerateMatches(regex, "skip alpha beta", startAt: 5)
-            .Take(2)
-            .Select(match => match.Value)
-            .ToArray();
+        var matches = EnumerateConcreteMatches(
+            BoundedRegex.EnumerateMatches(regex, "skip alpha beta", startAt: 5));
 
-        Assert.Equal(["alpha", "beta"], matches);
+        Assert.Collection(
+            matches,
+            match => Assert.Equal("alpha", match.Value),
+            match => Assert.Equal("beta", match.Value));
     }
 
     [Fact]
@@ -118,12 +131,154 @@ public sealed class BoundedRegexTests
     {
         var regex = new BoundedRegex(@"\w+", RegexOptions.RightToLeft);
 
-        var matches = BoundedRegex
-            .EnumerateMatches(regex, "alpha beta")
-            .Select(match => match.Value)
-            .ToArray();
+        var matches = EnumerateConcreteMatches(
+            BoundedRegex.EnumerateMatches(regex, "alpha beta"));
 
-        Assert.Equal(["beta", "alpha"], matches);
+        Assert.Collection(
+            matches,
+            match => Assert.Equal("beta", match.Value),
+            match => Assert.Equal("alpha", match.Value));
+    }
+
+    [Fact]
+    public void EnumerateMatches_InstanceRegex_InvalidStartAtIsDeferredUntilMoveNext()
+    {
+        var regex = new BoundedRegex(@"\w+");
+        var enumerable = BoundedRegex.EnumerateMatches(regex, "alpha", startAt: 6);
+        var enumerator = enumerable.GetEnumerator();
+        Exception? exception = null;
+
+        try
+        {
+            try
+            {
+                enumerator.MoveNext();
+            }
+            catch (Exception ex)
+            {
+                exception = ex;
+            }
+
+            Assert.IsType<ArgumentOutOfRangeException>(exception);
+            Assert.False(enumerator.MoveNext());
+        }
+        finally
+        {
+            enumerator.Dispose();
+        }
+    }
+
+    [Fact]
+    public void EnumerateMatches_InstanceRegex_ZeroLengthMatchesAdvance()
+    {
+        var regex = new BoundedRegex(@"(?=\w)");
+        var matches = EnumerateConcreteMatches(
+            BoundedRegex.EnumerateMatches(regex, "ab"));
+
+        Assert.Collection(
+            matches,
+            match =>
+            {
+                Assert.Equal(0, match.Index);
+                Assert.Equal(0, match.Length);
+            },
+            match =>
+            {
+                Assert.Equal(1, match.Index);
+                Assert.Equal(0, match.Length);
+            });
+    }
+
+    [Fact]
+    public void EnumerateMatches_InstanceRegex_GAnchorContinuesFromPreviousMatchEnd()
+    {
+        var regex = new BoundedRegex(@"\G\w");
+
+        var fromStart = EnumerateConcreteMatches(
+            BoundedRegex.EnumerateMatches(regex, "ab cd"));
+        var fromOffset = EnumerateConcreteMatches(
+            BoundedRegex.EnumerateMatches(regex, "ab cd", startAt: 3));
+
+        Assert.Collection(
+            fromStart,
+            match => Assert.Equal(("a", 0), (match.Value, match.Index)),
+            match => Assert.Equal(("b", 1), (match.Value, match.Index)));
+        Assert.Collection(
+            fromOffset,
+            match => Assert.Equal(("c", 3), (match.Value, match.Index)),
+            match => Assert.Equal(("d", 4), (match.Value, match.Index)));
+    }
+
+    [Fact]
+    public void EnumerateMatches_InstanceRightToLeftRegex_PreservesRequestedStartAndOrder()
+    {
+        var regex = new BoundedRegex(@"\w+", RegexOptions.RightToLeft);
+
+        var matches = EnumerateConcreteMatches(
+            BoundedRegex.EnumerateMatches(regex, "alpha beta gamma", startAt: 10));
+
+        Assert.Collection(
+            matches,
+            match => Assert.Equal(("beta", 6), (match.Value, match.Index)),
+            match => Assert.Equal(("alpha", 0), (match.Value, match.Index)));
+    }
+
+    [Fact]
+    public void EnumerateMatches_InstanceRegex_SuffixTimeoutIsRecordedOnceAndTerminates()
+    {
+        var regex = new BoundedRegex(
+            @"token|(?:a+)+$",
+            default,
+            TimeSpan.FromMilliseconds(25));
+        var input = "token " + new string('a', 100_000) + "!";
+        using var capture = BoundedRegex.CaptureTimeouts("csharp", "bounded_regex_test");
+        var matches = BoundedRegex.EnumerateMatches(regex, input).GetEnumerator();
+
+        try
+        {
+            Assert.True(matches.MoveNext());
+            Assert.Equal("token", matches.Current.Value);
+            Assert.False(matches.MoveNext());
+            Assert.Equal(1, capture.TimeoutCount);
+            Assert.Equal("matches", Assert.Single(capture.Diagnostics).Operation);
+
+            Assert.False(matches.MoveNext());
+            Assert.Equal(1, capture.TimeoutCount);
+        }
+        finally
+        {
+            matches.Dispose();
+        }
+    }
+
+    [Fact]
+    public void EnumerateMatches_InstanceRegex_InterfaceResetIsNotSupported()
+    {
+        var regex = new BoundedRegex(@"\w+");
+        IEnumerator<Match> matches = BoundedRegex
+            .EnumerateMatches(regex, "alpha")
+            .GetEnumerator();
+
+        try
+        {
+            Assert.True(matches.MoveNext());
+            Assert.Throws<NotSupportedException>(() => ((IEnumerator)matches).Reset());
+        }
+        finally
+        {
+            matches.Dispose();
+        }
+    }
+
+    [Fact]
+    public void EnumerateMatches_InstanceRegex_LinqCompatibilityPreservesOrder()
+    {
+        var regex = new BoundedRegex(@"\w+");
+        IEnumerable<Match> matches = BoundedRegex.EnumerateMatches(regex, "alpha beta");
+
+        var values = matches.Select(match => match.Value).ToArray();
+
+        Assert.Equal(["alpha", "beta"], values);
     }
 
     [Fact]
@@ -204,5 +359,15 @@ public sealed class BoundedRegexTests
         var isMatch = regex.IsMatch(input);
 
         Assert.False(isMatch);
+    }
+
+    private static List<Match> EnumerateConcreteMatches(
+        BoundedRegex.MatchEnumerable matches)
+    {
+        List<Match> materialized = [];
+        foreach (var match in matches)
+            materialized.Add(match);
+
+        return materialized;
     }
 }
