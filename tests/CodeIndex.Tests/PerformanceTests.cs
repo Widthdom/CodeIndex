@@ -1434,10 +1434,13 @@ public class PerformanceTests : IDisposable
         {
             builder.Append("  if (input) { total += /[{}]/.test(input) ? ")
                 .Append(index)
-                .AppendLine(" : 0; }");
+                .Append(" : 0; }")
+                .Append('\n');
         }
 
-        return builder.AppendLine("  return total;\n}").ToString();
+        return builder.Append("  return total;\n}")
+            .Append('\n')
+            .ToString();
     }
 
     private static string BuildPythonImportedTypeCallFixture(int importCount)
