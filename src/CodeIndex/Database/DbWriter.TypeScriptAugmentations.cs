@@ -425,6 +425,15 @@ public partial class DbWriter
                 references,
                 refreshMutualRecursionFlags: true,
                 cancellationToken);
+            if (references.Count == 0)
+            {
+                // The insert helper intentionally no-ops for an empty batch. Augmentation
+                // rebuilds still own graph finalization because they may have deleted every
+                // synthetic edge, or the caller may have coalesced an earlier graph pass.
+                // 空batchでも全augmentation edge削除や先行pass統合後のgraph確定を担う。
+                cancellationToken.ThrowIfCancellationRequested();
+                RefreshMutualRecursionFlags(cancellationToken);
+            }
             for (var referenceIndex = 0; referenceIndex < references.Count; referenceIndex++)
             {
                 if ((referenceIndex & 1_023) == 0)

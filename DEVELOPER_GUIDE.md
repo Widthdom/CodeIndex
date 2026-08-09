@@ -1559,6 +1559,8 @@ Extractor inputs are passed as a `ReferenceExtractionContext`. Implementations m
 
 TypeScript extraction emits `type_reference` edges from type-only constructs as dependency metadata, not executable call-graph edges. Type aliases, mapped types, indexed access types, conditional types, template literal type holes, and `infer` clauses are scanned for referenced identifiers while TypeScript type operators such as `keyof`, `in`, `as`, `extends`, and `infer` are suppressed as keywords. For example, ``type Getters<T> = { [K in keyof T as `get${Capitalize<K>}`]: () => T[K] }`` records references to `T`, `K`, and `Capitalize`; `type Unwrap<T> = T extends Promise<infer U> ? U : never` records `T`, `Promise`, and `U`.
 
+Post-index TypeScript declaration merging and reference-identity finalization share one graph pass. CLI full scan, scoped update, and MCP indexing defer their earlier mutual-recursion refresh only when clean readiness will definitely rebuild augmentation references; that rebuild deletes and inserts synthetic `augmentation` edges, then finalizes the graph even when it produces an empty reference batch. If immutable-input validation later makes the run partial, the orchestrator executes the deferred pass before readiness handling instead. An authoritative fresh or rebuild scan with no TypeScript targets stamps the augmentation contract without scanning augmentation rows. This keeps graph publication and retry semantics unchanged while avoiding two whole-graph refreshes on large TypeScript repositories.
+
 ## Why a database instead of grep?
 
 On small projects, `grep` works fine. But as a codebase grows to tens of thousands of files, `grep` becomes a bottleneck — especially when an AI agent calls it repeatedly. cdidx solves this by **reading every file once at index time** and building a search structure so that queries never need to touch the original files again.
@@ -5168,6 +5170,8 @@ Scala 抽出は `class` / `case class` 宣言を `class`、singleton の `object
 ### TypeScript 型グラフ抽出
 
 TypeScript 抽出は、type-only 構文から `type_reference` edge を dependency metadata として出力し、実行される call-graph edge とは扱わない。type alias、mapped type、indexed access type、conditional type、template literal type の hole、`infer` 句では参照先 identifier を走査し、`keyof`、`in`、`as`、`extends`、`infer` のような TypeScript type operator は keyword として抑止する。たとえば ``type Getters<T> = { [K in keyof T as `get${Capitalize<K>}`]: () => T[K] }`` は `T`、`K`、`Capitalize` への参照を記録し、`type Unwrap<T> = T extends Promise<infer U> ? U : never` は `T`、`Promise`、`U` を記録する。
+
+index 後の TypeScript declaration merge と reference identity の確定は、1回の graph pass を共有する。CLI full scan、scoped update、MCP indexing は、clean readiness で augmentation reference rebuild が確実に実行される場合だけ先行 mutual-recursion refresh を遅延する。rebuild は合成 `augmentation` edge を削除・挿入し、reference batch が空でも graph を確定する。immutable-input validation により後から partial になった場合は、readiness 処理の前に orchestrator が遅延 pass を補完する。TypeScript target のない authoritative な fresh / rebuild scan は augmentation row を走査せず contract だけを stamp する。これにより graph 公開と retry semantics を維持しながら、大規模 TypeScript repository での全 graph refresh 2回を避ける。
 
 ## なぜgrepではなくデータベースなのか？
 

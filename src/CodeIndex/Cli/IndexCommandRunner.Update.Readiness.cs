@@ -41,6 +41,8 @@ public static partial class IndexCommandRunner
         internal required int TargetCount { get; init; }
         internal required int Errors { get; init; }
         internal required List<StatusIndexFileError> FileErrorList { get; init; }
+        internal required List<IndexMemorySampleJsonResult> MemorySamples { get; init; }
+        internal required bool CaptureReferenceGraphMemorySampleAfterTypeScriptAugmentation { get; init; }
         internal required IReadOnlyList<string> FullyRefreshedDynamicGraphLanguages { get; init; }
     }
 
@@ -148,9 +150,10 @@ public static partial class IndexCommandRunner
 
             using (var hotspotFamilyTxn = writer.BeginTransaction(cancellationToken, "update hotspot-family restamp"))
             {
-                if (!options.SymbolsOnly
-                    && (context.TypeScriptAugmentationNeedsRefresh
-                        || context.TypeScriptAugmentationDirtyNames?.RequiresRefresh == true))
+                if (TypeScriptAugmentationRefreshPolicy.IsRefreshRequired(
+                        options.SymbolsOnly,
+                        context.TypeScriptAugmentationNeedsRefresh,
+                        context.TypeScriptAugmentationDirtyNames?.RequiresRefresh == true))
                 {
                     UpdateTypeScriptAugmentationRebuildForTesting?.Invoke();
                     writer.RebuildTypeScriptAugmentationReferences(
@@ -159,6 +162,11 @@ public static partial class IndexCommandRunner
                             ? context.TypeScriptAugmentationDirtyNames?.DirtyNames
                             : null,
                         cancellationToken);
+                }
+                if (options.MemoryTrace
+                    && context.CaptureReferenceGraphMemorySampleAfterTypeScriptAugmentation)
+                {
+                    context.MemorySamples.Add(CaptureMemorySample("reference_graph", context.Stopwatch));
                 }
                 RestampHotspotFamilyTrustForUpdate(
                     writer,

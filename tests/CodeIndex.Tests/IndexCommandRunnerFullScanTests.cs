@@ -147,6 +147,9 @@ public partial class IndexCommandRunnerTests
             var pythonPath = Path.Combine(projectRoot, "app.py");
             File.WriteAllText(csharpPath, "public class App { public void Run() { } }\n");
             File.WriteAllText(pythonPath, "def run():\n    return 1\n");
+            File.WriteAllText(
+                Path.Combine(projectRoot, "types.ts"),
+                "interface MemoryTraceContract { value: number }\n");
 
             var (fullExitCode, fullJson) = RunAndCaptureJson([
                 projectRoot,
@@ -158,7 +161,7 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, fullExitCode);
             var fullSamples = fullJson.GetProperty("memory_timeline").GetProperty("samples").EnumerateArray().ToArray();
             Assert.Equal(
-                ["start", "scan", "csharp_prepass", "purge", "extraction", "reference_graph", "text_index", "finalize", "commit"],
+                ["start", "scan", "csharp_prepass", "purge", "extraction", "text_index", "reference_graph", "finalize", "commit"],
                 fullSamples.Select(sample => sample.GetProperty("phase").GetString()));
             AssertPhaseSamplesAreMonotonic(fullSamples);
 
@@ -2360,20 +2363,42 @@ public partial class IndexCommandRunnerTests
     {
         var projectRoot = CreateTempProject();
         var previousValidationHook = IndexCommandRunner.FullScanCSharpReadinessValidationForTesting;
+        var previousAugmentationHook = IndexCommandRunner.FullScanTypeScriptAugmentationRebuildForTesting;
+        var previousRefreshHook = DbWriter.MutualRecursionRefreshForTesting;
         var addedPath = Path.Combine(projectRoot, "INewContract.cs");
+        var deletedTypeScriptPath = Path.Combine(projectRoot, "first.ts");
+        var augmentationRebuildCount = 0;
+        var refreshCount = 0;
         try
         {
             File.WriteAllText(Path.Combine(projectRoot, "Plain.cs"), "public sealed class Plain { }\n");
+            File.WriteAllText(
+                deletedTypeScriptPath,
+                "interface SharedBoundary { first: number }\n");
+            File.WriteAllText(
+                Path.Combine(projectRoot, "second.ts"),
+                "interface SharedBoundary { second: number }\n");
             Assert.Equal(
                 CommandExitCodes.Success,
                 IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions));
 
+            File.Delete(deletedTypeScriptPath);
             IndexCommandRunner.FullScanCSharpReadinessValidationForTesting = () =>
             {
                 File.WriteAllText(
                     addedPath,
                     "public interface INewContract<T> { static abstract T Create(); }\n");
                 File.SetLastWriteTimeUtc(addedPath, DateTime.UtcNow.AddSeconds(2));
+            };
+            IndexCommandRunner.FullScanTypeScriptAugmentationRebuildForTesting = () =>
+            {
+                augmentationRebuildCount++;
+                previousAugmentationHook?.Invoke();
+            };
+            DbWriter.MutualRecursionRefreshForTesting = () =>
+            {
+                refreshCount++;
+                previousRefreshHook?.Invoke();
             };
 
             var (partialExitCode, partialJson) = RunAndCaptureJson(
@@ -2384,26 +2409,38 @@ public partial class IndexCommandRunnerTests
             Assert.Contains(
                 partialJson.GetProperty("file_errors").EnumerateArray(),
                 error => error.GetProperty("phase").GetString() == "csharp_workspace_validation");
+            Assert.Equal(0, augmentationRebuildCount);
+            Assert.Equal(1, refreshCount);
             using (var partialDb = new DbContext(
                        DbOpenIntent.WriteIndex,
                        Path.Combine(projectRoot, ".cdidx", "codeindex.db")))
             {
                 Assert.Null(new DbWriter(partialDb).GetCSharpStaticInterfaceSourceEvidence());
+                Assert.Null(partialDb.GetMetaString(DbContext.TypeScriptAugmentationVersionMetaKey));
             }
 
             IndexCommandRunner.FullScanCSharpReadinessValidationForTesting = previousValidationHook;
+            augmentationRebuildCount = 0;
+            refreshCount = 0;
             var (recoveryExitCode, recoveryJson) = RunAndCaptureJson(
                 [projectRoot, "--json", "--quiet"]);
             Assert.Equal(CommandExitCodes.Success, recoveryExitCode);
             Assert.Equal("success", recoveryJson.GetProperty("status").GetString());
+            Assert.Equal(1, augmentationRebuildCount);
+            Assert.Equal(1, refreshCount);
             using var recoveryDb = new DbContext(
                 DbOpenIntent.WriteIndex,
                 Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
             Assert.Equal(true, new DbWriter(recoveryDb).GetCSharpStaticInterfaceSourceEvidence());
+            Assert.Equal(
+                DbContext.TypeScriptAugmentationVersion.ToString(CultureInfo.InvariantCulture),
+                recoveryDb.GetMetaString(DbContext.TypeScriptAugmentationVersionMetaKey));
         }
         finally
         {
             IndexCommandRunner.FullScanCSharpReadinessValidationForTesting = previousValidationHook;
+            IndexCommandRunner.FullScanTypeScriptAugmentationRebuildForTesting = previousAugmentationHook;
+            DbWriter.MutualRecursionRefreshForTesting = previousRefreshHook;
             DeleteDirectory(projectRoot);
             SqliteConnection.ClearAllPools();
         }

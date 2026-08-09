@@ -5725,7 +5725,9 @@ public partial class IndexCommandRunnerTests
     {
         var projectRoot = CreateTempProject();
         var previousGroupingHook = DbWriter.TypeScriptAugmentationGroupingForTesting;
+        var previousRefreshHook = DbWriter.MutualRecursionRefreshForTesting;
         DbWriter.TypeScriptAugmentationGroupingStats? groupingStats = null;
+        var refreshCount = 0;
         try
         {
             var sourcePath = Path.Combine(projectRoot, "types.ts");
@@ -5742,6 +5744,11 @@ public partial class IndexCommandRunnerTests
                 groupingStats = stats;
                 previousGroupingHook?.Invoke(stats);
             };
+            DbWriter.MutualRecursionRefreshForTesting = () =>
+            {
+                refreshCount++;
+                previousRefreshHook?.Invoke();
+            };
 
             var (updateExitCode, updateJson) = RunAndCaptureJson([projectRoot, "--files", "types.ts", "--json"]);
 
@@ -5752,11 +5759,13 @@ public partial class IndexCommandRunnerTests
             Assert.NotNull(groupingStats);
             Assert.Equal(0, groupingStats!.DeclarationCount);
             Assert.Equal(1, groupingStats.ScopedNameCount);
+            Assert.Equal(1, refreshCount);
         }
         finally
         {
             IndexCommandRunner.UpdateTypeScriptAugmentationRebuildForTesting = null;
             DbWriter.TypeScriptAugmentationGroupingForTesting = previousGroupingHook;
+            DbWriter.MutualRecursionRefreshForTesting = previousRefreshHook;
             DeleteDirectory(projectRoot);
         }
     }

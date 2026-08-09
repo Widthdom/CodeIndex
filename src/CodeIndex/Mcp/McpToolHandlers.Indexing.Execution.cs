@@ -1761,19 +1761,39 @@ public partial class McpServer
             await EmitProgressNotificationAsync(progressToken, processed, files.Count).ConfigureAwait(false);
         }
 
-        if (!deferCSharpMutationsForIncompleteScan && mutualRecursionRefreshNeeded)
+        var referenceIdentityReadyForMutualRecursionRefresh =
+            !deferCSharpMutationsForIncompleteScan && mutualRecursionRefreshNeeded
+                ? writer.CSharpFamilyTrustAllowsReferenceIdentityReady(
+                    startedWithNoIndexedFiles
+                    && !scanHadErrors
+                    && errors == 0
+                        ? csharpPrepassTargets.Count > 0
+                        : null)
+                : (bool?)null;
+        var canStampTypeScriptAugmentationReadyWithoutRebuild =
+            (startedWithNoIndexedFiles || rebuild)
+            && !scanHadErrors
+            && !hasTypeScriptTargets;
+        var deferMutualRecursionRefreshToTypeScriptAugmentation =
+            !deferCSharpMutationsForIncompleteScan
+            && mutualRecursionRefreshNeeded
+            && TypeScriptAugmentationRefreshPolicy.ShouldRebuildReferences(
+                symbolsOnly: false,
+                canFinalize: !scanHadErrors && errors == 0,
+                typeScriptAugmentationNeedsRefresh,
+                typeScriptAugmentationDirtyNames?.RequiresRefresh == true,
+                canStampReadyWithoutRebuild:
+                    canStampTypeScriptAugmentationReadyWithoutRebuild);
+        if (!deferCSharpMutationsForIncompleteScan
+            && mutualRecursionRefreshNeeded
+            && !deferMutualRecursionRefreshToTypeScriptAugmentation)
         {
             requestToken.ThrowIfCancellationRequested();
             await EmitProgressNotificationAsync(progressToken, processed, files.Count, "Finalizing reference graph.").ConfigureAwait(false);
             writer.RefreshMutualRecursionFlags(
                 requestToken,
                 stampReferenceIdentityContractReady:
-                    writer.CSharpFamilyTrustAllowsReferenceIdentityReady(
-                        startedWithNoIndexedFiles
-                        && !scanHadErrors
-                        && errors == 0
-                            ? csharpPrepassTargets.Count > 0
-                            : null),
+                    referenceIdentityReadyForMutualRecursionRefresh,
                 referenceSecondaryIndexBulkLoad: referenceSecondaryIndexBulkLoad);
         }
         else if (referenceSecondaryIndexBulkLoad != null)
@@ -1876,6 +1896,30 @@ public partial class McpServer
                 writer.SetCSharpStaticInterfaceSourceEvidence(true);
             }
         }
+        // The TypeScript augmentation rebuild performs the same graph refresh after adding
+        // synthetic edges. If late input validation makes that rebuild ineligible, complete
+        // the deferred pass before publishing partial metadata.
+        // late validation で augmentation を実行できない場合だけ、partial metadata 前に補完する。
+        if (deferMutualRecursionRefreshToTypeScriptAugmentation
+            && !TypeScriptAugmentationRefreshPolicy.ShouldRebuildReferences(
+                symbolsOnly: false,
+                canFinalize: !scanHadErrors && errors == 0,
+                typeScriptAugmentationNeedsRefresh,
+                typeScriptAugmentationDirtyNames?.RequiresRefresh == true,
+                canStampReadyWithoutRebuild:
+                    canStampTypeScriptAugmentationReadyWithoutRebuild))
+        {
+            requestToken.ThrowIfCancellationRequested();
+            await EmitProgressNotificationAsync(
+                progressToken,
+                processed,
+                files.Count,
+                "Finalizing reference graph after readiness validation.").ConfigureAwait(false);
+            writer.RefreshMutualRecursionFlags(
+                requestToken,
+                stampReferenceIdentityContractReady:
+                    referenceIdentityReadyForMutualRecursionRefresh);
+        }
         // A complete fresh/rebuild discovery is authoritative for both presence and absence.
         // With a partial discovery, positive target evidence remains authoritative while
         // absence falls back to persisted rows. This prevents readiness from depending on
@@ -1929,7 +1973,21 @@ public partial class McpServer
         }
         if (!scanHadErrors && errors == 0)
         {
-            await EmitProgressNotificationAsync(progressToken, processed, files.Count, "Finalizing index metadata.").ConfigureAwait(false);
+            var rebuildTypeScriptAugmentation =
+                TypeScriptAugmentationRefreshPolicy.ShouldRebuildReferences(
+                    symbolsOnly: false,
+                    canFinalize: true,
+                    typeScriptAugmentationNeedsRefresh,
+                    typeScriptAugmentationDirtyNames?.RequiresRefresh == true,
+                    canStampReadyWithoutRebuild:
+                        canStampTypeScriptAugmentationReadyWithoutRebuild);
+            await EmitProgressNotificationAsync(
+                progressToken,
+                processed,
+                files.Count,
+                rebuildTypeScriptAugmentation
+                    ? "Rebuilding TypeScript augmentation and finalizing reference graph."
+                    : "Finalizing index metadata.").ConfigureAwait(false);
             if (!useFullRunBatchMarker)
                 writer.MarkBatchInProgress();
             using var readinessTxn = writer.BeginTransaction(requestToken, "mcp index readiness");
@@ -1955,10 +2013,12 @@ public partial class McpServer
                 csharpMetadataTargetReadyAfter = true;
             }
             sqlGraphContractReadyAfter = true;
-            if (typeScriptAugmentationNeedsRefresh
-                || typeScriptAugmentationDirtyNames?.RequiresRefresh == true)
+            if (TypeScriptAugmentationRefreshPolicy.IsRefreshRequired(
+                    symbolsOnly: false,
+                    typeScriptAugmentationNeedsRefresh,
+                    typeScriptAugmentationDirtyNames?.RequiresRefresh == true))
             {
-                if (startedWithNoIndexedFiles && !hasTypeScriptTargets)
+                if (canStampTypeScriptAugmentationReadyWithoutRebuild)
                 {
                     writer.MarkTypeScriptAugmentationReady();
                 }

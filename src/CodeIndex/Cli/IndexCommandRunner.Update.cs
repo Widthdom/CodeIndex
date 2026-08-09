@@ -742,16 +742,28 @@ public static partial class IndexCommandRunner
 
         ThrowIfUpdateCancelled();
         mutualRecursionRefreshNeeded |= !options.SymbolsOnly && (removed > 0 || purgedRefs > 0);
-        if (mutualRecursionRefreshNeeded)
+        var referenceIdentityReadyForMutualRecursionRefresh = mutualRecursionRefreshNeeded
+            ? writer.CSharpFamilyTrustAllowsReferenceIdentityReady()
+            : (bool?)null;
+        var deferMutualRecursionRefreshToTypeScriptAugmentation =
+            mutualRecursionRefreshNeeded
+            && TypeScriptAugmentationRefreshPolicy.ShouldRebuildReferences(
+                options.SymbolsOnly,
+                canFinalize: readinessDemoted && errors == 0,
+                typeScriptAugmentationNeedsRefresh,
+                typeScriptAugmentationDirtyNames?.RequiresRefresh == true,
+                canStampReadyWithoutRebuild: false);
+        if (mutualRecursionRefreshNeeded
+            && !deferMutualRecursionRefreshToTypeScriptAugmentation)
             writer.RefreshMutualRecursionFlags(
                 cancellationToken,
                 stampReferenceIdentityContractReady:
-                    writer.CSharpFamilyTrustAllowsReferenceIdentityReady(),
+                    referenceIdentityReadyForMutualRecursionRefresh,
                 referenceSecondaryIndexBulkLoad: referenceSecondaryIndexBulkLoad);
         // Only the three reverse-edge indexes participate in graph finalization. Recoverable
         // mode restores the remaining query indexes afterwards and repairs all on unwind.
         referenceSecondaryIndexBulkLoad?.Complete(cancellationToken);
-        if (options.MemoryTrace)
+        if (options.MemoryTrace && !deferMutualRecursionRefreshToTypeScriptAugmentation)
             memorySamples.Add(CaptureMemorySample("reference_graph", stopwatch));
         ThrowIfUpdateCancelled();
         updateProgress.Pause();
@@ -798,6 +810,27 @@ public static partial class IndexCommandRunner
                 };
             }
         }
+        var deferredMutualRecursionRefreshCompletedBeforeReadiness = false;
+        // A successful TypeScript augmentation rebuild performs the graph refresh itself.
+        // Late workspace drift prevents that rebuild, so complete the deferred pass before
+        // partial readiness restores any prior graph trust.
+        // augmentation 実行不能となる late drift 時だけ、partial readiness の前に補完する。
+        if (deferMutualRecursionRefreshToTypeScriptAugmentation
+            && !TypeScriptAugmentationRefreshPolicy.ShouldRebuildReferences(
+                options.SymbolsOnly,
+                canFinalize: readinessDemoted && errors == 0,
+                typeScriptAugmentationNeedsRefresh,
+                typeScriptAugmentationDirtyNames?.RequiresRefresh == true,
+                canStampReadyWithoutRebuild: false))
+        {
+            writer.RefreshMutualRecursionFlags(
+                cancellationToken,
+                stampReferenceIdentityContractReady:
+                    referenceIdentityReadyForMutualRecursionRefresh);
+            deferredMutualRecursionRefreshCompletedBeforeReadiness = true;
+        }
+        if (options.MemoryTrace && deferredMutualRecursionRefreshCompletedBeforeReadiness)
+            memorySamples.Add(CaptureMemorySample("reference_graph", stopwatch));
         var readiness = FinalizeUpdateReadiness(new UpdateReadinessContext
         {
             Writer = writer,
@@ -832,6 +865,10 @@ public static partial class IndexCommandRunner
             TargetCount = targetPaths.Count,
             Errors = errors,
             FileErrorList = fileErrorList,
+            MemorySamples = memorySamples,
+            CaptureReferenceGraphMemorySampleAfterTypeScriptAugmentation =
+                deferMutualRecursionRefreshToTypeScriptAugmentation
+                && !deferredMutualRecursionRefreshCompletedBeforeReadiness,
             FullyRefreshedDynamicGraphLanguages = errors == 0 && readinessDemoted
                 ? GetFullyRefreshedDynamicGraphLanguages()
                 : [],

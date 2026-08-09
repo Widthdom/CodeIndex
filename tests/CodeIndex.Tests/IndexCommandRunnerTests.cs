@@ -2394,11 +2394,13 @@ public sealed class Caller
 
 
     [Fact]
-    public void Run_FreshFullScanWithoutTypeScript_SkipsTypeScriptAugmentationRebuild()
+    public void Run_FreshAndRebuildWithoutTypeScript_SkipTypeScriptAugmentationRebuild()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_fresh_no_ts_augmentation");
         var dbPath = CreateTempDbPath("cdidx_fresh_no_ts_augmentation");
+        var previousRefreshHook = DbWriter.MutualRecursionRefreshForTesting;
         var rebuiltTypeScriptAugmentation = false;
+        var refreshCount = 0;
         var foldBackfillVerifications = 0;
         var languagePresenceChecks = 0;
         var indexedLanguageReads = 0;
@@ -2411,6 +2413,11 @@ public sealed class Caller
             File.WriteAllText(Path.Combine(projectRoot, "tool.py"), "def run():\n    return 1\n");
 
             IndexCommandRunner.FullScanTypeScriptAugmentationRebuildForTesting = () => rebuiltTypeScriptAugmentation = true;
+            DbWriter.MutualRecursionRefreshForTesting = () =>
+            {
+                refreshCount++;
+                previousRefreshHook?.Invoke();
+            };
             DbWriter.FoldBackfillVerificationForTesting = () => foldBackfillVerifications++;
             DbWriter.LanguagePresenceCheckForTesting = _ => languagePresenceChecks++;
             DbWriter.IndexedLanguagesReadForTesting = () => indexedLanguageReads++;
@@ -2423,6 +2430,7 @@ public sealed class Caller
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal("success", json.GetProperty("status").GetString());
             Assert.False(rebuiltTypeScriptAugmentation);
+            Assert.Equal(1, refreshCount);
             Assert.Equal(1, foldBackfillVerifications);
             Assert.Equal(0, languagePresenceChecks);
             Assert.Equal(0, indexedLanguageReads);
@@ -2430,6 +2438,20 @@ public sealed class Caller
             Assert.Equal(0, reusableLookups);
             Assert.Equal(0, countReads);
             Assert.Equal(2, json.GetProperty("summary").GetProperty("files_total").GetInt64());
+
+            refreshCount = 0;
+            var (rebuildExitCode, rebuildJson) = RunAndCaptureJson([
+                projectRoot,
+                "--db",
+                dbPath,
+                "--rebuild",
+                "--yes",
+                "--json",
+            ]);
+            Assert.Equal(CommandExitCodes.Success, rebuildExitCode);
+            Assert.Equal("success", rebuildJson.GetProperty("status").GetString());
+            Assert.False(rebuiltTypeScriptAugmentation);
+            Assert.Equal(1, refreshCount);
             using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             Assert.Equal(
                 DbContext.TypeScriptAugmentationVersion.ToString(CultureInfo.InvariantCulture),
@@ -2438,6 +2460,7 @@ public sealed class Caller
         finally
         {
             IndexCommandRunner.FullScanTypeScriptAugmentationRebuildForTesting = null;
+            DbWriter.MutualRecursionRefreshForTesting = previousRefreshHook;
             DbWriter.FoldBackfillVerificationForTesting = null;
             DbWriter.LanguagePresenceCheckForTesting = null;
             DbWriter.IndexedLanguagesReadForTesting = null;
@@ -2505,7 +2528,9 @@ public sealed class Caller
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_fullscan_ts_augmentation_dirty_names");
         var previousGroupingHook = DbWriter.TypeScriptAugmentationGroupingForTesting;
+        var previousRefreshHook = DbWriter.MutualRecursionRefreshForTesting;
         DbWriter.TypeScriptAugmentationGroupingStats? groupingStats = null;
+        var refreshCount = 0;
         try
         {
             var changedPath = Path.Combine(projectRoot, "changed.ts");
@@ -2528,6 +2553,11 @@ public sealed class Caller
                 groupingStats = stats;
                 previousGroupingHook?.Invoke(stats);
             };
+            DbWriter.MutualRecursionRefreshForTesting = () =>
+            {
+                refreshCount++;
+                previousRefreshHook?.Invoke();
+            };
 
             var (updateExitCode, updateJson) = RunAndCaptureJson([projectRoot, "--json"]);
 
@@ -2538,10 +2568,12 @@ public sealed class Caller
             Assert.Equal(2, groupingStats.GroupCount);
             Assert.Equal(1, groupingStats.MergedGroupCount);
             Assert.Equal(2, groupingStats.ScopedNameCount);
+            Assert.Equal(1, refreshCount);
         }
         finally
         {
             DbWriter.TypeScriptAugmentationGroupingForTesting = previousGroupingHook;
+            DbWriter.MutualRecursionRefreshForTesting = previousRefreshHook;
             DeleteDirectory(projectRoot);
         }
     }

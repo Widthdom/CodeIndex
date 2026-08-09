@@ -7631,12 +7631,14 @@ public partial class McpServerTests
     }
 
     [Fact]
-    public void ToolsCall_Index_FreshWithoutTypeScriptSkipsTypeScriptAugmentationRebuild()
+    public void ToolsCall_Index_FreshAndRebuildWithoutTypeScriptSkipTypeScriptAugmentationRebuild()
     {
         var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_fresh_no_ts_augmentation_{Guid.NewGuid():N}");
         Directory.CreateDirectory(fixtureDir);
         var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_fresh_no_ts_augmentation");
+        var previousRefreshHook = DbWriter.MutualRecursionRefreshForTesting;
         var rebuiltTypeScriptAugmentation = false;
+        var refreshCount = 0;
         var foldBackfillVerifications = 0;
         var languagePresenceChecks = 0;
         var indexedLanguageReads = 0;
@@ -7650,6 +7652,11 @@ public partial class McpServerTests
             using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
 
             McpServer.McpIndexTypeScriptAugmentationRebuildForTesting = () => rebuiltTypeScriptAugmentation = true;
+            DbWriter.MutualRecursionRefreshForTesting = () =>
+            {
+                refreshCount++;
+                previousRefreshHook?.Invoke();
+            };
             DbWriter.FoldBackfillVerificationForTesting = () => foldBackfillVerifications++;
             DbWriter.LanguagePresenceCheckForTesting = _ => languagePresenceChecks++;
             DbWriter.IndexedLanguagesReadForTesting = () => indexedLanguageReads++;
@@ -7661,6 +7668,7 @@ public partial class McpServerTests
 
             Assert.False(response["result"]?["isError"]?.GetValue<bool>() ?? false, response.ToJsonString());
             Assert.False(rebuiltTypeScriptAugmentation);
+            Assert.Equal(1, refreshCount);
             Assert.Equal(1, foldBackfillVerifications);
             Assert.Equal(0, languagePresenceChecks);
             Assert.Equal(0, indexedLanguageReads);
@@ -7668,6 +7676,14 @@ public partial class McpServerTests
             Assert.Equal(0, reusableLookups);
             Assert.Equal(0, countReads);
             Assert.Equal(2, response["result"]!["structuredContent"]!["summary"]!["files"]!.GetValue<long>());
+
+            refreshCount = 0;
+            var rebuildResponse = CallIndex(server, fixtureDir, args => args["rebuild"] = true);
+            Assert.False(
+                rebuildResponse["result"]?["isError"]?.GetValue<bool>() ?? false,
+                rebuildResponse.ToJsonString());
+            Assert.False(rebuiltTypeScriptAugmentation);
+            Assert.Equal(1, refreshCount);
             using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             db.TryMigrateForRead();
             Assert.Equal(
@@ -7677,6 +7693,7 @@ public partial class McpServerTests
         finally
         {
             McpServer.McpIndexTypeScriptAugmentationRebuildForTesting = null;
+            DbWriter.MutualRecursionRefreshForTesting = previousRefreshHook;
             DbWriter.FoldBackfillVerificationForTesting = null;
             DbWriter.LanguagePresenceCheckForTesting = null;
             DbWriter.IndexedLanguagesReadForTesting = null;
@@ -7801,7 +7818,9 @@ public partial class McpServerTests
         Directory.CreateDirectory(fixtureDir);
         var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_ts_dirty_names");
         var previousGroupingHook = DbWriter.TypeScriptAugmentationGroupingForTesting;
+        var previousRefreshHook = DbWriter.MutualRecursionRefreshForTesting;
         DbWriter.TypeScriptAugmentationGroupingStats? groupingStats = null;
+        var refreshCount = 0;
         try
         {
             var changedPath = Path.Combine(fixtureDir, "changed.ts");
@@ -7825,6 +7844,11 @@ public partial class McpServerTests
                 groupingStats = stats;
                 previousGroupingHook?.Invoke(stats);
             };
+            DbWriter.MutualRecursionRefreshForTesting = () =>
+            {
+                refreshCount++;
+                previousRefreshHook?.Invoke();
+            };
 
             var secondResponse = CallIndex(server, fixtureDir);
 
@@ -7834,10 +7858,12 @@ public partial class McpServerTests
             Assert.Equal(2, groupingStats.GroupCount);
             Assert.Equal(1, groupingStats.MergedGroupCount);
             Assert.Equal(2, groupingStats.ScopedNameCount);
+            Assert.Equal(1, refreshCount);
         }
         finally
         {
             DbWriter.TypeScriptAugmentationGroupingForTesting = previousGroupingHook;
+            DbWriter.MutualRecursionRefreshForTesting = previousRefreshHook;
             TestProjectHelper.DeleteDirectory(fixtureDir);
             TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
         }
