@@ -7773,6 +7773,7 @@ public partial class McpServerTests
                     "identity_started",
                     "graph_required_restored",
                     "mutual_started",
+                    "readiness_committed",
                     "restored",
                     "hotspot_refresh",
                 },
@@ -7787,6 +7788,7 @@ public partial class McpServerTests
                     "identity_started",
                     "graph_required_restored",
                     "mutual_started",
+                    "readiness_committed",
                     "restored",
                 },
                 referenceIndexStates.Select(static state => state.Phase));
@@ -7804,7 +7806,7 @@ public partial class McpServerTests
                     static state => state.Phase == "deferred_graph_prepared").PresentIndexNames);
             Assert.All(
                 referenceIndexStates.Where(
-                    static state => state.Phase is "candidate_deferred" or "identity_started" or "graph_required_restored" or "mutual_started"),
+                    static state => state.Phase is "candidate_deferred" or "identity_started" or "graph_required_restored" or "mutual_started" or "readiness_committed"),
                 state =>
                 {
                     Assert.DoesNotContain(candidateReverseIndexName, state.PresentIndexNames);

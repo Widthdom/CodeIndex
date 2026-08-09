@@ -1329,6 +1329,9 @@ public static partial class IndexCommandRunner
             FreshCountReferences = freshCountReferences,
             WriteProjectRootOnce = WriteProjectRootOnce,
         });
+        if (referenceSecondaryIndexBulkLoad != null
+            && willRebuildTypeScriptAugmentationAfterReadinessValidation)
+            writer.ReportReferenceSecondaryIndexBulkLoadState("readiness_completed");
         referenceSecondaryIndexBulkLoad?.Complete(cancellationToken);
         graphTableAvailableAfter = readiness.GraphTableAvailable;
         issuesTableAvailableAfter = readiness.IssuesTableAvailable;
@@ -1340,6 +1343,9 @@ public static partial class IndexCommandRunner
         hotspotAggregateRefresh.Complete(cancellationToken);
         writer.ClearBatchInProgress();
         fullScanTxn.Commit();
+        if (referenceSecondaryIndexBulkLoad != null
+            && willRebuildTypeScriptAugmentationAfterReadinessValidation)
+            writer.ReportReferenceSecondaryIndexBulkLoadState("full_scan_committed");
         return WriteFullScanFinalOutput(new FullScanFinalOutputContext
         {
             Writer = writer,

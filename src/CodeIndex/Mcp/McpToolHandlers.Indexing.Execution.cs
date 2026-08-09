@@ -2206,8 +2206,14 @@ public partial class McpServer
         {
             writer.ClearBatchInProgress();
         }
-        // Keep recoverable guard ownership until the readiness transaction commits. A thrown
-        // readiness path is then repaired by Dispose instead of exposing a partial schema.
+        // A TypeScript-owned deferred graph pass keeps recoverable guard ownership until the
+        // readiness transaction commits. A thrown readiness path is then repaired by Dispose
+        // instead of exposing a partial schema.
+        if (referenceSecondaryIndexBulkLoad != null
+            && willRebuildTypeScriptAugmentationAfterReadinessValidation
+            && !scanHadErrors
+            && errors == 0)
+            writer.ReportReferenceSecondaryIndexBulkLoadState("readiness_committed");
         referenceSecondaryIndexBulkLoad?.Complete(requestToken);
         hotspotAggregateRefresh.Complete(requestToken);
         if (!scanResult.HadErrors && errors == 0)

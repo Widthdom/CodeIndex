@@ -921,8 +921,14 @@ public static partial class IndexCommandRunner
                 ? GetFullyRefreshedDynamicGraphLanguages()
                 : [],
         });
-        // Recoverable mode must retain ownership until the readiness transaction commits;
-        // otherwise a later rollback could discard CREATEs with no Dispose repair path.
+        // A TypeScript-owned deferred graph pass must retain recoverable ownership until the
+        // readiness transaction commits; otherwise a rollback could discard its CREATEs with
+        // no Dispose repair path.
+        if (referenceSecondaryIndexBulkLoad != null
+            && willRebuildTypeScriptAugmentationAfterReadinessValidation
+            && readinessDemoted
+            && errors == 0)
+            writer.ReportReferenceSecondaryIndexBulkLoadState("readiness_committed");
         referenceSecondaryIndexBulkLoad?.Complete(cancellationToken);
         var graphTableAvailableAfter = readiness.GraphTableAvailable;
         var issuesTableAvailableAfter = readiness.IssuesTableAvailable;
