@@ -309,8 +309,10 @@ reassigns parameter values by ordinal. Keep new bulk-write paths on this bounded
 cache so large indexes do not rebuild equivalent SQLite commands per file.
 
 Fresh CLI scans and explicit rebuilds defer the query and graph secondary
-indexes on `symbol_references` until raw reference persistence completes. The
-file and reference-line maintenance indexes remain available during the load,
+indexes on `symbol_references`, plus the reverse candidate-symbol lookup, until
+raw reference persistence completes. The candidate primary key remains available
+for reference-scoped materialization and resolution, and the file and
+reference-line maintenance indexes remain available during the load,
 while identity and resolution finalization continues without query indexes. The
 guard forces any active dirty graph scope onto its full-refresh plan before the
 indexes disappear. Immediately before mutual-recursion evaluation, its graph
@@ -3959,7 +3961,9 @@ value を再設定します。大規模 index で同じ SQLite command を file 
 新しい bulk-write 経路もこの bounded cache に載せてください。
 
 fresh な CLI scan と明示的 rebuild は、raw reference の永続化が完了するまで
-`symbol_references` の query / graph 用 secondary index を遅延します。load 中も file と
+`symbol_references` の query / graph 用 secondary index と candidate-symbol の reverse lookup
+を遅延します。reference scope の materialization / resolution に使う candidate primary key は
+維持します。load 中も file と
 reference-line の保守用 index は残し、identity / resolution finalization 中も query index は
 遅延したままにします。guard は index を外す前に active な dirty graph scope を full refresh へ
 昇格します。mutual-recursion 評価の直前に、その graph transaction 内で unresolved-folded、

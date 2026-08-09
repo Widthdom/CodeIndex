@@ -6,7 +6,7 @@ internal readonly record struct ReferenceSecondaryIndexDefinition(
     bool RequiresFoldedColumns = false);
 
 /// <summary>
-/// Canonical DDL for secondary indexes on <c>symbol_references</c>.
+/// Canonical DDL for secondary indexes used by reference persistence and graph queries.
 /// The raw-persistence set stays available while bulk extraction is writing rows; the
 /// graph-finalization set is restored immediately before mutual-recursion evaluation, and
 /// the remaining query set is restored after graph finalization completes.
@@ -100,6 +100,12 @@ internal static class ReferenceSecondaryIndexSql
         new(
             "idx_symbol_refs_target_symbol",
             "CREATE INDEX IF NOT EXISTS idx_symbol_refs_target_symbol ON symbol_references(target_symbol_id)"),
+        // Candidate materialization and resolution use the primary key's reference_id
+        // prefix. Defer the reverse symbol lookup so bulk graph refresh can populate the
+        // candidate table without maintaining a second B-tree row by row.
+        new(
+            "idx_symbol_ref_candidates_symbol",
+            "CREATE INDEX IF NOT EXISTS idx_symbol_ref_candidates_symbol ON symbol_reference_candidates(symbol_id, reference_id)"),
     ];
 
     private static readonly ReferenceSecondaryIndexDefinition[] DeferredDuringBulkLoadDefinitions =

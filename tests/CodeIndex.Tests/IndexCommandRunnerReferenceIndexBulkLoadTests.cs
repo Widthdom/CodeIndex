@@ -300,7 +300,8 @@ public partial class IndexCommandRunnerTests
         command.CommandText = """
             SELECT name
             FROM sqlite_schema
-            WHERE type = 'index' AND tbl_name = 'symbol_references'
+            WHERE type = 'index'
+              AND tbl_name IN ('symbol_references', 'symbol_reference_candidates')
             ORDER BY name
             """;
         using var reader = command.ExecuteReader();

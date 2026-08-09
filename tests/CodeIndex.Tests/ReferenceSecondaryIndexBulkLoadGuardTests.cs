@@ -56,6 +56,7 @@ public sealed class ReferenceSecondaryIndexBulkLoadGuardTests : IDisposable
             graphNames.Order(StringComparer.Ordinal));
         Assert.Empty(rawNames.Intersect(deferredNames));
         Assert.Empty(graphNames.Intersect(remainingNames));
+        Assert.Contains("idx_symbol_ref_candidates_symbol", remainingNames);
         Assert.True(deferredNames.SetEquals(graphNames.Concat(remainingNames)));
         Assert.Equal(
             graphNames.Order(StringComparer.Ordinal),
@@ -397,7 +398,7 @@ public sealed class ReferenceSecondaryIndexBulkLoadGuardTests : IDisposable
             SELECT name
             FROM sqlite_schema
             WHERE type = 'index'
-              AND tbl_name = 'symbol_references'
+              AND tbl_name IN ('symbol_references', 'symbol_reference_candidates')
               AND name NOT LIKE 'sqlite_autoindex_%'
             """;
         using var reader = command.ExecuteReader();
