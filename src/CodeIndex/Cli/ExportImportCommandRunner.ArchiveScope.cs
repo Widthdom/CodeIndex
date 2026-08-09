@@ -208,16 +208,7 @@ internal static partial class ExportImportCommandRunner
                 "incomplete",
                 StringComparison.Ordinal)
             || !HasPartialArchiveIncompleteReason(
-                ReadMetaString(connection, DbContext.IndexIncompleteReasonsMetaKey))
-            || ReadMetaString(connection, DbContext.UnknownExtensionFileCountMetaKey) != "0"
-            || ReadMetaString(connection, DbContext.UnknownExtensionFilePathsMetaKey) != "[]"
-            || !bool.TryParse(
-                ReadMetaString(connection, DbContext.UnknownExtensionFilesTruncatedMetaKey),
-                out var unknownFilesTruncated)
-            || unknownFilesTruncated
-            || ReadMetaString(connection, DbContext.UnknownExtensionExtensionCountsMetaKey) != "{}"
-            || ReadMetaString(connection, DbContext.UnknownExtensionCategoryCountsMetaKey) != "{}"
-            || ReadMetaString(connection, DbContext.UnknownExtensionGroupsMetaKey) != "[]")
+                ReadMetaString(connection, DbContext.IndexIncompleteReasonsMetaKey)))
         {
             return true;
         }
@@ -232,7 +223,14 @@ internal static partial class ExportImportCommandRunner
                OR key IN (
                    'commit_scoped_fresh_head_sha',
                    'last_full_scan_elapsed_ms',
-                   'last_workspace_freshened_at')
+                   'last_workspace_freshened_at',
+                   'unknown_extension_file_count',
+                   'unknown_extension_file_paths_json',
+                   'unknown_extension_files_truncated',
+                   'unknown_extension_file_path_limit',
+                   'unknown_extension_extension_counts_json',
+                   'unknown_extension_category_counts_json',
+                   'unknown_extension_groups_json')
             """;
         return Convert.ToInt64(command.ExecuteScalar(), CultureInfo.InvariantCulture) != 0;
     }
@@ -276,11 +274,13 @@ internal static partial class ExportImportCommandRunner
             IndexedHeadSha = null,
             IndexedHeadBranch = null,
             IndexedHeadTimestamp = null,
-            UnknownExtensionFileCount = 0,
+            UnknownExtensionFileCount = null,
             UnknownExtensionFiles = null,
-            UnknownExtensionFilesTruncated = false,
-            UnknownExtensionFileSampleCount = 0,
-            UnknownExtensionFileSampleTruncated = false,
+            UnknownExtensionFilesTruncated = null,
+            UnknownExtensionFilePathLimit = null,
+            UnknownExtensionFileSampleCount = null,
+            UnknownExtensionFileSampleLimit = null,
+            UnknownExtensionFileSampleTruncated = null,
             IndexComplete = false,
             IndexIncompleteReasons = persistedIncompleteReasons
                 ?? [PartialArchiveIncompleteReason],
@@ -318,7 +318,14 @@ internal static partial class ExportImportCommandRunner
                OR key IN (
                    'commit_scoped_fresh_head_sha',
                    'last_full_scan_elapsed_ms',
-                   'last_workspace_freshened_at');
+                   'last_workspace_freshened_at',
+                   'unknown_extension_file_count',
+                   'unknown_extension_file_paths_json',
+                   'unknown_extension_files_truncated',
+                   'unknown_extension_file_path_limit',
+                   'unknown_extension_extension_counts_json',
+                   'unknown_extension_category_counts_json',
+                   'unknown_extension_groups_json');
 
             INSERT INTO codeindex_meta(key, value)
             VALUES (@indexCompletenessKey, 'incomplete')
@@ -327,40 +334,10 @@ internal static partial class ExportImportCommandRunner
             INSERT INTO codeindex_meta(key, value)
             VALUES (@indexIncompleteReasonsKey, @indexIncompleteReasons)
             ON CONFLICT(key) DO UPDATE SET value = excluded.value;
-
-            INSERT INTO codeindex_meta(key, value)
-            VALUES (@unknownExtensionFileCountKey, '0')
-            ON CONFLICT(key) DO UPDATE SET value = excluded.value;
-
-            INSERT INTO codeindex_meta(key, value)
-            VALUES (@unknownExtensionFilePathsKey, '[]')
-            ON CONFLICT(key) DO UPDATE SET value = excluded.value;
-
-            INSERT INTO codeindex_meta(key, value)
-            VALUES (@unknownExtensionFilesTruncatedKey, 'False')
-            ON CONFLICT(key) DO UPDATE SET value = excluded.value;
-
-            INSERT INTO codeindex_meta(key, value)
-            VALUES (@unknownExtensionExtensionCountsKey, '{}')
-            ON CONFLICT(key) DO UPDATE SET value = excluded.value;
-
-            INSERT INTO codeindex_meta(key, value)
-            VALUES (@unknownExtensionCategoryCountsKey, '{}')
-            ON CONFLICT(key) DO UPDATE SET value = excluded.value;
-
-            INSERT INTO codeindex_meta(key, value)
-            VALUES (@unknownExtensionGroupsKey, '[]')
-            ON CONFLICT(key) DO UPDATE SET value = excluded.value;
             """;
         SqliteCommandPolicy.Add(command, "@indexCompletenessKey", DbContext.IndexCompletenessMetaKey);
         SqliteCommandPolicy.Add(command, "@indexIncompleteReasonsKey", DbContext.IndexIncompleteReasonsMetaKey);
         SqliteCommandPolicy.Add(command, "@indexIncompleteReasons", incompleteReasonsJson);
-        SqliteCommandPolicy.Add(command, "@unknownExtensionFileCountKey", DbContext.UnknownExtensionFileCountMetaKey);
-        SqliteCommandPolicy.Add(command, "@unknownExtensionFilePathsKey", DbContext.UnknownExtensionFilePathsMetaKey);
-        SqliteCommandPolicy.Add(command, "@unknownExtensionFilesTruncatedKey", DbContext.UnknownExtensionFilesTruncatedMetaKey);
-        SqliteCommandPolicy.Add(command, "@unknownExtensionExtensionCountsKey", DbContext.UnknownExtensionExtensionCountsMetaKey);
-        SqliteCommandPolicy.Add(command, "@unknownExtensionCategoryCountsKey", DbContext.UnknownExtensionCategoryCountsMetaKey);
-        SqliteCommandPolicy.Add(command, "@unknownExtensionGroupsKey", DbContext.UnknownExtensionGroupsMetaKey);
         command.ExecuteNonQuery();
         cancellationToken.ThrowIfCancellationRequested();
     }

@@ -511,9 +511,11 @@ full archive and preserves the source database's index completeness,
 indexed-HEAD provenance, run telemetry, and unknown-extension summary. A
 filtered archive is instead stamped `index_complete: false` with the stable
 `partial_archive` reason, clears source-wide indexed-HEAD and run metadata, and
-resets unknown-extension summaries so `status` cannot present the subset as a
-fresh full index. This normalization applies only to the exported snapshot and
-does not mutate the source database.
+omits unavailable unknown-extension summaries so `status` cannot present the
+subset as a fresh full index or an authoritative zero-result scan. This
+normalization applies only to the exported snapshot and does not mutate the
+source database. A later scoped index request falls back to a full workspace
+scan before clearing `partial_archive`.
 Portable export refuses an existing destination by default; pass `--overwrite`
 only when replacing it is intentional. The archive is built in an owner-only
 sibling temporary file and atomically published, and POSIX archives are verified
@@ -4014,9 +4016,11 @@ file count が含まれます。scope には `represents_entire_source_database`
 scope flag を指定しない full archive は source database の index completeness、
 indexed-HEAD provenance、run telemetry、unknown-extension summary を維持します。一方、
 filter 済み archive は `index_complete: false` と stable reason `partial_archive` を記録し、
-source 全体に対する indexed-HEAD / run metadata を消去して unknown-extension summary を
-reset するため、`status` が subset を fresh な full index として表示することはありません。
-この正規化は export snapshot だけに適用され、source database は変更しません。
+source 全体に対する indexed-HEAD / run metadata を消去し、未計測の unknown-extension
+summary を省略するため、`status` が subset を fresh な full index や authoritative な
+0 件 scan として表示することはありません。この正規化は export snapshot だけに適用され、
+source database は変更しません。後続の scoped index request は `partial_archive` を解除する前に
+full workspace scan へ fallback します。
 portable export は既存 destination を既定で拒否します。意図して置き換える場合だけ
 `--overwrite` を指定してください。archive は owner-only の sibling temporary file に
 構築して atomic に publish し、POSIX では mode `0600` であることも検証します。

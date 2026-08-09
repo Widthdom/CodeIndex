@@ -968,12 +968,17 @@ public class ExportImportCommandRunnerTests
     }
 
     [Fact]
-    public void RunExportArchive_AppliesProjectPathLanguageAndTestScope_Issue4714()
+    public void RunExportArchive_AppliesProjectPathLanguageAndTestScope_Issue4714_Issue5053()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("export_archive_scope");
         try
         {
             TestProjectHelper.WriteTextFile(projectRoot, "src/App/App.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+            TestProjectHelper.WriteTextFile(projectRoot, "src/App/App.cs", "public class AppType { }");
+            TestProjectHelper.WriteTextFile(projectRoot, "src/shared/Shared.cs", "public class SharedType { }");
+            TestProjectHelper.WriteTextFile(projectRoot, "src/Other/Other.cs", "public class OtherType { }");
+            TestProjectHelper.WriteTextFile(projectRoot, "src/App/tool.py", "def tool(): pass");
+            TestProjectHelper.WriteTextFile(projectRoot, "src/App/tests/AppTests.cs", "public class AppTests { }");
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             TestProjectHelper.InsertIndexedFile(dbPath, "src/App/App.cs", "csharp", "public class AppType { }");
             TestProjectHelper.InsertIndexedFile(dbPath, "src/shared/Shared.cs", "csharp", "public class SharedType { }");
@@ -1012,7 +1017,7 @@ public class ExportImportCommandRunnerTests
             Assert.Contains(
                 resultManifest.GetProperty("index_incomplete_reasons").EnumerateArray(),
                 reason => reason.GetString() == ExportImportCommandRunner.PartialArchiveIncompleteReason);
-            Assert.Equal(0, resultManifest.GetProperty("unknown_extension_file_count").GetInt64());
+            Assert.Equal(JsonValueKind.Null, resultManifest.GetProperty("unknown_extension_file_count").ValueKind);
             Assert.Equal(string.Empty, ReadMetaValue(dbPath, DbContext.IndexIncompleteReasonsMetaKey));
             Assert.Equal("source-head", ReadMetaValue(dbPath, DbContext.IndexedHeadShaMetaKey));
             Assert.Equal("source-head", ReadMetaValue(dbPath, DbContext.CommitScopedFreshHeadShaMetaKey));
@@ -1051,8 +1056,8 @@ public class ExportImportCommandRunnerTests
             Assert.Null(ReadMetaValue(extractedDb, DbContext.IndexedHeadShaMetaKey));
             Assert.Null(ReadMetaValue(extractedDb, DbContext.CommitScopedFreshHeadShaMetaKey));
             Assert.Null(ReadMetaValue(extractedDb, DbContext.LastIndexRunFilesScannedMetaKey));
-            Assert.Equal("0", ReadMetaValue(extractedDb, DbContext.UnknownExtensionFileCountMetaKey));
-            Assert.Equal("[]", ReadMetaValue(extractedDb, DbContext.UnknownExtensionFilePathsMetaKey));
+            Assert.Null(ReadMetaValue(extractedDb, DbContext.UnknownExtensionFileCountMetaKey));
+            Assert.Null(ReadMetaValue(extractedDb, DbContext.UnknownExtensionFilePathsMetaKey));
             AssertPartialArchiveStatus(extractedDb);
 
             var importedDb = Path.Combine(projectRoot, "imported", "codeindex.db");
@@ -1066,6 +1071,42 @@ public class ExportImportCommandRunnerTests
                 Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(extractedDb))),
                 Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(importedDb))));
             AssertPartialArchiveStatus(importedDb);
+
+            var (refreshExitCode, refreshStdout, _) = ConsoleCapture.Capture(() =>
+                ProgramRunner.Run(
+                    [
+                        "index", projectRoot,
+                        "--files", "src/App/App.cs",
+                        "--db", importedDb,
+                        "--json",
+                        "--no-progress",
+                        "--notify", "none",
+                    ],
+                    appVersion: "test"));
+            Assert.Equal(CommandExitCodes.Success, refreshExitCode);
+            using (var refreshResult = JsonDocument.Parse(refreshStdout))
+            {
+                Assert.Equal(6, refreshResult.RootElement
+                    .GetProperty("summary")
+                    .GetProperty("files_total")
+                    .GetInt32());
+                Assert.True(refreshResult.RootElement.GetProperty("index_complete").GetBoolean());
+            }
+            Assert.Equal("complete", ReadMetaValue(importedDb, DbContext.IndexCompletenessMetaKey));
+            Assert.Null(ReadMetaValue(importedDb, DbContext.IndexIncompleteReasonsMetaKey));
+
+            var (refreshedStatusExitCode, refreshedStatusStdout, refreshedStatusStderr) =
+                ConsoleCapture.Capture(() =>
+                    ProgramRunner.Run(
+                        ["status", "--check", "--db", importedDb, "--json"],
+                        appVersion: "test"));
+            Assert.Equal(CommandExitCodes.Success, refreshedStatusExitCode);
+            Assert.Equal(string.Empty, refreshedStatusStderr);
+            using (var refreshedStatus = JsonDocument.Parse(refreshedStatusStdout))
+            {
+                Assert.True(refreshedStatus.RootElement.GetProperty("index_complete").GetBoolean());
+                Assert.True(refreshedStatus.RootElement.GetProperty("index_matches_workspace").GetBoolean());
+            }
 
             using var manifest = ZipFile.OpenRead(archivePath);
             using var manifestStream = manifest.GetEntry("manifest.json")!.Open();
@@ -1148,13 +1189,15 @@ public class ExportImportCommandRunnerTests
                 Assert.True(
                     !legacyScope.TryGetProperty("represents_entire_source_database", out var wholeSource)
                     || wholeSource.ValueKind == JsonValueKind.Null);
-                Assert.Equal(0, legacyResult.RootElement.GetProperty("unknown_extension_file_count").GetInt64());
+                Assert.Equal(
+                    JsonValueKind.Null,
+                    legacyResult.RootElement.GetProperty("unknown_extension_file_count").ValueKind);
             }
             Assert.Equal("incomplete", ReadMetaValue(legacyImportDbPath, DbContext.IndexCompletenessMetaKey));
             Assert.Null(ReadMetaValue(legacyImportDbPath, DbContext.IndexedHeadShaMetaKey));
             Assert.Null(ReadMetaValue(legacyImportDbPath, DbContext.CommitScopedFreshHeadShaMetaKey));
             Assert.Null(ReadMetaValue(legacyImportDbPath, DbContext.LastIndexRunFilesScannedMetaKey));
-            Assert.Equal("0", ReadMetaValue(legacyImportDbPath, DbContext.UnknownExtensionFileCountMetaKey));
+            Assert.Null(ReadMetaValue(legacyImportDbPath, DbContext.UnknownExtensionFileCountMetaKey));
             Assert.Equal(
                 "[\"legacy_source_incomplete\",\"partial_archive\"]",
                 ReadMetaValue(legacyImportDbPath, DbContext.IndexIncompleteReasonsMetaKey));
@@ -2408,7 +2451,7 @@ public class ExportImportCommandRunnerTests
         Assert.True(
             !status.RootElement.TryGetProperty("head_freshness", out var headFreshness)
             || headFreshness.GetProperty("state").GetString() != "head_current");
-        Assert.Equal(0, status.RootElement.GetProperty("unknown_extension_file_count").GetInt64());
+        Assert.False(status.RootElement.TryGetProperty("unknown_extension_file_count", out _));
         Assert.True(
             !status.RootElement.TryGetProperty("last_index_run", out var lastIndexRun)
             || lastIndexRun.ValueKind == JsonValueKind.Null);
