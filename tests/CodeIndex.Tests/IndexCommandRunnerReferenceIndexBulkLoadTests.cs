@@ -196,13 +196,16 @@ public partial class IndexCommandRunnerTests
         bool scopedUpdate)
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_reference_index_update_bulk_load");
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
         var previousStateHook = DbWriter.ReferenceSecondaryIndexBulkLoadStateForTesting;
         var previousStatementHook = DbWriter.BatchStatementExecutingForTesting;
         var previousGraphHook = DbWriter.MutualRecursionRefreshForTesting;
         var previousScopeHook = DbWriter.ReferenceGraphRefreshScopeForTesting;
+        var previousHotspotHook = DbWriter.HotspotAggregateRefreshStatementExecutingForTesting;
         var snapshots = new ConcurrentQueue<ReferenceIndexStageSnapshot>();
         var scopeSnapshots = new ConcurrentQueue<DbWriter.ReferenceGraphRefreshScopeStats>();
         SqliteConnection? activeConnection = null;
+        string[]? hotspotIndexNamesDuringRefresh = null;
         try
         {
             var relativePaths = Enumerable
@@ -249,6 +252,13 @@ public partial class IndexCommandRunnerTests
                 scopeSnapshots.Enqueue(stats);
                 previousScopeHook?.Invoke(stats);
             };
+            DbWriter.HotspotAggregateRefreshStatementExecutingForTesting = () =>
+            {
+                var connection = Volatile.Read(ref activeConnection);
+                Assert.NotNull(connection);
+                hotspotIndexNamesDuringRefresh = ReadHotspotReferenceIndexNames(connection!);
+                previousHotspotHook?.Invoke();
+            };
 
             var args = new List<string>(relativePaths.Length + 5) { projectRoot };
             if (scopedUpdate)
@@ -278,6 +288,14 @@ public partial class IndexCommandRunnerTests
                 captured.Where(snapshot => snapshot.Stage is "graph_required_restored" or "mutual_started"),
                 snapshot => Assert.Equal(GetGraphFinalizationReferenceIndexNames(), snapshot.Names));
             Assert.Equal(GetAllReferenceIndexNames(), captured[^1].Names);
+            Assert.Empty(Assert.IsType<string[]>(hotspotIndexNamesDuringRefresh));
+            using (var completedConnection = new SqliteConnection($"Data Source={dbPath}"))
+            {
+                completedConnection.Open();
+                Assert.Equal(
+                    GetHotspotReferenceIndexNames(),
+                    ReadHotspotReferenceIndexNames(completedConnection));
+            }
             var scope = Assert.Single(scopeSnapshots);
             Assert.True(scope.UsedFullRefresh);
         }
@@ -287,6 +305,7 @@ public partial class IndexCommandRunnerTests
             DbWriter.BatchStatementExecutingForTesting = previousStatementHook;
             DbWriter.MutualRecursionRefreshForTesting = previousGraphHook;
             DbWriter.ReferenceGraphRefreshScopeForTesting = previousScopeHook;
+            DbWriter.HotspotAggregateRefreshStatementExecutingForTesting = previousHotspotHook;
             DeleteDirectory(projectRoot);
         }
     }
@@ -333,6 +352,30 @@ public partial class IndexCommandRunnerTests
             .Concat(ReferenceSecondaryIndexBulkLoadGuard.GraphFinalizationIndexNames)
             .Order(StringComparer.Ordinal)
             .ToArray();
+
+    private static string[] GetHotspotReferenceIndexNames()
+        => HotspotReferenceAggregateSql.Indexes
+            .Select(static index => index.Name)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+    private static string[] ReadHotspotReferenceIndexNames(SqliteConnection connection)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT name
+            FROM sqlite_schema
+            WHERE type = 'index'
+              AND tbl_name = 'hotspot_reference_counts'
+              AND name NOT LIKE 'sqlite_autoindex_%'
+            ORDER BY name
+            """;
+        using var reader = command.ExecuteReader();
+        var names = new List<string>();
+        while (reader.Read())
+            names.Add(reader.GetString(0));
+        return names.ToArray();
+    }
 
     private static void WriteReferenceIndexCycleFixture(string projectRoot)
     {

@@ -175,8 +175,8 @@ public partial class DbContext : IDisposable
             () => EnsureColumn("symbol_references", "is_mutual_recursion", "INTEGER NOT NULL DEFAULT 0"));
         yield return ("CREATE TABLE hotspot_reference_counts",
             () => Execute(HotspotReferenceAggregateSql.CreateTableSql));
-        foreach (var indexSql in HotspotReferenceAggregateSql.CreateIndexSql)
-            yield return ("CREATE INDEX hotspot_reference_counts", () => Execute(indexSql));
+        foreach (var index in HotspotReferenceAggregateSql.Indexes)
+            yield return ("CREATE INDEX hotspot_reference_counts", () => Execute(index.CreateSql));
         yield return ("EnsureColumn symbol_references.source_symbol_id",
             () => EnsureColumn("symbol_references", "source_symbol_id", "INTEGER"));
         yield return ("EnsureColumn symbol_references.target_symbol_id",

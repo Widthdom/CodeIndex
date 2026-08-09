@@ -253,8 +253,8 @@ public partial class DbContext : IDisposable
 
     private void InitializeReferenceGraphSchema(bool backfillHotspotReferenceCounts)
     {
-        foreach (var indexSql in HotspotReferenceAggregateSql.CreateIndexSql)
-            Execute(indexSql);
+        foreach (var index in HotspotReferenceAggregateSql.Indexes)
+            Execute(index.CreateSql);
         if (backfillHotspotReferenceCounts)
         {
             Execute(HotspotReferenceAggregateSql.BuildRefreshSql(singleFile: false));

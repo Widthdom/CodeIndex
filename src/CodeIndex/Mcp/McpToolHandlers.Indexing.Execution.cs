@@ -1258,7 +1258,8 @@ public partial class McpServer
         }
         using var referenceGraphRefresh = writer.BeginReferenceGraphRefreshScope(
             rebuild || !writer.HasAnyIndexedFiles());
-        using var hotspotAggregateRefresh = writer.BeginDeferredHotspotReferenceAggregateRefresh();
+        using var hotspotAggregateRefresh = writer.BeginDeferredHotspotReferenceAggregateRefresh(
+            deferSecondaryIndexes: useFtsBulkLoad);
         writer.RecoverInterruptedFtsBulkLoadIfNeeded(requestToken);
         if (!preservePriorPositiveCSharpSourceNoOp)
         {

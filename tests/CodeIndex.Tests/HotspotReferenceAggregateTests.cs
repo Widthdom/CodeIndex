@@ -6,6 +6,25 @@ namespace CodeIndex.Tests;
 
 public partial class DbReaderTests
 {
+    [Theory]
+    [InlineData(63, 63, false)]
+    [InlineData(64, 106, true)]
+    [InlineData(64, 107, false)]
+    [InlineData(600, 1_000, true)]
+    [InlineData(599, 1_000, false)]
+    [InlineData(int.MaxValue, int.MaxValue, true)]
+    public void HotspotAggregateIndexDeferral_UsesBoundedSixtyPercentThreshold(
+        int dirtyFileCount,
+        int indexedFileCount,
+        bool expected)
+    {
+        Assert.Equal(
+            expected,
+            DbWriter.ShouldDeferHotspotAggregateSecondaryIndexes(
+                dirtyFileCount,
+                indexedFileCount));
+    }
+
     [Fact]
     public void LimitedFileAndNameHotspots_UseBoundedMaintainedAggregate_Issue4581()
     {
@@ -513,6 +532,7 @@ public partial class DbReaderTests
         var previousDirtyHook = DbWriter.DeferredHotspotDirtyFilesForTesting;
         var readinessChecks = 0;
         var refreshStatements = 0;
+        string[]? indexNamesDuringRefresh = null;
         HashSet<long>? refreshedFileIds = null;
         try
         {
@@ -524,6 +544,7 @@ public partial class DbReaderTests
             DbWriter.HotspotAggregateRefreshStatementExecutingForTesting = () =>
             {
                 refreshStatements++;
+                indexNamesDuringRefresh = ReadHotspotReferenceAggregateIndexNames();
                 previousStatementHook?.Invoke();
             };
             DbWriter.DeferredHotspotDirtyFilesForTesting = dirtyFileIds =>
@@ -554,6 +575,7 @@ public partial class DbReaderTests
 
             Assert.Equal(inputs.Length, readinessChecks);
             Assert.Equal(1, refreshStatements);
+            Assert.Equal(GetHotspotReferenceAggregateIndexNames(), indexNamesDuringRefresh);
             Assert.NotNull(refreshedFileIds);
             Assert.True(fileIds.ToHashSet().SetEquals(refreshedFileIds!));
             Assert.NotEqual(0, _db.GetUserVersion() & DbContext.HotspotReferenceAggregateReadyFlag);
@@ -599,15 +621,18 @@ public partial class DbReaderTests
             .ToArray();
         var previousStatementHook = DbWriter.HotspotAggregateRefreshStatementExecutingForTesting;
         var refreshStatements = 0;
+        string[]? indexNamesDuringRefresh = null;
         try
         {
             DbWriter.HotspotAggregateRefreshStatementExecutingForTesting = () =>
             {
                 refreshStatements++;
+                indexNamesDuringRefresh = ReadHotspotReferenceAggregateIndexNames();
                 previousStatementHook?.Invoke();
             };
 
-            using var deferredRefresh = _writer.BeginDeferredHotspotReferenceAggregateRefresh();
+            using var deferredRefresh = _writer.BeginDeferredHotspotReferenceAggregateRefresh(
+                deferSecondaryIndexes: true);
             using (var transaction = _writer.BeginTransaction())
             {
                 _writer.InsertReferencesInAtomicFileScope(
@@ -619,6 +644,10 @@ public partial class DbReaderTests
             deferredRefresh.Complete(CancellationToken.None);
 
             Assert.Equal(1, refreshStatements);
+            Assert.Empty(Assert.IsType<string[]>(indexNamesDuringRefresh));
+            Assert.Equal(
+                GetHotspotReferenceAggregateIndexNames(),
+                ReadHotspotReferenceAggregateIndexNames());
             using var count = _db.Connection.CreateCommand();
             count.CommandText = "SELECT COUNT(*) FROM symbol_references WHERE file_id >= @first_file_id AND file_id <= @last_file_id";
             count.Parameters.AddWithValue("@first_file_id", fileIds[0]);
@@ -626,6 +655,18 @@ public partial class DbReaderTests
             Assert.Equal((long)fileCount, (long)count.ExecuteScalar()!);
             count.CommandText = "SELECT COALESCE(SUM(reference_count), 0) FROM hotspot_reference_counts WHERE file_id >= @first_file_id AND file_id <= @last_file_id";
             Assert.Equal((long)fileCount, (long)count.ExecuteScalar()!);
+
+            // Reuse the reference persistence command shapes that were prepared before
+            // the DROP/CREATE cycle. SQLite must reprepare them without leaking SQLITE_SCHEMA.
+            using (var reuseTransaction = _writer.BeginTransaction())
+            {
+                _writer.InsertReferencesInAtomicFileScope(
+                    [BuildDeferredReference(fileIds[0], "after_index_rebuild")],
+                    refreshMutualRecursionFlags: false,
+                    CancellationToken.None);
+                reuseTransaction.Commit();
+            }
+            AssertAggregateAndRawReferenceCounts(fileIds[0], expected: 2);
         }
         finally
         {
@@ -731,7 +772,8 @@ public partial class DbReaderTests
         var previousRefreshHook = DbWriter.HotspotAggregateRefreshExecutingForTesting;
         try
         {
-            using var deferredRefresh = _writer.BeginDeferredHotspotReferenceAggregateRefresh();
+            using var deferredRefresh = _writer.BeginDeferredHotspotReferenceAggregateRefresh(
+                deferSecondaryIndexes: true);
             using (var transaction = _writer.BeginTransaction())
             {
                 _writer.InsertReferencesInAtomicFileScope(
@@ -746,8 +788,14 @@ public partial class DbReaderTests
                 cancellation.Cancel();
             };
 
-            Assert.Throws<OperationCanceledException>(() => deferredRefresh.Complete(cancellation.Token));
+            using (var outerTransaction = _writer.BeginTransaction())
+            {
+                Assert.Throws<OperationCanceledException>(() => deferredRefresh.Complete(cancellation.Token));
+            }
             Assert.Equal(0, _db.GetUserVersion() & DbContext.HotspotReferenceAggregateReadyFlag);
+            Assert.Equal(
+                GetHotspotReferenceAggregateIndexNames(),
+                ReadHotspotReferenceAggregateIndexNames());
         }
         finally
         {
@@ -832,6 +880,30 @@ public partial class DbReaderTests
             Column = 1,
             Context = symbolName + "()",
         };
+
+    private static string[] GetHotspotReferenceAggregateIndexNames()
+        => HotspotReferenceAggregateSql.Indexes
+            .Select(static index => index.Name)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+    private string[] ReadHotspotReferenceAggregateIndexNames()
+    {
+        using var command = _db.Connection.CreateCommand();
+        command.CommandText = """
+            SELECT name
+            FROM sqlite_schema
+            WHERE type = 'index'
+              AND tbl_name = 'hotspot_reference_counts'
+              AND name NOT LIKE 'sqlite_autoindex_%'
+            ORDER BY name
+            """;
+        using var reader = command.ExecuteReader();
+        var names = new List<string>();
+        while (reader.Read())
+            names.Add(reader.GetString(0));
+        return names.ToArray();
+    }
 
     private void AssertAggregateAndRawReferenceCounts(long fileId, long expected)
     {

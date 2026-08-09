@@ -634,6 +634,8 @@ public static partial class IndexCommandRunner
             && ShouldUseUpdateReferenceSecondaryIndexBulkLoad(
                 targetPaths.Count,
                 writer.GetIndexedFileCount());
+        if (useReferenceSecondaryIndexBulkLoad)
+            hotspotAggregateRefresh.EnableSecondaryIndexDeferral();
         using var referenceSecondaryIndexBulkLoad =
             ReferenceSecondaryIndexBulkLoadGuard.StartRecoverable(
                 writer,

@@ -2,6 +2,10 @@ using CodeIndex.Indexer;
 
 namespace CodeIndex.Database;
 
+internal readonly record struct HotspotReferenceAggregateIndexDefinition(
+    string Name,
+    string CreateSql);
+
 /// <summary>
 /// Owns the maintained per-file reference aggregate used by hotspot readers.
 /// hotspot reader が使う file 単位の maintained reference aggregate を管理する。
@@ -39,13 +43,24 @@ internal static class HotspotReferenceAggregateSql
         )
         """;
 
-    internal static readonly string[] CreateIndexSql =
+    private static readonly HotspotReferenceAggregateIndexDefinition[] IndexDefinitions =
     [
-        "CREATE INDEX IF NOT EXISTS idx_hotspot_reference_counts_global ON hotspot_reference_counts(lang, symbol_name, symbol_segment_count)",
-        "CREATE INDEX IF NOT EXISTS idx_hotspot_reference_counts_file ON hotspot_reference_counts(lang, file_id, symbol_name, symbol_segment_count)",
-        "CREATE INDEX IF NOT EXISTS idx_hotspot_reference_counts_leaf ON hotspot_reference_counts(lang, file_id, raw_symbol_name, allow_leaf_fallback) WHERE allow_leaf_fallback = 1",
-        "CREATE INDEX IF NOT EXISTS idx_hotspot_reference_counts_rank ON hotspot_reference_counts(reference_score DESC, reference_count DESC, lang, symbol_name, symbol_segment_count)",
+        new(
+            "idx_hotspot_reference_counts_global",
+            "CREATE INDEX IF NOT EXISTS idx_hotspot_reference_counts_global ON hotspot_reference_counts(lang, symbol_name, symbol_segment_count)"),
+        new(
+            "idx_hotspot_reference_counts_file",
+            "CREATE INDEX IF NOT EXISTS idx_hotspot_reference_counts_file ON hotspot_reference_counts(lang, file_id, symbol_name, symbol_segment_count)"),
+        new(
+            "idx_hotspot_reference_counts_leaf",
+            "CREATE INDEX IF NOT EXISTS idx_hotspot_reference_counts_leaf ON hotspot_reference_counts(lang, file_id, raw_symbol_name, allow_leaf_fallback) WHERE allow_leaf_fallback = 1"),
+        new(
+            "idx_hotspot_reference_counts_rank",
+            "CREATE INDEX IF NOT EXISTS idx_hotspot_reference_counts_rank ON hotspot_reference_counts(reference_score DESC, reference_count DESC, lang, symbol_name, symbol_segment_count)"),
     ];
+
+    internal static IReadOnlyList<HotspotReferenceAggregateIndexDefinition> Indexes { get; }
+        = Array.AsReadOnly(IndexDefinitions);
 
     internal static string BuildRefreshSql(bool singleFile, bool includeTestCheckpoint = false)
     {

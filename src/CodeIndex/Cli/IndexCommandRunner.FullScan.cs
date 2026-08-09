@@ -826,7 +826,8 @@ public static partial class IndexCommandRunner
             db.RepairIncompleteBatchReadiness();
         using var referenceGraphRefresh = writer.BeginReferenceGraphRefreshScope(
             options.Rebuild || !writer.HasAnyIndexedFiles());
-        using var hotspotAggregateRefresh = writer.BeginDeferredHotspotReferenceAggregateRefresh();
+        using var hotspotAggregateRefresh = writer.BeginDeferredHotspotReferenceAggregateRefresh(
+            deferSecondaryIndexes: !options.SymbolsOnly && useFtsBulkLoad);
         using var fullScanTxn = writer.BeginTransaction(cancellationToken, "full scan write phase");
         fullScanWritePhaseStarted = true;
         writer.RecoverInterruptedFtsBulkLoadIfNeeded(cancellationToken);
