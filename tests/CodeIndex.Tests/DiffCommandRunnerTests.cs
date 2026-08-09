@@ -1079,6 +1079,28 @@ public class DiffCommandRunnerTests
                 // Symlink creation is unavailable in some test environments; same-path and copied-file
                 // coverage above still exercise both portable identity shortcuts.
             }
+
+            DiffCommandRunner.MaxDiffComparedRowsPerSideForTesting = 10_000;
+            using var walConnection = new SqliteConnection($"Data Source={db};Pooling=False");
+            walConnection.Open();
+            ExecuteNonQuery(walConnection, "PRAGMA journal_mode=WAL;");
+            ExecuteNonQuery(walConnection, "PRAGMA wal_autocheckpoint=0;");
+            ExecuteNonQuery(
+                walConnection,
+                "INSERT INTO files(path, lang, size, lines, checksum, modified) VALUES ('src/WalOnly.cs', 'csharp', 1, 1, 'wal-only', '2026-01-01T00:00:00Z');");
+
+            var immutableAlias = new Uri(db).AbsoluteUri + "?immutable=1";
+            var (walExitCode, walStdout, walStderr) = RunWithCapturedStreams(
+                [db, immutableAlias, "--summary-only", "--json"]);
+
+            Assert.Equal(1, walExitCode);
+            Assert.Equal(string.Empty, walStderr);
+            using var walDocument = JsonDocument.Parse(walStdout);
+            Assert.Equal("different", walDocument.RootElement.GetProperty("status").GetString());
+            Assert.False(walDocument.RootElement.GetProperty("identical").GetBoolean());
+            Assert.Equal(
+                -1,
+                walDocument.RootElement.GetProperty("summary").GetProperty("file_count_delta").GetInt64());
         }
         finally
         {
@@ -1202,7 +1224,8 @@ public class DiffCommandRunnerTests
                 Assert.Equal(
                     "comparison_budget_exceeded",
                     importError.GetProperty("root_cause").GetString());
-                Assert.Contains("cdidx diff", importError.GetProperty("hint").GetString(), StringComparison.Ordinal);
+                Assert.Contains("destination was left unchanged", importError.GetProperty("hint").GetString(), StringComparison.Ordinal);
+                Assert.Contains("cdidx export", importError.GetProperty("hint").GetString(), StringComparison.Ordinal);
             }
 
             var (importTextExitCode, importTextStdout, importTextStderr) = ConsoleCapture.Capture(() =>
@@ -1213,7 +1236,8 @@ public class DiffCommandRunnerTests
             Assert.Equal(CommandExitCodes.DatabaseError, importTextExitCode);
             Assert.Equal(string.Empty, importTextStdout);
             Assert.Contains("destination comparison could not complete", importTextStderr, StringComparison.Ordinal);
-            Assert.Contains("cdidx diff", importTextStderr, StringComparison.Ordinal);
+            Assert.Contains("destination was left unchanged", importTextStderr, StringComparison.Ordinal);
+            Assert.Contains("cdidx export", importTextStderr, StringComparison.Ordinal);
         }
         finally
         {
@@ -2047,6 +2071,14 @@ public class DiffCommandRunnerTests
             DataSource = dbPath,
         }.ConnectionString);
         connection.Open();
+        ExecuteNonQuery(connection, sql, configure);
+    }
+
+    private static void ExecuteNonQuery(
+        SqliteConnection connection,
+        string sql,
+        Action<SqliteCommand>? configure = null)
+    {
         using var command = connection.CreateCommand();
         command.CommandText = sql;
         configure?.Invoke(command);

@@ -190,7 +190,7 @@ public static class DiffCommandRunner
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (TryResolveLocalDatabasePaths(options, out var leftPath, out var rightPath)
-            && (DatabasePathsShareFileIdentity(leftPath, rightPath)
+            && (DatabasePathsShareEquivalentSnapshot(options, leftPath, rightPath)
                 || DatabaseFilesAreByteIdentical(leftPath, rightPath, cancellationToken)))
         {
             var identicalHeader = ReadHeader(options.LeftDb!);
@@ -236,14 +236,22 @@ public static class DiffCommandRunner
         }
     }
 
-    private static bool DatabasePathsShareFileIdentity(string leftPath, string rightPath)
+    private static bool DatabasePathsShareEquivalentSnapshot(
+        DiffCommandOptions options,
+        string leftPath,
+        string rightPath)
     {
-        if (PathCasing.PathsEqual(leftPath, rightPath))
-            return true;
+        var sharesFileIdentity = PathCasing.PathsEqual(leftPath, rightPath)
+            || (FileIndexer.TryGetFileIdentity(leftPath, out var leftIdentity)
+                && FileIndexer.TryGetFileIdentity(rightPath, out var rightIdentity)
+                && leftIdentity == rightIdentity);
+        if (!sharesFileIdentity)
+            return false;
 
-        return FileIndexer.TryGetFileIdentity(leftPath, out var leftIdentity)
-            && FileIndexer.TryGetFileIdentity(rightPath, out var rightIdentity)
-            && leftIdentity == rightIdentity;
+        var leftImmutable = SqliteFileUri.RequestsImmutableSnapshot(options.LeftDb!);
+        var rightImmutable = SqliteFileUri.RequestsImmutableSnapshot(options.RightDb!);
+        return leftImmutable == rightImmutable
+            || (!HasSqliteSidecar(leftPath) && !HasSqliteSidecar(rightPath));
     }
 
     private static bool DatabaseFilesAreByteIdentical(
