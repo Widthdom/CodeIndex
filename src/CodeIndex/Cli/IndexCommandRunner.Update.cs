@@ -630,10 +630,13 @@ public static partial class IndexCommandRunner
             purgeTxn.Commit();
         }
 
+        var indexedFileCountForSecondaryIndexStaging = options.SymbolsOnly
+            ? 0
+            : writer.GetIndexedFileCount();
         var useUpdateSecondaryIndexStaging = !options.SymbolsOnly
             && ShouldUseUpdateReferenceSecondaryIndexBulkLoad(
                 targetPaths.Count,
-                writer.GetIndexedFileCount());
+                indexedFileCountForSecondaryIndexStaging);
         if (useUpdateSecondaryIndexStaging
             && !mutualRecursionRefreshNeeded
             && !ftsMutated)
@@ -641,12 +644,13 @@ public static partial class IndexCommandRunner
             try
             {
                 useUpdateSecondaryIndexStaging =
-                    !AreAllUpdateTargetsDefinitelyReusableByStat(
+                    ShouldUseUpdateSecondaryIndexStagingAfterStatPreflight(
                         writer,
                         indexer,
                         options,
                         projectRoot,
                         targetPaths,
+                        indexedFileCountForSecondaryIndexStaging,
                         csharpWorkspace,
                         symbolKindFilterMatchesPrior,
                         csharpSymbolNameContractMatchesCurrent,

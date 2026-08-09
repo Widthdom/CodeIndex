@@ -6,12 +6,17 @@ namespace CodeIndex.Cli;
 
 public static partial class IndexCommandRunner
 {
-    private static bool AreAllUpdateTargetsDefinitelyReusableByStat(
+    internal static bool ShouldCountPathFilteredUpdateTargetAsMutating(
+        FileIndexer.PathFilterResult pathFilter)
+        => pathFilter.ShouldSkip && pathFilter.ShouldDeleteExisting;
+
+    private static bool ShouldUseUpdateSecondaryIndexStagingAfterStatPreflight(
         DbWriter writer,
         FileIndexer indexer,
         IndexCommandOptions options,
         string projectRoot,
         IReadOnlyCollection<string> targetPaths,
+        int indexedFileCount,
         CSharpStaticInterfaceWorkspaceSymbols csharpWorkspace,
         bool symbolKindFilterMatchesPrior,
         bool csharpSymbolNameContractMatchesCurrent,
@@ -46,23 +51,48 @@ public static partial class IndexCommandRunner
                     ?? FileIndexer.DefaultMaxFileSizeBytes);
             var visitedFileIdentities =
                 new HashSet<FileIndexer.FileIdentity>();
+            var estimatedMutatingTargetCount = 0;
+            bool RecordEstimatedMutatingTarget()
+            {
+                estimatedMutatingTargetCount++;
+                return ShouldUseUpdateReferenceSecondaryIndexBulkLoad(
+                    estimatedMutatingTargetCount,
+                    indexedFileCount);
+            }
+
             foreach (var target in targets)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var pathFilter = indexer.EvaluatePathFilter(target.FilePath);
-                if (pathFilter.Errors.Any() || pathFilter.ShouldSkip)
-                    return false;
+                if (pathFilter.Errors.Any())
+                    return true;
+                if (pathFilter.ShouldSkip)
+                {
+                    if (ShouldCountPathFilteredUpdateTargetAsMutating(pathFilter)
+                        && RecordEstimatedMutatingTarget())
+                    {
+                        return true;
+                    }
+                    continue;
+                }
 
                 var indexability =
                     indexer.GetFileIndexabilityForIndexing(target.FilePath);
                 var detection = indexer.TryDetectLanguageForIndexing(
                     target.FilePath,
                     knownIndexability: indexability);
+                if (indexability == FileIndexer.FileProbeStatus.ProbeFailed
+                    || detection.Status == FileIndexer.FileProbeStatus.ProbeFailed)
+                {
+                    return true;
+                }
                 if (indexability != FileIndexer.FileProbeStatus.Supported
                     || detection.Status
                         != FileIndexer.FileProbeStatus.Supported)
                 {
-                    return false;
+                    if (RecordEstimatedMutatingTarget())
+                        return true;
+                    continue;
                 }
 
                 if (FileIndexer.TryGetFileIdentity(
@@ -72,7 +102,9 @@ public static partial class IndexCommandRunner
                     && linkCount > 1
                     && !visitedFileIdentities.Add(identity))
                 {
-                    return false;
+                    if (RecordEstimatedMutatingTarget())
+                        return true;
+                    continue;
                 }
 
                 var language = GetStatReusableLanguage(
@@ -99,11 +131,12 @@ public static partial class IndexCommandRunner
                         language,
                         generatedExtractionSuppressed) == null)
                 {
-                    return false;
+                    if (RecordEstimatedMutatingTarget())
+                        return true;
                 }
             }
 
-            return true;
+            return false;
         }
         catch (OperationCanceledException)
             when (cancellationToken.IsCancellationRequested)
@@ -114,7 +147,7 @@ public static partial class IndexCommandRunner
         {
             // This is only a bulk-staging optimization. Any preflight uncertainty keeps
             // staging enabled and lets the authoritative per-file loop report the error.
-            return false;
+            return true;
         }
     }
 }

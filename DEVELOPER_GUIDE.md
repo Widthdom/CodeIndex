@@ -360,10 +360,13 @@ no authoritative workspace-wide byte estimate, so they use a conservative
 recoverable boundary: at least 64 targets and at least 60% of the indexed file
 count. When that raw boundary is met but no cleanup/graph/FTS work is already
 pending, compare a path-filtered reusable-stat snapshot with every target before
-staging. If every target is definitely reusable, skip both reference and hotspot
-secondary-index staging; any mismatch or uncertainty keeps staging enabled. This
-preflight is only a cost decision—the file loop must repeat its live authoritative
-lookup so changes after the snapshot are still indexed with all indexes present.
+staging. Estimate targets that can mutate indexed state (including filtered
+deletions and duplicate-hardlink cleanup) and stage reference and hotspot
+secondary indexes only when that count crosses the same 64-target / 60% boundary;
+non-mutating skips, unchanged targets, and sparsely mutating target sets keep every index in place.
+Any preflight uncertainty keeps staging enabled. This preflight is only a cost
+decision—the file loop must repeat its live authoritative lookup so changes after
+the snapshot are still indexed with all indexes present.
 Keep the query-only set deferred through identity and resolution work,
 restore the three reverse-edge indexes immediately before mutual recursion, then
 restore the remainder after that update. Small scoped updates must keep every
@@ -4043,10 +4046,13 @@ atomic file window を含む全経路でこの契約を維持してください�
 index 退避を使います。scoped update には workspace 全体の authoritative な byte estimate が
 ないため、64 target 以上かつ indexed file 数の60%以上という保守的な recoverable 境界を
 使います。この raw 境界を満たしても cleanup / graph / FTS work がまだ無い場合は、path-filter
-済み reusable-stat snapshot を全 target と照合し、全件が確実に reusable なら reference と hotspot
-の secondary-index staging をともに省きます。不一致や不確実性が1件でもあれば staging を維持します。
-この preflight は cost 判定に限り、snapshot 後の変更も全 index を維持したまま更新できるよう、file
-loop は authoritative な live lookup を必ず再実行してください。identity / resolution 中は query-only 集合を遅延したままにし、mutual recursion の
+済み reusable-stat snapshot を全 target と照合します。filtered deletion や duplicate-hardlink cleanup を
+含む、indexed state を変更し得る target を見積もり、その件数が同じ64 target / 60%境界を超えた
+場合だけ reference と hotspot の secondary-index staging を開始します。変更を伴わない skip、
+unchanged、または sparse mutation の target 集合では全 index を維持します。preflight
+に不確実性があれば保守的に staging を維持します。この preflight は cost 判定に限り、snapshot 後の
+変更も全 index を維持したまま更新できるよう、file loop は authoritative な live lookup を必ず再実行
+してください。identity / resolution 中は query-only 集合を遅延したままにし、mutual recursion の
 直前に reverse-edge 用3本を復元して、その update 後に残りを戻してください。小規模 scoped
 update は固定的な再構築 cost が更新時間を支配しないよう、全 index を維持します。
 

@@ -7842,6 +7842,108 @@ public partial class McpServerTests
     }
 
     [Fact]
+    public void ToolsCall_Index_ReadinessCommitFailurePersistsStampAndRestoresReferenceSchema()
+    {
+        var fixtureDir = Path.Combine(
+            Path.GetFullPath("."),
+            $"mcp_index_ts_readiness_commit_failure_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(fixtureDir);
+        var dbPath = TestProjectHelper.CreateTempDbPath(
+            "cdidx_mcp_index_ts_readiness_commit_failure");
+        var previousReferenceIndexHook =
+            DbWriter.ReferenceSecondaryIndexBulkLoadStateForTesting;
+        var expectedAugmentationVersion =
+            DbContext.TypeScriptAugmentationVersion.ToString(CultureInfo.InvariantCulture);
+        var expectedReferenceIndexNames = ReferenceSecondaryIndexSql.All
+            .Select(static definition => definition.Name)
+            .OrderBy(static indexName => indexName, StringComparer.Ordinal)
+            .ToArray();
+        var readinessCommitObserved = false;
+
+        static string? ReadCommittedAugmentationVersion(string databasePath)
+        {
+            using var connection = new SqliteConnection(
+                $"Data Source={databasePath};Mode=ReadOnly;Pooling=False");
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT value FROM codeindex_meta WHERE key = @key";
+            command.Parameters.AddWithValue(
+                "@key",
+                DbContext.TypeScriptAugmentationVersionMetaKey);
+            return command.ExecuteScalar() as string;
+        }
+
+        static string[] ReadUserReferenceIndexNames(SqliteConnection connection)
+        {
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT name
+                FROM sqlite_schema
+                WHERE type = 'index'
+                  AND tbl_name IN ('symbol_references', 'symbol_reference_candidates')
+                  AND name NOT LIKE 'sqlite_autoindex_%'
+                ORDER BY name
+                """;
+            using var reader = command.ExecuteReader();
+            var names = new List<string>();
+            while (reader.Read())
+                names.Add(reader.GetString(0));
+            return names.ToArray();
+        }
+
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(fixtureDir, "contract-a.ts"),
+                "interface ReadinessCommitContract { first: number; }\n");
+            File.WriteAllText(
+                Path.Combine(fixtureDir, "contract-b.ts"),
+                "interface ReadinessCommitContract { second: number; }\n");
+
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            DbWriter.ReferenceSecondaryIndexBulkLoadStateForTesting = (connection, phase) =>
+            {
+                if (!string.Equals(phase, "readiness_committed", StringComparison.Ordinal))
+                {
+                    previousReferenceIndexHook?.Invoke(connection, phase);
+                    return;
+                }
+
+                Assert.Equal(
+                    expectedAugmentationVersion,
+                    ReadCommittedAugmentationVersion(dbPath));
+                readinessCommitObserved = true;
+                previousReferenceIndexHook?.Invoke(connection, phase);
+                throw new InvalidOperationException(
+                    "Stop after the MCP readiness transaction committed.");
+            };
+
+            var response = CallIndex(server, fixtureDir);
+
+            Assert.True(
+                response["result"]?["isError"]?.GetValue<bool>() ?? false,
+                response.ToJsonString());
+            Assert.True(readinessCommitObserved);
+            Assert.Equal(
+                expectedAugmentationVersion,
+                ReadCommittedAugmentationVersion(dbPath));
+            using var verifyConnection = new SqliteConnection(
+                $"Data Source={dbPath};Mode=ReadOnly;Pooling=False");
+            verifyConnection.Open();
+            Assert.Equal(
+                expectedReferenceIndexNames,
+                ReadUserReferenceIndexNames(verifyConnection));
+        }
+        finally
+        {
+            DbWriter.ReferenceSecondaryIndexBulkLoadStateForTesting =
+                previousReferenceIndexHook;
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Fact]
     public void ToolsCall_Index_FreshAndRebuildWithoutTypeScriptSkipTypeScriptAugmentationRebuild()
     {
         var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_fresh_no_ts_augmentation_{Guid.NewGuid():N}");
