@@ -1840,38 +1840,38 @@ public partial class IndexCommandRunnerTests
                         workerIndexes.TryAdd(item.WorkerIndex, 0);
                         break;
                     case IndexCommandRunner.UpdateParallelExtractionEventKind.ExtractionStarted:
-                    {
-                        var started = Interlocked.Increment(ref extractionStarts);
-                        if (item.TargetIndex >= 4
-                            && !Enumerable.Range(0, 4).All(
-                                persistenceCompleted.ContainsKey))
                         {
-                            violations.Enqueue(
-                                "The next window started before the prior window was persisted.");
+                            var started = Interlocked.Increment(ref extractionStarts);
+                            if (item.TargetIndex >= 4
+                                && !Enumerable.Range(0, 4).All(
+                                    persistenceCompleted.ContainsKey))
+                            {
+                                violations.Enqueue(
+                                    "The next window started before the prior window was persisted.");
+                            }
+                            if (started == 1)
+                            {
+                                releaseFirstExtraction.Wait(TimeSpan.FromSeconds(30));
+                            }
+                            if (started == 4)
+                                firstWindowFilled.Set();
+                            break;
                         }
-                        if (started == 1)
-                        {
-                            releaseFirstExtraction.Wait(TimeSpan.FromSeconds(30));
-                        }
-                        if (started == 4)
-                            firstWindowFilled.Set();
-                        break;
-                    }
                     case IndexCommandRunner.UpdateParallelExtractionEventKind.ExtractionCompleted:
                         extractionCompleted.TryAdd(item.TargetIndex, 0);
                         break;
                     case IndexCommandRunner.UpdateParallelExtractionEventKind.PersistenceStarted:
-                    {
-                        var windowStart = item.TargetIndex < 4 ? 0 : 4;
-                        if (!Enumerable.Range(windowStart, 4).All(
-                                extractionCompleted.ContainsKey))
                         {
-                            violations.Enqueue(
-                                "Persistence started before every extraction in its window completed.");
+                            var windowStart = item.TargetIndex < 4 ? 0 : 4;
+                            if (!Enumerable.Range(windowStart, 4).All(
+                                    extractionCompleted.ContainsKey))
+                            {
+                                violations.Enqueue(
+                                    "Persistence started before every extraction in its window completed.");
+                            }
+                            persistenceOrder.Enqueue(item.TargetIndex);
+                            break;
                         }
-                        persistenceOrder.Enqueue(item.TargetIndex);
-                        break;
-                    }
                     case IndexCommandRunner.UpdateParallelExtractionEventKind.PersistenceCompleted:
                         persistenceCompleted.TryAdd(item.TargetIndex, 0);
                         break;
