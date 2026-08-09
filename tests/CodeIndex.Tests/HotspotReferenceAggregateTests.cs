@@ -7,22 +7,24 @@ namespace CodeIndex.Tests;
 public partial class DbReaderTests
 {
     [Theory]
-    [InlineData(63, 63, false)]
-    [InlineData(64, 106, true)]
-    [InlineData(64, 107, false)]
-    [InlineData(600, 1_000, true)]
-    [InlineData(599, 1_000, false)]
-    [InlineData(int.MaxValue, int.MaxValue, true)]
-    public void HotspotAggregateIndexDeferral_UsesBoundedSixtyPercentThreshold(
+    [InlineData(63, 0L, 0L, false)]
+    [InlineData(64, 0L, 0L, true)]
+    [InlineData(64, 59L, 100L, false)]
+    [InlineData(64, 60L, 100L, true)]
+    [InlineData(64, 0L, 1L, false)]
+    [InlineData(64, long.MaxValue, long.MaxValue, true)]
+    public void HotspotAggregateIndexDeferral_UsesBoundedAggregateRowRatio(
         int dirtyFileCount,
-        int indexedFileCount,
+        long dirtyAggregateRowCount,
+        long observedTotalAggregateRowCount,
         bool expected)
     {
         Assert.Equal(
             expected,
             DbWriter.ShouldDeferHotspotAggregateSecondaryIndexes(
                 dirtyFileCount,
-                indexedFileCount));
+                dirtyAggregateRowCount,
+                observedTotalAggregateRowCount));
     }
 
     [Fact]
@@ -599,6 +601,81 @@ public partial class DbReaderTests
     }
 
     [Fact]
+    public void DeferredAggregateRefresh_RetainsIndexesWhenDirtyFilesHaveNoAggregateRows()
+    {
+        const int stableAggregateRowCount = 256;
+        const int zeroReferenceFileCount =
+            DbWriter.HotspotAggregateSecondaryIndexDeferralMinimumDirtyFileCount;
+        var stableFileId = _writer.UpsertFile(new CodeIndex.Models.FileRecord
+        {
+            Path = "src/deferred-stable.py",
+            Lang = "python",
+            Modified = DateTime.UtcNow,
+        });
+        _writer.InsertReferences(
+            Enumerable.Range(0, stableAggregateRowCount)
+                .Select(index => BuildDeferredReference(
+                    stableFileId,
+                    $"stable_target_{index:D3}"))
+                .ToArray());
+
+        var zeroReferencePaths = new string[zeroReferenceFileCount];
+        for (var index = 0; index < zeroReferencePaths.Length; index++)
+        {
+            var path = $"src/deferred-empty-{index:D2}.py";
+            zeroReferencePaths[index] = path;
+            _writer.UpsertFile(new CodeIndex.Models.FileRecord
+            {
+                Path = path,
+                Lang = "python",
+                Modified = DateTime.UtcNow,
+            });
+        }
+
+        var previousStatementHook = DbWriter.HotspotAggregateRefreshStatementExecutingForTesting;
+        var previousSizingHook = DbWriter.HotspotAggregateIndexDeferralSizedForTesting;
+        string[]? indexNamesDuringRefresh = null;
+        (long DirtyRows, long ProbeLimit, long ObservedRows)? sizing = null;
+        try
+        {
+            DbWriter.HotspotAggregateRefreshStatementExecutingForTesting = () =>
+            {
+                indexNamesDuringRefresh = ReadHotspotReferenceAggregateIndexNames();
+                previousStatementHook?.Invoke();
+            };
+            DbWriter.HotspotAggregateIndexDeferralSizedForTesting =
+                (dirtyRows, probeLimit, observedRows) =>
+                {
+                    sizing = (dirtyRows, probeLimit, observedRows);
+                    previousSizingHook?.Invoke(dirtyRows, probeLimit, observedRows);
+                };
+
+            using var deferredRefresh = _writer.BeginDeferredHotspotReferenceAggregateRefresh(
+                deferSecondaryIndexes: true);
+            foreach (var path in zeroReferencePaths)
+                Assert.True(_writer.DeleteFileByPath(path));
+            deferredRefresh.Complete(CancellationToken.None);
+
+            Assert.Equal(
+                GetHotspotReferenceAggregateIndexNames(),
+                indexNamesDuringRefresh);
+            Assert.Equal(
+                GetHotspotReferenceAggregateIndexNames(),
+                ReadHotspotReferenceAggregateIndexNames());
+            Assert.Equal((0L, 1L, 1L), sizing);
+            using var count = _db.Connection.CreateCommand();
+            count.CommandText = "SELECT COUNT(*) FROM hotspot_reference_counts WHERE file_id = @file_id";
+            count.Parameters.AddWithValue("@file_id", stableFileId);
+            Assert.Equal((long)stableAggregateRowCount, (long)count.ExecuteScalar()!);
+        }
+        finally
+        {
+            DbWriter.HotspotAggregateRefreshStatementExecutingForTesting = previousStatementHook;
+            DbWriter.HotspotAggregateIndexDeferralSizedForTesting = previousSizingHook;
+        }
+    }
+
+    [Fact]
     public void DeferredAggregateRefresh_UsesOneStatementBeyondDirtyIdInsertBatch()
     {
         const int fileCount = 1_001;
@@ -619,9 +696,15 @@ public partial class DbReaderTests
         var references = fileIds
             .Select((fileId, index) => BuildDeferredReference(fileId, $"bulk_target_{index}"))
             .ToArray();
+        _writer.InsertReferences(
+            fileIds
+                .Select((fileId, index) => BuildDeferredReference(fileId, $"bulk_seed_{index}"))
+                .ToArray());
         var previousStatementHook = DbWriter.HotspotAggregateRefreshStatementExecutingForTesting;
+        var previousSizingHook = DbWriter.HotspotAggregateIndexDeferralSizedForTesting;
         var refreshStatements = 0;
         string[]? indexNamesDuringRefresh = null;
+        (long DirtyRows, long ProbeLimit, long ObservedRows)? sizing = null;
         try
         {
             DbWriter.HotspotAggregateRefreshStatementExecutingForTesting = () =>
@@ -630,6 +713,12 @@ public partial class DbReaderTests
                 indexNamesDuringRefresh = ReadHotspotReferenceAggregateIndexNames();
                 previousStatementHook?.Invoke();
             };
+            DbWriter.HotspotAggregateIndexDeferralSizedForTesting =
+                (dirtyRows, probeLimit, observedRows) =>
+                {
+                    sizing = (dirtyRows, probeLimit, observedRows);
+                    previousSizingHook?.Invoke(dirtyRows, probeLimit, observedRows);
+                };
 
             using var deferredRefresh = _writer.BeginDeferredHotspotReferenceAggregateRefresh(
                 deferSecondaryIndexes: true);
@@ -645,6 +734,7 @@ public partial class DbReaderTests
 
             Assert.Equal(1, refreshStatements);
             Assert.Empty(Assert.IsType<string[]>(indexNamesDuringRefresh));
+            Assert.Equal((1_001L, 1_669L, 1_002L), sizing);
             Assert.Equal(
                 GetHotspotReferenceAggregateIndexNames(),
                 ReadHotspotReferenceAggregateIndexNames());
@@ -652,9 +742,9 @@ public partial class DbReaderTests
             count.CommandText = "SELECT COUNT(*) FROM symbol_references WHERE file_id >= @first_file_id AND file_id <= @last_file_id";
             count.Parameters.AddWithValue("@first_file_id", fileIds[0]);
             count.Parameters.AddWithValue("@last_file_id", fileIds[^1]);
-            Assert.Equal((long)fileCount, (long)count.ExecuteScalar()!);
+            Assert.Equal((long)fileCount * 2, (long)count.ExecuteScalar()!);
             count.CommandText = "SELECT COALESCE(SUM(reference_count), 0) FROM hotspot_reference_counts WHERE file_id >= @first_file_id AND file_id <= @last_file_id";
-            Assert.Equal((long)fileCount, (long)count.ExecuteScalar()!);
+            Assert.Equal((long)fileCount * 2, (long)count.ExecuteScalar()!);
 
             // Reuse the reference persistence command shapes that were prepared before
             // the DROP/CREATE cycle. SQLite must reprepare them without leaking SQLITE_SCHEMA.
@@ -666,11 +756,12 @@ public partial class DbReaderTests
                     CancellationToken.None);
                 reuseTransaction.Commit();
             }
-            AssertAggregateAndRawReferenceCounts(fileIds[0], expected: 2);
+            AssertAggregateAndRawReferenceCounts(fileIds[0], expected: 3);
         }
         finally
         {
             DbWriter.HotspotAggregateRefreshStatementExecutingForTesting = previousStatementHook;
+            DbWriter.HotspotAggregateIndexDeferralSizedForTesting = previousSizingHook;
         }
     }
 
@@ -762,14 +853,26 @@ public partial class DbReaderTests
     [Fact]
     public void DeferredAggregateRefresh_CancellationLeavesTrustDemoted()
     {
-        var fileId = _writer.UpsertFile(new CodeIndex.Models.FileRecord
-        {
-            Path = "src/deferred-cancel.py",
-            Lang = "python",
-            Modified = DateTime.UtcNow,
-        });
+        var fileIds = Enumerable.Range(
+                0,
+                DbWriter.HotspotAggregateSecondaryIndexDeferralMinimumDirtyFileCount)
+            .Select(index => _writer.UpsertFile(new CodeIndex.Models.FileRecord
+            {
+                Path = $"src/deferred-cancel-{index:D2}.py",
+                Lang = "python",
+                Modified = DateTime.UtcNow,
+            }))
+            .ToArray();
+        _writer.InsertReferences(
+            fileIds
+                .Select((fileId, index) => BuildDeferredReference(
+                    fileId,
+                    $"cancel_seed_{index}"))
+                .ToArray());
         using var cancellation = new CancellationTokenSource();
         var previousRefreshHook = DbWriter.HotspotAggregateRefreshExecutingForTesting;
+        var previousStatementHook = DbWriter.HotspotAggregateRefreshStatementExecutingForTesting;
+        string[]? indexNamesDuringRefresh = null;
         try
         {
             using var deferredRefresh = _writer.BeginDeferredHotspotReferenceAggregateRefresh(
@@ -777,11 +880,20 @@ public partial class DbReaderTests
             using (var transaction = _writer.BeginTransaction())
             {
                 _writer.InsertReferencesInAtomicFileScope(
-                    [BuildDeferredReference(fileId, "cancel_target")],
+                    fileIds
+                        .Select((fileId, index) => BuildDeferredReference(
+                            fileId,
+                            $"cancel_target_{index}"))
+                        .ToArray(),
                     refreshMutualRecursionFlags: false,
                     CancellationToken.None);
                 transaction.Commit();
             }
+            DbWriter.HotspotAggregateRefreshStatementExecutingForTesting = () =>
+            {
+                indexNamesDuringRefresh = ReadHotspotReferenceAggregateIndexNames();
+                previousStatementHook?.Invoke();
+            };
             DbWriter.HotspotAggregateRefreshExecutingForTesting = () =>
             {
                 previousRefreshHook?.Invoke();
@@ -790,8 +902,11 @@ public partial class DbReaderTests
 
             using (var outerTransaction = _writer.BeginTransaction())
             {
-                Assert.Throws<OperationCanceledException>(() => deferredRefresh.Complete(cancellation.Token));
+                var exception = Assert.Throws<OperationCanceledException>(() =>
+                    deferredRefresh.Complete(cancellation.Token));
+                Assert.Equal(cancellation.Token, exception.CancellationToken);
             }
+            Assert.Empty(Assert.IsType<string[]>(indexNamesDuringRefresh));
             Assert.Equal(0, _db.GetUserVersion() & DbContext.HotspotReferenceAggregateReadyFlag);
             Assert.Equal(
                 GetHotspotReferenceAggregateIndexNames(),
@@ -800,6 +915,7 @@ public partial class DbReaderTests
         finally
         {
             DbWriter.HotspotAggregateRefreshExecutingForTesting = previousRefreshHook;
+            DbWriter.HotspotAggregateRefreshStatementExecutingForTesting = previousStatementHook;
         }
     }
 

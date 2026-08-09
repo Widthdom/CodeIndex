@@ -27,6 +27,12 @@ public partial class DbWriter
         get => ScopedFtsTableRebuildExecutingForTesting.Value;
         set => ScopedFtsTableRebuildExecutingForTesting.Value = value;
     }
+    private static readonly AsyncLocal<Action<string>?> ScopedFtsTableRebuildStatementCompletedForTesting = new();
+    internal static Action<string>? FtsTableRebuildStatementCompletedBeforeAutomergeRestoreForTesting
+    {
+        get => ScopedFtsTableRebuildStatementCompletedForTesting.Value;
+        set => ScopedFtsTableRebuildStatementCompletedForTesting.Value = value;
+    }
 
     /// <summary>
     /// Optimize FTS5 index to merge internal b-tree segments for better query performance.
@@ -165,6 +171,7 @@ public partial class DbWriter
         Execute(
             $"INSERT INTO {tableName}({tableName}) VALUES('rebuild')",
             cancellationToken);
+        FtsTableRebuildStatementCompletedBeforeAutomergeRestoreForTesting?.Invoke(tableName);
         SetFtsAutomergeSetting(tableName, previousSetting, cancellationToken);
         transaction.Commit();
     }

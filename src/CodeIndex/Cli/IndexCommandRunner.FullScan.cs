@@ -1300,7 +1300,7 @@ public static partial class IndexCommandRunner
             ScanResult = scanResult,
             ReadableFileBytes = readableFileBytes,
             MemorySamples = memorySamples,
-            CaptureReferenceGraphMemorySampleAfterTypeScriptAugmentation =
+            TypeScriptAugmentationOwnsDeferredReferenceGraphRefresh =
                 deferMutualRecursionRefreshToTypeScriptAugmentation
                 && !deferredMutualRecursionRefreshCompletedBeforeReadiness,
             FreshCountReferences = freshCountReferences,

@@ -346,8 +346,15 @@ public class PerformanceTests : IDisposable
     public void SymbolExtraction_JavaScriptTypeScriptScopeLexing_ReusesSanitizedSnapshot()
     {
         var content = BuildJavaScriptTypeScriptScopeLexingFixture(statementCount: 1_200);
-        _ = SymbolExtractor.Extract(1, "javascript", content);
-        _ = SymbolExtractor.Extract(1, "typescript", content);
+        var javaScriptSymbol = Assert.Single(
+            SymbolExtractor.Extract(1, "javascript", content));
+        var typeScriptSymbol = Assert.Single(
+            SymbolExtractor.Extract(1, "typescript", content));
+        Assert.All([javaScriptSymbol, typeScriptSymbol], symbol =>
+        {
+            Assert.Equal("function", symbol.Kind);
+            Assert.Equal("inspect", symbol.Name);
+        });
 
         var javaScriptAllocatedBytes = MeasureAllocatedBytes(
             () => SymbolExtractor.Extract(1, "javascript", content));

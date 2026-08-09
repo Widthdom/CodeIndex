@@ -2473,6 +2473,65 @@ public sealed class Caller
     }
 
     [Fact]
+    public void Run_StaleTypeScriptMarkerWithoutAugmentationEdges_SkipsGraphRefresh()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_ts_marker_only_refresh");
+        var dbPath = CreateTempDbPath("cdidx_ts_marker_only_refresh");
+        var previousAugmentationHook =
+            IndexCommandRunner.FullScanTypeScriptAugmentationRebuildForTesting;
+        var previousRefreshHook = DbWriter.MutualRecursionRefreshForTesting;
+        var augmentationRebuildCount = 0;
+        var refreshCount = 0;
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "contract.ts"),
+                "interface SingletonContract { value: number }\n");
+            IndexCommandRunner.FullScanTypeScriptAugmentationRebuildForTesting = () =>
+            {
+                augmentationRebuildCount++;
+                previousAugmentationHook?.Invoke();
+            };
+            DbWriter.MutualRecursionRefreshForTesting = () =>
+            {
+                refreshCount++;
+                previousRefreshHook?.Invoke();
+            };
+
+            var (initialExitCode, initialJson) = RunAndCaptureJson(
+                [projectRoot, "--db", dbPath, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.Equal("success", initialJson.GetProperty("status").GetString());
+            Assert.Equal(1, augmentationRebuildCount);
+            Assert.Equal(1, refreshCount);
+
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+                new DbWriter(db).ClearTypeScriptAugmentationReady();
+            augmentationRebuildCount = 0;
+            refreshCount = 0;
+
+            var (refreshExitCode, refreshJson) = RunAndCaptureJson(
+                [projectRoot, "--db", dbPath, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, refreshExitCode);
+            Assert.Equal("success", refreshJson.GetProperty("status").GetString());
+            Assert.Equal(1, augmentationRebuildCount);
+            Assert.Equal(0, refreshCount);
+            using var completedDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            Assert.Equal(
+                DbContext.TypeScriptAugmentationVersion.ToString(CultureInfo.InvariantCulture),
+                completedDb.GetMetaString(DbContext.TypeScriptAugmentationVersionMetaKey));
+        }
+        finally
+        {
+            IndexCommandRunner.FullScanTypeScriptAugmentationRebuildForTesting =
+                previousAugmentationHook;
+            DbWriter.MutualRecursionRefreshForTesting = previousRefreshHook;
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_NoOpFullScan_DoesNotOptimizeFts()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_noop_fullscan_no_fts_optimize");

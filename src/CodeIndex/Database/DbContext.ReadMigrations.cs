@@ -213,9 +213,6 @@ public partial class DbContext : IDisposable
             yield return ($"CREATE INDEX {indexDefinition.Name}",
                 () => Execute(indexDefinition.CreateSql));
         }
-        yield return ("CREATE INDEX idx_symbol_ref_candidates_symbol",
-            () => Execute("CREATE INDEX IF NOT EXISTS idx_symbol_ref_candidates_symbol ON symbol_reference_candidates(symbol_id, reference_id)"));
-
         yield return ("EnsureColumn files.lang", () => EnsureColumn("files", "lang", "TEXT"));
         yield return ("EnsureColumn files.checksum", () => EnsureColumn("files", "checksum", "TEXT"));
         yield return ("EnsureColumn files.modified", () => EnsureColumn("files", "modified", "DATETIME"));

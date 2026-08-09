@@ -866,7 +866,7 @@ public static partial class IndexCommandRunner
             Errors = errors,
             FileErrorList = fileErrorList,
             MemorySamples = memorySamples,
-            CaptureReferenceGraphMemorySampleAfterTypeScriptAugmentation =
+            TypeScriptAugmentationOwnsDeferredReferenceGraphRefresh =
                 deferMutualRecursionRefreshToTypeScriptAugmentation
                 && !deferredMutualRecursionRefreshCompletedBeforeReadiness,
             FullyRefreshedDynamicGraphLanguages = errors == 0 && readinessDemoted

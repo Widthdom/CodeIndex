@@ -178,22 +178,45 @@ public partial class DbWriter
         string? Visibility);
 
     public int RebuildTypeScriptAugmentationReferences(string? projectRoot = null) =>
-        RebuildTypeScriptAugmentationReferencesCore(projectRoot, dirtyNames: null);
+        RebuildTypeScriptAugmentationReferencesCore(
+            projectRoot,
+            dirtyNames: null,
+            finalizeDeferredReferenceGraph: false);
 
     internal int RebuildTypeScriptAugmentationReferences(
         string projectRoot,
         IReadOnlyCollection<string> dirtyNames) =>
-        RebuildTypeScriptAugmentationReferencesCore(projectRoot, dirtyNames, CancellationToken.None);
+        RebuildTypeScriptAugmentationReferencesCore(
+            projectRoot,
+            dirtyNames,
+            finalizeDeferredReferenceGraph: false,
+            CancellationToken.None);
 
     internal int RebuildTypeScriptAugmentationReferences(
         string projectRoot,
         IReadOnlyCollection<string>? dirtyNames,
         CancellationToken cancellationToken) =>
-        RebuildTypeScriptAugmentationReferencesCore(projectRoot, dirtyNames, cancellationToken);
+        RebuildTypeScriptAugmentationReferencesCore(
+            projectRoot,
+            dirtyNames,
+            finalizeDeferredReferenceGraph: false,
+            cancellationToken);
+
+    internal int RebuildTypeScriptAugmentationReferences(
+        string projectRoot,
+        IReadOnlyCollection<string>? dirtyNames,
+        bool finalizeDeferredReferenceGraph,
+        CancellationToken cancellationToken) =>
+        RebuildTypeScriptAugmentationReferencesCore(
+            projectRoot,
+            dirtyNames,
+            finalizeDeferredReferenceGraph,
+            cancellationToken);
 
     private int RebuildTypeScriptAugmentationReferencesCore(
         string? projectRoot,
         IReadOnlyCollection<string>? dirtyNames,
+        bool finalizeDeferredReferenceGraph,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -425,12 +448,13 @@ public partial class DbWriter
                 references,
                 refreshMutualRecursionFlags: true,
                 cancellationToken);
-            if (references.Count == 0)
+            if (references.Count == 0
+                && (deletedReferences.Count > 0 || finalizeDeferredReferenceGraph))
             {
                 // The insert helper intentionally no-ops for an empty batch. Augmentation
-                // rebuilds still own graph finalization because they may have deleted every
-                // synthetic edge, or the caller may have coalesced an earlier graph pass.
-                // 空batchでも全augmentation edge削除や先行pass統合後のgraph確定を担う。
+                // rebuilds finalize only when they deleted synthetic edges or explicitly
+                // inherited a coalesced graph pass. Marker-only validation stays O(1) here.
+                // 空batchはedge削除または先行pass統合時だけgraphを確定し、marker検証だけなら省く。
                 cancellationToken.ThrowIfCancellationRequested();
                 RefreshMutualRecursionFlags(cancellationToken);
             }

@@ -45,7 +45,7 @@ public static partial class IndexCommandRunner
         internal required FileIndexer.ScanFilesResult ScanResult { get; init; }
         internal required ReadableFileByteTracker ReadableFileBytes { get; init; }
         internal required List<IndexMemorySampleJsonResult> MemorySamples { get; init; }
-        internal required bool CaptureReferenceGraphMemorySampleAfterTypeScriptAugmentation { get; init; }
+        internal required bool TypeScriptAugmentationOwnsDeferredReferenceGraphRefresh { get; init; }
         internal required long FreshCountReferences { get; init; }
         internal required Action WriteProjectRootOnce { get; init; }
     }
@@ -143,7 +143,7 @@ public static partial class IndexCommandRunner
                 }
                 else
                 {
-                    const string phase = "rebuilding TypeScript augmentation and finalizing reference graph";
+                    const string phase = "rebuilding TypeScript augmentation";
                     WriteFullScanJsonLiveness(options, $"{phase}...");
                     var augmentationHeartbeat = StartFullScanJsonPhaseHeartbeat(options, phase);
                     try
@@ -154,6 +154,7 @@ public static partial class IndexCommandRunner
                             context.UseScopedTypeScriptAugmentationRefresh
                                 ? context.TypeScriptAugmentationDirtyNames?.DirtyNames
                                 : null,
+                            context.TypeScriptAugmentationOwnsDeferredReferenceGraphRefresh,
                             cancellationToken);
                         if (context.StartedWithNoIndexedFiles)
                             freshCountReferences += augmentationReferences;
@@ -165,7 +166,7 @@ public static partial class IndexCommandRunner
                 }
             }
             if (options.MemoryTrace
-                && context.CaptureReferenceGraphMemorySampleAfterTypeScriptAugmentation)
+                && context.TypeScriptAugmentationOwnsDeferredReferenceGraphRefresh)
             {
                 context.MemorySamples.Add(CaptureMemorySample("reference_graph", context.Stopwatch));
             }

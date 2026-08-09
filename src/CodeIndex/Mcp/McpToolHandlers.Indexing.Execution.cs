@@ -1986,7 +1986,7 @@ public partial class McpServer
                 processed,
                 files.Count,
                 rebuildTypeScriptAugmentation
-                    ? "Rebuilding TypeScript augmentation and finalizing reference graph."
+                    ? "Rebuilding TypeScript augmentation."
                     : "Finalizing index metadata.").ConfigureAwait(false);
             if (!useFullRunBatchMarker)
                 writer.MarkBatchInProgress();
@@ -2030,6 +2030,7 @@ public partial class McpServer
                         useScopedTypeScriptAugmentationRefresh
                             ? typeScriptAugmentationDirtyNames?.DirtyNames
                             : null,
+                        deferMutualRecursionRefreshToTypeScriptAugmentation,
                         requestToken);
                     if (startedWithNoIndexedFiles)
                         freshCountReferences += augmentationReferences;

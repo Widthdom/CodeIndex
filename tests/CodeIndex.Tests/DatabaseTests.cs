@@ -168,7 +168,7 @@ public class DatabaseTests : IDisposable
             .Select(static definition => definition.Name)
             .Order(StringComparer.Ordinal)
             .ToArray();
-        var actual = ReadIndexNames(_db.Connection, "symbol_references")
+        var actual = ReadReferenceSecondaryIndexNames(_db.Connection)
             .Order(StringComparer.Ordinal)
             .ToArray();
 
@@ -180,6 +180,10 @@ public class DatabaseTests : IDisposable
             _db.Connection,
             "idx_symbol_refs_unresolved_mutual_folded",
             [("container_name_folded", "BINARY"), ("symbol_name_folded", "BINARY")]);
+        AssertIndexColumns(
+            _db.Connection,
+            "idx_symbol_ref_candidates_symbol",
+            [("symbol_id", "BINARY"), ("reference_id", "BINARY")]);
         AssertIndexSqlContains(
             _db.Connection,
             "idx_symbol_refs_unresolved_mutual_folded",
@@ -3203,23 +3207,29 @@ public class DatabaseTests : IDisposable
         SetFtsAutomergeSetting("fts_chunks", 7);
         SetFtsAutomergeSetting(DbContext.FtsChunksTrigramTableName, 9);
 
-        var previousHook = DbWriter.FtsTableRebuildExecutingForTesting;
+        var previousHook =
+            DbWriter.FtsTableRebuildStatementCompletedBeforeAutomergeRestoreForTesting;
         using var cancellation = new CancellationTokenSource();
+        var completedRebuildStatements = new List<string>();
         try
         {
-            DbWriter.FtsTableRebuildExecutingForTesting = tableName =>
+            DbWriter.FtsTableRebuildStatementCompletedBeforeAutomergeRestoreForTesting = tableName =>
             {
                 previousHook?.Invoke(tableName);
                 Assert.Equal("fts_chunks", tableName);
-                Assert.Equal(0L, ReadFtsAutomergeSetting(tableName));
+                Assert.Equal((0L, 9L), ReadFtsAutomergeSettings());
+                completedRebuildStatements.Add(tableName);
                 cancellation.Cancel();
+                cancellation.Token.ThrowIfCancellationRequested();
             };
 
             using (var outerTransaction = _writer.BeginTransaction())
             {
-                Assert.Throws<OperationCanceledException>(() =>
+                var exception = Assert.Throws<OperationCanceledException>(() =>
                     _writer.RebuildFtsFromChunks(cancellationToken: cancellation.Token));
 
+                Assert.Equal(cancellation.Token, exception.CancellationToken);
+                Assert.Equal(["fts_chunks"], completedRebuildStatements);
                 Assert.Equal((7L, 9L), ReadFtsAutomergeSettings());
                 Assert.Equal(1L, ExecuteScalarLong(
                     $"SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH '{originalToken}'"));
@@ -3229,7 +3239,7 @@ public class DatabaseTests : IDisposable
         }
         finally
         {
-            DbWriter.FtsTableRebuildExecutingForTesting = previousHook;
+            DbWriter.FtsTableRebuildStatementCompletedBeforeAutomergeRestoreForTesting = previousHook;
             _writer.RestoreFtsSyncTriggers();
             _writer.RebuildFtsFromChunks();
             _writer.ClearFtsBulkLoadInProgress();
@@ -5658,7 +5668,7 @@ public class DatabaseTests : IDisposable
             db.TryMigrateForRead();
             var fileIndexes = ReadIndexNames(db.Connection, "files");
             var symbolIndexes = ReadIndexNames(db.Connection, "symbols");
-            var indexes = ReadIndexNames(db.Connection, "symbol_references");
+            var indexes = ReadReferenceSecondaryIndexNames(db.Connection);
 
             Assert.Equal(
                 ReferenceSecondaryIndexSql.All
@@ -8412,6 +8422,120 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void RebuildTypeScriptAugmentationReferences_EmptyBatchRefreshesOnlyForPendingGraphWork()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/augmentation-singleton.ts",
+            Lang = "typescript",
+            Modified = DateTime.UtcNow,
+        });
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "interface",
+                Name = "SingletonContract",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 1,
+                Signature = "interface SingletonContract { value: number }",
+            },
+        ]);
+
+        var previousRefreshHook = DbWriter.MutualRecursionRefreshForTesting;
+        var refreshCount = 0;
+        try
+        {
+            DbWriter.MutualRecursionRefreshForTesting = () =>
+            {
+                refreshCount++;
+                previousRefreshHook?.Invoke();
+            };
+
+            Assert.Equal(0, _writer.RebuildTypeScriptAugmentationReferences("."));
+            Assert.Equal(0, refreshCount);
+
+            Assert.Equal(
+                0,
+                _writer.RebuildTypeScriptAugmentationReferences(
+                    ".",
+                    dirtyNames: null,
+                    finalizeDeferredReferenceGraph: true,
+                    CancellationToken.None));
+            Assert.Equal(1, refreshCount);
+        }
+        finally
+        {
+            DbWriter.MutualRecursionRefreshForTesting = previousRefreshHook;
+        }
+    }
+
+    [Fact]
+    public void RebuildTypeScriptAugmentationReferences_EmptyBatchRefreshesDeletedEdges()
+    {
+        var firstFileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/augmentation-delete-first.ts",
+            Lang = "typescript",
+            Modified = DateTime.UtcNow,
+        });
+        var secondFileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/augmentation-delete-second.ts",
+            Lang = "typescript",
+            Modified = DateTime.UtcNow,
+        });
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = firstFileId,
+                Kind = "interface",
+                Name = "ShrinkingContract",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 1,
+                Signature = "interface ShrinkingContract { first: number }",
+            },
+            new SymbolRecord
+            {
+                FileId = secondFileId,
+                Kind = "interface",
+                Name = "ShrinkingContract",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 1,
+                Signature = "interface ShrinkingContract { second: number }",
+            },
+        ]);
+        Assert.Equal(2, _writer.RebuildTypeScriptAugmentationReferences("."));
+        Assert.True(_writer.DeleteFileByPath("src/augmentation-delete-second.ts"));
+
+        var previousRefreshHook = DbWriter.MutualRecursionRefreshForTesting;
+        var refreshCount = 0;
+        try
+        {
+            DbWriter.MutualRecursionRefreshForTesting = () =>
+            {
+                refreshCount++;
+                previousRefreshHook?.Invoke();
+            };
+
+            Assert.Equal(0, _writer.RebuildTypeScriptAugmentationReferences("."));
+            Assert.Equal(1, refreshCount);
+            using var count = _db.Connection.CreateCommand();
+            count.CommandText = "SELECT COUNT(*) FROM symbol_references WHERE reference_kind = 'augmentation'";
+            Assert.Equal(0L, (long)count.ExecuteScalar()!);
+        }
+        finally
+        {
+            DbWriter.MutualRecursionRefreshForTesting = previousRefreshHook;
+        }
+    }
+
+    [Fact]
     public void RebuildTypeScriptAugmentationReferences_ScopesOldAndNewDirtyNames()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_ts_aug_dirty_names");
@@ -8934,6 +9058,16 @@ public class DatabaseTests : IDisposable
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
             indexes.Add(reader.GetString(0));
+        return indexes;
+    }
+
+    private static HashSet<string> ReadReferenceSecondaryIndexNames(
+        SqliteConnection connection)
+    {
+        var indexes = ReadIndexNames(connection, "symbol_references");
+        indexes.UnionWith(ReadIndexNames(connection, "symbol_reference_candidates"));
+        indexes.RemoveWhere(static name =>
+            name.StartsWith("sqlite_autoindex_", StringComparison.Ordinal));
         return indexes;
     }
 

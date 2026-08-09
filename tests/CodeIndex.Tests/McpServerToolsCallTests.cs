@@ -7706,6 +7706,70 @@ public partial class McpServerTests
     }
 
     [Fact]
+    public void ToolsCall_Index_StaleTypeScriptMarkerWithoutAugmentationEdgesSkipsGraphRefresh()
+    {
+        var fixtureDir = Path.Combine(
+            Path.GetFullPath("."),
+            $"mcp_index_ts_marker_only_refresh_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(fixtureDir);
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_ts_marker_only_refresh");
+        var previousAugmentationHook =
+            McpServer.McpIndexTypeScriptAugmentationRebuildForTesting;
+        var previousRefreshHook = DbWriter.MutualRecursionRefreshForTesting;
+        var augmentationRebuildCount = 0;
+        var refreshCount = 0;
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(fixtureDir, "contract.ts"),
+                "interface SingletonContract { value: number }\n");
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            McpServer.McpIndexTypeScriptAugmentationRebuildForTesting = () =>
+            {
+                augmentationRebuildCount++;
+                previousAugmentationHook?.Invoke();
+            };
+            DbWriter.MutualRecursionRefreshForTesting = () =>
+            {
+                refreshCount++;
+                previousRefreshHook?.Invoke();
+            };
+
+            var initialResponse = CallIndex(server, fixtureDir);
+            Assert.False(
+                initialResponse["result"]?["isError"]?.GetValue<bool>() ?? false,
+                initialResponse.ToJsonString());
+            Assert.Equal(1, augmentationRebuildCount);
+            Assert.Equal(1, refreshCount);
+
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+                new DbWriter(db).ClearTypeScriptAugmentationReady();
+            augmentationRebuildCount = 0;
+            refreshCount = 0;
+
+            var refreshResponse = CallIndex(server, fixtureDir);
+            Assert.False(
+                refreshResponse["result"]?["isError"]?.GetValue<bool>() ?? false,
+                refreshResponse.ToJsonString());
+            Assert.Equal(1, augmentationRebuildCount);
+            Assert.Equal(0, refreshCount);
+            using var completedDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            completedDb.TryMigrateForRead();
+            Assert.Equal(
+                DbContext.TypeScriptAugmentationVersion.ToString(CultureInfo.InvariantCulture),
+                completedDb.GetMetaString(DbContext.TypeScriptAugmentationVersionMetaKey));
+        }
+        finally
+        {
+            McpServer.McpIndexTypeScriptAugmentationRebuildForTesting =
+                previousAugmentationHook;
+            DbWriter.MutualRecursionRefreshForTesting = previousRefreshHook;
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Fact]
     public void ToolsCall_Index_PreviouslyEmptyFailedFirstWriteInvalidatesTypeScriptAugmentationReadiness()
     {
         var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_empty_ts_rollback_{Guid.NewGuid():N}");

@@ -1168,6 +1168,27 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void BuildFullScanExtractionTailSchedule_CancelledAfterProbe_StopsBeforeNextProbe()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var probedOrdinals = new List<int>();
+
+        Assert.Throws<OperationCanceledException>(() =>
+            IndexCommandRunner.BuildFullScanExtractionTailSchedule(
+                workItemCount: 6,
+                workerCount: 1,
+                maxFileSizeBytes: 1_000,
+                workOrdinal =>
+                {
+                    probedOrdinals.Add(workOrdinal);
+                    cancellation.Cancel();
+                    return 1;
+                },
+                cancellation.Token));
+        Assert.Equal([2], probedOrdinals);
+    }
+
+    [Fact]
     public void Run_FullScan_DenseDeletionCapsReusableStatSnapshotCapacityToRetainedRows()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_fullscan_reuse_capacity");
