@@ -1117,7 +1117,16 @@ public class ExportImportCommandRunnerTests
             Assert.Equal("1", ReadMetaValue(fullImportDbPath, DbContext.LastIndexRunFilesScannedMetaKey));
             Assert.Equal("2", ReadMetaValue(fullImportDbPath, DbContext.UnknownExtensionFileCountMetaKey));
 
-            var legacyArchivePath = CopyArchiveWithoutTrustScopeMarker(projectRoot, pristineArchivePath);
+            using (var sourceDb = new DbContext(DbOpenIntent.WriteIndex, sourceDbPath))
+            {
+                var writer = new DbWriter(sourceDb.Connection);
+                writer.SetMeta(DbContext.IndexCompletenessMetaKey, "incomplete");
+                writer.SetMeta(
+                    DbContext.IndexIncompleteReasonsMetaKey,
+                    "[\"legacy_source_incomplete\"]");
+            }
+            var incompleteArchivePath = ExportArchive(projectRoot, sourceDbPath);
+            var legacyArchivePath = CopyArchiveWithoutTrustScopeMarker(projectRoot, incompleteArchivePath);
             var legacyImportDbPath = Path.Combine(projectRoot, "legacy", "codeindex.db");
             var (legacyExitCode, legacyStdout, legacyStderr) = ConsoleCapture.Capture(() =>
                 ExportImportCommandRunner.RunImport(
@@ -1129,9 +1138,12 @@ public class ExportImportCommandRunnerTests
             using (var legacyResult = JsonDocument.Parse(legacyStdout))
             {
                 Assert.False(legacyResult.RootElement.GetProperty("index_complete").GetBoolean());
-                Assert.Contains(
-                    legacyResult.RootElement.GetProperty("index_incomplete_reasons").EnumerateArray(),
-                    reason => reason.GetString() == ExportImportCommandRunner.PartialArchiveIncompleteReason);
+                Assert.Equal(
+                    ["legacy_source_incomplete", ExportImportCommandRunner.PartialArchiveIncompleteReason],
+                    legacyResult.RootElement
+                        .GetProperty("index_incomplete_reasons")
+                        .EnumerateArray()
+                        .Select(reason => reason.GetString()));
                 var legacyScope = legacyResult.RootElement.GetProperty("scope");
                 Assert.True(
                     !legacyScope.TryGetProperty("represents_entire_source_database", out var wholeSource)
@@ -1143,7 +1155,37 @@ public class ExportImportCommandRunnerTests
             Assert.Null(ReadMetaValue(legacyImportDbPath, DbContext.CommitScopedFreshHeadShaMetaKey));
             Assert.Null(ReadMetaValue(legacyImportDbPath, DbContext.LastIndexRunFilesScannedMetaKey));
             Assert.Equal("0", ReadMetaValue(legacyImportDbPath, DbContext.UnknownExtensionFileCountMetaKey));
+            Assert.Equal(
+                "[\"legacy_source_incomplete\",\"partial_archive\"]",
+                ReadMetaValue(legacyImportDbPath, DbContext.IndexIncompleteReasonsMetaKey));
             AssertPartialArchiveStatus(legacyImportDbPath);
+
+            var noMetaArchivePath = CopyArchiveWithoutTrustScopeMarker(
+                projectRoot,
+                pristineArchivePath,
+                removeMetadataTable: true);
+            var noMetaImportDbPath = Path.Combine(projectRoot, "no-meta", "codeindex.db");
+            var (noMetaExitCode, noMetaStdout, noMetaStderr) = ConsoleCapture.Capture(() =>
+                ExportImportCommandRunner.RunImport(
+                    [noMetaArchivePath, "--db", noMetaImportDbPath, "--json"],
+                    jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, noMetaExitCode);
+            Assert.Equal(string.Empty, noMetaStderr);
+            using (var noMetaResult = JsonDocument.Parse(noMetaStdout))
+            {
+                Assert.False(noMetaResult.RootElement.GetProperty("index_complete").GetBoolean());
+                Assert.Equal(
+                    [ExportImportCommandRunner.PartialArchiveIncompleteReason],
+                    noMetaResult.RootElement
+                        .GetProperty("index_incomplete_reasons")
+                        .EnumerateArray()
+                        .Select(reason => reason.GetString()));
+            }
+            Assert.Equal(
+                "[\"partial_archive\"]",
+                ReadMetaValue(noMetaImportDbPath, DbContext.IndexIncompleteReasonsMetaKey));
+            AssertPartialArchiveStatus(noMetaImportDbPath);
         }
         finally
         {
@@ -2271,7 +2313,10 @@ public class ExportImportCommandRunnerTests
         return archivePath;
     }
 
-    private static string CopyArchiveWithoutTrustScopeMarker(string projectRoot, string archivePath)
+    private static string CopyArchiveWithoutTrustScopeMarker(
+        string projectRoot,
+        string archivePath,
+        bool removeMetadataTable = false)
     {
         var legacyArchivePath = Path.Combine(projectRoot, $"legacy-{Guid.NewGuid():N}.cdidx.zip");
         File.Copy(archivePath, legacyArchivePath);
@@ -2287,6 +2332,31 @@ public class ExportImportCommandRunnerTests
         manifest["scope"]?.AsObject().Remove("represents_entire_source_database");
         manifest.Remove("index_complete");
         manifest.Remove("index_incomplete_reasons");
+        if (removeMetadataTable)
+        {
+            var databaseEntry = archive.GetEntry("codeindex.db")
+                ?? throw new InvalidOperationException("codeindex.db entry was not found");
+            var stagedDatabasePath = Path.Combine(projectRoot, $"legacy-{Guid.NewGuid():N}.db");
+            databaseEntry.ExtractToFile(stagedDatabasePath);
+            databaseEntry.Delete();
+            using (var connection = new SqliteConnection(
+                       new SqliteConnectionStringBuilder { DataSource = stagedDatabasePath }.ConnectionString))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = "DROP TABLE codeindex_meta";
+                command.ExecuteNonQuery();
+            }
+            SqliteConnection.ClearAllPools();
+            manifest["database_sha256"] = Convert.ToHexString(
+                    SHA256.HashData(File.ReadAllBytes(stagedDatabasePath)))
+                .ToLowerInvariant();
+            var replacementDatabase = archive.CreateEntry("codeindex.db", CompressionLevel.SmallestSize);
+            using (var source = File.OpenRead(stagedDatabasePath))
+            using (var destination = replacementDatabase.Open())
+                source.CopyTo(destination);
+            File.Delete(stagedDatabasePath);
+        }
         manifestEntry.Delete();
         var replacement = archive.CreateEntry("manifest.json", CompressionLevel.SmallestSize);
         using var writer = new StreamWriter(replacement.Open(), new UTF8Encoding(false));

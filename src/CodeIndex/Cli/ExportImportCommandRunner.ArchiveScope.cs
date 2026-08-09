@@ -166,27 +166,43 @@ internal static partial class ExportImportCommandRunner
             RepresentsEntireSourceDatabase: false);
     }
 
-    private static void ApplyImportedArchiveTrustMetadata(
+    private static ExportManifest ApplyImportedArchiveTrustMetadata(
         string databasePath,
         ExportManifest manifest,
         CancellationToken cancellationToken)
     {
         if (ManifestRepresentsEntireSourceDatabase(manifest))
-            return;
+            return manifest;
 
         cancellationToken.ThrowIfCancellationRequested();
         using var connection = new SqliteConnection(CreateUnpooledConnectionString(databasePath));
         connection.Open();
-        if (!ArchiveTrustMetadataRequiresNormalization(connection))
-            return;
+        if (ArchiveTrustMetadataRequiresNormalization(connection))
+        {
+            using var transaction = connection.BeginTransaction();
+            ApplyPartialArchiveTrustMetadata(connection, transaction, cancellationToken);
+            transaction.Commit();
+        }
 
-        using var transaction = connection.BeginTransaction();
-        ApplyPartialArchiveTrustMetadata(connection, transaction, cancellationToken);
-        transaction.Commit();
+        return NormalizeImportedArchiveTrustMetadata(
+            manifest,
+            ReadArchiveIncompleteReasons(connection));
     }
 
     private static bool ArchiveTrustMetadataRequiresNormalization(SqliteConnection connection)
     {
+        using (var tableCommand = connection.CreateCommand())
+        {
+            tableCommand.CommandText = """
+                SELECT EXISTS(
+                    SELECT 1
+                    FROM sqlite_master
+                    WHERE type = 'table' AND name = 'codeindex_meta')
+                """;
+            if (Convert.ToInt64(tableCommand.ExecuteScalar(), CultureInfo.InvariantCulture) == 0)
+                return true;
+        }
+
         if (!string.Equals(
                 ReadMetaString(connection, DbContext.IndexCompletenessMetaKey),
                 "incomplete",
@@ -248,27 +264,13 @@ internal static partial class ExportImportCommandRunner
         }
     }
 
-    private static ExportManifest NormalizeImportedArchiveTrustMetadata(ExportManifest manifest)
+    private static ExportManifest NormalizeImportedArchiveTrustMetadata(
+        ExportManifest manifest,
+        string[]? persistedIncompleteReasons)
     {
         if (ManifestRepresentsEntireSourceDatabase(manifest))
             return manifest;
 
-        var reasons = new List<string>(MaxArchiveIncompleteReasons);
-        var totalChars = 0;
-        foreach (var reason in manifest.IndexIncompleteReasons ?? [])
-        {
-            if (string.Equals(reason, PartialArchiveIncompleteReason, StringComparison.Ordinal))
-                continue;
-            if (reasons.Count >= MaxArchiveIncompleteReasons - 1
-                || totalChars + reason.Length + PartialArchiveIncompleteReason.Length
-                    > MaxArchiveIncompleteReasonsTotalChars)
-            {
-                break;
-            }
-            reasons.Add(reason);
-            totalChars += reason.Length;
-        }
-        reasons.Add(PartialArchiveIncompleteReason);
         return manifest with
         {
             IndexedHeadSha = null,
@@ -280,7 +282,8 @@ internal static partial class ExportImportCommandRunner
             UnknownExtensionFileSampleCount = 0,
             UnknownExtensionFileSampleTruncated = false,
             IndexComplete = false,
-            IndexIncompleteReasons = reasons.ToArray(),
+            IndexIncompleteReasons = persistedIncompleteReasons
+                ?? [PartialArchiveIncompleteReason],
         };
     }
 
