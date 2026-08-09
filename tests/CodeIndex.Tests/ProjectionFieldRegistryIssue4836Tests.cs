@@ -13,6 +13,7 @@ public sealed class ProjectionFieldRegistryIssue4836Tests
     [InlineData("search", "path")]
     [InlineData("references", "resolution_state")]
     [InlineData("map", "languages.lang")]
+    [InlineData("status", "workspace_check.unindexed_files_omitted_count")]
     public void FieldsList_DiscoversCommandSpecificSchemaWithoutRunningQuery_Issue4836(
         string command,
         string expectedField)

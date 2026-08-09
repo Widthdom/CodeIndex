@@ -19,6 +19,7 @@ Use the full suite by default. Use targeted filters only while iterating locally
 
 ## Test Stack
 
+- `WorkspaceCheckTruncationIssue5055Tests` owns the bounded `workspace_check` list contract. Keep zero, below-limit, exact-limit, and over-limit coverage for all six categories, plus the 1260/20/1240 example and one shared filesystem fixture for raw JSON, list-only projection, compact output, byte-budget trimming, deterministic order, and human sample labeling.
 - Marker-gate reference coverage keeps cross-language positive syntax in `ReferenceExtractorMarkerGateTests.cs`, with dedicated GraphQL/HTML/Markdown and XAML/XML cases proving that markerless continuation lines still advance parser state. `ReferenceExtractorPerformanceBudgetTests` owns three complementary regressions: Kotlin infix detection must not enumerate a large known-name set, Docker instruction classification must allocate nothing and scale with the instruction prefix rather than irrelevant line length, and warmed C#/Java/Kotlin markerless-decoy extraction must produce no references while staying below 24 MiB of measured allocations and the 3-second primary-target runaway guard. Keep the broad allocation/time guards on `net8.0`; keep the focused positive and state-preservation tests cross-target.
 - Framework: xUnit
 - Target frameworks: `net8.0` and `net9.0`
@@ -1013,6 +1014,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 
 ## テストスタック
 
+- `WorkspaceCheckTruncationIssue5055Tests` は上限付き `workspace_check` 一覧の契約を担当します。6カテゴリすべての0件・上限未満・上限一致・上限超過、1260/20/1240 の例、および raw JSON、一覧単独 projection、compact 出力、byte budget による短縮、決定的順序、human 向け sample 表示を1つの共有 filesystem fixture で検証する coverage を維持してください。
 - marker gate の reference coverage は、言語横断の正しい構文を `ReferenceExtractorMarkerGateTests.cs` にまとめ、GraphQL/HTML/Markdown と XAML/XML の専用 case で marker のない継続行でも parser state が更新されることを固定します。`ReferenceExtractorPerformanceBudgetTests` は相補的な3つの回帰契約を所有します。Kotlin infix 検出では大きな既知名集合を列挙しないこと、Docker instruction 分類では allocation が0で無関係な行長ではなく instruction prefix に応じて scale すること、warmup 済みの C#/Java/Kotlin markerless-decoy 抽出では reference が0件のまま計測 allocation 24 MiB未満かつ primary target の3秒 runaway guard内であることを検証します。広い allocation / time guard は `net8.0` に限定し、focused な正例とstate維持のテストはcross-targetのままにしてください。
 - フレームワーク: xUnit
 - メインのテストプロジェクト: `tests/CodeIndex.Tests/CodeIndex.Tests.csproj`

@@ -6,7 +6,6 @@ namespace CodeIndex.Cli;
 
 internal static class IndexFreshnessChecker
 {
-    private const int SampleLimit = 20;
     private const int MaxScanErrorPathChars = 180;
     internal const int MaxScanErrorSampleChars = 240;
 
@@ -249,7 +248,7 @@ internal static class IndexFreshnessChecker
 
     private static void AddSample(List<string> samples, string value)
     {
-        if (samples.Count < SampleLimit)
+        if (samples.Count < WorkspaceCheckPathSamples.PathLimit)
             samples.Add(value);
     }
 
