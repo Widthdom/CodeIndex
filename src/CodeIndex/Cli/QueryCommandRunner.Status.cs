@@ -211,7 +211,8 @@ public static partial class QueryCommandRunner
                 if (checkFailures.Count > 0)
                 {
                     WriteStatusCheckDiagnostics(checkFailures);
-                    if (status.WorkspaceCheck != null)
+                    if (status.WorkspaceCheck != null
+                        && checkFailures.Any(failure => failure.Name == "workspace_stale"))
                         WriteWorkspaceCheckSampleDiagnostics(status.WorkspaceCheck);
                     WriteStatusRepairCommands(status.RepairCommands);
                 }
@@ -1334,7 +1335,7 @@ public static partial class QueryCommandRunner
         CommandErrorWriter.WriteStderr(
             $"[stale] workspace_check.{field} coverage={(truncated ? "sample" : "complete")} "
             + $"returned={samples.Count} total={totalCount} omitted={omittedCount} path_limit={pathLimit} "
-            + $"paths=[{string.Join(", ", samples)}]");
+            + $"paths=[{string.Join(", ", samples.Select(EscapeStatusRepairControlCharacters))}]");
     }
 
     private static int GetStatusCheckExitCode(IReadOnlyList<StatusCheckFailure> failures)

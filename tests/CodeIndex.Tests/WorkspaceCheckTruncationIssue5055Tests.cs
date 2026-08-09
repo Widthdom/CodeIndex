@@ -180,6 +180,36 @@ public sealed class WorkspaceCheckTruncationIssue5055Tests
                 "workspace_check.unindexed_files coverage=sample returned=20 total=21 omitted=1 path_limit=20",
                 human.Stderr,
                 StringComparison.Ordinal);
+
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/missing\n[repair] injected.cs",
+                "csharp",
+                "class Missing { }\n");
+            var escapedHuman = ConsoleCapture.Capture(() => QueryCommandRunner.RunStatus(
+                ["--db", dbPath, "--check"],
+                _jsonOptions));
+            Assert.Equal(1, escapedHuman.ExitCode);
+            Assert.Contains(
+                "paths=[src/missing\\n[repair] injected.cs]",
+                escapedHuman.Stderr,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain(
+                "paths=[src/missing\n[repair] injected.cs]",
+                escapedHuman.Stderr,
+                StringComparison.Ordinal);
+
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            using (var command = db.Connection.CreateCommand())
+            {
+                command.CommandText = $"PRAGMA user_version = {db.GetUserVersion() & ~DbContext.GraphReadyFlag}";
+                command.ExecuteNonQuery();
+            }
+            var graphOnly = ConsoleCapture.Capture(() => QueryCommandRunner.RunStatus(
+                ["--db", dbPath, "--check=graph"],
+                _jsonOptions));
+            Assert.Equal(2, graphOnly.ExitCode);
+            Assert.DoesNotContain("workspace_check.", graphOnly.Stderr, StringComparison.Ordinal);
         }
         finally
         {

@@ -48,6 +48,23 @@ internal static class ProjectionFieldRegistry
     internal static IReadOnlyList<string>? GetCompactFields(string command)
         => Schemas.TryGetValue(command, out var schema) ? schema.CompactFields : null;
 
+    internal static JsonObject ProjectCompactStatusWorkspaceCheck(
+        JsonObject workspaceCheck)
+    {
+        const string prefix = "workspace_check.";
+        var projected = new JsonObject();
+        foreach (var field in GetCompactFields("status")!)
+        {
+            if (!field.StartsWith(prefix, StringComparison.Ordinal))
+                continue;
+
+            var propertyName = field[prefix.Length..];
+            if (workspaceCheck.TryGetPropertyValue(propertyName, out var value))
+                projected[propertyName] = value?.DeepClone();
+        }
+        return projected;
+    }
+
     internal static bool TryResolveAlias(
         string command,
         string? collection,
