@@ -249,6 +249,12 @@ public static partial class ReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
+        if (preparedLine.IndexOf("typeof", StringComparison.Ordinal) < 0
+            && preparedLine.IndexOf("keyof", StringComparison.Ordinal) < 0)
+        {
+            return;
+        }
+
         var tokens = GetTopLevelTokenSpans(preparedLine);
         if (tokens.Count == 0)
             return;
@@ -425,6 +431,9 @@ public static partial class ReferenceExtractor
         Func<int, SymbolRecord?> resolveContainerForColumn,
         IReadOnlySet<string>? ignoredSegments = null)
     {
+        if (line.IndexOf(':') < 0)
+            return;
+
         var trimmed = line.TrimStart();
         if (!(trimmed.Contains(" class ", StringComparison.Ordinal)
               || trimmed.Contains(" struct ", StringComparison.Ordinal)
@@ -580,6 +589,14 @@ public static partial class ReferenceExtractor
         CSharpWhereConstraintState pendingWhereConstraint)
     {
         UpdateCSharpWhereHeaderGenericParameterNames(line, declarationGenericParameterNames, pendingWhereConstraint);
+
+        if (!pendingWhereConstraint.Active
+            && line.IndexOf("where", StringComparison.Ordinal) < 0)
+        {
+            if (FindTypeListTerminator(line, allowArrow: true) >= 0)
+                pendingWhereConstraint.HeaderGenericParameterNames.Clear();
+            return;
+        }
 
         var searchStart = 0;
         if (pendingWhereConstraint.Active)

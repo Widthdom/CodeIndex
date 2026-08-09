@@ -72,8 +72,7 @@ public static partial class IndexCommandRunner
         string RelativePath,
         FileRecord? Record,
         string? Content,
-        bool? HasOversizeLine,
-        int? ConflictMarkerLine,
+        NormalizedContentFacts? ContentFacts,
         string? Warning,
         IReadOnlyList<ChunkRecord>? Chunks,
         IReadOnlyList<SymbolRecord>? Symbols,
@@ -84,14 +83,16 @@ public static partial class IndexCommandRunner
         string? FailurePhase,
         Exception? Exception)
     {
+        internal bool? HasOversizeLine => ContentFacts?.HasOversizeLine;
+        internal int? ConflictMarkerLine => ContentFacts?.ConflictMarkerLine;
+
         public static FullScanFileWorkItem Success(
             int fileIndex,
             string filePath,
             string relativePath,
             FileRecord record,
             string? content,
-            bool hasOversizeLine,
-            int conflictMarkerLine,
+            NormalizedContentFacts contentFacts,
             string? warning,
             IReadOnlyList<ChunkRecord>? chunks,
             IReadOnlyList<SymbolRecord>? symbols,
@@ -106,8 +107,7 @@ public static partial class IndexCommandRunner
                 relativePath,
                 record,
                 content,
-                hasOversizeLine,
-                conflictMarkerLine,
+                contentFacts,
                 warning,
                 chunks,
                 symbols,
@@ -132,8 +132,7 @@ public static partial class IndexCommandRunner
             FileIssue? generatedSuppressionIssue = null,
             bool generatedSuppressionChecked = false,
             string? content = null,
-            bool? hasOversizeLine = null,
-            int? conflictMarkerLine = null)
+            NormalizedContentFacts? contentFacts = null)
         {
             return new FullScanFileWorkItem(
                 fileIndex,
@@ -141,8 +140,7 @@ public static partial class IndexCommandRunner
                 relativePath,
                 record,
                 content,
-                hasOversizeLine,
-                conflictMarkerLine,
+                contentFacts,
                 warning,
                 chunks,
                 symbols,
@@ -155,10 +153,10 @@ public static partial class IndexCommandRunner
         }
 
         public static FullScanFileWorkItem Failure(int fileIndex, string filePath, string relativePath, string phase, Exception exception)
-            => new(fileIndex, filePath, relativePath, null, null, null, null, null, null, null, null, null, null, false, phase, exception);
+            => new(fileIndex, filePath, relativePath, null, null, null, null, null, null, null, null, null, false, phase, exception);
 
         public static FullScanFileWorkItem Skipped(int fileIndex, string filePath, string relativePath, string warning)
-            => new(fileIndex, filePath, relativePath, null, null, null, null, warning, null, null, null, null, null, false, null, null);
+            => new(fileIndex, filePath, relativePath, null, null, null, warning, null, null, null, null, null, false, null, null);
     }
 
     private sealed class CSharpWorkspaceSnapshotDriftException(string path)
@@ -187,7 +185,7 @@ public static partial class IndexCommandRunner
         public string? ActualMode { get; }
     }
 
-    private sealed class IndexExtractionStalledException : Exception
+    internal sealed class IndexExtractionStalledException : Exception
     {
         public IndexExtractionStalledException(int filesProcessed, int? filesTotal, TimeSpan timeout, string? activePath, string? workerError = null)
             : base("Index extraction stalled.")

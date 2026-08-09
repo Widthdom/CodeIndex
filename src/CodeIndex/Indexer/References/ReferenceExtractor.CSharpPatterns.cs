@@ -40,71 +40,75 @@ public static partial class ReferenceExtractor
             pendingWhereConstraint);
         EmitDeclarationTypeReferences("csharp", preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn, csharpGenericParameterNames);
 
-        foreach (Match match in BoundedRegex.EnumerateMatches(CSharpIsAsTypeTestRegex, preparedLine))
+        if (IndexOfCSharpWord(preparedLine, "is", 0) >= 0
+            || IndexOfCSharpWord(preparedLine, "as", 0) >= 0)
         {
-            if (ReferenceLimitReached(references))
-                break;
-            var typeGroup = match.Groups["type"];
-            int continuationIndex = SkipWhitespace(preparedLine, typeGroup.Index + typeGroup.Length);
-            if (TryEmitCSharpLogicalTypePatternHeads(
-                    preparedLine,
+            foreach (Match match in BoundedRegex.EnumerateMatches(CSharpIsAsTypeTestRegex, preparedLine))
+            {
+                if (ReferenceLimitReached(references))
+                    break;
+                var typeGroup = match.Groups["type"];
+                int continuationIndex = SkipWhitespace(preparedLine, typeGroup.Index + typeGroup.Length);
+                if (TryEmitCSharpLogicalTypePatternHeads(
+                        preparedLine,
+                        typeGroup.Value,
+                        typeGroup.Index,
+                        continuationIndex,
+                        lineNumber,
+                        csharpQualifiedConstantPatternMemberLookup,
+                        csharpQualifiedTypePatternLookup,
+                        csharpUsingAliases,
+                        csharpUsingStatics,
+                        hasActiveSameFileCSharpTypeCandidate,
+                        (logicalTypeExpression, logicalTypeIndex) => AddTypeExpressionSegments(
+                            references,
+                            seen,
+                            fileId,
+                            logicalTypeExpression,
+                            logicalTypeIndex,
+                            context,
+                            lineNumber,
+                            resolveContainerForColumn(logicalTypeIndex),
+                            "csharp",
+                            csharpGenericParameterNames)))
+                {
+                    continue;
+                }
+
+                if (IsCSharpNonTypePatternExpression(typeGroup.Value)
+                    || IsCSharpConstantPatternMemberHead(
+                        typeGroup.Value,
+                        lineNumber,
+                        csharpQualifiedConstantPatternMemberLookup,
+                        csharpUsingAliases,
+                        csharpUsingStatics,
+                        hasActiveSameFileCSharpTypeCandidate)
+                    || IsCSharpLogicalConstantPatternAtCursor(
+                        preparedLine,
+                        typeGroup.Value,
+                        continuationIndex,
+                        lineNumber,
+                        csharpQualifiedConstantPatternMemberLookup,
+                        csharpQualifiedTypePatternLookup,
+                        csharpUsingAliases,
+                        csharpUsingStatics,
+                        hasActiveSameFileCSharpTypeCandidate))
+                {
+                    continue;
+                }
+
+                AddTypeExpressionSegments(
+                    references,
+                    seen,
+                    fileId,
                     typeGroup.Value,
                     typeGroup.Index,
-                    continuationIndex,
+                    context,
                     lineNumber,
-                    csharpQualifiedConstantPatternMemberLookup,
-                    csharpQualifiedTypePatternLookup,
-                    csharpUsingAliases,
-                    csharpUsingStatics,
-                    hasActiveSameFileCSharpTypeCandidate,
-                    (logicalTypeExpression, logicalTypeIndex) => AddTypeExpressionSegments(
-                        references,
-                        seen,
-                        fileId,
-                        logicalTypeExpression,
-                        logicalTypeIndex,
-                        context,
-                        lineNumber,
-                        resolveContainerForColumn(logicalTypeIndex),
-                        "csharp",
-                        csharpGenericParameterNames)))
-            {
-                continue;
+                    resolveContainerForColumn(typeGroup.Index),
+                    "csharp",
+                    csharpGenericParameterNames);
             }
-
-            if (IsCSharpNonTypePatternExpression(typeGroup.Value)
-                || IsCSharpConstantPatternMemberHead(
-                    typeGroup.Value,
-                    lineNumber,
-                    csharpQualifiedConstantPatternMemberLookup,
-                    csharpUsingAliases,
-                    csharpUsingStatics,
-                    hasActiveSameFileCSharpTypeCandidate)
-                || IsCSharpLogicalConstantPatternAtCursor(
-                    preparedLine,
-                    typeGroup.Value,
-                    continuationIndex,
-                    lineNumber,
-                    csharpQualifiedConstantPatternMemberLookup,
-                    csharpQualifiedTypePatternLookup,
-                    csharpUsingAliases,
-                    csharpUsingStatics,
-                    hasActiveSameFileCSharpTypeCandidate))
-            {
-                continue;
-            }
-
-            AddTypeExpressionSegments(
-                references,
-                seen,
-                fileId,
-                typeGroup.Value,
-                typeGroup.Index,
-                context,
-                lineNumber,
-                resolveContainerForColumn(typeGroup.Index),
-                "csharp",
-                csharpGenericParameterNames);
         }
 
         EmitCSharpCaseTypePatternReferences(
@@ -328,6 +332,9 @@ public static partial class ReferenceExtractor
         Func<int, SymbolRecord?> resolveContainerForColumn,
         ref CSharpMultiLineTypePatternState pendingCSharpMultiLineTypePattern)
     {
+        if (IndexOfCSharpWord(preparedLine, "case", 0) < 0)
+            return;
+
         foreach (Match caseMatch in BoundedRegex.EnumerateMatches(CSharpCaseLabelRegex, preparedLine))
         {
             if (ReferenceLimitReached(references))

@@ -1797,6 +1797,2136 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public async Task Run_UpdateFiles_AuthoritativeCSharpParallelWindowsAreBoundedOrderedAndReuseWorkers()
+    {
+        var projectRoot = CreateTempProject();
+        var previousSchedulingHook =
+            IndexCommandRunner.UpdateParallelExtractionSchedulingForTesting;
+        var previousEventHook =
+            IndexCommandRunner.UpdateParallelExtractionEventForTesting;
+        using var releaseFirstExtraction = new ManualResetEventSlim();
+        using var firstWindowFilled = new ManualResetEventSlim();
+        Task<(int ExitCode, JsonElement Json)>? runTask = null;
+        try
+        {
+            CreateAuthoritativeParallelUpdateProject(
+                projectRoot,
+                implementationCount: 8);
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run(
+                    [projectRoot, "--json", "--quiet", "--parallelism", "1"],
+                    _jsonOptions));
+
+            var touchedPath = Path.Combine(projectRoot, "Source00.cs");
+            File.AppendAllText(touchedPath, "// parallel update\n");
+            File.SetLastWriteTimeUtc(touchedPath, DateTime.UtcNow.AddSeconds(2));
+
+            (bool Enabled, string? Reason, int Workers, int Capacity) scheduling = default;
+            var extractionStarts = 0;
+            var extractionCompleted = new ConcurrentDictionary<int, byte>();
+            var persistenceCompleted = new ConcurrentDictionary<int, byte>();
+            var persistenceOrder = new ConcurrentQueue<int>();
+            var violations = new ConcurrentQueue<string>();
+            var workerIndexes = new ConcurrentDictionary<int, byte>();
+            IndexCommandRunner.UpdateParallelExtractionSchedulingForTesting =
+                (enabled, reason, workers, capacity) =>
+                    scheduling = (enabled, reason, workers, capacity);
+            IndexCommandRunner.UpdateParallelExtractionEventForTesting = item =>
+            {
+                switch (item.Kind)
+                {
+                    case IndexCommandRunner.UpdateParallelExtractionEventKind.WorkerStarted:
+                        workerIndexes.TryAdd(item.WorkerIndex, 0);
+                        break;
+                    case IndexCommandRunner.UpdateParallelExtractionEventKind.ExtractionStarted:
+                        {
+                            var started = Interlocked.Increment(ref extractionStarts);
+                            if (item.TargetIndex >= 4
+                                && !Enumerable.Range(0, 4).All(
+                                    persistenceCompleted.ContainsKey))
+                            {
+                                violations.Enqueue(
+                                    "The next window started before the prior window was persisted.");
+                            }
+                            if (started == 1)
+                            {
+                                releaseFirstExtraction.Wait(TimeSpan.FromSeconds(30));
+                            }
+                            if (started == 4)
+                                firstWindowFilled.Set();
+                            break;
+                        }
+                    case IndexCommandRunner.UpdateParallelExtractionEventKind.ExtractionCompleted:
+                        extractionCompleted.TryAdd(item.TargetIndex, 0);
+                        break;
+                    case IndexCommandRunner.UpdateParallelExtractionEventKind.PersistenceStarted:
+                        {
+                            var windowStart = item.TargetIndex < 4 ? 0 : 4;
+                            if (!Enumerable.Range(windowStart, 4).All(
+                                    extractionCompleted.ContainsKey))
+                            {
+                                violations.Enqueue(
+                                    "Persistence started before every extraction in its window completed.");
+                            }
+                            persistenceOrder.Enqueue(item.TargetIndex);
+                            break;
+                        }
+                    case IndexCommandRunner.UpdateParallelExtractionEventKind.PersistenceCompleted:
+                        persistenceCompleted.TryAdd(item.TargetIndex, 0);
+                        break;
+                }
+            };
+
+            runTask = Task.Run(() => RunAndCaptureJson(
+                [
+                    projectRoot,
+                    "--files",
+                    "Source00.cs",
+                    "--json",
+                    "--parallelism",
+                    "2",
+                ]));
+
+            Assert.True(
+                firstWindowFilled.Wait(TimeSpan.FromSeconds(30)),
+                "The bounded extraction window did not fill.");
+            Assert.Equal(4, Volatile.Read(ref extractionStarts));
+            Assert.Empty(persistenceOrder);
+            releaseFirstExtraction.Set();
+
+            var (exitCode, json) = await runTask.WaitAsync(TimeSpan.FromSeconds(60));
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.True(scheduling.Enabled);
+            Assert.Null(scheduling.Reason);
+            Assert.Equal(2, scheduling.Workers);
+            Assert.Equal(4, scheduling.Capacity);
+            Assert.Equal(2, workerIndexes.Count);
+            Assert.Equal(8, extractionCompleted.Count);
+            Assert.Equal(Enumerable.Range(0, 8), persistenceOrder.ToArray());
+            Assert.Empty(violations);
+        }
+        finally
+        {
+            releaseFirstExtraction.Set();
+            var runCompleted = runTask == null;
+            if (runTask != null)
+            {
+                try
+                {
+                    await runTask.WaitAsync(TimeSpan.FromSeconds(30));
+                    runCompleted = true;
+                }
+                catch (TimeoutException)
+                {
+                }
+                catch
+                {
+                    runCompleted = true;
+                    // The body owns the primary assertion/run failure. Cleanup only waits
+                    // for the static test seam to stop being observed.
+                }
+            }
+            IndexCommandRunner.UpdateParallelExtractionSchedulingForTesting =
+                previousSchedulingHook;
+            IndexCommandRunner.UpdateParallelExtractionEventForTesting =
+                previousEventHook;
+            if (runCompleted)
+                DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData("parallelism_one")]
+    [InlineData("active_symbol_kind_filter")]
+    [InlineData("content_load_test_hook")]
+    [InlineData("non_authoritative_csharp_workspace")]
+    [InlineData("insufficient_authoritative_csharp_targets")]
+    public void Run_UpdateFiles_AuthoritativeCSharpParallelExtractionUsesRequiredFallbacks(
+        string expectedReason)
+    {
+        var projectRoot = CreateTempProject();
+        var previousSchedulingHook =
+            IndexCommandRunner.UpdateParallelExtractionSchedulingForTesting;
+        var previousEventHook =
+            IndexCommandRunner.UpdateParallelExtractionEventForTesting;
+        var previousContentLoadHook =
+            IndexCommandRunner.UpdateFileContentLoadForTesting;
+        try
+        {
+            var touchedRelativePath = "Source00.cs";
+            if (expectedReason == "non_authoritative_csharp_workspace")
+            {
+                touchedRelativePath = "Plain00.cs";
+                File.WriteAllText(
+                    Path.Combine(projectRoot, touchedRelativePath),
+                    "public sealed class Plain00 { }\n");
+                File.WriteAllText(
+                    Path.Combine(projectRoot, "Plain01.cs"),
+                    "public sealed class Plain01 { }\n");
+            }
+            else if (expectedReason == "insufficient_authoritative_csharp_targets")
+            {
+                touchedRelativePath = "IParseable.cs";
+                WriteParseableInterface(
+                    Path.Combine(projectRoot, touchedRelativePath),
+                    hasStaticContract: true);
+            }
+            else
+            {
+                CreateAuthoritativeParallelUpdateProject(
+                    projectRoot,
+                    implementationCount: 2);
+            }
+            var initialArgs = new List<string>
+            {
+                projectRoot,
+                "--json",
+                "--quiet",
+                "--parallelism",
+                "1",
+            };
+            if (expectedReason == "active_symbol_kind_filter")
+            {
+                initialArgs.Add("--include-symbol-kind");
+                initialArgs.Add("function");
+            }
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run(initialArgs.ToArray(), _jsonOptions));
+            var touchedPath = Path.Combine(projectRoot, touchedRelativePath);
+            File.AppendAllText(touchedPath, "// fallback update\n");
+            File.SetLastWriteTimeUtc(touchedPath, DateTime.UtcNow.AddSeconds(2));
+
+            (bool Enabled, string? Reason) scheduling = default;
+            var parallelEvents = 0;
+            var contentLoads = 0;
+            IndexCommandRunner.UpdateParallelExtractionSchedulingForTesting =
+                (enabled, reason, _, _) => scheduling = (enabled, reason);
+            IndexCommandRunner.UpdateParallelExtractionEventForTesting = _ =>
+                Interlocked.Increment(ref parallelEvents);
+            if (expectedReason == "content_load_test_hook")
+            {
+                IndexCommandRunner.UpdateFileContentLoadForTesting = _ =>
+                    Interlocked.Increment(ref contentLoads);
+            }
+
+            var args = new List<string>
+            {
+                projectRoot,
+                "--files",
+                touchedRelativePath,
+                "--json",
+                "--quiet",
+                "--parallelism",
+                expectedReason == "parallelism_one" ? "1" : "2",
+            };
+            if (expectedReason == "active_symbol_kind_filter")
+            {
+                args.Add("--include-symbol-kind");
+                args.Add("function");
+            }
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run(args.ToArray(), _jsonOptions));
+            Assert.False(scheduling.Enabled);
+            Assert.Equal(expectedReason, scheduling.Reason);
+            Assert.Equal(0, Volatile.Read(ref parallelEvents));
+            if (expectedReason == "content_load_test_hook")
+                Assert.True(contentLoads > 0);
+        }
+        finally
+        {
+            IndexCommandRunner.UpdateParallelExtractionSchedulingForTesting =
+                previousSchedulingHook;
+            IndexCommandRunner.UpdateParallelExtractionEventForTesting =
+                previousEventHook;
+            IndexCommandRunner.UpdateFileContentLoadForTesting =
+                previousContentLoadHook;
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData("io")]
+    [InlineData("operation_canceled")]
+    public void Run_UpdateFiles_AuthoritativeCSharpParallelWindowProbeFailureFallsBackToSerialBoundary(
+        string failureKind)
+    {
+        var projectRoot = CreateTempProject();
+        var previousProbeFailureHook =
+            IndexCommandRunner.UpdateParallelWindowProbeFailureForTesting;
+        var previousEventHook =
+            IndexCommandRunner.UpdateParallelExtractionEventForTesting;
+        try
+        {
+            CreateAuthoritativeParallelUpdateProject(projectRoot, implementationCount: 3);
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run(
+                    [projectRoot, "--json", "--quiet", "--parallelism", "1"],
+                    _jsonOptions));
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var sourceZeroChecksum = ReadIndexedChecksum(dbPath, "Source00.cs");
+            var sourceOneChecksum = ReadIndexedChecksum(dbPath, "Source01.cs");
+            foreach (var relativePath in new[] { "Source00.cs", "Source01.cs" })
+            {
+                var path = Path.Combine(projectRoot, relativePath);
+                File.AppendAllText(path, "// serial probe fallback\n");
+                File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddSeconds(3));
+            }
+
+            var probeFailures = 0;
+            var parallelEvents = 0;
+            IndexCommandRunner.UpdateParallelWindowProbeFailureForTesting = path =>
+                path == "Source00.cs"
+                    && Interlocked.Increment(ref probeFailures) == 1
+                        ? failureKind == "operation_canceled"
+                            ? new OperationCanceledException(
+                                "injected non-requested parallel window probe cancellation")
+                            : new IOException(
+                                "injected parallel window probe failure")
+                        : null;
+            IndexCommandRunner.UpdateParallelExtractionEventForTesting = _ =>
+                Interlocked.Increment(ref parallelEvents);
+
+            var (exitCode, json) = RunAndCaptureJson(
+                [
+                    projectRoot,
+                    "--files",
+                    "Source00.cs",
+                    "Source01.cs",
+                    "--json",
+                    "--parallelism",
+                    "2",
+                ]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(1, probeFailures);
+            Assert.Equal(0, parallelEvents);
+            Assert.NotEqual(sourceZeroChecksum, ReadIndexedChecksum(dbPath, "Source00.cs"));
+            Assert.NotEqual(sourceOneChecksum, ReadIndexedChecksum(dbPath, "Source01.cs"));
+        }
+        finally
+        {
+            IndexCommandRunner.UpdateParallelWindowProbeFailureForTesting =
+                previousProbeFailureHook;
+            IndexCommandRunner.UpdateParallelExtractionEventForTesting =
+                previousEventHook;
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateFiles_AuthoritativeCSharpParallelExtractionRevalidatesBeforePersist()
+    {
+        var projectRoot = CreateTempProject();
+        var previousEventHook =
+            IndexCommandRunner.UpdateParallelExtractionEventForTesting;
+        try
+        {
+            CreateAuthoritativeParallelUpdateProject(
+                projectRoot,
+                implementationCount: 3);
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run(
+                    [projectRoot, "--json", "--quiet", "--parallelism", "1"],
+                    _jsonOptions));
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var mutatedTarget = string.Empty;
+            string? checksumBefore = null;
+            var mutationCount = 0;
+            IndexCommandRunner.UpdateParallelExtractionEventForTesting = item =>
+            {
+                if (item.Kind
+                        != IndexCommandRunner.UpdateParallelExtractionEventKind.ExtractionCompleted
+                    || Interlocked.Increment(ref mutationCount) != 1)
+                {
+                    return;
+                }
+                mutatedTarget = item.RelativePath;
+                checksumBefore = ReadIndexedChecksum(dbPath, mutatedTarget);
+                var path = Path.Combine(
+                    projectRoot,
+                    mutatedTarget.Replace('/', Path.DirectorySeparatorChar));
+                File.AppendAllText(path, "// changed after extraction\n");
+                File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddSeconds(4));
+            };
+
+            var sourcePath = Path.Combine(projectRoot, "Source00.cs");
+            File.AppendAllText(sourcePath, "// trigger authoritative update\n");
+            File.SetLastWriteTimeUtc(sourcePath, DateTime.UtcNow.AddSeconds(2));
+            var (exitCode, json) = RunAndCaptureJson(
+                [
+                    projectRoot,
+                    "--files",
+                    "Source00.cs",
+                    "--json",
+                    "--parallelism",
+                    "2",
+                ]);
+
+            Assert.Equal(CommandExitCodes.PartialResult, exitCode);
+            Assert.Equal("partial", json.GetProperty("status").GetString());
+            Assert.NotEmpty(mutatedTarget);
+            Assert.Equal(checksumBefore, ReadIndexedChecksum(dbPath, mutatedTarget));
+            Assert.Null(ReadCSharpStaticInterfaceSourceEvidence(projectRoot));
+        }
+        finally
+        {
+            IndexCommandRunner.UpdateParallelExtractionEventForTesting =
+                previousEventHook;
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateFiles_AuthoritativeCSharpParallelWorkerFailureIsIsolatedWithPhase()
+    {
+        var projectRoot = CreateTempProject();
+        var previousFailureHook =
+            IndexCommandRunner.UpdateParallelExtractionFailureForTesting;
+        try
+        {
+            CreateAuthoritativeParallelUpdateProject(
+                projectRoot,
+                implementationCount: 3);
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run(
+                    [projectRoot, "--json", "--quiet", "--parallelism", "1"],
+                    _jsonOptions));
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var failingPath = "Source00.cs";
+            var succeedingPath = "Source01.cs";
+            var failingChecksumBefore = ReadIndexedChecksum(dbPath, failingPath);
+            var succeedingChecksumBefore = ReadIndexedChecksum(dbPath, succeedingPath);
+            File.AppendAllText(Path.Combine(projectRoot, failingPath), "// fail symbols\n");
+            File.AppendAllText(Path.Combine(projectRoot, succeedingPath), "// still persist\n");
+            File.SetLastWriteTimeUtc(
+                Path.Combine(projectRoot, failingPath),
+                DateTime.UtcNow.AddSeconds(2));
+            File.SetLastWriteTimeUtc(
+                Path.Combine(projectRoot, succeedingPath),
+                DateTime.UtcNow.AddSeconds(2));
+            IndexCommandRunner.UpdateParallelExtractionFailureForTesting =
+                (path, phase) => path == failingPath && phase == "symbols"
+                    ? new InvalidOperationException("parallel symbols failure")
+                    : null;
+
+            var (exitCode, json) = RunAndCaptureJson(
+                [
+                    projectRoot,
+                    "--files",
+                    failingPath,
+                    succeedingPath,
+                    "--json",
+                    "--parallelism",
+                    "2",
+                ]);
+
+            Assert.Equal(CommandExitCodes.PartialResult, exitCode);
+            Assert.Equal("partial", json.GetProperty("status").GetString());
+            Assert.Equal(failingChecksumBefore, ReadIndexedChecksum(dbPath, failingPath));
+            Assert.NotEqual(succeedingChecksumBefore, ReadIndexedChecksum(dbPath, succeedingPath));
+            var failure = Assert.Single(
+                json.GetProperty("file_errors").EnumerateArray(),
+                item => item.GetProperty("file").GetString() == failingPath);
+            Assert.Equal("symbols", failure.GetProperty("phase").GetString());
+            Assert.False(json.GetProperty("csharp_metadata_target_ready").GetBoolean());
+        }
+        finally
+        {
+            IndexCommandRunner.UpdateParallelExtractionFailureForTesting =
+                previousFailureHook;
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData("normal")]
+    [InlineData("generated")]
+    [InlineData("symbol_cap")]
+    [InlineData("reference_cap")]
+    [InlineData("oversize")]
+    public void Run_UpdateFiles_AuthoritativeCSharpParallelPersistenceMatchesSerialProjection(
+        string scenario)
+    {
+        var serialRoot = CreateTempProject();
+        var parallelRoot = CreateTempProject();
+        var previousSchedulingHook =
+            IndexCommandRunner.UpdateParallelExtractionSchedulingForTesting;
+        var previousEventHook =
+            IndexCommandRunner.UpdateParallelExtractionEventForTesting;
+        using var generatedPatterns = EnvironmentVariableScope.Capture(
+            IndexCommandRunner.GeneratedCodePatternsEnvironmentVariable);
+        try
+        {
+            generatedPatterns.Set(
+                IndexCommandRunner.GeneratedCodePatternsEnvironmentVariable,
+                scenario == "generated" ? "Source02.cs" : null);
+            CreateAuthoritativeParallelUpdateProject(serialRoot, implementationCount: 3);
+            CreateAuthoritativeParallelUpdateProject(parallelRoot, implementationCount: 3);
+            var initialModifiedUtc = DateTime.UtcNow.AddSeconds(-4);
+            foreach (var root in new[] { serialRoot, parallelRoot })
+            {
+                File.SetLastWriteTimeUtc(
+                    Path.Combine(root, "IParseable.cs"),
+                    initialModifiedUtc);
+                for (var index = 0; index < 3; index++)
+                {
+                    File.SetLastWriteTimeUtc(
+                        Path.Combine(root, $"Source{index:00}.cs"),
+                        initialModifiedUtc);
+                }
+            }
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run(
+                    [serialRoot, "--json", "--quiet", "--parallelism", "1"],
+                    _jsonOptions));
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run(
+                    [parallelRoot, "--json", "--quiet", "--parallelism", "1"],
+                    _jsonOptions));
+
+            var modifiedUtc = DateTime.UtcNow.AddSeconds(4);
+            foreach (var root in new[] { serialRoot, parallelRoot })
+            {
+                File.AppendAllText(Path.Combine(root, "Source00.cs"), "// parity zero\n");
+                File.AppendAllText(Path.Combine(root, "Source01.cs"), "// parity one\n");
+                if (scenario == "oversize")
+                {
+                    File.AppendAllText(
+                        Path.Combine(root, "Source02.cs"),
+                        "// " + new string('x', 2048) + "\n");
+                }
+                File.SetLastWriteTimeUtc(Path.Combine(root, "Source00.cs"), modifiedUtc);
+                File.SetLastWriteTimeUtc(Path.Combine(root, "Source01.cs"), modifiedUtc);
+                File.SetLastWriteTimeUtc(Path.Combine(root, "Source02.cs"), modifiedUtc);
+            }
+
+            var serialArgs = BuildArgs(serialRoot, "1");
+            var parallelArgs = BuildArgs(parallelRoot, "2");
+            var (serialExitCode, serialJson) = RunAndCaptureJson(serialArgs);
+            var parallelScheduled = false;
+            var completedPayloads = new ConcurrentQueue<
+                (string Path, int RetainedSymbols, bool HasSourceContract)>();
+            IndexCommandRunner.UpdateParallelExtractionSchedulingForTesting =
+                (enabled, _, _, _) => parallelScheduled = enabled;
+            IndexCommandRunner.UpdateParallelExtractionEventForTesting = item =>
+            {
+                if (item.Kind
+                    == IndexCommandRunner.UpdateParallelExtractionEventKind.ExtractionCompleted)
+                {
+                    completedPayloads.Enqueue(
+                        (
+                            item.RelativePath,
+                            item.RetainedSymbolCount,
+                            item.HasSourceContractEvidence));
+                }
+            };
+            var (parallelExitCode, parallelJson) = RunAndCaptureJson(parallelArgs);
+
+            Assert.Equal(CommandExitCodes.Success, serialExitCode);
+            Assert.True(
+                serialExitCode == parallelExitCode,
+                $"Serial result: {serialJson}; parallel result: {parallelJson}");
+            Assert.True(parallelScheduled);
+            Assert.NotEmpty(completedPayloads);
+            if (scenario == "symbol_cap")
+            {
+                Assert.All(
+                    completedPayloads,
+                    payload => Assert.Equal(0, payload.RetainedSymbols));
+                Assert.Contains(
+                    completedPayloads,
+                    payload => payload.Path == "IParseable.cs"
+                        && payload.HasSourceContract);
+            }
+            foreach (var property in new[]
+                     {
+                         "updated",
+                         "removed",
+                         "skipped",
+                         "warnings",
+                         "errors",
+                     })
+            {
+                Assert.Equal(
+                    serialJson.GetProperty("summary").GetProperty(property).GetInt32(),
+                    parallelJson.GetProperty("summary").GetProperty(property).GetInt32());
+            }
+            var serialProjection = ReadStableUpdateProjection(
+                Path.Combine(serialRoot, ".cdidx", "codeindex.db"));
+            var parallelProjection = ReadStableUpdateProjection(
+                Path.Combine(parallelRoot, ".cdidx", "codeindex.db"));
+            Assert.Equal(serialProjection, parallelProjection);
+            var (serialStatusExitCode, serialStatus) = RunStatusAndCaptureJson(
+                [
+                    "--db",
+                    Path.Combine(serialRoot, ".cdidx", "codeindex.db"),
+                    "--json",
+                ]);
+            var (parallelStatusExitCode, parallelStatus) = RunStatusAndCaptureJson(
+                [
+                    "--db",
+                    Path.Combine(parallelRoot, ".cdidx", "codeindex.db"),
+                    "--json",
+                ]);
+            Assert.Equal(CommandExitCodes.Success, serialStatusExitCode);
+            Assert.Equal(serialStatusExitCode, parallelStatusExitCode);
+            foreach (var property in new[]
+                     {
+                         "graph_table_available",
+                         "graph_data_current",
+                         "reference_graph_complete",
+                         "issues_table_available",
+                         "file_issues_data_current",
+                         "migration_in_progress",
+                         "index_complete",
+                         "hotspot_family_ready",
+                         "csharp_symbol_name_ready",
+                         "csharp_metadata_target_ready",
+                         "sql_graph_contract_ready",
+                         "fold_ready",
+                     })
+            {
+                Assert.Equal(
+                    serialStatus.GetProperty(property).GetBoolean(),
+                    parallelStatus.GetProperty(property).GetBoolean());
+            }
+
+            string[] BuildArgs(string root, string parallelism)
+            {
+                var args = new List<string>
+                {
+                    root,
+                    "--files",
+                    "Source00.cs",
+                    "Source01.cs",
+                    "--json",
+                    "--parallelism",
+                    parallelism,
+                };
+                switch (scenario)
+                {
+                    case "symbol_cap":
+                        args.Add("--max-symbols-per-file");
+                        args.Add("1");
+                        break;
+                    case "reference_cap":
+                        args.Add("--max-references-per-file");
+                        args.Add("1");
+                        break;
+                    case "oversize":
+                        args.Add("--max-file-bytes");
+                        args.Add("512");
+                        break;
+                }
+                return args.ToArray();
+            }
+        }
+        finally
+        {
+            IndexCommandRunner.UpdateParallelExtractionSchedulingForTesting =
+                previousSchedulingHook;
+            IndexCommandRunner.UpdateParallelExtractionEventForTesting =
+                previousEventHook;
+            DeleteDirectory(serialRoot);
+            DeleteDirectory(parallelRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData("normal")]
+    [InlineData("file_too_large")]
+    public void Run_UpdateFiles_AuthoritativeCSharpParallelPreservesNullableHeaderLanguageReuse(
+        string scenario)
+    {
+        var serialRoot = CreateTempProject();
+        var parallelRoot = CreateTempProject();
+        var previousSchedulingHook =
+            IndexCommandRunner.UpdateParallelExtractionSchedulingForTesting;
+        var previousEventHook =
+            IndexCommandRunner.UpdateParallelExtractionEventForTesting;
+        var previousFailureHook =
+            IndexCommandRunner.UpdateParallelExtractionFailureForTesting;
+        var previousContentLoadHook =
+            IndexCommandRunner.UpdateFileContentLoadForTesting;
+        var previousSkippedRecordHook =
+            IndexCommandRunner.UpdateSkippedFileRecordBuiltForTesting;
+        try
+        {
+            LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
+            var initialModifiedUtc = DateTime.UtcNow.AddSeconds(-4);
+            foreach (var root in new[] { serialRoot, parallelRoot })
+            {
+                var languageMapPath = Path.Combine(
+                    root,
+                    LanguageMapOverrides.WorkspaceFileName);
+                File.WriteAllText(
+                    languageMapPath,
+                    "entries:\n"
+                    + "  - extension: \".h\"\n"
+                    + "    language: \"csharp\"\n");
+                File.SetLastWriteTimeUtc(languageMapPath, initialModifiedUtc);
+                WriteParseableInterface(
+                    Path.Combine(root, "IParseable.cs"),
+                    hasStaticContract: true);
+                for (var index = 0; index < 2; index++)
+                {
+                    File.WriteAllText(
+                        Path.Combine(root, $"Header{index:00}.h"),
+                        $"public readonly struct Header{index:00} : IParseable<Header{index:00}>\n"
+                        + "{\n"
+                        + $"    public static Header{index:00} Parse(string value) => new();\n"
+                        + "}\n");
+                    File.SetLastWriteTimeUtc(
+                        Path.Combine(root, $"Header{index:00}.h"),
+                        initialModifiedUtc);
+                }
+                File.SetLastWriteTimeUtc(
+                    Path.Combine(root, "IParseable.cs"),
+                    initialModifiedUtc);
+            }
+
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run(
+                    [serialRoot, "--json", "--quiet", "--parallelism", "1"],
+                    _jsonOptions));
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run(
+                    [parallelRoot, "--json", "--quiet", "--parallelism", "1"],
+                    _jsonOptions));
+
+            var modifiedUtc = DateTime.UtcNow.AddSeconds(4);
+            foreach (var root in new[] { serialRoot, parallelRoot })
+            {
+                for (var index = 0; index < 2; index++)
+                {
+                    var path = Path.Combine(root, $"Header{index:00}.h");
+                    File.AppendAllText(path, "// nullable header language parity\n");
+                    File.SetLastWriteTimeUtc(path, modifiedUtc);
+                }
+            }
+
+            var serialSkippedLanguages = new ConcurrentQueue<
+                (string Path, string KnownLanguage)>();
+            IndexCommandRunner.UpdateSkippedFileRecordBuiltForTesting =
+                (path, knownLanguage) => serialSkippedLanguages.Enqueue(
+                    (path, knownLanguage ?? "<null>"));
+            if (scenario == "file_too_large")
+            {
+                IndexCommandRunner.UpdateFileContentLoadForTesting = path =>
+                {
+                    if (path == "Header00.h")
+                        throw CreateInjectedTooLargeException(path);
+                };
+            }
+            var (serialExitCode, serialJson) = RunAndCaptureJson(
+                [
+                    serialRoot,
+                    "--files",
+                    "Header00.h",
+                    "Header01.h",
+                    "--json",
+                    "--quiet",
+                    "--parallelism",
+                    "1",
+                ]);
+            IndexCommandRunner.UpdateFileContentLoadForTesting =
+                previousContentLoadHook;
+            var parallelScheduled = false;
+            var queuedKnownLanguages = new ConcurrentQueue<
+                (string Path, string KnownLanguage)>();
+            var parallelSkippedLanguages = new ConcurrentQueue<
+                (string Path, string KnownLanguage)>();
+            IndexCommandRunner.UpdateParallelExtractionSchedulingForTesting =
+                (enabled, _, _, _) => parallelScheduled = enabled;
+            IndexCommandRunner.UpdateParallelExtractionEventForTesting = item =>
+            {
+                if (item.Kind
+                    == IndexCommandRunner.UpdateParallelExtractionEventKind.ExtractionQueued)
+                {
+                    queuedKnownLanguages.Enqueue(
+                        (item.RelativePath, item.KnownLanguage ?? "<null>"));
+                }
+            };
+            IndexCommandRunner.UpdateSkippedFileRecordBuiltForTesting =
+                (path, knownLanguage) => parallelSkippedLanguages.Enqueue(
+                    (path, knownLanguage ?? "<null>"));
+            if (scenario == "file_too_large")
+            {
+                IndexCommandRunner.UpdateParallelExtractionFailureForTesting =
+                    (path, phase) => path == "Header00.h" && phase == "reading"
+                        ? CreateInjectedTooLargeException(path)
+                        : null;
+            }
+            var (parallelExitCode, parallelJson) = RunAndCaptureJson(
+                [
+                    parallelRoot,
+                    "--files",
+                    "Header00.h",
+                    "Header01.h",
+                    "--json",
+                    "--quiet",
+                    "--parallelism",
+                    "2",
+                ]);
+
+            Assert.Equal(CommandExitCodes.Success, serialExitCode);
+            Assert.Equal(serialExitCode, parallelExitCode);
+            foreach (var property in new[]
+                     {
+                         "updated",
+                         "removed",
+                         "skipped",
+                         "warnings",
+                         "errors",
+                     })
+            {
+                Assert.Equal(
+                    serialJson.GetProperty("summary").GetProperty(property).GetInt32(),
+                    parallelJson.GetProperty("summary").GetProperty(property).GetInt32());
+            }
+            Assert.True(parallelScheduled);
+            var queuedHeaders = queuedKnownLanguages
+                .Where(item => item.Path.EndsWith(".h", StringComparison.Ordinal))
+                .ToArray();
+            Assert.Equal(2, queuedHeaders.Length);
+            Assert.All(
+                queuedHeaders,
+                item => Assert.Equal("<null>", item.KnownLanguage));
+            if (scenario == "file_too_large")
+            {
+                var serialSkip = Assert.Single(
+                    serialSkippedLanguages,
+                    item => item.Path == "Header00.h");
+                var parallelSkip = Assert.Single(
+                    parallelSkippedLanguages,
+                    item => item.Path == "Header00.h");
+                Assert.Equal("<null>", serialSkip.KnownLanguage);
+                Assert.Equal(serialSkip.KnownLanguage, parallelSkip.KnownLanguage);
+            }
+            else
+            {
+                Assert.Empty(serialSkippedLanguages);
+                Assert.Empty(parallelSkippedLanguages);
+            }
+            var serialDbPath = Path.Combine(serialRoot, ".cdidx", "codeindex.db");
+            var parallelDbPath = Path.Combine(parallelRoot, ".cdidx", "codeindex.db");
+            Assert.Equal("csharp", ReadLanguage(parallelDbPath, "Header00.h"));
+            Assert.Equal("csharp", ReadLanguage(parallelDbPath, "Header01.h"));
+            Assert.Equal(
+                ReadStableUpdateProjection(serialDbPath),
+                ReadStableUpdateProjection(parallelDbPath));
+            var (serialStatusExitCode, serialStatus) = RunStatusAndCaptureJson(
+                ["--db", serialDbPath, "--json"]);
+            var (parallelStatusExitCode, parallelStatus) = RunStatusAndCaptureJson(
+                ["--db", parallelDbPath, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, serialStatusExitCode);
+            Assert.Equal(serialStatusExitCode, parallelStatusExitCode);
+            foreach (var property in new[]
+                     {
+                         "graph_table_available",
+                         "graph_data_current",
+                         "reference_graph_complete",
+                         "issues_table_available",
+                         "file_issues_data_current",
+                         "migration_in_progress",
+                         "index_complete",
+                         "hotspot_family_ready",
+                         "csharp_symbol_name_ready",
+                         "csharp_metadata_target_ready",
+                         "sql_graph_contract_ready",
+                         "fold_ready",
+                     })
+            {
+                Assert.Equal(
+                    serialStatus.GetProperty(property).GetBoolean(),
+                    parallelStatus.GetProperty(property).GetBoolean());
+            }
+        }
+        finally
+        {
+            IndexCommandRunner.UpdateParallelExtractionSchedulingForTesting =
+                previousSchedulingHook;
+            IndexCommandRunner.UpdateParallelExtractionEventForTesting =
+                previousEventHook;
+            IndexCommandRunner.UpdateParallelExtractionFailureForTesting =
+                previousFailureHook;
+            IndexCommandRunner.UpdateFileContentLoadForTesting =
+                previousContentLoadHook;
+            IndexCommandRunner.UpdateSkippedFileRecordBuiltForTesting =
+                previousSkippedRecordHook;
+            LanguageMapOverrides.ClearEffectiveMapCacheForTesting();
+            DeleteDirectory(serialRoot);
+            DeleteDirectory(parallelRoot);
+        }
+
+        static string? ReadLanguage(string dbPath, string path)
+        {
+            SqliteConnection.ClearAllPools();
+            using var connection = new SqliteConnection(
+                $"Data Source={dbPath};Pooling=False");
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT lang FROM files WHERE path = @path";
+            command.Parameters.AddWithValue("@path", path);
+            return Convert.ToString(
+                command.ExecuteScalar(),
+                CultureInfo.InvariantCulture);
+        }
+
+        static FileIndexer.FileTooLargeSkippedException CreateInjectedTooLargeException(
+            string relativePath)
+            => new(
+                relativePath,
+                actualBytes: 1024,
+                limitBytes: 512,
+                "injected nullable-language file-too-large skip");
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Run_UpdateFiles_AuthoritativeCSharpParallelCancellationKeepsExpectedPrefix(
+        bool cancelDuringExtraction)
+    {
+        var projectRoot = CreateTempProject();
+        var previousEventHook =
+            IndexCommandRunner.UpdateParallelExtractionEventForTesting;
+        var previousWorkersStoppedHook =
+            IndexCommandRunner.UpdateParallelExtractionWorkersStoppedForTesting;
+        using var cancellation = new CancellationTokenSource();
+        using var workersStopped = new ManualResetEventSlim();
+        var startedExtractions = new ConcurrentDictionary<string, byte>();
+        var completedExtractions = new ConcurrentDictionary<string, byte>();
+        var parallelPipelineUsed = 0;
+        try
+        {
+            CreateAuthoritativeParallelUpdateProject(
+                projectRoot,
+                implementationCount: 4);
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run(
+                    [projectRoot, "--json", "--quiet", "--parallelism", "1"],
+                    _jsonOptions));
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var sourceZeroChecksum = ReadIndexedChecksum(dbPath, "Source00.cs");
+            var sourceOneChecksum = ReadIndexedChecksum(dbPath, "Source01.cs");
+            File.AppendAllText(Path.Combine(projectRoot, "Source00.cs"), "// cancel zero\n");
+            File.AppendAllText(Path.Combine(projectRoot, "Source01.cs"), "// cancel one\n");
+            var modifiedUtc = DateTime.UtcNow.AddSeconds(3);
+            File.SetLastWriteTimeUtc(Path.Combine(projectRoot, "Source00.cs"), modifiedUtc);
+            File.SetLastWriteTimeUtc(Path.Combine(projectRoot, "Source01.cs"), modifiedUtc);
+            var cancelled = 0;
+            IndexCommandRunner.UpdateParallelExtractionWorkersStoppedForTesting =
+                workersStopped.Set;
+            IndexCommandRunner.UpdateParallelExtractionEventForTesting = item =>
+            {
+                if (item.Kind
+                    == IndexCommandRunner.UpdateParallelExtractionEventKind.ExtractionQueued)
+                {
+                    Interlocked.Exchange(ref parallelPipelineUsed, 1);
+                }
+                if (item.Kind
+                    == IndexCommandRunner.UpdateParallelExtractionEventKind.ExtractionStarted)
+                {
+                    startedExtractions.TryAdd(item.RelativePath, 0);
+                }
+                else if (item.Kind
+                         == IndexCommandRunner.UpdateParallelExtractionEventKind.ExtractionCompleted)
+                {
+                    completedExtractions.TryAdd(item.RelativePath, 0);
+                }
+                var shouldCancel = cancelDuringExtraction
+                    ? item.Kind
+                        == IndexCommandRunner.UpdateParallelExtractionEventKind.ExtractionStarted
+                    : item.Kind
+                        == IndexCommandRunner.UpdateParallelExtractionEventKind.PersistenceCompleted;
+                if (shouldCancel && Interlocked.Exchange(ref cancelled, 1) == 0)
+                    cancellation.Cancel();
+            };
+
+            var (exitCode, json) = RunAndCaptureJson(
+                [
+                    projectRoot,
+                    "--files",
+                    "Source00.cs",
+                    "Source01.cs",
+                    "--json",
+                    "--parallelism",
+                    "2",
+                ],
+                cancellation);
+
+            Assert.Equal(CommandExitCodes.Interrupted, exitCode);
+            Assert.Equal(CommandErrorCodes.Interrupted, json.GetProperty("error_code").GetString());
+            Assert.Contains(
+                cancelDuringExtraction ? "(0 of " : "(1 of ",
+                json.GetProperty("message").GetString(),
+                StringComparison.Ordinal);
+            if (cancelDuringExtraction)
+            {
+                Assert.Equal(sourceZeroChecksum, ReadIndexedChecksum(dbPath, "Source00.cs"));
+            }
+            else
+            {
+                Assert.NotEqual(sourceZeroChecksum, ReadIndexedChecksum(dbPath, "Source00.cs"));
+            }
+            Assert.Equal(sourceOneChecksum, ReadIndexedChecksum(dbPath, "Source01.cs"));
+            if (cancelDuringExtraction)
+            {
+                Assert.True(
+                    workersStopped.Wait(TimeSpan.FromSeconds(30)),
+                    "The cancelled parallel pipeline did not stop.");
+                Assert.True(startedExtractions.Keys.All(completedExtractions.ContainsKey));
+            }
+        }
+        finally
+        {
+            var cleanupSafe = Volatile.Read(ref parallelPipelineUsed) == 0
+                || workersStopped.Wait(TimeSpan.FromSeconds(30));
+            IndexCommandRunner.UpdateParallelExtractionEventForTesting =
+                previousEventHook;
+            IndexCommandRunner.UpdateParallelExtractionWorkersStoppedForTesting =
+                previousWorkersStoppedHook;
+            if (cleanupSafe)
+                DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData("symbols")]
+    [InlineData("completed")]
+    public void Run_UpdateFiles_AuthoritativeCSharpParallelCancellationAfterLoadDemotesUntilRetry(
+        string cancellationPoint)
+    {
+        var projectRoot = CreateTempProject();
+        var previousFailureHook =
+            IndexCommandRunner.UpdateParallelExtractionFailureForTesting;
+        var previousEventHook =
+            IndexCommandRunner.UpdateParallelExtractionEventForTesting;
+        var previousWorkersStoppedHook =
+            IndexCommandRunner.UpdateParallelExtractionWorkersStoppedForTesting;
+        using var cancellation = new CancellationTokenSource();
+        using var cancelledWorkerStarted = new ManualResetEventSlim();
+        using var cancelledWorkerCompleted = new ManualResetEventSlim();
+        using var workersStopped = new ManualResetEventSlim();
+        var startedExtractions = new ConcurrentDictionary<string, byte>();
+        var completedExtractions = new ConcurrentDictionary<string, byte>();
+        var parallelPipelineUsed = 0;
+        try
+        {
+            CreateAuthoritativeParallelUpdateProject(projectRoot, implementationCount: 3);
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run(
+                    [projectRoot, "--json", "--quiet", "--parallelism", "1"],
+                    _jsonOptions));
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var sourceZeroChecksum = ReadIndexedChecksum(dbPath, "Source00.cs");
+            var sourceOneChecksum = ReadIndexedChecksum(dbPath, "Source01.cs");
+            foreach (var relativePath in new[] { "Source00.cs", "Source01.cs" })
+            {
+                var path = Path.Combine(projectRoot, relativePath);
+                File.AppendAllText(path, "// cancel after validated load\n");
+                File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddSeconds(3));
+            }
+            var cancelled = 0;
+            IndexCommandRunner.UpdateParallelExtractionWorkersStoppedForTesting =
+                workersStopped.Set;
+            IndexCommandRunner.UpdateParallelExtractionFailureForTesting =
+                (path, phase) =>
+                {
+                    if (path == "Source00.cs"
+                        && cancellationPoint == "symbols"
+                        && phase == "symbols"
+                        && Interlocked.Exchange(ref cancelled, 1) == 0)
+                    {
+                        cancellation.Cancel();
+                    }
+                    return null;
+                };
+            IndexCommandRunner.UpdateParallelExtractionEventForTesting = item =>
+            {
+                if (item.Kind
+                    == IndexCommandRunner.UpdateParallelExtractionEventKind.ExtractionQueued)
+                {
+                    Interlocked.Exchange(ref parallelPipelineUsed, 1);
+                }
+                if (item.Kind
+                    == IndexCommandRunner.UpdateParallelExtractionEventKind.ExtractionStarted)
+                {
+                    startedExtractions.TryAdd(item.RelativePath, 0);
+                    if (item.RelativePath == "Source00.cs")
+                        cancelledWorkerStarted.Set();
+                }
+                if (item.Kind
+                    == IndexCommandRunner.UpdateParallelExtractionEventKind.ExtractionCompleted)
+                {
+                    completedExtractions.TryAdd(item.RelativePath, 0);
+                    if (item.RelativePath == "Source00.cs"
+                        && cancellationPoint == "completed"
+                        && Interlocked.Exchange(ref cancelled, 1) == 0)
+                    {
+                        cancellation.Cancel();
+                    }
+                    if (item.RelativePath == "Source00.cs")
+                        cancelledWorkerCompleted.Set();
+                }
+            };
+
+            var (exitCode, json) = RunAndCaptureJson(
+                [
+                    projectRoot,
+                    "--files",
+                    "Source00.cs",
+                    "Source01.cs",
+                    "--json",
+                    "--parallelism",
+                    "2",
+                ],
+                cancellation);
+
+            Assert.Equal(CommandExitCodes.Interrupted, exitCode);
+            Assert.Equal(
+                CommandErrorCodes.Interrupted,
+                json.GetProperty("error_code").GetString());
+            Assert.Equal(sourceZeroChecksum, ReadIndexedChecksum(dbPath, "Source00.cs"));
+            Assert.Equal(sourceOneChecksum, ReadIndexedChecksum(dbPath, "Source01.cs"));
+            Assert.True(
+                cancelledWorkerCompleted.Wait(TimeSpan.FromSeconds(30)),
+                "The cancelled extraction worker did not converge.");
+            Assert.True(
+                workersStopped.Wait(TimeSpan.FromSeconds(30)),
+                "The cancelled parallel pipeline did not stop.");
+            Assert.True(startedExtractions.Keys.All(completedExtractions.ContainsKey));
+            using (var interruptedDb = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                Assert.NotEqual(
+                    "true",
+                    interruptedDb.GetMetaString(DbContext.BatchInProgressMetaKey));
+            }
+            var (statusExitCode, statusJson) = RunStatusAndCaptureJson(
+                ["--db", dbPath, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, statusExitCode);
+            // No file transaction committed before interruption, so the general
+            // completeness bit remains true while C# derived-data readiness is
+            // deliberately degraded.
+            Assert.True(statusJson.GetProperty("index_complete").GetBoolean());
+            Assert.False(
+                statusJson.GetProperty("csharp_metadata_target_ready").GetBoolean());
+
+            IndexCommandRunner.UpdateParallelExtractionFailureForTesting =
+                previousFailureHook;
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run(
+                    [projectRoot, "--json", "--quiet", "--parallelism", "1"],
+                    _jsonOptions));
+            Assert.NotEqual(sourceZeroChecksum, ReadIndexedChecksum(dbPath, "Source00.cs"));
+            Assert.NotEqual(sourceOneChecksum, ReadIndexedChecksum(dbPath, "Source01.cs"));
+            var (repairedStatusExitCode, repairedStatusJson) = RunStatusAndCaptureJson(
+                ["--db", dbPath, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, repairedStatusExitCode);
+            Assert.True(repairedStatusJson.GetProperty("index_complete").GetBoolean());
+            Assert.True(
+                repairedStatusJson.GetProperty("csharp_metadata_target_ready").GetBoolean());
+        }
+        finally
+        {
+            var cleanupSafe = Volatile.Read(ref parallelPipelineUsed) == 0
+                || workersStopped.Wait(TimeSpan.FromSeconds(30));
+            IndexCommandRunner.UpdateParallelExtractionFailureForTesting =
+                previousFailureHook;
+            IndexCommandRunner.UpdateParallelExtractionEventForTesting =
+                previousEventHook;
+            IndexCommandRunner.UpdateParallelExtractionWorkersStoppedForTesting =
+                previousWorkersStoppedHook;
+            if (cleanupSafe)
+                DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateFiles_MixedLanguageBoundaryKeepsNonCSharpOnSerialConsumer()
+    {
+        var projectRoot = CreateTempProject();
+        var previousEventHook =
+            IndexCommandRunner.UpdateParallelExtractionEventForTesting;
+        try
+        {
+            CreateAuthoritativeParallelUpdateProject(
+                projectRoot,
+                implementationCount: 4);
+            var pythonPath = Path.Combine(projectRoot, "script.py");
+            File.WriteAllText(pythonPath, "def before():\n    return 1\n");
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run(
+                    [projectRoot, "--json", "--quiet", "--parallelism", "1"],
+                    _jsonOptions));
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var pythonChecksumBefore = ReadIndexedChecksum(dbPath, "script.py");
+            File.AppendAllText(Path.Combine(projectRoot, "Source00.cs"), "// mixed C#\n");
+            File.WriteAllText(pythonPath, "def after():\n    return 2\n");
+            var modifiedUtc = DateTime.UtcNow.AddSeconds(3);
+            File.SetLastWriteTimeUtc(Path.Combine(projectRoot, "Source00.cs"), modifiedUtc);
+            File.SetLastWriteTimeUtc(pythonPath, modifiedUtc);
+            var parallelPaths = new ConcurrentQueue<string>();
+            IndexCommandRunner.UpdateParallelExtractionEventForTesting = item =>
+            {
+                if (item.Kind
+                    == IndexCommandRunner.UpdateParallelExtractionEventKind.ExtractionStarted)
+                {
+                    parallelPaths.Enqueue(item.RelativePath);
+                }
+            };
+
+            var (exitCode, json) = RunAndCaptureJson(
+                [
+                    projectRoot,
+                    "--files",
+                    "Source00.cs",
+                    "script.py",
+                    "--json",
+                    "--parallelism",
+                    "2",
+                ]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.NotEmpty(parallelPaths);
+            Assert.All(
+                parallelPaths,
+                path => Assert.EndsWith(".cs", path, StringComparison.Ordinal));
+            Assert.NotEqual(pythonChecksumBefore, ReadIndexedChecksum(dbPath, "script.py"));
+        }
+        finally
+        {
+            IndexCommandRunner.UpdateParallelExtractionEventForTesting =
+                previousEventHook;
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateFiles_PostExtractionHooksForceParallelFallback()
+    {
+        var projectRoot = CreateTempProject();
+        var previousSchedulingHook =
+            IndexCommandRunner.UpdateParallelExtractionSchedulingForTesting;
+        var previousEventHook =
+            IndexCommandRunner.UpdateParallelExtractionEventForTesting;
+        using var extensionProject =
+            TestProjectHelper.CreateExecutableExtensionTestProjectScope(
+                "cdidx_parallel_update_hook_fallback");
+        using var env = EnvironmentVariableScope.Capture(
+            PostExtractionHookRunner.HooksDirectoryEnvironmentVariable);
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                var hooksDir = Path.Combine(extensionProject.Root, "hooks");
+                Directory.CreateDirectory(hooksDir);
+                File.Copy(
+                    typeof(CodeIndex.HookIsolationFixture.PathSelectivePostExtractionHook)
+                        .Assembly.Location,
+                    Path.Combine(hooksDir, "CodeIndex.HookIsolationFixture.dll"));
+                CreateAuthoritativeParallelUpdateProject(
+                    projectRoot,
+                    implementationCount: 3);
+                Assert.Equal(
+                    CommandExitCodes.Success,
+                    IndexCommandRunner.Run(
+                        [projectRoot, "--json", "--quiet", "--parallelism", "1"],
+                        _jsonOptions));
+                env.Set(
+                    PostExtractionHookRunner.HooksDirectoryEnvironmentVariable,
+                    hooksDir);
+                File.WriteAllText(
+                    Path.Combine(
+                        projectRoot,
+                        CodeIndex.HookIsolationFixture.HookIsolationFixtureEnvironment
+                            .RemoveCSharpStaticInterfaceMemberMarkerFileName),
+                    string.Empty);
+                File.AppendAllText(
+                    Path.Combine(projectRoot, "Source00.cs"),
+                    "// hook fallback\n");
+                File.SetLastWriteTimeUtc(
+                    Path.Combine(projectRoot, "Source00.cs"),
+                    DateTime.UtcNow.AddSeconds(3));
+                (bool Enabled, string? Reason) scheduling = default;
+                var parallelEvents = 0;
+                IndexCommandRunner.UpdateParallelExtractionSchedulingForTesting =
+                    (enabled, reason, _, _) => scheduling = (enabled, reason);
+                IndexCommandRunner.UpdateParallelExtractionEventForTesting = _ =>
+                    Interlocked.Increment(ref parallelEvents);
+
+                var (exitCode, json) = RunAndCaptureJson(
+                    [
+                        projectRoot,
+                        "--files",
+                        "Source00.cs",
+                        "--json",
+                        "--quiet",
+                        "--parallelism",
+                        "2",
+                    ]);
+                Assert.True(
+                    exitCode == CommandExitCodes.Success,
+                    $"Unexpected hook fallback result: {json}");
+                Assert.False(scheduling.Enabled);
+                Assert.Equal("post_extraction_hooks", scheduling.Reason);
+                Assert.Equal(0, parallelEvents);
+            }
+            finally
+            {
+                IndexCommandRunner.UpdateParallelExtractionSchedulingForTesting =
+                    previousSchedulingHook;
+                IndexCommandRunner.UpdateParallelExtractionEventForTesting =
+                    previousEventHook;
+                DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateFiles_AuthoritativeCSharpParallelStallPreservesTerminalSideEffects()
+    {
+        var projectRoot = CreateTempProject();
+        var previousTimeout =
+            IndexCommandRunner.IndexExtractionStallTimeoutForTesting;
+        var previousSchedulingHook =
+            IndexCommandRunner.UpdateParallelExtractionSchedulingForTesting;
+        var previousFailureHook =
+            IndexCommandRunner.UpdateParallelExtractionFailureForTesting;
+        var previousEventHook =
+            IndexCommandRunner.UpdateParallelExtractionEventForTesting;
+        var previousWorkersStoppedHook =
+            IndexCommandRunner.UpdateParallelExtractionWorkersStoppedForTesting;
+        using var sourceZeroCompleted = new ManualResetEventSlim();
+        using var stalledWorkerStarted = new ManualResetEventSlim();
+        using var stalledWorkerEntered = new ManualResetEventSlim();
+        using var releaseStalledWorker = new ManualResetEventSlim();
+        using var stalledWorkerCompleted = new ManualResetEventSlim();
+        using var workersStopped = new ManualResetEventSlim();
+        var startedExtractions = new ConcurrentDictionary<string, byte>();
+        var completedExtractions = new ConcurrentDictionary<string, byte>();
+        var parallelPipelineUsed = 0;
+        using var generatedPatterns = EnvironmentVariableScope.Capture(
+            IndexCommandRunner.GeneratedCodePatternsEnvironmentVariable);
+        try
+        {
+            generatedPatterns.Set(
+                IndexCommandRunner.GeneratedCodePatternsEnvironmentVariable,
+                "Source00.cs");
+            CreateAuthoritativeParallelUpdateProject(
+                projectRoot,
+                implementationCount: 3);
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run(
+                    [projectRoot, "--json", "--quiet", "--parallelism", "1"],
+                    _jsonOptions));
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var sourceZeroPath = Path.Combine(projectRoot, "Source00.cs");
+            var sourceOnePath = Path.Combine(projectRoot, "Source01.cs");
+            var sourceZeroChecksum = ReadIndexedChecksum(dbPath, "Source00.cs");
+            var sourceOneChecksum = ReadIndexedChecksum(dbPath, "Source01.cs");
+            var sourceTwoChecksum = ReadIndexedChecksum(dbPath, "Source02.cs");
+            File.AppendAllText(sourceZeroPath, "// persist before stalled target\n");
+            File.AppendAllText(sourceOnePath, "// force stalled refresh\n");
+            var modifiedUtc = DateTime.UtcNow.AddSeconds(3);
+            File.SetLastWriteTimeUtc(sourceZeroPath, modifiedUtc);
+            File.SetLastWriteTimeUtc(sourceOnePath, modifiedUtc);
+            var parallelScheduled = false;
+            IndexCommandRunner.UpdateParallelExtractionWorkersStoppedForTesting =
+                workersStopped.Set;
+            IndexCommandRunner.UpdateParallelExtractionSchedulingForTesting =
+                (enabled, _, _, _) => parallelScheduled = enabled;
+            IndexCommandRunner.UpdateParallelExtractionFailureForTesting =
+                (path, phase) =>
+                {
+                    if (path != "Source01.cs" || phase != "symbols")
+                        return null;
+
+                    stalledWorkerStarted.Set();
+                    sourceZeroCompleted.Wait(TimeSpan.FromSeconds(30));
+                    stalledWorkerEntered.Set();
+                    releaseStalledWorker.Wait(TimeSpan.FromSeconds(30));
+                    return null;
+                };
+            IndexCommandRunner.UpdateParallelExtractionEventForTesting = item =>
+            {
+                if (item.Kind
+                    == IndexCommandRunner.UpdateParallelExtractionEventKind.ExtractionQueued)
+                {
+                    Interlocked.Exchange(ref parallelPipelineUsed, 1);
+                }
+                if (item.Kind
+                    == IndexCommandRunner.UpdateParallelExtractionEventKind.ExtractionStarted)
+                {
+                    startedExtractions.TryAdd(item.RelativePath, 0);
+                }
+                if (item.Kind
+                    == IndexCommandRunner.UpdateParallelExtractionEventKind.ExtractionCompleted)
+                {
+                    completedExtractions.TryAdd(item.RelativePath, 0);
+                }
+                if (item.Kind
+                        == IndexCommandRunner.UpdateParallelExtractionEventKind.ExtractionCompleted
+                    && item.RelativePath == "Source00.cs")
+                {
+                    sourceZeroCompleted.Set();
+                }
+                if (item.Kind
+                        == IndexCommandRunner.UpdateParallelExtractionEventKind.ExtractionCompleted
+                    && item.RelativePath == "Source01.cs")
+                {
+                    stalledWorkerCompleted.Set();
+                }
+            };
+            IndexCommandRunner.IndexExtractionStallTimeoutForTesting = () =>
+                TimeSpan.FromSeconds(3);
+
+            var stalledRunStopwatch = Stopwatch.StartNew();
+            var (exitCode, json) = RunAndCaptureJson(
+                [
+                    projectRoot,
+                    "--files",
+                    "Source00.cs",
+                    "--json",
+                    "--parallelism",
+                    "2",
+                ]);
+            stalledRunStopwatch.Stop();
+
+            Assert.True(parallelScheduled);
+            Assert.True(
+                stalledRunStopwatch.Elapsed < TimeSpan.FromSeconds(15),
+                $"The stalled update took {stalledRunStopwatch.Elapsed} to return.");
+            Assert.Equal(CommandExitCodes.CancelledBySignal, exitCode);
+            Assert.Equal(
+                CommandErrorCodes.IndexExtractionStalled,
+                json.GetProperty("error_code").GetString());
+            Assert.NotEqual(sourceZeroChecksum, ReadIndexedChecksum(dbPath, "Source00.cs"));
+            Assert.Equal(sourceOneChecksum, ReadIndexedChecksum(dbPath, "Source01.cs"));
+            Assert.Equal(sourceTwoChecksum, ReadIndexedChecksum(dbPath, "Source02.cs"));
+            var stalledMessage = json.GetProperty("message").GetString();
+            Assert.True(
+                stalledMessage?.Contains(" files processed)", StringComparison.Ordinal) == true
+                && !stalledMessage.Contains("(0 of ", StringComparison.Ordinal),
+                $"Unexpected stalled progress message: {stalledMessage}");
+            Assert.Contains(
+                "Source01.cs (symbols)",
+                stalledMessage,
+                StringComparison.Ordinal);
+            Assert.True(stalledWorkerEntered.IsSet);
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                Assert.Equal(
+                    "true",
+                    db.GetMetaString(DbContext.BatchInProgressMetaKey));
+            }
+            var (statusExitCode, statusJson) = RunStatusAndCaptureJson(
+                ["--db", dbPath, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, statusExitCode);
+            Assert.False(statusJson.GetProperty("index_complete").GetBoolean());
+            Assert.False(
+                statusJson.GetProperty("csharp_metadata_target_ready").GetBoolean());
+
+            releaseStalledWorker.Set();
+            Assert.True(
+                stalledWorkerCompleted.Wait(TimeSpan.FromSeconds(30)),
+                "The cancelled peer worker did not converge after its test block was released.");
+            Assert.True(
+                workersStopped.Wait(TimeSpan.FromSeconds(30)),
+                "The stalled parallel pipeline did not stop.");
+            Assert.True(startedExtractions.Keys.All(completedExtractions.ContainsKey));
+            IndexCommandRunner.UpdateParallelExtractionFailureForTesting =
+                previousFailureHook;
+            IndexCommandRunner.IndexExtractionStallTimeoutForTesting = previousTimeout;
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run(
+                    [
+                        projectRoot,
+                        "--files",
+                        "Source01.cs",
+                        "--json",
+                        "--quiet",
+                        "--parallelism",
+                        "1",
+                    ],
+                    _jsonOptions));
+            Assert.NotEqual(sourceOneChecksum, ReadIndexedChecksum(dbPath, "Source01.cs"));
+            using var repairedDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            Assert.NotEqual(
+                "true",
+                repairedDb.GetMetaString(DbContext.BatchInProgressMetaKey));
+            var (repairedStatusExitCode, repairedStatusJson) = RunStatusAndCaptureJson(
+                ["--db", dbPath, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, repairedStatusExitCode);
+            Assert.True(repairedStatusJson.GetProperty("index_complete").GetBoolean());
+            Assert.True(
+                repairedStatusJson.GetProperty("csharp_metadata_target_ready").GetBoolean());
+        }
+        finally
+        {
+            releaseStalledWorker.Set();
+            var cleanupSafe = Volatile.Read(ref parallelPipelineUsed) == 0
+                || workersStopped.Wait(TimeSpan.FromSeconds(30));
+            IndexCommandRunner.IndexExtractionStallTimeoutForTesting =
+                previousTimeout;
+            IndexCommandRunner.UpdateParallelExtractionSchedulingForTesting =
+                previousSchedulingHook;
+            IndexCommandRunner.UpdateParallelExtractionFailureForTesting =
+                previousFailureHook;
+            IndexCommandRunner.UpdateParallelExtractionEventForTesting =
+                previousEventHook;
+            IndexCommandRunner.UpdateParallelExtractionWorkersStoppedForTesting =
+                previousWorkersStoppedHook;
+            if (cleanupSafe)
+                DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateFiles_AuthoritativeCSharpParallelFatalResultCancelsBlockedPeerImmediately()
+    {
+        var projectRoot = CreateTempProject();
+        var previousTimeout =
+            IndexCommandRunner.IndexExtractionStallTimeoutForTesting;
+        var previousFailureHook =
+            IndexCommandRunner.UpdateParallelExtractionFailureForTesting;
+        var previousEventHook =
+            IndexCommandRunner.UpdateParallelExtractionEventForTesting;
+        var previousWorkersStoppedHook =
+            IndexCommandRunner.UpdateParallelExtractionWorkersStoppedForTesting;
+        using var blockedWorkerStarted = new ManualResetEventSlim();
+        using var releaseBlockedWorker = new ManualResetEventSlim();
+        using var blockedWorkerCompleted = new ManualResetEventSlim();
+        using var workersStopped = new ManualResetEventSlim();
+        var startedExtractions = new ConcurrentDictionary<string, byte>();
+        var completedExtractions = new ConcurrentDictionary<string, byte>();
+        var parallelPipelineUsed = 0;
+        try
+        {
+            CreateAuthoritativeParallelUpdateProject(projectRoot, implementationCount: 3);
+            File.WriteAllText(
+                Path.Combine(projectRoot, "Source01.cs"),
+                "public interface IAdditionalContract<T>\n"
+                + "{\n"
+                + "    static abstract T Create();\n"
+                + "}\n");
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run(
+                    [projectRoot, "--json", "--quiet", "--parallelism", "1"],
+                    _jsonOptions));
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var sourceZeroChecksum = ReadIndexedChecksum(dbPath, "Source00.cs");
+            var sourceOneChecksum = ReadIndexedChecksum(dbPath, "Source01.cs");
+            var sourceTwoChecksum = ReadIndexedChecksum(dbPath, "Source02.cs");
+            foreach (var relativePath in new[] { "Source00.cs", "Source01.cs", "Source02.cs" })
+            {
+                var path = Path.Combine(projectRoot, relativePath);
+                File.AppendAllText(path, "// fatal-result cancellation\n");
+                File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddSeconds(3));
+            }
+
+            IndexCommandRunner.IndexExtractionStallTimeoutForTesting = () =>
+                TimeSpan.FromMinutes(5);
+            IndexCommandRunner.UpdateParallelExtractionWorkersStoppedForTesting =
+                workersStopped.Set;
+            IndexCommandRunner.UpdateParallelExtractionFailureForTesting =
+                (path, phase) =>
+                {
+                    if (path == "Source00.cs" && phase == "symbols")
+                    {
+                        blockedWorkerStarted.Set();
+                        releaseBlockedWorker.Wait(TimeSpan.FromSeconds(30));
+                        return null;
+                    }
+                    if (path == "Source01.cs" && phase == "references")
+                    {
+                        blockedWorkerStarted.Wait(TimeSpan.FromSeconds(30));
+                        return new IndexCommandRunner.IndexExtractionStalledException(
+                            0,
+                            null,
+                            TimeSpan.FromMilliseconds(10),
+                            "Source01.cs [references]",
+                            "injected fatal result");
+                    }
+                    return null;
+                };
+            IndexCommandRunner.UpdateParallelExtractionEventForTesting = item =>
+            {
+                if (item.Kind
+                    == IndexCommandRunner.UpdateParallelExtractionEventKind.ExtractionQueued)
+                {
+                    Interlocked.Exchange(ref parallelPipelineUsed, 1);
+                }
+                if (item.Kind
+                    == IndexCommandRunner.UpdateParallelExtractionEventKind.ExtractionStarted)
+                {
+                    startedExtractions.TryAdd(item.RelativePath, 0);
+                }
+                if (item.Kind
+                    == IndexCommandRunner.UpdateParallelExtractionEventKind.ExtractionCompleted)
+                {
+                    completedExtractions.TryAdd(item.RelativePath, 0);
+                }
+                if (item.Kind
+                        == IndexCommandRunner.UpdateParallelExtractionEventKind.ExtractionCompleted
+                    && item.RelativePath == "Source00.cs")
+                {
+                    blockedWorkerCompleted.Set();
+                }
+            };
+
+            var stopwatch = Stopwatch.StartNew();
+            var (exitCode, json) = RunAndCaptureJson(
+                [
+                    projectRoot,
+                    "--files",
+                    "Source00.cs",
+                    "--json",
+                    "--parallelism",
+                    "2",
+                ]);
+            stopwatch.Stop();
+
+            Assert.True(blockedWorkerStarted.IsSet);
+            Assert.True(
+                stopwatch.Elapsed < TimeSpan.FromSeconds(5),
+                $"The fatal worker result waited for its blocked peer for {stopwatch.Elapsed}.");
+            Assert.Equal(CommandExitCodes.CancelledBySignal, exitCode);
+            Assert.Equal(
+                CommandErrorCodes.IndexExtractionStalled,
+                json.GetProperty("error_code").GetString());
+            Assert.Contains(
+                "Source01.cs [references]",
+                json.GetProperty("message").GetString(),
+                StringComparison.Ordinal);
+            Assert.Contains(
+                "injected fatal result",
+                json.GetProperty("message").GetString(),
+                StringComparison.Ordinal);
+            Assert.Equal(sourceZeroChecksum, ReadIndexedChecksum(dbPath, "Source00.cs"));
+            Assert.Equal(sourceOneChecksum, ReadIndexedChecksum(dbPath, "Source01.cs"));
+            Assert.Equal(sourceTwoChecksum, ReadIndexedChecksum(dbPath, "Source02.cs"));
+
+            releaseBlockedWorker.Set();
+            Assert.True(
+                blockedWorkerCompleted.Wait(TimeSpan.FromSeconds(30)),
+                "The blocked peer did not converge after fatal-window cancellation.");
+            Assert.True(
+                workersStopped.Wait(TimeSpan.FromSeconds(30)),
+                "The fatal parallel pipeline did not stop.");
+            Assert.True(startedExtractions.Keys.All(completedExtractions.ContainsKey));
+        }
+        finally
+        {
+            releaseBlockedWorker.Set();
+            var cleanupSafe = Volatile.Read(ref parallelPipelineUsed) == 0
+                || workersStopped.Wait(TimeSpan.FromSeconds(30));
+            IndexCommandRunner.IndexExtractionStallTimeoutForTesting =
+                previousTimeout;
+            IndexCommandRunner.UpdateParallelExtractionFailureForTesting =
+                previousFailureHook;
+            IndexCommandRunner.UpdateParallelExtractionEventForTesting =
+                previousEventHook;
+            IndexCommandRunner.UpdateParallelExtractionWorkersStoppedForTesting =
+                previousWorkersStoppedHook;
+            if (cleanupSafe)
+                DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateFiles_AuthoritativeCSharpParallelFatalDefersToEarlierSourceContractEvidence()
+    {
+        var projectRoot = CreateTempProject();
+        var previousTimeout =
+            IndexCommandRunner.IndexExtractionStallTimeoutForTesting;
+        var previousSchedulingHook =
+            IndexCommandRunner.UpdateParallelExtractionSchedulingForTesting;
+        var previousFailureHook =
+            IndexCommandRunner.UpdateParallelExtractionFailureForTesting;
+        var previousEventHook =
+            IndexCommandRunner.UpdateParallelExtractionEventForTesting;
+        var previousWorkersStoppedHook =
+            IndexCommandRunner.UpdateParallelExtractionWorkersStoppedForTesting;
+        using var blockedWorkerStarted = new ManualResetEventSlim();
+        using var lateContractCompleted = new ManualResetEventSlim();
+        using var releaseBlockedWorker = new ManualResetEventSlim();
+        using var blockedWorkerCompleted = new ManualResetEventSlim();
+        using var workersStopped = new ManualResetEventSlim();
+        var startedExtractions = new ConcurrentDictionary<string, byte>();
+        var completedExtractions = new ConcurrentDictionary<string, byte>();
+        var parallelPipelineUsed = 0;
+        try
+        {
+            CreateAuthoritativeParallelUpdateProject(projectRoot, implementationCount: 3);
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run(
+                    [projectRoot, "--json", "--quiet", "--parallelism", "1"],
+                    _jsonOptions));
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var sourceZeroChecksum = ReadIndexedChecksum(dbPath, "Source00.cs");
+            var sourceOneChecksum = ReadIndexedChecksum(dbPath, "Source01.cs");
+            var sourceTwoChecksum = ReadIndexedChecksum(dbPath, "Source02.cs");
+
+            // Preserve conservative prior contract evidence while making the new
+            // authoritative preflight source-negative.
+            WriteParseableInterface(
+                Path.Combine(projectRoot, "IParseable.cs"),
+                hasStaticContract: false);
+            foreach (var relativePath in new[] { "Source00.cs", "Source02.cs" })
+            {
+                var path = Path.Combine(projectRoot, relativePath);
+                File.AppendAllText(path, "// ordered fatal recovery\n");
+                File.SetLastWriteTimeUtc(path, DateTime.UtcNow.AddSeconds(3));
+            }
+
+            var sourceOnePath = Path.Combine(projectRoot, "Source01.cs");
+            var sourceOneOriginal = File.ReadAllText(sourceOnePath);
+            var sourceOneModifiedUtc = File.GetLastWriteTimeUtc(sourceOnePath);
+            const string lateContractCore =
+                "public interface ILateContract<T>\n"
+                + "{\n"
+                + "    static abstract T Create();\n"
+                + "}\n";
+            Assert.True(lateContractCore.Length <= sourceOneOriginal.Length);
+            var lateContractSource = lateContractCore.PadRight(sourceOneOriginal.Length);
+            Assert.Equal(
+                Encoding.UTF8.GetByteCount(sourceOneOriginal),
+                Encoding.UTF8.GetByteCount(lateContractSource));
+
+            var parallelScheduled = false;
+            IndexCommandRunner.UpdateParallelExtractionWorkersStoppedForTesting =
+                workersStopped.Set;
+            var lateContractMutated = 0;
+            var sourceZeroBlocked = 0;
+            var lateContractPayloads = new ConcurrentQueue<
+                (int RetainedSymbols, bool HasSourceContract)>();
+            IndexCommandRunner.UpdateParallelExtractionSchedulingForTesting =
+                (enabled, _, workers, _) =>
+                {
+                    parallelScheduled = enabled;
+                    if (enabled)
+                        Assert.Equal(4, workers);
+                };
+            IndexCommandRunner.IndexExtractionStallTimeoutForTesting = () =>
+                TimeSpan.FromMinutes(5);
+            IndexCommandRunner.UpdateParallelExtractionFailureForTesting =
+                (path, phase) =>
+                {
+                    if (path == "Source00.cs"
+                        && phase == "symbols"
+                        && Interlocked.Exchange(ref sourceZeroBlocked, 1) == 0)
+                    {
+                        blockedWorkerStarted.Set();
+                        releaseBlockedWorker.Wait(TimeSpan.FromSeconds(30));
+                        return null;
+                    }
+                    if (path == "Source02.cs" && phase == "symbols")
+                    {
+                        if (!lateContractCompleted.Wait(TimeSpan.FromSeconds(30)))
+                        {
+                            return new TimeoutException(
+                                "The earlier source-contract extraction did not complete.");
+                        }
+                        return new IndexCommandRunner.IndexExtractionStalledException(
+                            0,
+                            null,
+                            TimeSpan.FromMilliseconds(10),
+                            "Source02.cs [symbols]",
+                            "injected later fatal result");
+                    }
+                    return null;
+                };
+            IndexCommandRunner.UpdateParallelExtractionEventForTesting = item =>
+            {
+                if (item.Kind
+                    == IndexCommandRunner.UpdateParallelExtractionEventKind.ExtractionQueued)
+                {
+                    Interlocked.Exchange(ref parallelPipelineUsed, 1);
+                }
+                if (item.Kind
+                    == IndexCommandRunner.UpdateParallelExtractionEventKind.ExtractionStarted)
+                {
+                    startedExtractions.TryAdd(item.RelativePath, 0);
+                }
+                if (item.Kind
+                    == IndexCommandRunner.UpdateParallelExtractionEventKind.ExtractionCompleted)
+                {
+                    completedExtractions.TryAdd(item.RelativePath, 0);
+                }
+                if (item.Kind
+                        == IndexCommandRunner.UpdateParallelExtractionEventKind.ExtractionStarted
+                    && item.RelativePath == "Source01.cs"
+                    && Interlocked.Exchange(ref lateContractMutated, 1) == 0)
+                {
+                    File.WriteAllText(sourceOnePath, lateContractSource);
+                    File.SetLastWriteTimeUtc(sourceOnePath, sourceOneModifiedUtc);
+                }
+                if (item.Kind
+                        == IndexCommandRunner.UpdateParallelExtractionEventKind.ExtractionCompleted
+                    && item.RelativePath == "Source01.cs"
+                    && item.HasSourceContractEvidence)
+                {
+                    lateContractPayloads.Enqueue(
+                        (item.RetainedSymbolCount, item.HasSourceContractEvidence));
+                    lateContractCompleted.Set();
+                }
+                if (item.Kind
+                        == IndexCommandRunner.UpdateParallelExtractionEventKind.ExtractionCompleted
+                    && item.RelativePath == "Source00.cs")
+                {
+                    blockedWorkerCompleted.Set();
+                }
+            };
+
+            var (exitCode, json) = RunAndCaptureJson(
+                [
+                    projectRoot,
+                    "--files",
+                    "Source00.cs",
+                    "Source01.cs",
+                    "Source02.cs",
+                    "--json",
+                    "--parallelism",
+                    "4",
+                    "--max-symbols-per-file",
+                    "1",
+                ]);
+
+            Assert.True(parallelScheduled);
+            Assert.True(blockedWorkerStarted.IsSet);
+            Assert.True(lateContractCompleted.IsSet);
+            var lateContractPayload = Assert.Single(lateContractPayloads);
+            Assert.Equal(0, lateContractPayload.RetainedSymbols);
+            Assert.True(lateContractPayload.HasSourceContract);
+            Assert.Equal(CommandExitCodes.PartialResult, exitCode);
+            Assert.Equal("partial", json.GetProperty("status").GetString());
+            Assert.NotEqual(sourceZeroChecksum, ReadIndexedChecksum(dbPath, "Source00.cs"));
+            Assert.Equal(sourceOneChecksum, ReadIndexedChecksum(dbPath, "Source01.cs"));
+            Assert.NotEqual(sourceTwoChecksum, ReadIndexedChecksum(dbPath, "Source02.cs"));
+            Assert.Null(ReadCSharpStaticInterfaceSourceEvidence(projectRoot));
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                Assert.NotEqual(
+                    "true",
+                    db.GetMetaString(DbContext.BatchInProgressMetaKey));
+            }
+
+            releaseBlockedWorker.Set();
+            Assert.True(
+                blockedWorkerCompleted.Wait(TimeSpan.FromSeconds(30)),
+                "The abandoned first-gap worker did not converge.");
+            Assert.True(
+                workersStopped.Wait(TimeSpan.FromSeconds(30)),
+                "The source-evidence recovery pipeline did not stop.");
+            Assert.True(startedExtractions.Keys.All(completedExtractions.ContainsKey));
+            IndexCommandRunner.UpdateParallelExtractionFailureForTesting =
+                previousFailureHook;
+            IndexCommandRunner.UpdateParallelExtractionEventForTesting =
+                previousEventHook;
+            IndexCommandRunner.IndexExtractionStallTimeoutForTesting = previousTimeout;
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run(
+                    [projectRoot, "--json", "--quiet", "--parallelism", "1"],
+                    _jsonOptions));
+            Assert.NotEqual(sourceOneChecksum, ReadIndexedChecksum(dbPath, "Source01.cs"));
+            Assert.True(ReadCSharpStaticInterfaceSourceEvidence(projectRoot));
+        }
+        finally
+        {
+            releaseBlockedWorker.Set();
+            var cleanupSafe = Volatile.Read(ref parallelPipelineUsed) == 0
+                || workersStopped.Wait(TimeSpan.FromSeconds(30));
+            IndexCommandRunner.IndexExtractionStallTimeoutForTesting = previousTimeout;
+            IndexCommandRunner.UpdateParallelExtractionSchedulingForTesting =
+                previousSchedulingHook;
+            IndexCommandRunner.UpdateParallelExtractionFailureForTesting =
+                previousFailureHook;
+            IndexCommandRunner.UpdateParallelExtractionEventForTesting =
+                previousEventHook;
+            IndexCommandRunner.UpdateParallelExtractionWorkersStoppedForTesting =
+                previousWorkersStoppedHook;
+            if (cleanupSafe)
+                DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateFiles_AuthoritativeCSharpParallelFatalDefersWhileEarlierContractCandidateIsExtracting()
+    {
+        var projectRoot = CreateTempProject();
+        var previousTimeout =
+            IndexCommandRunner.IndexExtractionStallTimeoutForTesting;
+        var previousFailureHook =
+            IndexCommandRunner.UpdateParallelExtractionFailureForTesting;
+        var previousEventHook =
+            IndexCommandRunner.UpdateParallelExtractionEventForTesting;
+        var previousWorkersStoppedHook =
+            IndexCommandRunner.UpdateParallelExtractionWorkersStoppedForTesting;
+        using var candidateWorkerEntered = new ManualResetEventSlim();
+        using var releaseCandidateWorker = new ManualResetEventSlim();
+        using var workersStopped = new ManualResetEventSlim();
+        var startedExtractions = new ConcurrentDictionary<string, byte>();
+        var completedExtractions = new ConcurrentDictionary<string, byte>();
+        var parallelPipelineUsed = 0;
+        try
+        {
+            CreateAuthoritativeParallelUpdateProject(projectRoot, implementationCount: 2);
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run(
+                    [projectRoot, "--json", "--quiet", "--parallelism", "1"],
+                    _jsonOptions));
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var sourceZeroChecksum = ReadIndexedChecksum(dbPath, "Source00.cs");
+            var sourceOneChecksum = ReadIndexedChecksum(dbPath, "Source01.cs");
+            WriteParseableInterface(
+                Path.Combine(projectRoot, "IParseable.cs"),
+                hasStaticContract: false);
+            var sourceOnePath = Path.Combine(projectRoot, "Source01.cs");
+            File.AppendAllText(sourceOnePath, "// candidate-order recovery\n");
+            File.SetLastWriteTimeUtc(sourceOnePath, DateTime.UtcNow.AddSeconds(3));
+
+            var sourceZeroPath = Path.Combine(projectRoot, "Source00.cs");
+            var sourceZeroOriginal = File.ReadAllText(sourceZeroPath);
+            var sourceZeroModifiedUtc = File.GetLastWriteTimeUtc(sourceZeroPath);
+            const string candidateContractCore =
+                "public interface ICandidateContract<T>\n"
+                + "{\n"
+                + "    static abstract T Create();\n"
+                + "}\n";
+            Assert.True(candidateContractCore.Length <= sourceZeroOriginal.Length);
+            var candidateContractSource =
+                candidateContractCore.PadRight(sourceZeroOriginal.Length);
+            Assert.Equal(
+                Encoding.UTF8.GetByteCount(sourceZeroOriginal),
+                Encoding.UTF8.GetByteCount(candidateContractSource));
+
+            var sourceZeroMutated = 0;
+            var sourceZeroBlocked = 0;
+            IndexCommandRunner.UpdateParallelExtractionWorkersStoppedForTesting =
+                workersStopped.Set;
+            IndexCommandRunner.IndexExtractionStallTimeoutForTesting = () =>
+                TimeSpan.FromMinutes(5);
+            IndexCommandRunner.UpdateParallelExtractionFailureForTesting =
+                (path, phase) =>
+                {
+                    if (path == "Source00.cs"
+                        && phase == "symbols"
+                        && Interlocked.Exchange(ref sourceZeroBlocked, 1) == 0)
+                    {
+                        candidateWorkerEntered.Set();
+                        releaseCandidateWorker.Wait(TimeSpan.FromSeconds(30));
+                        return null;
+                    }
+                    if (path == "Source01.cs" && phase == "symbols")
+                    {
+                        if (!candidateWorkerEntered.Wait(TimeSpan.FromSeconds(30)))
+                        {
+                            return new TimeoutException(
+                                "The earlier contract candidate did not reach symbol extraction.");
+                        }
+                        return new IndexCommandRunner.IndexExtractionStalledException(
+                            0,
+                            null,
+                            TimeSpan.FromMilliseconds(10),
+                            "Source01.cs [symbols]",
+                            "injected fatal behind candidate");
+                    }
+                    return null;
+                };
+            IndexCommandRunner.UpdateParallelExtractionEventForTesting = item =>
+            {
+                if (item.Kind
+                    == IndexCommandRunner.UpdateParallelExtractionEventKind.ExtractionQueued)
+                {
+                    Interlocked.Exchange(ref parallelPipelineUsed, 1);
+                }
+                if (item.Kind
+                    == IndexCommandRunner.UpdateParallelExtractionEventKind.ExtractionStarted)
+                {
+                    startedExtractions.TryAdd(item.RelativePath, 0);
+                    if (item.RelativePath == "Source00.cs"
+                        && Interlocked.Exchange(ref sourceZeroMutated, 1) == 0)
+                    {
+                        File.WriteAllText(sourceZeroPath, candidateContractSource);
+                        File.SetLastWriteTimeUtc(
+                            sourceZeroPath,
+                            sourceZeroModifiedUtc);
+                    }
+                }
+                if (item.Kind
+                    == IndexCommandRunner.UpdateParallelExtractionEventKind.ExtractionCompleted)
+                {
+                    completedExtractions.TryAdd(item.RelativePath, 0);
+                }
+            };
+
+            var stopwatch = Stopwatch.StartNew();
+            var (exitCode, json) = RunAndCaptureJson(
+                [
+                    projectRoot,
+                    "--files",
+                    "Source00.cs",
+                    "Source01.cs",
+                    "--json",
+                    "--parallelism",
+                    "2",
+                ]);
+            stopwatch.Stop();
+
+            Assert.True(candidateWorkerEntered.IsSet);
+            Assert.DoesNotContain("Source00.cs", completedExtractions.Keys);
+            Assert.True(
+                stopwatch.Elapsed < TimeSpan.FromSeconds(5),
+                $"The candidate-ordered serial recovery took {stopwatch.Elapsed}.");
+            Assert.Equal(CommandExitCodes.PartialResult, exitCode);
+            Assert.Equal("partial", json.GetProperty("status").GetString());
+            Assert.Equal(sourceZeroChecksum, ReadIndexedChecksum(dbPath, "Source00.cs"));
+            Assert.NotEqual(sourceOneChecksum, ReadIndexedChecksum(dbPath, "Source01.cs"));
+            Assert.Null(ReadCSharpStaticInterfaceSourceEvidence(projectRoot));
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                Assert.NotEqual(
+                    "true",
+                    db.GetMetaString(DbContext.BatchInProgressMetaKey));
+            }
+
+            releaseCandidateWorker.Set();
+            Assert.True(
+                workersStopped.Wait(TimeSpan.FromSeconds(30)),
+                "The candidate-ordered parallel pipeline did not stop.");
+            Assert.True(startedExtractions.Keys.All(completedExtractions.ContainsKey));
+            IndexCommandRunner.UpdateParallelExtractionFailureForTesting =
+                previousFailureHook;
+            IndexCommandRunner.UpdateParallelExtractionEventForTesting =
+                previousEventHook;
+            IndexCommandRunner.IndexExtractionStallTimeoutForTesting = previousTimeout;
+            Assert.Equal(
+                CommandExitCodes.Success,
+                IndexCommandRunner.Run(
+                    [projectRoot, "--json", "--quiet", "--parallelism", "1"],
+                    _jsonOptions));
+            Assert.NotEqual(sourceZeroChecksum, ReadIndexedChecksum(dbPath, "Source00.cs"));
+            Assert.True(ReadCSharpStaticInterfaceSourceEvidence(projectRoot));
+        }
+        finally
+        {
+            releaseCandidateWorker.Set();
+            var cleanupSafe = Volatile.Read(ref parallelPipelineUsed) == 0
+                || workersStopped.Wait(TimeSpan.FromSeconds(30));
+            IndexCommandRunner.IndexExtractionStallTimeoutForTesting = previousTimeout;
+            IndexCommandRunner.UpdateParallelExtractionFailureForTesting =
+                previousFailureHook;
+            IndexCommandRunner.UpdateParallelExtractionEventForTesting =
+                previousEventHook;
+            IndexCommandRunner.UpdateParallelExtractionWorkersStoppedForTesting =
+                previousWorkersStoppedHook;
+            if (cleanupSafe)
+                DeleteDirectory(projectRoot);
+        }
+    }
+
+    private static IReadOnlyList<string> ReadStableUpdateProjection(string dbPath)
+    {
+        SqliteConnection.ClearAllPools();
+        using var connection = new SqliteConnection($"Data Source={dbPath};Pooling=False");
+        connection.Open();
+        var projections = new List<string>();
+        Read(
+            "files",
+            "SELECT path, lang, size, lines, checksum, modified, generated FROM files ORDER BY path");
+        Read(
+            "chunks",
+            "SELECT f.path, c.chunk_index, c.start_line, c.end_line, c.content FROM chunks c JOIN files f ON f.id = c.file_id ORDER BY f.path, c.chunk_index");
+        Read(
+            "symbols",
+            "SELECT f.path, s.kind, s.sub_kind, s.name, s.line, s.start_line, s.start_column, s.end_line, s.body_start_line, s.body_end_line, s.signature, s.container_kind, s.container_name, s.container_qualified_name, s.family_key, s.visibility, s.return_type, s.is_partial_declaration, s.is_file_local_declaration, s.declaration_semantic_score, s.identifier_start_column, s.is_metadata_target, s.metadata_target_source, s.name_folded, s.display_name_folded FROM symbols s JOIN files f ON f.id = s.file_id ORDER BY f.path, s.line, s.start_column, s.kind, s.name, s.signature");
+        Read(
+            "reference_lines",
+            "SELECT f.path, l.line, l.context FROM reference_lines l JOIN files f ON f.id = l.file_id ORDER BY f.path, l.line, l.context");
+        Read(
+            "references",
+            "SELECT f.path, r.symbol_name, r.reference_kind, r.line, r.column_number, r.span_length, r.context, rl.line, rl.context, r.container_kind, r.container_name, r.symbol_name_folded, r.container_name_folded, r.is_self_reference, r.is_mutual_recursion, sf.path, ss.kind, ss.name, ss.line, ss.start_column, ss.signature, tf.path, ts.kind, ts.name, ts.line, ts.start_column, ts.signature, r.target_symbol_key, r.target_qualifier, r.resolution_state, r.resolution_candidate_count FROM symbol_references r JOIN files f ON f.id = r.file_id LEFT JOIN reference_lines rl ON rl.id = r.reference_line_id LEFT JOIN symbols ss ON ss.id = r.source_symbol_id LEFT JOIN files sf ON sf.id = ss.file_id LEFT JOIN symbols ts ON ts.id = r.target_symbol_id LEFT JOIN files tf ON tf.id = ts.file_id ORDER BY f.path, r.line, r.column_number, r.reference_kind, r.symbol_name, r.target_symbol_key, sf.path, ss.line, ss.start_column, tf.path, ts.line, ts.start_column");
+        Read(
+            "reference_candidates",
+            "SELECT rf.path, r.symbol_name, r.reference_kind, r.line, r.column_number, r.span_length, r.context, sf.path, s.kind, s.name, s.line, s.start_column, s.signature, s.container_kind, s.container_name, s.container_qualified_name, s.family_key, s.is_metadata_target, s.metadata_target_source, c.scope_rank FROM symbol_reference_candidates c JOIN symbol_references r ON r.id = c.reference_id JOIN files rf ON rf.id = r.file_id JOIN symbols s ON s.id = c.symbol_id JOIN files sf ON sf.id = s.file_id ORDER BY rf.path, r.line, r.column_number, r.reference_kind, r.symbol_name, sf.path, s.line, s.start_column, s.kind, s.name, s.signature, c.scope_rank");
+        Read(
+            "hotspot_reference_counts",
+            "SELECT f.path, h.lang, h.raw_symbol_name, h.symbol_name, h.symbol_segment_count, h.allow_leaf_fallback, h.reference_count, h.reference_score FROM hotspot_reference_counts h JOIN files f ON f.id = h.file_id ORDER BY f.path, h.lang, h.raw_symbol_name, h.symbol_name, h.symbol_segment_count, h.allow_leaf_fallback");
+        Read(
+            "issues",
+            "SELECT f.path, i.kind, i.line, i.message, i.origin, i.severity FROM file_issues i JOIN files f ON f.id = i.file_id ORDER BY f.path, i.line, i.kind, i.message");
+        Read("user_version", "PRAGMA user_version");
+        Read(
+            "meta",
+            "SELECT key, value FROM codeindex_meta WHERE key IN ('batch_in_progress', 'index_completeness', 'index_incomplete_reasons_json', 'csharp_static_interface_source_evidence', 'csharp_symbol_name_contract_version', 'metadata_target_version_csharp', 'reference_identity_contract_version', 'fold_key_version', 'fold_key_fingerprint', 'fold_backfill_graph_refresh_pending', 'sql_graph_contract_version', 'hdl_graph_contract_version', 'symbols_only_graph_omitted', 'last_index_run_mode', 'last_index_run_files_scanned', 'last_index_run_files_skipped', 'last_index_run_parse_errors', 'last_index_run_bytes_read', 'last_index_run_bytes_read_skipped_file_count', 'last_index_run_bytes_read_incomplete', 'last_index_run_rows_upserted', 'last_index_run_rows_deleted') ORDER BY key");
+        return projections;
+
+        void Read(string table, string sql)
+        {
+            using var command = connection.CreateCommand();
+            command.CommandText = sql;
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                var values = new string[reader.FieldCount];
+                for (var index = 0; index < reader.FieldCount; index++)
+                {
+                    values[index] = reader.IsDBNull(index)
+                        ? "<null>"
+                        : Convert.ToString(
+                            reader.GetValue(index),
+                            CultureInfo.InvariantCulture) ?? string.Empty;
+                }
+                projections.Add($"{table}:{string.Join('\u001f', values)}");
+            }
+        }
+    }
+
+    private static void CreateAuthoritativeParallelUpdateProject(
+        string projectRoot,
+        int implementationCount)
+    {
+        WriteParseableInterface(
+            Path.Combine(projectRoot, "IParseable.cs"),
+            hasStaticContract: true);
+        for (var index = 0; index < implementationCount; index++)
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, $"Source{index:00}.cs"),
+                $"public readonly struct Source{index:00} : IParseable<Source{index:00}>\n"
+                + "{\n"
+                + $"    public static Source{index:00} Parse(string value) => new();\n"
+                + "}\n");
+        }
+    }
+
+    [Fact]
     public void Run_UpdateFiles_CsharpContractPreflightAvoidsRedundantWorkspacePasses()
     {
         var projectRoot = CreateTempProject();
@@ -3135,7 +5265,7 @@ public partial class IndexCommandRunnerTests
             File.SetLastWriteTimeUtc(interfacePath, DateTime.UtcNow.AddSeconds(3));
 
             var mutationCount = 0;
-            IndexCommandRunner.UpdateSkippedFileRecordBuiltForTesting = path =>
+            IndexCommandRunner.UpdateSkippedFileRecordBuiltForTesting = (path, _) =>
             {
                 if (!string.Equals(path, "IParseable.cs", StringComparison.Ordinal)
                     || Interlocked.Increment(ref mutationCount) != 1)
@@ -3209,7 +5339,7 @@ public partial class IndexCommandRunnerTests
             File.SetLastWriteTimeUtc(interfacePath, DateTime.UtcNow.AddSeconds(3));
 
             var hookCount = 0;
-            IndexCommandRunner.UpdateSkippedFileRecordBuiltForTesting = path =>
+            IndexCommandRunner.UpdateSkippedFileRecordBuiltForTesting = (path, _) =>
             {
                 Assert.Equal("IParseable.cs", path);
                 Interlocked.Increment(ref hookCount);

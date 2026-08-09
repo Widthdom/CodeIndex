@@ -47,6 +47,8 @@ public partial class DbWriter
     private static readonly AsyncLocal<Action<bool>?> ScopedAtomicFileReferenceInsertForTesting = new();
     private static readonly AsyncLocal<Action?> ScopedReferenceBatchTransactionOpeningForTesting = new();
     private static readonly AsyncLocal<Action<DbWriterBatchStatement>?> ScopedBatchStatementExecutingForTesting = new();
+    private static readonly AsyncLocal<Action<SqliteConnection, string>?>
+        ScopedReferenceSecondaryIndexBulkLoadStateForTesting = new();
     internal static Action<string>? LanguagePresenceCheckForTesting
     {
         get => ScopedLanguagePresenceCheckForTesting.Value;
@@ -129,6 +131,12 @@ public partial class DbWriter
     {
         get => ScopedBatchStatementExecutingForTesting.Value;
         set => ScopedBatchStatementExecutingForTesting.Value = value;
+    }
+
+    internal static Action<SqliteConnection, string>? ReferenceSecondaryIndexBulkLoadStateForTesting
+    {
+        get => ScopedReferenceSecondaryIndexBulkLoadStateForTesting.Value;
+        set => ScopedReferenceSecondaryIndexBulkLoadStateForTesting.Value = value;
     }
 
     // Transaction ownership (#4154): the semaphore is held for the outermost writer

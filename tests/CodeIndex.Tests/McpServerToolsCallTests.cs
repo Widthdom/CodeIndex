@@ -2100,9 +2100,9 @@ public partial class McpServerTests
         var response = readOnlyServer.HandleMessage(request)!;
 
         Assert.False(response["result"]!["structuredContent"]!["exact_index_available"]!.GetValue<bool>());
-        Assert.Contains("idx_symbol_refs_name_nocase", response["result"]!["structuredContent"]!["degraded_reason"]!.GetValue<string>());
+        Assert.Contains("idx_symbol_refs_name_nocase_file", response["result"]!["structuredContent"]!["degraded_reason"]!.GetValue<string>());
         Assert.False(response["result"]!["structuredContent"]!["exact_index_available"]!.GetValue<bool>());
-        Assert.Contains("idx_symbol_refs_name_nocase", response["result"]!["structuredContent"]!["degraded_reason"]!.GetValue<string>());
+        Assert.Contains("idx_symbol_refs_name_nocase_file", response["result"]!["structuredContent"]!["degraded_reason"]!.GetValue<string>());
     }
 
     [Fact]
@@ -3294,8 +3294,8 @@ public partial class McpServerTests
         var response = readOnlyServer.HandleMessage(request)!;
 
         Assert.False(response["result"]!["structuredContent"]!["exact_index_available"]!.GetValue<bool>());
-        Assert.Contains("idx_symbol_refs_name_nocase", response["result"]!["structuredContent"]!["degraded_reason"]!.GetValue<string>());
-        Assert.Contains("idx_symbol_refs_container_nocase", response["result"]!["structuredContent"]!["degraded_reason"]!.GetValue<string>());
+        Assert.Contains("idx_symbol_refs_name_nocase_file", response["result"]!["structuredContent"]!["degraded_reason"]!.GetValue<string>());
+        Assert.Contains("idx_symbol_refs_container_nocase_kind", response["result"]!["structuredContent"]!["degraded_reason"]!.GetValue<string>());
     }
 
     [Fact]
@@ -9388,10 +9388,17 @@ public partial class McpServerTests
         var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_fts_bulk_boundary");
         var previousOptimizeHook = McpServer.McpIndexFtsOptimizeForTesting;
         var previousMergeHook = McpServer.McpIndexFtsMergeForTesting;
+        var previousReferenceIndexHook = DbWriter.ReferenceSecondaryIndexBulkLoadStateForTesting;
+        var previousGraphScopeHook = DbWriter.ReferenceGraphRefreshScopeForTesting;
         var optimizeCount = 0;
         var mergeCount = 0;
+        var referenceIndexPhases = new List<string>();
+        DbWriter.ReferenceGraphRefreshScopeStats? graphScopeStats = null;
         static string SizedSource(char fill, int size)
-            => "# " + new string(fill, size - 3) + "\n";
+        {
+            const string sourcePrefix = "def target():\n    return 1\n\ndef caller():\n    return target()\n\n# ";
+            return sourcePrefix + new string(fill, size - sourcePrefix.Length - 1) + "\n";
+        }
         try
         {
             Directory.CreateDirectory(fixtureDir);
@@ -9414,6 +9421,16 @@ public partial class McpServerTests
                 mergeCount++;
                 previousMergeHook?.Invoke();
             };
+            DbWriter.ReferenceSecondaryIndexBulkLoadStateForTesting = (connection, phase) =>
+            {
+                referenceIndexPhases.Add(phase);
+                previousReferenceIndexHook?.Invoke(connection, phase);
+            };
+            DbWriter.ReferenceGraphRefreshScopeForTesting = stats =>
+            {
+                graphScopeStats = stats;
+                previousGraphScopeHook?.Invoke(stats);
+            };
             File.WriteAllText(dirtyPath, SizedSource('b', 600));
             File.SetLastWriteTimeUtc(dirtyPath, DateTime.UtcNow.AddSeconds(2));
 
@@ -9423,11 +9440,18 @@ public partial class McpServerTests
             Assert.Equal(1, updateResponse["result"]!["structuredContent"]!["summary"]!["skipped"]!.GetValue<int>());
             Assert.Equal(1, optimizeCount);
             Assert.Equal(0, mergeCount);
+            Assert.Equal(
+                ["dropped", "identity_started", "graph_required_restored", "mutual_started", "restored"],
+                referenceIndexPhases);
+            Assert.NotNull(graphScopeStats);
+            Assert.True(graphScopeStats!.UsedFullRefresh);
         }
         finally
         {
             McpServer.McpIndexFtsOptimizeForTesting = previousOptimizeHook;
             McpServer.McpIndexFtsMergeForTesting = previousMergeHook;
+            DbWriter.ReferenceSecondaryIndexBulkLoadStateForTesting = previousReferenceIndexHook;
+            DbWriter.ReferenceGraphRefreshScopeForTesting = previousGraphScopeHook;
             TestProjectHelper.DeleteDirectory(fixtureDir);
             TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
         }

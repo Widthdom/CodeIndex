@@ -1,5 +1,3 @@
-using System.Text.RegularExpressions;
-using Regex = CodeIndex.Indexer.BoundedRegex;
 using CodeIndex.Models;
 
 namespace CodeIndex.Indexer;
@@ -141,12 +139,6 @@ internal static partial class LanguageReferenceExtractionSupport
         while (start >= 0 && !char.IsWhiteSpace(value[start]))
             start--;
         return start + 1;
-    }
-
-    private static IEnumerable<Match> EnumerateMatches(Regex regex, string input)
-    {
-        foreach (Match match in BoundedRegex.EnumerateMatches(regex, input))
-            yield return match;
     }
 
     private static void MaskRange(char[] chars, int start, int end)

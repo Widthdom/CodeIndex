@@ -10728,7 +10728,7 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Contains("src/session.py:2:12", stdout);
             Assert.Contains("WARN: --exact graph query ran without the supporting index", stderr);
-            Assert.Contains("idx_symbol_refs_name_nocase", stderr);
+            Assert.Contains("idx_symbol_refs_name_nocase_file", stderr);
             Assert.Contains("re-index with `cdidx index <projectPath>`", stderr);
         }
         finally
@@ -10759,7 +10759,7 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(string.Empty, stderr);
             Assert.Equal("Run", json.GetProperty("callee_name").GetString());
             Assert.False(json.GetProperty("exact_index_available").GetBoolean());
-            Assert.Contains("idx_symbol_refs_container_nocase", json.GetProperty("degraded_reason").GetString());
+            Assert.Contains("idx_symbol_refs_container_nocase_kind", json.GetProperty("degraded_reason").GetString());
         }
         finally
         {

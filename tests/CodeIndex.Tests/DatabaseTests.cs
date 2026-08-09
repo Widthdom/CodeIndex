@@ -161,6 +161,617 @@ public class DatabaseTests : IDisposable
         Assert.Contains("fts_chunks", tables);
     }
 
+    [Fact]
+    public void InitializeSchema_CreatesOnlyCanonicalReferenceSecondaryIndexes()
+    {
+        var expected = ReferenceSecondaryIndexSql.All
+            .Select(static definition => definition.Name)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        var actual = ReadIndexNames(_db.Connection, "symbol_references")
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Equal(expected, actual);
+        Assert.All(
+            ReferenceSecondaryIndexSql.Retired,
+            retiredIndex => Assert.DoesNotContain(retiredIndex, actual));
+        AssertIndexColumns(
+            _db.Connection,
+            "idx_symbol_refs_unresolved_mutual_folded",
+            [("container_name_folded", "BINARY"), ("symbol_name_folded", "BINARY")]);
+        AssertIndexSqlContains(
+            _db.Connection,
+            "idx_symbol_refs_unresolved_mutual_folded",
+            "WHERE source_symbol_id IS NULL AND target_symbol_id IS NULL AND is_self_reference = 0");
+        AssertIndexSqlContains(
+            _db.Connection,
+            "idx_symbol_refs_unresolved_mutual_folded",
+            "reference_kind IN ('call', 'instantiate', 'subscribe', 'unsubscribe', 'razor_event_binding')");
+    }
+
+    [Fact]
+    public void MutualRecursionLookups_UsePartialUnresolvedIndexInFullAndScopedPlans()
+    {
+        const string indexName = "idx_symbol_refs_unresolved_mutual_folded";
+        AssertUsesPartialIndex(
+            "full",
+            ReadQueryPlanDetails(
+                _db.Connection,
+                DbWriter.RefreshMutualRecursionFlagsSqlForTesting));
+
+        using var scope = _writer.BeginReferenceGraphRefreshScope();
+        var scopedLookups = DbWriter.ScopedUnresolvedMutualLookupStatementsForTesting;
+        Assert.Equal(["old", "old", "new"], scopedLookups.Select(static lookup => lookup.Scope));
+        foreach (var (lookupScope, sql) in scopedLookups)
+            AssertUsesPartialIndex($"scoped-{lookupScope}", ReadQueryPlanDetails(_db.Connection, sql));
+
+        static void AssertUsesPartialIndex(string scopeName, IReadOnlyList<string> plan)
+        {
+            Assert.True(plan.Any(detail =>
+                detail.Contains("SEARCH reverse USING INDEX", StringComparison.OrdinalIgnoreCase)
+                && detail.Contains(indexName, StringComparison.Ordinal)),
+                $"Expected {scopeName} plan to search {indexName}:{Environment.NewLine}{string.Join(Environment.NewLine, plan)}");
+            Assert.False(plan.Any(detail =>
+                detail.Equals("SCAN reverse", StringComparison.OrdinalIgnoreCase)
+                || detail.StartsWith("SCAN reverse ", StringComparison.OrdinalIgnoreCase)),
+                $"Unexpected reverse scan in {scopeName} plan:{Environment.NewLine}{string.Join(Environment.NewLine, plan)}");
+        }
+    }
+
+    [Fact]
+    public void CSharpGraphFacts_EvaluateManagedScalarsOnceBeforeGraphConsumers()
+    {
+        var stages = DbWriter.CSharpGraphFactEvaluationSqlForTesting;
+        Assert.Equal(["full", "scoped", "retained"], stages.Select(static stage => stage.Scope));
+
+        string[] managedFunctions =
+        [
+            "csharp_reference_type_arity(",
+            "csharp_invocation_argument_count(",
+            "csharp_reference_is_member_receiver(",
+            "csharp_definition_type_arity(",
+            "csharp_constructor_parameter_count(",
+            "csharp_definition_is_value_type(",
+        ];
+
+        foreach (var (scope, sql) in stages)
+        {
+            foreach (var function in managedFunctions)
+                Assert.Equal(1, CountOccurrences(sql, function));
+
+            var referenceDelete = sql.IndexOf(
+                "DELETE FROM temp.csharp_reference_facts",
+                StringComparison.Ordinal);
+            var referenceInsert = sql.IndexOf(
+                "INSERT INTO temp.csharp_reference_facts",
+                StringComparison.Ordinal);
+            var symbolDelete = sql.IndexOf(
+                "DELETE FROM temp.csharp_symbol_facts",
+                StringComparison.Ordinal);
+            var symbolInsert = sql.IndexOf(
+                "INSERT INTO temp.csharp_symbol_facts",
+                StringComparison.Ordinal);
+            var typeIdentityDelete = sql.IndexOf(
+                "DELETE FROM temp.csharp_type_identity_facts",
+                StringComparison.Ordinal);
+            var typeIdentityInsert = sql.IndexOf(
+                "INSERT INTO temp.csharp_type_identity_facts",
+                StringComparison.Ordinal);
+            var constructorIdentityDelete = sql.IndexOf(
+                "DELETE FROM temp.csharp_constructor_identity_facts",
+                StringComparison.Ordinal);
+            var constructorIdentityInsert = sql.IndexOf(
+                "INSERT INTO temp.csharp_constructor_identity_facts",
+                StringComparison.Ordinal);
+            var normalization = sql.IndexOf(
+                "DELETE FROM temp.csharp_type_inheritance",
+                StringComparison.Ordinal);
+            var candidates = sql.IndexOf(
+                "DELETE FROM symbol_reference_candidates",
+                StringComparison.Ordinal);
+
+            Assert.True(
+                referenceDelete >= 0
+                && referenceDelete < referenceInsert
+                && referenceInsert < symbolDelete
+                && symbolDelete < symbolInsert
+                && symbolInsert < typeIdentityDelete
+                && typeIdentityDelete < typeIdentityInsert
+                && typeIdentityInsert < constructorIdentityDelete
+                && constructorIdentityDelete < constructorIdentityInsert
+                && constructorIdentityInsert < normalization
+                && normalization < candidates,
+                $"Unexpected {scope} C# graph fact stage order.");
+            Assert.Equal(1, CountOccurrences(sql, "WITH type_identity_parts("));
+            Assert.Equal(1, CountOccurrences(sql, "WITH ranked_constructor_owners("));
+        }
+
+        var fullSql = Assert.Single(stages, static stage => stage.Scope == "full").Sql;
+        var scopedSql = Assert.Single(stages, static stage => stage.Scope == "scoped").Sql;
+        Assert.DoesNotContain("reference_graph_lookup_names AS symbol_lookup", fullSql, StringComparison.Ordinal);
+        Assert.Contains("reference_graph_lookup_names AS symbol_lookup", scopedSql, StringComparison.Ordinal);
+
+        var candidateStages = DbWriter.CSharpGraphCandidateSqlForTesting;
+        Assert.Equal(["full", "scoped", "retained"], candidateStages.Select(static stage => stage.Scope));
+        foreach (var (scope, sql) in candidateStages)
+        {
+            Assert.Contains("temp.csharp_type_identity_facts", sql, StringComparison.Ordinal);
+            Assert.Contains("temp.csharp_constructor_identity_facts", sql, StringComparison.Ordinal);
+            Assert.DoesNotContain("file-local:", sql, StringComparison.Ordinal);
+            Assert.DoesNotContain("ranked_constructor_owners", sql, StringComparison.Ordinal);
+            Assert.DoesNotContain(
+                "BETWEEN COALESCE(constructor_type.start_line, constructor_type.line)",
+                sql,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain(
+                "REPLACE(COALESCE(",
+                sql,
+                StringComparison.Ordinal);
+        }
+
+        static int CountOccurrences(string text, string value)
+        {
+            var count = 0;
+            var offset = 0;
+            while ((offset = text.IndexOf(value, offset, StringComparison.Ordinal)) >= 0)
+            {
+                count++;
+                offset += value.Length;
+            }
+
+            return count;
+        }
+    }
+
+    [Fact]
+    public void CSharpGraphIdentityFacts_PreserveFullScopedAndRetainedConstructorResolution()
+    {
+        var gadgetAFileId = UpsertTestFile("proj/A.Gadget.cs", "gadget-a");
+        var gadgetBFileId = UpsertTestFile("proj/B.Gadget.cs", "gadget-b");
+        var callerFileId = UpsertTestFile("proj/GadgetCaller.cs", "gadget-caller");
+        var localAFileId = UpsertTestFile("proj/local-a.cs", "local-a");
+        var localBFileId = UpsertTestFile("proj/local-b.cs", "local-b");
+        var orphanFileId = UpsertTestFile("proj/orphan.cs", "orphan");
+        var primaryGenericFileId = UpsertTestFile("proj/primary-generic.cs", "primary-generic");
+        var primaryPlainFileId = UpsertTestFile("proj/primary-plain.cs", "primary-plain");
+        _writer.InsertSymbols([
+            new SymbolRecord
+            {
+                FileId = gadgetAFileId,
+                Kind = "class",
+                Name = "Gadget",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 10,
+                Signature = "public partial class Gadget<T>",
+                ContainerQualifiedName = "Demo",
+                FamilyKey = "proj|Demo+Gadget`1",
+            },
+            new SymbolRecord
+            {
+                FileId = gadgetAFileId,
+                Kind = "function",
+                Name = "Gadget",
+                Line = 4,
+                StartLine = 4,
+                EndLine = 4,
+                Signature = "public Gadget(int value)",
+                ContainerKind = "class",
+                ContainerName = "Gadget",
+                ContainerQualifiedName = "Demo.Gadget",
+            },
+            new SymbolRecord
+            {
+                FileId = gadgetBFileId,
+                Kind = "class",
+                Name = "Gadget",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 10,
+                Signature = "public partial class Gadget<T>",
+                ContainerQualifiedName = "Demo",
+                FamilyKey = "proj|Demo+Gadget`1",
+            },
+        ]);
+        InsertFileLocalConstructorFixture(localAFileId, "proj/local-a.cs");
+        InsertFileLocalConstructorFixture(localBFileId, "proj/local-b.cs");
+        _writer.InsertSymbols([
+            new SymbolRecord
+            {
+                FileId = orphanFileId,
+                Kind = "function",
+                Name = "Orphan",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 1,
+                Signature = "public Orphan()",
+                ContainerKind = "class",
+                ContainerName = "Orphan",
+                ContainerQualifiedName = "Demo.Orphan",
+            },
+            new SymbolRecord
+            {
+                FileId = primaryGenericFileId,
+                Kind = "class",
+                Name = "PrimaryBox",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 3,
+                Signature = "public class PrimaryBox<T>(T value)",
+                ContainerQualifiedName = "Demo",
+            },
+            new SymbolRecord
+            {
+                FileId = primaryPlainFileId,
+                Kind = "class",
+                Name = "PrimaryBox",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 3,
+                Signature = "public class PrimaryBox",
+                ContainerQualifiedName = "Demo",
+            },
+        ]);
+        _writer.InsertReferences([
+            new ReferenceRecord
+            {
+                FileId = callerFileId,
+                SymbolName = "Gadget",
+                ReferenceKind = "instantiate",
+                Line = 1,
+                Column = 5,
+                Context = "new Gadget<int>(1);",
+            },
+            CreateInstantiation(localAFileId, "Hidden", "new Hidden();", line: 15),
+            CreateInstantiation(localBFileId, "Hidden", "new Hidden();", line: 15),
+            CreateInstantiation(
+                callerFileId,
+                "PrimaryBox",
+                "new PrimaryBox<int>(1);",
+                line: 2),
+        ], refreshMutualRecursionFlags: false);
+
+        _writer.RefreshMutualRecursionFlags();
+        _writer.MarkReferenceIdentityContractReady();
+
+        Assert.Equal(
+            $"proj/orphan.cs\u001fDemo.Orphan\u001f-1|null",
+            ExecuteScalarString("""
+                SELECT constructor_fact.type_identity || '|' ||
+                       COALESCE(CAST(constructor_fact.type_arity AS TEXT), 'null')
+                FROM temp.csharp_constructor_identity_facts AS constructor_fact
+                JOIN symbols AS constructor ON constructor.id = constructor_fact.symbol_id
+                WHERE constructor.name = 'Orphan'
+                """));
+        Assert.Equal(
+            "proj/A.Gadget.cs|function",
+            ExecuteScalarString("""
+                SELECT target_file.path || '|' || target.kind
+                FROM symbol_references AS reference
+                JOIN files AS source_file ON source_file.id = reference.file_id
+                JOIN symbols AS target ON target.id = reference.target_symbol_id
+                JOIN files AS target_file ON target_file.id = target.file_id
+                WHERE source_file.path = 'proj/GadgetCaller.cs'
+                  AND reference.symbol_name = 'Gadget'
+                """));
+        Assert.Equal(
+            2,
+            ExecuteScalarLong("""
+                SELECT COUNT(*)
+                FROM symbol_references AS reference
+                JOIN files AS source_file ON source_file.id = reference.file_id
+                JOIN symbols AS target ON target.id = reference.target_symbol_id
+                JOIN files AS target_file ON target_file.id = target.file_id
+                WHERE reference.symbol_name = 'Hidden'
+                  AND target.kind = 'function'
+                  AND source_file.path = target_file.path
+                """));
+        Assert.Equal(
+            "proj/primary-generic.cs|class",
+            ExecuteScalarString("""
+                SELECT target_file.path || '|' || target.kind
+                FROM symbol_references AS reference
+                JOIN symbols AS target ON target.id = reference.target_symbol_id
+                JOIN files AS target_file ON target_file.id = target.file_id
+                WHERE reference.symbol_name = 'PrimaryBox'
+                """));
+        Assert.Equal(
+            0,
+            ExecuteScalarLong("""
+                SELECT COUNT(*)
+                FROM temp.csharp_constructor_identity_facts AS constructor_fact
+                JOIN symbols AS symbol ON symbol.id = constructor_fact.symbol_id
+                WHERE symbol.name = 'PrimaryBox'
+                """));
+
+        using (var scope = _writer.BeginReferenceGraphRefreshScope())
+        {
+            using (var transaction = _writer.BeginTransaction())
+            {
+                Assert.True(_writer.DeleteFileByPath("proj/A.Gadget.cs"));
+                gadgetAFileId = _writer.InsertNewFile(new FileRecord
+                {
+                    Path = "proj/A.Gadget.cs",
+                    Lang = "csharp",
+                    Size = 100,
+                    Lines = 10,
+                    Modified = new DateTime(2025, 1, 2, 0, 0, 0, DateTimeKind.Utc),
+                    Checksum = "gadget-a-updated",
+                });
+                _writer.InsertSymbols([
+                    new SymbolRecord
+                    {
+                        FileId = gadgetAFileId,
+                        Kind = "class",
+                        Name = "Gadget",
+                        Line = 1,
+                        StartLine = 1,
+                        EndLine = 10,
+                        Signature = "public partial class Gadget<T>",
+                        ContainerQualifiedName = "Demo",
+                        FamilyKey = "proj|Demo+Gadget`1",
+                    },
+                    new SymbolRecord
+                    {
+                        FileId = gadgetAFileId,
+                        Kind = "function",
+                        Name = "Gadget",
+                        Line = 4,
+                        StartLine = 4,
+                        EndLine = 4,
+                        Signature = "public Gadget(int value, string label)",
+                        ContainerKind = "class",
+                        ContainerName = "Gadget",
+                        ContainerQualifiedName = "Demo.Gadget",
+                    },
+                ]);
+                var secondCallerFileId = UpsertTestFile(
+                    "proj/SecondGadgetCaller.cs",
+                    "second-gadget-caller");
+                _writer.InsertReferences([
+                    new ReferenceRecord
+                    {
+                        FileId = secondCallerFileId,
+                        SymbolName = "Gadget",
+                        ReferenceKind = "instantiate",
+                        Line = 1,
+                        Column = 5,
+                        Context = "new Gadget<int>(1);",
+                    },
+                ], refreshMutualRecursionFlags: false);
+                transaction.Commit();
+            }
+
+            _writer.RefreshMutualRecursionFlags();
+        }
+
+        var scopedSnapshot = ReadReferenceGraphSemanticSnapshot();
+        Assert.Equal(
+            2,
+            ExecuteScalarLong("""
+                SELECT COUNT(*)
+                FROM symbol_references AS reference
+                WHERE reference.symbol_name = 'Gadget'
+                  AND reference.resolution_state = 'unresolved'
+                """));
+        Assert.Equal(
+            0,
+            ExecuteScalarLong("""
+                SELECT COUNT(*)
+                FROM temp.csharp_type_identity_facts AS type_fact
+                JOIN symbols AS symbol ON symbol.id = type_fact.symbol_id
+                WHERE symbol.name = 'Hidden'
+                """));
+
+        _writer.RefreshMutualRecursionFlags();
+        var fullSnapshot = ReadReferenceGraphSemanticSnapshot();
+        Assert.Equal(scopedSnapshot, fullSnapshot);
+
+        using (var transaction = _db.Connection.BeginTransaction())
+        {
+            DbWriter.RebuildRetainedReferenceGraph(
+                _db.Connection,
+                transaction,
+                CancellationToken.None);
+            transaction.Commit();
+        }
+
+        Assert.Equal(fullSnapshot, ReadReferenceGraphSemanticSnapshot());
+
+        void InsertFileLocalConstructorFixture(long fileId, string path)
+        {
+            var familyKey = $"proj|file-local:{path}\u001f+Demo+Hidden";
+            _writer.InsertSymbols([
+                new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "class",
+                    Name = "Hidden",
+                    Line = 1,
+                    StartLine = 1,
+                    EndLine = 10,
+                    Signature = "file partial class Hidden",
+                    ContainerQualifiedName = "Demo",
+                    FamilyKey = familyKey,
+                },
+                new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "function",
+                    Name = "Hidden",
+                    Line = 4,
+                    StartLine = 4,
+                    EndLine = 4,
+                    Signature = "public Hidden()",
+                    ContainerKind = "class",
+                    ContainerName = "Hidden",
+                    ContainerQualifiedName = "Demo.Hidden",
+                    FamilyKey = familyKey,
+                },
+            ]);
+        }
+
+        static ReferenceRecord CreateInstantiation(
+            long fileId,
+            string name,
+            string context,
+            int line)
+            => new()
+            {
+                FileId = fileId,
+                SymbolName = name,
+                ReferenceKind = "instantiate",
+                Line = line,
+                Column = 5,
+                Context = context,
+            };
+    }
+
+    [Fact]
+    public void CSharpGraphIdentityFacts_RollBackAndClearStaleRowsOnRetry()
+    {
+        var staleFileId = UpsertTestFile("src/stale-type.cs", "stale-type");
+        var stableFileId = UpsertTestFile("src/stable-type.cs", "stable-type");
+        _writer.InsertSymbols([
+            new SymbolRecord
+            {
+                FileId = staleFileId,
+                Kind = "class",
+                Name = "StaleType",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 3,
+                Signature = "public class StaleType",
+            },
+            new SymbolRecord
+            {
+                FileId = stableFileId,
+                Kind = "class",
+                Name = "StableType",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 3,
+                Signature = "public class StableType",
+            },
+        ]);
+        _writer.InsertReferences([
+            new ReferenceRecord
+            {
+                FileId = stableFileId,
+                SymbolName = "StableType",
+                ReferenceKind = "instantiate",
+                Line = 4,
+                Column = 5,
+                Context = "new StableType();",
+            },
+        ], refreshMutualRecursionFlags: false);
+        _writer.RefreshMutualRecursionFlags();
+
+        var staleSymbolId = ExecuteScalarLong("SELECT id FROM symbols WHERE name = 'StaleType'");
+        ExecuteNonQuery(
+            _db.Connection,
+            $"DELETE FROM symbols WHERE id = {staleSymbolId.ToString(CultureInfo.InvariantCulture)}");
+        _writer.InsertSymbols([
+            new SymbolRecord
+            {
+                FileId = staleFileId,
+                Kind = "class",
+                Name = "FreshType",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 3,
+                Signature = "public class FreshType",
+            },
+        ]);
+        var freshSymbolId = ExecuteScalarLong("SELECT id FROM symbols WHERE name = 'FreshType'");
+        ExecuteNonQuery(_db.Connection, """
+            UPDATE symbol_references
+            SET target_symbol_id = NULL,
+                target_symbol_key = 'stale-target',
+                resolution_candidate_count = 9,
+                resolution_state = 'ambiguous';
+            CREATE TRIGGER fail_csharp_identity_fact_refresh
+            BEFORE UPDATE OF target_symbol_id ON symbol_references
+            BEGIN
+                SELECT RAISE(ABORT, 'forced identity fact refresh failure');
+            END;
+            """);
+
+        Assert.Throws<SqliteException>(() => _writer.RefreshMutualRecursionFlags());
+        Assert.Equal(
+            1,
+            ExecuteScalarLong($"""
+                SELECT COUNT(*)
+                FROM temp.csharp_type_identity_facts
+                WHERE symbol_id = {staleSymbolId.ToString(CultureInfo.InvariantCulture)}
+                """));
+        Assert.Equal(
+            0,
+            ExecuteScalarLong($"""
+                SELECT COUNT(*)
+                FROM temp.csharp_type_identity_facts
+                WHERE symbol_id = {freshSymbolId.ToString(CultureInfo.InvariantCulture)}
+                """));
+
+        ExecuteNonQuery(_db.Connection, "DROP TRIGGER fail_csharp_identity_fact_refresh");
+        _writer.RefreshMutualRecursionFlags();
+
+        Assert.Equal(
+            0,
+            ExecuteScalarLong($"""
+                SELECT COUNT(*)
+                FROM temp.csharp_type_identity_facts
+                WHERE symbol_id = {staleSymbolId.ToString(CultureInfo.InvariantCulture)}
+                """));
+        Assert.Equal(
+            1,
+            ExecuteScalarLong($"""
+                SELECT COUNT(*)
+                FROM temp.csharp_type_identity_facts
+                WHERE symbol_id = {freshSymbolId.ToString(CultureInfo.InvariantCulture)}
+                """));
+        Assert.Equal("resolved", ReadReferenceResolutionState(stableFileId));
+    }
+
+    [Fact]
+    public void CSharpGraphIdentityFacts_PreserveLegacyNullTypeIdentitySemantics()
+    {
+        var fileId = UpsertTestFile("src/legacy-null-type.cs", "legacy-null-type");
+        ExecuteNonQuery(
+            _db.Connection,
+            $"""
+            INSERT INTO symbols(
+                file_id,
+                kind,
+                name,
+                line,
+                start_line,
+                end_line,
+                signature)
+            VALUES (
+                {fileId.ToString(CultureInfo.InvariantCulture)},
+                'class',
+                NULL,
+                1,
+                1,
+                1,
+                NULL)
+            """);
+
+        var exception = Record.Exception(() => _writer.RefreshMutualRecursionFlags());
+
+        Assert.Null(exception);
+        Assert.Equal(
+            1,
+            ExecuteScalarLong("""
+                SELECT COUNT(*)
+                FROM temp.csharp_type_identity_facts
+                WHERE unprefixed_type_identity IS NULL
+                  AND type_identity IS NULL
+                """));
+    }
+
     private long InsertSearchFile(IReadOnlyList<ChunkRecord> chunks, IReadOnlyList<SymbolRecord> symbols)
     {
         var fileId = _writer.UpsertFile(new FileRecord
@@ -195,12 +806,12 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
-    public void InitializeSchema_CreatesFoldedMutualReferenceIndex()
+    public void InitializeSchema_CreatesPartialFoldedMutualReferenceIndex()
     {
         using var cmd = _db.Connection.CreateCommand();
-        cmd.CommandText = "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_symbol_refs_mutual_folded'";
+        cmd.CommandText = "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_symbol_refs_unresolved_mutual_folded'";
 
-        Assert.Equal("idx_symbol_refs_mutual_folded", (string?)cmd.ExecuteScalar());
+        Assert.Equal("idx_symbol_refs_unresolved_mutual_folded", (string?)cmd.ExecuteScalar());
     }
 
     [Fact]
@@ -434,9 +1045,11 @@ public class DatabaseTests : IDisposable
                 StringComparison.Ordinal))
             .ToArray();
         Assert.Equal(14, candidateInserts.Length);
+        var candidatePlans = new List<string>();
         foreach (var statement in candidateInserts)
         {
             var plan = ReadQueryPlanDetails(_db.Connection, statement);
+            candidatePlans.AddRange(plan);
             Assert.Contains(plan, static detail => detail.Contains(
                 "SEARCH r USING INTEGER PRIMARY KEY",
                 StringComparison.OrdinalIgnoreCase));
@@ -444,6 +1057,17 @@ public class DatabaseTests : IDisposable
                 detail.Equals("SCAN r", StringComparison.OrdinalIgnoreCase)
                 || detail.StartsWith("SCAN r ", StringComparison.OrdinalIgnoreCase));
         }
+        Assert.Contains(candidatePlans, static detail => detail.Contains(
+            "SEARCH type_identity_fact USING PRIMARY KEY",
+            StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(candidatePlans, static detail => detail.Contains(
+            "SEARCH constructor_identity_fact USING PRIMARY KEY",
+            StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(candidatePlans, static detail =>
+            detail.Equals("SCAN type_identity_fact", StringComparison.OrdinalIgnoreCase)
+            || detail.StartsWith("SCAN type_identity_fact ", StringComparison.OrdinalIgnoreCase)
+            || detail.Equals("SCAN constructor_identity_fact", StringComparison.OrdinalIgnoreCase)
+            || detail.StartsWith("SCAN constructor_identity_fact ", StringComparison.OrdinalIgnoreCase));
 
         var instantiateStatement = Assert.Single(candidateInserts.Where(static statement =>
             statement.Contains(
@@ -3407,6 +4031,46 @@ public class DatabaseTests : IDisposable
         return Convert.ToString(command.ExecuteScalar(), CultureInfo.InvariantCulture) ?? string.Empty;
     }
 
+    private string ReadReferenceGraphSemanticSnapshot()
+    {
+        using var command = _db.Connection.CreateCommand();
+        command.CommandText = """
+            SELECT group_concat(entry, char(30))
+            FROM (
+                SELECT 'reference:' ||
+                       source_file.path || ':' ||
+                       reference.line || ':' ||
+                       reference.symbol_name || ':' ||
+                       reference.reference_kind || ':' ||
+                       COALESCE(reference.resolution_state, '') || ':' ||
+                       reference.resolution_candidate_count || ':' ||
+                       COALESCE(target_file.path, '') || ':' ||
+                       COALESCE(target.kind, '') || ':' ||
+                       COALESCE(target.line, -1) AS entry
+                FROM symbol_references AS reference
+                JOIN files AS source_file ON source_file.id = reference.file_id
+                LEFT JOIN symbols AS target ON target.id = reference.target_symbol_id
+                LEFT JOIN files AS target_file ON target_file.id = target.file_id
+                UNION ALL
+                SELECT 'candidate:' ||
+                       source_file.path || ':' ||
+                       reference.line || ':' ||
+                       reference.symbol_name || ':' ||
+                       candidate.scope_rank || ':' ||
+                       target_file.path || ':' ||
+                       target.kind || ':' ||
+                       target.line AS entry
+                FROM symbol_reference_candidates AS candidate
+                JOIN symbol_references AS reference ON reference.id = candidate.reference_id
+                JOIN files AS source_file ON source_file.id = reference.file_id
+                JOIN symbols AS target ON target.id = candidate.symbol_id
+                JOIN files AS target_file ON target_file.id = target.file_id
+                ORDER BY entry
+            )
+            """;
+        return Convert.ToString(command.ExecuteScalar(), CultureInfo.InvariantCulture) ?? string.Empty;
+    }
+
     [Fact]
     public void OptimizeFtsIfIncrementalWriteThresholdReached_RunsOnlyAtThreshold()
     {
@@ -4447,6 +5111,33 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void MutualRecursionRefresh_UsesOnlyGraphFinalizationReferenceIndexes()
+    {
+        var plan = ReadQueryPlanDetails(
+            _db.Connection,
+            DbWriter.RefreshMutualRecursionFlagsSqlForTesting);
+
+        Assert.Contains(plan, detail =>
+            detail.Contains("idx_symbol_refs_resolved_source_target_kind", StringComparison.Ordinal));
+        Assert.Contains(plan, detail =>
+            detail.Contains("idx_symbol_refs_unresolved_mutual_folded", StringComparison.Ordinal));
+        Assert.Contains(plan, detail =>
+            detail.Contains("idx_symbol_refs_container_nocase_kind", StringComparison.Ordinal));
+
+        var graphIndexes = ReferenceSecondaryIndexSql.GraphFinalizationRequired
+            .Select(static definition => definition.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        var remainingIndexes = ReferenceSecondaryIndexSql.RemainingQuery
+            .Select(static definition => definition.Name);
+        Assert.All(
+            remainingIndexes,
+            indexName => Assert.DoesNotContain(
+                plan,
+                detail => detail.Contains(indexName, StringComparison.Ordinal)));
+        Assert.Equal(3, graphIndexes.Count);
+    }
+
+    [Fact]
     public void InitializeSchema_CreatesBoundedMaintenanceLookupIndexes()
     {
         Assert.Contains("idx_files_checksum", ReadIndexNames(_db.Connection, "files"));
@@ -4845,6 +5536,12 @@ public class DatabaseTests : IDisposable
             var symbolIndexes = ReadIndexNames(db.Connection, "symbols");
             var indexes = ReadIndexNames(db.Connection, "symbol_references");
 
+            Assert.Equal(
+                ReferenceSecondaryIndexSql.All
+                    .Select(static definition => definition.Name)
+                    .Order(StringComparer.Ordinal),
+                indexes.Order(StringComparer.Ordinal));
+
             Assert.DoesNotContain("idx_files_path_nocase", fileIndexes);
             Assert.Contains("idx_symbols_file_name_folded", symbolIndexes);
             Assert.Contains("idx_symbols_file_name_nocase", symbolIndexes);
@@ -4859,7 +5556,11 @@ public class DatabaseTests : IDisposable
             Assert.Contains("idx_symbol_refs_symbol_name_folded_kind", indexes);
             Assert.Contains("idx_symbol_refs_symbol_name_folded_file", indexes);
             Assert.Contains("idx_symbol_refs_container_name_folded_kind", indexes);
+            Assert.Contains("idx_symbol_refs_unresolved_mutual_folded", indexes);
             Assert.Contains("idx_symbol_refs_resolved_source_target_kind", indexes);
+            Assert.All(
+                ReferenceSecondaryIndexSql.Retired,
+                retiredIndex => Assert.DoesNotContain(retiredIndex, indexes));
 
             AssertIndexColumns(db.Connection, "idx_symbols_file_name_folded", [("file_id", "BINARY"), ("name_folded", "BINARY")]);
             AssertIndexColumns(db.Connection, "idx_symbols_file_name_nocase", [("file_id", "BINARY"), ("name", "NOCASE")]);
@@ -4872,11 +5573,67 @@ public class DatabaseTests : IDisposable
             AssertIndexColumns(db.Connection, "idx_symbols_name_folded_container_qualified_name_nocase", [("name_folded", "BINARY"), ("container_qualified_name", "NOCASE")]);
             AssertIndexColumns(db.Connection, "idx_symbol_refs_container_nocase_kind", [("container_name", "NOCASE"), ("reference_kind", "BINARY")]);
             AssertIndexColumns(db.Connection, "idx_symbol_refs_container_name_folded_kind", [("container_name_folded", "BINARY"), ("reference_kind", "BINARY")]);
+            AssertIndexColumns(db.Connection, "idx_symbol_refs_unresolved_mutual_folded", [("container_name_folded", "BINARY"), ("symbol_name_folded", "BINARY")]);
             AssertIndexColumns(db.Connection, "idx_symbol_refs_resolved_source_target_kind", [("source_symbol_id", "BINARY"), ("target_symbol_id", "BINARY"), ("reference_kind", "BINARY")]);
+            AssertIndexSqlContains(
+                db.Connection,
+                "idx_symbol_refs_unresolved_mutual_folded",
+                "WHERE source_symbol_id IS NULL AND target_symbol_id IS NULL AND is_self_reference = 0");
             AssertIndexSqlContains(
                 db.Connection,
                 "idx_symbol_refs_resolved_source_target_kind",
                 "WHERE source_symbol_id IS NOT NULL AND target_symbol_id IS NOT NULL");
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            TestProjectHelper.DeleteDirectory(dbDir);
+        }
+    }
+
+    [Fact]
+    public void TryMigrateForRead_RetiresLegacyReferenceIndexesWithoutRecreatingThemOnReopen()
+    {
+        var dbDir = TestProjectHelper.CreateTempProject("codeindex_retired_reference_indexes");
+        var dbPath = Path.Combine(dbDir, "codeindex.db");
+        try
+        {
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+                db.InitializeSchema();
+
+            using (var connection = new SqliteConnection(
+                       new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = """
+                    DROP INDEX idx_symbol_refs_unresolved_mutual_folded;
+                    CREATE INDEX idx_symbol_refs_name ON symbol_references(symbol_name);
+                    CREATE INDEX idx_symbol_refs_container ON symbol_references(container_name);
+                    CREATE INDEX idx_symbol_refs_name_nocase ON symbol_references(symbol_name COLLATE NOCASE);
+                    CREATE INDEX idx_symbol_refs_container_nocase ON symbol_references(container_name COLLATE NOCASE);
+                    CREATE INDEX idx_symbol_refs_symbol_name_folded ON symbol_references(symbol_name_folded);
+                    CREATE INDEX idx_symbol_refs_container_name_folded ON symbol_references(container_name_folded);
+                    CREATE INDEX idx_symbol_refs_mutual_folded ON symbol_references(
+                        container_name_folded,
+                        symbol_name_folded,
+                        reference_kind,
+                        is_self_reference);
+                    """;
+                command.ExecuteNonQuery();
+            }
+
+            for (var open = 0; open < 2; open++)
+            {
+                using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+                db.TryMigrateForRead();
+                var indexes = ReadIndexNames(db.Connection, "symbol_references");
+
+                Assert.Contains("idx_symbol_refs_unresolved_mutual_folded", indexes);
+                Assert.All(
+                    ReferenceSecondaryIndexSql.Retired,
+                    retiredIndex => Assert.DoesNotContain(retiredIndex, indexes));
+            }
         }
         finally
         {

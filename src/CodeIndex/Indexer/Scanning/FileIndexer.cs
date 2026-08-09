@@ -64,6 +64,7 @@ public partial class FileIndexer
     private readonly Dictionary<string, bool> _directoryIgnoreCaseCache;
     private readonly Dictionary<string, IReadOnlyDictionary<string, string>> _languageMapOverrideCache;
     private readonly Dictionary<string, bool> _nestedGitRepositoryCache;
+    private ProjectMarkerScopeSnapshot? _projectMarkerScopeSnapshot;
     private LanguageMapOverrideLookupCache? _lastLanguageMapOverrideLookup;
     private readonly long _maxFileSizeBytes;
     private readonly FileContentLoader _contentLoader;
@@ -110,6 +111,8 @@ public partial class FileIndexer
             HashSet<string> fullyScannedDirectories,
             IReadOnlySet<string> checkpointedDirectories,
             HashSet<string> visitedDirectories,
+            IReadOnlyList<ProjectMarkerFingerprintTraversalState> projectMarkerTraversalStates,
+            ProjectMarkerScopeCollectionState projectMarkerScopeCollection,
             bool captureDirectoryListingSnapshots)
         {
             Results = results;
@@ -121,6 +124,8 @@ public partial class FileIndexer
             FullyScannedDirectories = fullyScannedDirectories;
             CheckpointedDirectories = checkpointedDirectories;
             VisitedDirectories = visitedDirectories;
+            ProjectMarkerTraversalStates = projectMarkerTraversalStates;
+            ProjectMarkerScopeCollection = projectMarkerScopeCollection;
             CaptureDirectoryListingSnapshots = captureDirectoryListingSnapshots;
         }
 
@@ -144,6 +149,8 @@ public partial class FileIndexer
         public HashSet<string>? DanglingSymlinks { get; private set; }
         private HashSet<FileIdentity>? VisitedFileIdentities { get; set; }
         public HashSet<string> VisitedDirectories { get; }
+        public IReadOnlyList<ProjectMarkerFingerprintTraversalState> ProjectMarkerTraversalStates { get; }
+        public ProjectMarkerScopeCollectionState ProjectMarkerScopeCollection { get; }
 
         public bool RecordFileIdentity(FileIdentity identity)
             => (VisitedFileIdentities ??= []).Add(identity);

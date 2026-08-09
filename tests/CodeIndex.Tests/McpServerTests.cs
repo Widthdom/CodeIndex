@@ -11023,8 +11023,8 @@ public sealed class Caller
     {
         using var cmd = _db.Connection.CreateCommand();
         cmd.CommandText = """
-            DROP INDEX IF EXISTS idx_symbol_refs_name_nocase;
-            DROP INDEX IF EXISTS idx_symbol_refs_container_nocase;
+            DROP INDEX IF EXISTS idx_symbol_refs_name_nocase_file;
+            DROP INDEX IF EXISTS idx_symbol_refs_container_nocase_kind;
             PRAGMA wal_checkpoint(TRUNCATE);
             """;
         cmd.ExecuteNonQuery();

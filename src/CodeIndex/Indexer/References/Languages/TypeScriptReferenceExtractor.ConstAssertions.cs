@@ -15,6 +15,9 @@ internal static partial class TypeScriptReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
+        if (preparedLine.IndexOf("as", StringComparison.Ordinal) < 0)
+            return;
+
         foreach (var asIndex in TypedLanguageReferenceExtractor.EnumerateTopLevelKeywordIndices(preparedLine, "as"))
         {
             var typeStart = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(preparedLine, asIndex + "as".Length);
@@ -51,6 +54,12 @@ internal static partial class TypeScriptReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
+        if (preparedLine.IndexOf("as", StringComparison.Ordinal) < 0
+            || preparedLine.IndexOf("const", StringComparison.Ordinal) < 0)
+        {
+            return;
+        }
+
         foreach (var asIndex in TypedLanguageReferenceExtractor.EnumerateTopLevelKeywordIndices(preparedLine, "as"))
         {
             var constIndex = SkipWhitespace(preparedLine, asIndex + "as".Length);

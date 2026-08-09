@@ -6,8 +6,11 @@ internal readonly record struct LoadedFileRecord(
     FileRecord Record,
     string Content,
     byte[] RawBytes,
-    bool HasOversizeLine,
-    int ConflictMarkerLine,
+    NormalizedContentFacts Facts,
     string? Warning,
     FileContentInspection Inspection,
-    FileIndexer.LanguageDetectionResult LanguageDetection);
+    FileIndexer.LanguageDetectionResult LanguageDetection)
+{
+    internal bool HasOversizeLine => Facts.HasOversizeLine;
+    internal int ConflictMarkerLine => Facts.ConflictMarkerLine;
+}

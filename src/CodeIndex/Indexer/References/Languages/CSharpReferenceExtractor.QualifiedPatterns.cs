@@ -21,6 +21,9 @@ public static partial class ReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForCall)
     {
+        if (preparedLine.IndexOf('.') < 0)
+            return;
+
         var scan = 0;
         while (scan < preparedLine.Length)
         {

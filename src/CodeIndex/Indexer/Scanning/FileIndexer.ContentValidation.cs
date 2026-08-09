@@ -19,6 +19,42 @@ public partial class FileIndexer
         FileContentInspection inspection,
         bool? hasOversizeLine = null,
         int? conflictMarkerLine = null)
+        => ValidateContentCore(
+            relativePath,
+            rawBytes,
+            content,
+            language,
+            inspection,
+            facts: null,
+            hasOversizeLine,
+            conflictMarkerLine);
+
+    internal static IReadOnlyList<FileIssue> ValidateContent(
+        string relativePath,
+        byte[] rawBytes,
+        string content,
+        string? language,
+        FileContentInspection inspection,
+        NormalizedContentFacts facts)
+        => ValidateContentCore(
+            relativePath,
+            rawBytes,
+            content,
+            language,
+            inspection,
+            facts,
+            hasOversizeLine: null,
+            conflictMarkerLine: null);
+
+    private static IReadOnlyList<FileIssue> ValidateContentCore(
+        string relativePath,
+        byte[] rawBytes,
+        string content,
+        string? language,
+        FileContentInspection inspection,
+        NormalizedContentFacts? facts,
+        bool? hasOversizeLine,
+        int? conflictMarkerLine)
     {
         List<FileIssue>? issues = null;
 
@@ -56,7 +92,9 @@ public partial class FileIndexer
                 AddUtf16HeuristicIssue(ref issues, relativePath, utf16BigEndian);
         }
 
-        var effectiveConflictMarkerLine = conflictMarkerLine ?? GetConflictMarkerLine(content);
+        var effectiveConflictMarkerLine = facts?.ConflictMarkerLine
+            ?? conflictMarkerLine
+            ?? GetConflictMarkerLine(content);
         if (effectiveConflictMarkerLine > 0)
         {
             AddIssue(ref issues, new FileIssue
@@ -68,7 +106,15 @@ public partial class FileIndexer
             });
         }
 
-        AddReplacementCharacterIssues(ref issues, relativePath, rawBytes, content, isUtf16, utf16BigEndian, hasUtf16Bom);
+        AddReplacementCharacterIssues(
+            ref issues,
+            relativePath,
+            rawBytes,
+            content,
+            isUtf16,
+            utf16BigEndian,
+            hasUtf16Bom,
+            facts);
 
         // Raw-byte heuristics: skip for UTF-16-decoded files because every UTF-16 LE ASCII
         // codepoint looks like a NUL byte and CRLF appears as 0D 00 0A 00, so `bom` /
@@ -79,7 +125,7 @@ public partial class FileIndexer
         if (!isUtf16)
             AddRawByteContentIssues(ref issues, relativePath, inspection.RawByteContent);
 
-        AddOversizeContentIssues(ref issues, relativePath, content, hasOversizeLine);
+        AddOversizeContentIssues(ref issues, relativePath, content, facts, hasOversizeLine);
         var effectiveLanguage = language ?? TryDetectLanguage(relativePath, content).Language;
         if (effectiveLanguage is "xml" or "msbuild")
             AddXmlStructureIssues(ref issues, relativePath, content);

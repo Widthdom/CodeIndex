@@ -1277,6 +1277,11 @@ public partial class McpServer
             writer.MarkBatchInProgress();
 
         using var ftsBulkLoad = FtsBulkLoadTriggerGuard.Start(writer, useFtsBulkLoad, () => ftsMutated);
+        using var referenceSecondaryIndexBulkLoad =
+            ReferenceSecondaryIndexBulkLoadGuard.StartRecoverable(
+                writer,
+                enabled: useFtsBulkLoad,
+                requestToken);
 
         if (staleFilePurgePlan.Count > 0)
         {
@@ -1474,14 +1479,14 @@ public partial class McpServer
                     : writer.UpsertFile(record, out referenceIdentityChanged);
                 if (referenceIdentityChanged)
                     mutualRecursionRefreshNeeded = true;
-                var chunks = ChunkSplitter.SplitNormalized(fileId, content, loaded.HasOversizeLine, record.Lines);
+                var chunks = ChunkSplitter.SplitNormalized(fileId, content, loaded.Facts);
                 if (generatedSuppressionIssue != null)
                 {
                     writer.InsertChunks(chunks, requestToken);
                     writer.InsertSymbols([], requestToken);
                     writer.InsertReferencesInAtomicFileScope([], requestToken);
                     var issues = IndexCommandRunner.AppendIssueIfMissing(
-                        FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, loaded.HasOversizeLine, loaded.ConflictMarkerLine),
+                        FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, loaded.Facts),
                         generatedSuppressionIssue);
                     InsertIssuesForIndexedFile(fileId, issues);
                     WriteProjectRootOnce();
@@ -1580,7 +1585,7 @@ public partial class McpServer
                     committedReferenceCount = references.Count;
                     // Keep MCP index parity with CLI index: persist file-level validation issues too.
                     // MCPインデックスもCLIインデックスと同等に、ファイル検証issueを保存する。
-                    IReadOnlyList<FileIssue> issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, loaded.HasOversizeLine, loaded.ConflictMarkerLine);
+                    IReadOnlyList<FileIssue> issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, loaded.Facts);
                     if (symbolRegexTimeoutIssue != null)
                         issues = IndexCommandRunner.AppendIssue(issues, symbolRegexTimeoutIssue);
                     if (regexTimeoutIssue != null)
@@ -1767,8 +1772,19 @@ public partial class McpServer
                         && !scanHadErrors
                         && errors == 0
                             ? csharpPrepassTargets.Count > 0
-                            : null));
+                            : null),
+                referenceSecondaryIndexBulkLoad: referenceSecondaryIndexBulkLoad);
         }
+        else if (referenceSecondaryIndexBulkLoad != null)
+        {
+            await EmitProgressNotificationAsync(
+                progressToken,
+                processed,
+                files.Count,
+                "Restoring reference query indexes.").ConfigureAwait(false);
+        }
+
+        referenceSecondaryIndexBulkLoad?.Complete(requestToken);
 
         if (ftsBulkLoad != null)
         {

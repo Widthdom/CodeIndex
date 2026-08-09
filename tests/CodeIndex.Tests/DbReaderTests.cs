@@ -3468,7 +3468,7 @@ public partial class DbReaderTests : IDisposable
     public void GraphReaders_ExactPredicatesAreIndexable()
     {
         // Guard: `references / callers / callees --exact` must stay SARGable so SQLite can
-        // pick the new NOCASE covering indexes on symbol_references(symbol_name / container_name).
+        // use the left prefixes of the retained NOCASE composite indexes on references.
         // Mirrors SearchSymbols_ExactPredicateIsIndexable from #81.
         // references / callers / callees --exact 用の NOCASE index 使用を固定する回帰テスト。
         using var cmdRef = _db.Connection.CreateCommand();
@@ -3477,7 +3477,7 @@ public partial class DbReaderTests : IDisposable
         var refPlan = new System.Text.StringBuilder();
         using (var rr = cmdRef.ExecuteReader())
             while (rr.Read()) refPlan.AppendLine(rr.GetString(3));
-        Assert.Contains("idx_symbol_refs_name_nocase", refPlan.ToString());
+        Assert.Contains("idx_symbol_refs_name_nocase_file", refPlan.ToString());
 
         using var cmdCon = _db.Connection.CreateCommand();
         cmdCon.CommandText = "EXPLAIN QUERY PLAN SELECT r.line FROM symbol_references r WHERE r.container_name = @q COLLATE NOCASE";
@@ -3485,7 +3485,32 @@ public partial class DbReaderTests : IDisposable
         var conPlan = new System.Text.StringBuilder();
         using (var cr = cmdCon.ExecuteReader())
             while (cr.Read()) conPlan.AppendLine(cr.GetString(3));
-        Assert.Contains("idx_symbol_refs_container_nocase", conPlan.ToString());
+        Assert.Contains("idx_symbol_refs_container_nocase_kind", conPlan.ToString());
+    }
+
+    [Fact]
+    public void ExactGraphSignals_FoldReadyReportRetainedCompositeIndexes()
+    {
+        using (var command = _db.Connection.CreateCommand())
+        {
+            command.CommandText = """
+                DROP INDEX idx_symbol_refs_symbol_name_folded_file;
+                DROP INDEX idx_symbol_refs_container_name_folded_kind;
+                """;
+            command.ExecuteNonQuery();
+        }
+
+        using var reader = new DbReader(_db.Connection);
+        var references = reader.GetReferencesExactQuerySignal(includeSqlGraphContractSignal: false);
+        var callers = reader.GetCallersExactQuerySignal(includeSqlGraphContractSignal: false);
+        var callees = reader.GetCalleesExactQuerySignal(includeSqlGraphContractSignal: false);
+
+        Assert.False(references.ExactIndexAvailable);
+        Assert.Contains("idx_symbol_refs_symbol_name_folded_file", references.DegradedReason);
+        Assert.False(callers.ExactIndexAvailable);
+        Assert.Contains("idx_symbol_refs_symbol_name_folded_file", callers.DegradedReason);
+        Assert.False(callees.ExactIndexAvailable);
+        Assert.Contains("idx_symbol_refs_container_name_folded_kind", callees.DegradedReason);
     }
 
     [Fact]

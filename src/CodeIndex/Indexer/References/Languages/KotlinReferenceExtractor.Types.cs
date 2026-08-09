@@ -21,18 +21,26 @@ internal static partial class KotlinReferenceExtractor
         EmitHeritageTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn, genericParameterNames);
         EmitGenericBoundReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn, genericParameterNames);
         EmitExtensionPropertyReceiverTypeReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn, genericParameterNames);
-        TypedLanguageReferenceExtractor.EmitColonVariableTypeReferences(
-            preparedLine,
-            DeclarationKeywords,
-            "kotlin",
-            references,
-            seen,
-            fileId,
-            context,
-            lineNumber,
-            resolveContainerForColumn,
-            genericParameterNames);
-        if (!preparedLine.TrimStart().StartsWith("import ", StringComparison.Ordinal))
+        if (preparedLine.IndexOf(':') >= 0
+            && (preparedLine.IndexOf("val", StringComparison.Ordinal) >= 0
+                || preparedLine.IndexOf("var", StringComparison.Ordinal) >= 0))
+        {
+            TypedLanguageReferenceExtractor.EmitColonVariableTypeReferences(
+                preparedLine,
+                DeclarationKeywords,
+                "kotlin",
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                resolveContainerForColumn,
+                genericParameterNames);
+        }
+
+        if (!preparedLine.TrimStart().StartsWith("import ", StringComparison.Ordinal)
+            && (preparedLine.IndexOf("is", StringComparison.Ordinal) >= 0
+                || preparedLine.IndexOf("as", StringComparison.Ordinal) >= 0))
         {
             TypedLanguageReferenceExtractor.EmitKeywordFollowingTypeReferences(
                 preparedLine,
@@ -58,6 +66,12 @@ internal static partial class KotlinReferenceExtractor
         Func<int, SymbolRecord?> resolveContainerForColumn,
         IReadOnlySet<string>? ignoredSegments)
     {
+        if (preparedLine.IndexOf("fun", StringComparison.Ordinal) < 0
+            || preparedLine.IndexOf('(') < 0)
+        {
+            return;
+        }
+
         var funIndex = ReferenceExtractor.FindTopLevelKeyword(preparedLine, "fun");
         if (funIndex < 0)
             return;
@@ -176,6 +190,13 @@ internal static partial class KotlinReferenceExtractor
         Func<int, SymbolRecord?> resolveContainerForColumn,
         IReadOnlySet<string>? ignoredSegments)
     {
+        if (preparedLine.IndexOf('.') < 0
+            || (preparedLine.IndexOf("val", StringComparison.Ordinal) < 0
+                && preparedLine.IndexOf("var", StringComparison.Ordinal) < 0))
+        {
+            return;
+        }
+
         foreach (var keyword in DeclarationKeywords)
         {
             foreach (var keywordIndex in TypedLanguageReferenceExtractor.EnumerateTopLevelKeywordIndices(preparedLine, keyword))
@@ -275,6 +296,9 @@ internal static partial class KotlinReferenceExtractor
         Func<int, SymbolRecord?> resolveContainerForColumn,
         IReadOnlySet<string>? ignoredSegments)
     {
+        if (preparedLine.IndexOf(':') < 0)
+            return;
+
         var trimmed = preparedLine.TrimStart();
         if (!(trimmed.StartsWith("class ", StringComparison.Ordinal)
               || trimmed.StartsWith("data class ", StringComparison.Ordinal)
@@ -320,6 +344,9 @@ internal static partial class KotlinReferenceExtractor
         Func<int, SymbolRecord?> resolveContainerForColumn,
         IReadOnlySet<string>? ignoredSegments)
     {
+        if (preparedLine.IndexOf('(') < 0)
+            return;
+
         var trimmed = preparedLine.TrimStart();
         if (!(trimmed.StartsWith("class ", StringComparison.Ordinal)
               || trimmed.StartsWith("data class ", StringComparison.Ordinal)
@@ -377,20 +404,26 @@ internal static partial class KotlinReferenceExtractor
                 genericParameterNames);
         }
 
-        TypedLanguageReferenceExtractor.EmitWhereClauseTypeReferences(
-            preparedLine,
-            "kotlin",
-            references,
-            seen,
-            fileId,
-            context,
-            lineNumber,
-            resolveContainerForColumn,
-            genericParameterNames);
+        if (preparedLine.IndexOf("where", StringComparison.Ordinal) >= 0)
+        {
+            TypedLanguageReferenceExtractor.EmitWhereClauseTypeReferences(
+                preparedLine,
+                "kotlin",
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                resolveContainerForColumn,
+                genericParameterNames);
+        }
     }
 
     private static IReadOnlySet<string> CollectGenericParameterNames(string preparedLine)
     {
+        if (preparedLine.IndexOf('<') < 0)
+            return EmptyGenericParameterNames;
+
         foreach (var funIndex in TypedLanguageReferenceExtractor.EnumerateTopLevelKeywordIndices(preparedLine, "fun"))
         {
             var genericOpenIndex = TypedLanguageReferenceExtractor.SkipTypePrefixTrivia(preparedLine, funIndex + "fun".Length);

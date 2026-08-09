@@ -130,6 +130,62 @@ public class PathCasingTests
     });
 
     [Fact]
+    public void PathsEqual_DecidableOrdinalCasesSkipProbe_Issue4885()
+        => RunWithPathCasingLock(() =>
+    {
+        PathCasing.ResetCacheForTests();
+        var probeCount = 0;
+        var previousProbe = PathCasing.IgnoreCaseProbeForTesting;
+        PathCasing.IgnoreCaseProbeForTesting = _ =>
+        {
+            probeCount++;
+            throw new InvalidOperationException("A decidable equality must not probe the filesystem.");
+        };
+        try
+        {
+            var path = Path.Combine(Path.GetTempPath(), "Project");
+
+            Assert.True(PathCasing.PathsEqual(path, path));
+            Assert.False(PathCasing.PathsEqual(path, path + "-longer"));
+            Assert.Equal(0, probeCount);
+        }
+        finally
+        {
+            PathCasing.IgnoreCaseProbeForTesting = previousProbe;
+            PathCasing.ResetCacheForTests();
+        }
+    });
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void PathsEqual_EqualLengthCaseVariantUsesProbePolicy_Issue4885(bool ignoreCase)
+        => RunWithPathCasingLock(() =>
+    {
+        PathCasing.ResetCacheForTests();
+        var probeCount = 0;
+        var previousProbe = PathCasing.IgnoreCaseProbeForTesting;
+        PathCasing.IgnoreCaseProbeForTesting = _ =>
+        {
+            probeCount++;
+            return ignoreCase;
+        };
+        try
+        {
+            var left = Path.Combine(Path.GetTempPath(), "Project");
+            var right = Path.Combine(Path.GetTempPath(), "project");
+
+            Assert.Equal(ignoreCase, PathCasing.PathsEqual(left, right));
+            Assert.Equal(1, probeCount);
+        }
+        finally
+        {
+            PathCasing.IgnoreCaseProbeForTesting = previousProbe;
+            PathCasing.ResetCacheForTests();
+        }
+    });
+
+    [Fact]
     public void IsPathEqualOrParent_RespectsCaseSensitiveSeed()
         => RunWithPathCasingLock(() =>
     {
@@ -146,6 +202,63 @@ public class PathCasingTests
         PathCasing.ResetCacheForTests();
         PathCasing.SeedFromWorkspace(tempDir, ignoreCase: true);
         Assert.True(PathCasing.IsPathEqualOrParent(parent, child));
+    });
+
+    [Fact]
+    public void IsPathEqualOrParent_DecidableOrdinalCasesSkipProbe_Issue4885()
+        => RunWithPathCasingLock(() =>
+    {
+        PathCasing.ResetCacheForTests();
+        var probeCount = 0;
+        var previousProbe = PathCasing.IgnoreCaseProbeForTesting;
+        PathCasing.IgnoreCaseProbeForTesting = _ =>
+        {
+            probeCount++;
+            throw new InvalidOperationException("An exact-case path boundary must not probe the filesystem.");
+        };
+        try
+        {
+            var parent = Path.Combine(Path.GetTempPath(), "Project");
+            var child = Path.Combine(parent, "src", "App.cs");
+
+            Assert.True(PathCasing.IsPathEqualOrParent(parent, parent));
+            Assert.True(PathCasing.IsPathEqualOrParent(parent, child));
+            Assert.Equal(0, probeCount);
+        }
+        finally
+        {
+            PathCasing.IgnoreCaseProbeForTesting = previousProbe;
+            PathCasing.ResetCacheForTests();
+        }
+    });
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void IsPathEqualOrParent_CaseVariantUsesProbePolicy_Issue4885(bool ignoreCase)
+        => RunWithPathCasingLock(() =>
+    {
+        PathCasing.ResetCacheForTests();
+        var probeCount = 0;
+        var previousProbe = PathCasing.IgnoreCaseProbeForTesting;
+        PathCasing.IgnoreCaseProbeForTesting = _ =>
+        {
+            probeCount++;
+            return ignoreCase;
+        };
+        try
+        {
+            var parent = Path.Combine(Path.GetTempPath(), "Project");
+            var child = Path.Combine(Path.GetTempPath(), "project", "src", "App.cs");
+
+            Assert.Equal(ignoreCase, PathCasing.IsPathEqualOrParent(parent, child));
+            Assert.Equal(1, probeCount);
+        }
+        finally
+        {
+            PathCasing.IgnoreCaseProbeForTesting = previousProbe;
+            PathCasing.ResetCacheForTests();
+        }
     });
 
     [Fact]

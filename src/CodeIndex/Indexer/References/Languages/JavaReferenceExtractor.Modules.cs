@@ -33,6 +33,9 @@ internal static partial class JavaReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        if (preparedLine.IndexOf(".class", StringComparison.Ordinal) < 0)
+            return;
+
         foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
                      DotClassArgRegex,
                      preparedLine,
@@ -61,25 +64,34 @@ internal static partial class JavaReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
-        EmitModuleDirectiveReference(
-            preparedLine,
-            ModuleRequiresDirectiveReferenceRegex,
-            references,
-            seen,
-            fileId,
-            context,
-            lineNumber,
-            resolveContainerForColumn);
+        if (preparedLine.IndexOf("requires", StringComparison.Ordinal) >= 0)
+        {
+            EmitModuleDirectiveReference(
+                preparedLine,
+                ModuleRequiresDirectiveReferenceRegex,
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                resolveContainerForColumn);
+        }
 
-        EmitModuleDirectiveReference(
-            preparedLine,
-            ModuleUsesDirectiveReferenceRegex,
-            references,
-            seen,
-            fileId,
-            context,
-            lineNumber,
-            resolveContainerForColumn);
+        if (preparedLine.IndexOf("uses", StringComparison.Ordinal) >= 0)
+        {
+            EmitModuleDirectiveReference(
+                preparedLine,
+                ModuleUsesDirectiveReferenceRegex,
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                resolveContainerForColumn);
+        }
+
+        if (preparedLine.IndexOf("provides", StringComparison.Ordinal) < 0)
+            return;
 
         foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(ModuleProvidesDirectiveReferenceRegex, preparedLine, references))
         {

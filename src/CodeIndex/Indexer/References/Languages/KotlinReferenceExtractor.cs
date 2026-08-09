@@ -97,6 +97,13 @@ internal static partial class KotlinReferenceExtractor
     {
         foreach (var line in lines)
         {
+            if (line.IndexOf("infix", StringComparison.Ordinal) < 0
+                || line.IndexOf("fun", StringComparison.Ordinal) < 0
+                || line.IndexOf('(') < 0)
+            {
+                continue;
+            }
+
             var match = InfixFunctionNameRegex.Match(line);
             if (match.Success)
                 names.Add(match.Groups["name"].Value);
@@ -222,6 +229,9 @@ internal static partial class KotlinReferenceExtractor
 
     public static bool IsInfixFunctionDeclarationSite(string preparedLine, int nameIndex)
     {
+        if (preparedLine.IndexOf("infix", StringComparison.Ordinal) < 0)
+            return false;
+
         var prefix = preparedLine[..Math.Max(0, nameIndex)];
         return InfixFunctionDeclarationRegex.IsMatch(prefix);
     }
@@ -313,6 +323,12 @@ internal static partial class KotlinReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        if (preparedLine.IndexOf("::", StringComparison.Ordinal) < 0
+            || preparedLine.IndexOf("class", StringComparison.Ordinal) < 0)
+        {
+            return;
+        }
+
         var genericParameterNames = CollectGenericParameterNames(preparedLine);
         foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
                      ClassLiteralRegex,
@@ -344,7 +360,9 @@ internal static partial class KotlinReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
-        if (constructorTypeNames.Count == 0)
+        if (constructorTypeNames.Count == 0
+            || preparedLine.IndexOf('`') < 0
+            || preparedLine.IndexOf('(') < 0)
             return;
 
         foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
@@ -385,6 +403,9 @@ internal static partial class KotlinReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        if (preparedLine.IndexOf(':') < 0 || preparedLine.IndexOf('(') < 0)
+            return;
+
         using var matches = Regex
             .EnumerateMatches(CtorDelegationRegex, preparedLine)
             .GetEnumerator();

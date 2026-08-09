@@ -60,22 +60,25 @@ internal static partial class JavaReferenceExtractor
             resolveContainerForColumn,
             genericParameterNames);
 
-        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
-                     InstanceofRegex,
-                     preparedLine,
-                     references))
+        if (preparedLine.IndexOf("instanceof", StringComparison.Ordinal) >= 0)
         {
-            var typeGroup = match.Groups["type"];
-            ReferenceExtractor.AddTypeExpressionSegments(
-                references,
-                seen,
-                fileId,
-                typeGroup.Value,
-                typeGroup.Index,
-                context,
-                lineNumber,
-                resolveContainerForColumn(typeGroup.Index),
-                "java");
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
+                         InstanceofRegex,
+                         preparedLine,
+                         references))
+            {
+                var typeGroup = match.Groups["type"];
+                ReferenceExtractor.AddTypeExpressionSegments(
+                    references,
+                    seen,
+                    fileId,
+                    typeGroup.Value,
+                    typeGroup.Index,
+                    context,
+                    lineNumber,
+                    resolveContainerForColumn(typeGroup.Index),
+                    "java");
+            }
         }
     }
 
@@ -90,6 +93,9 @@ internal static partial class JavaReferenceExtractor
         Func<int, SymbolRecord?> resolveContainerForColumn,
         IReadOnlySet<string>? ignoredSegments = null)
     {
+        if (line.IndexOf(keyword, StringComparison.Ordinal) < 0)
+            return;
+
         int keywordIndex = ReferenceExtractor.FindTopLevelKeyword(line, keyword);
         if (keywordIndex < 0)
             return;
@@ -136,12 +142,21 @@ internal static partial class JavaReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
+        if (line.IndexOf('<') < 0
+            || line.IndexOf("extends", StringComparison.Ordinal) < 0)
+        {
+            return;
+        }
+
         EmitCallableGenericBoundReferences(line, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitNamedTypeGenericBoundReferences(line, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
     }
 
     private static IReadOnlySet<string> CollectGenericParameterNamesForDeclaration(string line)
     {
+        if (line.IndexOf('<') < 0)
+            return EmptyGenericParameterNames;
+
         if (ReferenceExtractor.TryFindCallableParameterList(line, "java", out var callableNameStart, out _, out _))
         {
             var headerEnd = callableNameStart;
@@ -387,6 +402,9 @@ internal static partial class JavaReferenceExtractor
         Func<int, SymbolRecord?> resolveContainerForColumn,
         IReadOnlySet<string>? ignoredSegments = null)
     {
+        if (line.IndexOf("throws", StringComparison.Ordinal) < 0)
+            return;
+
         int keywordIndex = ReferenceExtractor.FindTopLevelKeyword(line, "throws");
         if (keywordIndex < 0)
             return;

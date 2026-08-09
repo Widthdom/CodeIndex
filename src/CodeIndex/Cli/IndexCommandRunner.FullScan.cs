@@ -48,7 +48,6 @@ public static partial class IndexCommandRunner
         string? priorHdlGraphContractVersion,
         IReadOnlyDictionary<string, string?> priorHotspotFamilyVersions,
         IReadOnlyDictionary<string, string?> priorHotspotFamilyMarkerFingerprints,
-        IReadOnlyDictionary<string, FileIndexer.ProjectMarkerFingerprintResult> currentHotspotFamilyMarkerFingerprints,
         string? priorIndexedProjectRoot,
         string? priorIndexedHeadCommit,
         string? currentHeadCommit,
@@ -82,10 +81,6 @@ public static partial class IndexCommandRunner
         var sqlGraphContractMatchesCurrent = priorSqlGraphContractVersion == currentSqlGraphContractVersion;
         var currentHdlGraphContractVersion = DbContext.HdlGraphContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var hdlGraphContractMatchesCurrent = priorHdlGraphContractVersion == currentHdlGraphContractVersion;
-        var hotspotFamilyTrustMatchesCurrent = GetHotspotFamilyTrustMatchesCurrent(
-            priorHotspotFamilyVersions,
-            priorHotspotFamilyMarkerFingerprints,
-            currentHotspotFamilyMarkerFingerprints);
         var symbolKindFilterMatchesPrior = string.Equals(
             priorSymbolKindFilterSignature,
             options.SymbolKindFilter.Signature,
@@ -141,6 +136,11 @@ public static partial class IndexCommandRunner
             initialScanFileCapacity,
             cancellationToken: cancellationToken);
         var scanResult = discovery.ScanResult;
+        var currentHotspotFamilyMarkerFingerprints = scanResult.ProjectMarkerFingerprints;
+        var hotspotFamilyTrustMatchesCurrent = GetHotspotFamilyTrustMatchesCurrent(
+            priorHotspotFamilyVersions,
+            priorHotspotFamilyMarkerFingerprints,
+            currentHotspotFamilyMarkerFingerprints);
         var scanHadErrors = scanResult.HadErrors;
         var files = discovery.Files;
         var languageCounts = scanResult.LanguageCounts;
@@ -857,6 +857,11 @@ public static partial class IndexCommandRunner
                 csharpSourceEvidenceComplete && csharpSourceEvidenceForStamp ? true : null);
         }
 
+        using var referenceSecondaryIndexBulkLoad =
+            ReferenceSecondaryIndexBulkLoadGuard.StartTransactional(
+                writer,
+                enabled: !options.SymbolsOnly && useFtsBulkLoad,
+                cancellationToken);
         using var ftsBulkLoad = FtsBulkLoadTriggerGuard.Start(writer, useFtsBulkLoad);
 
         if (staleFilePurgePlan.Count > 0)
@@ -1021,21 +1026,30 @@ public static partial class IndexCommandRunner
             memorySamples.Add(CaptureMemorySample("extraction", stopwatch));
 
         ThrowIfFullScanCancelled(processed, files.Count);
-        if (!deferCSharpMutationsForIncompleteScan && mutualRecursionRefreshNeeded)
+        if ((!deferCSharpMutationsForIncompleteScan && mutualRecursionRefreshNeeded)
+            || referenceSecondaryIndexBulkLoad != null)
         {
             WriteFullScanJsonLiveness(options, "finalizing reference graph...");
             var referenceGraphHeartbeat = StartFullScanJsonPhaseHeartbeat(options, "finalizing reference graph");
             try
             {
-                writer.RefreshMutualRecursionFlags(
-                    cancellationToken,
-                    stampReferenceIdentityContractReady:
-                        writer.CSharpFamilyTrustAllowsReferenceIdentityReady(
-                            (options.Rebuild || startedWithNoIndexedFiles)
-                            && !scanHadErrors
-                            && errors == 0
-                                ? languageCounts.ContainsKey("csharp")
-                                : null));
+                if (!deferCSharpMutationsForIncompleteScan && mutualRecursionRefreshNeeded)
+                {
+                    writer.RefreshMutualRecursionFlags(
+                        cancellationToken,
+                        stampReferenceIdentityContractReady:
+                            writer.CSharpFamilyTrustAllowsReferenceIdentityReady(
+                                (options.Rebuild || startedWithNoIndexedFiles)
+                                && !scanHadErrors
+                                && errors == 0
+                                    ? languageCounts.ContainsKey("csharp")
+                                    : null),
+                        referenceSecondaryIndexBulkLoad: referenceSecondaryIndexBulkLoad);
+                }
+
+                // Query-only indexes do not participate in graph finalization. Restore them
+                // after mutual-recursion evaluation while this long phase remains heartbeated.
+                referenceSecondaryIndexBulkLoad?.Complete(cancellationToken);
             }
             finally
             {

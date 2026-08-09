@@ -24,7 +24,6 @@ internal static partial class LanguageReferenceExtractionSupport
     private static readonly Regex GoTypeAliasRegex = new(
         @"^\s*type\s+[A-Za-z_]\w*(?:\[[^\]]+\])?\s+=?\s*(?<type>[\*\[\]\w.]+)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
-    private static readonly Regex[] GoTypeReferenceRegexes = [GoVarTypeRegex, GoFieldTypeRegex, GoTypeAliasRegex];
     private static readonly Regex GoFuncRegex = new(
         @"^\s*func\b",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -219,13 +218,41 @@ internal static partial class LanguageReferenceExtractionSupport
         EmitGoGenericInstantiationTypeArgumentReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         EmitGoGenericCallTypeArgumentReferences(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
 
-        foreach (var regex in GoTypeReferenceRegexes)
+        if (preparedLine.IndexOf("var", StringComparison.Ordinal) >= 0
+            || preparedLine.IndexOf("const", StringComparison.Ordinal) >= 0)
         {
-            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(regex, preparedLine, references))
-            {
-                var group = match.Groups["type"];
-                EmitGoTypeExpression(group.Value, group.Index, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
-            }
+            EmitGoSimpleTypeReferenceMatches(
+                GoVarTypeRegex,
+                preparedLine,
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                resolveContainerForColumn);
+        }
+
+        EmitGoSimpleTypeReferenceMatches(
+            GoFieldTypeRegex,
+            preparedLine,
+            references,
+            seen,
+            fileId,
+            context,
+            lineNumber,
+            resolveContainerForColumn);
+
+        if (preparedLine.IndexOf("type", StringComparison.Ordinal) >= 0)
+        {
+            EmitGoSimpleTypeReferenceMatches(
+                GoTypeAliasRegex,
+                preparedLine,
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                resolveContainerForColumn);
         }
 
         if (preparedLine.IndexOf("func", StringComparison.Ordinal) >= 0
@@ -233,7 +260,7 @@ internal static partial class LanguageReferenceExtractionSupport
         {
             EmitGoFunctionSignatureTypes(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         }
-        else
+        else if (preparedLine.IndexOf('(') >= 0)
         {
             EmitGoInterfaceMethodSignatureTypes(preparedLine, references, seen, fileId, context, lineNumber, resolveContainerForColumn);
         }
@@ -251,6 +278,31 @@ internal static partial class LanguageReferenceExtractionSupport
 
                 ReferenceExtractor.AddReference(references, seen, fileId, group.Value, group.Index, "instantiate", context, lineNumber, resolveContainerForColumn(group.Index));
             }
+        }
+    }
+
+    private static void EmitGoSimpleTypeReferenceMatches(
+        Regex regex,
+        string line,
+        List<ReferenceRecord> references,
+        ReferenceDedupeSet seen,
+        long fileId,
+        string context,
+        int lineNumber,
+        Func<int, SymbolRecord?> resolveContainerForColumn)
+    {
+        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(regex, line, references))
+        {
+            var group = match.Groups["type"];
+            EmitGoTypeExpression(
+                group.Value,
+                group.Index,
+                references,
+                seen,
+                fileId,
+                context,
+                lineNumber,
+                resolveContainerForColumn);
         }
     }
 

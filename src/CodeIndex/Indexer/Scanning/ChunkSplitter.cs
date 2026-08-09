@@ -9,10 +9,10 @@ namespace CodeIndex.Indexer;
 public static class ChunkSplitter
 {
     // Lines per chunk / 1チャンクあたりの行数
-    private const int ChunkSize = 80;
+    internal const int ChunkSize = 80;
 
     // Overlap with previous chunk / 前チャンクとの重複行数
-    private const int Overlap = 10;
+    internal const int Overlap = 10;
 
     // Per-line byte cap (in chars). Lines longer than this trigger the
     // oversize-line skip path: chunks/symbols/references for that file
@@ -78,7 +78,41 @@ public static class ChunkSplitter
         if (normalized.Content.Length == 0)
             return [];
 
-        return SplitNormalized(fileId, normalized.Content, normalized.HasOversizeLine, normalized.LineCount);
+        return SplitNormalized(fileId, normalized.Content, normalized.Facts);
+    }
+
+    internal static List<ChunkRecord> SplitNormalized(
+        long fileId,
+        string content,
+        NormalizedContentFacts facts)
+    {
+        if (string.IsNullOrEmpty(content) || facts.HasOversizeLine)
+            return [];
+
+        var slices = facts.ChunkSlices;
+        if (slices is null || slices.Length == 0)
+            return SplitNormalizedCore(fileId, content, facts.LineCount);
+
+        var chunks = new List<ChunkRecord>(slices.Length);
+        var step = ChunkSize - Overlap;
+        for (var chunkIndex = 0; chunkIndex < slices.Length; chunkIndex++)
+        {
+            var slice = slices[chunkIndex];
+            var chunkContent = slice.StartOffset == 0 && slice.Length == content.Length
+                ? content
+                : content.Substring(slice.StartOffset, slice.Length);
+            var startLineIndex = chunkIndex * step;
+            chunks.Add(new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = chunkIndex,
+                StartLine = startLineIndex + 1,
+                EndLine = Math.Min(startLineIndex + ChunkSize, facts.LineCount),
+                Content = chunkContent,
+            });
+        }
+
+        return chunks;
     }
 
     internal static List<ChunkRecord> SplitNormalized(long fileId, string content, bool hasOversizeLine, int? lineCount = null)

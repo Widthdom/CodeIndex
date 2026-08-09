@@ -148,70 +148,84 @@ internal static class XamlReferenceExtractor
         if (originalLine.Length == 0)
             return;
 
-        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(XamlTypeAttributeRegex, originalLine, references))
+        var hasAttributeAssignment = originalLine.IndexOf('=') >= 0
+            && (originalLine.IndexOf('"') >= 0 || originalLine.IndexOf('\'') >= 0);
+        if (hasAttributeAssignment)
         {
-            foreach (var name in NormalizeXamlTypeValues(match.Groups["value"].Value))
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(XamlTypeAttributeRegex, originalLine, references))
             {
-                AddReference(references, seen, fileId, name, match.Groups["value"].Index, "type_reference", context, lineNumber, container);
+                foreach (var name in NormalizeXamlTypeValues(match.Groups["value"].Value))
+                {
+                    AddReference(references, seen, fileId, name, match.Groups["value"].Index, "type_reference", context, lineNumber, container);
+                }
+            }
+
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(XamlTypeArgumentsRegex, originalLine, references))
+            {
+                foreach (var name in NormalizeXamlTypeArguments(match.Groups["value"].Value))
+                {
+                    AddReference(references, seen, fileId, name, match.Groups["value"].Index, "type_reference", context, lineNumber, container);
+                }
             }
         }
 
-        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(XamlTypeArgumentsRegex, originalLine, references))
+        if (originalLine.IndexOf('{') >= 0)
         {
-            foreach (var name in NormalizeXamlTypeArguments(match.Groups["value"].Value))
+            foreach (var resource in EnumerateResourceMarkupExtensions(originalLine))
             {
-                AddReference(references, seen, fileId, name, match.Groups["value"].Index, "type_reference", context, lineNumber, container);
+                var value = NormalizeNamedMarkupReference(resource.Content);
+                if (value.Length > 0)
+                    AddReference(references, seen, fileId, value, resource.ContentIndex, "reference", context, lineNumber, container);
             }
+
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(XamlReferenceRegex, originalLine, references))
+            {
+                var value = NormalizeNamedMarkupReference(match.Groups["content"].Value);
+                if (value.Length > 0)
+                    AddReference(references, seen, fileId, value, match.Groups["content"].Index, "reference", context, lineNumber, container);
+            }
+
+            foreach (var binding in EnumerateBindingMarkupExtensions(originalLine))
+            {
+                EmitBindingMarkupExtensionReferences(binding.Kind, binding.Content, binding.ContentIndex, references, seen, fileId, context, lineNumber, container);
+            }
+
+            TryStartBindingMarkupExtensionState(originalLine, context, lineNumber, container, bindingMarkupExtensionState);
         }
 
-        foreach (var resource in EnumerateResourceMarkupExtensions(originalLine))
+        if (originalLine.IndexOf('<') >= 0)
         {
-            var value = NormalizeNamedMarkupReference(resource.Content);
-            if (value.Length > 0)
-                AddReference(references, seen, fileId, value, resource.ContentIndex, "reference", context, lineNumber, container);
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(XamlBindingElementRegex, originalLine, references))
+            {
+                EmitBindingElementAttributeReferences(
+                    match.Groups["attributes"].Value,
+                    match.Groups["attributes"].Index,
+                    references,
+                    seen,
+                    fileId,
+                    context,
+                    lineNumber,
+                    container);
+            }
+
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(XamlBindingPropertyElementRegex, originalLine, references))
+            {
+                var value = NormalizeBindingPath(match.Groups["value"].Value);
+                if (value.Length > 0)
+                    AddReference(references, seen, fileId, value, match.Groups["value"].Index, "reference", context, lineNumber, container);
+            }
+
+            TryStartBindingPropertyElementState(originalLine, context, lineNumber, container, bindingPropertyElementState);
         }
 
-        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(XamlReferenceRegex, originalLine, references))
+        if (hasAttributeAssignment)
         {
-            var value = NormalizeNamedMarkupReference(match.Groups["content"].Value);
-            if (value.Length > 0)
-                AddReference(references, seen, fileId, value, match.Groups["content"].Index, "reference", context, lineNumber, container);
-        }
-
-        foreach (var binding in EnumerateBindingMarkupExtensions(originalLine))
-        {
-            EmitBindingMarkupExtensionReferences(binding.Kind, binding.Content, binding.ContentIndex, references, seen, fileId, context, lineNumber, container);
-        }
-
-        TryStartBindingMarkupExtensionState(originalLine, context, lineNumber, container, bindingMarkupExtensionState);
-
-        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(XamlBindingElementRegex, originalLine, references))
-        {
-            EmitBindingElementAttributeReferences(
-                match.Groups["attributes"].Value,
-                match.Groups["attributes"].Index,
-                references,
-                seen,
-                fileId,
-                context,
-                lineNumber,
-                container);
-        }
-
-        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(XamlBindingPropertyElementRegex, originalLine, references))
-        {
-            var value = NormalizeBindingPath(match.Groups["value"].Value);
-            if (value.Length > 0)
-                AddReference(references, seen, fileId, value, match.Groups["value"].Index, "reference", context, lineNumber, container);
-        }
-
-        TryStartBindingPropertyElementState(originalLine, context, lineNumber, container, bindingPropertyElementState);
-
-        foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(XamlEventHandlerRegex, originalLine, references))
-        {
-            var value = match.Groups["value"].Value.Trim();
-            if (value.Length > 0)
-                AddReference(references, seen, fileId, value, match.Groups["value"].Index, "call", context, lineNumber, container);
+            foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(XamlEventHandlerRegex, originalLine, references))
+            {
+                var value = match.Groups["value"].Value.Trim();
+                if (value.Length > 0)
+                    AddReference(references, seen, fileId, value, match.Groups["value"].Index, "call", context, lineNumber, container);
+            }
         }
     }
 

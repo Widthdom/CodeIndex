@@ -113,14 +113,14 @@ public static partial class IndexCommandRunner
                         if (parallelizeExtraction)
                         {
                             Volatile.Write(ref activeExtractionPhases[workerIndex], new(record.Path, "chunking"));
-                            chunks = ChunkSplitter.SplitNormalized(0, content, hasOversizeLine, record.Lines);
+                            chunks = ChunkSplitter.SplitNormalized(0, content, loaded.Facts);
                             if (generatedSuppressionIssue != null)
                             {
                                 symbols = [];
                                 references = [];
                                 Volatile.Write(ref activeExtractionPhases[workerIndex], new(record.Path, "validating"));
                                 issues = AppendIssueIfMissing(
-                                    FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, hasOversizeLine, loaded.ConflictMarkerLine),
+                                    FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, loaded.Facts),
                                     generatedSuppressionIssue);
                                 extractionResults.Add(
                                     FullScanFileWorkItem.Precomputed(
@@ -210,7 +210,7 @@ public static partial class IndexCommandRunner
                                 referenceRegexTimeoutIssue = BuildRegexTimeoutIssue(record.Path, regexTimeouts);
                             }
                             Volatile.Write(ref activeExtractionPhases[workerIndex], new(record.Path, "validating"));
-                            issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, hasOversizeLine, loaded.ConflictMarkerLine);
+                            issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, loaded.Facts);
                             if (symbolRegexTimeoutIssue != null)
                                 issues = AppendIssue(issues, symbolRegexTimeoutIssue);
                             if (referenceRegexTimeoutIssue != null)
@@ -227,7 +227,7 @@ public static partial class IndexCommandRunner
                         else
                         {
                             Volatile.Write(ref activeExtractionPhases[workerIndex], new(record.Path, "validating"));
-                            issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, hasOversizeLine, loaded.ConflictMarkerLine);
+                            issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, loaded.Facts);
                         }
                         extractionResults.Add(
                             parallelizeExtraction
@@ -244,9 +244,8 @@ public static partial class IndexCommandRunner
                                     generatedSuppressionIssue,
                                     generatedSuppressionChecked: true,
                                     content: postExtractionHooks.HasHooks ? content : null,
-                                    hasOversizeLine: postExtractionHooks.HasHooks ? hasOversizeLine : null,
-                                    conflictMarkerLine: postExtractionHooks.HasHooks
-                                        ? loaded.ConflictMarkerLine
+                                    contentFacts: postExtractionHooks.HasHooks
+                                        ? loaded.Facts
                                         : null)
                                 : FullScanFileWorkItem.Success(
                                     fileIndex,
@@ -254,8 +253,7 @@ public static partial class IndexCommandRunner
                                     displayRelativePath,
                                     record,
                                     content,
-                                    hasOversizeLine,
-                                    loaded.ConflictMarkerLine,
+                                    loaded.Facts,
                                     warning,
                                     chunks,
                                     symbols,

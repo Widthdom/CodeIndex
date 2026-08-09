@@ -204,18 +204,24 @@ public partial class IndexCommandRunnerTests
         var projectRoot = CreateTempProject();
         var previousEnumerator = FileIndexer.EnumerateProjectMarkerDirectoriesForTesting;
         var previousDirectoryBudget = FileIndexer.ProjectMarkerFingerprintDirectoryBudgetForTesting;
+        var markerDirectoryEnumerationCount = 0;
         try
         {
             var childDir = Path.Combine(projectRoot, "nested");
             Directory.CreateDirectory(childDir);
-            File.WriteAllText(Path.Combine(projectRoot, "App.cs"), "public class App { }\n");
+            File.WriteAllText(Path.Combine(childDir, "App.cs"), "public class App { }\n");
             FileIndexer.EnumerateProjectMarkerDirectoriesForTesting =
-                _ => [childDir];
+                directory =>
+                {
+                    markerDirectoryEnumerationCount++;
+                    return Directory.EnumerateDirectories(directory);
+                };
             FileIndexer.ProjectMarkerFingerprintDirectoryBudgetForTesting = 1;
 
             var (exitCode, json, _) = RunAndCaptureJsonWithStderr([projectRoot, "--json"]);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(0, markerDirectoryEnumerationCount);
             Assert.Contains(
                 json.GetProperty("warnings").EnumerateArray(),
                 warning =>

@@ -11,6 +11,14 @@ namespace CodeIndex.Cli;
 public static partial class IndexCommandRunner
 {
     internal static Action<string>? UpdateScanInputSnapshotBarrierForTesting { get; set; }
+    internal const int UpdateReferenceSecondaryIndexBulkLoadMinimumTargetCount = 64;
+
+    internal static bool ShouldUseUpdateReferenceSecondaryIndexBulkLoad(
+        int targetCount,
+        int indexedFileCount)
+        => targetCount >= UpdateReferenceSecondaryIndexBulkLoadMinimumTargetCount
+           && indexedFileCount > 0
+           && (long)targetCount * 5 >= (long)indexedFileCount * 3;
 
     private static int RunUpdateMode(
         DbContext db,
@@ -153,7 +161,6 @@ public static partial class IndexCommandRunner
                 priorHdlGraphContractVersion,
                 priorHotspotFamilyVersions,
                 priorHotspotFamilyMarkerFingerprints,
-                currentHotspotFamilyMarkerFingerprints,
                 priorIndexedProjectRoot,
                 priorIndexedHeadCommit,
                 currentHeadCommit,
@@ -623,6 +630,16 @@ public static partial class IndexCommandRunner
             purgeTxn.Commit();
         }
 
+        var useReferenceSecondaryIndexBulkLoad = !options.SymbolsOnly
+            && ShouldUseUpdateReferenceSecondaryIndexBulkLoad(
+                targetPaths.Count,
+                writer.GetIndexedFileCount());
+        using var referenceSecondaryIndexBulkLoad =
+            ReferenceSecondaryIndexBulkLoadGuard.StartRecoverable(
+                writer,
+                useReferenceSecondaryIndexBulkLoad,
+                cancellationToken);
+
         var updateLoop = RunUpdateFileLoop(new UpdateFileLoopContext
         {
             Writer = writer,
@@ -727,7 +744,11 @@ public static partial class IndexCommandRunner
             writer.RefreshMutualRecursionFlags(
                 cancellationToken,
                 stampReferenceIdentityContractReady:
-                    writer.CSharpFamilyTrustAllowsReferenceIdentityReady());
+                    writer.CSharpFamilyTrustAllowsReferenceIdentityReady(),
+                referenceSecondaryIndexBulkLoad: referenceSecondaryIndexBulkLoad);
+        // Only the three reverse-edge indexes participate in graph finalization. Recoverable
+        // mode restores the remaining query indexes afterwards and repairs all on unwind.
+        referenceSecondaryIndexBulkLoad?.Complete(cancellationToken);
         if (options.MemoryTrace)
             memorySamples.Add(CaptureMemorySample("reference_graph", stopwatch));
         ThrowIfUpdateCancelled();

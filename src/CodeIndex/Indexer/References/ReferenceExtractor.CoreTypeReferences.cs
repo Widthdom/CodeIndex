@@ -61,7 +61,9 @@ public static partial class ReferenceExtractor
         }
 
         // Event subscription/unsubscription (C#) / イベント購読・解除 (C#)
-        if (line.Language is "csharp")
+        if (line.Language is "csharp"
+            && (line.PreparedLine.IndexOf("+=", StringComparison.Ordinal) >= 0
+                || line.PreparedLine.IndexOf("-=", StringComparison.Ordinal) >= 0))
         {
             foreach (Match match in BoundedRegex.EnumerateMatches(EventSubscriptionRegex, line.PreparedLine))
             {
@@ -99,18 +101,30 @@ public static partial class ReferenceExtractor
         // 末尾の `(` を持たず CallRegex では取れないコンパイル時の型/メンバ参照。issue #253 参照。
         if (line.Language is "csharp")
         {
-            var csharpGenericParameterNames = CollectCSharpGenericParameterNamesForDeclaration(line.PreparedLine);
-            foreach (Match match in BoundedRegex.EnumerateMatches(CSharpTypeKeywordIntroRegex, line.PreparedLine))
+            var hasTypeKeywordIntro = line.PreparedLine.IndexOf('(') >= 0
+                && (line.PreparedLine.IndexOf("nameof", StringComparison.Ordinal) >= 0
+                    || line.PreparedLine.IndexOf("typeof", StringComparison.Ordinal) >= 0
+                    || line.PreparedLine.IndexOf("sizeof", StringComparison.Ordinal) >= 0
+                    || line.PreparedLine.IndexOf("default", StringComparison.Ordinal) >= 0);
+            if (hasTypeKeywordIntro)
             {
-                if (ReferenceLimitReached(line.References))
-                    break;
-                int parenIndex = match.Index + match.Length - 1; // position of '(' / '(' の位置
-                ExtractCSharpTypeKeywordSegments(
-                    line.References, line.Seen, line.FileId, line.PreparedLine, parenIndex + 1,
-                    line.Context, line.LineNumber, line.Container, line.Language, csharpGenericParameterNames);
+                var csharpGenericParameterNames = CollectCSharpGenericParameterNamesForDeclaration(line.PreparedLine);
+                foreach (Match match in BoundedRegex.EnumerateMatches(CSharpTypeKeywordIntroRegex, line.PreparedLine))
+                {
+                    if (ReferenceLimitReached(line.References))
+                        break;
+                    int parenIndex = match.Index + match.Length - 1; // position of '(' / '(' の位置
+                    ExtractCSharpTypeKeywordSegments(
+                        line.References, line.Seen, line.FileId, line.PreparedLine, parenIndex + 1,
+                        line.Context, line.LineNumber, line.Container, line.Language, csharpGenericParameterNames);
+                }
             }
-            ExtractCSharpReflectionNameLiteralReferences(
-                line.References, line.Seen, line.FileId, line.PreparedLine, line.OriginalLine, line.Context, line.LineNumber, line.Container);
+
+            if (line.OriginalLine.IndexOf('"') >= 0)
+            {
+                ExtractCSharpReflectionNameLiteralReferences(
+                    line.References, line.Seen, line.FileId, line.PreparedLine, line.OriginalLine, line.Context, line.LineNumber, line.Container);
+            }
         }
         else if (line.Language is "java")
         {
@@ -166,15 +180,18 @@ public static partial class ReferenceExtractor
 
         if (line.Language == "csharp")
         {
-            EmitCSharpLambdaCaptureReferences(
-                line.PreparedLine,
-                line.References,
-                line.Seen,
-                line.FileId,
-                line.Context,
-                line.LineNumber,
-                line.Container,
-                type.CSharpLocalNamesByFunction);
+            if (line.PreparedLine.IndexOf("=>", StringComparison.Ordinal) >= 0)
+            {
+                EmitCSharpLambdaCaptureReferences(
+                    line.PreparedLine,
+                    line.References,
+                    line.Seen,
+                    line.FileId,
+                    line.Context,
+                    line.LineNumber,
+                    line.Container,
+                    type.CSharpLocalNamesByFunction);
+            }
 
             CSharpReferenceExtractor.EmitTypePositionReferences(
                 line.PreparedLine,

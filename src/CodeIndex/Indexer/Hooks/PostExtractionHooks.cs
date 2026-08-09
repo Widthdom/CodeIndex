@@ -341,6 +341,13 @@ public sealed class PostExtractionHookRunner : IDisposable
         }
     }
 
+    internal void ObserveCSharpStaticInterfaceSourceContractEvidence(bool hasContract)
+    {
+        ObjectDisposedException.ThrowIf(disposed, this);
+        if (hasContract)
+            Interlocked.Exchange(ref sawCSharpStaticInterfaceSourceContract, 1);
+    }
+
     public void OnSymbolsExtracted(FileContext context, IList<SymbolRecord> symbols, CancellationToken cancellationToken = default)
         => OnSymbolsExtractedCore(
             context,

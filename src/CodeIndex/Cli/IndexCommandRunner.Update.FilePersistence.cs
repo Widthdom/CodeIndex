@@ -97,8 +97,7 @@ public static partial class IndexCommandRunner
         var chunks = ChunkSplitter.SplitNormalized(
             fileId,
             loaded.Content,
-            loaded.HasOversizeLine,
-            record.Lines);
+            loaded.Facts);
         if (context.GeneratedSuppressionIssue != null)
         {
             writer.InsertChunks(chunks, cancellationToken);
@@ -117,8 +116,7 @@ public static partial class IndexCommandRunner
                     loaded.Content,
                     record.Lang,
                     loaded.Inspection,
-                    loaded.HasOversizeLine,
-                    loaded.ConflictMarkerLine),
+                    loaded.Facts),
                 context.GeneratedSuppressionIssue);
             writer.InsertIssues(fileId, generatedIssues);
             context.SetPhase(
@@ -283,8 +281,7 @@ public static partial class IndexCommandRunner
             loaded.Content,
             record.Lang,
             loaded.Inspection,
-            loaded.HasOversizeLine,
-            loaded.ConflictMarkerLine);
+            loaded.Facts);
         if (symbolRegexTimeoutIssue != null)
             issues = AppendIssue(issues, symbolRegexTimeoutIssue);
         if (referenceRegexTimeoutIssue != null)
@@ -330,7 +327,9 @@ public static partial class IndexCommandRunner
                 context.AbsolutePath,
                 context.RelativePath,
                 context.KnownLanguage);
-            UpdateSkippedFileRecordBuiltForTesting?.Invoke(context.RelativePath);
+            UpdateSkippedFileRecordBuiltForTesting?.Invoke(
+                context.RelativePath,
+                context.KnownLanguage);
             if (!context.ValidateSkippedRecord(skippedRecord))
             {
                 throw new CSharpWorkspaceChangedException(

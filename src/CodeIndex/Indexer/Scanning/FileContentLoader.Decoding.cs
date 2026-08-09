@@ -11,7 +11,7 @@ internal sealed partial class FileContentLoader
     private static readonly UnicodeEncoding Utf16BeBomEncoding = new(bigEndian: true, byteOrderMark: true, throwOnInvalidBytes: false);
     private static readonly UnicodeEncoding Utf16BeNoBomEncoding = new(bigEndian: true, byteOrderMark: false, throwOnInvalidBytes: false);
 
-    private (string Content, string? Warning, FileContentInspection Inspection) DecodeIndexableContent(
+    private (string Content, string? Warning, FileContentInspection Inspection, bool HadInvalidUtf8Replacement) DecodeIndexableContent(
         byte[] bytes,
         string relativePath,
         bool inspectRawByteContent = true)
@@ -44,17 +44,21 @@ internal sealed partial class FileContentLoader
             var warning = hasUtf16Bom
                 ? null
                 : $"{relativePath}: decoded as {(utf16BigEndian ? "UTF-16BE" : "UTF-16LE")} without BOM by NUL-byte heuristic";
-            return (content, warning, inspection);
+            return (content, warning, inspection, HadInvalidUtf8Replacement: false);
         }
 
         try
         {
-            return (StrictUtf8Encoding.GetString(bytes), null, inspection);
+            return (StrictUtf8Encoding.GetString(bytes), null, inspection, HadInvalidUtf8Replacement: false);
         }
         catch (DecoderFallbackException)
         {
             var content = LenientUtf8Encoding.GetString(bytes);
-            return (content, $"{relativePath}: contains invalid UTF-8 bytes (replaced with U+FFFD)", inspection);
+            return (
+                content,
+                $"{relativePath}: contains invalid UTF-8 bytes (replaced with U+FFFD)",
+                inspection,
+                HadInvalidUtf8Replacement: true);
         }
     }
 

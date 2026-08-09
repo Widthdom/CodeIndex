@@ -48,6 +48,11 @@ internal static class JsonReferenceExtractor
                 var value = reader.GetString();
                 if (string.IsNullOrEmpty(value))
                     continue;
+                if (value.IndexOf('.') < 0
+                    || (value.IndexOf('/') < 0 && value.IndexOf('\\') < 0))
+                {
+                    continue;
+                }
 
                 var tokenStart = checked((int)reader.TokenStartIndex);
                 var lineIndex = FindLineIndex(lineStarts, tokenStart);

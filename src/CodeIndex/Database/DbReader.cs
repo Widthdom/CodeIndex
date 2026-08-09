@@ -1322,15 +1322,21 @@ public partial class DbReader : IDisposable
             ? HasSymbolIndex("idx_symbols_name_folded")
             : HasSymbolIndex("idx_symbols_name_nocase");
 
-    private bool SymbolNameExactGraphIndexAvailable =>
+    private string SymbolNameExactGraphIndexName =>
         _foldReady
-            ? HasReferenceIndex("idx_symbol_refs_symbol_name_folded")
-            : HasReferenceIndex("idx_symbol_refs_name_nocase");
+            ? "idx_symbol_refs_symbol_name_folded_file"
+            : "idx_symbol_refs_name_nocase_file";
+
+    private string ContainerNameExactGraphIndexName =>
+        _foldReady
+            ? "idx_symbol_refs_container_name_folded_kind"
+            : "idx_symbol_refs_container_nocase_kind";
+
+    private bool SymbolNameExactGraphIndexAvailable =>
+        HasReferenceIndex(SymbolNameExactGraphIndexName);
 
     private bool ContainerNameExactGraphIndexAvailable =>
-        _foldReady
-            ? HasReferenceIndex("idx_symbol_refs_container_name_folded")
-            : HasReferenceIndex("idx_symbol_refs_container_nocase");
+        HasReferenceIndex(ContainerNameExactGraphIndexName);
 
     private string BuildExactGraphIndexReason(IEnumerable<string> missingIndexes)
     {
@@ -1582,7 +1588,7 @@ public partial class DbReader : IDisposable
         bool includeSqlGraphContractSignal = true)
         => CombineExactSignals(
             BuildExactGraphSignal(SymbolNameExactGraphIndexAvailable,
-                _foldReady ? "idx_symbol_refs_symbol_name_folded" : "idx_symbol_refs_name_nocase"),
+                SymbolNameExactGraphIndexName),
             GetCSharpCanonicalNameExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests),
             includeSqlGraphContractSignal ? GetSqlGraphContractExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests) : null,
             GetHdlGraphContractExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests));
@@ -1595,7 +1601,7 @@ public partial class DbReader : IDisposable
         bool includeSqlGraphContractSignal = true)
         => CombineExactSignals(
             BuildExactGraphSignal(SymbolNameExactGraphIndexAvailable,
-                _foldReady ? "idx_symbol_refs_symbol_name_folded" : "idx_symbol_refs_name_nocase"),
+                SymbolNameExactGraphIndexName),
             GetCSharpCanonicalNameExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests),
             includeSqlGraphContractSignal ? GetSqlGraphContractExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests) : null,
             GetHdlGraphContractExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests));
@@ -1608,7 +1614,7 @@ public partial class DbReader : IDisposable
         bool includeSqlGraphContractSignal = true)
         => CombineExactSignals(
             BuildExactGraphSignal(ContainerNameExactGraphIndexAvailable,
-                _foldReady ? "idx_symbol_refs_container_name_folded" : "idx_symbol_refs_container_nocase"),
+                ContainerNameExactGraphIndexName),
             GetCSharpCanonicalNameExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests),
             includeSqlGraphContractSignal ? GetSqlGraphContractExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests) : null,
             GetHdlGraphContractExactQuerySignal(lang, pathPatterns, excludePathPatterns, excludeTests));
@@ -1657,9 +1663,9 @@ public partial class DbReader : IDisposable
 
         var missing = new List<string>();
         if (!SymbolNameExactGraphIndexAvailable)
-            missing.Add(_foldReady ? "idx_symbol_refs_symbol_name_folded" : "idx_symbol_refs_name_nocase");
+            missing.Add(SymbolNameExactGraphIndexName);
         if (!ContainerNameExactGraphIndexAvailable)
-            missing.Add(_foldReady ? "idx_symbol_refs_container_name_folded" : "idx_symbol_refs_container_nocase");
+            missing.Add(ContainerNameExactGraphIndexName);
 
         return missing.Count == 0
             ? new(true, HasMissingIndex: false, HasMissingTable: false, null)

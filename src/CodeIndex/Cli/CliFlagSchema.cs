@@ -670,7 +670,7 @@ internal static class CliFlagSchema
             new() { Name = "--max-file-bytes", ValuePlaceholder = "<bytes>", Description = "Override the per-file indexing size limit", PrimaryCommands = Set("index") },
             new() { Name = "--max-symbols-per-file", ValuePlaceholder = "<n>", Description = "Skip file content, symbols, and references when one file emits too many symbols (max 50000)", PrimaryCommands = Set("index") },
             new() { Name = "--max-references-per-file", ValuePlaceholder = "<n>", Description = "Skip references when one file emits too many references (max 1000000)", PrimaryCommands = Set("index") },
-            new() { Name = "--parallelism", ValuePlaceholder = "<n>", Description = "Full-scan extraction worker count (default: CPU count capped at 8; explicit max: 16; also honors CDIDX_INDEX_PARALLELISM)", PrimaryCommands = Set("index") },
+            new() { Name = "--parallelism", ValuePlaceholder = "<n>", Description = "Full-scan and authoritative C# update extraction worker count (default: CPU count capped at 8; explicit max: 16; also honors CDIDX_INDEX_PARALLELISM)", PrimaryCommands = Set("index") },
             new() { Name = "--memory-trace", Description = "Include phase memory samples in index JSON output", PrimaryCommands = Set("index") },
             new() { Name = "--commits", ValuePlaceholder = "<commit-ref>", Description = "Update files changed in given git commits", PrimaryCommands = Set("index") },
             new() { Name = "--changed-between", ValuePlaceholder = "<old-ref> <new-ref>", Description = "Update files changed between two git refs", PrimaryCommands = Set("index") },

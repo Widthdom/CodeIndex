@@ -49,7 +49,14 @@ public partial class FileIndexer
             var loadResult = LoadIgnoreRulesForDirectory(dir, inheritedIgnoreRules, scanState.Errors, ref fullyScanned);
             var activeIgnoreRules = loadResult.Rules;
             if (!loadResult.IgnoreRulesAvailable)
+            {
+                scanState.ProjectMarkerScopeCollection.IsComplete = false;
+                TruncateSharedProjectMarkerTraversal(
+                    scanState.ProjectMarkerTraversalStates,
+                    dir,
+                    "ignore-rule loading failed");
                 return false;
+            }
 
             // Submodule passthrough: we are inside a SkipDirs-named ancestor of a submodule
             // (e.g. vendor/ on the way to vendor/foo). Honor SkipDirs for this directory's
@@ -111,6 +118,8 @@ public partial class FileIndexer
         }
         catch (Exception ex) when (FileSystemTraversalFailure.IsExpected(ex))
         {
+            scanState.ProjectMarkerScopeCollection.IsComplete = false;
+            MarkSharedProjectMarkerTraversalFailure(scanState.ProjectMarkerTraversalStates, dir, ex);
             scanState.Errors.Add(new ScanError(
                 relativeDir,
                 $"Could not scan directory due to {FileSystemTraversalFailure.DescribeReason(ex)}."));
@@ -200,6 +209,15 @@ public partial class FileIndexer
                 continue;
             }
 
+            ObserveSharedProjectMarkerFile(
+                scanState.ProjectMarkerTraversalStates,
+                scanState.ProjectMarkerScopeCollection,
+                relativeDir,
+                entry,
+                attributes,
+                activeIgnoreRules,
+                directoryIgnoreCase);
+
             if (passthrough)
                 continue;
 
@@ -270,7 +288,27 @@ public partial class FileIndexer
             // \\?\ 接頭辞付きの long-path ディレクトリを渡したとき EnumerateFiles も接頭辞付きで
             // 返すため、_projectRoot（接頭辞なし）と突き合わせる相対パス計算が崩れないよう剥がす。
             var file = LongPath.RemoveWindowsPrefix(enumeratedFile);
-            if (!TryAcceptScannedFile(file, scanState, activeIgnoreRules, seenFilePaths))
+            FileAttributes? knownAttributes = null;
+            if (FileSystemBoundary.TryGetAttributes(file, out var attributes)
+                == FileSystemBoundaryProbeStatus.Found)
+            {
+                knownAttributes = attributes;
+                ObserveSharedProjectMarkerFile(
+                    scanState.ProjectMarkerTraversalStates,
+                    scanState.ProjectMarkerScopeCollection,
+                    ToRelativePath(dir),
+                    file,
+                    attributes,
+                    activeIgnoreRules,
+                    directoryIgnoreCase);
+            }
+
+            if (!TryAcceptScannedFile(
+                    file,
+                    scanState,
+                    activeIgnoreRules,
+                    seenFilePaths,
+                    knownAttributes))
                 continue;
 
             scanState.Results.Add(file);

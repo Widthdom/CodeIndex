@@ -19,6 +19,32 @@ namespace CodeIndex.Tests;
 public partial class IndexCommandRunnerTests
 {
     [Fact]
+    public void Run_DryRunFullScan_ReusesDiscoveryForProjectMarkerFingerprints()
+    {
+        var projectRoot = CreateTempProject();
+        var previousEnumerator = FileIndexer.EnumerateProjectMarkerDirectoriesForTesting;
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "App.csproj"), "<Project />\n");
+            File.WriteAllText(Path.Combine(projectRoot, "App.cs"), "public class App { }\n");
+            FileIndexer.EnumerateProjectMarkerDirectoriesForTesting =
+                _ => throw new InvalidOperationException("Dry-run full scan must reuse its directory discovery snapshot.");
+
+            var (exitCode, json) = RunAndCaptureJson(
+                [projectRoot, "--dry-run", "--json", "--quiet"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("dry_run", json.GetProperty("status").GetString());
+            Assert.Equal(2, json.GetProperty("files_total").GetInt32());
+        }
+        finally
+        {
+            FileIndexer.EnumerateProjectMarkerDirectoriesForTesting = previousEnumerator;
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_DryRun_ReadOnlyUriDbPath_ReturnsDryRunSummary()
     {
         var projectRoot = CreateTempProject();

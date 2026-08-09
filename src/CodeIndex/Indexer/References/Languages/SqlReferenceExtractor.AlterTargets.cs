@@ -625,7 +625,7 @@ internal static partial class SqlReferenceExtractor
     }
 
     private static void EmitSourceCaptureReferences(
-        IEnumerable<Match> matches,
+        BoundedRegex.MatchEnumerable matches,
         string statement,
         int statementStart,
         int statementLineOffset,

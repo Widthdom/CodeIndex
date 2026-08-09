@@ -296,16 +296,53 @@ public static partial class ReferenceExtractor
         => references is BoundedReferenceList bounded
             && bounded.Count >= bounded.MaxReferenceCount;
 
-    internal static ReferenceMatchEnumerable EnumerateReferenceMatches(
+    internal static RegexReferenceMatchEnumerable EnumerateReferenceMatches(
         Regex regex,
         string input,
         List<ReferenceRecord> references) =>
         new(Regex.EnumerateMatches(regex, input), references);
 
+    internal static RegexReferenceMatchEnumerable EnumerateReferenceMatches(
+        BoundedRegex.MatchEnumerable matches,
+        List<ReferenceRecord> references) =>
+        new(matches, references);
+
     internal static ReferenceMatchEnumerable EnumerateReferenceMatches(
         IEnumerable<Match> matches,
         List<ReferenceRecord> references)
         => new(matches, references);
+
+    internal readonly struct RegexReferenceMatchEnumerable(
+        BoundedRegex.MatchEnumerable matches,
+        List<ReferenceRecord> references)
+    {
+        public RegexReferenceMatchEnumerator GetEnumerator() =>
+            new(matches.GetEnumerator(), references);
+    }
+
+    internal struct RegexReferenceMatchEnumerator : IDisposable
+    {
+        private BoundedRegex.MatchEnumerator _matches;
+        private readonly BoundedReferenceList? _references;
+
+        internal RegexReferenceMatchEnumerator(
+            BoundedRegex.MatchEnumerator matches,
+            List<ReferenceRecord> references)
+        {
+            _matches = matches;
+            _references = references as BoundedReferenceList;
+        }
+
+        public readonly Match Current => _matches.Current;
+
+        public bool MoveNext()
+        {
+            return (_references == null || _references.Count < _references.MaxReferenceCount)
+                && _matches.MoveNext();
+        }
+
+        public void Dispose() => _matches.Dispose();
+    }
 
     internal readonly struct ReferenceMatchEnumerable(
         IEnumerable<Match> matches,

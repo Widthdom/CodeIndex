@@ -20,6 +20,9 @@ internal static class TrailingLambdaReferenceExtractor
         Action<string, int> addCallLikeReference,
         List<ReferenceRecord> references)
     {
+        if (preparedLine.IndexOf('{') < 0)
+            return;
+
         foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(CallRegex, preparedLine, references))
         {
             var callIndex = match.Groups["name"].Index;

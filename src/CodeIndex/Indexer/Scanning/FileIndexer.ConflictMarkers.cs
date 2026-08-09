@@ -26,33 +26,54 @@ public partial class FileIndexer
             return false;
 
         var byteCount = 0;
-        var lineStart = 0;
         var lineNumber = 1;
-        for (int i = 0; i <= content.Length; i++)
+        var atLineStart = true;
+        for (var index = 0; index < content.Length;)
         {
-            if (i < content.Length)
+            var current = content[index];
+            int utf8ByteLength;
+            var charCount = 1;
+            if (char.IsHighSurrogate(current)
+                && index + 1 < content.Length
+                && char.IsLowSurrogate(content[index + 1]))
             {
-                byteCount += content[i] <= '\u007f' ? 1 : Encoding.UTF8.GetByteCount(content.AsSpan(i, 1));
-                if (byteCount > ConflictMarkerScanLimitBytes)
-                    return false;
+                utf8ByteLength = new Rune(current, content[index + 1]).Utf8SequenceLength;
+                charCount = 2;
+            }
+            else if (char.IsSurrogate(current))
+            {
+                utf8ByteLength = 3;
+            }
+            else
+            {
+                utf8ByteLength = current <= '\u007F'
+                    ? 1
+                    : new Rune(current).Utf8SequenceLength;
             }
 
-            if (i < content.Length && content[i] != '\n')
-                continue;
+            byteCount += utf8ByteLength;
+            if (byteCount > ConflictMarkerScanLimitBytes)
+                return false;
 
-            var lineLength = i - lineStart;
-            if (lineLength > 0 && content[lineStart + lineLength - 1] == '\r')
-                lineLength--;
-            var currentLine = content.AsSpan(lineStart, lineLength);
-            if (currentLine.StartsWith(ConflictStartMarker, StringComparison.Ordinal)
-                || currentLine.StartsWith(ConflictEndMarker, StringComparison.Ordinal))
+            if (atLineStart
+                && current is '<' or '>'
+                && IsConflictMarkerLineStart(content.AsSpan(index)))
             {
                 line = lineNumber;
                 return true;
             }
 
-            lineStart = i + 1;
-            lineNumber++;
+            if (current == '\n')
+            {
+                lineNumber++;
+                atLineStart = true;
+            }
+            else
+            {
+                atLineStart = false;
+            }
+
+            index += charCount;
         }
 
         return false;

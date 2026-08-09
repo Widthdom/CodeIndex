@@ -346,7 +346,7 @@ public partial class DbReader
             var useSqlQualifiedContextMatch = SqlNameResolver.HasQualifier(query);
             // --exact: Unicode-aware equality when FoldReady (#86), else ASCII COLLATE NOCASE.
             // Fold path: r.symbol_name_folded = @qFolded (indexed), query pre-folded in .NET.
-            // Fallback: r.symbol_name = @q COLLATE NOCASE (indexed by idx_symbol_refs_name_nocase).
+            // Fallback equality uses the left prefix of idx_symbol_refs_name_nocase_file.
             // When the query ends with C# attribute suffix `Attribute`, also OR against the
             // suffix-stripped alias so `references FooAttribute --exact` reaches the idiomatic
             // `[Foo]` reference site stored with `symbol_name = "Foo"`. In substring mode we

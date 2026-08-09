@@ -1,9 +1,26 @@
+using System.Text;
 using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Database;
 
 public partial class DbWriter
 {
+    private const int ReferenceInsertParameterCountPerRow = 14;
+    private static readonly AsyncLocal<Action<ReferenceInsertBindingWork>?>
+        ScopedReferenceInsertBindingWorkForTesting = new();
+
+    internal sealed record ReferenceInsertBindingWork(
+        int StatementRows,
+        int BoundParameterCount,
+        int MaterializedReferenceCount,
+        int MaterializedReferenceLineCount);
+
+    internal static Action<ReferenceInsertBindingWork>? ReferenceInsertBindingWorkForTesting
+    {
+        get => ScopedReferenceInsertBindingWorkForTesting.Value;
+        set => ScopedReferenceInsertBindingWorkForTesting.Value = value;
+    }
+
     private static string BuildReferenceInsertSql(int rowCount)
     {
         var sql = CreateBatchSqlBuilder(rowCount, estimatedCharsPerRow: 256);
@@ -20,9 +37,26 @@ public partial class DbWriter
         {
             if (row > 0)
                 sql.Append(", ");
-            AppendBatchParameterTuple(sql, ref parameterIndex, columnCount: 15);
+            AppendReferenceInsertParameterTuple(sql, ref parameterIndex);
         }
         return sql.ToString();
+    }
+
+    private static void AppendReferenceInsertParameterTuple(
+        StringBuilder sql,
+        ref int parameterIndex)
+    {
+        sql.Append('(');
+        for (var column = 0; column < 15; column++)
+        {
+            if (column > 0)
+                sql.Append(", ");
+            if (column == 6)
+                sql.Append("NULL");
+            else
+                sql.Append("@p").Append(parameterIndex++);
+        }
+        sql.Append(')');
     }
 
     private static void AddReferenceInsertParameters(SqliteCommand cmd, int rowCount)
@@ -36,7 +70,6 @@ public partial class DbWriter
             AddBatchParameter(cmd, ref parameterIndex, SqliteType.Integer);
             AddBatchParameter(cmd, ref parameterIndex, SqliteType.Integer);
             AddBatchParameter(cmd, ref parameterIndex, SqliteType.Integer);
-            AddBatchParameter(cmd, ref parameterIndex, SqliteType.Text);
             AddBatchParameter(cmd, ref parameterIndex, SqliteType.Integer);
             AddBatchParameter(cmd, ref parameterIndex, SqliteType.Text);
             AddBatchParameter(cmd, ref parameterIndex, SqliteType.Text);

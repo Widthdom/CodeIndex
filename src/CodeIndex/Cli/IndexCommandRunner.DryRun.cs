@@ -155,8 +155,6 @@ public static partial class IndexCommandRunner
             }
         }
 
-        var currentHotspotFamilyMarkerFingerprints =
-            GetHotspotFamilyMarkerFingerprints(dryIndexer, cancellationToken);
         var priorHotspotFamilyVersions = FileIndexer
             .GetHotspotFamilyMarkerLanguages()
             .ToDictionary(
@@ -171,12 +169,6 @@ public static partial class IndexCommandRunner
                 language => dbSnapshot.GetMeta(
                     DbContext.GetHotspotFamilyMarkerFingerprintMetaKey(language)),
                 StringComparer.Ordinal);
-        var hotspotFamilyTrustMatchesCurrent =
-            GetHotspotFamilyTrustMatchesCurrent(
-                priorHotspotFamilyVersions,
-                priorHotspotFamilyMarkerFingerprints,
-                currentHotspotFamilyMarkerFingerprints);
-
         if (!TryResolveDryRunCandidates(
             options,
             dryIndexer,
@@ -195,6 +187,15 @@ public static partial class IndexCommandRunner
         {
             return exitCode;
         }
+
+        var currentHotspotFamilyMarkerFingerprints = authoritativeFullScan
+            ? dryScanMetadata.ProjectMarkerFingerprints
+            : GetHotspotFamilyMarkerFingerprints(dryIndexer, cancellationToken);
+        var hotspotFamilyTrustMatchesCurrent =
+            GetHotspotFamilyTrustMatchesCurrent(
+                priorHotspotFamilyVersions,
+                priorHotspotFamilyMarkerFingerprints,
+                currentHotspotFamilyMarkerFingerprints);
 
         var dryFileSamples = new List<string>();
         var dryFileCount = 0;
@@ -1030,8 +1031,7 @@ public static partial class IndexCommandRunner
         var chunks = ChunkSplitter.SplitNormalized(
             0,
             loaded.Content,
-            loaded.HasOversizeLine,
-            record.Lines);
+            loaded.Facts);
         var generatedSuppressionIssue = indexer.IsGeneratedCodeExtractionSuppressed(record.Path)
             ? indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path)
             : null;
@@ -1044,8 +1044,7 @@ public static partial class IndexCommandRunner
                     loaded.Content,
                     record.Lang,
                     loaded.Inspection,
-                    loaded.HasOversizeLine,
-                    loaded.ConflictMarkerLine),
+                    loaded.Facts),
                 generatedSuppressionIssue);
             return new DryRunParsedMutationEstimate(
                 chunks.Count,
@@ -1152,8 +1151,7 @@ public static partial class IndexCommandRunner
             loaded.Content,
             record.Lang,
             loaded.Inspection,
-            loaded.HasOversizeLine,
-            loaded.ConflictMarkerLine);
+            loaded.Facts);
         if (symbolExtraction.RegexTimeoutIssue != null)
             issues = AppendIssue(issues, symbolExtraction.RegexTimeoutIssue);
         if (referenceRegexTimeoutIssue != null)
@@ -1906,7 +1904,8 @@ public static partial class IndexCommandRunner
         IReadOnlyList<string> ListedDirectories,
         IReadOnlyList<string> AttributePrunedDirectories,
         IReadOnlyList<string> NestedRepositories,
-        IReadOnlyDictionary<string, string> FileLanguages)
+        IReadOnlyDictionary<string, string> FileLanguages,
+        IReadOnlyDictionary<string, FileIndexer.ProjectMarkerFingerprintResult> ProjectMarkerFingerprints)
     {
         public static DryRunScanMetadata Empty { get; } = new(
             false,
@@ -1916,7 +1915,8 @@ public static partial class IndexCommandRunner
             [],
             [],
             [],
-            new Dictionary<string, string>(StringComparer.Ordinal));
+            new Dictionary<string, string>(StringComparer.Ordinal),
+            new Dictionary<string, FileIndexer.ProjectMarkerFingerprintResult>(StringComparer.Ordinal));
 
         public static DryRunScanMetadata FromScanResult(FileIndexer.ScanFilesResult scanResult)
             => new(
@@ -1927,7 +1927,8 @@ public static partial class IndexCommandRunner
                 scanResult.ListedDirectories,
                 scanResult.AttributePrunedDirectories,
                 scanResult.NestedRepositories,
-                scanResult.FileLanguages);
+                scanResult.FileLanguages,
+                scanResult.ProjectMarkerFingerprints);
     }
 
     private readonly record struct DryRunFileProbe(

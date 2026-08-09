@@ -121,7 +121,8 @@ public static partial class ReferenceExtractor
                 }
             }
         }
-        else if (AnnotationLanguages.Contains(line.Language))
+        else if (AnnotationLanguages.Contains(line.Language)
+                 && line.PreparedLine.IndexOf('@') >= 0)
         {
             if (line.Language == "kotlin")
             {

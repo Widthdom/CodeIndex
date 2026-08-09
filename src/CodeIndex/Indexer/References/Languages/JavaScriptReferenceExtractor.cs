@@ -29,6 +29,9 @@ internal static class JavaScriptReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForCall)
     {
+        if (preparedLine.IndexOf('.') < 0)
+            return;
+
         var index = 0;
         while (index < preparedLine.Length)
         {
@@ -75,6 +78,13 @@ internal static class JavaScriptReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForCall)
     {
+        if (detectionLine.IndexOf('.') < 0
+            || detectionLine.IndexOf('=') < 0
+            || (sourceLine.IndexOf('"') < 0 && sourceLine.IndexOf('\'') < 0))
+        {
+            return;
+        }
+
         foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(DiscriminantStringGuardRegex, detectionLine, references))
         {
             var objectName = match.Groups["object"].Value;
@@ -132,6 +142,9 @@ internal static class JavaScriptReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForCall)
     {
+        if (preparedLine.IndexOf("new", StringComparison.Ordinal) < 0)
+            return;
+
         foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(ParenlessConstructorRegex, preparedLine, references))
         {
             var rawName = match.Groups["name"].Value;

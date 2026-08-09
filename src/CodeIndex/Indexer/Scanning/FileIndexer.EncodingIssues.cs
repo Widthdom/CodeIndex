@@ -5,6 +5,9 @@ namespace CodeIndex.Indexer;
 
 public partial class FileIndexer
 {
+    internal const double NonUtf8LikelyReplacementRatioThreshold = 0.01;
+    internal const int NonUtf8LikelyMinimumReplacementCount = 5;
+
     private static readonly UTF8Encoding StrictReplacementOriginUtf8Encoding = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
     private static readonly UnicodeEncoding StrictReplacementOriginUtf16LeBomEncoding = new(bigEndian: false, byteOrderMark: true, throwOnInvalidBytes: true);
     private static readonly UnicodeEncoding StrictReplacementOriginUtf16LeNoBomEncoding = new(bigEndian: false, byteOrderMark: false, throwOnInvalidBytes: true);
@@ -46,7 +49,8 @@ public partial class FileIndexer
         string content,
         bool isUtf16,
         bool utf16BigEndian,
-        bool hasUtf16Bom)
+        bool hasUtf16Bom,
+        NormalizedContentFacts? facts)
     {
         // Aggregate signal: when a large fraction of the decoded content is U+FFFD, the file
         // most likely uses a non-UTF8 encoding without a BOM (SHIFT_JIS / GBK / ISO-8859-1).
@@ -60,16 +64,12 @@ public partial class FileIndexer
         // で数百件の重複が出てしまい本来の診断を埋もれさせるためアグリゲートで代替。
         // 最低 5 件しきい値で、たまたま 1 byte 壊れた小さなスタブを誤検出しないように。
         // Closes #1540.
-        const double NonUtf8LikelyRatioThreshold = 0.01;
-        const int NonUtf8LikelyMinCount = 5;
-        var fffdCount = CountReplacementChars(content);
+        var fffdCount = facts?.ReplacementCharacterCount ?? CountReplacementChars(content);
         var replacementCharOrigin = fffdCount > 0
             ? DetermineReplacementCharOrigin(rawBytes, isUtf16, utf16BigEndian, hasUtf16Bom)
             : null;
         var nonUtf8Likely = replacementCharOrigin == FileIssue.OriginDecodeReplacement
-            && fffdCount >= NonUtf8LikelyMinCount
-            && content.Length > 0
-            && (double)fffdCount / content.Length >= NonUtf8LikelyRatioThreshold;
+            && MeetsNonUtf8LikelyReplacementThreshold(fffdCount, content.Length);
         if (nonUtf8Likely)
         {
             var ratioPercent = 100.0 * fffdCount / content.Length;
@@ -91,6 +91,16 @@ public partial class FileIndexer
         if (nonUtf8Likely)
             return;
 
+        if (facts is { } normalizedFacts)
+        {
+            if (normalizedFacts.ReplacementCharacterLines is not { } replacementLines)
+                return;
+
+            foreach (var lineNumber in replacementLines)
+                AddReplacementCharacterIssue(ref issues, relativePath, lineNumber, replacementCharOrigin);
+            return;
+        }
+
         var lineNum = 1;
         for (int i = 0; i < content.Length; i++)
         {
@@ -103,18 +113,7 @@ public partial class FileIndexer
             if (content[i] != '\uFFFD')
                 continue;
 
-            var isSourceLiteral = replacementCharOrigin == FileIssue.OriginSourceLiteral;
-            AddIssue(ref issues, new FileIssue
-            {
-                Path = relativePath,
-                Kind = "replacement_char",
-                Line = lineNum,
-                Message = isSourceLiteral
-                    ? $"U+FFFD source literal at line {lineNum}"
-                    : $"U+FFFD decoder replacement character at line {lineNum}",
-                Origin = replacementCharOrigin,
-                Severity = isSourceLiteral ? FileIssue.SeverityInfo : FileIssue.SeverityWarning,
-            });
+            AddReplacementCharacterIssue(ref issues, relativePath, lineNum, replacementCharOrigin);
             // Skip to next line to avoid reporting every char on the same line
             // 同じ行の連続報告を避けるため次の行までスキップ
             var nextNewline = content.IndexOf('\n', i);
@@ -124,6 +123,34 @@ public partial class FileIndexer
             i = nextNewline;
         }
     }
+
+    private static void AddReplacementCharacterIssue(
+        ref List<FileIssue>? issues,
+        string relativePath,
+        int lineNumber,
+        string? replacementCharOrigin)
+    {
+        var isSourceLiteral = replacementCharOrigin == FileIssue.OriginSourceLiteral;
+        AddIssue(ref issues, new FileIssue
+        {
+            Path = relativePath,
+            Kind = "replacement_char",
+            Line = lineNumber,
+            Message = isSourceLiteral
+                ? $"U+FFFD source literal at line {lineNumber}"
+                : $"U+FFFD decoder replacement character at line {lineNumber}",
+            Origin = replacementCharOrigin,
+            Severity = isSourceLiteral ? FileIssue.SeverityInfo : FileIssue.SeverityWarning,
+        });
+    }
+
+    internal static bool MeetsNonUtf8LikelyReplacementThreshold(
+        int replacementCharacterCount,
+        int contentLength)
+        => replacementCharacterCount >= NonUtf8LikelyMinimumReplacementCount
+            && contentLength > 0
+            && (double)replacementCharacterCount / contentLength
+                >= NonUtf8LikelyReplacementRatioThreshold;
 
     private static void AddRawByteContentIssues(
         ref List<FileIssue>? issues,

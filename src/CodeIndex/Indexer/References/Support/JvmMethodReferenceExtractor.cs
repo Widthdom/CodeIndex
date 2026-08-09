@@ -26,6 +26,9 @@ internal static class JvmMethodReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForColumn)
     {
+        if (preparedLine.IndexOf("::", StringComparison.Ordinal) < 0)
+            return;
+
         foreach (Match match in ReferenceExtractor.EnumerateReferenceMatches(
                      MethodReferenceRegex,
                      preparedLine,

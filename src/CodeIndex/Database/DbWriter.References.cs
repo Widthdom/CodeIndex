@@ -21,8 +21,10 @@ public partial class DbWriter
                     AND r.source_symbol_id <> r.target_symbol_id
                     AND EXISTS (
                         SELECT 1
-                        FROM symbol_references AS reverse
-                        WHERE reverse.source_symbol_id = r.target_symbol_id
+                        FROM symbol_references AS reverse INDEXED BY idx_symbol_refs_resolved_source_target_kind
+                        WHERE reverse.source_symbol_id IS NOT NULL
+                          AND reverse.target_symbol_id IS NOT NULL
+                          AND reverse.source_symbol_id = r.target_symbol_id
                           AND reverse.target_symbol_id = r.source_symbol_id
                           AND reverse.reference_kind IN ('call', 'instantiate', 'subscribe', 'unsubscribe', 'razor_event_binding')
                     )
@@ -43,10 +45,14 @@ public partial class DbWriter
                             AND r.symbol_name_folded <> ''
                             AND EXISTS (
                                 SELECT 1
-                                FROM symbol_references AS reverse
+                                FROM symbol_references AS reverse INDEXED BY idx_symbol_refs_unresolved_mutual_folded
                                 WHERE reverse.source_symbol_id IS NULL
                                   AND reverse.target_symbol_id IS NULL
                                   AND reverse.is_self_reference = 0
+                                  AND reverse.container_name_folded IS NOT NULL
+                                  AND reverse.container_name_folded <> ''
+                                  AND reverse.symbol_name_folded IS NOT NULL
+                                  AND reverse.symbol_name_folded <> ''
                                   AND reverse.reference_kind IN ('call', 'instantiate', 'subscribe', 'unsubscribe', 'razor_event_binding')
                                   AND reverse.container_name_folded = r.symbol_name_folded
                                   AND reverse.symbol_name_folded = r.container_name_folded
@@ -56,7 +62,7 @@ public partial class DbWriter
                             (r.container_name_folded IS NULL OR r.symbol_name_folded IS NULL)
                             AND EXISTS (
                                 SELECT 1
-                                FROM symbol_references AS reverse
+                                FROM symbol_references AS reverse INDEXED BY idx_symbol_refs_container_nocase_kind
                                 WHERE reverse.source_symbol_id IS NULL
                                   AND reverse.target_symbol_id IS NULL
                                   AND reverse.is_self_reference = 0
@@ -123,8 +129,164 @@ public partial class DbWriter
             base_qualified_name    TEXT NOT NULL,
             distance               INTEGER NOT NULL,
             PRIMARY KEY(derived_qualified_name, base_qualified_name)
+        ) WITHOUT ROWID;
+
+        CREATE TEMP TABLE IF NOT EXISTS csharp_reference_facts (
+            reference_id       INTEGER NOT NULL PRIMARY KEY,
+            type_arity         INTEGER,
+            argument_count     INTEGER,
+            is_member_receiver INTEGER NOT NULL
+        ) WITHOUT ROWID;
+
+        CREATE TEMP TABLE IF NOT EXISTS csharp_symbol_facts (
+            symbol_id                   INTEGER NOT NULL PRIMARY KEY,
+            definition_type_arity       INTEGER,
+            constructor_parameter_count INTEGER,
+            is_value_type               INTEGER NOT NULL
+        ) WITHOUT ROWID;
+
+        CREATE TEMP TABLE IF NOT EXISTS csharp_type_identity_facts (
+            symbol_id                    INTEGER NOT NULL PRIMARY KEY,
+            unprefixed_type_identity     TEXT COLLATE BINARY,
+            type_identity                TEXT COLLATE BINARY
+        ) WITHOUT ROWID;
+
+        CREATE TEMP TABLE IF NOT EXISTS csharp_constructor_identity_facts (
+            symbol_id     INTEGER NOT NULL PRIMARY KEY,
+            type_identity TEXT COLLATE BINARY,
+            type_arity    INTEGER
         ) WITHOUT ROWID
         """;
+
+    private static string BuildRefreshCSharpReferenceFactsSql(string scopePredicate)
+        => $"""
+            DELETE FROM temp.csharp_reference_facts;
+
+            INSERT INTO temp.csharp_reference_facts(
+                reference_id,
+                type_arity,
+                argument_count,
+                is_member_receiver)
+            SELECT r.id,
+                   CASE
+                       WHEN r.reference_kind IN ('instantiate', 'type_reference')
+                         OR (
+                             r.reference_kind = 'reference'
+                             AND r.target_qualifier LIKE
+                                 char(31) || 'property_receiver:%'
+                         )
+                       THEN csharp_reference_type_arity(
+                           COALESCE(r.context, reference_line.context),
+                           r.symbol_name,
+                           r.column_number)
+                   END,
+                   CASE
+                       WHEN r.reference_kind = 'instantiate'
+                       THEN csharp_invocation_argument_count(
+                           COALESCE(r.context, reference_line.context),
+                           r.symbol_name,
+                           r.column_number)
+                   END,
+                   CASE
+                       WHEN (
+                           r.reference_kind = 'type_reference'
+                           AND r.target_qualifier IS NULL
+                       ) OR (
+                           r.reference_kind = 'reference'
+                           AND r.target_qualifier LIKE
+                               char(31) || 'property_receiver:%'
+                       )
+                       THEN csharp_reference_is_member_receiver(
+                           COALESCE(r.context, reference_line.context),
+                           r.symbol_name,
+                           r.column_number)
+                       ELSE 0
+                   END
+            FROM symbol_references AS r
+            JOIN files AS source_file
+              ON source_file.id = r.file_id
+             AND source_file.lang = 'csharp'
+            LEFT JOIN reference_lines AS reference_line
+              ON reference_line.id = r.reference_line_id
+            WHERE {scopePredicate}
+              AND (
+                  r.reference_kind IN ('instantiate', 'type_reference')
+                  OR (
+                      r.reference_kind = 'reference'
+                      AND r.target_qualifier LIKE
+                          char(31) || 'property_receiver:%'
+                  )
+              );
+            """;
+
+    private static string RefreshCSharpReferenceFactsFullSql =>
+        BuildRefreshCSharpReferenceFactsSql("1 = 1");
+
+    private static string BuildRefreshCSharpSymbolFactsSql(string scopeJoin)
+        => $"""
+            DELETE FROM temp.csharp_symbol_facts;
+
+            INSERT INTO temp.csharp_symbol_facts(
+                symbol_id,
+                definition_type_arity,
+                constructor_parameter_count,
+                is_value_type)
+            SELECT symbol.id,
+                   csharp_definition_type_arity(
+                       symbol.signature,
+                       symbol.name,
+                       symbol.kind),
+                   csharp_constructor_parameter_count(
+                       symbol.signature,
+                       symbol.name,
+                       symbol.kind),
+                   csharp_definition_is_value_type(
+                       symbol.signature,
+                       symbol.kind)
+            FROM symbols AS symbol
+            {scopeJoin}
+            JOIN files AS symbol_file
+              ON symbol_file.id = symbol.file_id
+             AND symbol_file.lang = 'csharp'
+            WHERE symbol.kind IN (
+                'class',
+                'struct',
+                'interface',
+                'record',
+                'enum',
+                'delegate',
+                'function');
+            """;
+
+    private static string RefreshCSharpSymbolFactsFullSql =>
+        BuildRefreshCSharpSymbolFactsSql(string.Empty);
+
+    private static string BuildCSharpDefinitionTypeAritySql(string symbolAlias)
+        => $"""
+            (
+                SELECT symbol_fact.definition_type_arity
+                FROM temp.csharp_symbol_facts AS symbol_fact
+                WHERE symbol_fact.symbol_id = {symbolAlias}.id
+            )
+            """;
+
+    private static string BuildCSharpConstructorParameterCountSql(string symbolAlias)
+        => $"""
+            (
+                SELECT symbol_fact.constructor_parameter_count
+                FROM temp.csharp_symbol_facts AS symbol_fact
+                WHERE symbol_fact.symbol_id = {symbolAlias}.id
+            )
+            """;
+
+    private static string BuildCSharpIsValueTypeSql(string symbolAlias)
+        => $"""
+            (
+                SELECT symbol_fact.is_value_type
+                FROM temp.csharp_symbol_facts AS symbol_fact
+                WHERE symbol_fact.symbol_id = {symbolAlias}.id
+            )
+            """;
 
     private static string BuildCSharpProjectPrefixSql(string symbolAlias)
         => $"""
@@ -165,124 +327,191 @@ public partial class DbWriter
             END
             """;
 
-    private static string BuildCSharpTypeIdentitySql(string symbolAlias, string fileAlias)
+    private static string BuildCSharpTypeIdentityPrefixSql(string symbolAlias, string fileAlias)
         => $"""
-            (
-                COALESCE(
-                    {BuildCSharpProjectPrefixSql(symbolAlias)},
-                    CASE
-                        WHEN INSTR(
-                                 ' ' || LOWER(
+            COALESCE(
+                {BuildCSharpProjectPrefixSql(symbolAlias)},
+                CASE
+                    WHEN INSTR(
+                             ' ' || LOWER(
+                                 REPLACE(
                                      REPLACE(
                                          REPLACE(
-                                             REPLACE(
-                                                 REPLACE(COALESCE({symbolAlias}.signature, ''), '(', ' '),
-                                                 ')',
-                                                 ' '),
-                                             ':',
+                                             REPLACE(COALESCE({symbolAlias}.signature, ''), '(', ' '),
+                                             ')',
                                              ' '),
-                                         CHAR(9),
-                                         ' ')) || ' ',
-                                 ' partial ') > 0
-                            THEN ''
-                        ELSE {fileAlias}.path || char(31)
-                    END
-                ) ||
-                {BuildCSharpUnprefixedTypeIdentitySql(symbolAlias)} ||
-                char(31) ||
-                COALESCE(
-                    csharp_definition_type_arity(
-                        {symbolAlias}.signature,
-                        {symbolAlias}.name,
-                        {symbolAlias}.kind),
-                    -1)
+                                         ':',
+                                         ' '),
+                                     CHAR(9),
+                                     ' ')) || ' ',
+                             ' partial ') > 0
+                        THEN ''
+                    ELSE {fileAlias}.path || char(31)
+                END
             )
             """;
 
-    private static string BuildCSharpConstructorIdentitySql(string symbolAlias, string fileAlias)
+    private static readonly string RefreshCSharpTypeIdentityFactsSql = $"""
+        DELETE FROM temp.csharp_type_identity_facts;
+
+        WITH type_identity_parts(
+            symbol_id,
+            identity_prefix,
+            unprefixed_type_identity,
+            definition_type_arity) AS MATERIALIZED (
+            SELECT symbol.id,
+                   {BuildCSharpTypeIdentityPrefixSql("symbol", "symbol_file")},
+                   {BuildCSharpUnprefixedTypeIdentitySql("symbol")},
+                   symbol_fact.definition_type_arity
+            FROM temp.csharp_symbol_facts AS symbol_fact
+            JOIN symbols AS symbol
+              ON symbol.id = symbol_fact.symbol_id
+            JOIN files AS symbol_file
+              ON symbol_file.id = symbol.file_id
+             AND symbol_file.lang = 'csharp'
+            WHERE symbol.kind IN (
+                'class',
+                'struct',
+                'interface',
+                'record',
+                'enum',
+                'delegate')
+        )
+        INSERT INTO temp.csharp_type_identity_facts(
+            symbol_id,
+            unprefixed_type_identity,
+            type_identity)
+        SELECT symbol_id,
+               unprefixed_type_identity,
+               identity_prefix ||
+                   unprefixed_type_identity ||
+                   char(31) ||
+                   COALESCE(definition_type_arity, -1)
+        FROM type_identity_parts;
+        """;
+
+    private static readonly string RefreshCSharpConstructorIdentityFactsSql = $"""
+        DELETE FROM temp.csharp_constructor_identity_facts;
+
+        WITH ranked_constructor_owners(
+            constructor_symbol_id,
+            type_identity,
+            type_arity,
+            owner_rank) AS MATERIALIZED (
+            SELECT constructor.id,
+                   constructor_type_identity.type_identity,
+                   constructor_type_fact.definition_type_arity,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY constructor.id
+                       ORDER BY
+                           COALESCE(constructor_type.end_line, constructor_type.line)
+                               - COALESCE(constructor_type.start_line, constructor_type.line),
+                           COALESCE(constructor_type.start_line, constructor_type.line) DESC,
+                           constructor_type.id)
+            FROM temp.csharp_symbol_facts AS constructor_fact
+            JOIN symbols AS constructor
+              ON constructor.id = constructor_fact.symbol_id
+            JOIN files AS constructor_file
+              ON constructor_file.id = constructor.file_id
+             AND constructor_file.lang = 'csharp'
+            JOIN symbols AS constructor_type
+              ON constructor_type.file_id = constructor.file_id
+             AND constructor_type.kind IN ('class', 'struct', 'record')
+             AND COALESCE(constructor.start_line, constructor.line)
+                 BETWEEN COALESCE(constructor_type.start_line, constructor_type.line)
+                     AND COALESCE(constructor_type.end_line, constructor_type.line)
+            JOIN temp.csharp_type_identity_facts AS constructor_type_identity
+              ON constructor_type_identity.symbol_id = constructor_type.id
+             AND constructor_type_identity.unprefixed_type_identity =
+                 COALESCE(
+                     NULLIF(constructor.container_qualified_name, ''),
+                     NULLIF(constructor.container_name, ''),
+                     constructor.name) COLLATE BINARY
+            JOIN temp.csharp_symbol_facts AS constructor_type_fact
+              ON constructor_type_fact.symbol_id = constructor_type.id
+            WHERE constructor.kind = 'function'
+              AND constructor_fact.constructor_parameter_count IS NOT NULL
+        )
+        INSERT INTO temp.csharp_constructor_identity_facts(
+            symbol_id,
+            type_identity,
+            type_arity)
+        SELECT constructor_symbol_id,
+               type_identity,
+               type_arity
+        FROM ranked_constructor_owners
+        WHERE owner_rank = 1;
+
+        INSERT OR IGNORE INTO temp.csharp_constructor_identity_facts(
+            symbol_id,
+            type_identity,
+            type_arity)
+        SELECT constructor.id,
+               COALESCE(
+                   {BuildCSharpProjectPrefixSql("constructor")},
+                   constructor_file.path || char(31)) ||
+               COALESCE(
+                   NULLIF(constructor.container_qualified_name, ''),
+                   NULLIF(constructor.container_name, ''),
+                   constructor.name) ||
+               char(31) || '-1',
+               NULL
+        FROM temp.csharp_symbol_facts AS constructor_fact
+        JOIN symbols AS constructor
+          ON constructor.id = constructor_fact.symbol_id
+        JOIN files AS constructor_file
+          ON constructor_file.id = constructor.file_id
+         AND constructor_file.lang = 'csharp'
+        WHERE constructor.kind = 'function'
+          AND constructor_fact.constructor_parameter_count IS NOT NULL
+          AND NOT EXISTS (
+              SELECT 1
+              FROM temp.csharp_constructor_identity_facts AS existing
+              WHERE existing.symbol_id = constructor.id
+          );
+        """;
+
+    private static string BuildCSharpTypeIdentitySql(string symbolAlias)
         => $"""
-            COALESCE(
-                (
-                    SELECT {BuildCSharpTypeIdentitySql("constructor_type", "constructor_type_file")}
-                    FROM symbols AS constructor_type
-                    JOIN files AS constructor_type_file
-                      ON constructor_type_file.id = constructor_type.file_id
-                     AND constructor_type_file.lang = 'csharp'
-                    WHERE constructor_type.file_id = {symbolAlias}.file_id
-                      AND constructor_type.kind IN ('class', 'struct', 'record')
-                      AND COALESCE({symbolAlias}.start_line, {symbolAlias}.line)
-                          BETWEEN COALESCE(constructor_type.start_line, constructor_type.line)
-                              AND COALESCE(constructor_type.end_line, constructor_type.line)
-                      AND {BuildCSharpUnprefixedTypeIdentitySql("constructor_type")}
-                          = COALESCE(
-                              NULLIF({symbolAlias}.container_qualified_name, ''),
-                              NULLIF({symbolAlias}.container_name, ''),
-                              {symbolAlias}.name) COLLATE BINARY
-                    ORDER BY
-                        COALESCE(constructor_type.end_line, constructor_type.line)
-                            - COALESCE(constructor_type.start_line, constructor_type.line),
-                        COALESCE(constructor_type.start_line, constructor_type.line) DESC,
-                        constructor_type.id
-                    LIMIT 1
-                ),
-                COALESCE(
-                    {BuildCSharpProjectPrefixSql(symbolAlias)},
-                    {fileAlias}.path || char(31)) ||
-                COALESCE(
-                    NULLIF({symbolAlias}.container_qualified_name, ''),
-                    NULLIF({symbolAlias}.container_name, ''),
-                    {symbolAlias}.name) ||
-                char(31) || '-1'
+            (
+                SELECT type_identity_fact.type_identity
+                FROM temp.csharp_type_identity_facts AS type_identity_fact
+                WHERE type_identity_fact.symbol_id = {symbolAlias}.id
+            )
+            """;
+
+    private static string BuildCSharpConstructorIdentitySql(string symbolAlias)
+        => $"""
+            (
+                SELECT constructor_identity_fact.type_identity
+                FROM temp.csharp_constructor_identity_facts AS constructor_identity_fact
+                WHERE constructor_identity_fact.symbol_id = {symbolAlias}.id
             )
             """;
 
     private static string BuildCSharpConstructorTypeAritySql(string symbolAlias)
         => $"""
             (
-                SELECT csharp_definition_type_arity(
-                           constructor_type.signature,
-                           constructor_type.name,
-                           constructor_type.kind)
-                FROM symbols AS constructor_type
-                WHERE constructor_type.file_id = {symbolAlias}.file_id
-                  AND constructor_type.kind IN ('class', 'struct', 'record')
-                  AND COALESCE({symbolAlias}.start_line, {symbolAlias}.line)
-                      BETWEEN COALESCE(constructor_type.start_line, constructor_type.line)
-                          AND COALESCE(constructor_type.end_line, constructor_type.line)
-                  AND {BuildCSharpUnprefixedTypeIdentitySql("constructor_type")}
-                      = COALESCE(
-                          NULLIF({symbolAlias}.container_qualified_name, ''),
-                          NULLIF({symbolAlias}.container_name, ''),
-                          {symbolAlias}.name) COLLATE BINARY
-                ORDER BY
-                    COALESCE(constructor_type.end_line, constructor_type.line)
-                        - COALESCE(constructor_type.start_line, constructor_type.line),
-                    COALESCE(constructor_type.start_line, constructor_type.line) DESC,
-                    constructor_type.id
-                LIMIT 1
+                SELECT constructor_identity_fact.type_arity
+                FROM temp.csharp_constructor_identity_facts AS constructor_identity_fact
+                WHERE constructor_identity_fact.symbol_id = {symbolAlias}.id
             )
             """;
 
     private static string CSharpReferenceTypeAritySql => """
-        csharp_reference_type_arity(
-            COALESCE(
-                r.context,
-                (SELECT reference_line.context
-                 FROM reference_lines AS reference_line
-                 WHERE reference_line.id = r.reference_line_id)),
-            r.symbol_name,
-            r.column_number)
+        (
+            SELECT reference_fact.type_arity
+            FROM temp.csharp_reference_facts AS reference_fact
+            WHERE reference_fact.reference_id = r.id
+        )
         """;
 
     private static string CSharpReferenceArgumentCountSql => """
-        csharp_invocation_argument_count(
-            COALESCE(
-                r.context,
-                (SELECT reference_line.context
-                 FROM reference_lines AS reference_line
-                 WHERE reference_line.id = r.reference_line_id)),
-            r.symbol_name,
-            r.column_number)
+        (
+            SELECT reference_fact.argument_count
+            FROM temp.csharp_reference_facts AS reference_fact
+            WHERE reference_fact.reference_id = r.id
+        )
         """;
 
     private static string CSharpTypeReferenceCandidatePredicateSql => $"""
@@ -295,16 +524,11 @@ public partial class DbWriter
                 WHEN r.reference_kind = 'instantiate'
                      AND s.kind = 'function'
                      AND s.container_name = s.name COLLATE BINARY
-                     AND csharp_constructor_parameter_count(
-                             s.signature,
-                             s.name,
-                             s.kind) IS NOT NULL
+                     AND {BuildCSharpConstructorParameterCountSql("s")} IS NOT NULL
                      AND (
                          {CSharpReferenceArgumentCountSql} IS NULL
-                         OR csharp_constructor_parameter_count(
-                                s.signature,
-                                s.name,
-                                s.kind) = {CSharpReferenceArgumentCountSql}
+                         OR {BuildCSharpConstructorParameterCountSql("s")}
+                            = {CSharpReferenceArgumentCountSql}
                      )
                      AND (
                          {CSharpReferenceTypeAritySql} IS NULL
@@ -315,7 +539,7 @@ public partial class DbWriter
                      AND s.kind IN ('class', 'struct', 'record', 'enum', 'delegate')
                      AND (
                          {CSharpReferenceTypeAritySql} IS NULL
-                         OR csharp_definition_type_arity(s.signature, s.name, s.kind)
+                         OR {BuildCSharpDefinitionTypeAritySql("s")}
                             = {CSharpReferenceTypeAritySql}
                      )
                      AND s.id = (
@@ -332,8 +556,8 @@ public partial class DbWriter
                                'record',
                                'enum',
                                'delegate')
-                           AND {BuildCSharpTypeIdentitySql("representative", "representative_file")}
-                               = {BuildCSharpTypeIdentitySql("s", "target_file")} COLLATE BINARY
+                           AND {BuildCSharpTypeIdentitySql("representative")}
+                               = {BuildCSharpTypeIdentitySql("s")} COLLATE BINARY
                          ORDER BY representative_file.path,
                                   COALESCE(representative.start_line, representative.line),
                                   representative.id
@@ -341,16 +565,11 @@ public partial class DbWriter
                      )
                      AND (
                          (
-                             csharp_constructor_parameter_count(
-                                 s.signature,
-                                 s.name,
-                                 s.kind) IS NOT NULL
+                             {BuildCSharpConstructorParameterCountSql("s")} IS NOT NULL
                              AND (
                                  {CSharpReferenceArgumentCountSql} IS NULL
-                                 OR csharp_constructor_parameter_count(
-                                        s.signature,
-                                        s.name,
-                                        s.kind) = {CSharpReferenceArgumentCountSql}
+                                 OR {BuildCSharpConstructorParameterCountSql("s")}
+                                    = {CSharpReferenceArgumentCountSql}
                              )
                          )
                          OR s.kind = 'delegate'
@@ -363,11 +582,8 @@ public partial class DbWriter
                          )
                          OR (
                              s.kind IN ('class', 'record')
-                             AND csharp_definition_is_value_type(s.signature, s.kind) = 0
-                             AND csharp_constructor_parameter_count(
-                                     s.signature,
-                                     s.name,
-                                     s.kind) IS NULL
+                             AND {BuildCSharpIsValueTypeSql("s")} = 0
+                             AND {BuildCSharpConstructorParameterCountSql("s")} IS NULL
                              AND (
                                  {CSharpReferenceArgumentCountSql} IS NULL
                                  OR {CSharpReferenceArgumentCountSql} = 0
@@ -383,16 +599,14 @@ public partial class DbWriter
                                    AND explicit_constructor.kind = 'function'
                                    AND explicit_constructor.container_name =
                                        explicit_constructor.name COLLATE BINARY
-                                   AND csharp_constructor_parameter_count(
-                                           explicit_constructor.signature,
-                                           explicit_constructor.name,
-                                           explicit_constructor.kind) IS NOT NULL
-                                   AND {BuildCSharpConstructorIdentitySql("explicit_constructor", "constructor_file")}
-                                       = {BuildCSharpTypeIdentitySql("s", "target_file")} COLLATE BINARY
+                                   AND {BuildCSharpConstructorParameterCountSql("explicit_constructor")}
+                                       IS NOT NULL
+                                   AND {BuildCSharpConstructorIdentitySql("explicit_constructor")}
+                                       = {BuildCSharpTypeIdentitySql("s")} COLLATE BINARY
                              )
                          )
                          OR (
-                             csharp_definition_is_value_type(s.signature, s.kind) = 1
+                             {BuildCSharpIsValueTypeSql("s")} = 1
                              AND (
                                  {CSharpReferenceArgumentCountSql} IS NULL
                                  OR {CSharpReferenceArgumentCountSql} = 0
@@ -408,35 +622,19 @@ public partial class DbWriter
                                    AND explicit_zero_constructor.kind = 'function'
                                    AND explicit_zero_constructor.container_name =
                                        explicit_zero_constructor.name COLLATE BINARY
-                                   AND csharp_constructor_parameter_count(
-                                           explicit_zero_constructor.signature,
-                                           explicit_zero_constructor.name,
-                                           explicit_zero_constructor.kind) = 0
-                                   AND {BuildCSharpConstructorIdentitySql("explicit_zero_constructor", "zero_constructor_file")}
-                                       = {BuildCSharpTypeIdentitySql("s", "target_file")} COLLATE BINARY
+                                   AND {BuildCSharpConstructorParameterCountSql("explicit_zero_constructor")}
+                                       = 0
+                                   AND {BuildCSharpConstructorIdentitySql("explicit_zero_constructor")}
+                                       = {BuildCSharpTypeIdentitySql("s")} COLLATE BINARY
                              )
                          )
                      ) THEN 1
                 WHEN r.reference_kind = 'instantiate' THEN 0
                 WHEN s.kind NOT IN ('class', 'struct', 'record', 'interface', 'enum', 'delegate') THEN 0
                 WHEN s.name <> r.symbol_name COLLATE BINARY THEN 0
-                WHEN csharp_reference_type_arity(
-                         COALESCE(
-                             r.context,
-                             (SELECT reference_line.context
-                              FROM reference_lines AS reference_line
-                              WHERE reference_line.id = r.reference_line_id)),
-                         r.symbol_name,
-                         r.column_number) IS NULL THEN 1
-                WHEN csharp_definition_type_arity(s.signature, s.name, s.kind)
-                     = csharp_reference_type_arity(
-                         COALESCE(
-                             r.context,
-                             (SELECT reference_line.context
-                              FROM reference_lines AS reference_line
-                              WHERE reference_line.id = r.reference_line_id)),
-                         r.symbol_name,
-                         r.column_number) THEN 1
+                WHEN {CSharpReferenceTypeAritySql} IS NULL THEN 1
+                WHEN {BuildCSharpDefinitionTypeAritySql("s")}
+                     = {CSharpReferenceTypeAritySql} THEN 1
                 ELSE 0
             END = 1
         )
@@ -624,17 +822,11 @@ public partial class DbWriter
         WHERE {scopePredicate}
           AND r.reference_kind = 'type_reference'
           AND r.target_qualifier IS NULL
-          AND csharp_reference_is_member_receiver(
-                  COALESCE(
-                      r.context,
-                      (
-                          SELECT reference_line.context
-                          FROM reference_lines AS reference_line
-                          WHERE reference_line.id = r.reference_line_id
-                      )
-                  ),
-                  r.symbol_name,
-                  r.column_number) = 1
+          AND COALESCE((
+                  SELECT reference_fact.is_member_receiver
+                  FROM temp.csharp_reference_facts AS reference_fact
+                  WHERE reference_fact.reference_id = r.id
+              ), 0) = 1
           AND EXISTS (
               SELECT 1
               FROM symbols AS source
@@ -972,20 +1164,14 @@ public partial class DbWriter
             SELECT type_symbol.id AS symbol_id,
                    type_symbol.name_folded,
                    type_symbol.name,
-                   csharp_definition_type_arity(
-                       type_symbol.signature,
-                       type_symbol.name,
-                       type_symbol.kind) AS type_arity
+                   {BuildCSharpDefinitionTypeAritySql("type_symbol")} AS type_arity
             FROM symbols AS type_symbol
             JOIN files AS target_file
               ON target_file.id = type_symbol.file_id
             WHERE target_file.lang = 'csharp'
               AND type_symbol.name_folded IS NOT NULL
               AND type_symbol.kind IN ('class', 'struct', 'record', 'interface', 'enum', 'delegate')
-              AND csharp_definition_type_arity(
-                      type_symbol.signature,
-                      type_symbol.name,
-                      type_symbol.kind) IS NOT NULL
+              AND {BuildCSharpDefinitionTypeAritySql("type_symbol")} IS NOT NULL
               AND NOT EXISTS (
                   SELECT 1
                   FROM symbols AS other_type
@@ -995,16 +1181,10 @@ public partial class DbWriter
                   WHERE other_type.name_folded = type_symbol.name_folded
                     AND other_type.name = type_symbol.name COLLATE BINARY
                     AND other_type.kind IN ('class', 'struct', 'record', 'interface', 'enum', 'delegate')
-                    AND csharp_definition_type_arity(
-                            other_type.signature,
-                            other_type.name,
-                            other_type.kind)
-                        = csharp_definition_type_arity(
-                            type_symbol.signature,
-                            type_symbol.name,
-                            type_symbol.kind)
-                    AND {BuildCSharpTypeIdentitySql("other_type", "other_type_file")}
-                        <> {BuildCSharpTypeIdentitySql("type_symbol", "target_file")} COLLATE BINARY
+                    AND {BuildCSharpDefinitionTypeAritySql("other_type")}
+                        = {BuildCSharpDefinitionTypeAritySql("type_symbol")}
+                    AND {BuildCSharpTypeIdentitySql("other_type")}
+                        <> {BuildCSharpTypeIdentitySql("type_symbol")} COLLATE BINARY
               )
         ) AS unique_target
           ON unique_target.name_folded = r.symbol_name_folded
@@ -1013,23 +1193,9 @@ public partial class DbWriter
           AND r.target_qualifier IS NULL
           AND r.reference_kind = 'type_reference'
           AND (
-              csharp_reference_type_arity(
-                  COALESCE(
-                      r.context,
-                      (SELECT reference_line.context
-                       FROM reference_lines AS reference_line
-                       WHERE reference_line.id = r.reference_line_id)),
-                   r.symbol_name,
-                   r.column_number) IS NULL
+              {CSharpReferenceTypeAritySql} IS NULL
               OR unique_target.type_arity
-                 = csharp_reference_type_arity(
-                     COALESCE(
-                         r.context,
-                         (SELECT reference_line.context
-                          FROM reference_lines AS reference_line
-                          WHERE reference_line.id = r.reference_line_id)),
-                     r.symbol_name,
-                     r.column_number)
+                 = {CSharpReferenceTypeAritySql}
           )
           AND NOT EXISTS (
               SELECT 1 FROM symbol_reference_candidates AS existing
@@ -1135,21 +1301,14 @@ public partial class DbWriter
                    unique_type.type_arity,
                    unique_type.type_identity,
                    candidate.kind AS candidate_kind,
-                   csharp_constructor_parameter_count(
-                       candidate.signature,
-                       candidate.name,
-                       candidate.kind) AS constructor_parameter_count,
-                   csharp_definition_is_value_type(
-                       candidate.signature,
-                       candidate.kind) AS is_value_type
+                   {BuildCSharpConstructorParameterCountSql("candidate")}
+                       AS constructor_parameter_count,
+                   {BuildCSharpIsValueTypeSql("candidate")} AS is_value_type
             FROM (
                 SELECT s.name_folded,
                        s.name,
-                       csharp_definition_type_arity(
-                           s.signature,
-                           s.name,
-                           s.kind) AS type_arity,
-                       MIN({BuildCSharpTypeIdentitySql("s", "target_file")}) AS type_identity
+                       {BuildCSharpDefinitionTypeAritySql("s")} AS type_arity,
+                       MIN({BuildCSharpTypeIdentitySql("s")}) AS type_identity
                 FROM symbols AS s
                 JOIN files AS target_file ON target_file.id = s.file_id
                 WHERE target_file.lang = 'csharp'
@@ -1157,11 +1316,8 @@ public partial class DbWriter
                   AND s.kind IN ('class', 'struct', 'record', 'enum', 'delegate')
                 GROUP BY s.name_folded,
                          s.name,
-                         csharp_definition_type_arity(
-                             s.signature,
-                             s.name,
-                             s.kind)
-                HAVING COUNT(DISTINCT {BuildCSharpTypeIdentitySql("s", "target_file")}) = 1
+                         {BuildCSharpDefinitionTypeAritySql("s")}
+                HAVING COUNT(DISTINCT {BuildCSharpTypeIdentitySql("s")}) = 1
             ) AS unique_type
             JOIN symbols AS candidate
               ON candidate.name_folded = unique_type.name_folded
@@ -1172,16 +1328,13 @@ public partial class DbWriter
             WHERE (
                 candidate.kind = 'function'
                     AND candidate.container_name = candidate.name COLLATE BINARY
-                    AND csharp_constructor_parameter_count(
-                            candidate.signature,
-                            candidate.name,
-                            candidate.kind) IS NOT NULL
-                    AND {BuildCSharpConstructorIdentitySql("candidate", "candidate_file")}
+                    AND {BuildCSharpConstructorParameterCountSql("candidate")} IS NOT NULL
+                    AND {BuildCSharpConstructorIdentitySql("candidate")}
                         = unique_type.type_identity COLLATE BINARY
                 )
                OR (
                     candidate.kind IN ('class', 'struct', 'record', 'enum', 'delegate')
-                    AND {BuildCSharpTypeIdentitySql("candidate", "candidate_file")}
+                    AND {BuildCSharpTypeIdentitySql("candidate")}
                         = unique_type.type_identity COLLATE BINARY
                     AND candidate.id = (
                         SELECT representative.id
@@ -1197,7 +1350,7 @@ public partial class DbWriter
                               'record',
                               'enum',
                               'delegate')
-                          AND {BuildCSharpTypeIdentitySql("representative", "representative_file")}
+                          AND {BuildCSharpTypeIdentitySql("representative")}
                               = unique_type.type_identity COLLATE BINARY
                         ORDER BY representative_file.path,
                                  COALESCE(representative.start_line, representative.line),
@@ -1259,11 +1412,9 @@ public partial class DbWriter
                         AND explicit_constructor.kind = 'function'
                         AND explicit_constructor.container_name =
                             explicit_constructor.name COLLATE BINARY
-                        AND csharp_constructor_parameter_count(
-                                explicit_constructor.signature,
-                                explicit_constructor.name,
-                                explicit_constructor.kind) IS NOT NULL
-                        AND {BuildCSharpConstructorIdentitySql("explicit_constructor", "constructor_file")}
+                        AND {BuildCSharpConstructorParameterCountSql("explicit_constructor")}
+                            IS NOT NULL
+                        AND {BuildCSharpConstructorIdentitySql("explicit_constructor")}
                             = unique_target.type_identity COLLATE BINARY
                   )
               )
@@ -1284,11 +1435,9 @@ public partial class DbWriter
                         AND explicit_zero_constructor.kind = 'function'
                         AND explicit_zero_constructor.container_name =
                             explicit_zero_constructor.name COLLATE BINARY
-                        AND csharp_constructor_parameter_count(
-                                explicit_zero_constructor.signature,
-                                explicit_zero_constructor.name,
-                                explicit_zero_constructor.kind) = 0
-                        AND {BuildCSharpConstructorIdentitySql("explicit_zero_constructor", "zero_constructor_file")}
+                        AND {BuildCSharpConstructorParameterCountSql("explicit_zero_constructor")}
+                            = 0
+                        AND {BuildCSharpConstructorIdentitySql("explicit_zero_constructor")}
                             = unique_target.type_identity COLLATE BINARY
                   )
               )
@@ -1367,6 +1516,9 @@ public partial class DbWriter
         WHERE r.is_mutual_recursion IS NOT ({MutualRecursionValueSql})
         """;
 
+    internal static string RefreshMutualRecursionFlagsSqlForTesting
+        => RefreshMutualRecursionFlagsSql;
+
     internal static void RebuildRetainedReferenceGraph(
         SqliteConnection connection,
         SqliteTransaction transaction,
@@ -1378,6 +1530,10 @@ public partial class DbWriter
         command.CommandText =
             CreateReferenceUniqueFamiliesSql + ";\n" +
             RefreshReferenceSourceSymbolsFullSql + ";\n" +
+            RefreshCSharpReferenceFactsFullSql + "\n" +
+            RefreshCSharpSymbolFactsFullSql + "\n" +
+            RefreshCSharpTypeIdentityFactsSql + "\n" +
+            RefreshCSharpConstructorIdentityFactsSql + "\n" +
             NormalizeCSharpPropertyReceiverReferencesFullSql + "\n" +
             RefreshReferenceUniqueFamiliesSql + "\n" +
             RefreshReferenceCandidatesSql + "\n" +
@@ -1500,7 +1656,8 @@ public partial class DbWriter
         // aggregate refresh 前に中断した場合は trust bit を残さず raw fallback に降格する。
         var aggregateWasReady = ClearHotspotReferenceAggregateReady();
 
-        int rowsPerStatement = GetRowsPerInsertStatement(columnCount: 14);
+        int rowsPerStatement = GetRowsPerInsertStatement(
+            columnCount: ReferenceInsertParameterCountPerRow);
         var foldedNameCache = CreateFoldedNameCache(
             Math.Min(references.Count, rowsPerStatement),
             namesPerRow: 2);
@@ -1638,7 +1795,7 @@ public partial class DbWriter
         return windowEndBatch;
     }
 
-    private Dictionary<(long FileId, int Line, string Context), long> MaterializeReferenceLines(
+    private ReferenceLineBatchMap MaterializeReferenceLines(
         IReadOnlyList<ReferenceRecord> references,
         int start,
         int end,
@@ -1653,7 +1810,7 @@ public partial class DbWriter
         IReadOnlyList<ReferenceRecord> references,
         int start,
         int end,
-        Dictionary<(long FileId, int Line, string Context), long> referenceLineIds,
+        ReferenceLineBatchMap referenceLineIds,
         Dictionary<string, string?> foldedNameCache)
     {
         var rowsInBatch = end - start;
@@ -1662,19 +1819,10 @@ public partial class DbWriter
         try
         {
             var parameterIndex = 0;
-            (long FileId, int Line, string Context)? previousReferenceLineKey = null;
-            var previousReferenceLineId = 0L;
             for (int index = start; index < end; index++)
             {
                 var reference = references[index];
                 ValidateReferenceKinds(reference);
-                var referenceLineKey = (reference.FileId, reference.Line, reference.Context);
-                if (previousReferenceLineKey is not { } previousKey
-                    || !ReferenceLineKeysEqual(previousKey, referenceLineKey))
-                {
-                    previousReferenceLineId = referenceLineIds[referenceLineKey];
-                    previousReferenceLineKey = referenceLineKey;
-                }
 
                 cmd.Parameters[parameterIndex++].Value = reference.FileId;
                 cmd.Parameters[parameterIndex++].Value = reference.SymbolName;
@@ -1684,8 +1832,8 @@ public partial class DbWriter
                 cmd.Parameters[parameterIndex++].Value =
                     (object?)(reference.SpanLength > 0 ? reference.SpanLength : null)
                     ?? DBNull.Value;
-                cmd.Parameters[parameterIndex++].Value = DBNull.Value;
-                cmd.Parameters[parameterIndex++].Value = previousReferenceLineId;
+                cmd.Parameters[parameterIndex++].Value =
+                    referenceLineIds.GetReferenceLineId(index);
                 cmd.Parameters[parameterIndex++].Value = (object?)reference.ContainerKind ?? DBNull.Value;
                 cmd.Parameters[parameterIndex++].Value = (object?)reference.ContainerName ?? DBNull.Value;
                 cmd.Parameters[parameterIndex++].Value = FoldedNameDbValue(
@@ -1701,6 +1849,12 @@ public partial class DbWriter
                 cmd.Parameters[parameterIndex++].Value = (object?)ExtractTargetQualifier(reference) ?? DBNull.Value;
             }
 
+            ReferenceInsertBindingWorkForTesting?.Invoke(
+                new ReferenceInsertBindingWork(
+                    rowsInBatch,
+                    cmd.Parameters.Count,
+                    referenceLineIds.ReferenceCount,
+                    referenceLineIds.ReferenceLineCount));
             ReportBatchStatementForTesting("insert_references", rowsInBatch, rowsInBatch);
             cmd.ExecuteNonQuery();
         }
@@ -1736,7 +1890,8 @@ public partial class DbWriter
         if (atomicFileScope)
             return 0;
 
-        int rowsPerStatement = GetRowsPerInsertStatement(columnCount: 14);
+        int rowsPerStatement = GetRowsPerInsertStatement(
+            columnCount: ReferenceInsertParameterCountPerRow);
         long transactionCount = 0;
         foreach (var referenceCount in referenceCountsByFile)
             transactionCount += GetReferenceBatchCount(referenceCount, rowsPerStatement);
@@ -1817,25 +1972,18 @@ public partial class DbWriter
         transaction.Commit();
     }
 
-    private Dictionary<(long FileId, int Line, string Context), long> UpsertReferenceLines(IReadOnlyList<ReferenceRecord> references, int start, int end, CancellationToken cancellationToken)
+    private ReferenceLineBatchMap UpsertReferenceLines(
+        IReadOnlyList<ReferenceRecord> references,
+        int start,
+        int end,
+        CancellationToken cancellationToken)
     {
-        var batchCount = end - start;
-        var referenceLineKeys = new HashSet<(long FileId, int Line, string Context)>(batchCount);
-        (long FileId, int Line, string Context)? previousReferenceLineKey = null;
-        for (int i = start; i < end; i++)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var reference = references[i];
-            var referenceLineKey = (reference.FileId, reference.Line, reference.Context);
-            if (previousReferenceLineKey is not { } previousKey
-                || !ReferenceLineKeysEqual(previousKey, referenceLineKey))
-            {
-                referenceLineKeys.Add(referenceLineKey);
-                previousReferenceLineKey = referenceLineKey;
-            }
-        }
-
-        var rows = referenceLineKeys.ToArray();
+        var lineIds = ReferenceLineBatchMap.Create(
+            references,
+            start,
+            end,
+            cancellationToken);
+        var rows = lineIds.Keys;
         int rowsPerStatement = GetRowsPerInsertStatement(columnCount: 3);
         for (int i = 0; i < rows.Length; i += rowsPerStatement)
         {
@@ -1856,7 +2004,6 @@ public partial class DbWriter
             }
         }
 
-        var lineIds = new Dictionary<(long FileId, int Line, string Context), long>(rows.Length);
         int keysPerStatement = GetRowsPerInsertStatement(columnCount: 3);
         for (int i = 0; i < rows.Length; i += keysPerStatement)
         {
@@ -1879,7 +2026,7 @@ public partial class DbWriter
                     var line = reader.GetInt32(2);
                     var context = reader.GetString(3);
                     var key = (fileId, line, context);
-                    lineIds[key] = id;
+                    lineIds.SetReferenceLineId(key, id);
                 }
             }
             finally
@@ -1888,38 +2035,28 @@ public partial class DbWriter
             }
         }
 
+        lineIds.CompleteMaterialization();
         return lineIds;
     }
 
-    private Dictionary<(long FileId, int Line, string Context), long> InsertNewReferenceLines(
+    private ReferenceLineBatchMap InsertNewReferenceLines(
         IReadOnlyList<ReferenceRecord> references,
         int start,
         int end,
         Dictionary<(long FileId, int Line, string Context), long> knownLineIds,
         CancellationToken cancellationToken)
     {
-        var batchCount = end - start;
-        var referenceLineKeys = new HashSet<(long FileId, int Line, string Context)>(batchCount);
-        (long FileId, int Line, string Context)? previousReferenceLineKey = null;
-        for (int i = start; i < end; i++)
+        var lineIds = ReferenceLineBatchMap.Create(
+            references,
+            start,
+            end,
+            cancellationToken);
+        var rows = new List<(long FileId, int Line, string Context)>(lineIds.ReferenceLineCount);
+        for (var ordinal = 0; ordinal < lineIds.Keys.Length; ordinal++)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            var reference = references[i];
-            var referenceLineKey = (reference.FileId, reference.Line, reference.Context);
-            if (previousReferenceLineKey is not { } previousKey
-                || !ReferenceLineKeysEqual(previousKey, referenceLineKey))
-            {
-                referenceLineKeys.Add(referenceLineKey);
-                previousReferenceLineKey = referenceLineKey;
-            }
-        }
-
-        var lineIds = new Dictionary<(long FileId, int Line, string Context), long>(referenceLineKeys.Count);
-        var rows = new List<(long FileId, int Line, string Context)>(referenceLineKeys.Count);
-        foreach (var key in referenceLineKeys)
-        {
+            var key = lineIds.Keys[ordinal];
             if (knownLineIds.TryGetValue(key, out var knownId))
-                lineIds[key] = knownId;
+                lineIds.SetReferenceLineId(ordinal, knownId);
             else
                 rows.Add(key);
         }
@@ -1944,7 +2081,7 @@ public partial class DbWriter
                     var line = reader.GetInt32(2);
                     var context = reader.GetString(3);
                     var key = (fileId, line, context);
-                    lineIds[key] = id;
+                    lineIds.SetReferenceLineId(key, id);
                     knownLineIds[key] = id;
                 }
             }
@@ -1954,7 +2091,124 @@ public partial class DbWriter
             }
         }
 
+        lineIds.CompleteMaterialization();
         return lineIds;
+    }
+
+    private sealed class ReferenceLineBatchMap
+    {
+        private readonly int _referenceStart;
+        private readonly int[] _referenceLineOrdinals;
+        private readonly long[] _referenceLineIds;
+        private readonly bool[] _hasReferenceLineIds;
+        private Dictionary<(long FileId, int Line, string Context), int>? _keyOrdinals;
+
+        private ReferenceLineBatchMap(
+            int referenceStart,
+            (long FileId, int Line, string Context)[] keys,
+            int[] referenceLineOrdinals,
+            Dictionary<(long FileId, int Line, string Context), int> keyOrdinals)
+        {
+            _referenceStart = referenceStart;
+            Keys = keys;
+            _referenceLineOrdinals = referenceLineOrdinals;
+            _referenceLineIds = new long[keys.Length];
+            _hasReferenceLineIds = new bool[keys.Length];
+            _keyOrdinals = keyOrdinals;
+        }
+
+        internal (long FileId, int Line, string Context)[] Keys { get; }
+        internal int ReferenceCount => _referenceLineOrdinals.Length;
+        internal int ReferenceLineCount => Keys.Length;
+
+        internal static ReferenceLineBatchMap Create(
+            IReadOnlyList<ReferenceRecord> references,
+            int start,
+            int end,
+            CancellationToken cancellationToken)
+        {
+            var referenceCount = end - start;
+            var keys = new List<(long FileId, int Line, string Context)>(referenceCount);
+            var keyOrdinals = new Dictionary<(long FileId, int Line, string Context), int>(
+                referenceCount);
+            var referenceLineOrdinals = new int[referenceCount];
+            (long FileId, int Line, string Context)? previousKey = null;
+            var previousOrdinal = 0;
+            for (var index = start; index < end; index++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var reference = references[index];
+                var key = (reference.FileId, reference.Line, reference.Context);
+                int ordinal;
+                if (previousKey is { } prior && ReferenceLineKeysEqual(prior, key))
+                {
+                    ordinal = previousOrdinal;
+                }
+                else if (!keyOrdinals.TryGetValue(key, out ordinal))
+                {
+                    ordinal = keys.Count;
+                    keys.Add(key);
+                    keyOrdinals.Add(key, ordinal);
+                }
+
+                referenceLineOrdinals[index - start] = ordinal;
+                previousKey = key;
+                previousOrdinal = ordinal;
+            }
+
+            return new ReferenceLineBatchMap(
+                start,
+                keys.ToArray(),
+                referenceLineOrdinals,
+                keyOrdinals);
+        }
+
+        internal void SetReferenceLineId(
+            (long FileId, int Line, string Context) key,
+            long id)
+        {
+            var keyOrdinals = _keyOrdinals
+                ?? throw new InvalidOperationException("Reference-line materialization is already complete.");
+            if (!keyOrdinals.TryGetValue(key, out var ordinal))
+                throw new KeyNotFoundException($"Unexpected materialized reference-line key: {key}.");
+
+            _referenceLineIds[ordinal] = id;
+            _hasReferenceLineIds[ordinal] = true;
+        }
+
+        internal void SetReferenceLineId(int ordinal, long id)
+        {
+            _referenceLineIds[ordinal] = id;
+            _hasReferenceLineIds[ordinal] = true;
+        }
+
+        internal void CompleteMaterialization()
+        {
+            for (var ordinal = 0; ordinal < _referenceLineIds.Length; ordinal++)
+            {
+                if (_hasReferenceLineIds[ordinal])
+                    continue;
+
+                throw new KeyNotFoundException(
+                    $"Reference-line ID was not materialized for key: {Keys[ordinal]}.");
+            }
+
+            // Insert binding is ordinal-only. Release the tuple lookup table before the
+            // symbol_references command walks the batch, so repeated contexts are not rehashed.
+            _keyOrdinals = null;
+        }
+
+        internal long GetReferenceLineId(int referenceIndex)
+        {
+            if (_keyOrdinals != null)
+                throw new InvalidOperationException("Reference-line materialization is incomplete.");
+
+            var offset = referenceIndex - _referenceStart;
+            if ((uint)offset >= (uint)_referenceLineOrdinals.Length)
+                throw new ArgumentOutOfRangeException(nameof(referenceIndex));
+
+            return _referenceLineIds[_referenceLineOrdinals[offset]];
+        }
     }
 
     private static bool ReferenceLineKeysEqual(
@@ -1981,7 +2235,8 @@ public partial class DbWriter
 
     internal void RefreshMutualRecursionFlags(
         CancellationToken cancellationToken = default,
-        bool? stampReferenceIdentityContractReady = null)
+        bool? stampReferenceIdentityContractReady = null,
+        ReferenceSecondaryIndexBulkLoadGuard? referenceSecondaryIndexBulkLoad = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         MutualRecursionRefreshForTesting?.Invoke();
@@ -2022,11 +2277,19 @@ public partial class DbWriter
             {
                 refreshIdentitySql = HasPersistedReferenceResolutionState(cancellationToken)
                     ? RefreshReferenceSourceSymbolsDifferentialSql + ";\n" +
+                      RefreshCSharpReferenceFactsFullSql + "\n" +
+                      RefreshCSharpSymbolFactsFullSql + "\n" +
+                      RefreshCSharpTypeIdentityFactsSql + "\n" +
+                      RefreshCSharpConstructorIdentityFactsSql + "\n" +
                       NormalizeCSharpPropertyReceiverReferencesFullSql + "\n" +
                       RefreshReferenceUniqueFamiliesSql + "\n" +
                       RefreshReferenceCandidatesSql + "\n" +
                       RefreshReferenceResolutionDifferentialSql + "\n"
                     : RefreshReferenceSourceSymbolsFullSql + ";\n" +
+                      RefreshCSharpReferenceFactsFullSql + "\n" +
+                      RefreshCSharpSymbolFactsFullSql + "\n" +
+                      RefreshCSharpTypeIdentityFactsSql + "\n" +
+                      RefreshCSharpConstructorIdentityFactsSql + "\n" +
                       NormalizeCSharpPropertyReceiverReferencesFullSql + "\n" +
                       RefreshReferenceUniqueFamiliesSql + "\n" +
                       RefreshReferenceCandidatesSql + "\n" +
@@ -2036,6 +2299,10 @@ public partial class DbWriter
             {
                 DeleteRemovedReferenceCandidates(cancellationToken);
                 refreshIdentitySql = RefreshScopedReferenceSourceSymbolsSql + "\n" +
+                                     RefreshCSharpReferenceFactsScopedSql + "\n" +
+                                     RefreshCSharpSymbolFactsScopedSql + "\n" +
+                                     RefreshCSharpTypeIdentityFactsSql + "\n" +
+                                     RefreshCSharpConstructorIdentityFactsSql + "\n" +
                                      NormalizeCSharpPropertyReceiverReferencesScopedSql + "\n" +
                                      RefreshScopedReferenceUniqueFamiliesSql + "\n" +
                                      RefreshScopedReferenceCandidatesSql + "\n" +
@@ -2046,11 +2313,6 @@ public partial class DbWriter
                 refreshPlan.UseFullRefresh,
                 cancellationToken);
             refreshIdentityCommand = RentCommand(refreshIdentitySql, static _ => { });
-            refreshMutualCommand = RentCommand(
-                refreshPlan.UseFullRefresh
-                    ? RefreshMutualRecursionFlagsSql
-                    : RefreshScopedMutualRecursionFlagsSql,
-                static _ => { });
             // Reconcile the marker inside the same transaction, but before the graph refresh
             // so the public SQLite changes() result continues to describe recursion updates.
             // High-level indexing defers v7 while untouched legacy C# family rows remain.
@@ -2061,6 +2323,7 @@ public partial class DbWriter
             else
                 ClearReferenceIdentityContractReady();
             cancellationToken.ThrowIfCancellationRequested();
+            referenceSecondaryIndexBulkLoad?.ReportIdentityRefreshStarted();
             refreshIdentityCommand.ExecuteNonQuery();
             cancellationToken.ThrowIfCancellationRequested();
             // Resolution changes alter the default C# common-call hotspot projection even
@@ -2071,6 +2334,14 @@ public partial class DbWriter
             // 対象 source file の aggregate を再集計する。
             RefreshHotspotReferenceCounts(hotspotReferenceFileIds, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
+            referenceSecondaryIndexBulkLoad?.PrepareForMutualRecursion(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            referenceSecondaryIndexBulkLoad?.ReportMutualRecursionStarted();
+            refreshMutualCommand = RentCommand(
+                refreshPlan.UseFullRefresh
+                    ? RefreshMutualRecursionFlagsSql
+                    : RefreshScopedMutualRecursionFlagsSql,
+                static _ => { });
             refreshMutualCommand.ExecuteNonQuery();
             cancellationToken.ThrowIfCancellationRequested();
             if (graphScope != null)

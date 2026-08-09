@@ -109,6 +109,9 @@ internal static partial class CSharpReferenceExtractor
         int lineNumber,
         SymbolRecord? container)
     {
+        if (preparedLine.IndexOf(':') < 0 || preparedLine.IndexOf('(') < 0)
+            return;
+
         using var chainMatches = ReferenceExtractor.EnumerateReferenceMatches(CtorChainRegex, preparedLine, references).GetEnumerator();
         if (!chainMatches.MoveNext())
             return;
@@ -325,6 +328,9 @@ internal static partial class CSharpReferenceExtractor
         int lineNumber,
         Func<int, SymbolRecord?> resolveContainerForCall)
     {
+        if (preparedLine.IndexOf('.') < 0)
+            return;
+
         var trimmed = preparedLine.TrimStart();
         if (trimmed.StartsWith("namespace ", StringComparison.Ordinal)
             || trimmed.StartsWith("global using ", StringComparison.Ordinal)

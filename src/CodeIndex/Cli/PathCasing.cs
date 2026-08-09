@@ -51,8 +51,16 @@ internal static class PathCasing
     {
         if (left is null || right is null)
             return ReferenceEquals(left, right);
-        var anchor = !string.IsNullOrEmpty(left) ? left : right;
-        return string.Equals(left, right, ComparisonFor(anchor));
+
+        // These conclusions are invariant under both Ordinal and OrdinalIgnoreCase,
+        // so avoid a filesystem probe unless casing can actually change the result.
+        // Ordinal / OrdinalIgnoreCase のどちらでも結論が同じ場合は FS probe を避ける。
+        if (left.Length != right.Length)
+            return false;
+        if (string.Equals(left, right, StringComparison.Ordinal))
+            return true;
+
+        return string.Equals(left, right, ComparisonFor(left));
     }
 
     public static string NormalizeBoundaryPath(string path)
@@ -76,15 +84,27 @@ internal static class PathCasing
     /// </summary>
     public static bool IsPathEqualOrParent(string normalizedParent, string normalizedChild)
     {
-        var comparison = ComparisonFor(normalizedParent);
-        if (string.Equals(normalizedParent, normalizedChild, comparison))
+        if (string.Equals(normalizedParent, normalizedChild, StringComparison.Ordinal))
             return true;
 
         var trimmedParent = normalizedParent.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         if (trimmedParent.Length == 0)
             return Path.IsPathFullyQualified(normalizedChild);
-        return normalizedChild.StartsWith(trimmedParent + Path.DirectorySeparatorChar, comparison)
-            || normalizedChild.StartsWith(trimmedParent + Path.AltDirectorySeparatorChar, comparison);
+
+        var directoryPrefix = trimmedParent + Path.DirectorySeparatorChar;
+        var alternateDirectoryPrefix = trimmedParent + Path.AltDirectorySeparatorChar;
+        if (normalizedChild.StartsWith(directoryPrefix, StringComparison.Ordinal)
+            || normalizedChild.StartsWith(alternateDirectoryPrefix, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        var comparison = ComparisonFor(normalizedParent);
+        if (string.Equals(normalizedParent, normalizedChild, comparison))
+            return true;
+
+        return normalizedChild.StartsWith(directoryPrefix, comparison)
+            || normalizedChild.StartsWith(alternateDirectoryPrefix, comparison);
     }
 
     /// <summary>

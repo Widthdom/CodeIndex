@@ -453,7 +453,7 @@ internal static partial class SqlReferenceExtractor
     }
 
     private static void CollectTempObjectNamesFromTargetMatches(
-        IEnumerable<Match> matches,
+        BoundedRegex.MatchEnumerable matches,
         string statement,
         HashSet<string> names)
     {
@@ -471,7 +471,7 @@ internal static partial class SqlReferenceExtractor
     }
 
     private static void CollectTempObjectNamesFromMatches(
-        IEnumerable<Match> matches,
+        BoundedRegex.MatchEnumerable matches,
         string statement,
         HashSet<string> names)
     {

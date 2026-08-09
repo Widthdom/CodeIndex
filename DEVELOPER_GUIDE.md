@@ -260,11 +260,97 @@ Directory scan / shared path filter (built-in skip lists + `.gitignore` / `.cdid
   → Populate FTS5 index
 ```
 
+Every loaded text file is normalized and analyzed in one UTF-16 walk. The
+resulting `NormalizedContentFacts` is the shared source for normalized line
+count, oversized-line and FTS-token diagnostics, conflict-marker detection,
+replacement-character counts/lines, and 80-line/10-line-overlap chunk slices.
+Full scans, scoped updates, dry runs, and MCP indexing pass those facts through
+the same language-independent loader, validation, extraction, and persistence
+paths instead of rescanning content in each consumer. Keep compatibility
+overloads for callers that do not own normalized facts, but do not route normal
+indexing back through them. Files of 80 lines or fewer retain no chunk-boundary
+array, short files skip impossible FTS-token tracking, and high-ratio invalid
+UTF-8 decode replacements retain only the aggregate count used by
+`non_utf8_likely` rather than a line number for every damaged line.
+
+Scoped updates may also parallelize extraction when the immutable C# prepass is
+authoritative and finds static-interface contracts. This path requires at least
+two snapshotted C# targets, `--parallelism > 1`, no active symbol-kind filter,
+no content-load test seam, and no post-extraction hooks. Each window contains
+only consecutive, snapshot-validated C# targets; ambiguous language reuse stays
+nullable so content-aware detection can still reject a target. A fixed pool of
+at most `min(parallelism, authoritative snapshot count)` workers processes no
+more than `2 * workers` payloads per window. All extraction in that window
+finishes before the single consumer persists results in target order. SQLite
+writes, hooks, readiness changes, byte accounting, and user progress remain on
+that consumer. File stats are checked before scheduling, after loading, and
+immediately before persistence; probe failures or an ineligible boundary fall
+back to the ordinary serial per-file error boundary.
+
+The `2 * workers` limit is a count bound, not a byte bound: a slow tail may hold
+the other extracted chunk/symbol/reference payloads until the ordered write
+barrier completes. Workers do not retain raw file bytes after extraction. An
+over-limit collection is discarded before publication, symbol caps also discard
+downstream payloads, and only the bounded surviving payload, issue, and
+source-contract evidence are retained. Do not enlarge this window or add another
+payload copy without peak-RSS and large-file parity measurements. Cancellation
+aborts queued work and waits asynchronously for already-running workers. A global
+no-progress watchdog observes phase and validated-load progress; terminal stalls
+preserve the active phase and required readiness/batch markers. Before a later
+fatal becomes terminal, source-negative workspaces retry the natural serial
+suffix when an earlier target's source-contract candidate is positive or not yet
+evaluated. Only symbol-confirmed evidence is published as persisted source
+evidence; lexical candidates can cause a conservative serial fallback only.
+
 The single writer reuses multi-row chunk, symbol, reference, and reference-line
 commands by row-count shape through the bounded `PreparedCommandCache`. SQL text
 and typed parameter schemas are created only on a cache miss; each execution
 reassigns parameter values by ordinal. Keep new bulk-write paths on this bounded
 cache so large indexes do not rebuild equivalent SQLite commands per file.
+
+Fresh CLI scans and explicit rebuilds defer the query and graph secondary
+indexes on `symbol_references` until raw reference persistence completes. The
+file and reference-line maintenance indexes remain available during the load,
+while identity and resolution finalization continues without query indexes. The
+guard forces any active dirty graph scope onto its full-refresh plan before the
+indexes disappear. Immediately before mutual-recursion evaluation, its graph
+transaction restores only the unresolved-folded, legacy NOCASE, and resolved
+reverse-edge indexes; the remaining query indexes return after the mutual update.
+CLI owns this DDL inside the outer scan transaction so cancellation or failure
+rolls the schema back atomically. MCP uses the same recoverable lifecycle whenever
+its established dirty-byte policy selects FTS bulk loading, and restores every
+index on completion or disposal. Schema initialization and read repair must use
+the same canonical index catalog so every path converges on an identical schema.
+
+Reference context text is normalized into `reference_lines`; the legacy
+`symbol_references.context` column is therefore written as a SQL `NULL` literal
+rather than bound once per reference. Reference-line materialization builds a
+batch-local key-to-ordinal map, resolves each unique line ID, then releases the
+tuple lookup before binding `symbol_references` from ordinal arrays. Preserve
+this path for both new-file inserts and replacement upserts, including atomic
+file windows, so large multi-language reference sets do not rehash file/line/
+context tuples for every persisted edge.
+
+Use the same secondary-index deferral for an existing-database full scan when
+the established FTS dirty-byte policy selects bulk loading. Scoped updates have
+no authoritative workspace-wide byte estimate, so they use a conservative
+recoverable boundary: at least 64 targets and at least 60% of the indexed file
+count. Keep the query-only set deferred through identity and resolution work,
+restore the three reverse-edge indexes immediately before mutual recursion, then
+restore the remainder after that update. Small scoped updates must keep every
+index in place so a fixed rebuild cost does not dominate the update.
+
+C# reference-graph finalization materializes reference arity, invocation arity,
+member-receiver, definition arity, constructor arity, and value-type facts once
+per applicable row in TEMP tables. Full, scoped, and retained-graph rebuilds must
+then materialize project/file-local type identities and constructor-owner identity
+and arity facts from those symbol facts. Populate all four fact tables before
+property-receiver normalization, candidate construction, and resolution. Keep
+candidate SQL on primary-key fact lookups instead of rebuilding identity strings,
+rescanning constructor-owner ranges, or re-entering managed SQLite scalar functions
+for every join candidate. Scoped refreshes must limit symbol facts to their
+lookup-name set and derive identity facts from that bounded population; full and
+retained rebuilds use the complete C# symbol-fact population.
 
 Repository-wide incremental scans load stat-reuse candidates with one SQLite
 statement before the C# contract prepass and parallel extraction. Each candidate
@@ -275,6 +361,17 @@ not replace this snapshot with per-file database probes in either CLI or MCP.
 Rows with missing or invalid legacy stat values are excluded so normal checksum
 reuse or reindexing can repair them, and CLI/MCP cancellation must interrupt the
 snapshot query as well as the later extraction pipeline.
+
+Authoritative full scans collect the C#, VB, F#, and MSBuild project-marker
+fingerprints during the shared source-directory enumeration. The same pass also
+builds a budget-independent directory marker-count snapshot used by
+`GetFamilyScopeKey`, so per-file family assignment does not enumerate marker
+globs again for every ancestor. Fingerprint budgets and scope completeness stay
+independent: an exhausted fingerprint budget may still leave a complete scope
+snapshot, while an incomplete discovery discards the scope snapshot and falls
+back to the live, fail-closed lookup. Scoped update, MCP, and direct pre-scan
+callers retain that fallback because they do not own an authoritative full-tree
+snapshot.
 
 `FileIssue` rows may include nullable `origin` and `severity` metadata.
 For `replacement_char`, `origin: source_literal` means the file contains a
@@ -781,6 +878,18 @@ a reference list use `ReferenceExtractor.EnumerateReferenceMatches` so bounded
 lists stop before requesting the next match, and the shared per-line pipeline
   checks the same cap between type, infrastructure, SQL, call, member, metadata,
   Razor, Python, and R phases.
+The BCL-regex overloads of `BoundedRegex.EnumerateMatches` return the concrete
+`MatchEnumerable` / `MatchEnumerator` value types. Direct `foreach`, the
+cap-aware reference wrapper, and SQL match helpers must preserve that static
+type so an empty or already-capped scan allocates no iterator object. Conversion
+to `IEnumerable<Match>` and LINQ remain supported compatibility paths, but box
+the value enumerable and enumerator and therefore do not belong in hot loops.
+Creating the enumerable or enumerator must not invoke the regex engine. The
+first `Regex.Match` runs only on the first `MoveNext`; later steps must use
+`Match.NextMatch` to preserve timeout handling, zero-length progress, `\G`
+continuation, explicit `startAt`, and right-to-left ordering. Cap-aware wrappers
+check capacity before the underlying `MoveNext` and never look ahead after the
+list is full.
 Symbol and dependency extractors follow the same streaming rule across
 scientific/native, Pascal/Ada, SQL, Python, Swift, GraphQL, markup/XAML, shell,
 Ruby, Perl, Elixir, CSS, HDL, C++, and manifest parsing. When only a total is
@@ -1228,9 +1337,8 @@ idx_symbols_display_name_folded ON symbols(display_name_folded) WHERE display_na
 idx_symbols_file    ON symbols(file_id)
 idx_symbols_file_kind ON symbols(file_id, kind)
 idx_files_lang_modified ON files(lang, modified)
-idx_symbol_refs_name      ON symbol_references(symbol_name)
 idx_symbol_refs_file      ON symbol_references(file_id)
-idx_symbol_refs_container ON symbol_references(container_name)
+idx_symbol_refs_container_kind ON symbol_references(container_name, reference_kind)
 idx_symbol_refs_name_kind ON symbol_references(symbol_name, reference_kind)
 idx_symbol_refs_name_file ON symbol_references(symbol_name, file_id)
 idx_symbol_refs_name_nocase_kind ON symbol_references(symbol_name COLLATE NOCASE, reference_kind)
@@ -1239,10 +1347,26 @@ idx_symbol_refs_container_nocase_kind ON symbol_references(container_name COLLAT
 idx_symbol_refs_symbol_name_folded_kind ON symbol_references(symbol_name_folded, reference_kind)
 idx_symbol_refs_symbol_name_folded_file ON symbol_references(symbol_name_folded, file_id)
 idx_symbol_refs_container_name_folded_kind ON symbol_references(container_name_folded, reference_kind)
+idx_symbol_refs_unresolved_mutual_folded ON symbol_references(container_name_folded, symbol_name_folded)
+  WHERE source_symbol_id IS NULL AND target_symbol_id IS NULL AND is_self_reference = 0
+    AND container_name_folded IS NOT NULL AND container_name_folded <> ''
+    AND symbol_name_folded IS NOT NULL AND symbol_name_folded <> ''
+    AND reference_kind IN ('call', 'instantiate', 'subscribe', 'unsubscribe', 'razor_event_binding')
 idx_symbol_refs_source_symbol ON symbol_references(source_symbol_id)
 idx_symbol_refs_target_symbol ON symbol_references(target_symbol_id)
+idx_symbol_refs_resolved_source_target_kind ON symbol_references(source_symbol_id, target_symbol_id, reference_kind)
+  WHERE source_symbol_id IS NOT NULL AND target_symbol_id IS NOT NULL
 idx_symbol_ref_candidates_symbol ON symbol_reference_candidates(symbol_id, reference_id)
 ```
+
+Single-column BINARY, NOCASE, and folded reference name/container indexes are
+not part of the canonical schema: the retained `*_kind` / `*_file` composites
+supply the same equality seeks through their leftmost prefixes. Read migration
+removes those six legacy indexes and the former all-row
+`idx_symbol_refs_mutual_folded`; unresolved reciprocal lookup uses the partial
+index above so resolved and non-call reference rows do not inflate graph-index
+rebuilds. Exact-query readiness diagnostics name the retained composite that
+backs each folded or NOCASE path.
 
 ### Query planner expectations
 
@@ -1250,8 +1374,8 @@ Hot graph aggregations that constrain `symbol_references.symbol_name` and a
 small `reference_kind IN (...)` set must stay indexable through
 `idx_symbol_refs_name_kind`. Regression coverage uses `EXPLAIN QUERY PLAN`
 before and after `ANALYZE` so this compound index remains the expected plan for
-`GROUP_CONCAT(DISTINCT r.reference_kind)` summaries instead of falling back to a
-single-column symbol-name probe plus row-by-row kind filtering (#1922).
+`GROUP_CONCAT(DISTINCT r.reference_kind)` summaries instead of using a
+name-only composite-prefix probe plus row-by-row kind filtering (#1922).
 
 Language + symbol-kind definition queries intentionally keep `lang` on
 `files` instead of denormalizing it into `symbols`. Query builders express that
@@ -2086,6 +2210,7 @@ Process exit codes are coarse (`0` success including valid zero-row queries, `1`
 
 ## Design decisions
 
+- **Marker-gated reference extraction** — Before running an expensive per-line reference regex, check the cheapest required syntax marker with an ordinal scan. Stateful extractors must advance comment, fence, header, binding, and other continuation state before a markerless line is skipped; marker gates must not reorder or bypass those transitions. Paths whose syntax intentionally lacks the shared marker, including no-parentheses constructors, trailing lambdas, annotations, and markup continuations, keep their own narrowly scoped markers. Changes to these gates require cross-language positive regressions plus a markerless-decoy practical-budget test so indexing speed does not trade away graph edges.
 - **Language capability patterns remain typed at the integration boundary** — CLI/MCP `languages` rows expose suffix-only `extensions`, literal `exact_filenames`, and `<suffix>`-rendered `filename_prefix_patterns`. `legacy_patterns` preserves the former combined list during deprecation, and `pattern_provenance` identifies built-in, plugin/pattern, and language-map override ownership. Round-trip tests feed every advertised typed pattern back through `FileIndexer.DetectLanguage` (#4617).
 - **Ambiguous source extensions stay explicit** — `.m` and `.pl` are not assigned to Objective-C and Perl by default. After language-map overrides and built-in exact/prefix filename rules, `FileIndexer` checks an authoritative recognized shebang whose first physical line is bounded to 256 bytes, then a 64 KiB bounded prefix for strong mutually exclusive Objective-C/MATLAB or Perl/Prolog markers, then at most 256 entries per ancestor directory for conservative project markers. A first line that reaches the shebang boundary without a terminator falls through instead of selecting an interpreter. Conflicting or weak evidence is indexed as `ambiguous_m` / `ambiguous_pl`; unresolved `.m` files run the bounded MATLAB and Objective-C symbol/reference paths after a shared position-preserving comment mask, while Prolog and `ambiguous_pl` advertise conservative reference/graph support and the ambiguous `.pl` bucket uses union symbol/reference rules without changing content-based classification. The detector owns the ordered candidate descriptors, filename patterns, exact content patterns, project markers, bounded shebang rules, and reason/confidence vocabulary; CLI/MCP `extension_lookup` diagnostics and dry-run `language_detections` consume that same source so catalog guidance cannot drift from indexing decisions (#4612, #4738, #4746, #4901).
 - **Dynamic reference-graph readiness follows extractor contracts** — when indexed Crystal, Groovy, Tcl, Prolog, or `ambiguous_pl` rows have a missing or stale symbol-extractor version stamp, status reports `dynamic_reference_graph_contract_stale` and keeps `reference_graph_complete` / `graph_data_current` false until a normal index refresh rewrites those rows (#4746).
@@ -3792,11 +3917,83 @@ query コマンドも JSON profile block 用の `--profile` と command-scoped p
   → FTS5インデックス反映
 ```
 
+読み込んだ text file は UTF-16 上の1回の走査で正規化と解析を行います。得られた
+`NormalizedContentFacts` を、正規化後の行数、長すぎる行 / FTS token の診断、conflict
+marker、replacement character の件数 / 行、80行・10行 overlap の chunk slice に対する
+共通の情報源とします。full scan、scoped update、dry-run、MCP indexing は全言語共通の
+loader、validation、extraction、persistence 経路でこの facts を引き回し、consumer ごとの
+content 再走査を避けます。normalized facts を持たない caller 用の互換 overload は維持しますが、
+通常の indexing をその経路へ戻さないでください。80行以下の file は chunk 境界 array を保持せず、
+短い file は発生し得ない FTS token 追跡を省き、高比率の invalid UTF-8 decode replacement は
+破損行ごとの番号ではなく `non_utf8_likely` に必要な集約件数だけを保持します。
+
+scoped update でも、immutable な C# prepass が authoritative で static-interface
+contract を検出した場合は extraction を並列化できます。この経路は snapshot 済み C# target
+が2件以上、`--parallelism > 1`、symbol-kind filter 無効、content-load test seam なし、
+post-extraction hook なしの場合だけ有効です。各 window は連続する snapshot 検証済み C#
+target だけで構成し、ambiguous language の再利用値は nullable のまま保って content-aware
+detection が target を拒否できるようにします。最大
+`min(parallelism, authoritative snapshot count)` の固定 worker pool が、1 window あたり
+`2 * workers` 以下の payload を処理します。window 内の extraction がすべて完了してから、
+single consumer が target 順に永続化します。SQLite write、hook、readiness 変更、byte accounting、
+user progress はすべて consumer 側に残します。file stat は schedule 前、load 後、persist 直前の
+3箇所で検証し、probe failure または対象外境界では通常の serial per-file error boundary へ戻します。
+
+`2 * workers` は件数上限であり byte 上限ではありません。slow tail があると、ordered write
+barrier の完了まで他の抽出済み chunk / symbol / reference payload を保持します。worker は
+extraction 後に raw file byte を保持しません。上限を超えた collection は publish 前に破棄し、
+symbol cap では downstream payload も破棄して、上限内で残る payload、issue、source-contract
+evidence だけを保持します。peak RSS と large-file parity を測定せずに
+window を拡大したり payload copy を増やしたりしないでください。cancellation は queued work を
+中断し、実行中 worker の収束は非同期に待ちます。global no-progress watchdog は phase と validated
+load の進捗を監視し、terminal stall では active phase と必要な readiness / batch marker を保持します。
+後続 fatal を terminal にする前に、source-negative workspace では、それ以前の target の
+source-contract candidate が positive または未評価なら natural serial suffix を再試行します。
+永続 source evidence に反映するのは symbol で確認済みの evidence だけで、lexical candidate は
+保守的な serial fallback の契機にだけ使います。
+
 single writer は、複数行の chunk、symbol、reference、reference-line command を
 row-count shape ごとに bounded な `PreparedCommandCache` で再利用します。SQL text と
 型付き parameter schema は cache miss 時だけ構築し、各実行では ordinal 順に parameter
 value を再設定します。大規模 index で同じ SQLite command を file ごとに再構築しないよう、
 新しい bulk-write 経路もこの bounded cache に載せてください。
+
+fresh な CLI scan と明示的 rebuild は、raw reference の永続化が完了するまで
+`symbol_references` の query / graph 用 secondary index を遅延します。load 中も file と
+reference-line の保守用 index は残し、identity / resolution finalization 中も query index は
+遅延したままにします。guard は index を外す前に active な dirty graph scope を full refresh へ
+昇格します。mutual-recursion 評価の直前に、その graph transaction 内で unresolved-folded、
+legacy NOCASE、resolved reverse-edge の3本だけを復元し、残りの query index は mutual update
+後に戻します。CLI はこの DDL を scan 全体の外側 transaction 内で所有するため、cancellation
+や失敗時には schema も原子的に rollback されます。MCP は既定の dirty-byte policy が FTS bulk
+load を選ぶ場合に同じ recoverable lifecycle を使い、正常完了時と dispose 時の両方で全 index
+を復元します。schema initialization と read repair は同じ canonical index catalog を使い、
+すべての経路が同一の最終 schema に収束する状態を保ってください。
+
+reference の context text は `reference_lines` へ正規化されるため、legacy な
+`symbol_references.context` column は reference ごとの parameter ではなく SQL の `NULL`
+literal として書き込みます。reference-line materialization は batch-local な key-to-ordinal
+map を構築し、unique な line ID を解決した後、`symbol_references` を ordinal array から bind
+する前に tuple lookup を解放します。巨大な multi-language reference 集合で file / line /
+context tuple を edge ごとに再 hash しないよう、新規 file insert と replacement upsert の両方、
+atomic file window を含む全経路でこの契約を維持してください。
+
+既存DBの full scan でも、既定の FTS dirty-byte policy が bulk load を選ぶ場合は同じ secondary
+index 退避を使います。scoped update には workspace 全体の authoritative な byte estimate が
+ないため、64 target 以上かつ indexed file 数の60%以上という保守的な recoverable 境界を
+使います。identity / resolution 中は query-only 集合を遅延したままにし、mutual recursion の
+直前に reverse-edge 用3本を復元して、その update 後に残りを戻してください。小規模 scoped
+update は固定的な再構築 cost が更新時間を支配しないよう、全 index を維持します。
+
+C# の reference-graph finalization は、reference arity、invocation arity、member receiver、
+definition arity、constructor arity、value-type の fact を、対象 row ごとに TEMP table へ1回だけ
+materialize し、その symbol fact から project / file-local type identity と constructor-owner の identity / arity
+も materialize します。full / scoped / retained graph rebuild の全経路で4つの fact tableを
+property-receiver normalization、candidate 構築、resolution より前に投入してください。candidate SQL は
+join candidate ごとに identity 文字列を再構築したり constructor-owner range を再走査したり managed SQLite
+scalar function へ再入したりせず、primary-key の fact lookup を使います。scoped refresh の symbol fact は
+lookup-name 集合だけに限定し、identity fact もその限定済み集合から作ります。full / retained rebuild は
+C# symbol fact の全対象を使います。
 
 リポジトリ全体の incremental scan は、C# contract prepass と parallel extraction の前に
 stat-reuse 候補を 1 回の SQLite statement で読みます。各候補は引き続き最新の filesystem
@@ -3805,6 +4002,15 @@ generated-code suppression も snapshot eligibility contract に含めます。C
 この snapshot を file ごとの database probe に戻さないでください。旧 DB の欠損または不正な
 stat 値を持つ row は除外して通常の checksum reuse / 再 index で修復し、CLI/MCP の cancellation は
 後続の extraction pipeline だけでなく snapshot query も中断できる状態を保ってください。
+
+authoritative な full scan は、共有 source-directory enumeration 中に C#、VB、F#、
+MSBuild の project-marker fingerprint を収集します。同じ pass で budget 非依存の
+directory marker-count snapshot も構築し、`GetFamilyScopeKey` が file ごとに各 ancestor の
+marker glob を再列挙しないようにします。fingerprint budget と scope completeness は独立です。
+fingerprint budget を使い切っても scope snapshot は complete になり得ますが、discovery 自体が
+不完全なら scope snapshot を破棄し、従来の fail-closed な live lookup へ fallback します。
+authoritative な full-tree snapshot を所有しない scoped update、MCP、scan 前の直接 caller も
+同じ fallback を維持してください。
 
 `FileIssue` rows には nullable な `origin` / `severity` metadata が入ることがある。
 `replacement_char` では `origin: source_literal` が正規にエンコードされた U+FFFD
@@ -4246,6 +4452,16 @@ reference list を所有する regex loop は `ReferenceExtractor.EnumerateRefer
 を使い、bounded list が満杯なら次の match を要求しない。共有の行単位 pipeline も
   type、infrastructure、SQL、call、member、metadata、Razor、Python、R の各 phase 間で
   同じ上限を確認する。
+`BoundedRegex.EnumerateMatches` の BCL regex overload は、value type の concrete
+`MatchEnumerable` / `MatchEnumerator` を返す。direct `foreach`、cap-aware な reference
+wrapper、SQL match helper はこの static type を維持し、空 scan または既に cap 到達済みの
+scan で iterator object を割り当ててはならない。`IEnumerable<Match>` への変換と LINQ は
+互換経路として維持するが、value enumerable / enumerator を box するため hot loop では
+使わない。enumerable / enumerator の作成時には regex engine を呼び出さず、最初の
+`Regex.Match` は最初の `MoveNext` まで遅延する。後続処理は timeout、zero-length の進行、
+`\G` continuation、明示的 `startAt`、right-to-left の順序を保つため必ず
+`Match.NextMatch` を使う。cap-aware wrapper は下位の `MoveNext` より先に capacity を
+確認し、list が満杯になった後は先読みしない。
 symbol / dependency extractor も scientific / native、Pascal / Ada、SQL、Python、
 Swift、GraphQL、markup / XAML、shell、Ruby、Perl、Elixir、CSS、HDL、C++、
 manifest parsing をまたいで同じ逐次走査規則に従う。総数だけが必要な場合は
@@ -4742,21 +4958,42 @@ idx_symbols_name    ON symbols(name)
 idx_symbols_file    ON symbols(file_id)
 idx_symbols_file_kind ON symbols(file_id, kind)
 idx_files_lang_modified ON files(lang, modified)
-idx_symbol_refs_name      ON symbol_references(symbol_name)
 idx_symbol_refs_file      ON symbol_references(file_id)
-idx_symbol_refs_container ON symbol_references(container_name)
+idx_symbol_refs_container_kind ON symbol_references(container_name, reference_kind)
+idx_symbol_refs_name_kind ON symbol_references(symbol_name, reference_kind)
+idx_symbol_refs_name_file ON symbol_references(symbol_name, file_id)
+idx_symbol_refs_name_nocase_kind ON symbol_references(symbol_name COLLATE NOCASE, reference_kind)
+idx_symbol_refs_name_nocase_file ON symbol_references(symbol_name COLLATE NOCASE, file_id)
+idx_symbol_refs_container_nocase_kind ON symbol_references(container_name COLLATE NOCASE, reference_kind)
+idx_symbol_refs_symbol_name_folded_kind ON symbol_references(symbol_name_folded, reference_kind)
+idx_symbol_refs_symbol_name_folded_file ON symbol_references(symbol_name_folded, file_id)
+idx_symbol_refs_container_name_folded_kind ON symbol_references(container_name_folded, reference_kind)
+idx_symbol_refs_unresolved_mutual_folded ON symbol_references(container_name_folded, symbol_name_folded)
+  WHERE source_symbol_id IS NULL AND target_symbol_id IS NULL AND is_self_reference = 0
+    AND container_name_folded IS NOT NULL AND container_name_folded <> ''
+    AND symbol_name_folded IS NOT NULL AND symbol_name_folded <> ''
+    AND reference_kind IN ('call', 'instantiate', 'subscribe', 'unsubscribe', 'razor_event_binding')
 idx_symbol_refs_source_symbol ON symbol_references(source_symbol_id)
 idx_symbol_refs_target_symbol ON symbol_references(target_symbol_id)
+idx_symbol_refs_resolved_source_target_kind ON symbol_references(source_symbol_id, target_symbol_id, reference_kind)
+  WHERE source_symbol_id IS NOT NULL AND target_symbol_id IS NOT NULL
 idx_symbol_ref_candidates_symbol ON symbol_reference_candidates(symbol_id, reference_id)
 ```
+
+reference の BINARY / NOCASE / folded name・container 用単一カラム index は
+canonical schema に含めません。保持する `*_kind` / `*_file` composite の左端 prefix が
+同じ equality seek を提供するためです。read migration はこの legacy 6本と、全rowを保持していた
+旧 `idx_symbol_refs_mutual_folded` を削除します。未解決 reciprocal lookup は上記 partial indexを
+使い、resolved rowやcall graph外のreferenceをgraph index rebuildへ含めません。exact queryの
+readiness diagnosticも、folded / NOCASE経路を実際に支える保持済みcomposite名を報告します。
 
 ### クエリプランナー期待値
 
 `symbol_references.symbol_name` と小さな `reference_kind IN (...)` 集合で絞る
 hot graph aggregation は、`idx_symbol_refs_name_kind` で indexable な状態を
 保つ必要があります。回帰テストは `ANALYZE` 前後の `EXPLAIN QUERY PLAN` を使い、
-`GROUP_CONCAT(DISTINCT r.reference_kind)` の要約が単一カラムの symbol-name
-probe と行ごとの kind filtering に戻らず、この compound index を期待計画として
+`GROUP_CONCAT(DISTINCT r.reference_kind)` の要約がname-onlyのcomposite-prefix
+probeと行ごとのkind filteringに戻らず、このcompound indexを期待計画として
 維持することを確認します (#1922)。
 
 言語 + シンボル種別の定義検索では、`lang` を `symbols` に非正規化せず
@@ -5623,6 +5860,7 @@ USER_GUIDEの[終了コード](USER_GUIDE.md#終了コード)セクションを�
 
 ## 設計判断
 
+- **marker gate 付き reference extraction** — 高コストな行単位 reference regex を実行する前に、必要な構文 marker のうち最も安価なものを ordinal scan で確認する。stateful extractor は marker のない行を skip する前に comment、fence、header、binding などの継続 state を更新し、marker gate がその遷移を並べ替えたり迂回したりしてはならない。括弧なし constructor、trailing lambda、annotation、markup continuation のように共有 marker を意図的に持たない構文経路は、それぞれ narrowly scoped な marker を維持する。gate を変更するときは、indexing 速度と graph edge の維持を同時に確認できるよう、言語横断の positive regression と markerless-decoy practical-budget test を追加する。
 - **integration boundary では language capability pattern の型を維持** — CLI/MCP の `languages` 行は suffix のみの `extensions`、literal な `exact_filenames`、`<suffix>` 表記の `filename_prefix_patterns` を公開します。`legacy_patterns` は deprecation 中に従来の combined list を保持し、`pattern_provenance` は built-in、plugin/pattern、language-map override の所有元を示します。round-trip test は広告した全 typed pattern を `FileIndexer.DetectLanguage` に戻して検証します（#4617）。
 - **曖昧な source extension は曖昧なまま明示** — `.m` と `.pl` を既定で Objective-C / Perl に割り当てません。language-map override と built-in の完全一致/prefix filename rule の後で、`FileIndexer` は先頭物理行を 256 byte に制限した authoritative な認識済み shebang、64 KiB 上限 prefix 内の相互排他的で強い Objective-C/MATLAB または Perl/Prolog marker、各 ancestor directory 最大 256 entry の保守的な project marker の順に確認します。行終端なしで shebang 境界に達した先頭行は interpreter を選択せず、後続判定へ進みます。競合または弱い証拠は `ambiguous_m` / `ambiguous_pl` として index し、未確定の `.m` は位置を保つ共通コメントマスクの後で上限付きの MATLAB / Objective-C symbol・reference 経路を実行します。一方、Prolog と `ambiguous_pl` は保守的な reference / graph 対応を広告し、曖昧な `.pl` bucket は content-based classification を変えずに symbol / reference rule の和集合を使います。順序付き candidate descriptor、filename pattern、正確な content pattern、project marker、上限付き shebang rule、reason/confidence 語彙は detector 自身が所有し、CLI/MCP の `extension_lookup` diagnostic と dry-run の `language_detections` は同じ source を使うため、catalog guidance と indexing 判定が乖離しません（#4612、#4738、#4746、#4901）。
 - **動的言語の reference-graph readiness は extractor contract に従う** — index 済みの Crystal、Groovy、Tcl、Prolog、`ambiguous_pl` row で symbol-extractor version stamp が欠落または古い場合、status は `dynamic_reference_graph_contract_stale` を報告し、通常の index refresh が対象 row を更新するまで `reference_graph_complete` / `graph_data_current` を false に保ちます（#4746）。

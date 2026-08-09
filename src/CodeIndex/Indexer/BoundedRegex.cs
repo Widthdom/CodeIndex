@@ -1,3 +1,4 @@
+using System.Collections;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -143,29 +144,125 @@ internal sealed class BoundedRegex : BclRegex
         }
     }
 
-    public static IEnumerable<BclMatch> EnumerateMatches(BclRegex regex, string input)
-    {
-        var pattern = regex.ToString();
-        var match = FirstMatchOrEmpty(regex, input, pattern);
-        while (match.Success)
-        {
-            yield return match;
-            match = NextMatchOrEmpty(match, pattern);
-        }
-    }
+    public static MatchEnumerable EnumerateMatches(BclRegex regex, string input) =>
+        new(regex, input);
 
-    public static IEnumerable<BclMatch> EnumerateMatches(
+    public static MatchEnumerable EnumerateMatches(
         BclRegex regex,
         string input,
-        int startAt)
+        int startAt) =>
+        new(regex, input, startAt);
+
+    internal readonly struct MatchEnumerable : IEnumerable<BclMatch>
     {
-        var pattern = regex.ToString();
-        var match = FirstMatchOrEmpty(regex, input, startAt, pattern);
-        while (match.Success)
+        private readonly BclRegex _regex;
+        private readonly string _input;
+        private readonly int _startAt;
+        private readonly bool _hasStartAt;
+
+        internal MatchEnumerable(BclRegex regex, string input)
         {
-            yield return match;
-            match = NextMatchOrEmpty(match, pattern);
+            _regex = regex;
+            _input = input;
+            _startAt = 0;
+            _hasStartAt = false;
         }
+
+        internal MatchEnumerable(BclRegex regex, string input, int startAt)
+        {
+            _regex = regex;
+            _input = input;
+            _startAt = startAt;
+            _hasStartAt = true;
+        }
+
+        public MatchEnumerator GetEnumerator() =>
+            new(_regex, _input, _startAt, _hasStartAt);
+
+        IEnumerator<BclMatch> IEnumerable<BclMatch>.GetEnumerator() => GetEnumerator();
+
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
+    internal struct MatchEnumerator : IEnumerator<BclMatch>
+    {
+        private readonly BclRegex _regex;
+        private readonly string _input;
+        private readonly int _startAt;
+        private readonly bool _hasStartAt;
+        private BclMatch? _current;
+        private bool _started;
+        private bool _finished;
+
+        internal MatchEnumerator(
+            BclRegex regex,
+            string input,
+            int startAt,
+            bool hasStartAt)
+        {
+            _regex = regex;
+            _input = input;
+            _startAt = startAt;
+            _hasStartAt = hasStartAt;
+            _current = null;
+            _started = false;
+            _finished = false;
+        }
+
+        public readonly BclMatch Current => _current!;
+
+        BclMatch IEnumerator<BclMatch>.Current => Current;
+
+        object IEnumerator.Current => Current;
+
+        public bool MoveNext()
+        {
+            if (_finished)
+                return false;
+
+            try
+            {
+                var next = _started
+                    ? _current!.NextMatch()
+                    : _hasStartAt
+                        ? _regex.Match(_input, _startAt)
+                        : _regex.Match(_input);
+                _started = true;
+                _current = next;
+                if (next.Success)
+                    return true;
+
+                _finished = true;
+                return false;
+            }
+            catch (RegexMatchTimeoutException ex)
+            {
+                _started = true;
+                _finished = true;
+                _current = BclMatch.Empty;
+                RecordTimeout("matches", _regex.ToString(), ex);
+                return false;
+            }
+            catch
+            {
+                _started = true;
+                _finished = true;
+                _current = BclMatch.Empty;
+                throw;
+            }
+        }
+
+        bool IEnumerator.MoveNext() => MoveNext();
+
+        public void Dispose()
+        {
+            _finished = true;
+            _current = BclMatch.Empty;
+        }
+
+        void IDisposable.Dispose() => Dispose();
+
+        void IEnumerator.Reset() => throw new NotSupportedException();
     }
 
     public static IEnumerable<BclMatch> EnumerateMatches(string input, string pattern) =>
@@ -380,39 +477,6 @@ internal sealed class BoundedRegex : BclRegex
 
     private static void RecordTimeout(string operation, string pattern, RegexMatchTimeoutException ex) =>
         TimeoutCaptureScope.Value?.Record(operation, pattern, ex.MatchTimeout);
-
-    private static BclMatch FirstMatchOrEmpty(
-        BclRegex regex,
-        string input,
-        string pattern)
-    {
-        try
-        {
-            return regex.Match(input);
-        }
-        catch (RegexMatchTimeoutException ex)
-        {
-            RecordTimeout("matches", pattern, ex);
-            return BclMatch.Empty;
-        }
-    }
-
-    private static BclMatch FirstMatchOrEmpty(
-        BclRegex regex,
-        string input,
-        int startAt,
-        string pattern)
-    {
-        try
-        {
-            return regex.Match(input, startAt);
-        }
-        catch (RegexMatchTimeoutException ex)
-        {
-            RecordTimeout("matches", pattern, ex);
-            return BclMatch.Empty;
-        }
-    }
 
     private static BclMatch FirstMatchOrEmpty(
         string input,
