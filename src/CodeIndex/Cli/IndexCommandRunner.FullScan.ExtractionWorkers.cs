@@ -18,6 +18,7 @@ public static partial class IndexCommandRunner
         internal required int ExtractionWorkItemCount { get; init; }
         internal required int ExtractionWorkerCount { get; init; }
         internal required bool ParallelizeExtraction { get; init; }
+        internal required int[] ExtractionTailSchedule { get; init; }
         internal required CSharpStaticInterfaceWorkspaceSymbols CSharpWorkspace { get; init; }
         internal Dictionary<string, CSharpStaticInterfacePrepass.FileStatSnapshot>? CSharpWorkspaceFileSnapshots { get; init; }
         internal required PostExtractionHookRunner PostExtractionHooks { get; init; }
@@ -38,6 +39,7 @@ public static partial class IndexCommandRunner
         var extractionWorkItemCount = context.ExtractionWorkItemCount;
         var extractionWorkerCount = context.ExtractionWorkerCount;
         var parallelizeExtraction = context.ParallelizeExtraction;
+        var extractionTailSchedule = context.ExtractionTailSchedule;
         var csharpWorkspace = context.CSharpWorkspace;
         var csharpWorkspaceFileSnapshots = context.CSharpWorkspaceFileSnapshots;
         var postExtractionHooks = context.PostExtractionHooks;
@@ -58,9 +60,13 @@ public static partial class IndexCommandRunner
                     if (extractionIndex >= extractionWorkItemCount)
                         break;
 
-                    var fileIndex = extractionFileIndexes == null
-                        ? extractionIndex
-                        : extractionFileIndexes[extractionIndex];
+                    var tailStart = extractionWorkItemCount - extractionTailSchedule.Length;
+                    var workOrdinal = extractionIndex >= tailStart
+                        ? extractionTailSchedule[extractionIndex - tailStart]
+                        : extractionIndex;
+                    var fileIndex = ResolveFullScanExtractionFileIndex(
+                        extractionFileIndexes,
+                        workOrdinal);
                     var target = fileTargets[fileIndex];
                     var filePath = target.FilePath;
                     var relativeFilePath = target.RelativePath;

@@ -273,6 +273,16 @@ array, short files skip impossible FTS-token tracking, and high-ratio invalid
 UTF-8 decode replacements retain only the aggregate count used by
 `non_utf8_likely` rather than a line number for every damaged line.
 
+Parallel full scans use shared dynamic work claiming for the main extraction
+body. To keep a large file near the input tail from starting only in the final
+worker wave, they probe at most the last `min(4 * workers, 64)` work items and
+claim known, indexable sizes largest-first. Equal sizes, unavailable metadata,
+and files already above the configured size cap retain their original order.
+The target array and logical file indexes never move, serial hook/filter paths
+do not probe, and the bounded completion queue still publishes in completion
+order. Keep this tail probe and its schedule state independent of repository
+size; an all-file metadata pass can regress network and virtual filesystems.
+
 Scoped updates may also parallelize extraction when the immutable C# prepass is
 authoritative and finds static-interface contracts. This path requires at least
 two snapshotted C# targets, `--parallelism > 1`, no active symbol-kind filter,
@@ -3943,6 +3953,14 @@ content 再走査を避けます。normalized facts を持たない caller 用�
 通常の indexing をその経路へ戻さないでください。80行以下の file は chunk 境界 array を保持せず、
 短い file は発生し得ない FTS token 追跡を省き、高比率の invalid UTF-8 decode replacement は
 破損行ごとの番号ではなく `non_utf8_likely` に必要な集約件数だけを保持します。
+
+parallel full scan は extraction 本体を共有dynamic claimで配分します。入力末尾の大きなfileが
+最後のworker waveまで開始されないことを防ぐため、末尾の
+`min(4 * workers, 64)` work itemだけをprobeし、size取得済みかつ上限内のfileを大きい順に
+claimします。同一size、metadata取得不能、設定size上限を既に超えるfileは元順を維持します。
+target arrayと論理file indexは並べ替えず、serialなhook/filter経路はprobeせず、bounded completion
+queueは引き続き完了順でpublishします。network/virtual filesystemで全file metadata passへ
+退行しないよう、tail probeとschedule stateをrepository規模に依存しない固定上限に保ってください。
 
 scoped update でも、immutable な C# prepass が authoritative で static-interface
 contract を検出した場合は extraction を並列化できます。この経路は snapshot 済み C# target

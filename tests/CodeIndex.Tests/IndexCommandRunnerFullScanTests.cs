@@ -1080,6 +1080,94 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void BuildFullScanExtractionTailSchedule_PrioritizesLargestKnownFilesWithinBoundedSuffix()
+    {
+        long?[] lengths = [null, null, null, 4, 100, 100, 2_000, 10, 900, 2];
+        var probedOrdinals = new List<int>();
+
+        var schedule = IndexCommandRunner.BuildFullScanExtractionTailSchedule(
+            workItemCount: lengths.Length,
+            workerCount: 2,
+            maxFileSizeBytes: 1_000,
+            workOrdinal =>
+            {
+                probedOrdinals.Add(workOrdinal);
+                return lengths[workOrdinal];
+            },
+            CancellationToken.None);
+
+        Assert.Equal(Enumerable.Range(2, 8), probedOrdinals);
+        Assert.Equal([8, 4, 5, 7, 3, 9, 2, 6], schedule);
+    }
+
+    [Fact]
+    public void BuildFullScanExtractionTailSchedule_BoundsProbeAndScheduleState()
+    {
+        const int workItemCount = 1_000;
+        var probedOrdinals = new List<int>();
+
+        var schedule = IndexCommandRunner.BuildFullScanExtractionTailSchedule(
+            workItemCount,
+            workerCount: 16,
+            maxFileSizeBytes: long.MaxValue,
+            workOrdinal =>
+            {
+                probedOrdinals.Add(workOrdinal);
+                return workOrdinal;
+            },
+            CancellationToken.None);
+
+        Assert.Equal(IndexCommandRunner.MaxFullScanExtractionTailProbeCount, schedule.Length);
+        Assert.Equal(
+            Enumerable.Range(
+                workItemCount - IndexCommandRunner.MaxFullScanExtractionTailProbeCount,
+                IndexCommandRunner.MaxFullScanExtractionTailProbeCount),
+            probedOrdinals);
+        Assert.Equal(probedOrdinals.AsEnumerable().Reverse(), schedule);
+    }
+
+    [Fact]
+    public void BuildFullScanExtractionTailSchedule_TreatsExpectedProbeFailuresAsStableUnknowns()
+    {
+        var schedule = IndexCommandRunner.BuildFullScanExtractionTailSchedule(
+            workItemCount: 6,
+            workerCount: 1,
+            maxFileSizeBytes: 1_000,
+            workOrdinal => workOrdinal switch
+            {
+                2 => throw new IOException("simulated size probe failure"),
+                3 => 10,
+                4 => throw new UnauthorizedAccessException("simulated size probe denial"),
+                5 => 20,
+                _ => throw new InvalidOperationException("prefix must not be probed"),
+            },
+            CancellationToken.None);
+
+        Assert.Equal([5, 3, 2, 4], schedule);
+    }
+
+    [Fact]
+    public void BuildFullScanExtractionTailSchedule_PreCancelled_DoesNotProbe()
+    {
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        var probeCount = 0;
+
+        Assert.Throws<OperationCanceledException>(() =>
+            IndexCommandRunner.BuildFullScanExtractionTailSchedule(
+                workItemCount: 16,
+                workerCount: 4,
+                maxFileSizeBytes: 1_000,
+                _ =>
+                {
+                    probeCount++;
+                    return 1;
+                },
+                cancellation.Token));
+        Assert.Equal(0, probeCount);
+    }
+
+    [Fact]
     public void Run_FullScan_DenseDeletionCapsReusableStatSnapshotCapacityToRetainedRows()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_fullscan_reuse_capacity");

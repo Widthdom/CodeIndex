@@ -113,6 +113,13 @@ public static partial class IndexCommandRunner
         bool Parallelize,
         string? Reason);
 
+    private readonly record struct FullScanExtractionTailCandidate(
+        int WorkOrdinal,
+        long? Length);
+
+    private const int FullScanExtractionTailWorkerWaves = 4;
+    internal const int MaxFullScanExtractionTailProbeCount = 64;
+
     private static FullScanExtractionPipelineResult
         RunFullScanExtractionPipeline(
             FullScanExtractionPipelineContext context)
@@ -170,6 +177,98 @@ public static partial class IndexCommandRunner
         return new FullScanExtractionScheduling(parallelize, reason);
     }
 
+    internal static int[] BuildFullScanExtractionTailSchedule(
+        int workItemCount,
+        int workerCount,
+        long maxFileSizeBytes,
+        Func<int, long?> getFileLength,
+        CancellationToken cancellationToken)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(workItemCount);
+        ArgumentOutOfRangeException.ThrowIfLessThan(workerCount, 1);
+        ArgumentOutOfRangeException.ThrowIfNegative(maxFileSizeBytes);
+        ArgumentNullException.ThrowIfNull(getFileLength);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (workItemCount <= 1)
+            return [];
+
+        // Dynamic claiming balances the main body of the scan, but a large file at the
+        // input tail otherwise starts in the final worker wave. Probe only a fixed-size
+        // suffix so the remedy never turns into an all-repository metadata pass.
+        // 本体はdynamic claimで均等化し、末尾だけを固定上限でsize順にして全件statを避ける。
+        var workerBound = workerCount >= MaxFullScanExtractionTailProbeCount / FullScanExtractionTailWorkerWaves
+            ? MaxFullScanExtractionTailProbeCount
+            : workerCount * FullScanExtractionTailWorkerWaves;
+        var tailCount = Math.Min(
+            workItemCount,
+            Math.Min(workerBound, MaxFullScanExtractionTailProbeCount));
+        var tailStart = workItemCount - tailCount;
+        var candidates = new FullScanExtractionTailCandidate[tailCount];
+        for (var tailIndex = 0; tailIndex < tailCount; tailIndex++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var workOrdinal = tailStart + tailIndex;
+            long? length;
+            try
+            {
+                length = getFileLength(workOrdinal);
+            }
+            catch (Exception ex) when (
+                ex is IOException
+                    or UnauthorizedAccessException
+                    or NotSupportedException
+                    or ArgumentException
+                    or System.Security.SecurityException)
+            {
+                length = null;
+            }
+
+            var eligibleLength = length is >= 0
+                && length <= maxFileSizeBytes
+                    ? length
+                    : null;
+            candidates[tailIndex] = new FullScanExtractionTailCandidate(
+                workOrdinal,
+                eligibleLength);
+        }
+
+        Array.Sort(
+            candidates,
+            static (left, right) =>
+            {
+                if (left.Length.HasValue != right.Length.HasValue)
+                    return left.Length.HasValue ? -1 : 1;
+
+                if (left.Length.HasValue)
+                {
+                    var lengthComparison = right.Length.GetValueOrDefault().CompareTo(
+                        left.Length.GetValueOrDefault());
+                    if (lengthComparison != 0)
+                        return lengthComparison;
+                }
+
+                return left.WorkOrdinal.CompareTo(right.WorkOrdinal);
+            });
+
+        var schedule = new int[candidates.Length];
+        for (var index = 0; index < candidates.Length; index++)
+            schedule[index] = candidates[index].WorkOrdinal;
+        return schedule;
+    }
+
+    private static int ResolveFullScanExtractionFileIndex(
+        IReadOnlyList<int>? extractionFileIndexes,
+        int workOrdinal)
+        => extractionFileIndexes == null
+            ? workOrdinal
+            : extractionFileIndexes[workOrdinal];
+
+    private static long? ReadFullScanExtractionFileLength(string filePath)
+    {
+        var info = new FileInfo(filePath);
+        return info.Exists ? info.Length : null;
+    }
+
     private static FullScanExtractionConsumerState
         ExecuteFullScanExtractionPipeline(
             FullScanExtractionPipelineContext context,
@@ -200,6 +299,18 @@ public static partial class IndexCommandRunner
             new LazyDisposable<SymbolExtractionWorkerClient>(
                 () => new SymbolExtractionWorkerClient(
                     context.Options.MaxFileSizeBytes));
+        var extractionTailSchedule = parallelizeExtraction
+            ? BuildFullScanExtractionTailSchedule(
+                context.ExtractionWorkItemCount,
+                extractionWorkerCount,
+                context.Indexer.MaxFileSizeBytes,
+                workOrdinal => ReadFullScanExtractionFileLength(
+                    context.FileTargets[
+                        ResolveFullScanExtractionFileIndex(
+                            context.ExtractionFileIndexes,
+                            workOrdinal)].FilePath),
+                context.CancellationToken)
+            : [];
         var workers = StartFullScanExtractionWorkers(
             new FullScanExtractionWorkerContext
             {
@@ -213,6 +324,7 @@ public static partial class IndexCommandRunner
                     context.ExtractionWorkItemCount,
                 ExtractionWorkerCount = extractionWorkerCount,
                 ParallelizeExtraction = parallelizeExtraction,
+                ExtractionTailSchedule = extractionTailSchedule,
                 CSharpWorkspace = context.GetCSharpWorkspace(),
                 CSharpWorkspaceFileSnapshots =
                     context.GetCSharpWorkspaceFileSnapshots(),

@@ -67,6 +67,7 @@ public partial class FileIndexer
     private ProjectMarkerScopeSnapshot? _projectMarkerScopeSnapshot;
     private LanguageMapOverrideLookupCache? _lastLanguageMapOverrideLookup;
     private readonly long _maxFileSizeBytes;
+    internal long MaxFileSizeBytes => _maxFileSizeBytes;
     private readonly FileContentLoader _contentLoader;
     private readonly SymlinkPolicy _symlinkPolicy;
     private readonly int _maxDanglingFileSystemEntryScanCandidates;
