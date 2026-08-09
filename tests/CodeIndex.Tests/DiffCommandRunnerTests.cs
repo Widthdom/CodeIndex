@@ -1068,6 +1068,14 @@ public class DiffCommandRunnerTests
             AssertIdenticalSummary(db, copy);
             AssertIdenticalSummary(db, new Uri(db).AbsoluteUri + "?immutable=1");
 
+            string? hardLink = null;
+            if (!OperatingSystem.IsWindows())
+            {
+                hardLink = Path.Combine(root, "codeindex-hardlink.db");
+                CreateHardLink(db, hardLink);
+                AssertIdenticalSummary(db, hardLink);
+            }
+
             var alias = Path.Combine(root, "codeindex-alias.db");
             try
             {
@@ -1101,6 +1109,21 @@ public class DiffCommandRunnerTests
             Assert.Equal(
                 -1,
                 walDocument.RootElement.GetProperty("summary").GetProperty("file_count_delta").GetInt64());
+
+            if (hardLink is not null)
+            {
+                var (hardLinkExitCode, hardLinkStdout, hardLinkStderr) = RunWithCapturedStreams(
+                    [db, hardLink, "--summary-only", "--json"]);
+
+                Assert.Equal(1, hardLinkExitCode);
+                Assert.Equal(string.Empty, hardLinkStderr);
+                using var hardLinkDocument = JsonDocument.Parse(hardLinkStdout);
+                Assert.Equal("different", hardLinkDocument.RootElement.GetProperty("status").GetString());
+                Assert.False(hardLinkDocument.RootElement.GetProperty("identical").GetBoolean());
+                Assert.Equal(
+                    -1,
+                    hardLinkDocument.RootElement.GetProperty("summary").GetProperty("file_count_delta").GetInt64());
+            }
         }
         finally
         {
@@ -2083,6 +2106,27 @@ public class DiffCommandRunnerTests
         command.CommandText = sql;
         configure?.Invoke(command);
         command.ExecuteNonQuery();
+    }
+
+    private static void CreateHardLink(string existingPath, string newPath)
+    {
+        var startInfo = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = "ln",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        startInfo.ArgumentList.Add(existingPath);
+        startInfo.ArgumentList.Add(newPath);
+
+        using var process = System.Diagnostics.Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Failed to start ln / ln の起動に失敗");
+        var stderr = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        if (process.ExitCode != 0)
+            throw new InvalidOperationException($"ln failed: {stderr.Trim()}");
     }
 
     private static List<JsonElement> GetRecords(JsonElement root, string area, string? side = null)

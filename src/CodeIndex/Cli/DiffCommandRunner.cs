@@ -241,17 +241,23 @@ public static class DiffCommandRunner
         string leftPath,
         string rightPath)
     {
-        var sharesFileIdentity = PathCasing.PathsEqual(leftPath, rightPath)
-            || (FileIndexer.TryGetFileIdentity(leftPath, out var leftIdentity)
-                && FileIndexer.TryGetFileIdentity(rightPath, out var rightIdentity)
-                && leftIdentity == rightIdentity);
-        if (!sharesFileIdentity)
+        var pathsEqual = PathCasing.PathsEqual(leftPath, rightPath);
+        if (!pathsEqual
+            && (!FileIndexer.TryGetFileIdentity(leftPath, out var leftIdentity)
+                || !FileIndexer.TryGetFileIdentity(rightPath, out var rightIdentity)
+                || leftIdentity != rightIdentity))
+        {
             return false;
+        }
+
+        var hasSidecar = HasSqliteSidecar(leftPath) || HasSqliteSidecar(rightPath);
+        if (!pathsEqual)
+            return !hasSidecar;
 
         var leftImmutable = SqliteFileUri.RequestsImmutableSnapshot(options.LeftDb!);
         var rightImmutable = SqliteFileUri.RequestsImmutableSnapshot(options.RightDb!);
         return leftImmutable == rightImmutable
-            || (!HasSqliteSidecar(leftPath) && !HasSqliteSidecar(rightPath));
+            || !hasSidecar;
     }
 
     private static bool DatabaseFilesAreByteIdentical(
