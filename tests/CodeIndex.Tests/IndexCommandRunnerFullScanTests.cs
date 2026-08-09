@@ -147,6 +147,9 @@ public partial class IndexCommandRunnerTests
             var pythonPath = Path.Combine(projectRoot, "app.py");
             File.WriteAllText(csharpPath, "public class App { public void Run() { } }\n");
             File.WriteAllText(pythonPath, "def run():\n    return 1\n");
+            File.WriteAllText(
+                Path.Combine(projectRoot, "types.ts"),
+                "interface MemoryTraceContract { value: number }\n");
 
             var (fullExitCode, fullJson) = RunAndCaptureJson([
                 projectRoot,
@@ -158,7 +161,7 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, fullExitCode);
             var fullSamples = fullJson.GetProperty("memory_timeline").GetProperty("samples").EnumerateArray().ToArray();
             Assert.Equal(
-                ["start", "scan", "csharp_prepass", "purge", "extraction", "reference_graph", "text_index", "finalize", "commit"],
+                ["start", "scan", "csharp_prepass", "purge", "extraction", "text_index", "reference_graph", "finalize", "commit"],
                 fullSamples.Select(sample => sample.GetProperty("phase").GetString()));
             AssertPhaseSamplesAreMonotonic(fullSamples);
 
@@ -1074,6 +1077,180 @@ public partial class IndexCommandRunnerTests
         {
             DeleteDirectory(projectRoot);
         }
+    }
+
+    [Fact]
+    public void BuildFullScanExtractionTailSchedule_PrioritizesLargestKnownFilesWithinBoundedSuffix()
+    {
+        long?[] lengths = [null, null, null, 4, 100, 100, 2_000, 10, 900, 2];
+        var probedOrdinals = new List<int>();
+
+        var schedule = IndexCommandRunner.BuildFullScanExtractionTailSchedule(
+            workItemCount: lengths.Length,
+            workerCount: 2,
+            maxFileSizeBytes: 1_000,
+            workOrdinal =>
+            {
+                probedOrdinals.Add(workOrdinal);
+                return lengths[workOrdinal];
+            },
+            CancellationToken.None);
+
+        Assert.Equal(Enumerable.Range(2, 8), probedOrdinals);
+        Assert.Equal([8, 4, 5, 7, 3, 9, 2, 6], schedule);
+    }
+
+    [Theory]
+    [InlineData(6, 1)]
+    [InlineData(3, 4)]
+    [InlineData(4, 4)]
+    public void BuildFullScanExtractionTailSchedule_NonParallelOrFirstWorkerWave_DoesNotProbe(
+        int workItemCount,
+        int workerCount)
+    {
+        var probeCount = 0;
+
+        var schedule = IndexCommandRunner.BuildFullScanExtractionTailSchedule(
+            workItemCount,
+            workerCount,
+            maxFileSizeBytes: 1_000,
+            _ =>
+            {
+                probeCount++;
+                return 1;
+            },
+            CancellationToken.None);
+
+        Assert.Empty(schedule);
+        Assert.Equal(0, probeCount);
+    }
+
+    [Fact]
+    public void BuildFullScanExtractionTailSchedule_OneItemBeyondFirstWorkerWave_StillProbes()
+    {
+        var probedOrdinals = new List<int>();
+
+        var schedule = IndexCommandRunner.BuildFullScanExtractionTailSchedule(
+            workItemCount: 5,
+            workerCount: 4,
+            maxFileSizeBytes: 1_000,
+            workOrdinal =>
+            {
+                probedOrdinals.Add(workOrdinal);
+                return workOrdinal;
+            },
+            CancellationToken.None);
+
+        Assert.Equal(Enumerable.Range(0, 5), probedOrdinals);
+        Assert.Equal([4, 3, 2, 1, 0], schedule);
+    }
+
+    [Fact]
+    public void ResolveFullScanExtractionFileIndex_UsesSparseMappingOrWorkOrdinalFallback()
+    {
+        int[] extractionFileIndexes = [11, 3, 17, 5];
+
+        Assert.Equal(
+            [11, 3, 17, 5],
+            Enumerable.Range(0, extractionFileIndexes.Length)
+                .Select(workOrdinal =>
+                    IndexCommandRunner.ResolveFullScanExtractionFileIndex(
+                        extractionFileIndexes,
+                        workOrdinal)));
+        Assert.Equal(
+            7,
+            IndexCommandRunner.ResolveFullScanExtractionFileIndex(
+                extractionFileIndexes: null,
+                workOrdinal: 7));
+    }
+
+    [Fact]
+    public void BuildFullScanExtractionTailSchedule_BoundsProbeAndScheduleState()
+    {
+        const int workItemCount = 1_000;
+        var probedOrdinals = new List<int>();
+
+        var schedule = IndexCommandRunner.BuildFullScanExtractionTailSchedule(
+            workItemCount,
+            workerCount: 16,
+            maxFileSizeBytes: long.MaxValue,
+            workOrdinal =>
+            {
+                probedOrdinals.Add(workOrdinal);
+                return workOrdinal;
+            },
+            CancellationToken.None);
+
+        Assert.Equal(IndexCommandRunner.MaxFullScanExtractionTailProbeCount, schedule.Length);
+        Assert.Equal(
+            Enumerable.Range(
+                workItemCount - IndexCommandRunner.MaxFullScanExtractionTailProbeCount,
+                IndexCommandRunner.MaxFullScanExtractionTailProbeCount),
+            probedOrdinals);
+        Assert.Equal(probedOrdinals.AsEnumerable().Reverse(), schedule);
+    }
+
+    [Fact]
+    public void BuildFullScanExtractionTailSchedule_TreatsExpectedProbeFailuresAsStableUnknowns()
+    {
+        var schedule = IndexCommandRunner.BuildFullScanExtractionTailSchedule(
+            workItemCount: 10,
+            workerCount: 2,
+            maxFileSizeBytes: 1_000,
+            workOrdinal => workOrdinal switch
+            {
+                2 => throw new IOException("simulated size probe failure"),
+                3 => 10,
+                4 => throw new UnauthorizedAccessException("simulated size probe denial"),
+                5 => 20,
+                >= 6 => null,
+                _ => throw new InvalidOperationException("prefix must not be probed"),
+            },
+            CancellationToken.None);
+
+        Assert.Equal([5, 3, 2, 4, 6, 7, 8, 9], schedule);
+    }
+
+    [Fact]
+    public void BuildFullScanExtractionTailSchedule_PreCancelled_DoesNotProbe()
+    {
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        var probeCount = 0;
+
+        Assert.Throws<OperationCanceledException>(() =>
+            IndexCommandRunner.BuildFullScanExtractionTailSchedule(
+                workItemCount: 16,
+                workerCount: 4,
+                maxFileSizeBytes: 1_000,
+                _ =>
+                {
+                    probeCount++;
+                    return 1;
+                },
+                cancellation.Token));
+        Assert.Equal(0, probeCount);
+    }
+
+    [Fact]
+    public void BuildFullScanExtractionTailSchedule_CancelledAfterProbe_StopsBeforeNextProbe()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var probedOrdinals = new List<int>();
+
+        Assert.Throws<OperationCanceledException>(() =>
+            IndexCommandRunner.BuildFullScanExtractionTailSchedule(
+                workItemCount: 10,
+                workerCount: 2,
+                maxFileSizeBytes: 1_000,
+                workOrdinal =>
+                {
+                    probedOrdinals.Add(workOrdinal);
+                    cancellation.Cancel();
+                    return 1;
+                },
+                cancellation.Token));
+        Assert.Equal([2], probedOrdinals);
     }
 
     [Fact]
@@ -2360,20 +2537,42 @@ public partial class IndexCommandRunnerTests
     {
         var projectRoot = CreateTempProject();
         var previousValidationHook = IndexCommandRunner.FullScanCSharpReadinessValidationForTesting;
+        var previousAugmentationHook = IndexCommandRunner.FullScanTypeScriptAugmentationRebuildForTesting;
+        var previousRefreshHook = DbWriter.MutualRecursionRefreshForTesting;
         var addedPath = Path.Combine(projectRoot, "INewContract.cs");
+        var deletedTypeScriptPath = Path.Combine(projectRoot, "first.ts");
+        var augmentationRebuildCount = 0;
+        var refreshCount = 0;
         try
         {
             File.WriteAllText(Path.Combine(projectRoot, "Plain.cs"), "public sealed class Plain { }\n");
+            File.WriteAllText(
+                deletedTypeScriptPath,
+                "interface SharedBoundary { first: number }\n");
+            File.WriteAllText(
+                Path.Combine(projectRoot, "second.ts"),
+                "interface SharedBoundary { second: number }\n");
             Assert.Equal(
                 CommandExitCodes.Success,
                 IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions));
 
+            File.Delete(deletedTypeScriptPath);
             IndexCommandRunner.FullScanCSharpReadinessValidationForTesting = () =>
             {
                 File.WriteAllText(
                     addedPath,
                     "public interface INewContract<T> { static abstract T Create(); }\n");
                 File.SetLastWriteTimeUtc(addedPath, DateTime.UtcNow.AddSeconds(2));
+            };
+            IndexCommandRunner.FullScanTypeScriptAugmentationRebuildForTesting = () =>
+            {
+                augmentationRebuildCount++;
+                previousAugmentationHook?.Invoke();
+            };
+            DbWriter.MutualRecursionRefreshForTesting = () =>
+            {
+                refreshCount++;
+                previousRefreshHook?.Invoke();
             };
 
             var (partialExitCode, partialJson) = RunAndCaptureJson(
@@ -2384,26 +2583,38 @@ public partial class IndexCommandRunnerTests
             Assert.Contains(
                 partialJson.GetProperty("file_errors").EnumerateArray(),
                 error => error.GetProperty("phase").GetString() == "csharp_workspace_validation");
+            Assert.Equal(0, augmentationRebuildCount);
+            Assert.Equal(1, refreshCount);
             using (var partialDb = new DbContext(
                        DbOpenIntent.WriteIndex,
                        Path.Combine(projectRoot, ".cdidx", "codeindex.db")))
             {
                 Assert.Null(new DbWriter(partialDb).GetCSharpStaticInterfaceSourceEvidence());
+                Assert.Null(partialDb.GetMetaString(DbContext.TypeScriptAugmentationVersionMetaKey));
             }
 
             IndexCommandRunner.FullScanCSharpReadinessValidationForTesting = previousValidationHook;
+            augmentationRebuildCount = 0;
+            refreshCount = 0;
             var (recoveryExitCode, recoveryJson) = RunAndCaptureJson(
                 [projectRoot, "--json", "--quiet"]);
             Assert.Equal(CommandExitCodes.Success, recoveryExitCode);
             Assert.Equal("success", recoveryJson.GetProperty("status").GetString());
+            Assert.Equal(1, augmentationRebuildCount);
+            Assert.Equal(1, refreshCount);
             using var recoveryDb = new DbContext(
                 DbOpenIntent.WriteIndex,
                 Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
             Assert.Equal(true, new DbWriter(recoveryDb).GetCSharpStaticInterfaceSourceEvidence());
+            Assert.Equal(
+                DbContext.TypeScriptAugmentationVersion.ToString(CultureInfo.InvariantCulture),
+                recoveryDb.GetMetaString(DbContext.TypeScriptAugmentationVersionMetaKey));
         }
         finally
         {
             IndexCommandRunner.FullScanCSharpReadinessValidationForTesting = previousValidationHook;
+            IndexCommandRunner.FullScanTypeScriptAugmentationRebuildForTesting = previousAugmentationHook;
+            DbWriter.MutualRecursionRefreshForTesting = previousRefreshHook;
             DeleteDirectory(projectRoot);
             SqliteConnection.ClearAllPools();
         }

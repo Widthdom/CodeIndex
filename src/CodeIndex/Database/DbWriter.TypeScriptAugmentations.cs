@@ -178,22 +178,63 @@ public partial class DbWriter
         string? Visibility);
 
     public int RebuildTypeScriptAugmentationReferences(string? projectRoot = null) =>
-        RebuildTypeScriptAugmentationReferencesCore(projectRoot, dirtyNames: null);
+        RebuildTypeScriptAugmentationReferencesCore(
+            projectRoot,
+            dirtyNames: null,
+            finalizeDeferredReferenceGraph: false,
+            referenceSecondaryIndexBulkLoad: null);
 
     internal int RebuildTypeScriptAugmentationReferences(
         string projectRoot,
         IReadOnlyCollection<string> dirtyNames) =>
-        RebuildTypeScriptAugmentationReferencesCore(projectRoot, dirtyNames, CancellationToken.None);
+        RebuildTypeScriptAugmentationReferencesCore(
+            projectRoot,
+            dirtyNames,
+            finalizeDeferredReferenceGraph: false,
+            referenceSecondaryIndexBulkLoad: null,
+            cancellationToken: CancellationToken.None);
 
     internal int RebuildTypeScriptAugmentationReferences(
         string projectRoot,
         IReadOnlyCollection<string>? dirtyNames,
         CancellationToken cancellationToken) =>
-        RebuildTypeScriptAugmentationReferencesCore(projectRoot, dirtyNames, cancellationToken);
+        RebuildTypeScriptAugmentationReferencesCore(
+            projectRoot,
+            dirtyNames,
+            finalizeDeferredReferenceGraph: false,
+            referenceSecondaryIndexBulkLoad: null,
+            cancellationToken: cancellationToken);
+
+    internal int RebuildTypeScriptAugmentationReferences(
+        string projectRoot,
+        IReadOnlyCollection<string>? dirtyNames,
+        bool finalizeDeferredReferenceGraph,
+        CancellationToken cancellationToken) =>
+        RebuildTypeScriptAugmentationReferences(
+            projectRoot,
+            dirtyNames,
+            finalizeDeferredReferenceGraph,
+            referenceSecondaryIndexBulkLoad: null,
+            cancellationToken: cancellationToken);
+
+    internal int RebuildTypeScriptAugmentationReferences(
+        string projectRoot,
+        IReadOnlyCollection<string>? dirtyNames,
+        bool finalizeDeferredReferenceGraph,
+        ReferenceSecondaryIndexBulkLoadGuard? referenceSecondaryIndexBulkLoad,
+        CancellationToken cancellationToken) =>
+        RebuildTypeScriptAugmentationReferencesCore(
+            projectRoot,
+            dirtyNames,
+            finalizeDeferredReferenceGraph,
+            referenceSecondaryIndexBulkLoad,
+            cancellationToken);
 
     private int RebuildTypeScriptAugmentationReferencesCore(
         string? projectRoot,
         IReadOnlyCollection<string>? dirtyNames,
+        bool finalizeDeferredReferenceGraph,
+        ReferenceSecondaryIndexBulkLoadGuard? referenceSecondaryIndexBulkLoad,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -424,7 +465,20 @@ public partial class DbWriter
             InsertReferencesInAtomicFileScope(
                 references,
                 refreshMutualRecursionFlags: true,
-                cancellationToken);
+                cancellationToken,
+                referenceSecondaryIndexBulkLoad);
+            if (references.Count == 0
+                && (deletedReferences.Count > 0 || finalizeDeferredReferenceGraph))
+            {
+                // The insert helper intentionally no-ops for an empty batch. Augmentation
+                // rebuilds finalize only when they deleted synthetic edges or explicitly
+                // inherited a coalesced graph pass. Marker-only validation stays O(1) here.
+                // 空batchはedge削除または先行pass統合時だけgraphを確定し、marker検証だけなら省く。
+                cancellationToken.ThrowIfCancellationRequested();
+                RefreshMutualRecursionFlags(
+                    cancellationToken,
+                    referenceSecondaryIndexBulkLoad: referenceSecondaryIndexBulkLoad);
+            }
             for (var referenceIndex = 0; referenceIndex < references.Count; referenceIndex++)
             {
                 if ((referenceIndex & 1_023) == 0)

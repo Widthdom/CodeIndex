@@ -45,6 +45,9 @@ public static partial class IndexCommandRunner
         internal required FileIndexer.ScanFilesResult ScanResult { get; init; }
         internal required ReadableFileByteTracker ReadableFileBytes { get; init; }
         internal required List<IndexMemorySampleJsonResult> MemorySamples { get; init; }
+        internal required bool TypeScriptAugmentationOwnsDeferredReferenceGraphRefresh { get; init; }
+        internal required bool TypeScriptAugmentationRebuildOwnsReferenceGraphMemorySample { get; init; }
+        internal ReferenceSecondaryIndexBulkLoadGuard? ReferenceSecondaryIndexBulkLoad { get; init; }
         internal required long FreshCountReferences { get; init; }
         internal required Action WriteProjectRootOnce { get; init; }
     }
@@ -129,27 +132,46 @@ public static partial class IndexCommandRunner
             issuesTableAvailableAfter = true;
             csharpSymbolNameReadyAfter = true;
 
-            if (!options.SymbolsOnly
-                && (context.TypeScriptAugmentationNeedsRefresh
-                    || context.TypeScriptAugmentationDirtyNames?.RequiresRefresh == true))
+            if (TypeScriptAugmentationRefreshPolicy.IsRefreshRequired(
+                    options.SymbolsOnly,
+                    context.TypeScriptAugmentationNeedsRefresh,
+                    context.TypeScriptAugmentationDirtyNames?.RequiresRefresh == true))
             {
-                if (context.StartedWithNoIndexedFiles
+                if ((context.StartedWithNoIndexedFiles || options.Rebuild)
+                    && !context.ScanHadErrors
                     && !context.LanguageCounts.ContainsKey("typescript"))
                 {
                     writer.MarkTypeScriptAugmentationReady();
                 }
                 else
                 {
-                    FullScanTypeScriptAugmentationRebuildForTesting?.Invoke();
-                    var augmentationReferences = writer.RebuildTypeScriptAugmentationReferences(
-                        context.ProjectRoot,
-                        context.UseScopedTypeScriptAugmentationRefresh
-                            ? context.TypeScriptAugmentationDirtyNames?.DirtyNames
-                            : null,
-                        cancellationToken);
-                    if (context.StartedWithNoIndexedFiles)
-                        freshCountReferences += augmentationReferences;
+                    const string phase = "rebuilding TypeScript augmentation";
+                    WriteFullScanJsonLiveness(options, $"{phase}...");
+                    var augmentationHeartbeat = StartFullScanJsonPhaseHeartbeat(options, phase);
+                    try
+                    {
+                        FullScanTypeScriptAugmentationRebuildForTesting?.Invoke();
+                        var augmentationReferences = writer.RebuildTypeScriptAugmentationReferences(
+                            context.ProjectRoot,
+                            context.UseScopedTypeScriptAugmentationRefresh
+                                ? context.TypeScriptAugmentationDirtyNames?.DirtyNames
+                                : null,
+                            context.TypeScriptAugmentationOwnsDeferredReferenceGraphRefresh,
+                            context.ReferenceSecondaryIndexBulkLoad,
+                            cancellationToken);
+                        if (context.StartedWithNoIndexedFiles)
+                            freshCountReferences += augmentationReferences;
+                    }
+                    finally
+                    {
+                        StopFullScanJsonPhaseHeartbeat(augmentationHeartbeat);
+                    }
                 }
+            }
+            if (options.MemoryTrace
+                && context.TypeScriptAugmentationRebuildOwnsReferenceGraphMemorySample)
+            {
+                context.MemorySamples.Add(CaptureMemorySample("reference_graph", context.Stopwatch));
             }
             RestampHotspotFamilyTrustForFullScan(
                 writer,

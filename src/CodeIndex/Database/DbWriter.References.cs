@@ -1594,6 +1594,19 @@ public partial class DbWriter
             referenceLinesAreNew: false,
             operation: nameof(InsertReferencesInAtomicFileScope));
 
+    internal void InsertReferencesInAtomicFileScope(
+        IReadOnlyList<ReferenceRecord> references,
+        bool refreshMutualRecursionFlags,
+        CancellationToken cancellationToken,
+        ReferenceSecondaryIndexBulkLoadGuard? referenceSecondaryIndexBulkLoad)
+        => InsertReferencesInAtomicFileScopeCore(
+            references,
+            refreshMutualRecursionFlags,
+            cancellationToken,
+            referenceLinesAreNew: false,
+            operation: nameof(InsertReferencesInAtomicFileScope),
+            referenceSecondaryIndexBulkLoad: referenceSecondaryIndexBulkLoad);
+
     internal void InsertReferencesForNewFilesInAtomicFileScope(
         IReadOnlyList<ReferenceRecord> references,
         bool refreshMutualRecursionFlags,
@@ -1610,7 +1623,8 @@ public partial class DbWriter
         bool refreshMutualRecursionFlags,
         CancellationToken cancellationToken,
         bool referenceLinesAreNew,
-        string operation)
+        string operation,
+        ReferenceSecondaryIndexBulkLoadGuard? referenceSecondaryIndexBulkLoad = null)
     {
         RequireCallerOwnedTransaction(operation);
         AtomicFileReferenceInsertForTesting?.Invoke(referenceLinesAreNew);
@@ -1619,7 +1633,8 @@ public partial class DbWriter
             refreshMutualRecursionFlags,
             cancellationToken,
             referenceLinesAreNew,
-            batchesAreAtomicInCaller: true);
+            batchesAreAtomicInCaller: true,
+            referenceSecondaryIndexBulkLoad: referenceSecondaryIndexBulkLoad);
     }
 
     private void RequireCallerOwnedTransaction(string operation)
@@ -1645,7 +1660,8 @@ public partial class DbWriter
         bool refreshMutualRecursionFlags,
         CancellationToken cancellationToken,
         bool referenceLinesAreNew,
-        bool batchesAreAtomicInCaller)
+        bool batchesAreAtomicInCaller,
+        ReferenceSecondaryIndexBulkLoadGuard? referenceSecondaryIndexBulkLoad = null)
     {
         if (references.Count == 0) return;
         TrackReferenceGraphInsertedReferences(references);
@@ -1711,7 +1727,9 @@ public partial class DbWriter
         if (refreshMutualRecursionFlags)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            RefreshMutualRecursionFlags(cancellationToken);
+            RefreshMutualRecursionFlags(
+                cancellationToken,
+                referenceSecondaryIndexBulkLoad: referenceSecondaryIndexBulkLoad);
         }
     }
 
@@ -2253,6 +2271,8 @@ public partial class DbWriter
         try
         {
             using var cancellationRegistration = RegisterSqliteInterrupt(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            referenceSecondaryIndexBulkLoad?.PrepareForCandidatePopulation(cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
             createUniqueFamiliesCommand = RentCommand(CreateReferenceUniqueFamiliesSql, static _ => { });
             createUniqueFamiliesCommand.ExecuteNonQuery();

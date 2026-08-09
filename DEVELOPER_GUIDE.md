@@ -273,6 +273,16 @@ array, short files skip impossible FTS-token tracking, and high-ratio invalid
 UTF-8 decode replacements retain only the aggregate count used by
 `non_utf8_likely` rather than a line number for every damaged line.
 
+Parallel full scans use shared dynamic work claiming for the main extraction
+body. To keep a large file near the input tail from starting only in the final
+worker wave, they probe at most the last `min(4 * workers, 64)` work items and
+claim known, indexable sizes largest-first. Equal sizes, unavailable metadata,
+and files already above the configured size cap retain their original order.
+The target array and logical file indexes never move, serial hook/filter paths
+do not probe, and the bounded completion queue still publishes in completion
+order. Keep this tail probe and its schedule state independent of repository
+size; an all-file metadata pass can regress network and virtual filesystems.
+
 Scoped updates may also parallelize extraction when the immutable C# prepass is
 authoritative and finds static-interface contracts. This path requires at least
 two snapshotted C# targets, `--parallelism > 1`, no active symbol-kind filter,
@@ -310,17 +320,30 @@ cache so large indexes do not rebuild equivalent SQLite commands per file.
 
 Fresh CLI scans and explicit rebuilds defer the query and graph secondary
 indexes on `symbol_references` until raw reference persistence completes. The
-file and reference-line maintenance indexes remain available during the load,
-while identity and resolution finalization continues without query indexes. The
+reverse candidate-symbol lookup remains available during raw persistence and is
+dropped only when an actual graph refresh is about to delete or materialize
+candidate rows, so marker-only and high-cardinality no-op updates do not rebuild
+that whole index. The candidate primary key remains available for reference-scoped
+materialization and resolution, and the file and reference-line maintenance indexes
+remain available during the load, while identity and resolution finalization
+continues without query indexes. The
 guard forces any active dirty graph scope onto its full-refresh plan before the
 indexes disappear. Immediately before mutual-recursion evaluation, its graph
 transaction restores only the unresolved-folded, legacy NOCASE, and resolved
 reverse-edge indexes; the remaining query indexes return after the mutual update.
-CLI owns this DDL inside the outer scan transaction so cancellation or failure
-rolls the schema back atomically. MCP uses the same recoverable lifecycle whenever
-its established dirty-byte policy selects FTS bulk loading, and restores every
-index on completion or disposal. Schema initialization and read repair must use
-the same canonical index catalog so every path converges on an identical schema.
+When a TypeScript augmentation rebuild owns the sole graph pass, restore every
+ordinary graph/query index before readiness, then drop the reverse candidate-symbol
+lookup immediately before augmentation candidate population and keep it deferred
+through that graph pass. Transactional full
+scans restore that final index after readiness work and before committing the outer
+full-scan transaction, preserving atomic schema rollback on cancellation or
+failure. Recoverable scoped updates and MCP indexing retain guard ownership through
+the readiness transaction commit and restore the final index immediately afterward.
+Both lifecycles keep readiness queries available without maintaining the candidate
+B-tree row by row. MCP uses the recoverable lifecycle whenever its established
+dirty-byte policy selects FTS bulk loading, and restores every index on completion
+or disposal. Schema initialization and read repair must use the same canonical
+index catalog so every path converges on an identical schema.
 
 Reference context text is normalized into `reference_lines`; the legacy
 `symbol_references.context` column is therefore written as a SQL `NULL` literal
@@ -335,7 +358,16 @@ Use the same secondary-index deferral for an existing-database full scan when
 the established FTS dirty-byte policy selects bulk loading. Scoped updates have
 no authoritative workspace-wide byte estimate, so they use a conservative
 recoverable boundary: at least 64 targets and at least 60% of the indexed file
-count. Keep the query-only set deferred through identity and resolution work,
+count. When that raw boundary is met but no cleanup/graph/FTS work is already
+pending, compare a path-filtered reusable-stat snapshot with every target before
+staging. Estimate targets that can mutate indexed state (including filtered
+deletions and duplicate-hardlink cleanup) and stage reference and hotspot
+secondary indexes only when that count crosses the same 64-target / 60% boundary;
+non-mutating skips, unchanged targets, and sparsely mutating target sets keep every index in place.
+Any preflight uncertainty keeps staging enabled. This preflight is only a cost
+decision—the file loop must repeat its live authoritative lookup so changes after
+the snapshot are still indexed with all indexes present.
+Keep the query-only set deferred through identity and resolution work,
 restore the three reverse-edge indexes immediately before mutual recursion, then
 restore the remainder after that update. Small scoped updates must keep every
 index in place so a fixed rebuild cost does not dominate the update.
@@ -406,6 +438,14 @@ scans.
 | Fresh index or explicit rebuild | Always use the bulk path. |
 | Scoped `--files` / `--commits` refresh | Keep trigger synchronization and incremental merge maintenance. |
 | Explicit optimize | `cdidx optimize --db <path>` and `cdidx index <projectPath> --optimize` run a full optimize, reset both counters, and stamp `fts_last_optimized_at`. This may briefly hold the writer lock on large indexes. |
+
+Each FTS5 rebuild temporarily sets that table's effective `automerge` value to
+zero. The setting change, rebuild, and restoration of the prior value share one
+transaction or nested SAVEPOINT, so cancellation, failure, and process exit
+roll back both the rebuilt index and its configuration. The standard and
+trigram tables use separate scopes, then the bulk guard performs the existing
+final optimize once. FTS5 crisis merging remains enabled as a bounded safety
+valve during reconstruction.
 
 Bulk-path estimation and purge safety follow these rules:
 
@@ -924,6 +964,11 @@ All line-based symbol and reference extractors share `SourceLineSplitter`.
 It counts newline boundaries once, allocates the exact result array, and then
 materializes only the line strings that downstream scanners require; do not
 restore separator-index arrays through `string.Split`.
+JavaScript / TypeScript pattern scans likewise share one lazily cached,
+column-preserving sanitized-line snapshot between module, supplemental symbol,
+and private-scope analysis. Keep the cheap raw `{` / `=>` gate ahead of snapshot
+materialization so flat files do not pay for a lexical pass, and treat the cached
+lines as immutable rather than copying or sanitizing them again per consumer.
 
 When structural masking turns a source line into whitespace, do not materialize
 a trimmed copy merely to discover that the line has no references. Preserve
@@ -1548,6 +1593,8 @@ Extractor inputs are passed as a `ReferenceExtractionContext`. Implementations m
 ### TypeScript type-graph extraction
 
 TypeScript extraction emits `type_reference` edges from type-only constructs as dependency metadata, not executable call-graph edges. Type aliases, mapped types, indexed access types, conditional types, template literal type holes, and `infer` clauses are scanned for referenced identifiers while TypeScript type operators such as `keyof`, `in`, `as`, `extends`, and `infer` are suppressed as keywords. For example, ``type Getters<T> = { [K in keyof T as `get${Capitalize<K>}`]: () => T[K] }`` records references to `T`, `K`, and `Capitalize`; `type Unwrap<T> = T extends Promise<infer U> ? U : never` records `T`, `Promise`, and `U`.
+
+Post-index TypeScript declaration merging and reference-identity finalization share one graph pass. CLI full scan, scoped update, and MCP indexing defer their earlier mutual-recursion refresh only when clean readiness will definitely rebuild augmentation references; that rebuild deletes and inserts synthetic `augmentation` edges, then finalizes the graph. An empty batch still finalizes deleted edges or an explicitly inherited deferred pass, while marker-only validation with no inserted or deleted edge stamps readiness without scanning the whole graph. If immutable-input validation later makes the run partial, the orchestrator executes the deferred pass before readiness handling instead. An authoritative fresh or rebuild scan with no TypeScript targets stamps the augmentation contract without scanning augmentation rows. This keeps graph publication and retry semantics unchanged while avoiding two whole-graph refreshes on large TypeScript repositories.
 
 ## Why a database instead of grep?
 
@@ -2265,7 +2312,7 @@ Process exit codes are coarse (`0` success including valid zero-row queries, `1`
 - **MCP server instructions** — The `initialize` response includes an `instructions` string with tool-selection guidance so AI clients can choose the right tool on first connection.
 - **Per-deployment MCP tool enablement** — `cdidx mcp` honors two environment variables so operators can narrow the exposed tool surface without a code change (#1561). `CDIDX_MCP_TOOLS_ALLOW=<csv>` is a strict allowlist; if set, only those tools appear in `tools/list` and are dispatched by `tools/call`. `CDIDX_MCP_TOOLS_DENY=<csv>` removes individual tools from the default-all-enabled set. Allow wins over deny when both are set. The single source of truth for known tool names is `McpToolFilter.KnownToolNames`, which is checked against by both the `tools/list` filter and the `tools/call` gate (and the per-slot guard inside `batch_query`). `BuildInstructions` is also gate-aware: scoped deployments never recommend a disabled tool in the `initialize` instructions, so the guidance stays in sync with the advertised surface. Top-level `tools/call` on a disabled known tool returns `-32601 Tool not enabled: <name>`; `batch_query` envelopes succeed but each disabled-tool slot carries a `code: -32601` field alongside the `error` string so clients can branch on the code without parsing prose. Truly unknown names still fall through to the existing `-32602 Unknown tool` path so operator-disabled tools remain distinguishable from typos. Tool names compare case-insensitively, unknown env-var entries are filtered against the known set (an allowlist of only-unknown names intentionally exposes nothing rather than silently disabling the gate), and the default — no env vars set — keeps every tool enabled so existing deployments are unaffected.
 - **Backward-compatible symbol schema** — Opening an older DB with a newer binary auto-adds missing symbol columns when possible, including hotspot-family metadata such as `container_qualified_name` and `family_key`. If a read path cannot migrate the DB in place, symbol queries fall back to the legacy column set instead of crashing.
-- **Bounded hotspot aggregation** — `DbWriter` maintains `hotspot_reference_counts` as compact per-file logical-reference totals. Limited hotspot readers use its rank index to select a fixed bounded candidate frontier before the non-SQL, SQL exact, SQL leaf, ambiguity, and target-family joins; they do not rematerialize the complete `symbol_references` graph on every query. Logical-site identity excludes raw aliases, mutations refresh cross-file context dependents and demote reference-identity trust transactionally, and reader/writer aggregate SQL is cancellation-interruptible. Writable legacy databases create and backfill the table transactionally, while immutable legacy readers retain the raw-reference compatibility path.
+- **Bounded hotspot aggregation** — `DbWriter` maintains `hotspot_reference_counts` as compact per-file logical-reference totals. Limited hotspot readers use its rank index to select a fixed bounded candidate frontier before the non-SQL, SQL exact, SQL leaf, ambiguity, and target-family joins; they do not rematerialize the complete `symbol_references` graph on every query. Logical-site identity excludes raw aliases, mutations refresh cross-file context dependents and demote reference-identity trust transactionally, and reader/writer aggregate SQL is cancellation-interruptible. Bulk-eligible refreshes with at least 64 dirty file IDs use primary-key seeks plus a bounded total-row probe to drop the four query indexes only when existing dirty aggregate rows cover at least three-fifths of the table; an empty pre-refresh aggregate also qualifies for fresh and rebuild runs, while skewed or small updates retain every index. Qualifying runs rebuild the indexes once after the set-based insert in the same transaction. Writable legacy databases create and backfill the table transactionally, while immutable legacy readers retain the raw-reference compatibility path.
 - **Manual arg parsing** — `System.CommandLine` was removed to reduce dependencies. Simple switch-based parsing.
 - **SHA256 checksums** — Computed from raw file bytes and stored per file. Used as a fallback for change detection when timestamps differ (e.g. after `git checkout`).
 - **UTF-8 with fallback** — Invalid UTF-8 bytes are replaced with U+FFFD rather than failing the entire file.
@@ -3927,6 +3974,14 @@ content 再走査を避けます。normalized facts を持たない caller 用�
 短い file は発生し得ない FTS token 追跡を省き、高比率の invalid UTF-8 decode replacement は
 破損行ごとの番号ではなく `non_utf8_likely` に必要な集約件数だけを保持します。
 
+parallel full scan は extraction 本体を共有dynamic claimで配分します。入力末尾の大きなfileが
+最後のworker waveまで開始されないことを防ぐため、末尾の
+`min(4 * workers, 64)` work itemだけをprobeし、size取得済みかつ上限内のfileを大きい順に
+claimします。同一size、metadata取得不能、設定size上限を既に超えるfileは元順を維持します。
+target arrayと論理file indexは並べ替えず、serialなhook/filter経路はprobeせず、bounded completion
+queueは引き続き完了順でpublishします。network/virtual filesystemで全file metadata passへ
+退行しないよう、tail probeとschedule stateをrepository規模に依存しない固定上限に保ってください。
+
 scoped update でも、immutable な C# prepass が authoritative で static-interface
 contract を検出した場合は extraction を並列化できます。この経路は snapshot 済み C# target
 が2件以上、`--parallelism > 1`、symbol-kind filter 無効、content-load test seam なし、
@@ -3959,16 +4014,25 @@ value を再設定します。大規模 index で同じ SQLite command を file 
 新しい bulk-write 経路もこの bounded cache に載せてください。
 
 fresh な CLI scan と明示的 rebuild は、raw reference の永続化が完了するまで
-`symbol_references` の query / graph 用 secondary index を遅延します。load 中も file と
-reference-line の保守用 index は残し、identity / resolution finalization 中も query index は
-遅延したままにします。guard は index を外す前に active な dirty graph scope を full refresh へ
+`symbol_references` の query / graph 用 secondary index を遅延します。candidate-symbol の
+reverse lookup は raw persistence 中は維持し、実際の graph refresh が candidate row を削除・
+構築する直前だけ外すため、marker-only / 高 cardinality no-op update はこの index 全体を
+再構築しません。reference scope の materialization / resolution に使う candidate primary key は
+維持します。load 中も file と reference-line の保守用 index は残し、identity / resolution
+finalization 中は query index を遅延したままにします。guard は index を外す前に active な dirty graph scope を full refresh へ
 昇格します。mutual-recursion 評価の直前に、その graph transaction 内で unresolved-folded、
 legacy NOCASE、resolved reverse-edge の3本だけを復元し、残りの query index は mutual update
-後に戻します。CLI はこの DDL を scan 全体の外側 transaction 内で所有するため、cancellation
-や失敗時には schema も原子的に rollback されます。MCP は既定の dirty-byte policy が FTS bulk
-load を選ぶ場合に同じ recoverable lifecycle を使い、正常完了時と dispose 時の両方で全 index
-を復元します。schema initialization と read repair は同じ canonical index catalog を使い、
-すべての経路が同一の最終 schema に収束する状態を保ってください。
+後に戻します。TypeScript augmentation rebuild が唯一の graph pass を担当する場合は、readiness
+前に通常の graph / query index を復元し、augmentation の candidate 構築直前にだけ
+candidate-symbol reverse lookup を外して graph pass の完了まで遅延します。transactional full scan は readiness work 後
+かつ outer full-scan transaction の commit 前に最後の1本を復元し、cancellation や失敗時の
+schema rollback を原子的に保ちます。recoverable scoped update と MCP indexing は readiness
+transaction の commit まで guard ownership を保持し、その直後に最後の index を復元します。
+どちらの lifecycle も readiness query を利用可能なまま candidate B-tree の行ごとの保守を
+省きます。MCP は既定の dirty-byte policy が FTS bulk load を選ぶ場合に recoverable lifecycle
+を使い、正常完了時と dispose 時の両方で全 index を復元します。schema initialization と read
+repair は同じ canonical index catalog を使い、すべての経路が同一の最終 schema に収束する状態を
+保ってください。
 
 reference の context text は `reference_lines` へ正規化されるため、legacy な
 `symbol_references.context` column は reference ごとの parameter ではなく SQL の `NULL`
@@ -3981,7 +4045,14 @@ atomic file window を含む全経路でこの契約を維持してください�
 既存DBの full scan でも、既定の FTS dirty-byte policy が bulk load を選ぶ場合は同じ secondary
 index 退避を使います。scoped update には workspace 全体の authoritative な byte estimate が
 ないため、64 target 以上かつ indexed file 数の60%以上という保守的な recoverable 境界を
-使います。identity / resolution 中は query-only 集合を遅延したままにし、mutual recursion の
+使います。この raw 境界を満たしても cleanup / graph / FTS work がまだ無い場合は、path-filter
+済み reusable-stat snapshot を全 target と照合します。filtered deletion や duplicate-hardlink cleanup を
+含む、indexed state を変更し得る target を見積もり、その件数が同じ64 target / 60%境界を超えた
+場合だけ reference と hotspot の secondary-index staging を開始します。変更を伴わない skip、
+unchanged、または sparse mutation の target 集合では全 index を維持します。preflight
+に不確実性があれば保守的に staging を維持します。この preflight は cost 判定に限り、snapshot 後の
+変更も全 index を維持したまま更新できるよう、file loop は authoritative な live lookup を必ず再実行
+してください。identity / resolution 中は query-only 集合を遅延したままにし、mutual recursion の
 直前に reverse-edge 用3本を復元して、その update 後に残りを戻してください。小規模 scoped
 update は固定的な再構築 cost が更新時間を支配しないよう、全 index を維持します。
 
@@ -4494,6 +4565,10 @@ match set は materialize してよいが、single-pass emitter は demand-drive
 line-based symbol / reference extractor はすべて `SourceLineSplitter` を共有する。
 newline boundary を一度数えて exact result array を確保し、downstream scanner が必要とする
 line string だけを実体化する。`string.Split` による separator-index array を戻してはならない。
+JavaScript / TypeScript の pattern scan も、module、supplemental symbol、private-scope 解析で
+列位置を保つ遅延生成済み sanitized-line snapshot を1つ共有する。flat file が lexical pass を
+負担しないよう snapshot の実体化より前に軽量な raw `{` / `=>` gate を維持し、consumer ごとに
+copy や再 sanitization をせず、cached line を immutable として扱う。
 
 構造マスクによって source line が空白だけになった場合、reference がないことを確認するため
 だけに trim 済み copy を実体化してはならない。documentation handling と、original line を
@@ -5157,6 +5232,8 @@ Scala 抽出は `class` / `case class` 宣言を `class`、singleton の `object
 
 TypeScript 抽出は、type-only 構文から `type_reference` edge を dependency metadata として出力し、実行される call-graph edge とは扱わない。type alias、mapped type、indexed access type、conditional type、template literal type の hole、`infer` 句では参照先 identifier を走査し、`keyof`、`in`、`as`、`extends`、`infer` のような TypeScript type operator は keyword として抑止する。たとえば ``type Getters<T> = { [K in keyof T as `get${Capitalize<K>}`]: () => T[K] }`` は `T`、`K`、`Capitalize` への参照を記録し、`type Unwrap<T> = T extends Promise<infer U> ? U : never` は `T`、`Promise`、`U` を記録する。
 
+index 後の TypeScript declaration merge と reference identity の確定は、1回の graph pass を共有する。CLI full scan、scoped update、MCP indexing は、clean readiness で augmentation reference rebuild が確実に実行される場合だけ先行 mutual-recursion refresh を遅延する。rebuild は合成 `augmentation` edge を削除・挿入して graph を確定する。空batchでもedgeを削除した場合または遅延passを明示的に引き継いだ場合は確定を行うが、edgeの挿入・削除がないmarker検証だけなら全graph走査をせずreadinessだけをstampする。immutable-input validation により後から partial になった場合は、readiness 処理の前に orchestrator が遅延 pass を補完する。TypeScript target のない authoritative な fresh / rebuild scan は augmentation row を走査せず contract だけを stamp する。これにより graph 公開と retry semantics を維持しながら、大規模 TypeScript repository での全 graph refresh 2回を避ける。
+
 ## なぜgrepではなくデータベースなのか？
 
 小規模プロジェクトなら `grep` で十分です。しかしファイルが数万規模になると `grep` はボトルネックになります。特にAIエージェントが繰り返し検索を実行するケースで顕著です。cdidxは**すべてのファイルを一度だけ読み込んで検索用の構造を構築する**ことで、以降の検索で元のファイルを一切開かずに済むようにします。
@@ -5516,6 +5593,13 @@ watcher は startup reconciliation scan より先に有効化する。`FileChang
 | fresh index / 明示的 rebuild | 常に bulk path を使います。 |
 | scoped `--files` / `--commits` refresh | trigger 同期と incremental merge maintenance を維持します。 |
 | 明示的 optimize | `cdidx optimize --db <path>` と `cdidx index <projectPath> --optimize` は full optimize を実行し、両 counter を reset して `fts_last_optimized_at` を記録します。大きな index では短時間 writer lock を保持する場合があります。 |
+
+各 FTS5 rebuild は、その table の effective な `automerge` 値を一時的に zero へ
+変更します。設定変更、rebuild、以前の値の復元は同じ transaction または nested
+SAVEPOINT を共有するため、cancellation、failure、process 終了時は再構築した index と
+設定の両方が rollback されます。standard / trigram table は別々の scope を使い、その後
+bulk guard が既存の最終 optimize を1回実行します。再構築中の bounded な安全弁として
+FTS5 crisis merge は維持します。
 
 bulk path の見積もりと purge の安全性は次の規則に従います。
 
@@ -5924,7 +6008,7 @@ USER_GUIDEの[終了コード](USER_GUIDE.md#終了コード)セクションを�
 - **人間向けがデフォルト** — 全コマンドのデフォルト出力は人間向け。`--json`でAI/機械向け出力。
 - **手動引数解析** — `System.CommandLine`は依存削減のため削除。シンプルなswitch文での解析。
 - **後方互換なシンボルスキーマ** — 新しいバイナリで古いDBを開いたときは、可能なら不足するシンボル列を自動追加する。対象には `container_qualified_name` や `family_key` のような `hotspots` 用グループメタデータも含む。読み取り経路でその場移行ができない場合も、シンボル検索は旧カラム構成へフォールバックしてクラッシュを避ける。
-- **bounded な hotspot 集約** — `DbWriter` は `hotspot_reference_counts` を file 単位の compact な logical-reference totals として維持する。limit 付き hotspot reader は rank index で固定上限の candidate frontier を先に選び、その後だけ non-SQL、SQL exact、SQL leaf、曖昧性、target-family の join を実行するため、complete `symbol_references` graph を毎回再 materialize しない。logical-site identity から raw alias を除外し、mutation 時は cross-file context 依存を再集計して reference-identity trust を transaction 内で降格し、reader/writer の aggregate SQL は cancellation で中断できる。writable な legacy database では table の作成と backfill を transaction 内で行い、immutable な legacy reader は raw-reference compatibility path を維持する。
+- **bounded な hotspot 集約** — `DbWriter` は `hotspot_reference_counts` を file 単位の compact な logical-reference totals として維持する。limit 付き hotspot reader は rank index で固定上限の candidate frontier を先に選び、その後だけ non-SQL、SQL exact、SQL leaf、曖昧性、target-family の join を実行するため、complete `symbol_references` graph を毎回再 materialize しない。logical-site identity から raw alias を除外し、mutation 時は cross-file context 依存を再集計して reference-identity trust を transaction 内で降格し、reader/writer の aggregate SQL は cancellation で中断できる。bulk候補のrefreshはdirty file IDが64件以上の場合にprimary-key seekとbounded total-row probeを行い、既存dirty aggregate rowがtableの5分の3以上を占める場合だけquery index 4本を外す。fresh / rebuild のrefresh前aggregateが空の場合も条件を満たすものとし、偏りの大きいupdateや小規模updateは全indexを維持する。条件を満たすrunだけ同じtransactionのset-based insert後に1回再構築する。writable な legacy database では table の作成と backfill を transaction 内で行い、immutable な legacy reader は raw-reference compatibility path を維持する。
 - **SHA256チェックサム** — ファイルのraw bytesから算出しファイルごとに保存。タイムスタンプが異なる場合の変更検出フォールバックとして使用（例: `git checkout`後）。
 - **UTF-8フォールバック** — 不正なUTF-8バイトはファイル全体を失敗させずU+FFFDに置換。
 - **portable な信頼済み Git 選択** — Git subprocess は検証済みの既知 installation path または process-only の絶対パス override `CDIDX_GIT_EXECUTABLE` だけを選び、`PATH` 上の任意の `git` は解決しない。明示 override は `git`（Windows は `git.exe`）という名前の regular かつ symlink / reparse point / device ではない file でなければ fail-closed になる。POSIX candidate と canonical ancestor は effective user または root の所有で group / other write bit がないことを要求するが、`/tmp` や multi-user Nix store のような root 所有の sticky ancestor は受理する。Windows candidate と ancestor は信頼済み owner / write ACL を持ち、executable は有効な PE image でなければならない。受理する candidate は上限付きの `git --version` probe で `git version` と自己識別できなければならない。CLI / MCP の `status.git_executable` は sanitization 済み source、acceptance、stable な rejection reason、owner-only-write 判定、Unix mode、owner category、owner / ancestor trust、executable probe の結果を報告し、受理済み environment override は `trust_overrides[]` にも含まれる。

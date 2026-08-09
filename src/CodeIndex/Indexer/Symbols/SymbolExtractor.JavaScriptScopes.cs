@@ -6,15 +6,11 @@ namespace CodeIndex.Indexer;
 
 public static partial class SymbolExtractor
 {
-    private static JavaScriptScopePrivacyFlags[][] BuildJavaScriptTypeScriptPrivateScopeColumns(string[] lines, string lang)
+    private static JavaScriptScopePrivacyFlags[][] BuildJavaScriptTypeScriptPrivateScopeColumns(
+        string[] sanitizedLines,
+        string lang)
     {
-        if (!LinesContainAny(lines, '{', "=>", StringComparison.Ordinal))
-        {
-            return BuildEmptyJavaScriptTypeScriptPrivateScopeColumns(lines.Length);
-        }
-
-        var privateColumns = new JavaScriptScopePrivacyFlags[lines.Length][];
-        var lexState = new JavaScriptLexState();
+        var privateColumns = new JavaScriptScopePrivacyFlags[sanitizedLines.Length][];
         var scopeStack = new Stack<JavaScriptScopeKind>();
         var pendingFunctionScope = false;
         var functionHeaderState = new JavaScriptTypeScriptFunctionHeaderState();
@@ -38,11 +34,9 @@ public static partial class SymbolExtractor
         string? previousIdentifier = null;
         char previousSignificantChar = '\0';
 
-        for (int lineIndex = 0; lineIndex < lines.Length; lineIndex++)
+        for (int lineIndex = 0; lineIndex < sanitizedLines.Length; lineIndex++)
         {
-            var lexedLine = LexJavaScriptLine(lines[lineIndex], lexState);
-            lexState = lexedLine.EndState;
-            var sanitizedLine = lexedLine.SanitizedLine;
+            var sanitizedLine = sanitizedLines[lineIndex];
             var linePrivateColumns = new JavaScriptScopePrivacyFlags[sanitizedLine.Length];
 
             if (arrowExpressionActive

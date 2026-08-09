@@ -630,14 +630,47 @@ public static partial class IndexCommandRunner
             purgeTxn.Commit();
         }
 
-        var useReferenceSecondaryIndexBulkLoad = !options.SymbolsOnly
+        var indexedFileCountForSecondaryIndexStaging = options.SymbolsOnly
+            ? 0
+            : writer.GetIndexedFileCount();
+        var useUpdateSecondaryIndexStaging = !options.SymbolsOnly
             && ShouldUseUpdateReferenceSecondaryIndexBulkLoad(
                 targetPaths.Count,
-                writer.GetIndexedFileCount());
+                indexedFileCountForSecondaryIndexStaging);
+        if (useUpdateSecondaryIndexStaging
+            && !mutualRecursionRefreshNeeded
+            && !ftsMutated)
+        {
+            try
+            {
+                useUpdateSecondaryIndexStaging =
+                    ShouldUseUpdateSecondaryIndexStagingAfterStatPreflight(
+                        writer,
+                        indexer,
+                        options,
+                        projectRoot,
+                        targetPaths,
+                        indexedFileCountForSecondaryIndexStaging,
+                        csharpWorkspace,
+                        symbolKindFilterMatchesPrior,
+                        csharpSymbolNameContractMatchesCurrent,
+                        sqlGraphContractMatchesCurrent,
+                        hdlGraphContractMatchesCurrent,
+                        cancellationToken);
+            }
+            catch (OperationCanceledException)
+                when (cancellationToken.IsCancellationRequested)
+            {
+                ThrowIfUpdateCancelled();
+                throw;
+            }
+        }
+        if (useUpdateSecondaryIndexStaging)
+            hotspotAggregateRefresh.EnableSecondaryIndexDeferral();
         using var referenceSecondaryIndexBulkLoad =
             ReferenceSecondaryIndexBulkLoadGuard.StartRecoverable(
                 writer,
-                useReferenceSecondaryIndexBulkLoad,
+                useUpdateSecondaryIndexStaging,
                 cancellationToken);
 
         var updateLoop = RunUpdateFileLoop(new UpdateFileLoopContext
@@ -740,16 +773,36 @@ public static partial class IndexCommandRunner
 
         ThrowIfUpdateCancelled();
         mutualRecursionRefreshNeeded |= !options.SymbolsOnly && (removed > 0 || purgedRefs > 0);
-        if (mutualRecursionRefreshNeeded)
+        var referenceIdentityReadyForMutualRecursionRefresh = mutualRecursionRefreshNeeded
+            ? writer.CSharpFamilyTrustAllowsReferenceIdentityReady()
+            : (bool?)null;
+        var willRebuildTypeScriptAugmentation =
+            TypeScriptAugmentationRefreshPolicy.ShouldRebuildReferences(
+                options.SymbolsOnly,
+                canFinalize: readinessDemoted && errors == 0,
+                typeScriptAugmentationNeedsRefresh,
+                typeScriptAugmentationDirtyNames?.RequiresRefresh == true,
+                canStampReadyWithoutRebuild: false);
+        var deferMutualRecursionRefreshToTypeScriptAugmentation =
+            mutualRecursionRefreshNeeded && willRebuildTypeScriptAugmentation;
+        if (mutualRecursionRefreshNeeded
+            && !deferMutualRecursionRefreshToTypeScriptAugmentation)
             writer.RefreshMutualRecursionFlags(
                 cancellationToken,
                 stampReferenceIdentityContractReady:
-                    writer.CSharpFamilyTrustAllowsReferenceIdentityReady(),
+                    referenceIdentityReadyForMutualRecursionRefresh,
                 referenceSecondaryIndexBulkLoad: referenceSecondaryIndexBulkLoad);
-        // Only the three reverse-edge indexes participate in graph finalization. Recoverable
-        // mode restores the remaining query indexes afterwards and repairs all on unwind.
-        referenceSecondaryIndexBulkLoad?.Complete(cancellationToken);
-        if (options.MemoryTrace)
+        if (willRebuildTypeScriptAugmentation)
+        {
+            // Retain the candidate reverse-index deferral until the TypeScript-owned graph
+            // pass. Recoverable disposal repairs the full schema if readiness fails.
+            referenceSecondaryIndexBulkLoad?.PrepareForDeferredGraphRefresh(cancellationToken);
+        }
+        else
+        {
+            referenceSecondaryIndexBulkLoad?.Complete(cancellationToken);
+        }
+        if (options.MemoryTrace && !willRebuildTypeScriptAugmentation)
             memorySamples.Add(CaptureMemorySample("reference_graph", stopwatch));
         ThrowIfUpdateCancelled();
         updateProgress.Pause();
@@ -796,6 +849,34 @@ public static partial class IndexCommandRunner
                 };
             }
         }
+        var deferredMutualRecursionRefreshCompletedBeforeReadiness = false;
+        // A successful TypeScript augmentation rebuild performs the graph refresh itself.
+        // Late workspace drift prevents that rebuild, so complete the deferred pass before
+        // partial readiness restores any prior graph trust.
+        // augmentation 実行不能となる late drift 時だけ、partial readiness の前に補完する。
+        var willRebuildTypeScriptAugmentationAfterReadinessValidation =
+            TypeScriptAugmentationRefreshPolicy.ShouldRebuildReferences(
+                options.SymbolsOnly,
+                canFinalize: readinessDemoted && errors == 0,
+                typeScriptAugmentationNeedsRefresh,
+                typeScriptAugmentationDirtyNames?.RequiresRefresh == true,
+                canStampReadyWithoutRebuild: false);
+        if (willRebuildTypeScriptAugmentation
+            && !willRebuildTypeScriptAugmentationAfterReadinessValidation)
+        {
+            if (deferMutualRecursionRefreshToTypeScriptAugmentation)
+            {
+                writer.RefreshMutualRecursionFlags(
+                    cancellationToken,
+                    stampReferenceIdentityContractReady:
+                        referenceIdentityReadyForMutualRecursionRefresh,
+                    referenceSecondaryIndexBulkLoad: referenceSecondaryIndexBulkLoad);
+                deferredMutualRecursionRefreshCompletedBeforeReadiness = true;
+            }
+            referenceSecondaryIndexBulkLoad?.Complete(cancellationToken);
+        }
+        if (options.MemoryTrace && deferredMutualRecursionRefreshCompletedBeforeReadiness)
+            memorySamples.Add(CaptureMemorySample("reference_graph", stopwatch));
         var readiness = FinalizeUpdateReadiness(new UpdateReadinessContext
         {
             Writer = writer,
@@ -830,10 +911,29 @@ public static partial class IndexCommandRunner
             TargetCount = targetPaths.Count,
             Errors = errors,
             FileErrorList = fileErrorList,
+            MemorySamples = memorySamples,
+            TypeScriptAugmentationOwnsDeferredReferenceGraphRefresh =
+                deferMutualRecursionRefreshToTypeScriptAugmentation
+                && !deferredMutualRecursionRefreshCompletedBeforeReadiness,
+            TypeScriptAugmentationRebuildOwnsReferenceGraphMemorySample =
+                willRebuildTypeScriptAugmentationAfterReadinessValidation,
+            ReferenceSecondaryIndexBulkLoad =
+                willRebuildTypeScriptAugmentationAfterReadinessValidation
+                    ? referenceSecondaryIndexBulkLoad
+                    : null,
             FullyRefreshedDynamicGraphLanguages = errors == 0 && readinessDemoted
                 ? GetFullyRefreshedDynamicGraphLanguages()
                 : [],
         });
+        // A TypeScript-owned deferred graph pass must retain recoverable ownership until the
+        // readiness transaction commits; otherwise a rollback could discard its CREATEs with
+        // no Dispose repair path.
+        if (referenceSecondaryIndexBulkLoad != null
+            && willRebuildTypeScriptAugmentationAfterReadinessValidation
+            && readinessDemoted
+            && errors == 0)
+            writer.ReportReferenceSecondaryIndexBulkLoadState("readiness_committed");
+        referenceSecondaryIndexBulkLoad?.Complete(cancellationToken);
         var graphTableAvailableAfter = readiness.GraphTableAvailable;
         var issuesTableAvailableAfter = readiness.IssuesTableAvailable;
         var csharpSymbolNameReadyAfter = readiness.CSharpSymbolNameReady;

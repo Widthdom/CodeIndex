@@ -343,6 +343,36 @@ public class PerformanceTests : IDisposable
 #else
     [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
 #endif
+    public void SymbolExtraction_JavaScriptTypeScriptScopeLexing_ReusesSanitizedSnapshot()
+    {
+        var content = BuildJavaScriptTypeScriptScopeLexingFixture(statementCount: 1_200);
+        var javaScriptSymbol = Assert.Single(
+            SymbolExtractor.Extract(1, "javascript", content));
+        var typeScriptSymbol = Assert.Single(
+            SymbolExtractor.Extract(1, "typescript", content));
+        Assert.All([javaScriptSymbol, typeScriptSymbol], symbol =>
+        {
+            Assert.Equal("function", symbol.Kind);
+            Assert.Equal("inspect", symbol.Name);
+        });
+
+        var javaScriptAllocatedBytes = MeasureAllocatedBytes(
+            () => SymbolExtractor.Extract(1, "javascript", content));
+        var typeScriptAllocatedBytes = MeasureAllocatedBytes(
+            () => SymbolExtractor.Extract(1, "typescript", content));
+
+        Assert.True(
+            javaScriptAllocatedBytes < 6_000_000
+                && typeScriptAllocatedBytes < 8_200_000
+                && javaScriptAllocatedBytes + typeScriptAllocatedBytes < 14_100_000,
+            $"Scope-heavy JS/TS extraction allocated JavaScript={javaScriptAllocatedBytes:N0}, TypeScript={typeScriptAllocatedBytes:N0} bytes");
+    }
+
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
     public void ReferenceExtraction_CsharpHotPath_StaysWithinAllocationBudget()
     {
         var content = BuildCSharpHotPathFixture(typeCount: 80);
@@ -1395,6 +1425,22 @@ public class PerformanceTests : IDisposable
         }
 
         return builder.ToString();
+    }
+
+    private static string BuildJavaScriptTypeScriptScopeLexingFixture(int statementCount)
+    {
+        var builder = new StringBuilder("export function inspect(input) {\n  let total = 0;\n");
+        for (var index = 0; index < statementCount; index++)
+        {
+            builder.Append("  if (input) { total += /[{}]/.test(input) ? ")
+                .Append(index)
+                .Append(" : 0; }")
+                .Append('\n');
+        }
+
+        return builder.Append("  return total;\n}")
+            .Append('\n')
+            .ToString();
     }
 
     private static string BuildPythonImportedTypeCallFixture(int importCount)

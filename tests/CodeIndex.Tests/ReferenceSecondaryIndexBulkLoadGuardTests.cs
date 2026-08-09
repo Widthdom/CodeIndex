@@ -34,10 +34,17 @@ public sealed class ReferenceSecondaryIndexBulkLoadGuardTests : IDisposable
     [Fact]
     public void CanonicalSets_PartitionRawGraphAndRemainingIndexesExactly()
     {
+        const string candidateReverseIndexName = "idx_symbol_ref_candidates_symbol";
         var rawNames = ReferenceSecondaryIndexSql.RawPersistenceRequired
             .Select(static definition => definition.Name)
             .ToHashSet(StringComparer.Ordinal);
         var graphNames = ReferenceSecondaryIndexSql.GraphFinalizationRequired
+            .Select(static definition => definition.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        var deferredGraphPreparationNames = ReferenceSecondaryIndexSql.DeferredGraphPreparation
+            .Select(static definition => definition.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        var candidatePopulationNames = ReferenceSecondaryIndexSql.CandidatePopulationDeferred
             .Select(static definition => definition.Name)
             .ToHashSet(StringComparer.Ordinal);
         var remainingNames = ReferenceSecondaryIndexSql.RemainingQuery
@@ -56,10 +63,26 @@ public sealed class ReferenceSecondaryIndexBulkLoadGuardTests : IDisposable
             graphNames.Order(StringComparer.Ordinal));
         Assert.Empty(rawNames.Intersect(deferredNames));
         Assert.Empty(graphNames.Intersect(remainingNames));
+        Assert.Contains(candidateReverseIndexName, remainingNames);
+        Assert.Equal([candidateReverseIndexName], candidatePopulationNames);
+        Assert.DoesNotContain(candidateReverseIndexName, deferredGraphPreparationNames);
+        Assert.True(
+            deferredGraphPreparationNames.SetEquals(
+                graphNames.Concat(remainingNames.Where(
+                    name => !string.Equals(
+                        name,
+                        candidateReverseIndexName,
+                        StringComparison.Ordinal)))));
         Assert.True(deferredNames.SetEquals(graphNames.Concat(remainingNames)));
         Assert.Equal(
             graphNames.Order(StringComparer.Ordinal),
             ReferenceSecondaryIndexBulkLoadGuard.GraphFinalizationIndexNames.Order(StringComparer.Ordinal));
+        Assert.Equal(
+            deferredGraphPreparationNames.Order(StringComparer.Ordinal),
+            ReferenceSecondaryIndexBulkLoadGuard.DeferredGraphPreparationIndexNames.Order(StringComparer.Ordinal));
+        Assert.Equal(
+            candidatePopulationNames.Order(StringComparer.Ordinal),
+            ReferenceSecondaryIndexBulkLoadGuard.CandidatePopulationIndexNames.Order(StringComparer.Ordinal));
     }
 
     [Fact]
@@ -73,13 +96,53 @@ public sealed class ReferenceSecondaryIndexBulkLoadGuardTests : IDisposable
             enabled: true);
 
         Assert.NotNull(guard);
-        AssertDeferredIndexesAbsent(_db.Connection);
+        AssertInitialBulkPersistenceSchema(_db.Connection);
         AssertRawPersistenceIndexesPresent(_db.Connection);
 
+        guard.PrepareForCandidatePopulation();
         guard.PrepareForMutualRecursion();
 
         AssertGraphFinalizationIndexesPresent(_db.Connection);
         AssertRemainingQueryIndexesAbsent(_db.Connection);
+
+        guard.Complete();
+
+        Assert.Equal(
+            baseline.Order(StringComparer.Ordinal),
+            ReadReferenceIndexNames(_db.Connection).Order(StringComparer.Ordinal));
+        transaction.Commit();
+    }
+
+    [Fact]
+    public void TransactionalPrepareForDeferredGraphRefresh_KeepsCandidateUntilPopulationStarts()
+    {
+        const string candidateReverseIndexName = "idx_symbol_ref_candidates_symbol";
+        var baseline = ReadReferenceIndexNames(_db.Connection);
+        var expectedPreparedNames = ReferenceSecondaryIndexSql.RawPersistenceRequired
+            .Concat(ReferenceSecondaryIndexSql.DeferredGraphPreparation)
+            .Select(static definition => definition.Name)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+        using var transaction = _writer.BeginTransaction();
+        using var guard = ReferenceSecondaryIndexBulkLoadGuard.StartTransactional(
+            _writer,
+            enabled: true);
+
+        Assert.NotNull(guard);
+        AssertInitialBulkPersistenceSchema(_db.Connection);
+
+        guard.PrepareForDeferredGraphRefresh();
+
+        var preparedNames = ReadReferenceIndexNames(_db.Connection);
+        Assert.Equal(baseline.Order(StringComparer.Ordinal), preparedNames.Order(StringComparer.Ordinal));
+        Assert.Contains(candidateReverseIndexName, preparedNames);
+
+        guard.PrepareForCandidatePopulation();
+
+        preparedNames = ReadReferenceIndexNames(_db.Connection);
+        Assert.Equal(expectedPreparedNames, preparedNames.Order(StringComparer.Ordinal));
+        Assert.DoesNotContain(candidateReverseIndexName, preparedNames);
 
         guard.Complete();
 
@@ -101,11 +164,11 @@ public sealed class ReferenceSecondaryIndexBulkLoadGuardTests : IDisposable
                        enabled: true))
             {
                 Assert.NotNull(guard);
-                AssertDeferredIndexesAbsent(_db.Connection);
+                AssertInitialBulkPersistenceSchema(_db.Connection);
             }
 
             // Dispose must not rebuild a large index set while cancellation is unwinding.
-            AssertDeferredIndexesAbsent(_db.Connection);
+            AssertInitialBulkPersistenceSchema(_db.Connection);
         }
 
         Assert.Equal(
@@ -154,7 +217,7 @@ public sealed class ReferenceSecondaryIndexBulkLoadGuardTests : IDisposable
                    enabled: true))
         {
             Assert.NotNull(guard);
-            AssertDeferredIndexesAbsent(_db.Connection);
+            AssertInitialBulkPersistenceSchema(_db.Connection);
             AssertRawPersistenceIndexesPresent(_db.Connection);
         }
 
@@ -174,7 +237,7 @@ public sealed class ReferenceSecondaryIndexBulkLoadGuardTests : IDisposable
             cancellation.Cancel();
 
             Assert.Throws<OperationCanceledException>(() => guard!.Complete(cancellation.Token));
-            AssertDeferredIndexesAbsent(_db.Connection);
+            AssertInitialBulkPersistenceSchema(_db.Connection);
         }
 
         AssertDeferredIndexesPresent(_db.Connection);
@@ -190,6 +253,7 @@ public sealed class ReferenceSecondaryIndexBulkLoadGuardTests : IDisposable
                    enabled: true))
         {
             Assert.NotNull(guard);
+            guard.PrepareForCandidatePopulation();
             guard.PrepareForMutualRecursion();
             AssertGraphFinalizationIndexesPresent(_db.Connection);
             AssertRemainingQueryIndexesAbsent(_db.Connection);
@@ -205,15 +269,30 @@ public sealed class ReferenceSecondaryIndexBulkLoadGuardTests : IDisposable
     [Fact]
     public void RecoverableComplete_WithoutGraphRefreshRestoresAllIndexes()
     {
-        using var guard = ReferenceSecondaryIndexBulkLoadGuard.StartRecoverable(
-            _writer,
-            enabled: true);
-        Assert.NotNull(guard);
-        AssertDeferredIndexesAbsent(_db.Connection);
+        var previousStateHook = DbWriter.ReferenceSecondaryIndexBulkLoadStateForTesting;
+        var phases = new List<string>();
+        try
+        {
+            DbWriter.ReferenceSecondaryIndexBulkLoadStateForTesting = (connection, phase) =>
+            {
+                phases.Add(phase);
+                previousStateHook?.Invoke(connection, phase);
+            };
+            using var guard = ReferenceSecondaryIndexBulkLoadGuard.StartRecoverable(
+                _writer,
+                enabled: true);
+            Assert.NotNull(guard);
+            AssertInitialBulkPersistenceSchema(_db.Connection);
 
-        guard.Complete();
+            guard.Complete();
 
-        AssertDeferredIndexesPresent(_db.Connection);
+            Assert.Equal(["dropped", "restored"], phases);
+            AssertDeferredIndexesPresent(_db.Connection);
+        }
+        finally
+        {
+            DbWriter.ReferenceSecondaryIndexBulkLoadStateForTesting = previousStateHook;
+        }
     }
 
     [Fact]
@@ -280,7 +359,7 @@ public sealed class ReferenceSecondaryIndexBulkLoadGuardTests : IDisposable
             _writer,
             enabled: true);
         Assert.NotNull(abandonedGuard);
-        AssertDeferredIndexesAbsent(_db.Connection);
+        AssertInitialBulkPersistenceSchema(_db.Connection);
 
         // Model process termination: the connection disappears without running guard Dispose.
         _db.Dispose();
@@ -300,6 +379,7 @@ public sealed class ReferenceSecondaryIndexBulkLoadGuardTests : IDisposable
             _writer,
             enabled: true);
         Assert.NotNull(abandonedGuard);
+        abandonedGuard.PrepareForCandidatePopulation();
         abandonedGuard.PrepareForMutualRecursion();
         AssertGraphFinalizationIndexesPresent(_db.Connection);
         AssertRemainingQueryIndexesAbsent(_db.Connection);
@@ -315,11 +395,13 @@ public sealed class ReferenceSecondaryIndexBulkLoadGuardTests : IDisposable
         GC.KeepAlive(abandonedGuard);
     }
 
-    private static void AssertDeferredIndexesAbsent(SqliteConnection connection)
+    private static void AssertInitialBulkPersistenceSchema(SqliteConnection connection)
     {
         var names = ReadReferenceIndexNames(connection);
-        foreach (var name in ReferenceSecondaryIndexBulkLoadGuard.IndexNames)
-            Assert.DoesNotContain(name, names);
+        foreach (var definition in ReferenceSecondaryIndexSql.DeferredGraphPreparation)
+            Assert.DoesNotContain(definition.Name, names);
+        foreach (var definition in ReferenceSecondaryIndexSql.CandidatePopulationDeferred)
+            Assert.Contains(definition.Name, names);
     }
 
     private static void AssertDeferredIndexesPresent(SqliteConnection connection)
@@ -397,7 +479,7 @@ public sealed class ReferenceSecondaryIndexBulkLoadGuardTests : IDisposable
             SELECT name
             FROM sqlite_schema
             WHERE type = 'index'
-              AND tbl_name = 'symbol_references'
+              AND tbl_name IN ('symbol_references', 'symbol_reference_candidates')
               AND name NOT LIKE 'sqlite_autoindex_%'
             """;
         using var reader = command.ExecuteReader();

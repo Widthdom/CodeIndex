@@ -7,9 +7,38 @@ public partial class DbWriter
     internal static Action? HotspotAggregateReadinessCheckedForTesting { get; set; }
     internal static Action? HotspotAggregateRefreshStatementExecutingForTesting { get; set; }
     internal static Action<IReadOnlyCollection<long>>? DeferredHotspotDirtyFilesForTesting { get; set; }
+    internal static Action<long, long, long>? HotspotAggregateIndexDeferralSizedForTesting { get; set; }
+    internal const int HotspotAggregateSecondaryIndexDeferralMinimumDirtyFileCount = 64;
     private const string DeferredHotspotDirtyFilesTable = HotspotReferenceAggregateSql.DeferredDirtyFilesTableName;
     private DeferredHotspotReferenceAggregateRefreshScope? _deferredHotspotReferenceRefresh;
     private DeferredHotspotReferenceTransactionFrame? _activeDeferredHotspotReferenceTransactionFrame;
+
+    internal static bool ShouldDeferHotspotAggregateSecondaryIndexes(
+        int dirtyFileCount,
+        long dirtyAggregateRowCount,
+        long observedTotalAggregateRowCount)
+    {
+        if (dirtyFileCount < HotspotAggregateSecondaryIndexDeferralMinimumDirtyFileCount
+            || dirtyAggregateRowCount < 0
+            || observedTotalAggregateRowCount < 0)
+        {
+            return false;
+        }
+
+        return observedTotalAggregateRowCount
+            <= CalculateMaxQualifyingHotspotAggregateRowCount(dirtyAggregateRowCount);
+    }
+
+    private static long CalculateMaxQualifyingHotspotAggregateRowCount(
+        long dirtyAggregateRowCount)
+    {
+        var quotient = dirtyAggregateRowCount / 3;
+        var remainder = dirtyAggregateRowCount % 3;
+        var extra = quotient * 2 + (remainder * 2) / 3;
+        return dirtyAggregateRowCount > long.MaxValue - extra
+            ? long.MaxValue
+            : dirtyAggregateRowCount + extra;
+    }
 
     /// <summary>
     /// Defer per-file hotspot aggregate maintenance until a whole indexing batch has
@@ -20,7 +49,8 @@ public partial class DbWriter
     /// transaction/savepoint checkpoint により成功 mutation の dirty ID だけを保持し、
     /// Complete が一度の set-based refresh と trust 復元を同一 transaction で行う。
     /// </summary>
-    internal DeferredHotspotReferenceAggregateRefreshScope BeginDeferredHotspotReferenceAggregateRefresh()
+    internal DeferredHotspotReferenceAggregateRefreshScope BeginDeferredHotspotReferenceAggregateRefresh(
+        bool deferSecondaryIndexes = false)
     {
         if (_deferredHotspotReferenceRefresh != null)
         {
@@ -28,7 +58,9 @@ public partial class DbWriter
                 "A deferred hotspot reference aggregate refresh scope is already active for this writer.");
         }
 
-        var scope = new DeferredHotspotReferenceAggregateRefreshScope(this);
+        var scope = new DeferredHotspotReferenceAggregateRefreshScope(
+            this,
+            deferSecondaryIndexes);
         _deferredHotspotReferenceRefresh = scope;
         return scope;
     }
@@ -90,6 +122,7 @@ public partial class DbWriter
     private void RefreshDeferredHotspotReferenceCounts(
         IReadOnlyCollection<long> fileIds,
         bool restoreReady,
+        bool considerSecondaryIndexDeferral,
         CancellationToken cancellationToken)
     {
         using var transaction = BeginTransaction(cancellationToken, "complete deferred hotspot reference refresh");
@@ -128,7 +161,15 @@ public partial class DbWriter
                 insert.ExecuteNonQuery();
             }
 
+            var deferSecondaryIndexes = considerSecondaryIndexDeferral
+                && ShouldDeferHotspotAggregateSecondaryIndexes(
+                    fileIds.Count,
+                    cancellationToken);
+            if (deferSecondaryIndexes)
+                DropHotspotReferenceAggregateSecondaryIndexes(cancellationToken);
             ExecuteDeferredHotspotReferenceRefresh(cancellationToken);
+            if (deferSecondaryIndexes)
+                RestoreHotspotReferenceAggregateSecondaryIndexes(cancellationToken);
             using var drop = _conn.CreateCommand();
             drop.Transaction = _activeTransaction;
             drop.CommandText = $"DROP TABLE {DeferredHotspotDirtyFilesTable}";
@@ -138,6 +179,90 @@ public partial class DbWriter
         if (restoreReady)
             ApplyReadyBitToUserVersion(DbContext.HotspotReferenceAggregateFlags, _activeTransaction);
         transaction.Commit();
+    }
+
+    private bool ShouldDeferHotspotAggregateSecondaryIndexes(
+        int dirtyFileCount,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        using var cancellationRegistration = RegisterSqliteInterrupt(cancellationToken);
+        try
+        {
+            using var dirtyCountCommand = _conn.CreateCommand();
+            dirtyCountCommand.Transaction = _activeTransaction;
+            dirtyCountCommand.CommandText = $"""
+                SELECT COUNT(*)
+                FROM {DeferredHotspotDirtyFilesTable} AS dirty
+                CROSS JOIN {HotspotReferenceAggregateSql.TableName} AS aggregate_rows
+                WHERE aggregate_rows.file_id = dirty.file_id
+                """;
+            cancellationToken.ThrowIfCancellationRequested();
+            var dirtyAggregateRowCount = Convert.ToInt64(
+                dirtyCountCommand.ExecuteScalar(),
+                System.Globalization.CultureInfo.InvariantCulture);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var maxQualifyingTotal =
+                CalculateMaxQualifyingHotspotAggregateRowCount(dirtyAggregateRowCount);
+            if (maxQualifyingTotal == long.MaxValue)
+                return true;
+
+            using var totalProbeCommand = _conn.CreateCommand();
+            totalProbeCommand.Transaction = _activeTransaction;
+            totalProbeCommand.CommandText = $"""
+                SELECT COUNT(*)
+                FROM (
+                    SELECT 1
+                    FROM {HotspotReferenceAggregateSql.TableName}
+                    LIMIT @probe_limit
+                )
+                """;
+            var probeLimit = maxQualifyingTotal + 1;
+            totalProbeCommand.Parameters.Add("@probe_limit", SqliteType.Integer).Value = probeLimit;
+            cancellationToken.ThrowIfCancellationRequested();
+            var observedTotalAggregateRowCount = Convert.ToInt64(
+                totalProbeCommand.ExecuteScalar(),
+                System.Globalization.CultureInfo.InvariantCulture);
+            cancellationToken.ThrowIfCancellationRequested();
+            HotspotAggregateIndexDeferralSizedForTesting?.Invoke(
+                dirtyAggregateRowCount,
+                probeLimit,
+                observedTotalAggregateRowCount);
+            cancellationToken.ThrowIfCancellationRequested();
+            return ShouldDeferHotspotAggregateSecondaryIndexes(
+                dirtyFileCount,
+                dirtyAggregateRowCount,
+                observedTotalAggregateRowCount);
+        }
+        catch (SqliteException exception)
+            when (IsSqliteInterruptCancellation(exception, cancellationToken))
+        {
+            throw new OperationCanceledException(
+                "Hotspot aggregate index-deferral sizing was interrupted.",
+                exception,
+                cancellationToken);
+        }
+    }
+
+    private void DropHotspotReferenceAggregateSecondaryIndexes(
+        CancellationToken cancellationToken)
+    {
+        foreach (var index in HotspotReferenceAggregateSql.Indexes)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Execute($"DROP INDEX IF EXISTS {index.Name}", cancellationToken);
+        }
+    }
+
+    private void RestoreHotspotReferenceAggregateSecondaryIndexes(
+        CancellationToken cancellationToken)
+    {
+        foreach (var index in HotspotReferenceAggregateSql.Indexes)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Execute(index.CreateSql, cancellationToken);
+        }
     }
 
     private void ExecuteDeferredHotspotReferenceRefresh(CancellationToken cancellationToken)
@@ -181,19 +306,35 @@ public partial class DbWriter
     internal sealed class DeferredHotspotReferenceAggregateRefreshScope : IDisposable
     {
         private readonly DbWriter _writer;
+        private bool _deferSecondaryIndexes;
         private readonly HashSet<long> _dirtyFileIds = [];
         private bool _hasReadinessBaseline;
         private bool _restoreReady;
         private bool _completed;
         private bool _disposed;
 
-        internal DeferredHotspotReferenceAggregateRefreshScope(DbWriter writer)
+        internal DeferredHotspotReferenceAggregateRefreshScope(
+            DbWriter writer,
+            bool deferSecondaryIndexes)
         {
             _writer = writer;
+            _deferSecondaryIndexes = deferSecondaryIndexes;
         }
 
         internal bool IsCompleting { get; private set; }
         internal bool IsCompleted => _completed;
+
+        internal void EnableSecondaryIndexDeferral()
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_completed)
+            {
+                throw new InvalidOperationException(
+                    "A completed hotspot reference aggregate refresh cannot defer indexes.");
+            }
+
+            _deferSecondaryIndexes = true;
+        }
 
         internal void MergeCommitted(
             IReadOnlyCollection<long> dirtyFileIds,
@@ -247,10 +388,14 @@ public partial class DbWriter
             IsCompleting = true;
             try
             {
+                var considerSecondaryIndexDeferral = _deferSecondaryIndexes
+                    && dirtyFileIds.Count
+                        >= HotspotAggregateSecondaryIndexDeferralMinimumDirtyFileCount;
                 _writer.RefreshDeferredHotspotReferenceCounts(
                     dirtyFileIds,
                     restoreReady: hasReadinessBaseline && restoreReady,
-                    cancellationToken);
+                    considerSecondaryIndexDeferral: considerSecondaryIndexDeferral,
+                    cancellationToken: cancellationToken);
                 _completed = true;
                 _dirtyFileIds.Clear();
                 activeFrame?.Consume();

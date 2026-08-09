@@ -128,8 +128,22 @@ public static partial class SymbolExtractor
         private CSharpLexState[] BuildCSharpLineStartStates() =>
             _csharpLineStartStates ??= SymbolExtractor.BuildCSharpLineStartStates(_lines);
 
-        private JavaScriptScopePrivacyFlags[][] BuildPrivateScopeColumns() =>
-            _privateScopeColumns ??= BuildJavaScriptTypeScriptPrivateScopeColumns(_lines, _lang);
+        private JavaScriptScopePrivacyFlags[][] BuildPrivateScopeColumns()
+        {
+            if (_privateScopeColumns != null)
+                return _privateScopeColumns;
+
+            // Keep the raw-text fast gate ahead of snapshot creation. Files with neither a
+            // block nor an arrow cannot introduce a private function/class scope, so they do
+            // not need the JS/TS lexer solely for this map.
+            // block / arrow のない file は scope map 専用の lex を行わない。
+            _privateScopeColumns = !LinesContainAny(_lines, '{', "=>", StringComparison.Ordinal)
+                ? BuildEmptyJavaScriptTypeScriptPrivateScopeColumns(_lines.Length)
+                : BuildJavaScriptTypeScriptPrivateScopeColumns(
+                    GetJavaScriptTypeScriptSanitizedLines(),
+                    _lang);
+            return _privateScopeColumns;
+        }
 
         private bool[]? BuildCSharpSwitchExpressionLines()
         {

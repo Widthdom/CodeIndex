@@ -826,7 +826,8 @@ public static partial class IndexCommandRunner
             db.RepairIncompleteBatchReadiness();
         using var referenceGraphRefresh = writer.BeginReferenceGraphRefreshScope(
             options.Rebuild || !writer.HasAnyIndexedFiles());
-        using var hotspotAggregateRefresh = writer.BeginDeferredHotspotReferenceAggregateRefresh();
+        using var hotspotAggregateRefresh = writer.BeginDeferredHotspotReferenceAggregateRefresh(
+            deferSecondaryIndexes: !options.SymbolsOnly && useFtsBulkLoad);
         using var fullScanTxn = writer.BeginTransaction(cancellationToken, "full scan write phase");
         fullScanWritePhaseStarted = true;
         writer.RecoverInterruptedFtsBulkLoadIfNeeded(cancellationToken);
@@ -1026,37 +1027,71 @@ public static partial class IndexCommandRunner
             memorySamples.Add(CaptureMemorySample("extraction", stopwatch));
 
         ThrowIfFullScanCancelled(processed, files.Count);
-        if ((!deferCSharpMutationsForIncompleteScan && mutualRecursionRefreshNeeded)
+        var referenceIdentityReadyForMutualRecursionRefresh =
+            !deferCSharpMutationsForIncompleteScan && mutualRecursionRefreshNeeded
+                ? writer.CSharpFamilyTrustAllowsReferenceIdentityReady(
+                    (options.Rebuild || startedWithNoIndexedFiles)
+                    && !scanHadErrors
+                    && errors == 0
+                        ? languageCounts.ContainsKey("csharp")
+                        : null)
+                : (bool?)null;
+        var canStampTypeScriptAugmentationReadyWithoutRebuild =
+            (startedWithNoIndexedFiles || options.Rebuild)
+            && !scanHadErrors
+            && !languageCounts.ContainsKey("typescript");
+        var willRebuildTypeScriptAugmentation =
+            !deferCSharpMutationsForIncompleteScan
+            && TypeScriptAugmentationRefreshPolicy.ShouldRebuildReferences(
+                options.SymbolsOnly,
+                canFinalize: errors == 0,
+                typeScriptAugmentationNeedsRefresh,
+                typeScriptAugmentationDirtyNames?.RequiresRefresh == true,
+                canStampReadyWithoutRebuild:
+                    canStampTypeScriptAugmentationReadyWithoutRebuild);
+        var deferMutualRecursionRefreshToTypeScriptAugmentation =
+            mutualRecursionRefreshNeeded && willRebuildTypeScriptAugmentation;
+        if ((!deferCSharpMutationsForIncompleteScan
+             && mutualRecursionRefreshNeeded
+             && !deferMutualRecursionRefreshToTypeScriptAugmentation)
             || referenceSecondaryIndexBulkLoad != null)
         {
-            WriteFullScanJsonLiveness(options, "finalizing reference graph...");
-            var referenceGraphHeartbeat = StartFullScanJsonPhaseHeartbeat(options, "finalizing reference graph");
+            var phase = deferMutualRecursionRefreshToTypeScriptAugmentation
+                ? "restoring reference query indexes"
+                : "finalizing reference graph";
+            WriteFullScanJsonLiveness(options, $"{phase}...");
+            var referenceGraphHeartbeat = StartFullScanJsonPhaseHeartbeat(options, phase);
             try
             {
-                if (!deferCSharpMutationsForIncompleteScan && mutualRecursionRefreshNeeded)
+                if (!deferCSharpMutationsForIncompleteScan
+                    && mutualRecursionRefreshNeeded
+                    && !deferMutualRecursionRefreshToTypeScriptAugmentation)
                 {
                     writer.RefreshMutualRecursionFlags(
                         cancellationToken,
                         stampReferenceIdentityContractReady:
-                            writer.CSharpFamilyTrustAllowsReferenceIdentityReady(
-                                (options.Rebuild || startedWithNoIndexedFiles)
-                                && !scanHadErrors
-                                && errors == 0
-                                    ? languageCounts.ContainsKey("csharp")
-                                    : null),
+                            referenceIdentityReadyForMutualRecursionRefresh,
                         referenceSecondaryIndexBulkLoad: referenceSecondaryIndexBulkLoad);
                 }
 
-                // Query-only indexes do not participate in graph finalization. Restore them
-                // after mutual-recursion evaluation while this long phase remains heartbeated.
-                referenceSecondaryIndexBulkLoad?.Complete(cancellationToken);
+                if (willRebuildTypeScriptAugmentation)
+                {
+                    // Keep only the candidate reverse lookup deferred until the TypeScript-owned
+                    // graph refresh; readiness retains every ordinary reference query path.
+                    referenceSecondaryIndexBulkLoad?.PrepareForDeferredGraphRefresh(
+                        cancellationToken);
+                }
+                else
+                {
+                    referenceSecondaryIndexBulkLoad?.Complete(cancellationToken);
+                }
             }
             finally
             {
                 StopFullScanJsonPhaseHeartbeat(referenceGraphHeartbeat);
             }
         }
-        if (options.MemoryTrace)
+        if (options.MemoryTrace && !willRebuildTypeScriptAugmentation)
             memorySamples.Add(CaptureMemorySample("reference_graph", stopwatch));
         ThrowIfFullScanCancelled(processed, files.Count);
         if (ftsBulkLoad != null)
@@ -1200,6 +1235,50 @@ public static partial class IndexCommandRunner
                 writer.SetCSharpStaticInterfaceSourceEvidence(true);
             }
         }
+
+        // The augmentation rebuild refreshes the whole reference graph after inserting its
+        // synthetic edges. Avoid doing the same graph pass immediately beforehand. If the
+        // final immutable-input validation makes augmentation ineligible, run the deferred
+        // pass before readiness finalization so a partial run still persists a coherent graph.
+        // augmentation が synthetic edge 挿入後に行う graph refresh を唯一の pass にする。
+        // 最終 validation で実行不能になった場合だけ、readiness 確定前に遅延分を補完する。
+        var deferredMutualRecursionRefreshCompletedBeforeReadiness = false;
+        var willRebuildTypeScriptAugmentationAfterReadinessValidation =
+            !deferCSharpMutationsForIncompleteScan
+            && TypeScriptAugmentationRefreshPolicy.ShouldRebuildReferences(
+                options.SymbolsOnly,
+                canFinalize: errors == 0,
+                typeScriptAugmentationNeedsRefresh,
+                typeScriptAugmentationDirtyNames?.RequiresRefresh == true,
+                canStampReadyWithoutRebuild:
+                    canStampTypeScriptAugmentationReadyWithoutRebuild);
+        if (willRebuildTypeScriptAugmentation
+            && !willRebuildTypeScriptAugmentationAfterReadinessValidation)
+        {
+            if (deferMutualRecursionRefreshToTypeScriptAugmentation)
+            {
+                WriteFullScanJsonLiveness(options, "finalizing reference graph after readiness validation...");
+                var referenceGraphHeartbeat = StartFullScanJsonPhaseHeartbeat(
+                    options,
+                    "finalizing reference graph after readiness validation");
+                try
+                {
+                    writer.RefreshMutualRecursionFlags(
+                        cancellationToken,
+                        stampReferenceIdentityContractReady:
+                            referenceIdentityReadyForMutualRecursionRefresh,
+                        referenceSecondaryIndexBulkLoad: referenceSecondaryIndexBulkLoad);
+                    deferredMutualRecursionRefreshCompletedBeforeReadiness = true;
+                }
+                finally
+                {
+                    StopFullScanJsonPhaseHeartbeat(referenceGraphHeartbeat);
+                }
+            }
+            referenceSecondaryIndexBulkLoad?.Complete(cancellationToken);
+        }
+        if (options.MemoryTrace && deferredMutualRecursionRefreshCompletedBeforeReadiness)
+            memorySamples.Add(CaptureMemorySample("reference_graph", stopwatch));
         var readiness = FinalizeFullScanReadiness(new FullScanReadinessContext
         {
             Writer = writer,
@@ -1238,9 +1317,22 @@ public static partial class IndexCommandRunner
             ScanResult = scanResult,
             ReadableFileBytes = readableFileBytes,
             MemorySamples = memorySamples,
+            TypeScriptAugmentationOwnsDeferredReferenceGraphRefresh =
+                deferMutualRecursionRefreshToTypeScriptAugmentation
+                && !deferredMutualRecursionRefreshCompletedBeforeReadiness,
+            TypeScriptAugmentationRebuildOwnsReferenceGraphMemorySample =
+                willRebuildTypeScriptAugmentationAfterReadinessValidation,
+            ReferenceSecondaryIndexBulkLoad =
+                willRebuildTypeScriptAugmentationAfterReadinessValidation
+                    ? referenceSecondaryIndexBulkLoad
+                    : null,
             FreshCountReferences = freshCountReferences,
             WriteProjectRootOnce = WriteProjectRootOnce,
         });
+        if (referenceSecondaryIndexBulkLoad != null
+            && willRebuildTypeScriptAugmentationAfterReadinessValidation)
+            writer.ReportReferenceSecondaryIndexBulkLoadState("readiness_completed");
+        referenceSecondaryIndexBulkLoad?.Complete(cancellationToken);
         graphTableAvailableAfter = readiness.GraphTableAvailable;
         issuesTableAvailableAfter = readiness.IssuesTableAvailable;
         csharpSymbolNameReadyAfter = readiness.CSharpSymbolNameReady;
@@ -1251,6 +1343,9 @@ public static partial class IndexCommandRunner
         hotspotAggregateRefresh.Complete(cancellationToken);
         writer.ClearBatchInProgress();
         fullScanTxn.Commit();
+        if (referenceSecondaryIndexBulkLoad != null
+            && willRebuildTypeScriptAugmentationAfterReadinessValidation)
+            writer.ReportReferenceSecondaryIndexBulkLoadState("full_scan_committed");
         return WriteFullScanFinalOutput(new FullScanFinalOutputContext
         {
             Writer = writer,
