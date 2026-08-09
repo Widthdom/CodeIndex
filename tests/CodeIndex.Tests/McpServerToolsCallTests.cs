@@ -3857,6 +3857,7 @@ public partial class McpServerTests
             (DbContext.IndexedHeadShaMetaKey, initialHead),
             (DbContext.IndexedHeadTimestampMetaKey, initialTimestamp.ToString("O", CultureInfo.InvariantCulture)));
         RepoMapBuilder.HeadMetadataCapturedForTesting.Value = () => writer.SetMetaValues(
+            (DbContext.IndexedProjectRootMetaKey, Path.Combine(_projectRoot, "after-map-snapshot")),
             (DbContext.IndexedHeadShaMetaKey, nextHead),
             (DbContext.IndexedHeadTimestampMetaKey, nextTimestamp.ToString("O", CultureInfo.InvariantCulture)));
         try
@@ -3867,6 +3868,7 @@ public partial class McpServerTests
             var response = _server.HandleMessage(request)!;
             var structured = response["result"]!["structuredContent"]!;
 
+            Assert.Equal(_projectRoot, structured["projectRoot"]!.GetValue<string>());
             Assert.NotEqual(legacyFullScanHead, structured["indexed_head_sha"]!.GetValue<string>());
             Assert.Equal(initialHead, structured["workspace_verified_head_sha"]!.GetValue<string>());
             Assert.Equal(initialHead, structured["indexed_head_sha"]!.GetValue<string>());
@@ -3878,6 +3880,43 @@ public partial class McpServerTests
         {
             RepoMapBuilder.HeadMetadataCapturedForTesting.Value = null;
         }
+    }
+
+    [Theory]
+    [InlineData("default")]
+    [InlineData("compact")]
+    [InlineData("count")]
+    public void ToolsCall_AnalyzeSymbol_AllFormatsExposeSameHeadProvenance_Issue5054(string format)
+    {
+        InsertIndexedFile("src/issue5054/App.cs", "csharp", "public class App5054 { }\n");
+        var legacyHead = new string('1', 40);
+        var verifiedHead = new string('2', 40);
+        var latestHead = new string('3', 40);
+        new DbWriter(_db.Connection).SetMetaValues(
+            (DbContext.IndexedHeadCommitMetaKey, legacyHead),
+            (DbContext.WorkspaceVerifiedHeadShaMetaKey, verifiedHead),
+            (DbContext.IndexedHeadShaMetaKey, latestHead));
+        var arguments = new JsonObject { ["query"] = "App5054" };
+        if (format != "default")
+            arguments["format"] = format;
+        var request = new JsonObject
+        {
+            ["jsonrpc"] = "2.0",
+            ["id"] = 1,
+            ["method"] = "tools/call",
+            ["params"] = new JsonObject
+            {
+                ["name"] = "analyze_symbol",
+                ["arguments"] = arguments,
+            },
+        };
+
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.Equal(legacyHead, structured["indexed_head_commit"]!.GetValue<string>());
+        Assert.Equal(verifiedHead, structured["workspace_verified_head_sha"]!.GetValue<string>());
+        Assert.Equal(latestHead, structured["indexed_head_sha"]!.GetValue<string>());
     }
 
     [Fact]

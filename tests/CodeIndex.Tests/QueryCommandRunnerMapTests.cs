@@ -673,6 +673,7 @@ public partial class QueryCommandRunnerTests
                 using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
                 var writer = new DbWriter(db.Connection);
                 writer.SetMetaValues(
+                    (DbContext.IndexedProjectRootMetaKey, Path.Combine(projectRoot, "after-map-snapshot")),
                     (DbContext.IndexedHeadCommitMetaKey, nextLegacyHead),
                     (DbContext.IndexedHeadShaMetaKey, nextIndexedHead),
                     (DbContext.IndexedHeadTimestampMetaKey, nextIndexedHeadTimestamp.ToString("O", CultureInfo.InvariantCulture)));

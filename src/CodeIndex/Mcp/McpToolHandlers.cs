@@ -764,6 +764,7 @@ public partial class McpServer
             payload["exact_index_available"] = analysis.ExactIndexAvailable.Value;
         if (analysis.DegradedReason != null)
             payload["degraded_reason"] = analysis.DegradedReason;
+        AddAnalyzeSymbolProvenance(payload, analysis);
         return payload;
     }
 
@@ -817,6 +818,7 @@ public partial class McpServer
             payload["exact_index_available"] = analysis.ExactIndexAvailable.Value;
         if (analysis.DegradedReason != null)
             payload["degraded_reason"] = analysis.DegradedReason;
+        AddAnalyzeSymbolProvenance(payload, analysis);
         return payload;
     }
 
@@ -829,9 +831,6 @@ public partial class McpServer
             ["file"] = JsonSerializer.SerializeToNode(analysis.File, _jsonOptions),
             ["workspace_indexed_at"] = JsonSerializer.SerializeToNode(analysis.WorkspaceIndexedAt, _jsonOptions),
             ["workspace_latest_modified"] = JsonSerializer.SerializeToNode(analysis.WorkspaceLatestModified, _jsonOptions),
-            ["project_root"] = analysis.ProjectRoot,
-            ["git_head"] = analysis.GitHead,
-            ["git_is_dirty"] = analysis.GitIsDirty,
             ["graph_language"] = analysis.GraphLanguage,
             ["graph_language_source"] = analysis.GraphLanguageSource,
             ["graph_language_confidence"] = analysis.GraphLanguageConfidence,
@@ -851,14 +850,7 @@ public partial class McpServer
             ["candidate_bundles"] = JsonSerializer.SerializeToNode(analysis.CandidateBundles, _jsonOptions),
             ["graph_table_available"] = analysis.GraphTableAvailable,
         };
-        if (analysis.IndexedHeadCommit != null)
-            payload["indexed_head_commit"] = analysis.IndexedHeadCommit;
-        if (analysis.WorkspaceVerifiedHeadSha != null)
-            payload["workspace_verified_head_sha"] = analysis.WorkspaceVerifiedHeadSha;
-        if (analysis.IndexedHeadSha != null)
-            payload["indexed_head_sha"] = analysis.IndexedHeadSha;
-        if (analysis.WorktreeHeadChanged.HasValue)
-            payload["worktree_head_changed"] = analysis.WorktreeHeadChanged.Value;
+        AddAnalyzeSymbolProvenance(payload, analysis);
         if (analysis.GraphDegraded.HasValue)
             payload["graph_degraded"] = analysis.GraphDegraded.Value;
         if (analysis.UnsupportedSymbolKind != null)
@@ -874,6 +866,26 @@ public partial class McpServer
         if (analysis.DegradedReason != null)
             payload["degraded_reason"] = analysis.DegradedReason;
         return payload;
+    }
+
+    private static void AddAnalyzeSymbolProvenance(
+        JsonObject payload,
+        SymbolAnalysisResult analysis)
+    {
+        if (analysis.ProjectRoot != null)
+            payload["project_root"] = analysis.ProjectRoot;
+        if (analysis.GitHead != null)
+            payload["git_head"] = analysis.GitHead;
+        if (analysis.GitIsDirty.HasValue)
+            payload["git_is_dirty"] = analysis.GitIsDirty.Value;
+        if (analysis.IndexedHeadCommit != null)
+            payload["indexed_head_commit"] = analysis.IndexedHeadCommit;
+        if (analysis.WorkspaceVerifiedHeadSha != null)
+            payload["workspace_verified_head_sha"] = analysis.WorkspaceVerifiedHeadSha;
+        if (analysis.IndexedHeadSha != null)
+            payload["indexed_head_sha"] = analysis.IndexedHeadSha;
+        if (analysis.WorktreeHeadChanged.HasValue)
+            payload["worktree_head_changed"] = analysis.WorktreeHeadChanged.Value;
     }
 
     private JsonArray BuildCompactCandidateBundles(List<SymbolCandidateBundle>? bundles)

@@ -9374,6 +9374,62 @@ public sealed class Caller
     }
 
     [Fact]
+    public void RunChangedBetween_RevisitsPriorScopedPathWhenNetGitDiffReturnsToBaseline_Issue5054()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            RunGit(projectRoot, "init");
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            const string baselineSource = "public class App { }\n";
+            File.WriteAllText(sourcePath, baselineSource);
+            RunGit(projectRoot, "add", "app.cs");
+            RunGit(projectRoot, "commit", "-m", "baseline");
+            var baselineHead = RunGitCaptureStdOut(projectRoot, "rev-parse", "HEAD").Trim();
+            Assert.Equal(CommandExitCodes.Success, IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions));
+
+            File.WriteAllText(sourcePath, "public class App { public void FromBOnly() { } }\n");
+            RunGit(projectRoot, "add", "app.cs");
+            RunGit(projectRoot, "commit", "-m", "intermediate scoped content");
+            Assert.Equal(
+                CommandExitCodes.Success,
+                RunAndCaptureJson([projectRoot, "--files", "app.cs", "--json"]).ExitCode);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var scopedDb = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                var pendingPaths = JsonStringListCodec.Deserialize(
+                    scopedDb.GetMetaString(DbContext.WorkspaceVerificationPendingPathsMetaKey));
+                Assert.NotNull(pendingPaths);
+                Assert.Contains("app.cs", pendingPaths);
+                Assert.Equal(
+                    bool.TrueString,
+                    scopedDb.GetMetaString(DbContext.WorkspaceVerificationPendingPathsCompleteMetaKey));
+            }
+
+            File.WriteAllText(sourcePath, baselineSource);
+            RunGit(projectRoot, "add", "app.cs");
+            RunGit(projectRoot, "commit", "-m", "return tree to baseline");
+            var currentHead = RunGitCaptureStdOut(projectRoot, "rev-parse", "HEAD").Trim();
+
+            var (refreshExitCode, _) = RunAndCaptureJson(
+                [projectRoot, "--changed-between", baselineHead, currentHead, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, refreshExitCode);
+            var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--check", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, statusExitCode);
+            Assert.True(statusJson.GetProperty("workspace_check").GetProperty("matches_workspace").GetBoolean());
+            Assert.Equal(currentHead, statusJson.GetProperty("workspace_verified_head_sha").GetString());
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            Assert.Null(db.GetMetaString(DbContext.WorkspaceVerificationPendingPathsMetaKey));
+            Assert.Null(db.GetMetaString(DbContext.WorkspaceVerificationPendingPathsCompleteMetaKey));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunChangedBetween_ReconcilesDivergentPersistedWorkspaceBaseline_Issue5054()
     {
         var projectRoot = CreateTempProject();
@@ -9464,6 +9520,54 @@ public sealed class Caller
             using var postFailureDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             Assert.Equal(initialHead, postFailureDb.GetMetaString(DbContext.IndexedHeadShaMetaKey));
             Assert.Equal(unavailableBaseline, postFailureDb.GetMetaString(DbContext.WorkspaceVerifiedHeadShaMetaKey));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunChangedBetween_IncompletePendingPathCoverageFailsClosedWithoutAdvancingProvenance_Issue5054()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            RunGit(projectRoot, "init");
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            File.WriteAllText(sourcePath, "public class App { }\n");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "initial");
+            var initialHead = RunGitCaptureStdOut(projectRoot, "rev-parse", "HEAD").Trim();
+            Assert.Equal(CommandExitCodes.Success, IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions));
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                new DbWriter(db.Connection).SetMetaValues(
+                    (DbContext.WorkspaceVerificationPendingPathsMetaKey,
+                        JsonStringListCodec.Serialize(["app.cs"])),
+                    (DbContext.WorkspaceVerificationPendingPathsCompleteMetaKey,
+                        bool.FalseString));
+            }
+
+            File.WriteAllText(sourcePath, "public class App { public void Run() { } }\n");
+            RunGit(projectRoot, "add", "app.cs");
+            RunGit(projectRoot, "commit", "-m", "change app");
+            var currentHead = RunGitCaptureStdOut(projectRoot, "rev-parse", "HEAD").Trim();
+
+            var (exitCode, json) = RunAndCaptureJson(
+                [projectRoot, "--changed-between", initialHead, currentHead, "--json"]);
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains("pending-path coverage is incomplete", json.GetProperty("message").GetString(), StringComparison.Ordinal);
+            Assert.Contains("verified full-workspace refresh", json.GetProperty("hint").GetString(), StringComparison.Ordinal);
+            using var postFailureDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            Assert.Equal(initialHead, postFailureDb.GetMetaString(DbContext.IndexedHeadShaMetaKey));
+            Assert.Equal(initialHead, postFailureDb.GetMetaString(DbContext.WorkspaceVerifiedHeadShaMetaKey));
+            Assert.Equal(
+                bool.FalseString,
+                postFailureDb.GetMetaString(DbContext.WorkspaceVerificationPendingPathsCompleteMetaKey));
         }
         finally
         {

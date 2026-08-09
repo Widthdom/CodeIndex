@@ -427,6 +427,8 @@ public static partial class IndexCommandRunner
                     SymbolKindFilterMetaKey,
                     DbContext.IndexedHeadCommitMetaKey,
                     DbContext.WorkspaceVerifiedHeadShaMetaKey,
+                    DbContext.WorkspaceVerificationPendingPathsMetaKey,
+                    DbContext.WorkspaceVerificationPendingPathsCompleteMetaKey,
                     DbContext.IndexCompletenessMetaKey,
                     DbContext.IndexIncompleteReasonsMetaKey,
                 ]);
@@ -465,6 +467,19 @@ public static partial class IndexCommandRunner
                 var priorIndexedHeadCommit = PriorMeta(DbContext.IndexedHeadCommitMetaKey);
                 var priorWorkspaceVerifiedHead =
                     PriorMeta(DbContext.WorkspaceVerifiedHeadShaMetaKey) ?? priorIndexedHeadCommit;
+                var priorWorkspaceVerificationPendingPathsJson =
+                    PriorMeta(DbContext.WorkspaceVerificationPendingPathsMetaKey);
+                var decodedPriorWorkspaceVerificationPendingPaths =
+                    JsonStringListCodec.Deserialize(priorWorkspaceVerificationPendingPathsJson);
+                var priorWorkspaceVerificationPendingPaths =
+                    decodedPriorWorkspaceVerificationPendingPaths ?? [];
+                var priorWorkspaceVerificationPendingPathsComplete =
+                    priorWorkspaceVerificationPendingPathsJson == null
+                    || (decodedPriorWorkspaceVerificationPendingPaths != null
+                        && !string.Equals(
+                            PriorMeta(DbContext.WorkspaceVerificationPendingPathsCompleteMetaKey),
+                            "false",
+                            StringComparison.OrdinalIgnoreCase));
                 var currentHeadCommit = GitHelper.TryGetHeadCommit(options.ProjectPath!, indexCancellation.Token);
 
                 // Don't demote readiness yet. A transient usage error in update-mode preflight
@@ -494,7 +509,7 @@ public static partial class IndexCommandRunner
                 var projectRoot = Path.GetFullPath(options.ProjectPath!);
 
                 initialExitCode = isUpdateMode
-                    ? RunUpdateMode(db, writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, runStartedAtUtc, spinnerFrames, jsonOptions, priorReadiness, priorIndexComplete, priorFileIndexIncomplete, priorSymbolsOnlyGraphOmitted, priorFoldVersion, priorFoldFingerprint, priorSymbolExtractorVersionsMatchCurrent, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHdlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints!, priorIndexedProjectRoot, priorIndexedHeadCommit, priorWorkspaceVerifiedHead, currentHeadCommit, priorSymbolKindFilterSignature, initialCwd, indexRunDiagnostics, indexCancellation.Token)
+                    ? RunUpdateMode(db, writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, runStartedAtUtc, spinnerFrames, jsonOptions, priorReadiness, priorIndexComplete, priorFileIndexIncomplete, priorSymbolsOnlyGraphOmitted, priorFoldVersion, priorFoldFingerprint, priorSymbolExtractorVersionsMatchCurrent, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHdlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints!, priorIndexedProjectRoot, priorIndexedHeadCommit, priorWorkspaceVerifiedHead, priorWorkspaceVerificationPendingPaths, priorWorkspaceVerificationPendingPathsComplete, currentHeadCommit, priorSymbolKindFilterSignature, initialCwd, indexRunDiagnostics, indexCancellation.Token)
                     : RunFullScan(db, writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, runStartedAtUtc, spinnerFrames, jsonOptions, priorReadiness, priorIndexComplete, priorSymbolsOnlyGraphOmitted, priorFoldVersion, priorFoldFingerprint, priorSymbolExtractorVersionsMatchCurrent, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHdlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, priorSymbolKindFilterSignature, initialCwd, indexRunDiagnostics, showNextSteps: !databaseExistedBeforeIndex, indexCancellation.Token);
                 if (initialExitCode == CommandExitCodes.Success)
                 {

@@ -9,6 +9,7 @@ namespace CodeIndex.Cli;
 public static class WorkspaceMetadataEnricher
 {
     internal static AsyncLocal<Action?> StatusRuntimeMetadataResolvedForTesting { get; } = new();
+    internal static AsyncLocal<Action?> AnalysisRuntimeMetadataResolvedForTesting { get; } = new();
 
     public static void Enrich(
         StatusResult status,
@@ -22,7 +23,8 @@ public static class WorkspaceMetadataEnricher
                 dbPath,
                 dbPathExplicit,
                 cancellationToken,
-                status.ProjectRoot);
+                status.ProjectRoot,
+                projectRootSnapshotCaptured: true);
             StatusRuntimeMetadataResolvedForTesting.Value?.Invoke();
             status.ProjectRoot = runtime.ProjectRoot;
             status.GitHead = runtime.RuntimeHead;
@@ -67,7 +69,12 @@ public static class WorkspaceMetadataEnricher
         bool dbPathExplicit = false,
         CancellationToken cancellationToken = default)
     {
-        var runtime = ResolveRuntime(dbPath, dbPathExplicit, cancellationToken);
+        var runtime = ResolveRuntime(
+            dbPath,
+            dbPathExplicit,
+            cancellationToken,
+            map.IndexedHeadSnapshot?.ProjectRoot,
+            projectRootSnapshotCaptured: map.IndexedHeadSnapshot != null);
         map.ProjectRoot = runtime.ProjectRoot;
         map.GitHead = runtime.RuntimeHead;
         map.GitIsDirty = runtime.IsDirty;
@@ -100,6 +107,31 @@ public static class WorkspaceMetadataEnricher
         bool dbPathExplicit = false,
         CancellationToken cancellationToken = default)
     {
+        if (analysis.HeadMetadataSnapshotCaptured)
+        {
+            var runtime = ResolveRuntime(
+                dbPath,
+                dbPathExplicit,
+                cancellationToken,
+                analysis.ProjectRoot,
+                projectRootSnapshotCaptured: true);
+            AnalysisRuntimeMetadataResolvedForTesting.Value?.Invoke();
+            analysis.ProjectRoot = runtime.ProjectRoot;
+            analysis.GitHead = runtime.RuntimeHead;
+            analysis.GitIsDirty = runtime.IsDirty;
+            analysis.WorktreeHeadChanged = ResolveHeadChanged(
+                runtime.RuntimeHead,
+                runtime.RuntimeBranch,
+                analysis.WorkspaceVerifiedHeadSha,
+                analysis.IndexedHeadSha,
+                analysis.IndexedHeadBranchSnapshot,
+                analysis.IndexedHeadBranchStampPresentSnapshot,
+                analysis.IndexedHeadCommit,
+                analysis.IndexedHeadCommitBranchSnapshot,
+                analysis.IndexedHeadCommitBranchStampPresentSnapshot);
+            return;
+        }
+
         var metadata = Resolve(dbPath, dbPathExplicit, cancellationToken);
         analysis.ProjectRoot = metadata.ProjectRoot;
         analysis.GitHead = metadata.RuntimeHead;
@@ -158,10 +190,12 @@ public static class WorkspaceMetadataEnricher
         string dbPath,
         bool dbPathExplicit,
         CancellationToken cancellationToken,
-        string? capturedProjectRoot = null)
+        string? capturedProjectRoot = null,
+        bool projectRootSnapshotCaptured = false)
     {
-        var projectRoot = capturedProjectRoot
-            ?? DbPathResolver.ResolveProjectRootForQuery(dbPath, dbPathExplicit);
+        var projectRoot = projectRootSnapshotCaptured
+            ? capturedProjectRoot
+            : capturedProjectRoot ?? DbPathResolver.ResolveProjectRootForQuery(dbPath, dbPathExplicit);
         if (projectRoot == null)
             return new(null, null, null, null);
 

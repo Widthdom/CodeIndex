@@ -89,12 +89,24 @@ public static partial class IndexCommandRunner
                 && !string.IsNullOrWhiteSpace(currentHeadCommit)
                     ? currentHeadCommit
                     : priorWorkspaceVerifiedHead;
-            writer.SetMeta(DbContext.WorkspaceVerifiedHeadShaMetaKey, verifiedHead);
             var coveredHead = !string.IsNullOrWhiteSpace(currentHeadCommit)
                 && string.Equals(verifiedHead, currentHeadCommit, StringComparison.OrdinalIgnoreCase)
                     ? currentHeadCommit
                     : null;
-            writer.SetMeta(DbContext.CommitScopedFreshHeadShaMetaKey, coveredHead);
+            if (workspaceHeadCoverageVerified)
+            {
+                writer.SetMetaValues(
+                    (DbContext.WorkspaceVerifiedHeadShaMetaKey, verifiedHead),
+                    (DbContext.CommitScopedFreshHeadShaMetaKey, coveredHead),
+                    (DbContext.WorkspaceVerificationPendingPathsMetaKey, null),
+                    (DbContext.WorkspaceVerificationPendingPathsCompleteMetaKey, null));
+            }
+            else
+            {
+                writer.SetMetaValues(
+                    (DbContext.WorkspaceVerifiedHeadShaMetaKey, verifiedHead),
+                    (DbContext.CommitScopedFreshHeadShaMetaKey, coveredHead));
+            }
         }
         catch (Exception ex)
         {
@@ -102,6 +114,42 @@ public static partial class IndexCommandRunner
             // best-effort のみ。stamp 失敗で index 全体を落とさない。
             RecordIndexRunDiagnostic(diagnostics, "commit_scoped_head_metadata_write_failed", ex);
         }
+    }
+
+    private static void PersistWorkspaceVerificationPendingPathsBeforeScopedMutation(
+        DbWriter writer,
+        IReadOnlyList<string> priorPendingPaths,
+        bool priorPendingPathsComplete,
+        IReadOnlyCollection<string> currentTargetPaths,
+        CancellationToken cancellationToken)
+    {
+        var combinedPaths = priorPendingPaths
+            .Concat(currentTargetPaths)
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Select(FileIndexer.NormalizeIndexPath)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToList();
+        var serializablePaths = JsonStringListCodec.TakeSerializableSample(
+            combinedPaths,
+            JsonStringListCodec.MaxArrayItems);
+        var coverageComplete = priorPendingPathsComplete
+            && serializablePaths.Count == combinedPaths.Count;
+
+        // This guard must commit before any scoped row mutation. If the run later fails or
+        // is cancelled, a future Git refresh revisits every possibly changed path instead of
+        // reusing a baseline the database no longer represents.
+        // scoped row の mutation より先に guard を commit する。後続処理が失敗・cancel しても、
+        // 次回 Git refresh は変更可能性のある path を必ず再照合する。
+        using var pendingTxn = writer.BeginTransaction(
+            cancellationToken,
+            "workspace verification pending paths");
+        writer.SetMetaValues(
+            (DbContext.WorkspaceVerificationPendingPathsMetaKey,
+                JsonStringListCodec.Serialize(serializablePaths)),
+            (DbContext.WorkspaceVerificationPendingPathsCompleteMetaKey,
+                coverageComplete.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+        pendingTxn.Commit();
     }
 
     private static bool GitRefCoversCurrentHead(

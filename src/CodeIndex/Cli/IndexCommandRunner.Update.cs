@@ -48,6 +48,8 @@ public static partial class IndexCommandRunner
         string? priorIndexedProjectRoot,
         string? priorIndexedHeadCommit,
         string? priorWorkspaceVerifiedHead,
+        IReadOnlyList<string> priorWorkspaceVerificationPendingPaths,
+        bool priorWorkspaceVerificationPendingPathsComplete,
         string? currentHeadCommit,
         string? priorSymbolKindFilterSignature,
         string? initialCwd,
@@ -89,6 +91,8 @@ public static partial class IndexCommandRunner
             spinnerFrames,
             jsonOptions,
             priorWorkspaceVerifiedHead,
+            priorWorkspaceVerificationPendingPaths,
+            priorWorkspaceVerificationPendingPathsComplete,
             currentHeadCommit,
             cancellationToken,
             out var targetPaths,
@@ -573,6 +577,12 @@ public static partial class IndexCommandRunner
         // tracking only now, then publish conservative C# evidence immediately before the
         // first possible cleanup/reference/file mutation.
         // expanded discovery の write前 barrier 通過後に graph tracking と mutation を開始する。
+        PersistWorkspaceVerificationPendingPathsBeforeScopedMutation(
+            writer,
+            priorWorkspaceVerificationPendingPaths,
+            priorWorkspaceVerificationPendingPathsComplete,
+            targetPaths,
+            cancellationToken);
         using var referenceGraphRefresh = writer.BeginReferenceGraphRefreshScope();
         using var hotspotAggregateRefresh = writer.BeginDeferredHotspotReferenceAggregateRefresh();
         mutationPhaseStarted = true;

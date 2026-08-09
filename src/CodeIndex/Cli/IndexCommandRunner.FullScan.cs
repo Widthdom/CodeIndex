@@ -821,6 +821,9 @@ public static partial class IndexCommandRunner
             deferSecondaryIndexes: !options.SymbolsOnly && useFtsBulkLoad);
         using var fullScanTxn = writer.BeginTransaction(cancellationToken, "full scan write phase");
         fullScanWritePhaseStarted = true;
+        writer.SetMeta(
+            DbContext.WorkspaceVerificationPendingPathsCompleteMetaKey,
+            false.ToString(System.Globalization.CultureInfo.InvariantCulture));
         writer.RecoverInterruptedFtsBulkLoadIfNeeded(cancellationToken);
         writer.MarkBatchInProgress();
         writer.ClearReadyFlags();

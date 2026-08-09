@@ -12,6 +12,8 @@ public static partial class IndexCommandRunner
         string[] spinnerFrames,
         JsonSerializerOptions jsonOptions,
         string? priorWorkspaceVerifiedHead,
+        IReadOnlyList<string> priorWorkspaceVerificationPendingPaths,
+        bool priorWorkspaceVerificationPendingPathsComplete,
         string? currentHeadCommit,
         CancellationToken cancellationToken,
         out HashSet<string> targetPaths,
@@ -62,6 +64,50 @@ public static partial class IndexCommandRunner
             }
         }
 
+        int? AddPendingWorkspaceVerificationTargets()
+        {
+            if (!priorWorkspaceVerificationPendingPathsComplete)
+            {
+                return WriteCommandError(
+                    options.Json,
+                    jsonOptions,
+                    "persisted workspace verification pending-path coverage is incomplete",
+                    CommandExitCodes.UsageError,
+                    "Run `cdidx index <projectPath>` for a verified full-workspace refresh before using a scoped Git refresh.",
+                    CommandErrorCodes.UsageError);
+            }
+
+            foreach (var path in priorWorkspaceVerificationPendingPaths)
+            {
+                var normalizedPath = FileIndexer.NormalizeIndexPath(path);
+                if (string.IsNullOrWhiteSpace(normalizedPath))
+                    continue;
+                var absolutePath = Path.GetFullPath(Path.Combine(
+                    projectRoot,
+                    normalizedPath.Replace('/', Path.DirectorySeparatorChar)));
+                var relativePath = FileIndexer.NormalizePathSeparators(
+                    FileIndexer.GetRelativePathFromProjectRoot(projectRoot, absolutePath));
+                if (relativePath == "." || IsOutsideProjectRoot(relativePath))
+                {
+                    return WriteCommandError(
+                        options.Json,
+                        jsonOptions,
+                        "persisted workspace verification pending paths contain an invalid project-relative path",
+                        CommandExitCodes.UsageError,
+                        "Run `cdidx index <projectPath>` for a verified full-workspace refresh before using a scoped Git refresh.",
+                        CommandErrorCodes.UsageError);
+                }
+                if (IsMissingSparseSkippedTarget(relativePath))
+                {
+                    sparseTargetSkipped = true;
+                    continue;
+                }
+                mutableTargetPaths.Add(relativePath);
+                mutableGitTargetPaths.Add(relativePath);
+            }
+            return null;
+        }
+
         if (options.Commits.Count > 0)
         {
             CancellationTokenSource? spinnerCts = null;
@@ -82,6 +128,9 @@ public static partial class IndexCommandRunner
                         GitRefCoversCurrentHead(projectRoot, commit, currentHeadCommit, cancellationToken));
                 if (currentHeadCovered && !string.IsNullOrWhiteSpace(priorWorkspaceVerifiedHead))
                 {
+                    var pendingTargetError = AddPendingWorkspaceVerificationTargets();
+                    if (pendingTargetError != null)
+                        return pendingTargetError.Value;
                     var resolvedBaseline = GitHelper.TryResolveCommit(
                         projectRoot,
                         priorWorkspaceVerifiedHead,
@@ -159,6 +208,9 @@ public static partial class IndexCommandRunner
                         cancellationToken);
                 if (newRefCoversCurrentHead && !string.IsNullOrWhiteSpace(priorWorkspaceVerifiedHead))
                 {
+                    var pendingTargetError = AddPendingWorkspaceVerificationTargets();
+                    if (pendingTargetError != null)
+                        return pendingTargetError.Value;
                     var resolvedBaseline = GitHelper.TryResolveCommit(
                         projectRoot,
                         priorWorkspaceVerifiedHead,

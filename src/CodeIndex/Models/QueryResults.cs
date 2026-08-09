@@ -2271,6 +2271,7 @@ public class RepoMapResult
 }
 
 internal sealed record RepoMapIndexedHeadSnapshot(
+    string? ProjectRoot,
     string? LegacyFullScanHead,
     string? WorkspaceVerifiedHead,
     string? LatestIndexHead,
@@ -2342,6 +2343,21 @@ public class SymbolAnalysisResult
     [JsonPropertyName("indexed_head_sha")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? IndexedHeadSha { get; set; }
+    // AnalyzeSymbol captures persisted provenance in the same SQLite transaction as the
+    // analysis body. Runtime Git enrichment consumes these ignored fields without reopening
+    // the database or mixing index generations. Issue #5054.
+    // AnalyzeSymbol の本文と同じ SQLite transaction で persisted provenance を取得し、
+    // runtime Git 補強では DB を再読込せず index 世代を混在させない。
+    [JsonIgnore]
+    internal bool HeadMetadataSnapshotCaptured { get; set; }
+    [JsonIgnore]
+    internal string? IndexedHeadCommitBranchSnapshot { get; set; }
+    [JsonIgnore]
+    internal bool IndexedHeadCommitBranchStampPresentSnapshot { get; set; }
+    [JsonIgnore]
+    internal string? IndexedHeadBranchSnapshot { get; set; }
+    [JsonIgnore]
+    internal bool IndexedHeadBranchStampPresentSnapshot { get; set; }
     [JsonPropertyName("worktree_head_changed")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public bool? WorktreeHeadChanged { get; set; }

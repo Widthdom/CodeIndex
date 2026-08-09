@@ -250,16 +250,20 @@ public partial class DbReader
     /// </summary>
     public SymbolAnalysisResult AnalyzeSymbol(string query, int limit = 10, string? lang = null, bool includeBody = false, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, int maxLineWidth = LineWidthFormatter.DefaultMaxLineWidth, int? bodyStartLine = null, int? bodyLineCount = null, string? kind = null, bool groupPartials = false, SymbolGraphPageRequest? graphPage = null)
     {
+        using var txn = _conn.BeginTransaction(deferred: true);
         if (string.IsNullOrWhiteSpace(query) || IsBareVerbatimQueryToken(query))
         {
             var workspaceFreshness = GetWorkspaceFreshness();
-            return new SymbolAnalysisResult
+            var emptyResult = new SymbolAnalysisResult
             {
                 Query = query,
                 WorkspaceIndexedAt = workspaceFreshness.IndexedAt,
                 WorkspaceLatestModified = workspaceFreshness.LatestModified,
                 GraphTableAvailable = _hasReferencesTable,
             };
+            CaptureAnalysisHeadMetadataSnapshot(emptyResult);
+            txn.Commit();
+            return emptyResult;
         }
 
         lang = DbReader.NormalizeQueryLanguage(lang);
@@ -280,7 +284,6 @@ public partial class DbReader
         // Issue #180: bundle 内の全 sub-query を 1 つの DEFERRED transaction でまとめ、
         // definitions / file / freshness / references / callers / callees / nearby symbols
         // が同じ WAL snapshot を参照するようにする。
-        using var txn = _conn.BeginTransaction(deferred: true);
         var definitionLimit = Math.Min(limit, 5);
         var definitions = PrioritizeSourceDefinitions(GetDefinitions(normalizedQuery, definitionLimit, kind: kind, lang, includeBody, pathPatterns, excludePathPatterns, excludeTests, since: null, exact, bodyStartLine: bodyStartLine, bodyLineCount: bodyLineCount, groupPartials: groupPartials));
         DefinitionResult? primaryDefinition = definitions
@@ -446,8 +449,22 @@ public partial class DbReader
             ExactHasMissingTable = exactSignal?.HasMissingTable,
             DegradedReason = exactSignal?.DegradedReason,
         };
+        CaptureAnalysisHeadMetadataSnapshot(result);
         txn.Commit();
         return result;
+    }
+
+    private void CaptureAnalysisHeadMetadataSnapshot(SymbolAnalysisResult result)
+    {
+        result.ProjectRoot = TryGetMetaStringInternal(DbContext.IndexedProjectRootMetaKey);
+        result.IndexedHeadCommit = TryGetMetaStringInternal(DbContext.IndexedHeadCommitMetaKey);
+        result.WorkspaceVerifiedHeadSha = TryGetMetaStringInternal(DbContext.WorkspaceVerifiedHeadShaMetaKey);
+        result.IndexedHeadSha = TryGetMetaStringInternal(DbContext.IndexedHeadShaMetaKey);
+        result.IndexedHeadCommitBranchSnapshot = TryGetMetaStringInternal(DbContext.IndexedHeadCommitBranchMetaKey);
+        result.IndexedHeadCommitBranchStampPresentSnapshot = HasMetaKeyInternal(DbContext.IndexedHeadCommitBranchMetaKey);
+        result.IndexedHeadBranchSnapshot = TryGetMetaStringInternal(DbContext.IndexedHeadBranchMetaKey);
+        result.IndexedHeadBranchStampPresentSnapshot = HasMetaKeyInternal(DbContext.IndexedHeadBranchMetaKey);
+        result.HeadMetadataSnapshotCaptured = true;
     }
 
     private string NormalizeGraphEvidenceLanguage(string language)

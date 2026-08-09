@@ -128,6 +128,16 @@ public partial class DbContext : IDisposable
     // `--files` 単独では進めない。旧 DB は次の成功 refresh まで
     // `indexed_head_commit` へ保守的にフォールバックする。Issue #5054。
     public const string WorkspaceVerifiedHeadShaMetaKey = "workspace_verified_head_sha";
+    // Scoped/partial writes can make rows diverge from the commit named by the verified
+    // baseline. Persist every affected path until a later baseline-reconciled Git refresh
+    // revisits it. `complete=false` is the fail-closed overflow/partial-full-scan marker:
+    // only a successful whole-workspace scan may clear it. Issue #5054.
+    // scoped / partial write で検証基準 commit と異なる row が生じ得るため、後続の
+    // baseline-reconciled Git refresh が再照合するまで対象 path を保持する。
+    // `complete=false` は overflow / partial full-scan の fail-closed marker であり、
+    // 成功した workspace 全体 scan だけが解除できる。Issue #5054。
+    public const string WorkspaceVerificationPendingPathsMetaKey = "workspace_verification_pending_paths_json";
+    public const string WorkspaceVerificationPendingPathsCompleteMetaKey = "workspace_verification_pending_paths_complete";
     public const string CommitScopedFreshHeadShaMetaKey = "commit_scoped_fresh_head_sha";
     public const string LastFullScanElapsedMsMetaKey = "last_full_scan_elapsed_ms";
     public const string LastIndexRunModeMetaKey = "last_index_run_mode";

@@ -435,7 +435,7 @@ public static partial class QueryCommandRunner
                 "workspace_verified_head_sha",
                 "Whole-workspace verified HEAD",
                 "the index records the Git HEAD whose complete tracked workspace was verified by a full scan or a baseline-reconciled Git refresh.",
-                "the field is absent on legacy or non-Git indexes; explicit `--files` updates preserve a current value but cannot advance an older one.",
+                "the field is absent on legacy or non-Git indexes; explicit `--files` updates preserve a current value and carry affected paths into the next reconciled Git refresh but cannot advance an older value.",
                 "Run `cdidx index <projectPath>` or a Git-scoped refresh whose new ref is the current HEAD to publish current whole-workspace verification."),
             new(
                 "worktree_head_changed",

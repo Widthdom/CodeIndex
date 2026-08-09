@@ -1256,6 +1256,9 @@ public partial class McpServer
             db.InitializeSchema();
             writer = new DbWriter(db);
         }
+        writer.SetMeta(
+            DbContext.WorkspaceVerificationPendingPathsCompleteMetaKey,
+            false.ToString(System.Globalization.CultureInfo.InvariantCulture));
         using var referenceGraphRefresh = writer.BeginReferenceGraphRefreshScope(
             rebuild || !writer.HasAnyIndexedFiles());
         using var hotspotAggregateRefresh = writer.BeginDeferredHotspotReferenceAggregateRefresh(
@@ -2143,6 +2146,8 @@ public partial class McpServer
             writer.SetMetaValues(
                 (DbContext.IndexedHeadCommitMetaKey, currentHeadCommit),
                 (DbContext.WorkspaceVerifiedHeadShaMetaKey, currentHeadCommit),
+                (DbContext.WorkspaceVerificationPendingPathsMetaKey, null),
+                (DbContext.WorkspaceVerificationPendingPathsCompleteMetaKey, null),
                 (DbContext.IndexedHeadCommitBranchMetaKey, currentHeadBranch));
             // #1509: also persist the always-updated HEAD/branch/timestamp triple so
             // status / consumers can detect cross-session staleness via
