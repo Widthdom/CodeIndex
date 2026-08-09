@@ -59,6 +59,12 @@ internal sealed class ReferenceSecondaryIndexBulkLoadGuard : IDisposable
                 .Select(static definition => definition.Name)
                 .ToArray());
 
+    internal static IReadOnlyList<string> DeferredGraphPreparationIndexNames { get; }
+        = Array.AsReadOnly(
+            ReferenceSecondaryIndexSql.DeferredGraphPreparation
+                .Select(static definition => definition.Name)
+                .ToArray());
+
     internal static ReferenceSecondaryIndexBulkLoadGuard? StartTransactional(
         DbWriter writer,
         bool enabled,
@@ -100,6 +106,15 @@ internal sealed class ReferenceSecondaryIndexBulkLoadGuard : IDisposable
 
     internal void PrepareForMutualRecursion(CancellationToken cancellationToken = default)
         => _writer?.RestoreGraphFinalizationRequiredReferenceSecondaryIndexes(cancellationToken);
+
+    /// <summary>
+    /// Restore every deferred index except the candidate reverse lookup. A later graph
+    /// refresh can then populate candidates without maintaining that B-tree, while readiness
+    /// work retains the ordinary reference query paths.
+    /// candidate逆引き以外を復元し、readiness queryを保ったまま後段graph構築を遅延する。
+    /// </summary>
+    internal void PrepareForDeferredGraphRefresh(CancellationToken cancellationToken = default)
+        => _writer?.RestoreReferenceSecondaryIndexesForDeferredGraph(cancellationToken);
 
     internal void ReportMutualRecursionStarted()
         => _writer?.ReportReferenceSecondaryIndexBulkLoadState("mutual_started");
@@ -170,6 +185,15 @@ public partial class DbWriter
             ReferenceSecondaryIndexSql.GraphFinalizationRequired,
             cancellationToken);
         ReportReferenceSecondaryIndexBulkLoadState("graph_required_restored");
+    }
+
+    internal void RestoreReferenceSecondaryIndexesForDeferredGraph(
+        CancellationToken cancellationToken = default)
+    {
+        RestoreReferenceSecondaryIndexes(
+            ReferenceSecondaryIndexSql.DeferredGraphPreparation,
+            cancellationToken);
+        ReportReferenceSecondaryIndexBulkLoadState("deferred_graph_prepared");
     }
 
     private void RestoreReferenceSecondaryIndexes(

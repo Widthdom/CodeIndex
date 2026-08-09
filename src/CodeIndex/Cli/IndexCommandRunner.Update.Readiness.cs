@@ -43,6 +43,8 @@ public static partial class IndexCommandRunner
         internal required List<StatusIndexFileError> FileErrorList { get; init; }
         internal required List<IndexMemorySampleJsonResult> MemorySamples { get; init; }
         internal required bool TypeScriptAugmentationOwnsDeferredReferenceGraphRefresh { get; init; }
+        internal required bool TypeScriptAugmentationRebuildOwnsReferenceGraphMemorySample { get; init; }
+        internal ReferenceSecondaryIndexBulkLoadGuard? ReferenceSecondaryIndexBulkLoad { get; init; }
         internal required IReadOnlyList<string> FullyRefreshedDynamicGraphLanguages { get; init; }
     }
 
@@ -162,10 +164,11 @@ public static partial class IndexCommandRunner
                             ? context.TypeScriptAugmentationDirtyNames?.DirtyNames
                             : null,
                         context.TypeScriptAugmentationOwnsDeferredReferenceGraphRefresh,
+                        context.ReferenceSecondaryIndexBulkLoad,
                         cancellationToken);
                 }
                 if (options.MemoryTrace
-                    && context.TypeScriptAugmentationOwnsDeferredReferenceGraphRefresh)
+                    && context.TypeScriptAugmentationRebuildOwnsReferenceGraphMemorySample)
                 {
                     context.MemorySamples.Add(CaptureMemorySample("reference_graph", context.Stopwatch));
                 }

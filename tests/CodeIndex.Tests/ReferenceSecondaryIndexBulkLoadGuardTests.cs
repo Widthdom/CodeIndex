@@ -34,10 +34,14 @@ public sealed class ReferenceSecondaryIndexBulkLoadGuardTests : IDisposable
     [Fact]
     public void CanonicalSets_PartitionRawGraphAndRemainingIndexesExactly()
     {
+        const string candidateReverseIndexName = "idx_symbol_ref_candidates_symbol";
         var rawNames = ReferenceSecondaryIndexSql.RawPersistenceRequired
             .Select(static definition => definition.Name)
             .ToHashSet(StringComparer.Ordinal);
         var graphNames = ReferenceSecondaryIndexSql.GraphFinalizationRequired
+            .Select(static definition => definition.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        var deferredGraphPreparationNames = ReferenceSecondaryIndexSql.DeferredGraphPreparation
             .Select(static definition => definition.Name)
             .ToHashSet(StringComparer.Ordinal);
         var remainingNames = ReferenceSecondaryIndexSql.RemainingQuery
@@ -56,11 +60,22 @@ public sealed class ReferenceSecondaryIndexBulkLoadGuardTests : IDisposable
             graphNames.Order(StringComparer.Ordinal));
         Assert.Empty(rawNames.Intersect(deferredNames));
         Assert.Empty(graphNames.Intersect(remainingNames));
-        Assert.Contains("idx_symbol_ref_candidates_symbol", remainingNames);
+        Assert.Contains(candidateReverseIndexName, remainingNames);
+        Assert.DoesNotContain(candidateReverseIndexName, deferredGraphPreparationNames);
+        Assert.True(
+            deferredGraphPreparationNames.SetEquals(
+                graphNames.Concat(remainingNames.Where(
+                    name => !string.Equals(
+                        name,
+                        candidateReverseIndexName,
+                        StringComparison.Ordinal)))));
         Assert.True(deferredNames.SetEquals(graphNames.Concat(remainingNames)));
         Assert.Equal(
             graphNames.Order(StringComparer.Ordinal),
             ReferenceSecondaryIndexBulkLoadGuard.GraphFinalizationIndexNames.Order(StringComparer.Ordinal));
+        Assert.Equal(
+            deferredGraphPreparationNames.Order(StringComparer.Ordinal),
+            ReferenceSecondaryIndexBulkLoadGuard.DeferredGraphPreparationIndexNames.Order(StringComparer.Ordinal));
     }
 
     [Fact]
@@ -81,6 +96,39 @@ public sealed class ReferenceSecondaryIndexBulkLoadGuardTests : IDisposable
 
         AssertGraphFinalizationIndexesPresent(_db.Connection);
         AssertRemainingQueryIndexesAbsent(_db.Connection);
+
+        guard.Complete();
+
+        Assert.Equal(
+            baseline.Order(StringComparer.Ordinal),
+            ReadReferenceIndexNames(_db.Connection).Order(StringComparer.Ordinal));
+        transaction.Commit();
+    }
+
+    [Fact]
+    public void TransactionalPrepareForDeferredGraphRefresh_RestoresCanonicalSetExceptCandidateReverseIndex()
+    {
+        const string candidateReverseIndexName = "idx_symbol_ref_candidates_symbol";
+        var baseline = ReadReferenceIndexNames(_db.Connection);
+        var expectedPreparedNames = ReferenceSecondaryIndexSql.RawPersistenceRequired
+            .Concat(ReferenceSecondaryIndexSql.DeferredGraphPreparation)
+            .Select(static definition => definition.Name)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+        using var transaction = _writer.BeginTransaction();
+        using var guard = ReferenceSecondaryIndexBulkLoadGuard.StartTransactional(
+            _writer,
+            enabled: true);
+
+        Assert.NotNull(guard);
+        AssertDeferredIndexesAbsent(_db.Connection);
+
+        guard.PrepareForDeferredGraphRefresh();
+
+        var preparedNames = ReadReferenceIndexNames(_db.Connection);
+        Assert.Equal(expectedPreparedNames, preparedNames.Order(StringComparer.Ordinal));
+        Assert.DoesNotContain(candidateReverseIndexName, preparedNames);
 
         guard.Complete();
 

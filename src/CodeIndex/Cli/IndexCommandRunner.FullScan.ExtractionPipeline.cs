@@ -189,7 +189,7 @@ public static partial class IndexCommandRunner
         ArgumentOutOfRangeException.ThrowIfNegative(maxFileSizeBytes);
         ArgumentNullException.ThrowIfNull(getFileLength);
         cancellationToken.ThrowIfCancellationRequested();
-        if (workItemCount <= 1)
+        if (workItemCount <= workerCount)
             return [];
 
         // Dynamic claiming balances the main body of the scan, but a large file at the
@@ -256,7 +256,7 @@ public static partial class IndexCommandRunner
         return schedule;
     }
 
-    private static int ResolveFullScanExtractionFileIndex(
+    internal static int ResolveFullScanExtractionFileIndex(
         IReadOnlyList<int>? extractionFileIndexes,
         int workOrdinal)
         => extractionFileIndexes == null

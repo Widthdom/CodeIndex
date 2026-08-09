@@ -61,7 +61,7 @@ internal static class ReferenceSecondaryIndexSql
             "CREATE INDEX IF NOT EXISTS idx_symbol_refs_resolved_source_target_kind ON symbol_references(source_symbol_id, target_symbol_id, reference_kind) WHERE source_symbol_id IS NOT NULL AND target_symbol_id IS NOT NULL"),
     ];
 
-    private static readonly ReferenceSecondaryIndexDefinition[] RemainingQueryDefinitions =
+    private static readonly ReferenceSecondaryIndexDefinition[] RemainingQueryBeforeDeferredGraphDefinitions =
     [
         new(
             "idx_symbol_refs_container_kind",
@@ -100,12 +100,28 @@ internal static class ReferenceSecondaryIndexSql
         new(
             "idx_symbol_refs_target_symbol",
             "CREATE INDEX IF NOT EXISTS idx_symbol_refs_target_symbol ON symbol_references(target_symbol_id)"),
+    ];
+
+    private static readonly ReferenceSecondaryIndexDefinition[] CandidatePopulationDeferredDefinitions =
+    [
         // Candidate materialization and resolution use the primary key's reference_id
         // prefix. Defer the reverse symbol lookup so bulk graph refresh can populate the
         // candidate table without maintaining a second B-tree row by row.
         new(
             "idx_symbol_ref_candidates_symbol",
             "CREATE INDEX IF NOT EXISTS idx_symbol_ref_candidates_symbol ON symbol_reference_candidates(symbol_id, reference_id)"),
+    ];
+
+    private static readonly ReferenceSecondaryIndexDefinition[] RemainingQueryDefinitions =
+    [
+        .. RemainingQueryBeforeDeferredGraphDefinitions,
+        .. CandidatePopulationDeferredDefinitions,
+    ];
+
+    private static readonly ReferenceSecondaryIndexDefinition[] DeferredGraphPreparationDefinitions =
+    [
+        .. GraphFinalizationRequiredDefinitions,
+        .. RemainingQueryBeforeDeferredGraphDefinitions,
     ];
 
     private static readonly ReferenceSecondaryIndexDefinition[] DeferredDuringBulkLoadDefinitions =
@@ -125,6 +141,9 @@ internal static class ReferenceSecondaryIndexSql
 
     internal static IReadOnlyList<ReferenceSecondaryIndexDefinition> GraphFinalizationRequired { get; }
         = Array.AsReadOnly(GraphFinalizationRequiredDefinitions);
+
+    internal static IReadOnlyList<ReferenceSecondaryIndexDefinition> DeferredGraphPreparation { get; }
+        = Array.AsReadOnly(DeferredGraphPreparationDefinitions);
 
     internal static IReadOnlyList<ReferenceSecondaryIndexDefinition> RemainingQuery { get; }
         = Array.AsReadOnly(RemainingQueryDefinitions);

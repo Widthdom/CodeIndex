@@ -1040,9 +1040,8 @@ public static partial class IndexCommandRunner
             (startedWithNoIndexedFiles || options.Rebuild)
             && !scanHadErrors
             && !languageCounts.ContainsKey("typescript");
-        var deferMutualRecursionRefreshToTypeScriptAugmentation =
+        var willRebuildTypeScriptAugmentation =
             !deferCSharpMutationsForIncompleteScan
-            && mutualRecursionRefreshNeeded
             && TypeScriptAugmentationRefreshPolicy.ShouldRebuildReferences(
                 options.SymbolsOnly,
                 canFinalize: errors == 0,
@@ -1050,6 +1049,8 @@ public static partial class IndexCommandRunner
                 typeScriptAugmentationDirtyNames?.RequiresRefresh == true,
                 canStampReadyWithoutRebuild:
                     canStampTypeScriptAugmentationReadyWithoutRebuild);
+        var deferMutualRecursionRefreshToTypeScriptAugmentation =
+            mutualRecursionRefreshNeeded && willRebuildTypeScriptAugmentation;
         if ((!deferCSharpMutationsForIncompleteScan
              && mutualRecursionRefreshNeeded
              && !deferMutualRecursionRefreshToTypeScriptAugmentation)
@@ -1073,16 +1074,24 @@ public static partial class IndexCommandRunner
                         referenceSecondaryIndexBulkLoad: referenceSecondaryIndexBulkLoad);
                 }
 
-                // Query-only indexes do not participate in graph finalization. Restore them
-                // after mutual-recursion evaluation while this long phase remains heartbeated.
-                referenceSecondaryIndexBulkLoad?.Complete(cancellationToken);
+                if (willRebuildTypeScriptAugmentation)
+                {
+                    // Keep only the candidate reverse lookup deferred until the TypeScript-owned
+                    // graph refresh; readiness retains every ordinary reference query path.
+                    referenceSecondaryIndexBulkLoad?.PrepareForDeferredGraphRefresh(
+                        cancellationToken);
+                }
+                else
+                {
+                    referenceSecondaryIndexBulkLoad?.Complete(cancellationToken);
+                }
             }
             finally
             {
                 StopFullScanJsonPhaseHeartbeat(referenceGraphHeartbeat);
             }
         }
-        if (options.MemoryTrace && !deferMutualRecursionRefreshToTypeScriptAugmentation)
+        if (options.MemoryTrace && !willRebuildTypeScriptAugmentation)
             memorySamples.Add(CaptureMemorySample("reference_graph", stopwatch));
         ThrowIfFullScanCancelled(processed, files.Count);
         if (ftsBulkLoad != null)
@@ -1234,31 +1243,39 @@ public static partial class IndexCommandRunner
         // augmentation が synthetic edge 挿入後に行う graph refresh を唯一の pass にする。
         // 最終 validation で実行不能になった場合だけ、readiness 確定前に遅延分を補完する。
         var deferredMutualRecursionRefreshCompletedBeforeReadiness = false;
-        if (deferMutualRecursionRefreshToTypeScriptAugmentation
-            && !TypeScriptAugmentationRefreshPolicy.ShouldRebuildReferences(
+        var willRebuildTypeScriptAugmentationAfterReadinessValidation =
+            !deferCSharpMutationsForIncompleteScan
+            && TypeScriptAugmentationRefreshPolicy.ShouldRebuildReferences(
                 options.SymbolsOnly,
                 canFinalize: errors == 0,
                 typeScriptAugmentationNeedsRefresh,
                 typeScriptAugmentationDirtyNames?.RequiresRefresh == true,
                 canStampReadyWithoutRebuild:
-                    canStampTypeScriptAugmentationReadyWithoutRebuild))
+                    canStampTypeScriptAugmentationReadyWithoutRebuild);
+        if (willRebuildTypeScriptAugmentation
+            && !willRebuildTypeScriptAugmentationAfterReadinessValidation)
         {
-            WriteFullScanJsonLiveness(options, "finalizing reference graph after readiness validation...");
-            var referenceGraphHeartbeat = StartFullScanJsonPhaseHeartbeat(
-                options,
-                "finalizing reference graph after readiness validation");
-            try
+            if (deferMutualRecursionRefreshToTypeScriptAugmentation)
             {
-                writer.RefreshMutualRecursionFlags(
-                    cancellationToken,
-                    stampReferenceIdentityContractReady:
-                        referenceIdentityReadyForMutualRecursionRefresh);
-                deferredMutualRecursionRefreshCompletedBeforeReadiness = true;
+                WriteFullScanJsonLiveness(options, "finalizing reference graph after readiness validation...");
+                var referenceGraphHeartbeat = StartFullScanJsonPhaseHeartbeat(
+                    options,
+                    "finalizing reference graph after readiness validation");
+                try
+                {
+                    writer.RefreshMutualRecursionFlags(
+                        cancellationToken,
+                        stampReferenceIdentityContractReady:
+                            referenceIdentityReadyForMutualRecursionRefresh,
+                        referenceSecondaryIndexBulkLoad: referenceSecondaryIndexBulkLoad);
+                    deferredMutualRecursionRefreshCompletedBeforeReadiness = true;
+                }
+                finally
+                {
+                    StopFullScanJsonPhaseHeartbeat(referenceGraphHeartbeat);
+                }
             }
-            finally
-            {
-                StopFullScanJsonPhaseHeartbeat(referenceGraphHeartbeat);
-            }
+            referenceSecondaryIndexBulkLoad?.Complete(cancellationToken);
         }
         if (options.MemoryTrace && deferredMutualRecursionRefreshCompletedBeforeReadiness)
             memorySamples.Add(CaptureMemorySample("reference_graph", stopwatch));
@@ -1303,9 +1320,16 @@ public static partial class IndexCommandRunner
             TypeScriptAugmentationOwnsDeferredReferenceGraphRefresh =
                 deferMutualRecursionRefreshToTypeScriptAugmentation
                 && !deferredMutualRecursionRefreshCompletedBeforeReadiness,
+            TypeScriptAugmentationRebuildOwnsReferenceGraphMemorySample =
+                willRebuildTypeScriptAugmentationAfterReadinessValidation,
+            ReferenceSecondaryIndexBulkLoad =
+                willRebuildTypeScriptAugmentationAfterReadinessValidation
+                    ? referenceSecondaryIndexBulkLoad
+                    : null,
             FreshCountReferences = freshCountReferences,
             WriteProjectRootOnce = WriteProjectRootOnce,
         });
+        referenceSecondaryIndexBulkLoad?.Complete(cancellationToken);
         graphTableAvailableAfter = readiness.GraphTableAvailable;
         issuesTableAvailableAfter = readiness.IssuesTableAvailable;
         csharpSymbolNameReadyAfter = readiness.CSharpSymbolNameReady;

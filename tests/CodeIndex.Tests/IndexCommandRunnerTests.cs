@@ -2532,6 +2532,65 @@ public sealed class Caller
     }
 
     [Fact]
+    public void Run_StaleMergedTypeScriptMarker_AttributesGraphMemoryAfterTextIndex()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_ts_marker_graph_memory");
+        var dbPath = CreateTempDbPath("cdidx_ts_marker_graph_memory");
+        var previousRefreshHook = DbWriter.MutualRecursionRefreshForTesting;
+        var refreshCount = 0;
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "contract-a.ts"),
+                "interface SharedContract { first: number }\n");
+            File.WriteAllText(
+                Path.Combine(projectRoot, "contract-b.ts"),
+                "interface SharedContract { second: number }\n");
+
+            var (initialExitCode, _) = RunAndCaptureJson(
+                [projectRoot, "--db", dbPath, "--json", "--quiet"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+                new DbWriter(db).ClearTypeScriptAugmentationReady();
+            DbWriter.MutualRecursionRefreshForTesting = () =>
+            {
+                refreshCount++;
+                previousRefreshHook?.Invoke();
+            };
+
+            var (refreshExitCode, refreshJson) = RunAndCaptureJson([
+                projectRoot,
+                "--db",
+                dbPath,
+                "--memory-trace",
+                "--json",
+                "--quiet",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, refreshExitCode);
+            Assert.Equal("success", refreshJson.GetProperty("status").GetString());
+            Assert.Equal(1, refreshCount);
+            var phases = refreshJson
+                .GetProperty("memory_timeline")
+                .GetProperty("samples")
+                .EnumerateArray()
+                .Select(sample => sample.GetProperty("phase").GetString())
+                .ToArray();
+            Assert.Contains("text_index", phases);
+            Assert.Contains("reference_graph", phases);
+            Assert.Equal(1, phases.Count(phase => phase == "reference_graph"));
+            Assert.True(
+                Array.IndexOf(phases, "text_index") < Array.IndexOf(phases, "reference_graph"));
+        }
+        finally
+        {
+            DbWriter.MutualRecursionRefreshForTesting = previousRefreshHook;
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_NoOpFullScan_DoesNotOptimizeFts()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_noop_fullscan_no_fts_optimize");

@@ -745,14 +745,15 @@ public static partial class IndexCommandRunner
         var referenceIdentityReadyForMutualRecursionRefresh = mutualRecursionRefreshNeeded
             ? writer.CSharpFamilyTrustAllowsReferenceIdentityReady()
             : (bool?)null;
-        var deferMutualRecursionRefreshToTypeScriptAugmentation =
-            mutualRecursionRefreshNeeded
-            && TypeScriptAugmentationRefreshPolicy.ShouldRebuildReferences(
+        var willRebuildTypeScriptAugmentation =
+            TypeScriptAugmentationRefreshPolicy.ShouldRebuildReferences(
                 options.SymbolsOnly,
                 canFinalize: readinessDemoted && errors == 0,
                 typeScriptAugmentationNeedsRefresh,
                 typeScriptAugmentationDirtyNames?.RequiresRefresh == true,
                 canStampReadyWithoutRebuild: false);
+        var deferMutualRecursionRefreshToTypeScriptAugmentation =
+            mutualRecursionRefreshNeeded && willRebuildTypeScriptAugmentation;
         if (mutualRecursionRefreshNeeded
             && !deferMutualRecursionRefreshToTypeScriptAugmentation)
             writer.RefreshMutualRecursionFlags(
@@ -760,10 +761,17 @@ public static partial class IndexCommandRunner
                 stampReferenceIdentityContractReady:
                     referenceIdentityReadyForMutualRecursionRefresh,
                 referenceSecondaryIndexBulkLoad: referenceSecondaryIndexBulkLoad);
-        // Only the three reverse-edge indexes participate in graph finalization. Recoverable
-        // mode restores the remaining query indexes afterwards and repairs all on unwind.
-        referenceSecondaryIndexBulkLoad?.Complete(cancellationToken);
-        if (options.MemoryTrace && !deferMutualRecursionRefreshToTypeScriptAugmentation)
+        if (willRebuildTypeScriptAugmentation)
+        {
+            // Retain the candidate reverse-index deferral until the TypeScript-owned graph
+            // pass. Recoverable disposal repairs the full schema if readiness fails.
+            referenceSecondaryIndexBulkLoad?.PrepareForDeferredGraphRefresh(cancellationToken);
+        }
+        else
+        {
+            referenceSecondaryIndexBulkLoad?.Complete(cancellationToken);
+        }
+        if (options.MemoryTrace && !willRebuildTypeScriptAugmentation)
             memorySamples.Add(CaptureMemorySample("reference_graph", stopwatch));
         ThrowIfUpdateCancelled();
         updateProgress.Pause();
@@ -815,19 +823,26 @@ public static partial class IndexCommandRunner
         // Late workspace drift prevents that rebuild, so complete the deferred pass before
         // partial readiness restores any prior graph trust.
         // augmentation 実行不能となる late drift 時だけ、partial readiness の前に補完する。
-        if (deferMutualRecursionRefreshToTypeScriptAugmentation
-            && !TypeScriptAugmentationRefreshPolicy.ShouldRebuildReferences(
+        var willRebuildTypeScriptAugmentationAfterReadinessValidation =
+            TypeScriptAugmentationRefreshPolicy.ShouldRebuildReferences(
                 options.SymbolsOnly,
                 canFinalize: readinessDemoted && errors == 0,
                 typeScriptAugmentationNeedsRefresh,
                 typeScriptAugmentationDirtyNames?.RequiresRefresh == true,
-                canStampReadyWithoutRebuild: false))
+                canStampReadyWithoutRebuild: false);
+        if (willRebuildTypeScriptAugmentation
+            && !willRebuildTypeScriptAugmentationAfterReadinessValidation)
         {
-            writer.RefreshMutualRecursionFlags(
-                cancellationToken,
-                stampReferenceIdentityContractReady:
-                    referenceIdentityReadyForMutualRecursionRefresh);
-            deferredMutualRecursionRefreshCompletedBeforeReadiness = true;
+            if (deferMutualRecursionRefreshToTypeScriptAugmentation)
+            {
+                writer.RefreshMutualRecursionFlags(
+                    cancellationToken,
+                    stampReferenceIdentityContractReady:
+                        referenceIdentityReadyForMutualRecursionRefresh,
+                    referenceSecondaryIndexBulkLoad: referenceSecondaryIndexBulkLoad);
+                deferredMutualRecursionRefreshCompletedBeforeReadiness = true;
+            }
+            referenceSecondaryIndexBulkLoad?.Complete(cancellationToken);
         }
         if (options.MemoryTrace && deferredMutualRecursionRefreshCompletedBeforeReadiness)
             memorySamples.Add(CaptureMemorySample("reference_graph", stopwatch));
@@ -869,10 +884,19 @@ public static partial class IndexCommandRunner
             TypeScriptAugmentationOwnsDeferredReferenceGraphRefresh =
                 deferMutualRecursionRefreshToTypeScriptAugmentation
                 && !deferredMutualRecursionRefreshCompletedBeforeReadiness,
+            TypeScriptAugmentationRebuildOwnsReferenceGraphMemorySample =
+                willRebuildTypeScriptAugmentationAfterReadinessValidation,
+            ReferenceSecondaryIndexBulkLoad =
+                willRebuildTypeScriptAugmentationAfterReadinessValidation
+                    ? referenceSecondaryIndexBulkLoad
+                    : null,
             FullyRefreshedDynamicGraphLanguages = errors == 0 && readinessDemoted
                 ? GetFullyRefreshedDynamicGraphLanguages()
                 : [],
         });
+        // Recoverable mode must retain ownership until the readiness transaction commits;
+        // otherwise a later rollback could discard CREATEs with no Dispose repair path.
+        referenceSecondaryIndexBulkLoad?.Complete(cancellationToken);
         var graphTableAvailableAfter = readiness.GraphTableAvailable;
         var issuesTableAvailableAfter = readiness.IssuesTableAvailable;
         var csharpSymbolNameReadyAfter = readiness.CSharpSymbolNameReady;

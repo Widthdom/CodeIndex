@@ -328,6 +328,11 @@ guard forces any active dirty graph scope onto its full-refresh plan before the
 indexes disappear. Immediately before mutual-recursion evaluation, its graph
 transaction restores only the unresolved-folded, legacy NOCASE, and resolved
 reverse-edge indexes; the remaining query indexes return after the mutual update.
+When a TypeScript augmentation rebuild owns the sole graph pass, restore every
+ordinary graph/query index before readiness but keep the reverse candidate-symbol
+lookup deferred. Pass the live guard through augmentation candidate population and
+restore that final index only after the readiness transaction commits; this keeps
+readiness queries available without maintaining the candidate B-tree row by row.
 CLI owns this DDL inside the outer scan transaction so cancellation or failure
 rolls the schema back atomically. MCP uses the same recoverable lifecycle whenever
 its established dirty-byte policy selects FTS bulk loading, and restores every
@@ -4001,7 +4006,11 @@ reference-line の保守用 index は残し、identity / resolution finalization
 遅延したままにします。guard は index を外す前に active な dirty graph scope を full refresh へ
 昇格します。mutual-recursion 評価の直前に、その graph transaction 内で unresolved-folded、
 legacy NOCASE、resolved reverse-edge の3本だけを復元し、残りの query index は mutual update
-後に戻します。CLI はこの DDL を scan 全体の外側 transaction 内で所有するため、cancellation
+後に戻します。TypeScript augmentation rebuild が唯一の graph pass を担当する場合は、readiness
+前に通常の graph / query index を復元しつつ candidate-symbol reverse lookup だけを遅延し、live
+guard を augmentation の candidate 構築へ渡して readiness transaction の commit 後に最後の1本を
+復元します。これにより readiness query を利用可能なまま candidate B-tree の行ごとの保守を省きます。
+CLI はこの DDL を scan 全体の外側 transaction 内で所有するため、cancellation
 や失敗時には schema も原子的に rollback されます。MCP は既定の dirty-byte policy が FTS bulk
 load を選ぶ場合に同じ recoverable lifecycle を使い、正常完了時と dispose 時の両方で全 index
 を復元します。schema initialization と read repair は同じ canonical index catalog を使い、

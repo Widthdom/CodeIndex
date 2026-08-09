@@ -1100,6 +1100,69 @@ public partial class IndexCommandRunnerTests
         Assert.Equal([8, 4, 5, 7, 3, 9, 2, 6], schedule);
     }
 
+    [Theory]
+    [InlineData(3, 4)]
+    [InlineData(4, 4)]
+    public void BuildFullScanExtractionTailSchedule_WorkFitsInFirstWorkerWave_DoesNotProbe(
+        int workItemCount,
+        int workerCount)
+    {
+        var probeCount = 0;
+
+        var schedule = IndexCommandRunner.BuildFullScanExtractionTailSchedule(
+            workItemCount,
+            workerCount,
+            maxFileSizeBytes: 1_000,
+            _ =>
+            {
+                probeCount++;
+                return 1;
+            },
+            CancellationToken.None);
+
+        Assert.Empty(schedule);
+        Assert.Equal(0, probeCount);
+    }
+
+    [Fact]
+    public void BuildFullScanExtractionTailSchedule_OneItemBeyondFirstWorkerWave_StillProbes()
+    {
+        var probedOrdinals = new List<int>();
+
+        var schedule = IndexCommandRunner.BuildFullScanExtractionTailSchedule(
+            workItemCount: 5,
+            workerCount: 4,
+            maxFileSizeBytes: 1_000,
+            workOrdinal =>
+            {
+                probedOrdinals.Add(workOrdinal);
+                return workOrdinal;
+            },
+            CancellationToken.None);
+
+        Assert.Equal(Enumerable.Range(0, 5), probedOrdinals);
+        Assert.Equal([4, 3, 2, 1, 0], schedule);
+    }
+
+    [Fact]
+    public void ResolveFullScanExtractionFileIndex_UsesSparseMappingOrWorkOrdinalFallback()
+    {
+        int[] extractionFileIndexes = [11, 3, 17, 5];
+
+        Assert.Equal(
+            [11, 3, 17, 5],
+            Enumerable.Range(0, extractionFileIndexes.Length)
+                .Select(workOrdinal =>
+                    IndexCommandRunner.ResolveFullScanExtractionFileIndex(
+                        extractionFileIndexes,
+                        workOrdinal)));
+        Assert.Equal(
+            7,
+            IndexCommandRunner.ResolveFullScanExtractionFileIndex(
+                extractionFileIndexes: null,
+                workOrdinal: 7));
+    }
+
     [Fact]
     public void BuildFullScanExtractionTailSchedule_BoundsProbeAndScheduleState()
     {

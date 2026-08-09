@@ -7631,6 +7631,199 @@ public partial class McpServerTests
     }
 
     [Fact]
+    public void ToolsCall_Index_FreshTypeScriptBulkDefersReferenceAndHotspotSecondaryIndexes()
+    {
+        const string candidateReverseIndexName = "idx_symbol_ref_candidates_symbol";
+        var fixtureDir = Path.Combine(
+            Path.GetFullPath("."),
+            $"mcp_index_fresh_ts_bulk_indexes_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(fixtureDir);
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_fresh_ts_bulk_indexes");
+        var previousAugmentationHook =
+            McpServer.McpIndexTypeScriptAugmentationRebuildForTesting;
+        var previousRefreshHook = DbWriter.MutualRecursionRefreshForTesting;
+        var previousReferenceIndexHook =
+            DbWriter.ReferenceSecondaryIndexBulkLoadStateForTesting;
+        var previousHotspotRefreshHook =
+            DbWriter.HotspotAggregateRefreshStatementExecutingForTesting;
+        var referenceIndexStates = new List<(string Phase, string[] PresentIndexNames)>();
+        var hotspotIndexStates = new List<string[]>();
+        var lifecycle = new List<string>();
+        SqliteConnection? writerConnection = null;
+        bool? candidatePresentAtAugmentationRebuild = null;
+        bool? candidatePresentAtGraphRefresh = null;
+        var augmentationRebuildCount = 0;
+        var graphRefreshCount = 0;
+
+        static bool IndexExists(SqliteConnection connection, string indexName)
+        {
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT EXISTS(
+                    SELECT 1
+                    FROM sqlite_schema
+                    WHERE type = 'index' AND name = @name)
+                """;
+            command.Parameters.AddWithValue("@name", indexName);
+            return Convert.ToInt64(
+                command.ExecuteScalar(),
+                CultureInfo.InvariantCulture) != 0;
+        }
+
+        static string[] ReadPresentIndexes(
+            SqliteConnection connection,
+            IEnumerable<string> indexNames)
+            => indexNames
+                .Where(indexName => IndexExists(connection, indexName))
+                .OrderBy(static indexName => indexName, StringComparer.Ordinal)
+                .ToArray();
+
+        var canonicalReferenceIndexNames = ReferenceSecondaryIndexSql.All
+            .Select(static definition => definition.Name)
+            .OrderBy(static indexName => indexName, StringComparer.Ordinal)
+            .ToArray();
+        var deferredGraphPreparedIndexNames = ReferenceSecondaryIndexSql.RawPersistenceRequired
+            .Concat(ReferenceSecondaryIndexSql.DeferredGraphPreparation)
+            .Select(static definition => definition.Name)
+            .OrderBy(static indexName => indexName, StringComparer.Ordinal)
+            .ToArray();
+        var hotspotIndexNames = HotspotReferenceAggregateSql.Indexes
+            .Select(static definition => definition.Name)
+            .OrderBy(static indexName => indexName, StringComparer.Ordinal)
+            .ToArray();
+
+        try
+        {
+            var fileCount = Math.Max(
+                64,
+                DbWriter.HotspotAggregateSecondaryIndexDeferralMinimumDirtyFileCount);
+            for (var index = 0; index < fileCount; index++)
+            {
+                File.WriteAllText(
+                    Path.Combine(fixtureDir, $"contract-{index:D2}.ts"),
+                    $"interface FreshBulkContract {{ member{index:D2}: number; }}\n");
+            }
+
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            DbWriter.ReferenceSecondaryIndexBulkLoadStateForTesting = (connection, phase) =>
+            {
+                writerConnection = connection;
+                lifecycle.Add(phase);
+                referenceIndexStates.Add((
+                    phase,
+                    ReadPresentIndexes(connection, canonicalReferenceIndexNames)));
+                previousReferenceIndexHook?.Invoke(connection, phase);
+            };
+            McpServer.McpIndexTypeScriptAugmentationRebuildForTesting = () =>
+            {
+                augmentationRebuildCount++;
+                lifecycle.Add("typescript_augmentation");
+                if (writerConnection != null)
+                {
+                    candidatePresentAtAugmentationRebuild =
+                        IndexExists(writerConnection, candidateReverseIndexName);
+                }
+                previousAugmentationHook?.Invoke();
+            };
+            DbWriter.MutualRecursionRefreshForTesting = () =>
+            {
+                graphRefreshCount++;
+                lifecycle.Add("graph_refresh");
+                if (writerConnection != null)
+                {
+                    candidatePresentAtGraphRefresh =
+                        IndexExists(writerConnection, candidateReverseIndexName);
+                }
+                previousRefreshHook?.Invoke();
+            };
+            DbWriter.HotspotAggregateRefreshStatementExecutingForTesting = () =>
+            {
+                lifecycle.Add("hotspot_refresh");
+                if (writerConnection != null)
+                    hotspotIndexStates.Add(ReadPresentIndexes(writerConnection, hotspotIndexNames));
+                previousHotspotRefreshHook?.Invoke();
+            };
+
+            var response = CallIndex(server, fixtureDir);
+
+            Assert.False(
+                response["result"]?["isError"]?.GetValue<bool>() ?? false,
+                response.ToJsonString());
+            Assert.Equal(
+                fileCount,
+                response["result"]!["structuredContent"]!["summary"]!["files"]!.GetValue<long>());
+            Assert.Equal(1, augmentationRebuildCount);
+            Assert.Equal(1, graphRefreshCount);
+            Assert.Equal(4, hotspotIndexNames.Length);
+            Assert.Equal(false, candidatePresentAtAugmentationRebuild);
+            Assert.Equal(false, candidatePresentAtGraphRefresh);
+            Assert.Equal(
+                new[]
+                {
+                    "dropped",
+                    "deferred_graph_prepared",
+                    "typescript_augmentation",
+                    "graph_refresh",
+                    "identity_started",
+                    "graph_required_restored",
+                    "mutual_started",
+                    "restored",
+                    "hotspot_refresh",
+                },
+                lifecycle);
+
+            Assert.Equal(
+                new[]
+                {
+                    "dropped",
+                    "deferred_graph_prepared",
+                    "identity_started",
+                    "graph_required_restored",
+                    "mutual_started",
+                    "restored",
+                },
+                referenceIndexStates.Select(static state => state.Phase));
+            var restoredStateIndex = referenceIndexStates.FindIndex(
+                static state => state.Phase == "restored");
+            Assert.Equal(referenceIndexStates.Count - 1, restoredStateIndex);
+            Assert.All(
+                referenceIndexStates.Take(restoredStateIndex),
+                state => Assert.DoesNotContain(candidateReverseIndexName, state.PresentIndexNames));
+            Assert.Contains(
+                candidateReverseIndexName,
+                referenceIndexStates[restoredStateIndex].PresentIndexNames);
+            Assert.Equal(
+                deferredGraphPreparedIndexNames,
+                Assert.Single(
+                    referenceIndexStates,
+                    static state => state.Phase == "deferred_graph_prepared").PresentIndexNames);
+            Assert.Empty(Assert.Single(hotspotIndexStates));
+
+            using var verifyConnection = new SqliteConnection(
+                $"Data Source={dbPath};Mode=ReadOnly;Pooling=False");
+            verifyConnection.Open();
+            Assert.Equal(
+                canonicalReferenceIndexNames,
+                ReadPresentIndexes(verifyConnection, canonicalReferenceIndexNames));
+            Assert.Equal(
+                hotspotIndexNames,
+                ReadPresentIndexes(verifyConnection, hotspotIndexNames));
+        }
+        finally
+        {
+            McpServer.McpIndexTypeScriptAugmentationRebuildForTesting =
+                previousAugmentationHook;
+            DbWriter.MutualRecursionRefreshForTesting = previousRefreshHook;
+            DbWriter.ReferenceSecondaryIndexBulkLoadStateForTesting =
+                previousReferenceIndexHook;
+            DbWriter.HotspotAggregateRefreshStatementExecutingForTesting =
+                previousHotspotRefreshHook;
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Fact]
     public void ToolsCall_Index_FreshAndRebuildWithoutTypeScriptSkipTypeScriptAugmentationRebuild()
     {
         var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_fresh_no_ts_augmentation_{Guid.NewGuid():N}");

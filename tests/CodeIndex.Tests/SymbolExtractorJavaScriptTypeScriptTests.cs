@@ -300,6 +300,7 @@ public partial class SymbolExtractorTests
             /*
               const GhostComment = class { ghostComment() {} };
             */
+            const regex = /}\s*=>\s*{\s*class GhostRegex { ghostRegex\(\) {} }/;
             const factory = () => {
               const Hidden = class { hidden() {} };
             };
@@ -319,6 +320,7 @@ public partial class SymbolExtractorTests
             s => s.Name is
                 "GhostTemplate" or "ghostTemplate"
                 or "GhostComment" or "ghostComment"
+                or "GhostRegex" or "ghostRegex"
                 or "Hidden" or "hidden");
     }
 

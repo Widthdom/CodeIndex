@@ -1774,9 +1774,8 @@ public partial class McpServer
             (startedWithNoIndexedFiles || rebuild)
             && !scanHadErrors
             && !hasTypeScriptTargets;
-        var deferMutualRecursionRefreshToTypeScriptAugmentation =
+        var willRebuildTypeScriptAugmentation =
             !deferCSharpMutationsForIncompleteScan
-            && mutualRecursionRefreshNeeded
             && TypeScriptAugmentationRefreshPolicy.ShouldRebuildReferences(
                 symbolsOnly: false,
                 canFinalize: !scanHadErrors && errors == 0,
@@ -1784,6 +1783,8 @@ public partial class McpServer
                 typeScriptAugmentationDirtyNames?.RequiresRefresh == true,
                 canStampReadyWithoutRebuild:
                     canStampTypeScriptAugmentationReadyWithoutRebuild);
+        var deferMutualRecursionRefreshToTypeScriptAugmentation =
+            mutualRecursionRefreshNeeded && willRebuildTypeScriptAugmentation;
         if (!deferCSharpMutationsForIncompleteScan
             && mutualRecursionRefreshNeeded
             && !deferMutualRecursionRefreshToTypeScriptAugmentation)
@@ -1802,10 +1803,15 @@ public partial class McpServer
                 progressToken,
                 processed,
                 files.Count,
-                "Restoring reference query indexes.").ConfigureAwait(false);
+                willRebuildTypeScriptAugmentation
+                    ? "Preparing reference query indexes."
+                    : "Restoring reference query indexes.").ConfigureAwait(false);
         }
 
-        referenceSecondaryIndexBulkLoad?.Complete(requestToken);
+        if (willRebuildTypeScriptAugmentation)
+            referenceSecondaryIndexBulkLoad?.PrepareForDeferredGraphRefresh(requestToken);
+        else
+            referenceSecondaryIndexBulkLoad?.Complete(requestToken);
 
         if (ftsBulkLoad != null)
         {
@@ -1900,25 +1906,33 @@ public partial class McpServer
         // synthetic edges. If late input validation makes that rebuild ineligible, complete
         // the deferred pass before publishing partial metadata.
         // late validation で augmentation を実行できない場合だけ、partial metadata 前に補完する。
-        if (deferMutualRecursionRefreshToTypeScriptAugmentation
-            && !TypeScriptAugmentationRefreshPolicy.ShouldRebuildReferences(
+        var willRebuildTypeScriptAugmentationAfterReadinessValidation =
+            !deferCSharpMutationsForIncompleteScan
+            && TypeScriptAugmentationRefreshPolicy.ShouldRebuildReferences(
                 symbolsOnly: false,
                 canFinalize: !scanHadErrors && errors == 0,
                 typeScriptAugmentationNeedsRefresh,
                 typeScriptAugmentationDirtyNames?.RequiresRefresh == true,
                 canStampReadyWithoutRebuild:
-                    canStampTypeScriptAugmentationReadyWithoutRebuild))
+                    canStampTypeScriptAugmentationReadyWithoutRebuild);
+        if (willRebuildTypeScriptAugmentation
+            && !willRebuildTypeScriptAugmentationAfterReadinessValidation)
         {
-            requestToken.ThrowIfCancellationRequested();
-            await EmitProgressNotificationAsync(
-                progressToken,
-                processed,
-                files.Count,
-                "Finalizing reference graph after readiness validation.").ConfigureAwait(false);
-            writer.RefreshMutualRecursionFlags(
-                requestToken,
-                stampReferenceIdentityContractReady:
-                    referenceIdentityReadyForMutualRecursionRefresh);
+            if (deferMutualRecursionRefreshToTypeScriptAugmentation)
+            {
+                requestToken.ThrowIfCancellationRequested();
+                await EmitProgressNotificationAsync(
+                    progressToken,
+                    processed,
+                    files.Count,
+                    "Finalizing reference graph after readiness validation.").ConfigureAwait(false);
+                writer.RefreshMutualRecursionFlags(
+                    requestToken,
+                    stampReferenceIdentityContractReady:
+                        referenceIdentityReadyForMutualRecursionRefresh,
+                    referenceSecondaryIndexBulkLoad: referenceSecondaryIndexBulkLoad);
+            }
+            referenceSecondaryIndexBulkLoad?.Complete(requestToken);
         }
         // A complete fresh/rebuild discovery is authoritative for both presence and absence.
         // With a partial discovery, positive target evidence remains authoritative while
@@ -1974,13 +1988,7 @@ public partial class McpServer
         if (!scanHadErrors && errors == 0)
         {
             var rebuildTypeScriptAugmentation =
-                TypeScriptAugmentationRefreshPolicy.ShouldRebuildReferences(
-                    symbolsOnly: false,
-                    canFinalize: true,
-                    typeScriptAugmentationNeedsRefresh,
-                    typeScriptAugmentationDirtyNames?.RequiresRefresh == true,
-                    canStampReadyWithoutRebuild:
-                        canStampTypeScriptAugmentationReadyWithoutRebuild);
+                willRebuildTypeScriptAugmentationAfterReadinessValidation;
             await EmitProgressNotificationAsync(
                 progressToken,
                 processed,
@@ -2031,6 +2039,7 @@ public partial class McpServer
                             ? typeScriptAugmentationDirtyNames?.DirtyNames
                             : null,
                         deferMutualRecursionRefreshToTypeScriptAugmentation,
+                        referenceSecondaryIndexBulkLoad,
                         requestToken);
                     if (startedWithNoIndexedFiles)
                         freshCountReferences += augmentationReferences;
@@ -2197,6 +2206,9 @@ public partial class McpServer
         {
             writer.ClearBatchInProgress();
         }
+        // Keep recoverable guard ownership until the readiness transaction commits. A thrown
+        // readiness path is then repaired by Dispose instead of exposing a partial schema.
+        referenceSecondaryIndexBulkLoad?.Complete(requestToken);
         hotspotAggregateRefresh.Complete(requestToken);
         if (!scanResult.HadErrors && errors == 0)
         {
