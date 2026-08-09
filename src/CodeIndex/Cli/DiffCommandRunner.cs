@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -15,6 +16,7 @@ public static class DiffCommandRunner
     internal const int MinDiffJsonBytes = 4 * 1024;
     internal const int DefaultDiffJsonBytes = 1024 * 1024;
     internal const int MaxDiffJsonBytes = 16 * 1024 * 1024;
+    private const int DiffFileComparisonBufferBytes = 128 * 1024;
     internal static int MaxDiffLimit => QueryCommandRunner.NumericFlagUpperBounds["--limit"];
     internal static int? MaxDiffComparedRowsPerSideForTesting { get; set; }
     internal static int? MaxDiffComparedRowBytesForTesting { get; set; }
@@ -187,6 +189,14 @@ public static class DiffCommandRunner
         CliJsonSerializerContext? materializationJsonContext)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        if (TryResolveLocalDatabasePaths(options, out var leftPath, out var rightPath)
+            && (DatabasePathsShareFileIdentity(leftPath, rightPath)
+                || DatabaseFilesAreByteIdentical(leftPath, rightPath, cancellationToken)))
+        {
+            var identicalHeader = ReadHeader(options.LeftDb!);
+            return BuildIdenticalDatabaseDiff(identicalHeader, options);
+        }
+
         var leftHeader = ReadHeader(options.LeftDb!);
         cancellationToken.ThrowIfCancellationRequested();
         var rightHeader = ReadHeader(options.RightDb!);
@@ -198,6 +208,188 @@ public static class DiffCommandRunner
                 options,
                 materializationJsonContext,
                 cancellationToken);
+    }
+
+    private static bool TryResolveLocalDatabasePaths(
+        DiffCommandOptions options,
+        out string leftPath,
+        out string rightPath)
+    {
+        leftPath = string.Empty;
+        rightPath = string.Empty;
+        if (!DbPathResolver.TryNormalizeDbPath(options.LeftDb!, out var normalizedLeftPath, out _)
+            || !DbPathResolver.TryNormalizeDbPath(options.RightDb!, out var normalizedRightPath, out _))
+        {
+            return false;
+        }
+
+        try
+        {
+            leftPath = Path.GetFullPath(normalizedLeftPath);
+            rightPath = Path.GetFullPath(normalizedRightPath);
+            return File.Exists(LongPath.EnsureWindowsPrefix(leftPath))
+                && File.Exists(LongPath.EnsureWindowsPrefix(rightPath));
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
+    }
+
+    private static bool DatabasePathsShareFileIdentity(string leftPath, string rightPath)
+    {
+        if (PathCasing.PathsEqual(leftPath, rightPath))
+            return true;
+
+        return FileIndexer.TryGetFileIdentity(leftPath, out var leftIdentity)
+            && FileIndexer.TryGetFileIdentity(rightPath, out var rightIdentity)
+            && leftIdentity == rightIdentity;
+    }
+
+    private static bool DatabaseFilesAreByteIdentical(
+        string leftPath,
+        string rightPath,
+        CancellationToken cancellationToken)
+    {
+        if (HasSqliteSidecar(leftPath) || HasSqliteSidecar(rightPath))
+            return false;
+
+        var leftBuffer = ArrayPool<byte>.Shared.Rent(DiffFileComparisonBufferBytes);
+        var rightBuffer = ArrayPool<byte>.Shared.Rent(DiffFileComparisonBufferBytes);
+        try
+        {
+            using var leftStream = OpenDatabaseFileForComparison(leftPath);
+            using var rightStream = OpenDatabaseFileForComparison(rightPath);
+            var leftLength = leftStream.Length;
+            if (leftLength != rightStream.Length)
+                return false;
+
+            while (leftStream.Position < leftLength)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var bufferBytes = Math.Min(leftBuffer.Length, rightBuffer.Length);
+                var bytesToRead = (int)Math.Min(bufferBytes, leftLength - leftStream.Position);
+                var leftRead = ReadFileChunk(leftStream, leftBuffer, bytesToRead, cancellationToken);
+                var rightRead = ReadFileChunk(rightStream, rightBuffer, bytesToRead, cancellationToken);
+                if (leftRead == 0
+                    || leftRead != rightRead
+                    || !leftBuffer.AsSpan(0, leftRead).SequenceEqual(rightBuffer.AsSpan(0, rightRead)))
+                {
+                    return false;
+                }
+            }
+
+            return rightStream.Position == leftLength;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(leftBuffer);
+            ArrayPool<byte>.Shared.Return(rightBuffer);
+        }
+    }
+
+    private static FileStream OpenDatabaseFileForComparison(string path)
+        => new(
+            LongPath.EnsureWindowsPrefix(path),
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            bufferSize: DiffFileComparisonBufferBytes,
+            FileOptions.SequentialScan);
+
+    private static int ReadFileChunk(
+        FileStream stream,
+        byte[] buffer,
+        int bytesToRead,
+        CancellationToken cancellationToken)
+    {
+        var totalRead = 0;
+        while (totalRead < bytesToRead)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var read = stream.Read(buffer, totalRead, bytesToRead - totalRead);
+            if (read == 0)
+                break;
+            totalRead += read;
+        }
+
+        return totalRead;
+    }
+
+    private static bool HasSqliteSidecar(string dbPath)
+        => File.Exists(LongPath.EnsureWindowsPrefix(dbPath + "-wal"))
+            || File.Exists(LongPath.EnsureWindowsPrefix(dbPath + "-shm"))
+            || File.Exists(LongPath.EnsureWindowsPrefix(dbPath + "-journal"));
+
+    private static DiffJsonResult BuildIdenticalDatabaseDiff(
+        DiffDbHeader header,
+        DiffCommandOptions options)
+    {
+        var categories = BuildDifferenceCategories([], [], [], [], options, evaluated: true);
+        var summary = new DiffSummaryJsonResult(
+            header.FileCount,
+            header.FileCount,
+            0,
+            header.SymbolCount,
+            header.SymbolCount,
+            0,
+            header.ReferenceCount,
+            header.ReferenceCount,
+            0,
+            header.SchemaVersion,
+            header.SchemaVersion,
+            true,
+            GetComparisonMode(options),
+            0,
+            [],
+            categories);
+        var detailedOutput = options.Detailed && !options.SummaryOnly;
+        var selectionFingerprint = detailedOutput && options.EmitCursorMetadata
+            ? DiffCursorCodec.CreateSelectionFingerprint(
+                options.LeftDb!,
+                options.RightDb!,
+                options.IncludeContent,
+                options.DataOnly,
+                options.IncludeTelemetry)
+            : null;
+        var currentCursor = selectionFingerprint is null
+            ? null
+            : DiffCursorCodec.Encode(options.Offset, selectionFingerprint);
+
+        return new DiffJsonResult(
+            "identical",
+            true,
+            FormatSensitiveText(DbPathResolver.FormatDbPathForDisplay(options.LeftDb!), options),
+            FormatSensitiveText(DbPathResolver.FormatDbPathForDisplay(options.RightDb!), options),
+            summary,
+            [],
+            [],
+            options.Detailed ? [] : null,
+            options.Detailed ? [] : null,
+            options.Detailed ? [] : null,
+            options.Detailed ? [] : null,
+            options.Detailed ? [] : null,
+            options.Detailed ? [] : null,
+            options.Detailed ? [] : null,
+            options.Limit,
+            options.Offset,
+            options.Detailed,
+            Records: detailedOutput ? [] : null,
+            TotalCount: detailedOutput ? 0 : null,
+            ReturnedCount: detailedOutput ? 0 : null,
+            OmittedCount: detailedOutput ? 0 : null,
+            ContentIncluded: detailedOutput ? options.IncludeContent : null,
+            ContentPolicy: detailedOutput ? options.IncludeContent ? "included" : "redacted_hashes" : null,
+            MaxJsonBytes: options.MaxJsonBytes,
+            SelectionFingerprint: selectionFingerprint,
+            CurrentCursor: currentCursor,
+            Replay: selectionFingerprint is null || currentCursor is null
+                ? null
+                : BuildReplayMetadata(options, selectionFingerprint, currentCursor, null));
     }
 
     private const string FilePathRowsSql = "SELECT path FROM files ORDER BY path";
@@ -1275,14 +1467,14 @@ public static class DiffCommandRunner
         rowsRead++;
         var maxRows = MaxDiffComparedRowsPerSideForTesting ?? MaxDiffComparedRowsPerSide;
         if (rowsRead > maxRows)
-            throw new InvalidOperationException($"diff {side} row comparison exceeded the safety budget of {maxRows} rows.");
+            throw new DiffComparisonBudgetExceededException($"diff {side} row comparison exceeded the safety budget of {maxRows} rows.");
     }
 
     private static void EnsureDiffRowByteBudget(long rowBytes, string side)
     {
         var maxBytes = MaxDiffComparedRowBytesForTesting ?? MaxDiffComparedRowBytes;
         if (rowBytes > maxBytes)
-            throw new InvalidOperationException($"diff {side} row comparison exceeded the safety budget of {maxBytes} bytes per row.");
+            throw new DiffComparisonBudgetExceededException($"diff {side} row comparison exceeded the safety budget of {maxBytes} bytes per row.");
     }
 
     private static long EstimateDiffValueBytes(object? value)
@@ -1817,6 +2009,8 @@ public static class DiffCommandRunner
         long SymbolCount,
         long ReferenceCount);
 }
+
+internal sealed class DiffComparisonBudgetExceededException(string message) : InvalidOperationException(message);
 
 internal sealed class DiffCommandOptions
 {

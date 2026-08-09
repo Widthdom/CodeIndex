@@ -1043,6 +1043,51 @@ public class DiffCommandRunnerTests
     }
 
     [Fact]
+    public void Run_IdenticalLargeDatabasePathsBypassRowBudget_Issue5052()
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_diff_identical_large");
+        var originalRowBudget = DiffCommandRunner.MaxDiffComparedRowsPerSideForTesting;
+        try
+        {
+            var db = TestProjectHelper.CreateProjectDb(root);
+            for (var i = 0; i < 11; i++)
+            {
+                TestProjectHelper.InsertIndexedFile(
+                    db,
+                    $"src/File{i:00}.cs",
+                    "csharp",
+                    $"public class File{i:00} {{ }}");
+            }
+
+            SqliteConnection.ClearAllPools();
+            var copy = Path.Combine(root, "codeindex-copy.db");
+            File.Copy(db, copy);
+            DiffCommandRunner.MaxDiffComparedRowsPerSideForTesting = 10;
+
+            AssertIdenticalSummary(db, db);
+            AssertIdenticalSummary(db, copy);
+            AssertIdenticalSummary(db, new Uri(db).AbsoluteUri + "?immutable=1");
+
+            var alias = Path.Combine(root, "codeindex-alias.db");
+            try
+            {
+                File.CreateSymbolicLink(alias, db);
+                AssertIdenticalSummary(db, alias);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+            {
+                // Symlink creation is unavailable in some test environments; same-path and copied-file
+                // coverage above still exercise both portable identity shortcuts.
+            }
+        }
+        finally
+        {
+            DiffCommandRunner.MaxDiffComparedRowsPerSideForTesting = originalRowBudget;
+            TestProjectHelper.DeleteDirectory(root);
+        }
+    }
+
+    [Fact]
     public void Run_StopsWhenDiffRowBudgetIsExceeded_Issue3834()
     {
         var leftRoot = TestProjectHelper.CreateTempProject("cdidx_diff_row_budget_left");
@@ -1078,6 +1123,14 @@ public class DiffCommandRunnerTests
                 SET name = 'Drifted', name_folded = 'drifted'
                 WHERE id = (SELECT MIN(id) FROM symbols);
                 """);
+            var archivePath = Path.Combine(leftRoot, "source.cdidx.zip");
+            var (exportExitCode, _, exportStderr) = ConsoleCapture.Capture(() =>
+                ExportImportCommandRunner.RunExport(
+                    [archivePath, "--db", leftDb],
+                    _jsonOptions,
+                    "test"));
+            Assert.Equal(CommandExitCodes.Success, exportExitCode);
+            Assert.Equal(string.Empty, exportStderr);
 
             var (differentExitCode, differentOutput) = RunWithCapturedOut(
                 [leftDb, rightDb, "--summary-only"]);
@@ -1111,11 +1164,56 @@ public class DiffCommandRunnerTests
             Assert.Contains("data:file_rows_changed", boundedOutput, StringComparison.Ordinal);
 
             ExecuteNonQuery(rightDb, "DELETE FROM files WHERE path = 'src/C.cs';");
+            var (jsonExitCode, jsonStdout, jsonStderr) = RunWithCapturedStreams(
+                [leftDb, rightDb, "--summary-only", "--json"]);
+
+            Assert.Equal(3, jsonExitCode);
+            Assert.Equal(string.Empty, jsonStderr);
+            using (var jsonDocument = JsonDocument.Parse(jsonStdout))
+            {
+                Assert.Equal("error", jsonDocument.RootElement.GetProperty("status").GetString());
+                Assert.Equal(
+                    CommandErrorCodes.DbError,
+                    jsonDocument.RootElement.GetProperty("error_code").GetString());
+            }
+
             var (exitCode, stdout, stderr) = RunWithCapturedStreams([leftDb, rightDb]);
 
             Assert.Equal(3, exitCode);
             Assert.Equal(string.Empty, stdout);
             Assert.Contains("diff left row comparison exceeded the safety budget of 10 rows", stderr);
+
+            var (importJsonExitCode, importJsonStdout, importJsonStderr) = ConsoleCapture.Capture(() =>
+                ExportImportCommandRunner.RunImport(
+                    [archivePath, "--db", rightDb, "--check", "--json"],
+                    _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.DatabaseError, importJsonExitCode);
+            Assert.Equal(string.Empty, importJsonStderr);
+            using (var importDocument = JsonDocument.Parse(importJsonStdout))
+            {
+                var importError = importDocument.RootElement;
+                Assert.Equal("error", importError.GetProperty("status").GetString());
+                Assert.Equal("import", importError.GetProperty("command").GetString());
+                Assert.Equal("destination_delta", importError.GetProperty("phase").GetString());
+                Assert.Equal(
+                    "import_destination_comparison_budget_exceeded",
+                    importError.GetProperty("error_code").GetString());
+                Assert.Equal(
+                    "comparison_budget_exceeded",
+                    importError.GetProperty("root_cause").GetString());
+                Assert.Contains("cdidx diff", importError.GetProperty("hint").GetString(), StringComparison.Ordinal);
+            }
+
+            var (importTextExitCode, importTextStdout, importTextStderr) = ConsoleCapture.Capture(() =>
+                ExportImportCommandRunner.RunImport(
+                    [archivePath, "--db", rightDb, "--check"],
+                    _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.DatabaseError, importTextExitCode);
+            Assert.Equal(string.Empty, importTextStdout);
+            Assert.Contains("destination comparison could not complete", importTextStderr, StringComparison.Ordinal);
+            Assert.Contains("cdidx diff", importTextStderr, StringComparison.Ordinal);
         }
         finally
         {
@@ -1975,6 +2073,19 @@ public class DiffCommandRunnerTests
             record.GetProperty("fields")
                 .EnumerateArray()
                 .Where(field => field.GetProperty("name").GetString() == name));
+
+    private void AssertIdenticalSummary(string leftDb, string rightDb)
+    {
+        var (exitCode, stdout, stderr) = RunWithCapturedStreams(
+            [leftDb, rightDb, "--summary-only", "--json"]);
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = JsonDocument.Parse(stdout);
+        Assert.Equal("identical", document.RootElement.GetProperty("status").GetString());
+        Assert.True(document.RootElement.GetProperty("identical").GetBoolean());
+        Assert.Equal(0, document.RootElement.GetProperty("summary").GetProperty("difference_reason_count").GetInt32());
+    }
 
     private static int GetMaterializedRecordCount(
         List<DiffRecordJsonResult> records,
