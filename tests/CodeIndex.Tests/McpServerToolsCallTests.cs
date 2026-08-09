@@ -3853,6 +3853,7 @@ public partial class McpServerTests
         var writer = new DbWriter(_db.Connection);
         writer.SetMetaValues(
             (DbContext.IndexedHeadCommitMetaKey, legacyFullScanHead),
+            (DbContext.WorkspaceVerifiedHeadShaMetaKey, initialHead),
             (DbContext.IndexedHeadShaMetaKey, initialHead),
             (DbContext.IndexedHeadTimestampMetaKey, initialTimestamp.ToString("O", CultureInfo.InvariantCulture)));
         RepoMapBuilder.HeadMetadataCapturedForTesting.Value = () => writer.SetMetaValues(
@@ -3867,9 +3868,11 @@ public partial class McpServerTests
             var structured = response["result"]!["structuredContent"]!;
 
             Assert.NotEqual(legacyFullScanHead, structured["indexed_head_sha"]!.GetValue<string>());
+            Assert.Equal(initialHead, structured["workspace_verified_head_sha"]!.GetValue<string>());
             Assert.Equal(initialHead, structured["indexed_head_sha"]!.GetValue<string>());
             Assert.Equal(initialTimestamp, structured["indexed_head_timestamp"]!.GetValue<DateTimeOffset>());
             Assert.Equal(initialHead, structured["head_freshness"]!["indexed_head"]!.GetValue<string>());
+            Assert.Equal("workspace_verified", structured["head_freshness"]!["indexed_head_source"]!.GetValue<string>());
         }
         finally
         {

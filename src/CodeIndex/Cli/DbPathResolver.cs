@@ -334,6 +334,9 @@ public static class DbPathResolver
     public static string? TryReadIndexedHeadSha(string dbPath)
         => TryReadMetaString(dbPath, CodeIndex.Database.DbContext.IndexedHeadShaMetaKey);
 
+    public static string? TryReadWorkspaceVerifiedHeadSha(string dbPath)
+        => TryReadMetaString(dbPath, CodeIndex.Database.DbContext.WorkspaceVerifiedHeadShaMetaKey);
+
     public static string? TryReadIndexedHeadForResponse(string dbPath)
     {
         try

@@ -47,6 +47,7 @@ public static partial class IndexCommandRunner
         IReadOnlyDictionary<string, FileIndexer.ProjectMarkerFingerprintResult> currentHotspotFamilyMarkerFingerprints,
         string? priorIndexedProjectRoot,
         string? priorIndexedHeadCommit,
+        string? priorWorkspaceVerifiedHead,
         string? currentHeadCommit,
         string? priorSymbolKindFilterSignature,
         string? initialCwd,
@@ -87,11 +88,14 @@ public static partial class IndexCommandRunner
             options,
             spinnerFrames,
             jsonOptions,
+            priorWorkspaceVerifiedHead,
+            currentHeadCommit,
             cancellationToken,
             out var targetPaths,
             out var gitTargetPaths,
             out var explicitFileTargetPaths,
-            out var relevantIgnoreFileChanged);
+            out var relevantIgnoreFileChanged,
+            out var workspaceHeadCoverageVerified);
         if (resolveTargetsExitCode != null)
             return resolveTargetsExitCode.Value;
 
@@ -950,6 +954,9 @@ public static partial class IndexCommandRunner
         hotspotAggregateRefresh.Complete(cancellationToken);
         if (errors == 0)
         {
+            using var successMetadataTxn = writer.BeginTransaction(
+                cancellationToken,
+                "update success metadata");
             if (csharpSourceEvidenceForStamp.HasValue && csharpSourceEvidenceCompleteForStamp)
             {
                 writer.SetCSharpStaticInterfaceSourceEvidence(
@@ -957,7 +964,12 @@ public static partial class IndexCommandRunner
             }
             StampIndexedHeadMetadata(writer, projectRoot, indexRunDiagnostics, cancellationToken);
             StampIndexedSymlinkPolicy(writer, options.SymlinkPolicy, indexRunDiagnostics);
-            StampCommitScopedFreshHeadMetadata(writer, options, projectRoot, currentHeadCommit, indexRunDiagnostics, cancellationToken);
+            StampCommitScopedFreshHeadMetadata(
+                writer,
+                priorWorkspaceVerifiedHead,
+                currentHeadCommit,
+                workspaceHeadCoverageVerified,
+                indexRunDiagnostics);
             if (options.MemoryTrace)
                 memorySamples.Add(CaptureMemorySample("finalize", stopwatch));
             var memoryTimelineForStamp = BuildMemoryTimeline(memorySamples);
@@ -978,6 +990,7 @@ public static partial class IndexCommandRunner
                 indexRunDiagnostics,
                 writer.GetReferenceExtractionCapHits(issuesTableAvailableAfter),
                 writer.GetPersistedIndexOmissionReasons());
+            successMetadataTxn.Commit();
         }
         return WriteUpdateFinalOutput(new UpdateFinalOutputContext
         {

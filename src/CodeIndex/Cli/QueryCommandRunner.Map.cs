@@ -447,6 +447,8 @@ public static partial class QueryCommandRunner
             payload["git_is_dirty"] = map.GitIsDirty;
         if (map.IndexedHeadCommit != null)
             payload["indexed_head_commit"] = map.IndexedHeadCommit;
+        if (map.WorkspaceVerifiedHeadSha != null)
+            payload["workspace_verified_head_sha"] = map.WorkspaceVerifiedHeadSha;
         if (map.IndexedHeadSha != null)
             payload["indexed_head_sha"] = map.IndexedHeadSha;
         if (map.IndexedHeadBranch != null)
@@ -572,6 +574,7 @@ public static partial class QueryCommandRunner
         "git_head",
         "git_is_dirty",
         "indexed_head_commit",
+        "workspace_verified_head_sha",
         "indexed_head_sha",
         "indexed_head_branch",
         "indexed_head_timestamp",

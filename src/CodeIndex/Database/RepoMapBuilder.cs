@@ -640,6 +640,7 @@ internal sealed class RepoMapBuilder
     private RepoMapIndexedHeadSnapshot LoadIndexedHeadSnapshot()
     {
         string? legacyHead = null;
+        string? workspaceVerifiedHead = null;
         string? latestHead = null;
         string? latestBranch = null;
         string? latestTimestamp = null;
@@ -653,9 +654,10 @@ internal sealed class RepoMapBuilder
             cmd.CommandText = """
                 SELECT key, value
                 FROM codeindex_meta
-                WHERE key IN (@legacyHead, @latestHead, @latestBranch, @latestTimestamp, @legacyBranch)
+                WHERE key IN (@legacyHead, @workspaceVerifiedHead, @latestHead, @latestBranch, @latestTimestamp, @legacyBranch)
                 """;
             SqliteCommandPolicy.Add(cmd, "@legacyHead", DbContext.IndexedHeadCommitMetaKey);
+            SqliteCommandPolicy.Add(cmd, "@workspaceVerifiedHead", DbContext.WorkspaceVerifiedHeadShaMetaKey);
             SqliteCommandPolicy.Add(cmd, "@latestHead", DbContext.IndexedHeadShaMetaKey);
             SqliteCommandPolicy.Add(cmd, "@latestBranch", DbContext.IndexedHeadBranchMetaKey);
             SqliteCommandPolicy.Add(cmd, "@latestTimestamp", DbContext.IndexedHeadTimestampMetaKey);
@@ -670,6 +672,9 @@ internal sealed class RepoMapBuilder
                 {
                     case DbContext.IndexedHeadCommitMetaKey:
                         legacyHead = value;
+                        break;
+                    case DbContext.WorkspaceVerifiedHeadShaMetaKey:
+                        workspaceVerifiedHead = value;
                         break;
                     case DbContext.IndexedHeadShaMetaKey:
                         latestHead = value;
@@ -696,6 +701,7 @@ internal sealed class RepoMapBuilder
 
         return new RepoMapIndexedHeadSnapshot(
             legacyHead,
+            workspaceVerifiedHead,
             latestHead,
             latestBranch,
             ParseIndexedHeadTimestamp(latestTimestamp),

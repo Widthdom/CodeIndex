@@ -239,10 +239,9 @@ public static partial class QueryCommandRunner
                     Console.WriteLine(ConsoleUi.FormatSummaryLine("Git Dirty", status.GitIsDirty));
                 if (status.MacProfile != null)
                     Console.WriteLine(ConsoleUi.FormatSummaryLine("MAC", status.MacProfile));
-                // #1509 surface: SHA / branch / timestamp / drift come from the per-success
-                // stamp (indexed_head_sha / _branch / _timestamp) and reflect last-touched HEAD
-                // regardless of update mode. #1508/#1512's IndexedHeadCommit (full-scan only)
-                // is rendered separately below when it disagrees with the runtime GitHead.
+                // Latest-write and whole-workspace verification are separate provenance.
+                // Render the verified HEAD when it differs so a drift warning never cites
+                // the legacy full-scan stamp for a newer reconciled workspace.
                 if (status.IndexedHeadSha != null)
                 {
                     var branchSuffix = string.IsNullOrWhiteSpace(status.IndexedHeadBranch)
@@ -250,9 +249,11 @@ public static partial class QueryCommandRunner
                         : $" (branch {status.IndexedHeadBranch})";
                     Console.WriteLine(ConsoleUi.FormatSummaryLine("Idx HEAD", $"{status.IndexedHeadSha}{branchSuffix}"));
                 }
-                else if (status.IndexedHeadCommit != null && !string.Equals(status.IndexedHeadCommit, status.GitHead, StringComparison.OrdinalIgnoreCase))
+                var verifiedHead = status.WorkspaceVerifiedHeadSha ?? status.IndexedHeadCommit;
+                if (verifiedHead != null
+                    && !string.Equals(verifiedHead, status.IndexedHeadSha, StringComparison.OrdinalIgnoreCase))
                 {
-                    Console.WriteLine(ConsoleUi.FormatSummaryLine("Idx HEAD", status.IndexedHeadCommit));
+                    Console.WriteLine(ConsoleUi.FormatSummaryLine("Verified", verifiedHead));
                 }
                 if (status.IndexedHeadTimestamp != null)
                     Console.WriteLine(ConsoleUi.FormatSummaryLine("Idx Stamp", $"{status.IndexedHeadTimestamp:O}"));
@@ -313,7 +314,7 @@ public static partial class QueryCommandRunner
                     Console.WriteLine(ConsoleUi.FormatSummaryLine("FS Case", status.PathCaseSensitive == true ? "case-sensitive" : "case-insensitive"));
                 WriteStatusReadinessSummary(status, options);
                 if (status.WorktreeHeadChanged == true)
-                    Console.WriteLine(ConsoleUi.FormatSummaryLine("WARN", $"worktree HEAD changed since the index was built ({ShortSha(status.IndexedHeadCommit)} -> {ShortSha(status.GitHead)}). Run `{BuildReindexRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit)}` to refresh the index for the current branch."));
+                    Console.WriteLine(ConsoleUi.FormatSummaryLine("WARN", $"worktree HEAD changed since the workspace was verified ({ShortSha(verifiedHead)} -> {ShortSha(status.GitHead)}). Run `{BuildReindexRepairCommand(status.ProjectRoot, options.DbPath, options.DbPathExplicit)}` to refresh the index for the current branch."));
                 if (status.IndexNewerThanReader)
                 {
                     var reason = status.IndexNewerThanReaderReason ?? "DB was written by a newer cdidx than this binary.";

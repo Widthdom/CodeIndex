@@ -119,6 +119,7 @@ public partial class DbReader
         // reported by the same status call.
         // #1509: 同じ snapshot 内で HEAD metadata を引き、counts / freshness と整合させる。
         var indexedHeadSha = TryGetMetaStringInternal(DbContext.IndexedHeadShaMetaKey);
+        var workspaceVerifiedHeadSha = TryGetMetaStringInternal(DbContext.WorkspaceVerifiedHeadShaMetaKey);
         var indexedHeadBranch = TryGetMetaStringInternal(DbContext.IndexedHeadBranchMetaKey);
         var indexedHeadTimestamp = ParseMetaDateTimeOffset(TryGetMetaStringInternal(DbContext.IndexedHeadTimestampMetaKey));
         var unknownExtensionFileCount = ParseMetaLong(TryGetMetaStringInternal(DbContext.UnknownExtensionFileCountMetaKey));
@@ -209,6 +210,7 @@ public partial class DbReader
             LastWorkspaceFreshenedAt = lastIndexRun?.StartedAt ?? indexedHeadTimestamp?.UtcDateTime,
             LatestModified = freshness.LatestModified,
             IndexedHeadSha = indexedHeadSha,
+            WorkspaceVerifiedHeadSha = workspaceVerifiedHeadSha,
             IndexedHeadBranch = indexedHeadBranch,
             IndexedHeadTimestamp = indexedHeadTimestamp,
             Languages = langs,

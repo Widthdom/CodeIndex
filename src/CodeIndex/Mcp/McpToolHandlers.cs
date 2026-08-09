@@ -853,6 +853,10 @@ public partial class McpServer
         };
         if (analysis.IndexedHeadCommit != null)
             payload["indexed_head_commit"] = analysis.IndexedHeadCommit;
+        if (analysis.WorkspaceVerifiedHeadSha != null)
+            payload["workspace_verified_head_sha"] = analysis.WorkspaceVerifiedHeadSha;
+        if (analysis.IndexedHeadSha != null)
+            payload["indexed_head_sha"] = analysis.IndexedHeadSha;
         if (analysis.WorktreeHeadChanged.HasValue)
             payload["worktree_head_changed"] = analysis.WorktreeHeadChanged.Value;
         if (analysis.GraphDegraded.HasValue)

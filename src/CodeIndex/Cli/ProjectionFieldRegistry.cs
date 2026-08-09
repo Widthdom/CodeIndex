@@ -324,7 +324,7 @@ internal static class ProjectionFieldRegistry
                 .Fields(
                     "api_version", "file_count", "total_lines", "total_symbols", "total_references",
                     "indexed_at", "latest_modified", "workspace_indexed_at", "workspace_latest_modified",
-                    "project_root", "git_head", "git_is_dirty", "indexed_head_commit", "indexed_head_sha",
+                    "project_root", "git_head", "git_is_dirty", "indexed_head_commit", "workspace_verified_head_sha", "indexed_head_sha",
                     "indexed_head_branch", "indexed_head_timestamp", "commits_ahead_of_indexed_head",
                     "worktree_head_changed", "head_freshness", "language_count", "module_count",
                     "entrypoint_count", "graph_table_available", "generated_code_policy",

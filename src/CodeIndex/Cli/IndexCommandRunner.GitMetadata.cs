@@ -78,24 +78,23 @@ public static partial class IndexCommandRunner
 
     private static void StampCommitScopedFreshHeadMetadata(
         DbWriter writer,
-        IndexCommandOptions options,
-        string projectRoot,
+        string? priorWorkspaceVerifiedHead,
         string? currentHeadCommit,
-        List<string>? diagnostics,
-        CancellationToken cancellationToken = default)
+        bool workspaceHeadCoverageVerified,
+        List<string>? diagnostics)
     {
         try
         {
+            var verifiedHead = workspaceHeadCoverageVerified
+                && !string.IsNullOrWhiteSpace(currentHeadCommit)
+                    ? currentHeadCommit
+                    : priorWorkspaceVerifiedHead;
+            writer.SetMeta(DbContext.WorkspaceVerifiedHeadShaMetaKey, verifiedHead);
             var coveredHead = !string.IsNullOrWhiteSpace(currentHeadCommit)
-                && (options.Commits.Any(commit => GitRefCoversCurrentHead(projectRoot, commit, currentHeadCommit, cancellationToken))
-                    || TryChangedBetweenCoversCurrentHead(options, projectRoot, currentHeadCommit, cancellationToken))
-                ? currentHeadCommit
-                : null;
+                && string.Equals(verifiedHead, currentHeadCommit, StringComparison.OrdinalIgnoreCase)
+                    ? currentHeadCommit
+                    : null;
             writer.SetMeta(DbContext.CommitScopedFreshHeadShaMetaKey, coveredHead);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
         }
         catch (Exception ex)
         {
@@ -116,18 +115,6 @@ public static partial class IndexCommandRunner
 
         var resolvedRef = GitHelper.TryResolveCommit(projectRoot, refName, cancellationToken);
         return string.Equals(resolvedRef, currentHeadCommit, StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static bool TryChangedBetweenCoversCurrentHead(
-        IndexCommandOptions options,
-        string projectRoot,
-        string currentHeadCommit,
-        CancellationToken cancellationToken)
-    {
-        if (options.ChangedBetweenRefs.Count != 2)
-            return false;
-
-        return GitRefCoversCurrentHead(projectRoot, options.ChangedBetweenRefs[1], currentHeadCommit, cancellationToken);
     }
 
     // Issue #1546: capture the actual case-sensitivity of the workspace filesystem so

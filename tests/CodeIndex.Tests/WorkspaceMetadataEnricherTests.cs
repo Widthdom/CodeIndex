@@ -238,7 +238,7 @@ public class WorkspaceMetadataEnricherTests
     }
 
     [Fact]
-    public void Enrich_ResultTypes_UseLatestIndexedHeadShaBeforeFullScanHeadForWorktreeHeadChanged()
+    public void Enrich_ResultTypes_UseConservativeLegacyBaselineUntilWorkspaceVerificationExists_Issue5054()
     {
         var (projectRoot, dbPath, originalHead) = CreateDirtyGitProject("cdidx_workspace_current_head_preferred");
         try
@@ -258,10 +258,27 @@ public class WorkspaceMetadataEnricherTests
             WorkspaceMetadataEnricher.Enrich(analysis, dbPath);
 
             Assert.Equal(staleFullScanHead, status.IndexedHeadCommit);
-            Assert.False(status.WorktreeHeadChanged);
+            Assert.Null(status.WorkspaceVerifiedHeadSha);
+            Assert.True(status.WorktreeHeadChanged);
             Assert.Equal(0, status.CommitsAheadOfIndexedHead);
             Assert.Equal(staleFullScanHead, analysis.IndexedHeadCommit);
-            Assert.False(analysis.WorktreeHeadChanged);
+            Assert.Null(analysis.WorkspaceVerifiedHeadSha);
+            Assert.Equal(originalHead, analysis.IndexedHeadSha);
+            Assert.True(analysis.WorktreeHeadChanged);
+
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+                new DbWriter(db.Connection).SetMeta(DbContext.WorkspaceVerifiedHeadShaMetaKey, originalHead);
+
+            var verifiedStatus = new StatusResult { IndexedHeadSha = originalHead };
+            var verifiedAnalysis = new SymbolAnalysisResult();
+            WorkspaceMetadataEnricher.Enrich(verifiedStatus, dbPath);
+            WorkspaceMetadataEnricher.Enrich(verifiedAnalysis, dbPath);
+
+            Assert.Equal(originalHead, verifiedStatus.WorkspaceVerifiedHeadSha);
+            Assert.False(verifiedStatus.WorktreeHeadChanged);
+            Assert.Equal(originalHead, verifiedAnalysis.WorkspaceVerifiedHeadSha);
+            Assert.Equal(originalHead, verifiedAnalysis.IndexedHeadSha);
+            Assert.False(verifiedAnalysis.WorktreeHeadChanged);
         }
         finally
         {

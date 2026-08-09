@@ -11,17 +11,23 @@ public static partial class IndexCommandRunner
         IndexCommandOptions options,
         string[] spinnerFrames,
         JsonSerializerOptions jsonOptions,
+        string? priorWorkspaceVerifiedHead,
+        string? currentHeadCommit,
         CancellationToken cancellationToken,
         out HashSet<string> targetPaths,
         out HashSet<string> gitTargetPaths,
         out HashSet<string> explicitFileTargetPaths,
-        out bool relevantIgnoreFileChanged)
+        out bool relevantIgnoreFileChanged,
+        out bool workspaceHeadCoverageVerified)
     {
         targetPaths = new HashSet<string>(StringComparer.Ordinal);
         gitTargetPaths = new HashSet<string>(StringComparer.Ordinal);
         explicitFileTargetPaths = new HashSet<string>(StringComparer.Ordinal);
         relevantIgnoreFileChanged = false;
+        workspaceHeadCoverageVerified = false;
         HashSet<string>? skipWorktreePaths = null;
+        var mutableTargetPaths = targetPaths;
+        var mutableGitTargetPaths = gitTargetPaths;
 
         bool IsMissingSparseSkippedTarget(string relativePath)
         {
@@ -31,6 +37,25 @@ public static partial class IndexCommandRunner
 
             skipWorktreePaths ??= GitHelper.TryGetSkipWorktreePaths(projectRoot, cancellationToken);
             return IsSparseSkippedPath(skipWorktreePaths, relativePath);
+        }
+
+        void AddNormalizedGitTargets(
+            string repoRoot,
+            IReadOnlyList<string> changedFiles,
+            out bool touchedRelevantIgnoreFile)
+        {
+            var normalized = NormalizeCommitFileTargets(
+                projectRoot,
+                repoRoot,
+                changedFiles,
+                out touchedRelevantIgnoreFile);
+            foreach (var path in normalized)
+            {
+                if (IsMissingSparseSkippedTarget(path))
+                    continue;
+                mutableTargetPaths.Add(path);
+                mutableGitTargetPaths.Add(path);
+            }
         }
 
         if (options.Commits.Count > 0)
@@ -44,15 +69,38 @@ public static partial class IndexCommandRunner
                 foreach (var commit in options.Commits)
                 {
                     var changedFiles = GitHelper.GetChangedFilesFromCommit(projectRoot, commit, cancellationToken);
-                    var normalized = NormalizeCommitFileTargets(projectRoot, repoRoot, changedFiles, out var commitTouchedRelevantIgnoreFile);
+                    AddNormalizedGitTargets(repoRoot, changedFiles, out var commitTouchedRelevantIgnoreFile);
                     relevantIgnoreFileChanged |= commitTouchedRelevantIgnoreFile;
-                    foreach (var f in normalized)
+                }
+
+                var currentHeadCovered = !string.IsNullOrWhiteSpace(currentHeadCommit)
+                    && options.Commits.Any(commit =>
+                        GitRefCoversCurrentHead(projectRoot, commit, currentHeadCommit, cancellationToken));
+                if (currentHeadCovered && !string.IsNullOrWhiteSpace(priorWorkspaceVerifiedHead))
+                {
+                    var resolvedBaseline = GitHelper.TryResolveCommit(
+                        projectRoot,
+                        priorWorkspaceVerifiedHead,
+                        cancellationToken);
+                    if (resolvedBaseline == null)
                     {
-                        if (IsMissingSparseSkippedTarget(f))
-                            continue;
-                        targetPaths.Add(f);
-                        gitTargetPaths.Add(f);
+                        return WriteCommandError(
+                            options.Json,
+                            jsonOptions,
+                            $"persisted workspace verification baseline could not be resolved by git: {priorWorkspaceVerifiedHead}",
+                            CommandExitCodes.UsageError,
+                            "Fetch the missing history and rerun the scoped refresh, or run `cdidx index <projectPath>` for a verified full-workspace refresh.",
+                            CommandErrorCodes.UsageError);
                     }
+
+                    var baselineChanges = GitHelper.GetChangedFilesBetweenRefs(
+                        projectRoot,
+                        resolvedBaseline,
+                        currentHeadCommit!,
+                        cancellationToken);
+                    AddNormalizedGitTargets(repoRoot, baselineChanges, out var baselineTouchedRelevantIgnoreFile);
+                    relevantIgnoreFileChanged |= baselineTouchedRelevantIgnoreFile;
+                    workspaceHeadCoverageVerified = true;
                 }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -91,14 +139,47 @@ public static partial class IndexCommandRunner
                     spinnerCts = ConsoleUi.StartSpinner("Resolving changed files between refs...", spinnerFrames);
                 var repoRoot = GitHelper.TryGetRepositoryRoot(projectRoot, cancellationToken) ?? Path.GetFullPath(projectRoot);
                 var changedFiles = GitHelper.GetChangedFilesBetweenRefs(projectRoot, options.ChangedBetweenRefs[0], options.ChangedBetweenRefs[1], cancellationToken);
-                var normalized = NormalizeCommitFileTargets(projectRoot, repoRoot, changedFiles, out var rangeTouchedRelevantIgnoreFile);
+                AddNormalizedGitTargets(repoRoot, changedFiles, out var rangeTouchedRelevantIgnoreFile);
                 relevantIgnoreFileChanged |= rangeTouchedRelevantIgnoreFile;
-                foreach (var f in normalized)
+
+                var newRefCoversCurrentHead = !string.IsNullOrWhiteSpace(currentHeadCommit)
+                    && GitRefCoversCurrentHead(
+                        projectRoot,
+                        options.ChangedBetweenRefs[1],
+                        currentHeadCommit,
+                        cancellationToken);
+                if (newRefCoversCurrentHead && !string.IsNullOrWhiteSpace(priorWorkspaceVerifiedHead))
                 {
-                    if (IsMissingSparseSkippedTarget(f))
-                        continue;
-                    targetPaths.Add(f);
-                    gitTargetPaths.Add(f);
+                    var resolvedBaseline = GitHelper.TryResolveCommit(
+                        projectRoot,
+                        priorWorkspaceVerifiedHead,
+                        cancellationToken);
+                    if (resolvedBaseline == null)
+                    {
+                        return WriteCommandError(
+                            options.Json,
+                            jsonOptions,
+                            $"persisted workspace verification baseline could not be resolved by git: {priorWorkspaceVerifiedHead}",
+                            CommandExitCodes.UsageError,
+                            "Fetch the missing history and rerun `--changed-between`, or run `cdidx index <projectPath>` for a verified full-workspace refresh.",
+                            CommandErrorCodes.UsageError);
+                    }
+
+                    var resolvedOldRef = GitHelper.TryResolveCommit(
+                        projectRoot,
+                        options.ChangedBetweenRefs[0],
+                        cancellationToken);
+                    if (!string.Equals(resolvedBaseline, resolvedOldRef, StringComparison.OrdinalIgnoreCase))
+                    {
+                        var baselineChanges = GitHelper.GetChangedFilesBetweenRefs(
+                            projectRoot,
+                            resolvedBaseline,
+                            currentHeadCommit!,
+                            cancellationToken);
+                        AddNormalizedGitTargets(repoRoot, baselineChanges, out var baselineTouchedRelevantIgnoreFile);
+                        relevantIgnoreFileChanged |= baselineTouchedRelevantIgnoreFile;
+                    }
+                    workspaceHeadCoverageVerified = true;
                 }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

@@ -89,16 +89,15 @@ public partial class DbContext : IDisposable
     // the default incremental full scan). Reading this back lets the CLI detect that a user
     // ran `cdidx index <projectPath>` after switching branches / commits, where the DB still
     // mirrors the previously-indexed worktree even though the on-disk file set has diverged.
-    // Partial update modes (`--commits` / `--files`) deliberately do NOT touch this key, so a
-    // post-branch-switch partial refresh still surfaces as stale until a real full scan
-    // republishes the captured HEAD. The same value is read at `status` time (without
-    // `--check`) to surface a worktree branch / HEAD switch via `worktree_head_changed`.
+    // Partial update modes (`--commits` / `--files`) deliberately do NOT touch this key.
+    // Current databases use the separate whole-workspace verification key below for
+    // `worktree_head_changed`; this full-scan stamp remains the conservative legacy fallback.
     // Issues #1508 and #1512.
     // 直近の full-scan 成功時点で記録した git HEAD。`cdidx index` 後にブランチが切り替わると
     // DB は旧 worktree のスナップショットのまま残るため、ここを比較して「rebuild を勧める」
-    // 警告を出す。partial update (`--commits` / `--files`) は本キーを更新せず、後続の
-    // full scan が改めて記録する。同じ値を `status` (no `--check`) でも参照し、
-    // `worktree_head_changed` として worktree の HEAD 切替を素早く通知する。Issues #1508 / #1512。
+    // 警告を出す。partial update (`--commits` / `--files`) は本キーを更新しない。現行 DB の
+    // `worktree_head_changed` は下記の workspace 全体検証 key を使い、本値は旧 DB の
+    // 保守的 fallback として維持する。Issues #1508 / #1512。
     public const string IndexedHeadCommitMetaKey = "indexed_head_commit";
     public const string IndexedHeadCommitBranchMetaKey = "indexed_head_commit_branch";
     // #1509: full Git HEAD commit and short branch name captured at the end of every
@@ -119,6 +118,16 @@ public partial class DbContext : IDisposable
     public const string IndexedHeadShaMetaKey = "indexed_head_sha";
     public const string IndexedHeadBranchMetaKey = "indexed_head_branch";
     public const string IndexedHeadTimestampMetaKey = "indexed_head_timestamp";
+    // HEAD whose complete tracked workspace has been verified by a successful full scan or
+    // by a scoped Git refresh reconciled from the previously verified baseline. Unlike
+    // `indexed_head_sha`, explicit-file updates never advance this provenance on their own.
+    // Legacy databases fall back conservatively to `indexed_head_commit` until a successful
+    // refresh publishes this additive key. Issue #5054.
+    // full scan、または直前の検証済み基準から差分を補完した scoped Git refresh により、
+    // tracked workspace 全体との一致を証明できた HEAD。`indexed_head_sha` と異なり、
+    // `--files` 単独では進めない。旧 DB は次の成功 refresh まで
+    // `indexed_head_commit` へ保守的にフォールバックする。Issue #5054。
+    public const string WorkspaceVerifiedHeadShaMetaKey = "workspace_verified_head_sha";
     public const string CommitScopedFreshHeadShaMetaKey = "commit_scoped_fresh_head_sha";
     public const string LastFullScanElapsedMsMetaKey = "last_full_scan_elapsed_ms";
     public const string LastIndexRunModeMetaKey = "last_index_run_mode";
