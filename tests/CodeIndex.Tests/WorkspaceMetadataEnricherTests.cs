@@ -377,6 +377,56 @@ public class WorkspaceMetadataEnricherTests
         }
     }
 
+    [Fact]
+    public void Enrich_StatusResult_PreservesSingleReaderSnapshotAcrossConcurrentMetadataCommit_Issue5054()
+    {
+        var (projectRoot, dbPath, snapshotHead) = CreateDirtyGitProject("cdidx_workspace_snapshot_provenance");
+        var nextHead = new string('b', 40);
+        try
+        {
+            string? branch;
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                branch = TestProjectHelper.RunGit(projectRoot, "rev-parse", "--abbrev-ref", "HEAD").Trim();
+                var writer = new DbWriter(db.Connection);
+                writer.SetMetaValues(
+                    (DbContext.IndexedHeadCommitMetaKey, snapshotHead),
+                    (DbContext.IndexedHeadCommitBranchMetaKey, branch),
+                    (DbContext.WorkspaceVerifiedHeadShaMetaKey, snapshotHead),
+                    (DbContext.IndexedHeadShaMetaKey, snapshotHead),
+                    (DbContext.IndexedHeadBranchMetaKey, branch));
+            }
+
+            StatusResult status;
+            using (var db = new DbContext(DbOpenIntent.QueryOnly, dbPath))
+            using (var reader = new DbReader(db.Connection))
+                status = reader.GetStatus();
+
+            WorkspaceMetadataEnricher.StatusRuntimeMetadataResolvedForTesting.Value = () =>
+            {
+                using var concurrentDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+                new DbWriter(concurrentDb.Connection).SetMetaValues(
+                    (DbContext.IndexedHeadCommitMetaKey, nextHead),
+                    (DbContext.WorkspaceVerifiedHeadShaMetaKey, nextHead),
+                    (DbContext.IndexedHeadShaMetaKey, nextHead));
+            };
+
+            WorkspaceMetadataEnricher.Enrich(status, dbPath);
+
+            Assert.Equal(snapshotHead, status.IndexedHeadCommit);
+            Assert.Equal(snapshotHead, status.WorkspaceVerifiedHeadSha);
+            Assert.Equal(snapshotHead, status.IndexedHeadSha);
+            Assert.False(status.WorktreeHeadChanged);
+            using var verificationDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            Assert.Equal(nextHead, verificationDb.GetMetaString(DbContext.WorkspaceVerifiedHeadShaMetaKey));
+        }
+        finally
+        {
+            WorkspaceMetadataEnricher.StatusRuntimeMetadataResolvedForTesting.Value = null;
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     private static (string ProjectRoot, string DbPath, string HeadCommit) CreateDirtyGitProject(string prefix)
     {
         var projectRoot = TestProjectHelper.CreateTempProject(prefix);

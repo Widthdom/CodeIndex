@@ -8,12 +8,45 @@ namespace CodeIndex.Cli;
 /// </summary>
 public static class WorkspaceMetadataEnricher
 {
+    internal static AsyncLocal<Action?> StatusRuntimeMetadataResolvedForTesting { get; } = new();
+
     public static void Enrich(
         StatusResult status,
         string dbPath,
         bool dbPathExplicit = false,
         CancellationToken cancellationToken = default)
     {
+        if (status.HeadMetadataSnapshotCaptured)
+        {
+            var runtime = ResolveRuntime(
+                dbPath,
+                dbPathExplicit,
+                cancellationToken,
+                status.ProjectRoot);
+            StatusRuntimeMetadataResolvedForTesting.Value?.Invoke();
+            status.ProjectRoot = runtime.ProjectRoot;
+            status.GitHead = runtime.RuntimeHead;
+            status.GitIsDirty = runtime.IsDirty;
+            status.WorktreeHeadChanged = ResolveHeadChanged(
+                runtime.RuntimeHead,
+                runtime.RuntimeBranch,
+                status.WorkspaceVerifiedHeadSha,
+                status.IndexedHeadSha,
+                status.IndexedHeadBranch,
+                status.IndexedHeadBranchStampPresentSnapshot,
+                status.IndexedHeadCommit,
+                status.IndexedHeadCommitBranchSnapshot,
+                status.IndexedHeadCommitBranchStampPresentSnapshot);
+            if (runtime.ProjectRoot != null && !string.IsNullOrWhiteSpace(status.IndexedHeadSha))
+            {
+                status.CommitsAheadOfIndexedHead = GitHelper.TryCountCommitsAhead(
+                    runtime.ProjectRoot,
+                    status.IndexedHeadSha,
+                    cancellationToken);
+            }
+            return;
+        }
+
         var metadata = Resolve(dbPath, dbPathExplicit, cancellationToken);
         status.ProjectRoot = metadata.ProjectRoot;
         status.GitHead = metadata.RuntimeHead;
@@ -124,9 +157,11 @@ public static class WorkspaceMetadataEnricher
     private static RuntimeWorkspaceMetadata ResolveRuntime(
         string dbPath,
         bool dbPathExplicit,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? capturedProjectRoot = null)
     {
-        var projectRoot = DbPathResolver.ResolveProjectRootForQuery(dbPath, dbPathExplicit);
+        var projectRoot = capturedProjectRoot
+            ?? DbPathResolver.ResolveProjectRootForQuery(dbPath, dbPathExplicit);
         if (projectRoot == null)
             return new(null, null, null, null);
 

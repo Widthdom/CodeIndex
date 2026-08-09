@@ -2142,6 +2142,7 @@ public partial class McpServer
             var currentHeadBranch = GitHelper.TryGetHeadBranch(projectPath, requestToken);
             writer.SetMetaValues(
                 (DbContext.IndexedHeadCommitMetaKey, currentHeadCommit),
+                (DbContext.WorkspaceVerifiedHeadShaMetaKey, currentHeadCommit),
                 (DbContext.IndexedHeadCommitBranchMetaKey, currentHeadBranch));
             // #1509: also persist the always-updated HEAD/branch/timestamp triple so
             // status / consumers can detect cross-session staleness via

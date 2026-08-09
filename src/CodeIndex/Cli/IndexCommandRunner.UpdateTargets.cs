@@ -26,6 +26,7 @@ public static partial class IndexCommandRunner
         relevantIgnoreFileChanged = false;
         workspaceHeadCoverageVerified = false;
         HashSet<string>? skipWorktreePaths = null;
+        var sparseTargetSkipped = false;
         var mutableTargetPaths = targetPaths;
         var mutableGitTargetPaths = gitTargetPaths;
 
@@ -52,7 +53,10 @@ public static partial class IndexCommandRunner
             foreach (var path in normalized)
             {
                 if (IsMissingSparseSkippedTarget(path))
+                {
+                    sparseTargetSkipped = true;
                     continue;
+                }
                 mutableTargetPaths.Add(path);
                 mutableGitTargetPaths.Add(path);
             }
@@ -100,7 +104,12 @@ public static partial class IndexCommandRunner
                         cancellationToken);
                     AddNormalizedGitTargets(repoRoot, baselineChanges, out var baselineTouchedRelevantIgnoreFile);
                     relevantIgnoreFileChanged |= baselineTouchedRelevantIgnoreFile;
-                    workspaceHeadCoverageVerified = true;
+                    // A skip-worktree path that is absent from the sparse checkout cannot be
+                    // reconciled against its indexed row. Keep the prior whole-workspace
+                    // verification stamp even though the visible-cone update may succeed.
+                    // sparse checkout 外の不在 path は indexed row と照合できないため、
+                    // visible cone の更新が成功しても workspace 全体の検証 stamp は進めない。
+                    workspaceHeadCoverageVerified = !sparseTargetSkipped;
                 }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -179,7 +188,7 @@ public static partial class IndexCommandRunner
                         AddNormalizedGitTargets(repoRoot, baselineChanges, out var baselineTouchedRelevantIgnoreFile);
                         relevantIgnoreFileChanged |= baselineTouchedRelevantIgnoreFile;
                     }
-                    workspaceHeadCoverageVerified = true;
+                    workspaceHeadCoverageVerified = !sparseTargetSkipped;
                 }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

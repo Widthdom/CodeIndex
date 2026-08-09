@@ -118,9 +118,14 @@ public partial class DbReader
         // recorded SHA / branch / timestamp can't drift relative to the counts and freshness
         // reported by the same status call.
         // #1509: 同じ snapshot 内で HEAD metadata を引き、counts / freshness と整合させる。
+        var indexedProjectRoot = TryGetMetaStringInternal(DbContext.IndexedProjectRootMetaKey);
+        var indexedHeadCommit = TryGetMetaStringInternal(DbContext.IndexedHeadCommitMetaKey);
+        var indexedHeadCommitBranch = TryGetMetaStringInternal(DbContext.IndexedHeadCommitBranchMetaKey);
+        var indexedHeadCommitBranchStampPresent = HasMetaKeyInternal(DbContext.IndexedHeadCommitBranchMetaKey);
         var indexedHeadSha = TryGetMetaStringInternal(DbContext.IndexedHeadShaMetaKey);
         var workspaceVerifiedHeadSha = TryGetMetaStringInternal(DbContext.WorkspaceVerifiedHeadShaMetaKey);
         var indexedHeadBranch = TryGetMetaStringInternal(DbContext.IndexedHeadBranchMetaKey);
+        var indexedHeadBranchStampPresent = HasMetaKeyInternal(DbContext.IndexedHeadBranchMetaKey);
         var indexedHeadTimestamp = ParseMetaDateTimeOffset(TryGetMetaStringInternal(DbContext.IndexedHeadTimestampMetaKey));
         var unknownExtensionFileCount = ParseMetaLong(TryGetMetaStringInternal(DbContext.UnknownExtensionFileCountMetaKey));
         var unknownExtensionFiles = ParseMetaStringList(TryGetMetaStringInternal(DbContext.UnknownExtensionFilePathsMetaKey));
@@ -209,10 +214,16 @@ public partial class DbReader
             IndexedAt = freshness.IndexedAt,
             LastWorkspaceFreshenedAt = lastIndexRun?.StartedAt ?? indexedHeadTimestamp?.UtcDateTime,
             LatestModified = freshness.LatestModified,
+            ProjectRoot = indexedProjectRoot,
+            IndexedHeadCommit = indexedHeadCommit,
             IndexedHeadSha = indexedHeadSha,
             WorkspaceVerifiedHeadSha = workspaceVerifiedHeadSha,
             IndexedHeadBranch = indexedHeadBranch,
             IndexedHeadTimestamp = indexedHeadTimestamp,
+            HeadMetadataSnapshotCaptured = true,
+            IndexedHeadCommitBranchSnapshot = indexedHeadCommitBranch,
+            IndexedHeadCommitBranchStampPresentSnapshot = indexedHeadCommitBranchStampPresent,
+            IndexedHeadBranchStampPresentSnapshot = indexedHeadBranchStampPresent,
             Languages = langs,
             SymbolsByLanguage = symbolsByLanguage.Count > 0 ? symbolsByLanguage : null,
             GraphTableAvailable = persistedReadiness.GraphTableAvailable,
@@ -291,6 +302,21 @@ public partial class DbReader
         // read-only なので rollback でも同じだが、明示 commit して SHARED lock を早期解放する。
         txn.Commit();
         return result;
+    }
+
+    private bool HasMetaKeyInternal(string key)
+    {
+        try
+        {
+            using var command = _conn.CreateCommand();
+            command.CommandText = "SELECT EXISTS(SELECT 1 FROM codeindex_meta WHERE key = @key)";
+            SqliteCommandPolicy.Add(command, "@key", key);
+            return Convert.ToInt64(command.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture) != 0;
+        }
+        catch (Microsoft.Data.Sqlite.SqliteException)
+        {
+            return false;
+        }
     }
 
     private bool AreDynamicReferenceGraphContractsCurrent(

@@ -8380,6 +8380,59 @@ public partial class McpServerTests
     }
 
     [Fact]
+    public void ToolsCall_Index_BranchSwitchAdvancesWorkspaceVerificationOnlyAfterSuccess_Issue5054()
+    {
+        var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_verified_head_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(fixtureDir);
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_verified_head");
+        try
+        {
+            TestProjectHelper.InitializeGitRepo(fixtureDir);
+            var appPath = Path.Combine(fixtureDir, "app.cs");
+            File.WriteAllText(appPath, "public class App { }\n");
+            TestProjectHelper.RunGit(fixtureDir, "add", "app.cs");
+            TestProjectHelper.RunGit(fixtureDir, "commit", "-m", "initial");
+            var initialHead = TestProjectHelper.RunGit(fixtureDir, "rev-parse", "HEAD").Trim();
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+
+            var initialResponse = CallIndex(server, fixtureDir);
+            Assert.False(initialResponse["result"]?["isError"]?.GetValue<bool>() ?? false, initialResponse.ToJsonString());
+            Assert.Equal(initialHead, DbPathResolver.TryReadWorkspaceVerifiedHeadSha(dbPath));
+
+            TestProjectHelper.RunGit(fixtureDir, "checkout", "-b", "feature");
+            File.WriteAllText(Path.Combine(fixtureDir, "feature.cs"), "public class Feature { }\n");
+            TestProjectHelper.RunGit(fixtureDir, "add", "feature.cs");
+            TestProjectHelper.RunGit(fixtureDir, "commit", "-m", "feature");
+            var featureHead = TestProjectHelper.RunGit(fixtureDir, "rev-parse", "HEAD").Trim();
+
+            var featureResponse = CallIndex(server, fixtureDir);
+            Assert.False(featureResponse["result"]?["isError"]?.GetValue<bool>() ?? false, featureResponse.ToJsonString());
+            Assert.Equal(featureHead, DbPathResolver.TryReadIndexedHeadCommit(dbPath));
+            Assert.Equal(featureHead, DbPathResolver.TryReadWorkspaceVerifiedHeadSha(dbPath));
+            Assert.Equal(featureHead, DbPathResolver.TryReadIndexedHeadSha(dbPath));
+
+            File.WriteAllText(appPath, "public class App { public void Changed() { } }\n");
+            TestProjectHelper.RunGit(fixtureDir, "add", "app.cs");
+            TestProjectHelper.RunGit(fixtureDir, "commit", "-m", "partial candidate");
+            McpServer.McpIndexFileCommittedForTesting = _ =>
+                throw new InvalidOperationException("forced partial MCP index failure");
+
+            var partialResponse = CallIndex(server, fixtureDir);
+
+            Assert.True(
+                partialResponse["result"]!["structuredContent"]!["summary"]!["errors"]!.GetValue<int>() > 0,
+                partialResponse.ToJsonString());
+            Assert.Equal(featureHead, DbPathResolver.TryReadWorkspaceVerifiedHeadSha(dbPath));
+        }
+        finally
+        {
+            McpServer.McpIndexFileCommittedForTesting = null;
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+        }
+    }
+
+    [Fact]
     public async Task ToolsCall_Index_StatSnapshotObservesRequestCancellationToken()
     {
         var fixtureDir = Path.Combine(
@@ -8391,10 +8444,19 @@ public partial class McpServerTests
         var hookInvoked = false;
         try
         {
+            TestProjectHelper.InitializeGitRepo(fixtureDir);
             File.WriteAllText(Path.Combine(fixtureDir, "app.cs"), "public class App { }\n");
+            TestProjectHelper.RunGit(fixtureDir, "add", "app.cs");
+            TestProjectHelper.RunGit(fixtureDir, "commit", "-m", "initial");
+            var verifiedHead = TestProjectHelper.RunGit(fixtureDir, "rev-parse", "HEAD").Trim();
             using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
             var firstResponse = CallIndex(server, fixtureDir);
             Assert.False(firstResponse["result"]?["isError"]?.GetValue<bool>() ?? false, firstResponse.ToJsonString());
+            Assert.Equal(verifiedHead, DbPathResolver.TryReadWorkspaceVerifiedHeadSha(dbPath));
+
+            File.WriteAllText(Path.Combine(fixtureDir, "app.cs"), "public class App { public void Changed() { } }\n");
+            TestProjectHelper.RunGit(fixtureDir, "add", "app.cs");
+            TestProjectHelper.RunGit(fixtureDir, "commit", "-m", "next");
 
             DbWriter.ReusableStatSnapshotReadForTesting = () =>
             {
@@ -8417,6 +8479,7 @@ public partial class McpServerTests
             await server.RunAsync(transport, cancellation.Token).WaitAsync(TimeSpan.FromSeconds(5));
 
             Assert.True(hookInvoked);
+            Assert.Equal(verifiedHead, DbPathResolver.TryReadWorkspaceVerifiedHeadSha(dbPath));
         }
         finally
         {

@@ -1432,6 +1432,19 @@ public class StatusResult
     [JsonPropertyName("indexed_head_sha")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? IndexedHeadSha { get; set; }
+    // Persisted HEAD provenance is captured by DbReader in one SQLite snapshot. These
+    // non-contract fields let runtime Git enrichment derive branch/HEAD drift without
+    // reopening the database and mixing generations. Issue #5054.
+    // persisted HEAD provenance は DbReader の同一 SQLite snapshot で取得する。
+    // runtime Git 補強時に DB を再読込して世代を混在させないための非公開情報。
+    [JsonIgnore]
+    internal bool HeadMetadataSnapshotCaptured { get; set; }
+    [JsonIgnore]
+    internal string? IndexedHeadCommitBranchSnapshot { get; set; }
+    [JsonIgnore]
+    internal bool IndexedHeadCommitBranchStampPresentSnapshot { get; set; }
+    [JsonIgnore]
+    internal bool IndexedHeadBranchStampPresentSnapshot { get; set; }
     /// <summary>
     /// Branch short name (e.g. `main`) captured at the same time as <see cref="IndexedHeadSha"/>.
     /// Null when the branch could not be resolved (detached HEAD) or the DB was indexed before
