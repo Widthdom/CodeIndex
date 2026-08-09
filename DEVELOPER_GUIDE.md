@@ -934,6 +934,11 @@ All line-based symbol and reference extractors share `SourceLineSplitter`.
 It counts newline boundaries once, allocates the exact result array, and then
 materializes only the line strings that downstream scanners require; do not
 restore separator-index arrays through `string.Split`.
+JavaScript / TypeScript pattern scans likewise share one lazily cached,
+column-preserving sanitized-line snapshot between module, supplemental symbol,
+and private-scope analysis. Keep the cheap raw `{` / `=>` gate ahead of snapshot
+materialization so flat files do not pay for a lexical pass, and treat the cached
+lines as immutable rather than copying or sanitizing them again per consumer.
 
 When structural masking turns a source line into whitespace, do not materialize
 a trimmed copy merely to discover that the line has no references. Preserve
@@ -4508,6 +4513,10 @@ match set は materialize してよいが、single-pass emitter は demand-drive
 line-based symbol / reference extractor はすべて `SourceLineSplitter` を共有する。
 newline boundary を一度数えて exact result array を確保し、downstream scanner が必要とする
 line string だけを実体化する。`string.Split` による separator-index array を戻してはならない。
+JavaScript / TypeScript の pattern scan も、module、supplemental symbol、private-scope 解析で
+列位置を保つ遅延生成済み sanitized-line snapshot を1つ共有する。flat file が lexical pass を
+負担しないよう snapshot の実体化より前に軽量な raw `{` / `=>` gate を維持し、consumer ごとに
+copy や再 sanitization をせず、cached line を immutable として扱う。
 
 構造マスクによって source line が空白だけになった場合、reference がないことを確認するため
 だけに trim 済み copy を実体化してはならない。documentation handling と、original line を

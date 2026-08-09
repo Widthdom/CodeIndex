@@ -287,6 +287,41 @@ public partial class SymbolExtractorTests
         Assert.All([stringBar, templateBar], symbol => Assert.Equal("class", symbol.ContainerKind));
     }
 
+    [Theory]
+    [InlineData("javascript")]
+    [InlineData("typescript")]
+    public void Extract_JavaScriptTypeScript_LiteralAndCommentTokensDoNotDistortPrivateClassScopes(
+        string language)
+    {
+        var content = """"
+            const template = `() => {
+              export const GhostTemplate = class { ghostTemplate() {} };
+            }`;
+            /*
+              const GhostComment = class { ghostComment() {} };
+            */
+            const factory = () => {
+              const Hidden = class { hidden() {} };
+            };
+            export const Visible = class {
+              keep() {}
+            };
+            """";
+
+        var symbols = SymbolExtractor.Extract(1, language, content);
+
+        Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Visible");
+        Assert.Contains(
+            symbols,
+            s => s.Kind == "function" && s.Name == "keep" && s.ContainerName == "Visible");
+        Assert.DoesNotContain(
+            symbols,
+            s => s.Name is
+                "GhostTemplate" or "ghostTemplate"
+                or "GhostComment" or "ghostComment"
+                or "Hidden" or "hidden");
+    }
+
     [Fact]
     public void Extract_JavaScript_HandlesNamedAndAnonymousDefaultClassMembers()
     {
