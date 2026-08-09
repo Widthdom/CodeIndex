@@ -409,6 +409,14 @@ scans.
 | Scoped `--files` / `--commits` refresh | Keep trigger synchronization and incremental merge maintenance. |
 | Explicit optimize | `cdidx optimize --db <path>` and `cdidx index <projectPath> --optimize` run a full optimize, reset both counters, and stamp `fts_last_optimized_at`. This may briefly hold the writer lock on large indexes. |
 
+Each FTS5 rebuild temporarily sets that table's effective `automerge` value to
+zero. The setting change, rebuild, and restoration of the prior value share one
+transaction or nested SAVEPOINT, so cancellation, failure, and process exit
+roll back both the rebuilt index and its configuration. The standard and
+trigram tables use separate scopes, then the bulk guard performs the existing
+final optimize once. FTS5 crisis merging remains enabled as a bounded safety
+valve during reconstruction.
+
 Bulk-path estimation and purge safety follow these rules:
 
 - Dirty bytes use the larger current/persisted size for each rewritten file,
@@ -5520,6 +5528,13 @@ watcher は startup reconciliation scan より先に有効化する。`FileChang
 | fresh index / 明示的 rebuild | 常に bulk path を使います。 |
 | scoped `--files` / `--commits` refresh | trigger 同期と incremental merge maintenance を維持します。 |
 | 明示的 optimize | `cdidx optimize --db <path>` と `cdidx index <projectPath> --optimize` は full optimize を実行し、両 counter を reset して `fts_last_optimized_at` を記録します。大きな index では短時間 writer lock を保持する場合があります。 |
+
+各 FTS5 rebuild は、その table の effective な `automerge` 値を一時的に zero へ
+変更します。設定変更、rebuild、以前の値の復元は同じ transaction または nested
+SAVEPOINT を共有するため、cancellation、failure、process 終了時は再構築した index と
+設定の両方が rollback されます。standard / trigram table は別々の scope を使い、その後
+bulk guard が既存の最終 optimize を1回実行します。再構築中の bounded な安全弁として
+FTS5 crisis merge は維持します。
 
 bulk path の見積もりと purge の安全性は次の規則に従います。
 

@@ -1,10 +1,12 @@
 using System.Diagnostics;
+using System.Globalization;
 using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Database;
 
 public partial class DbWriter
 {
+    private const long DefaultFtsAutomergeSetting = 4;
     private static readonly long? CurrentProcessStartTimeUtcTicks = TryGetCurrentProcessStartTimeUtcTicks();
     private static readonly Guid CurrentProcessIncarnationToken = Guid.NewGuid();
     internal const string FtsBulkLoadGenerationClearInsertTriggerName = "codeindex_fts_bulk_generation_clear_insert";
@@ -18,6 +20,12 @@ public partial class DbWriter
     {
         get => ScopedFtsMaintenanceBeforeExecuteForTesting.Value;
         set => ScopedFtsMaintenanceBeforeExecuteForTesting.Value = value;
+    }
+    private static readonly AsyncLocal<Action<string>?> ScopedFtsTableRebuildExecutingForTesting = new();
+    internal static Action<string>? FtsTableRebuildExecutingForTesting
+    {
+        get => ScopedFtsTableRebuildExecutingForTesting.Value;
+        set => ScopedFtsTableRebuildExecutingForTesting.Value = value;
     }
 
     /// <summary>
@@ -125,9 +133,9 @@ public partial class DbWriter
         CancellationToken cancellationToken = default)
     {
         FtsMaintenanceBeforeExecuteForTesting?.Invoke(FtsRebuildMaintenancePhase);
-        Execute("INSERT INTO fts_chunks(fts_chunks) VALUES('rebuild')", cancellationToken);
-        Execute(
-            $"INSERT INTO {DbContext.FtsChunksTrigramTableName}({DbContext.FtsChunksTrigramTableName}) VALUES('rebuild')",
+        RebuildFtsTableWithAutomergeSuppressed("fts_chunks", cancellationToken);
+        RebuildFtsTableWithAutomergeSuppressed(
+            DbContext.FtsChunksTrigramTableName,
             cancellationToken);
         if (resetIncrementalWriteCounter)
         {
@@ -135,6 +143,69 @@ public partial class DbWriter
                 (FtsIncrementalWritesSinceOptimizeMetaKey, "0"),
                 (FtsIncrementalWritesSinceMergeMetaKey, "0"));
         }
+    }
+
+    /// <summary>
+    /// Rebuild one FTS table without intermediate automerges. The setting change, rebuild,
+    /// and restoration share one transaction/savepoint so cancellation and process failure
+    /// cannot leave automerge disabled.
+    /// 1つの FTS table を中間 automerge なしで再構築する。設定変更、rebuild、復元を同じ
+    /// transaction/savepoint に置き、cancel や process failure でも無効設定を残さない。
+    /// </summary>
+    private void RebuildFtsTableWithAutomergeSuppressed(
+        string tableName,
+        CancellationToken cancellationToken)
+    {
+        using var transaction = BeginTransaction(
+            cancellationToken,
+            $"rebuild {tableName} with automerge suppressed");
+        var previousSetting = ReadFtsAutomergeSetting(tableName, cancellationToken);
+        SetFtsAutomergeSetting(tableName, 0, cancellationToken);
+        FtsTableRebuildExecutingForTesting?.Invoke(tableName);
+        Execute(
+            $"INSERT INTO {tableName}({tableName}) VALUES('rebuild')",
+            cancellationToken);
+        SetFtsAutomergeSetting(tableName, previousSetting, cancellationToken);
+        transaction.Commit();
+    }
+
+    private long ReadFtsAutomergeSetting(
+        string tableName,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        using var command = _conn.CreateCommand();
+        command.Transaction = _activeTransaction;
+        command.CommandText = $"""
+            SELECT COALESCE(
+                (SELECT v FROM {tableName}_config WHERE k = 'automerge'),
+                {DefaultFtsAutomergeSetting})
+            """;
+        using var cancellationRegistration = RegisterSqliteInterrupt(cancellationToken);
+        try
+        {
+            var value = command.ExecuteScalar();
+            cancellationToken.ThrowIfCancellationRequested();
+            return Convert.ToInt64(value, CultureInfo.InvariantCulture);
+        }
+        catch (SqliteException exception) when (IsSqliteInterruptCancellation(exception, cancellationToken))
+        {
+            throw new OperationCanceledException(
+                "FTS automerge configuration read was interrupted.",
+                exception,
+                cancellationToken);
+        }
+    }
+
+    private void SetFtsAutomergeSetting(
+        string tableName,
+        long value,
+        CancellationToken cancellationToken)
+    {
+        var sql = string.Create(
+            CultureInfo.InvariantCulture,
+            $"INSERT INTO {tableName}({tableName}, rank) VALUES('automerge', {value})");
+        Execute(sql, cancellationToken);
     }
 
     public void ClearFtsBulkLoadInProgress()

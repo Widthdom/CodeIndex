@@ -3116,6 +3116,126 @@ public class DatabaseTests : IDisposable
         Assert.Equal(1L, ExecuteScalarLong("SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH 'abandonedbulktoken'"));
     }
 
+    [Fact]
+    public void FtsBulkLoadTriggerGuard_CompleteSuppressesIntermediateAutomergeAndRestoresSettings()
+    {
+        var fileId = UpsertTestFile("src/automerge-bulk-fts.cs", checksum: "automerge-bulk-fts");
+        const string token = "suppressedautomergebulktoken";
+        var previousHook = DbWriter.FtsTableRebuildExecutingForTesting;
+        var settingsDuringRebuild = new Dictionary<string, long>(StringComparer.Ordinal);
+        (long Unicode61, long Trigram)? settingsBeforeOptimize = null;
+
+        SetFtsAutomergeSetting("fts_chunks", 8);
+        SetFtsAutomergeSetting(DbContext.FtsChunksTrigramTableName, 2);
+        try
+        {
+            DbWriter.FtsTableRebuildExecutingForTesting = tableName =>
+            {
+                previousHook?.Invoke(tableName);
+                settingsDuringRebuild.Add(tableName, ReadFtsAutomergeSetting(tableName));
+            };
+
+            using (var guard = FtsBulkLoadTriggerGuard.Start(_writer, enabled: true))
+            {
+                Assert.NotNull(guard);
+                Assert.Equal((8L, 2L), ReadFtsAutomergeSettings());
+                _writer.InsertChunks(
+                [
+                    new ChunkRecord
+                    {
+                        FileId = fileId,
+                        ChunkIndex = 0,
+                        StartLine = 1,
+                        EndLine = 1,
+                        Content = token,
+                    },
+                ]);
+
+                guard!.Complete(
+                    rebuild: true,
+                    beforeOptimize: () => settingsBeforeOptimize = ReadFtsAutomergeSettings());
+            }
+
+            Assert.Equal(0L, settingsDuringRebuild["fts_chunks"]);
+            Assert.Equal(0L, settingsDuringRebuild[DbContext.FtsChunksTrigramTableName]);
+            Assert.Equal((8L, 2L), settingsBeforeOptimize);
+            Assert.Equal((8L, 2L), ReadFtsAutomergeSettings());
+            Assert.Equal(1L, ExecuteScalarLong(
+                $"SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH '{token}'"));
+            Assert.Equal(1L, ExecuteScalarLong(
+                $"SELECT COUNT(*) FROM {DbContext.FtsChunksTrigramTableName} WHERE {DbContext.FtsChunksTrigramTableName} MATCH '{token}'"));
+        }
+        finally
+        {
+            DbWriter.FtsTableRebuildExecutingForTesting = previousHook;
+        }
+    }
+
+    [Fact]
+    public void RebuildFtsFromChunks_CancellationWhileAutomergeIsSuppressedRollsBackSettingAndIndex()
+    {
+        var fileId = UpsertTestFile("src/cancelled-automerge-fts.cs", checksum: "cancelled-automerge-fts");
+        const string originalToken = "originalautomergetoken";
+        const string replacementToken = "replacementautomergetoken";
+        _writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 1,
+                Content = originalToken,
+            },
+        ]);
+        _writer.SuspendFtsSyncTriggersForBulkLoad();
+        _writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 1,
+                Content = replacementToken,
+            },
+        ]);
+        SetFtsAutomergeSetting("fts_chunks", 7);
+        SetFtsAutomergeSetting(DbContext.FtsChunksTrigramTableName, 9);
+
+        var previousHook = DbWriter.FtsTableRebuildExecutingForTesting;
+        using var cancellation = new CancellationTokenSource();
+        try
+        {
+            DbWriter.FtsTableRebuildExecutingForTesting = tableName =>
+            {
+                previousHook?.Invoke(tableName);
+                Assert.Equal("fts_chunks", tableName);
+                Assert.Equal(0L, ReadFtsAutomergeSetting(tableName));
+                cancellation.Cancel();
+            };
+
+            using (var outerTransaction = _writer.BeginTransaction())
+            {
+                Assert.Throws<OperationCanceledException>(() =>
+                    _writer.RebuildFtsFromChunks(cancellationToken: cancellation.Token));
+
+                Assert.Equal((7L, 9L), ReadFtsAutomergeSettings());
+                Assert.Equal(1L, ExecuteScalarLong(
+                    $"SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH '{originalToken}'"));
+                Assert.Equal(0L, ExecuteScalarLong(
+                    $"SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH '{replacementToken}'"));
+            }
+        }
+        finally
+        {
+            DbWriter.FtsTableRebuildExecutingForTesting = previousHook;
+            _writer.RestoreFtsSyncTriggers();
+            _writer.RebuildFtsFromChunks();
+            _writer.ClearFtsBulkLoadInProgress();
+        }
+    }
+
     [Theory]
     [InlineData(DbWriter.FtsRestoreTriggersMaintenancePhase, 0L)]
     [InlineData(DbWriter.FtsRebuildMaintenancePhase, 3L)]
@@ -3334,6 +3454,7 @@ public class DatabaseTests : IDisposable
         }
 
         Assert.Equal(3L, CountFtsSyncTriggers());
+        Assert.Equal((4L, 4L), ReadFtsAutomergeSettings());
         Assert.Equal("true", ReadMeta(DbWriter.FtsBulkLoadInProgressMetaKey));
         Assert.True(_writer.RecoverInterruptedFtsBulkLoadIfNeeded());
         Assert.Null(ReadMeta(DbWriter.FtsBulkLoadInProgressMetaKey));
@@ -3346,6 +3467,8 @@ public class DatabaseTests : IDisposable
         var fileId = UpsertTestFile("src/recovered-bulk-fts.cs", checksum: "recovered-bulk-fts");
 
         _writer.SuspendFtsSyncTriggersForBulkLoad();
+        SetFtsAutomergeSetting("fts_chunks", 7);
+        SetFtsAutomergeSetting(DbContext.FtsChunksTrigramTableName, 9);
         Assert.NotNull(ReadMeta(DbWriter.FtsBulkLoadInProgressMetaKey));
         Assert.Equal(0L, CountFtsSyncTriggers());
 
@@ -3367,6 +3490,7 @@ public class DatabaseTests : IDisposable
         Assert.True(_writer.RecoverInterruptedFtsBulkLoadIfNeeded());
 
         Assert.Equal(3L, CountFtsSyncTriggers());
+        Assert.Equal((7L, 9L), ReadFtsAutomergeSettings());
         Assert.Null(ReadMeta(DbWriter.FtsBulkLoadInProgressMetaKey));
         Assert.Equal(1L, ExecuteScalarLong("SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH 'recoveredbulktoken'"));
         Assert.False(_writer.RecoverInterruptedFtsBulkLoadIfNeeded());
@@ -10462,6 +10586,26 @@ public class DatabaseTests : IDisposable
 
     private long CountTrigramFtsSyncTriggers()
         => ExecuteScalarLong("SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND name IN ('fts_chunks_trigram_ai', 'fts_chunks_trigram_ad', 'fts_chunks_trigram_au')");
+
+    private (long Unicode61, long Trigram) ReadFtsAutomergeSettings()
+        => (
+            ReadFtsAutomergeSetting("fts_chunks"),
+            ReadFtsAutomergeSetting(DbContext.FtsChunksTrigramTableName));
+
+    private long ReadFtsAutomergeSetting(string tableName)
+        => ExecuteScalarLong($"""
+            SELECT COALESCE(
+                (SELECT v FROM {tableName}_config WHERE k = 'automerge'),
+                4)
+            """);
+
+    private void SetFtsAutomergeSetting(string tableName, long value)
+    {
+        using var command = _db.Connection.CreateCommand();
+        command.CommandText = $"INSERT INTO {tableName}({tableName}, rank) VALUES('automerge', @value)";
+        command.Parameters.AddWithValue("@value", value);
+        command.ExecuteNonQuery();
+    }
 
     private long CountFtsBulkLoadGenerationCleanupTriggers()
         => ExecuteScalarLong($"""
