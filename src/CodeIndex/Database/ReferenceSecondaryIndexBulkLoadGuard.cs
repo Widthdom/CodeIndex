@@ -1,7 +1,8 @@
 namespace CodeIndex.Database;
 
 /// <summary>
-/// Temporarily removes reference-query and graph indexes while a fresh index is populated.
+/// Temporarily removes reference-query and graph indexes while raw rows are populated, then
+/// removes the candidate reverse lookup only when graph candidate materialization begins.
 /// File and reference-line maintenance indexes remain available throughout the load.
 /// </summary>
 internal sealed class ReferenceSecondaryIndexBulkLoadGuard : IDisposable
@@ -65,6 +66,12 @@ internal sealed class ReferenceSecondaryIndexBulkLoadGuard : IDisposable
                 .Select(static definition => definition.Name)
                 .ToArray());
 
+    internal static IReadOnlyList<string> CandidatePopulationIndexNames { get; }
+        = Array.AsReadOnly(
+            ReferenceSecondaryIndexSql.CandidatePopulationDeferred
+                .Select(static definition => definition.Name)
+                .ToArray());
+
     internal static ReferenceSecondaryIndexBulkLoadGuard? StartTransactional(
         DbWriter writer,
         bool enabled,
@@ -103,6 +110,15 @@ internal sealed class ReferenceSecondaryIndexBulkLoadGuard : IDisposable
 
     internal void ReportIdentityRefreshStarted()
         => _writer?.ReportReferenceSecondaryIndexBulkLoadState("identity_started");
+
+    /// <summary>
+    /// Drop the candidate reverse lookup only once a graph refresh will actually rebuild
+    /// candidate rows. Raw reference persistence and marker-only readiness work never touch
+    /// that table, so keeping the index until this boundary avoids a full no-op rebuild.
+    /// graph更新がcandidate rowを実際に再構築する直前だけ逆引きindexをdropする。
+    /// </summary>
+    internal void PrepareForCandidatePopulation(CancellationToken cancellationToken = default)
+        => _writer?.DropCandidatePopulationReferenceSecondaryIndexes(cancellationToken);
 
     internal void PrepareForMutualRecursion(CancellationToken cancellationToken = default)
         => _writer?.RestoreGraphFinalizationRequiredReferenceSecondaryIndexes(cancellationToken);
@@ -154,13 +170,28 @@ public partial class DbWriter
             Execute($"DROP INDEX IF EXISTS {indexName}", cancellationToken);
         }
 
-        foreach (var definition in ReferenceSecondaryIndexSql.DeferredDuringBulkLoad)
+        // Candidate rows are not touched by raw reference persistence. Keep their reverse
+        // lookup until a graph refresh actually reaches candidate materialization so a
+        // high-cardinality no-op update never pays to rebuild the whole candidate index.
+        foreach (var definition in ReferenceSecondaryIndexSql.DeferredGraphPreparation)
         {
             cancellationToken.ThrowIfCancellationRequested();
             Execute($"DROP INDEX IF EXISTS {definition.Name}", cancellationToken);
         }
 
         ReferenceSecondaryIndexBulkLoadStateForTesting?.Invoke(_conn, "dropped");
+    }
+
+    internal void DropCandidatePopulationReferenceSecondaryIndexes(
+        CancellationToken cancellationToken = default)
+    {
+        foreach (var definition in ReferenceSecondaryIndexSql.CandidatePopulationDeferred)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Execute($"DROP INDEX IF EXISTS {definition.Name}", cancellationToken);
+        }
+
+        ReportReferenceSecondaryIndexBulkLoadState("candidate_deferred");
     }
 
     internal void RestoreDeferredReferenceSecondaryIndexes(

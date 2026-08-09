@@ -8,6 +8,7 @@ internal readonly record struct ReferenceSecondaryIndexDefinition(
 /// <summary>
 /// Canonical DDL for secondary indexes used by reference persistence and graph queries.
 /// The raw-persistence set stays available while bulk extraction is writing rows; the
+/// candidate reverse lookup is dropped only when candidate materialization begins; the
 /// graph-finalization set is restored immediately before mutual-recursion evaluation, and
 /// the remaining query set is restored after graph finalization completes.
 /// </summary>
@@ -144,6 +145,9 @@ internal static class ReferenceSecondaryIndexSql
 
     internal static IReadOnlyList<ReferenceSecondaryIndexDefinition> DeferredGraphPreparation { get; }
         = Array.AsReadOnly(DeferredGraphPreparationDefinitions);
+
+    internal static IReadOnlyList<ReferenceSecondaryIndexDefinition> CandidatePopulationDeferred { get; }
+        = Array.AsReadOnly(CandidatePopulationDeferredDefinitions);
 
     internal static IReadOnlyList<ReferenceSecondaryIndexDefinition> RemainingQuery { get; }
         = Array.AsReadOnly(RemainingQueryDefinitions);

@@ -630,16 +630,43 @@ public static partial class IndexCommandRunner
             purgeTxn.Commit();
         }
 
-        var useReferenceSecondaryIndexBulkLoad = !options.SymbolsOnly
+        var useUpdateSecondaryIndexStaging = !options.SymbolsOnly
             && ShouldUseUpdateReferenceSecondaryIndexBulkLoad(
                 targetPaths.Count,
                 writer.GetIndexedFileCount());
-        if (useReferenceSecondaryIndexBulkLoad)
+        if (useUpdateSecondaryIndexStaging
+            && !mutualRecursionRefreshNeeded
+            && !ftsMutated)
+        {
+            try
+            {
+                useUpdateSecondaryIndexStaging =
+                    !AreAllUpdateTargetsDefinitelyReusableByStat(
+                        writer,
+                        indexer,
+                        options,
+                        projectRoot,
+                        targetPaths,
+                        csharpWorkspace,
+                        symbolKindFilterMatchesPrior,
+                        csharpSymbolNameContractMatchesCurrent,
+                        sqlGraphContractMatchesCurrent,
+                        hdlGraphContractMatchesCurrent,
+                        cancellationToken);
+            }
+            catch (OperationCanceledException)
+                when (cancellationToken.IsCancellationRequested)
+            {
+                ThrowIfUpdateCancelled();
+                throw;
+            }
+        }
+        if (useUpdateSecondaryIndexStaging)
             hotspotAggregateRefresh.EnableSecondaryIndexDeferral();
         using var referenceSecondaryIndexBulkLoad =
             ReferenceSecondaryIndexBulkLoadGuard.StartRecoverable(
                 writer,
-                useReferenceSecondaryIndexBulkLoad,
+                useUpdateSecondaryIndexStaging,
                 cancellationToken);
 
         var updateLoop = RunUpdateFileLoop(new UpdateFileLoopContext

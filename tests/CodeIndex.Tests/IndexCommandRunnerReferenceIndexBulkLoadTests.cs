@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using CodeIndex.Cli;
 using CodeIndex.Database;
+using CodeIndex.Indexer;
 using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Tests;
@@ -106,6 +107,7 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(1, captured.Count(snapshot => snapshot.Stage == "dropped"));
             Assert.Contains(captured, snapshot => snapshot.Stage == "insert_references");
             Assert.Equal(1, captured.Count(snapshot => snapshot.Stage == "deferred_graph_prepared"));
+            Assert.Equal(1, captured.Count(snapshot => snapshot.Stage == "candidate_deferred"));
             Assert.Equal(1, captured.Count(snapshot => snapshot.Stage == "identity_started"));
             Assert.Equal(1, captured.Count(snapshot => snapshot.Stage == "graph_required_restored"));
             Assert.Equal(1, captured.Count(snapshot => snapshot.Stage == "mutual_started"));
@@ -113,27 +115,29 @@ public partial class IndexCommandRunnerTests
             Assert.Equal("dropped", captured[0].Stage);
             Assert.Equal("restored", captured[^1].Stage);
             Assert.Equal(
-                ["dropped", "deferred_graph_prepared", "identity_started", "graph_required_restored", "mutual_started", "restored"],
+                ["dropped", "deferred_graph_prepared", "candidate_deferred", "identity_started", "graph_required_restored", "mutual_started", "restored"],
                 captured
                     .Where(snapshot => snapshot.Stage != "insert_references")
                     .Select(snapshot => snapshot.Stage));
 
             var requiredNames = GetRequiredReferenceIndexNames();
+            var initialBulkNames = GetInitialBulkPersistenceReferenceIndexNames();
             var deferredGraphNames = GetDeferredGraphPreparationReferenceIndexNames();
             var allNames = GetAllReferenceIndexNames();
-            Assert.Equal(requiredNames, captured.First(snapshot => snapshot.Stage == "dropped").Names);
+            Assert.Equal(initialBulkNames, captured.First(snapshot => snapshot.Stage == "dropped").Names);
             Assert.All(
-                captured.Where(snapshot => snapshot.Stage != "dropped" && snapshot.Stage != "restored"),
+                captured.Where(snapshot => snapshot.Stage == "insert_references"),
+                snapshot => Assert.Equal(initialBulkNames, snapshot.Names));
+            Assert.Equal(
+                allNames,
+                captured.First(snapshot => snapshot.Stage == "deferred_graph_prepared").Names);
+            Assert.All(
+                captured.Where(snapshot => snapshot.Stage is "candidate_deferred" or "identity_started" or "graph_required_restored" or "mutual_started"),
                 snapshot =>
                 {
                     Assert.DoesNotContain("idx_symbol_ref_candidates_symbol", snapshot.Names);
-                    Assert.True(
-                        snapshot.Names.SequenceEqual(requiredNames)
-                        || snapshot.Names.SequenceEqual(deferredGraphNames));
+                    Assert.Equal(deferredGraphNames, snapshot.Names);
                 });
-            Assert.All(
-                captured.Where(snapshot => snapshot.Stage is "deferred_graph_prepared" or "identity_started" or "graph_required_restored" or "mutual_started"),
-                snapshot => Assert.Equal(deferredGraphNames, snapshot.Names));
             Assert.Equal(allNames, captured[^1].Names);
             Assert.Empty(Assert.IsType<string[]>(hotspotIndexNamesDuringRefresh));
             using (var completedConnection = new SqliteConnection($"Data Source={dbPath}"))
@@ -161,6 +165,7 @@ public partial class IndexCommandRunnerTests
 
     [Theory]
     [InlineData("dropped")]
+    [InlineData("candidate_deferred")]
     [InlineData("graph_required_restored")]
     public void Run_FreshFullScan_FailureDuringStagedReferenceIndexLifecycleRollsBackSchema(
         string failurePhase)
@@ -194,7 +199,7 @@ public partial class IndexCommandRunnerTests
             Assert.NotNull(failureSnapshot);
             Assert.Equal(
                 failurePhase == "dropped"
-                    ? GetRequiredReferenceIndexNames()
+                    ? GetInitialBulkPersistenceReferenceIndexNames()
                     : GetDeferredGraphPreparationReferenceIndexNames(),
                 failureSnapshot!.Names);
             Assert.True(File.Exists(dbPath));
@@ -234,20 +239,7 @@ public partial class IndexCommandRunnerTests
         string[]? hotspotIndexNamesDuringRefresh = null;
         try
         {
-            var relativePaths = Enumerable
-                .Range(
-                    0,
-                    IndexCommandRunner.UpdateReferenceSecondaryIndexBulkLoadMinimumTargetCount)
-                .Select(index => $"source_{index:D2}.ts")
-                .ToArray();
-            foreach (var relativePath in relativePaths)
-            {
-                var stem = Path.GetFileNameWithoutExtension(relativePath);
-                File.WriteAllText(
-                    Path.Combine(projectRoot, relativePath),
-                    $"export function {stem}(): number {{ return 1; }}\n"
-                    + $"export function call_{stem}(): number {{ return {stem}(); }}\n");
-            }
+            var relativePaths = WriteHighCardinalityTypeScriptReferenceFixture(projectRoot);
 
             var (seedExitCode, _) = RunAndCaptureJson([projectRoot, "--json", "--quiet"]);
             Assert.Equal(CommandExitCodes.Success, seedExitCode);
@@ -304,25 +296,26 @@ public partial class IndexCommandRunnerTests
             Assert.Contains(captured, snapshot => snapshot.Stage == "insert_references");
             Assert.Equal("restored", captured[^1].Stage);
             Assert.Equal(
-                ["dropped", "deferred_graph_prepared", "identity_started", "graph_required_restored", "mutual_started", "restored"],
+                ["dropped", "deferred_graph_prepared", "candidate_deferred", "identity_started", "graph_required_restored", "mutual_started", "restored"],
                 captured
                     .Where(snapshot => snapshot.Stage != "insert_references")
                     .Select(snapshot => snapshot.Stage));
             Assert.Equal(
-                GetRequiredReferenceIndexNames(),
+                GetInitialBulkPersistenceReferenceIndexNames(),
                 captured.First(snapshot => snapshot.Stage == "dropped").Names);
             Assert.All(
-                captured.Where(snapshot => snapshot.Stage != "dropped" && snapshot.Stage != "restored"),
+                captured.Where(snapshot => snapshot.Stage == "insert_references"),
+                snapshot => Assert.Equal(GetInitialBulkPersistenceReferenceIndexNames(), snapshot.Names));
+            Assert.Equal(
+                GetAllReferenceIndexNames(),
+                captured.First(snapshot => snapshot.Stage == "deferred_graph_prepared").Names);
+            Assert.All(
+                captured.Where(snapshot => snapshot.Stage is "candidate_deferred" or "identity_started" or "graph_required_restored" or "mutual_started"),
                 snapshot =>
                 {
                     Assert.DoesNotContain("idx_symbol_ref_candidates_symbol", snapshot.Names);
-                    Assert.True(
-                        snapshot.Names.SequenceEqual(GetRequiredReferenceIndexNames())
-                        || snapshot.Names.SequenceEqual(GetDeferredGraphPreparationReferenceIndexNames()));
+                    Assert.Equal(GetDeferredGraphPreparationReferenceIndexNames(), snapshot.Names);
                 });
-            Assert.All(
-                captured.Where(snapshot => snapshot.Stage is "deferred_graph_prepared" or "identity_started" or "graph_required_restored" or "mutual_started"),
-                snapshot => Assert.Equal(GetDeferredGraphPreparationReferenceIndexNames(), snapshot.Names));
             Assert.Equal(GetAllReferenceIndexNames(), captured[^1].Names);
             Assert.Empty(Assert.IsType<string[]>(hotspotIndexNamesDuringRefresh));
             using (var completedConnection = new SqliteConnection($"Data Source={dbPath}"))
@@ -342,6 +335,153 @@ public partial class IndexCommandRunnerTests
             DbWriter.MutualRecursionRefreshForTesting = previousGraphHook;
             DbWriter.ReferenceGraphRefreshScopeForTesting = previousScopeHook;
             DbWriter.HotspotAggregateRefreshStatementExecutingForTesting = previousHotspotHook;
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_HighCardinalityNoOpScopedUpdate_KeepsCandidateReverseIndex()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_reference_index_noop_update");
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        var previousStateHook = DbWriter.ReferenceSecondaryIndexBulkLoadStateForTesting;
+        var previousGraphHook = DbWriter.MutualRecursionRefreshForTesting;
+        var previousSnapshotReadHook = DbWriter.ReusableStatSnapshotReadForTesting;
+        var previousSnapshotFilterModeHook = DbWriter.ReusableStatSnapshotFilterModeForTesting;
+        var snapshots = new List<ReferenceIndexStageSnapshot>();
+        var snapshotFilterModes = new List<string>();
+        var graphRefreshCount = 0;
+        var snapshotReadCount = 0;
+        try
+        {
+            var relativePaths = WriteHighCardinalityTypeScriptReferenceFixture(projectRoot);
+
+            var (seedExitCode, _) = RunAndCaptureJson([projectRoot, "--json", "--quiet"]);
+            Assert.Equal(CommandExitCodes.Success, seedExitCode);
+            using (var seededConnection = new SqliteConnection($"Data Source={dbPath}"))
+            {
+                seededConnection.Open();
+                using var countCommand = seededConnection.CreateCommand();
+                countCommand.CommandText = "SELECT COUNT(*) FROM symbol_reference_candidates";
+                Assert.True((long)countCommand.ExecuteScalar()! > 0);
+            }
+
+            DbWriter.ReferenceSecondaryIndexBulkLoadStateForTesting = (connection, phase) =>
+            {
+                snapshots.Add(CaptureReferenceIndexSnapshot(phase, connection));
+                previousStateHook?.Invoke(connection, phase);
+            };
+            DbWriter.MutualRecursionRefreshForTesting = () =>
+            {
+                graphRefreshCount++;
+                previousGraphHook?.Invoke();
+            };
+            DbWriter.ReusableStatSnapshotReadForTesting = () =>
+            {
+                snapshotReadCount++;
+                previousSnapshotReadHook?.Invoke();
+            };
+            DbWriter.ReusableStatSnapshotFilterModeForTesting = mode =>
+            {
+                snapshotFilterModes.Add(mode);
+                previousSnapshotFilterModeHook?.Invoke(mode);
+            };
+
+            var args = new List<string>(relativePaths.Length + 4)
+            {
+                projectRoot,
+                "--files",
+            };
+            args.AddRange(relativePaths);
+            args.Add("--json");
+            args.Add("--quiet");
+            var (exitCode, json) = RunAndCaptureJson(args.ToArray());
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(0, graphRefreshCount);
+            Assert.Empty(snapshots);
+            Assert.Equal(1, snapshotReadCount);
+            Assert.Equal(["candidate_paths"], snapshotFilterModes);
+            using var completedConnection = new SqliteConnection($"Data Source={dbPath}");
+            completedConnection.Open();
+            Assert.Equal(
+                GetAllReferenceIndexNames(),
+                CaptureReferenceIndexSnapshot("completed", completedConnection).Names);
+        }
+        finally
+        {
+            DbWriter.ReferenceSecondaryIndexBulkLoadStateForTesting = previousStateHook;
+            DbWriter.MutualRecursionRefreshForTesting = previousGraphHook;
+            DbWriter.ReusableStatSnapshotReadForTesting = previousSnapshotReadHook;
+            DbWriter.ReusableStatSnapshotFilterModeForTesting = previousSnapshotFilterModeHook;
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_HighCardinalityStatPreflightRace_UsesAuthoritativeFileLoop()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_reference_index_preflight_race");
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        var previousStateHook = DbWriter.ReferenceSecondaryIndexBulkLoadStateForTesting;
+        var previousLookupHook = IndexedFileStatReuse.LookupForTesting;
+        var referenceIndexPhases = new List<string>();
+        var firstPathLookupCount = 0;
+        try
+        {
+            var relativePaths = WriteHighCardinalityTypeScriptReferenceFixture(projectRoot);
+            var racedRelativePath = relativePaths[0];
+            var racedAbsolutePath = Path.Combine(projectRoot, racedRelativePath);
+            var (seedExitCode, _) = RunAndCaptureJson([projectRoot, "--json", "--quiet"]);
+            Assert.Equal(CommandExitCodes.Success, seedExitCode);
+
+            DbWriter.ReferenceSecondaryIndexBulkLoadStateForTesting = (connection, phase) =>
+            {
+                referenceIndexPhases.Add(phase);
+                previousStateHook?.Invoke(connection, phase);
+            };
+            IndexedFileStatReuse.LookupForTesting = relativePath =>
+            {
+                previousLookupHook?.Invoke(relativePath);
+                if (!string.Equals(relativePath, racedRelativePath, StringComparison.Ordinal)
+                    || ++firstPathLookupCount != 2)
+                {
+                    return;
+                }
+
+                File.AppendAllText(
+                    racedAbsolutePath,
+                    "export function racedAfterPreflight(): number { return source_00(); }\n");
+            };
+
+            var args = new List<string>(relativePaths.Length + 4)
+            {
+                projectRoot,
+                "--files",
+            };
+            args.AddRange(relativePaths);
+            args.Add("--json");
+            args.Add("--quiet");
+            var (exitCode, json) = RunAndCaptureJson(args.ToArray());
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(2, firstPathLookupCount);
+            Assert.Empty(referenceIndexPhases);
+            using var connection = new SqliteConnection($"Data Source={dbPath}");
+            connection.Open();
+            using var symbolCommand = connection.CreateCommand();
+            symbolCommand.CommandText = "SELECT COUNT(*) FROM symbols WHERE name = 'racedAfterPreflight'";
+            Assert.Equal(1L, (long)symbolCommand.ExecuteScalar()!);
+            Assert.Equal(
+                GetAllReferenceIndexNames(),
+                CaptureReferenceIndexSnapshot("completed", connection).Names);
+        }
+        finally
+        {
+            DbWriter.ReferenceSecondaryIndexBulkLoadStateForTesting = previousStateHook;
+            IndexedFileStatReuse.LookupForTesting = previousLookupHook;
             DeleteDirectory(projectRoot);
         }
     }
@@ -380,6 +520,12 @@ public partial class IndexCommandRunnerTests
     private static string[] GetAllReferenceIndexNames()
         => GetRequiredReferenceIndexNames()
             .Concat(ReferenceSecondaryIndexBulkLoadGuard.IndexNames)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+    private static string[] GetInitialBulkPersistenceReferenceIndexNames()
+        => GetRequiredReferenceIndexNames()
+            .Concat(ReferenceSecondaryIndexBulkLoadGuard.CandidatePopulationIndexNames)
             .Order(StringComparer.Ordinal)
             .ToArray();
 
@@ -436,6 +582,24 @@ public partial class IndexCommandRunnerTests
                 $"export function bulkTarget{index:D2}(): number {{ return {index}; }}\n"
                 + $"export function bulkCaller{index:D2}(): number {{ return bulkTarget{index:D2}(); }}\n");
         }
+    }
+
+    private static string[] WriteHighCardinalityTypeScriptReferenceFixture(string projectRoot)
+    {
+        var relativePaths = Enumerable
+            .Range(0, IndexCommandRunner.UpdateReferenceSecondaryIndexBulkLoadMinimumTargetCount)
+            .Select(index => $"source_{index:D2}.ts")
+            .ToArray();
+        foreach (var relativePath in relativePaths)
+        {
+            var stem = Path.GetFileNameWithoutExtension(relativePath);
+            File.WriteAllText(
+                Path.Combine(projectRoot, relativePath),
+                $"export function {stem}(): number {{ return 1; }}\n"
+                + $"export function call_{stem}(): number {{ return {stem}(); }}\n");
+        }
+
+        return relativePaths;
     }
 
     private sealed record ReferenceIndexStageSnapshot(string Stage, string[] Names);

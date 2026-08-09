@@ -189,7 +189,7 @@ public static partial class IndexCommandRunner
         ArgumentOutOfRangeException.ThrowIfNegative(maxFileSizeBytes);
         ArgumentNullException.ThrowIfNull(getFileLength);
         cancellationToken.ThrowIfCancellationRequested();
-        if (workItemCount <= workerCount)
+        if (workerCount <= 1 || workItemCount <= workerCount)
             return [];
 
         // Dynamic claiming balances the main body of the scan, but a large file at the

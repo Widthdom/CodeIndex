@@ -2272,6 +2272,8 @@ public partial class DbWriter
         {
             using var cancellationRegistration = RegisterSqliteInterrupt(cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
+            referenceSecondaryIndexBulkLoad?.PrepareForCandidatePopulation(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
             createUniqueFamiliesCommand = RentCommand(CreateReferenceUniqueFamiliesSql, static _ => { });
             createUniqueFamiliesCommand.ExecuteNonQuery();
             cancellationToken.ThrowIfCancellationRequested();

@@ -7687,6 +7687,11 @@ public partial class McpServerTests
             .Select(static definition => definition.Name)
             .OrderBy(static indexName => indexName, StringComparer.Ordinal)
             .ToArray();
+        var initialBulkPersistenceIndexNames = ReferenceSecondaryIndexSql.RawPersistenceRequired
+            .Concat(ReferenceSecondaryIndexSql.CandidatePopulationDeferred)
+            .Select(static definition => definition.Name)
+            .OrderBy(static indexName => indexName, StringComparer.Ordinal)
+            .ToArray();
         var hotspotIndexNames = HotspotReferenceAggregateSql.Indexes
             .Select(static definition => definition.Name)
             .OrderBy(static indexName => indexName, StringComparer.Ordinal)
@@ -7755,8 +7760,8 @@ public partial class McpServerTests
             Assert.Equal(1, augmentationRebuildCount);
             Assert.Equal(1, graphRefreshCount);
             Assert.Equal(4, hotspotIndexNames.Length);
-            Assert.Equal(false, candidatePresentAtAugmentationRebuild);
-            Assert.Equal(false, candidatePresentAtGraphRefresh);
+            Assert.Equal(true, candidatePresentAtAugmentationRebuild);
+            Assert.Equal(true, candidatePresentAtGraphRefresh);
             Assert.Equal(
                 new[]
                 {
@@ -7764,6 +7769,7 @@ public partial class McpServerTests
                     "deferred_graph_prepared",
                     "typescript_augmentation",
                     "graph_refresh",
+                    "candidate_deferred",
                     "identity_started",
                     "graph_required_restored",
                     "mutual_started",
@@ -7777,6 +7783,7 @@ public partial class McpServerTests
                 {
                     "dropped",
                     "deferred_graph_prepared",
+                    "candidate_deferred",
                     "identity_started",
                     "graph_required_restored",
                     "mutual_started",
@@ -7786,17 +7793,26 @@ public partial class McpServerTests
             var restoredStateIndex = referenceIndexStates.FindIndex(
                 static state => state.Phase == "restored");
             Assert.Equal(referenceIndexStates.Count - 1, restoredStateIndex);
-            Assert.All(
-                referenceIndexStates.Take(restoredStateIndex),
-                state => Assert.DoesNotContain(candidateReverseIndexName, state.PresentIndexNames));
-            Assert.Contains(
-                candidateReverseIndexName,
-                referenceIndexStates[restoredStateIndex].PresentIndexNames);
             Assert.Equal(
-                deferredGraphPreparedIndexNames,
+                initialBulkPersistenceIndexNames,
+                Assert.Single(referenceIndexStates, static state => state.Phase == "dropped")
+                    .PresentIndexNames);
+            Assert.Equal(
+                canonicalReferenceIndexNames,
                 Assert.Single(
                     referenceIndexStates,
                     static state => state.Phase == "deferred_graph_prepared").PresentIndexNames);
+            Assert.All(
+                referenceIndexStates.Where(
+                    static state => state.Phase is "candidate_deferred" or "identity_started" or "graph_required_restored" or "mutual_started"),
+                state =>
+                {
+                    Assert.DoesNotContain(candidateReverseIndexName, state.PresentIndexNames);
+                    Assert.Equal(deferredGraphPreparedIndexNames, state.PresentIndexNames);
+                });
+            Assert.Contains(
+                candidateReverseIndexName,
+                referenceIndexStates[restoredStateIndex].PresentIndexNames);
             Assert.Empty(Assert.Single(hotspotIndexStates));
 
             using var verifyConnection = new SqliteConnection(
@@ -9724,7 +9740,7 @@ public partial class McpServerTests
             Assert.Equal(1, optimizeCount);
             Assert.Equal(0, mergeCount);
             Assert.Equal(
-                ["dropped", "identity_started", "graph_required_restored", "mutual_started", "restored"],
+                ["dropped", "candidate_deferred", "identity_started", "graph_required_restored", "mutual_started", "restored"],
                 referenceIndexPhases);
             Assert.NotNull(graphScopeStats);
             Assert.True(graphScopeStats!.UsedFullRefresh);

@@ -1101,9 +1101,10 @@ public partial class IndexCommandRunnerTests
     }
 
     [Theory]
+    [InlineData(6, 1)]
     [InlineData(3, 4)]
     [InlineData(4, 4)]
-    public void BuildFullScanExtractionTailSchedule_WorkFitsInFirstWorkerWave_DoesNotProbe(
+    public void BuildFullScanExtractionTailSchedule_NonParallelOrFirstWorkerWave_DoesNotProbe(
         int workItemCount,
         int workerCount)
     {
@@ -1193,8 +1194,8 @@ public partial class IndexCommandRunnerTests
     public void BuildFullScanExtractionTailSchedule_TreatsExpectedProbeFailuresAsStableUnknowns()
     {
         var schedule = IndexCommandRunner.BuildFullScanExtractionTailSchedule(
-            workItemCount: 6,
-            workerCount: 1,
+            workItemCount: 10,
+            workerCount: 2,
             maxFileSizeBytes: 1_000,
             workOrdinal => workOrdinal switch
             {
@@ -1202,11 +1203,12 @@ public partial class IndexCommandRunnerTests
                 3 => 10,
                 4 => throw new UnauthorizedAccessException("simulated size probe denial"),
                 5 => 20,
+                >= 6 => null,
                 _ => throw new InvalidOperationException("prefix must not be probed"),
             },
             CancellationToken.None);
 
-        Assert.Equal([5, 3, 2, 4], schedule);
+        Assert.Equal([5, 3, 2, 4, 6, 7, 8, 9], schedule);
     }
 
     [Fact]
@@ -1238,8 +1240,8 @@ public partial class IndexCommandRunnerTests
 
         Assert.Throws<OperationCanceledException>(() =>
             IndexCommandRunner.BuildFullScanExtractionTailSchedule(
-                workItemCount: 6,
-                workerCount: 1,
+                workItemCount: 10,
+                workerCount: 2,
                 maxFileSizeBytes: 1_000,
                 workOrdinal =>
                 {

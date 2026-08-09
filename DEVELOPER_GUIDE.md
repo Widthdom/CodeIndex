@@ -319,25 +319,31 @@ reassigns parameter values by ordinal. Keep new bulk-write paths on this bounded
 cache so large indexes do not rebuild equivalent SQLite commands per file.
 
 Fresh CLI scans and explicit rebuilds defer the query and graph secondary
-indexes on `symbol_references`, plus the reverse candidate-symbol lookup, until
-raw reference persistence completes. The candidate primary key remains available
-for reference-scoped materialization and resolution, and the file and
-reference-line maintenance indexes remain available during the load,
-while identity and resolution finalization continues without query indexes. The
+indexes on `symbol_references` until raw reference persistence completes. The
+reverse candidate-symbol lookup remains available during raw persistence and is
+dropped only when an actual graph refresh is about to delete or materialize
+candidate rows, so marker-only and high-cardinality no-op updates do not rebuild
+that whole index. The candidate primary key remains available for reference-scoped
+materialization and resolution, and the file and reference-line maintenance indexes
+remain available during the load, while identity and resolution finalization
+continues without query indexes. The
 guard forces any active dirty graph scope onto its full-refresh plan before the
 indexes disappear. Immediately before mutual-recursion evaluation, its graph
 transaction restores only the unresolved-folded, legacy NOCASE, and resolved
 reverse-edge indexes; the remaining query indexes return after the mutual update.
 When a TypeScript augmentation rebuild owns the sole graph pass, restore every
-ordinary graph/query index before readiness but keep the reverse candidate-symbol
-lookup deferred. Pass the live guard through augmentation candidate population and
-restore that final index only after the readiness transaction commits; this keeps
-readiness queries available without maintaining the candidate B-tree row by row.
-CLI owns this DDL inside the outer scan transaction so cancellation or failure
-rolls the schema back atomically. MCP uses the same recoverable lifecycle whenever
-its established dirty-byte policy selects FTS bulk loading, and restores every
-index on completion or disposal. Schema initialization and read repair must use
-the same canonical index catalog so every path converges on an identical schema.
+ordinary graph/query index before readiness, then drop the reverse candidate-symbol
+lookup immediately before augmentation candidate population and keep it deferred
+through that graph pass. Transactional full
+scans restore that final index after readiness work and before committing the outer
+full-scan transaction, preserving atomic schema rollback on cancellation or
+failure. Recoverable scoped updates and MCP indexing retain guard ownership through
+the readiness transaction commit and restore the final index immediately afterward.
+Both lifecycles keep readiness queries available without maintaining the candidate
+B-tree row by row. MCP uses the recoverable lifecycle whenever its established
+dirty-byte policy selects FTS bulk loading, and restores every index on completion
+or disposal. Schema initialization and read repair must use the same canonical
+index catalog so every path converges on an identical schema.
 
 Reference context text is normalized into `reference_lines`; the legacy
 `symbol_references.context` column is therefore written as a SQL `NULL` literal
@@ -352,7 +358,13 @@ Use the same secondary-index deferral for an existing-database full scan when
 the established FTS dirty-byte policy selects bulk loading. Scoped updates have
 no authoritative workspace-wide byte estimate, so they use a conservative
 recoverable boundary: at least 64 targets and at least 60% of the indexed file
-count. Keep the query-only set deferred through identity and resolution work,
+count. When that raw boundary is met but no cleanup/graph/FTS work is already
+pending, compare a path-filtered reusable-stat snapshot with every target before
+staging. If every target is definitely reusable, skip both reference and hotspot
+secondary-index staging; any mismatch or uncertainty keeps staging enabled. This
+preflight is only a cost decision—the file loop must repeat its live authoritative
+lookup so changes after the snapshot are still indexed with all indexes present.
+Keep the query-only set deferred through identity and resolution work,
 restore the three reverse-edge indexes immediately before mutual recursion, then
 restore the remainder after that update. Small scoped updates must keep every
 index in place so a fixed rebuild cost does not dominate the update.
@@ -3999,22 +4011,25 @@ value を再設定します。大規模 index で同じ SQLite command を file 
 新しい bulk-write 経路もこの bounded cache に載せてください。
 
 fresh な CLI scan と明示的 rebuild は、raw reference の永続化が完了するまで
-`symbol_references` の query / graph 用 secondary index と candidate-symbol の reverse lookup
-を遅延します。reference scope の materialization / resolution に使う candidate primary key は
-維持します。load 中も file と
-reference-line の保守用 index は残し、identity / resolution finalization 中も query index は
-遅延したままにします。guard は index を外す前に active な dirty graph scope を full refresh へ
+`symbol_references` の query / graph 用 secondary index を遅延します。candidate-symbol の
+reverse lookup は raw persistence 中は維持し、実際の graph refresh が candidate row を削除・
+構築する直前だけ外すため、marker-only / 高 cardinality no-op update はこの index 全体を
+再構築しません。reference scope の materialization / resolution に使う candidate primary key は
+維持します。load 中も file と reference-line の保守用 index は残し、identity / resolution
+finalization 中は query index を遅延したままにします。guard は index を外す前に active な dirty graph scope を full refresh へ
 昇格します。mutual-recursion 評価の直前に、その graph transaction 内で unresolved-folded、
 legacy NOCASE、resolved reverse-edge の3本だけを復元し、残りの query index は mutual update
 後に戻します。TypeScript augmentation rebuild が唯一の graph pass を担当する場合は、readiness
-前に通常の graph / query index を復元しつつ candidate-symbol reverse lookup だけを遅延し、live
-guard を augmentation の candidate 構築へ渡して readiness transaction の commit 後に最後の1本を
-復元します。これにより readiness query を利用可能なまま candidate B-tree の行ごとの保守を省きます。
-CLI はこの DDL を scan 全体の外側 transaction 内で所有するため、cancellation
-や失敗時には schema も原子的に rollback されます。MCP は既定の dirty-byte policy が FTS bulk
-load を選ぶ場合に同じ recoverable lifecycle を使い、正常完了時と dispose 時の両方で全 index
-を復元します。schema initialization と read repair は同じ canonical index catalog を使い、
-すべての経路が同一の最終 schema に収束する状態を保ってください。
+前に通常の graph / query index を復元し、augmentation の candidate 構築直前にだけ
+candidate-symbol reverse lookup を外して graph pass の完了まで遅延します。transactional full scan は readiness work 後
+かつ outer full-scan transaction の commit 前に最後の1本を復元し、cancellation や失敗時の
+schema rollback を原子的に保ちます。recoverable scoped update と MCP indexing は readiness
+transaction の commit まで guard ownership を保持し、その直後に最後の index を復元します。
+どちらの lifecycle も readiness query を利用可能なまま candidate B-tree の行ごとの保守を
+省きます。MCP は既定の dirty-byte policy が FTS bulk load を選ぶ場合に recoverable lifecycle
+を使い、正常完了時と dispose 時の両方で全 index を復元します。schema initialization と read
+repair は同じ canonical index catalog を使い、すべての経路が同一の最終 schema に収束する状態を
+保ってください。
 
 reference の context text は `reference_lines` へ正規化されるため、legacy な
 `symbol_references.context` column は reference ごとの parameter ではなく SQL の `NULL`
@@ -4027,7 +4042,11 @@ atomic file window を含む全経路でこの契約を維持してください�
 既存DBの full scan でも、既定の FTS dirty-byte policy が bulk load を選ぶ場合は同じ secondary
 index 退避を使います。scoped update には workspace 全体の authoritative な byte estimate が
 ないため、64 target 以上かつ indexed file 数の60%以上という保守的な recoverable 境界を
-使います。identity / resolution 中は query-only 集合を遅延したままにし、mutual recursion の
+使います。この raw 境界を満たしても cleanup / graph / FTS work がまだ無い場合は、path-filter
+済み reusable-stat snapshot を全 target と照合し、全件が確実に reusable なら reference と hotspot
+の secondary-index staging をともに省きます。不一致や不確実性が1件でもあれば staging を維持します。
+この preflight は cost 判定に限り、snapshot 後の変更も全 index を維持したまま更新できるよう、file
+loop は authoritative な live lookup を必ず再実行してください。identity / resolution 中は query-only 集合を遅延したままにし、mutual recursion の
 直前に reverse-edge 用3本を復元して、その update 後に残りを戻してください。小規模 scoped
 update は固定的な再構築 cost が更新時間を支配しないよう、全 index を維持します。
 
