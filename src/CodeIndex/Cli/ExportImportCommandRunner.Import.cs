@@ -115,6 +115,13 @@ internal static partial class ExportImportCommandRunner
             AddImportValidationPhase(validationPhases, PhaseSqliteValidate);
             SqliteConnection.ClearAllPools();
 
+            ApplyImportedArchiveTrustMetadata(
+                tempPath,
+                importedManifest ?? throw new InvalidDataException("archive manifest was not loaded"),
+                cancellationToken);
+            importedManifest = NormalizeImportedArchiveTrustMetadata(importedManifest);
+            SqliteConnection.ClearAllPools();
+
             if (prunePaths)
             {
                 cancellationToken.ThrowIfCancellationRequested();

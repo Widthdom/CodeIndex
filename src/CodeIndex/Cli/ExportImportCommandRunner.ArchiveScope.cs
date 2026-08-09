@@ -50,7 +50,8 @@ internal static partial class ExportImportCommandRunner
                 options.ExcludeTests,
                 projectPathPatterns,
                 sourceFileCount,
-                sourceFileCount);
+                sourceFileCount,
+                RepresentsEntireSourceDatabase: true);
         }
 
         using (var foreignKeys = connection.CreateCommand())
@@ -131,6 +132,7 @@ internal static partial class ExportImportCommandRunner
                 """;
             pruneCommand.ExecuteNonQuery();
             DbWriter.RebuildRetainedReferenceGraph(connection, transaction, cancellationToken);
+            ApplyPartialArchiveTrustMetadata(connection, transaction, cancellationToken);
             transaction.Commit();
         }
 
@@ -160,7 +162,251 @@ internal static partial class ExportImportCommandRunner
             options.ExcludeTests,
             projectPathPatterns,
             sourceFileCount,
-            exportedFileCount);
+            exportedFileCount,
+            RepresentsEntireSourceDatabase: false);
+    }
+
+    private static void ApplyImportedArchiveTrustMetadata(
+        string databasePath,
+        ExportManifest manifest,
+        CancellationToken cancellationToken)
+    {
+        if (ManifestRepresentsEntireSourceDatabase(manifest))
+            return;
+
+        cancellationToken.ThrowIfCancellationRequested();
+        using var connection = new SqliteConnection(CreateUnpooledConnectionString(databasePath));
+        connection.Open();
+        if (!ArchiveTrustMetadataRequiresNormalization(connection))
+            return;
+
+        using var transaction = connection.BeginTransaction();
+        ApplyPartialArchiveTrustMetadata(connection, transaction, cancellationToken);
+        transaction.Commit();
+    }
+
+    private static bool ArchiveTrustMetadataRequiresNormalization(SqliteConnection connection)
+    {
+        if (!string.Equals(
+                ReadMetaString(connection, DbContext.IndexCompletenessMetaKey),
+                "incomplete",
+                StringComparison.Ordinal)
+            || !HasPartialArchiveIncompleteReason(
+                ReadMetaString(connection, DbContext.IndexIncompleteReasonsMetaKey))
+            || ReadMetaString(connection, DbContext.UnknownExtensionFileCountMetaKey) != "0"
+            || ReadMetaString(connection, DbContext.UnknownExtensionFilePathsMetaKey) != "[]"
+            || !bool.TryParse(
+                ReadMetaString(connection, DbContext.UnknownExtensionFilesTruncatedMetaKey),
+                out var unknownFilesTruncated)
+            || unknownFilesTruncated
+            || ReadMetaString(connection, DbContext.UnknownExtensionExtensionCountsMetaKey) != "{}"
+            || ReadMetaString(connection, DbContext.UnknownExtensionCategoryCountsMetaKey) != "{}"
+            || ReadMetaString(connection, DbContext.UnknownExtensionGroupsMetaKey) != "[]")
+        {
+            return true;
+        }
+
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT COUNT(*)
+            FROM codeindex_meta
+            WHERE key GLOB 'indexed_head_*'
+               OR key GLOB 'last_index_run_*'
+               OR key GLOB 'last_failed_index_run_*'
+               OR key IN (
+                   'commit_scoped_fresh_head_sha',
+                   'last_full_scan_elapsed_ms',
+                   'last_workspace_freshened_at')
+            """;
+        return Convert.ToInt64(command.ExecuteScalar(), CultureInfo.InvariantCulture) != 0;
+    }
+
+    private static bool HasPartialArchiveIncompleteReason(string? rawReasons)
+    {
+        if (string.IsNullOrWhiteSpace(rawReasons)
+            || Encoding.UTF8.GetByteCount(rawReasons) > MaxImportManifestBytes)
+        {
+            return false;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(
+                rawReasons,
+                new JsonDocumentOptions { MaxDepth = 4 });
+            return document.RootElement.ValueKind == JsonValueKind.Array
+                && document.RootElement.EnumerateArray().Any(item =>
+                    item.ValueKind == JsonValueKind.String
+                    && string.Equals(
+                        item.GetString(),
+                        PartialArchiveIncompleteReason,
+                        StringComparison.Ordinal));
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static ExportManifest NormalizeImportedArchiveTrustMetadata(ExportManifest manifest)
+    {
+        if (ManifestRepresentsEntireSourceDatabase(manifest))
+            return manifest;
+
+        var reasons = new List<string>(MaxArchiveIncompleteReasons);
+        var totalChars = 0;
+        foreach (var reason in manifest.IndexIncompleteReasons ?? [])
+        {
+            if (string.Equals(reason, PartialArchiveIncompleteReason, StringComparison.Ordinal))
+                continue;
+            if (reasons.Count >= MaxArchiveIncompleteReasons - 1
+                || totalChars + reason.Length + PartialArchiveIncompleteReason.Length
+                    > MaxArchiveIncompleteReasonsTotalChars)
+            {
+                break;
+            }
+            reasons.Add(reason);
+            totalChars += reason.Length;
+        }
+        reasons.Add(PartialArchiveIncompleteReason);
+        return manifest with
+        {
+            IndexedHeadSha = null,
+            IndexedHeadBranch = null,
+            IndexedHeadTimestamp = null,
+            UnknownExtensionFileCount = 0,
+            UnknownExtensionFiles = null,
+            UnknownExtensionFilesTruncated = false,
+            UnknownExtensionFileSampleCount = 0,
+            UnknownExtensionFileSampleTruncated = false,
+            IndexComplete = false,
+            IndexIncompleteReasons = reasons.ToArray(),
+        };
+    }
+
+    private static bool ManifestRepresentsEntireSourceDatabase(ExportManifest manifest)
+        => manifest.Scope?.RepresentsEntireSourceDatabase == true;
+
+    private static void ApplyPartialArchiveTrustMetadata(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        using (var ensureMeta = connection.CreateCommand())
+        {
+            ensureMeta.Transaction = transaction;
+            ensureMeta.CommandText = """
+                CREATE TABLE IF NOT EXISTS codeindex_meta (
+                    key TEXT PRIMARY KEY NOT NULL,
+                    value TEXT
+                )
+                """;
+            ensureMeta.ExecuteNonQuery();
+        }
+        var incompleteReasonsJson = BuildPartialArchiveIncompleteReasonsJson(connection, transaction);
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            DELETE FROM codeindex_meta
+            WHERE key GLOB 'indexed_head_*'
+               OR key GLOB 'last_index_run_*'
+               OR key GLOB 'last_failed_index_run_*'
+               OR key IN (
+                   'commit_scoped_fresh_head_sha',
+                   'last_full_scan_elapsed_ms',
+                   'last_workspace_freshened_at');
+
+            INSERT INTO codeindex_meta(key, value)
+            VALUES (@indexCompletenessKey, 'incomplete')
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value;
+
+            INSERT INTO codeindex_meta(key, value)
+            VALUES (@indexIncompleteReasonsKey, @indexIncompleteReasons)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value;
+
+            INSERT INTO codeindex_meta(key, value)
+            VALUES (@unknownExtensionFileCountKey, '0')
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value;
+
+            INSERT INTO codeindex_meta(key, value)
+            VALUES (@unknownExtensionFilePathsKey, '[]')
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value;
+
+            INSERT INTO codeindex_meta(key, value)
+            VALUES (@unknownExtensionFilesTruncatedKey, 'False')
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value;
+
+            INSERT INTO codeindex_meta(key, value)
+            VALUES (@unknownExtensionExtensionCountsKey, '{}')
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value;
+
+            INSERT INTO codeindex_meta(key, value)
+            VALUES (@unknownExtensionCategoryCountsKey, '{}')
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value;
+
+            INSERT INTO codeindex_meta(key, value)
+            VALUES (@unknownExtensionGroupsKey, '[]')
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value;
+            """;
+        SqliteCommandPolicy.Add(command, "@indexCompletenessKey", DbContext.IndexCompletenessMetaKey);
+        SqliteCommandPolicy.Add(command, "@indexIncompleteReasonsKey", DbContext.IndexIncompleteReasonsMetaKey);
+        SqliteCommandPolicy.Add(command, "@indexIncompleteReasons", incompleteReasonsJson);
+        SqliteCommandPolicy.Add(command, "@unknownExtensionFileCountKey", DbContext.UnknownExtensionFileCountMetaKey);
+        SqliteCommandPolicy.Add(command, "@unknownExtensionFilePathsKey", DbContext.UnknownExtensionFilePathsMetaKey);
+        SqliteCommandPolicy.Add(command, "@unknownExtensionFilesTruncatedKey", DbContext.UnknownExtensionFilesTruncatedMetaKey);
+        SqliteCommandPolicy.Add(command, "@unknownExtensionExtensionCountsKey", DbContext.UnknownExtensionExtensionCountsMetaKey);
+        SqliteCommandPolicy.Add(command, "@unknownExtensionCategoryCountsKey", DbContext.UnknownExtensionCategoryCountsMetaKey);
+        SqliteCommandPolicy.Add(command, "@unknownExtensionGroupsKey", DbContext.UnknownExtensionGroupsMetaKey);
+        command.ExecuteNonQuery();
+        cancellationToken.ThrowIfCancellationRequested();
+    }
+
+    private static string BuildPartialArchiveIncompleteReasonsJson(
+        SqliteConnection connection,
+        SqliteTransaction transaction)
+    {
+        var reasons = new List<string>(MaxArchiveIncompleteReasons);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var rawReasons = ReadMetaString(connection, DbContext.IndexIncompleteReasonsMetaKey, transaction);
+        if (!string.IsNullOrWhiteSpace(rawReasons)
+            && Encoding.UTF8.GetByteCount(rawReasons) <= MaxImportManifestBytes)
+        {
+            try
+            {
+                using var document = JsonDocument.Parse(
+                    rawReasons,
+                    new JsonDocumentOptions { MaxDepth = 4 });
+                if (document.RootElement.ValueKind == JsonValueKind.Array)
+                {
+                    var totalChars = 0;
+                    foreach (var item in document.RootElement.EnumerateArray())
+                    {
+                        if (item.ValueKind != JsonValueKind.String || reasons.Count >= MaxArchiveIncompleteReasons - 1)
+                            break;
+                        var reason = item.GetString();
+                        if (string.IsNullOrWhiteSpace(reason)
+                            || reason.Length > MaxArchiveIncompleteReasonChars
+                            || totalChars + reason.Length + PartialArchiveIncompleteReason.Length
+                                > MaxArchiveIncompleteReasonsTotalChars
+                            || !seen.Add(reason))
+                        {
+                            continue;
+                        }
+                        reasons.Add(reason);
+                        totalChars += reason.Length;
+                    }
+                }
+            }
+            catch (JsonException)
+            {
+                // Invalid legacy metadata is replaced by the stable partial-archive reason.
+            }
+        }
+
+        if (seen.Add(PartialArchiveIncompleteReason))
+            reasons.Add(PartialArchiveIncompleteReason);
+        return JsonSerializer.Serialize(reasons);
     }
 
     private static bool TryValidateArchiveScopeValues(
