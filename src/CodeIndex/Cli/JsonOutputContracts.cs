@@ -1079,6 +1079,7 @@ internal sealed class IndexFullScanJsonResult : IVersionedJsonResult
     public List<StatusIndexFileError>? FileErrors { get; init; }
     public List<CliJsonMessage>? Warnings { get; init; }
     public IndexMemoryTimelineJsonResult? MemoryTimeline { get; init; }
+    public StatusRebuildReclaim? RebuildReclaim { get; init; }
     public long ElapsedMs { get; init; }
 }
 

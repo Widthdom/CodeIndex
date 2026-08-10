@@ -440,6 +440,7 @@ internal static class McpToolOutputSchemas
             ["mode"] = StringSchema(),
             ["summary"] = ObjectSchema(),
             ["dry_run"] = BooleanSchema(),
+            ["rebuild_reclaim"] = ObjectSchema(),
             ["readiness"] = Reference("readiness"),
         };
 

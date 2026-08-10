@@ -2135,7 +2135,8 @@ public partial class McpServer
                 (DbContext.LastIndexRunRowsDeletedMetaKey, purged.ToString(System.Globalization.CultureInfo.InvariantCulture)),
                 (DbContext.LastIndexRunReferenceExtractionCapHitsMetaKey, JsonSerializer.Serialize(
                     referenceExtractionCapHits,
-                    StatusMetadataJsonContext.Default.ReferenceExtractionCapHitSummary)));
+                    StatusMetadataJsonContext.Default.ReferenceExtractionCapHitSummary)),
+                (DbContext.LastIndexRunRebuildReclaimMetaKey, null));
             writer.MarkIndexCompleteness(writer.GetPersistedIndexOmissionReasons());
             writer.ClearLastFailedIndexRunMetadata();
             // Persist the current HEAD only after the run is fully successful (errors == 0).
@@ -2223,6 +2224,21 @@ public partial class McpServer
             writer.ReportReferenceSecondaryIndexBulkLoadState("readiness_committed");
         referenceSecondaryIndexBulkLoad?.Complete(requestToken);
         hotspotAggregateRefresh.Complete(requestToken);
+        StatusRebuildReclaim? rebuildReclaim = null;
+        if (rebuild && !scanResult.HadErrors && errors == 0)
+        {
+            await EmitProgressNotificationAsync(
+                progressToken,
+                files.Count,
+                files.Count,
+                "Evaluating rebuild free-page reclaim.").ConfigureAwait(false);
+            rebuildReclaim = db.RunRebuildReclaimIfRecommended(requestToken);
+            IndexCommandRunner.TryStampRebuildReclaimMetadata(
+                writer,
+                rebuildReclaim,
+                runStopwatch.ElapsedMilliseconds,
+                memoryTimeline: null);
+        }
         if (!scanResult.HadErrors && errors == 0)
         {
             var plannerMaintenanceFailure = db.RunPlannerStatisticsMaintenance(
@@ -2267,6 +2283,7 @@ public partial class McpServer
                 csharpMetadataTargetReadyAfter,
                 foldReadyAfter,
                 foldReadyReason,
+                rebuildReclaim,
                 memorySamples,
                 failures,
                 mcpIndexDiagnostics,

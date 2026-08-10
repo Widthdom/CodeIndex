@@ -2107,6 +2107,67 @@ public sealed class StatusLastIndexRun
     public bool? DiagnosticsTruncated { get; set; }
     [JsonPropertyName("reference_extraction_cap_hits")]
     public ReferenceExtractionCapHitSummary? ReferenceExtractionCapHits { get; set; }
+    [JsonPropertyName("rebuild_reclaim")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public StatusRebuildReclaim? RebuildReclaim { get; set; }
+}
+
+/// <summary>
+/// Bounded telemetry for the thresholded free-page reclaim that follows a successful rebuild.
+/// 成功した rebuild 後にしきい値付きで行う free-page 回収の bounded telemetry。
+/// </summary>
+public sealed class StatusRebuildReclaim
+{
+    public string State { get; set; } = "not_needed";
+    public string Reason { get; set; } = "freelist_below_threshold";
+    [JsonPropertyName("duration_ms")]
+    public long DurationMs { get; set; }
+    [JsonPropertyName("page_size_bytes")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? PageSizeBytes { get; set; }
+    [JsonPropertyName("page_count_before")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? PageCountBefore { get; set; }
+    [JsonPropertyName("freelist_count_before")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? FreelistCountBefore { get; set; }
+    [JsonPropertyName("freelist_ratio_before")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public double? FreelistRatioBefore { get; set; }
+    [JsonPropertyName("freelist_threshold_ratio")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public double? FreelistThresholdRatio { get; set; }
+    [JsonPropertyName("estimated_bytes_reclaimable_before")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? EstimatedBytesReclaimableBefore { get; set; }
+    [JsonPropertyName("page_count_after")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? PageCountAfter { get; set; }
+    [JsonPropertyName("freelist_count_after")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? FreelistCountAfter { get; set; }
+    [JsonPropertyName("freelist_ratio_after")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public double? FreelistRatioAfter { get; set; }
+    [JsonPropertyName("pages_reclaimed")]
+    public long PagesReclaimed { get; set; }
+    [JsonPropertyName("bytes_reclaimed")]
+    public long BytesReclaimed { get; set; }
+    [JsonPropertyName("logical_database_bytes_before")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? LogicalDatabaseBytesBefore { get; set; }
+    [JsonPropertyName("logical_database_bytes_after")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? LogicalDatabaseBytesAfter { get; set; }
+    [JsonPropertyName("db_size_bytes_before")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? DbSizeBytesBefore { get; set; }
+    [JsonPropertyName("db_size_bytes_after")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? DbSizeBytesAfter { get; set; }
+    [JsonPropertyName("auto_vacuum_mode")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? AutoVacuumMode { get; set; }
 }
 
 public sealed class StatusFailedOrPartialIndexRun
@@ -2149,6 +2210,7 @@ public sealed class StatusIndexFileError
 
 [JsonSerializable(typeof(List<StatusIndexFileError>))]
 [JsonSerializable(typeof(ReferenceExtractionCapHitSummary))]
+[JsonSerializable(typeof(StatusRebuildReclaim))]
 internal sealed partial class StatusMetadataJsonContext : JsonSerializerContext
 {
 }
