@@ -21,6 +21,12 @@ public static partial class IndexCommandRunner
 
     private const int PartialIndexFileErrorLimit = 50;
 
+    internal static bool ShouldUseFreshReferenceResolutionDefaults(
+        bool startedWithNoIndexedFiles,
+        bool rebuild,
+        bool symbolsOnly)
+        => startedWithNoIndexedFiles && !rebuild && !symbolsOnly;
+
 
 
 
@@ -175,6 +181,10 @@ public static partial class IndexCommandRunner
         if (!options.Json && !options.Quiet)
             purgeCts = ConsoleUi.StartSpinner("Cleaning up stale entries...", spinnerFrames);
         var startedWithNoIndexedFiles = !writer.HasAnyIndexedFiles();
+        var useFreshReferenceResolutionDefaults = ShouldUseFreshReferenceResolutionDefaults(
+            startedWithNoIndexedFiles,
+            options.Rebuild,
+            options.SymbolsOnly);
         var priorCSharpStaticInterfaceSourceEvidence = options.Rebuild || startedWithNoIndexedFiles
             ? null
             : writer.GetCSharpStaticInterfaceSourceEvidence();
@@ -817,7 +827,8 @@ public static partial class IndexCommandRunner
         if (options.Rebuild)
             db.RepairIncompleteBatchReadiness();
         using var referenceGraphRefresh = writer.BeginReferenceGraphRefreshScope(
-            options.Rebuild || !writer.HasAnyIndexedFiles());
+            forceFullRefresh: options.Rebuild || startedWithNoIndexedFiles,
+            useFreshReferenceResolutionDefaults: useFreshReferenceResolutionDefaults);
         using var hotspotAggregateRefresh = writer.BeginDeferredHotspotReferenceAggregateRefresh(
             deferSecondaryIndexes: !options.SymbolsOnly && useFtsBulkLoad);
         using var fullScanTxn = writer.BeginTransaction(cancellationToken, "full scan write phase");

@@ -493,10 +493,18 @@ public partial class DbWriter
     /// 参加するため、rollbackされたfile batchのdirty状態は残らない。空・stale契約・広範な
     /// dirty集合では従来のfull refreshを維持する。
     /// </summary>
-    internal ReferenceGraphRefreshScope BeginReferenceGraphRefreshScope(bool forceFullRefresh = false)
+    internal ReferenceGraphRefreshScope BeginReferenceGraphRefreshScope(
+        bool forceFullRefresh = false,
+        bool useFreshReferenceResolutionDefaults = false)
     {
         if (_referenceGraphRefreshScope != null)
             throw new InvalidOperationException("A reference graph refresh scope is already active for this writer.");
+        if (useFreshReferenceResolutionDefaults && !forceFullRefresh)
+        {
+            throw new ArgumentException(
+                "Fresh reference resolution defaults require a forced full graph refresh.",
+                nameof(useFreshReferenceResolutionDefaults));
+        }
 
         using (var command = _conn.CreateCommand())
         {
@@ -535,7 +543,8 @@ public partial class DbWriter
 
         var scope = new ReferenceGraphRefreshScope(
             this,
-            forceFullRefresh || !ReferenceIdentityContractMatchesCurrent());
+            forceFullRefresh || !ReferenceIdentityContractMatchesCurrent(),
+            useFreshReferenceResolutionDefaults);
         _referenceGraphRefreshScope = scope;
         return scope;
     }
@@ -824,20 +833,31 @@ public partial class DbWriter
     {
         private readonly DbWriter _writer;
         private bool _forceFullRefresh;
+        private bool _freshReferenceResolutionDefaultsPending;
 
-        internal ReferenceGraphRefreshScope(DbWriter writer, bool forceFullRefresh)
+        internal ReferenceGraphRefreshScope(
+            DbWriter writer,
+            bool forceFullRefresh,
+            bool useFreshReferenceResolutionDefaults)
         {
             _writer = writer;
             _forceFullRefresh = forceFullRefresh;
+            _freshReferenceResolutionDefaultsPending = useFreshReferenceResolutionDefaults;
         }
 
         internal bool IsCompleting { get; set; }
         internal bool IsDisposed { get; private set; }
         internal bool ForceFullRefresh => _forceFullRefresh;
+        internal bool FreshReferenceResolutionDefaultsPending
+            => _freshReferenceResolutionDefaultsPending;
 
         internal void RequireFullRefresh() => _forceFullRefresh = true;
 
-        internal void MarkRefreshCompleted() => _forceFullRefresh = false;
+        internal void MarkRefreshCompleted()
+        {
+            _forceFullRefresh = false;
+            _freshReferenceResolutionDefaultsPending = false;
+        }
 
         public void Dispose()
         {

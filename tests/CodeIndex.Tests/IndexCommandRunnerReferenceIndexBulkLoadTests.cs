@@ -66,6 +66,7 @@ public partial class IndexCommandRunnerTests
         var scopeSnapshots = new ConcurrentQueue<DbWriter.ReferenceGraphRefreshScopeStats>();
         SqliteConnection? activeConnection = null;
         string[]? hotspotIndexNamesDuringRefresh = null;
+        ProvisionalReferenceRows? provisionalRowsAtIdentityStart = null;
         var missingConnectionObservations = 0;
         var refreshCount = 0;
         try
@@ -81,6 +82,8 @@ public partial class IndexCommandRunnerTests
             {
                 Volatile.Write(ref activeConnection, connection);
                 snapshots.Enqueue(CaptureReferenceIndexSnapshot(phase, connection));
+                if (string.Equals(phase, "identity_started", StringComparison.Ordinal))
+                    provisionalRowsAtIdentityStart = CaptureProvisionalReferenceRows(connection);
                 previousStateHook?.Invoke(connection, phase);
             };
             DbWriter.BatchStatementExecutingForTesting = statement =>
@@ -177,6 +180,23 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(1, refreshCount);
             var scope = Assert.Single(scopeSnapshots);
             Assert.True(scope.UsedFullRefresh);
+            var provisionalRows = Assert.IsType<ProvisionalReferenceRows>(provisionalRowsAtIdentityStart);
+            Assert.True(provisionalRows.Total > 0);
+            Assert.Equal(provisionalRows.Total, provisionalRows.ZeroCandidateCount);
+            Assert.Equal(provisionalRows.Total, provisionalRows.NullTargetCount);
+            Assert.Equal(provisionalRows.Total, provisionalRows.NullTargetKeyCount);
+            Assert.Equal(provisionalRows.Total, provisionalRows.ZeroSelfCount);
+            Assert.Equal(provisionalRows.Total, provisionalRows.ZeroMutualCount);
+            if (rebuild)
+            {
+                Assert.Equal(provisionalRows.Total, provisionalRows.NullResolutionStateCount);
+                Assert.Equal(0, provisionalRows.UnresolvedResolutionStateCount);
+            }
+            else
+            {
+                Assert.Equal(0, provisionalRows.NullResolutionStateCount);
+                Assert.Equal(provisionalRows.Total, provisionalRows.UnresolvedResolutionStateCount);
+            }
             Assert.Equal(2, CountMutualRecursionReferences(dbPath));
         }
         finally
@@ -754,6 +774,34 @@ public partial class IndexCommandRunnerTests
         return new ReferenceIndexStageSnapshot(stage, names);
     }
 
+    private static ProvisionalReferenceRows CaptureProvisionalReferenceRows(
+        SqliteConnection connection)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT COUNT(*),
+                   SUM(CASE WHEN resolution_state IS NULL THEN 1 ELSE 0 END),
+                   SUM(CASE WHEN resolution_state = 'unresolved' THEN 1 ELSE 0 END),
+                   SUM(CASE WHEN resolution_candidate_count = 0 THEN 1 ELSE 0 END),
+                   SUM(CASE WHEN target_symbol_id IS NULL THEN 1 ELSE 0 END),
+                   SUM(CASE WHEN target_symbol_key IS NULL THEN 1 ELSE 0 END),
+                   SUM(CASE WHEN is_self_reference = 0 THEN 1 ELSE 0 END),
+                   SUM(CASE WHEN is_mutual_recursion = 0 THEN 1 ELSE 0 END)
+            FROM symbol_references
+            """;
+        using var reader = command.ExecuteReader();
+        Assert.True(reader.Read());
+        return new ProvisionalReferenceRows(
+            reader.GetInt64(0),
+            reader.GetInt64(1),
+            reader.GetInt64(2),
+            reader.GetInt64(3),
+            reader.GetInt64(4),
+            reader.GetInt64(5),
+            reader.GetInt64(6),
+            reader.GetInt64(7));
+    }
+
     private static string? ReadCommittedTypeScriptAugmentationVersion(string dbPath)
     {
         using var connection = new SqliteConnection(
@@ -877,4 +925,14 @@ public partial class IndexCommandRunnerTests
     }
 
     private sealed record ReferenceIndexStageSnapshot(string Stage, string[] Names);
+
+    private sealed record ProvisionalReferenceRows(
+        long Total,
+        long NullResolutionStateCount,
+        long UnresolvedResolutionStateCount,
+        long ZeroCandidateCount,
+        long NullTargetCount,
+        long NullTargetKeyCount,
+        long ZeroSelfCount,
+        long ZeroMutualCount);
 }

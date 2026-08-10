@@ -1513,14 +1513,26 @@ The persisted reference-identity contract is versioned for this rule, so indexes
 the compatibility filter are treated as non-authoritative until a normal index refresh rebuilds
 their candidates.
 
-Reference finalization computes candidate count, minimum symbol ID, distinct target-family
-count, and stable target key in one correlated aggregate per reference. Keep these four
-resolution fields on the row-value assignment path; separate scalar subqueries multiply the
-candidate-index and symbol/file lookup work on large graphs. The language/name families that
+Existing-index, rebuild, and retained-graph finalization paths compute candidate count, minimum
+symbol ID, distinct target-family count, and stable target key in one correlated aggregate per
+reference. Keep these four resolution fields on the row-value assignment path; separate scalar
+subqueries multiply the candidate-index and symbol/file lookup work on large graphs. The
+language/name families that
 are globally unique are aggregated once into the connection-local
 `temp.reference_unique_symbol_families` table and reused by non-C#, C#, and C# attribute
 fallbacks. Create that temp table in a separate prepared command before preparing the refresh;
 SQLite resolves referenced tables while preparing every statement in a command batch.
+
+A true empty-database ordinary CLI full scan (not `--rebuild` or `--symbols-only`) opts into a
+separate fresh-resolution contract. Reference inserts persist canonical provisional values
+(`unresolved`, candidate count zero, and zero self/mutual flags) without adding bind parameters.
+Finalization scans `symbol_reference_candidates` once into materialized per-reference facts and
+updates only candidate-bearing references by primary key; candidate-free references retain their
+provisional values, and the self flag is derived in that same sparse update. The opt-in remains
+pending after a failed graph transaction and clears only after the graph commit. Existing-index
+updates, rebuilds, retained-graph rebuilds, and MCP indexing keep the established path. In
+particular, MCP can durably commit per-file batches before graph finalization, so it must retain
+its existing retry semantics until a separately designed recovery contract can cover that state.
 
 For C# explicit-interface members, `symbols.name` remains the short display/discovery alias,
 while `symbols.name_folded` stores the normalized interface qualifier plus terminal method
@@ -5188,14 +5200,26 @@ Java の reference resolution は変更しません。
 この規則は persisted reference-identity contract の version 対象であり、compatibility filter 導入前に
 作成された index は、通常の index 更新で candidate を再構築するまで非 authoritative として扱います。
 
-reference finalization は、candidate count、最小 symbol ID、distinct target-family count、安定 target
-key を reference ごとに1回の correlated aggregate で計算します。この4つの resolution field は
-row-value assignment のまま維持してください。scalar subquery を分けると、大規模 graph で
-candidate index と symbol/file lookup が重複します。global に一意な language/name family は
+既存index、rebuild、retained graph の reference finalization は、candidate count、最小 symbol ID、
+distinct target-family count、安定 target key を reference ごとに1回の correlated aggregate で
+計算します。この4つの resolution field は row-value assignment のまま維持してください。
+scalar subquery を分けると、大規模 graph で candidate index と symbol/file lookup が重複します。
+global に一意な language/name family は
 connection-local な `temp.reference_unique_symbol_families` table へ1回だけ集約し、non-C#、C#、
 C# attribute fallback で共有します。この temp table は refresh command を prepare する前に別の
 prepared command で作成してください。SQLite は command batch の全statementをprepareする時点で
 参照tableを解決します。
+
+真に空のdatabaseから始める通常のCLI full scan（`--rebuild` と `--symbols-only` を除く）だけは、
+fresh resolution専用の契約をopt-inします。reference insertはbind parameterを増やさず、
+`unresolved`、candidate count 0、self/mutual flag 0というcanonicalな暫定値を永続化します。
+finalizationは`symbol_reference_candidates`をreferenceごとのmaterialized factsへ1回走査し、
+candidateを持つreferenceだけをprimary keyで更新します。candidateを持たないreferenceは暫定値を
+維持し、self flagも同じsparse update内で導出します。このopt-inはgraph transaction失敗後も
+pendingのまま残り、graph commit後にだけ解除します。既存indexのupdate、rebuild、retained graph
+rebuild、MCP indexingは従来経路を維持します。特にMCPはgraph finalization前にfile batchをdurable
+commitできるため、その状態を扱う独立したrecovery契約が設計されるまでは既存の再試行semanticsを
+変更してはいけません。
 
 C# の明示的 interface member では、`symbols.name` は短い表示用 / discovery alias のままにし、
 `symbols.name_folded` に正規化した interface qualifier と末尾 method の generic arity を

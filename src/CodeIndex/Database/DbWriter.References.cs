@@ -1494,6 +1494,9 @@ public partial class DbWriter
         SET is_self_reference = {SelfReferenceValueSql};
         """;
 
+    internal static string RefreshReferenceResolutionFullSqlForTesting
+        => RefreshReferenceResolutionFullSql;
+
     private static readonly string RefreshReferenceResolutionDifferentialSql = $"""
         UPDATE symbol_references AS r
         SET (target_symbol_id, target_symbol_key, resolution_candidate_count, resolution_state) = {ReferenceResolutionValueSql}
@@ -1507,6 +1510,52 @@ public partial class DbWriter
         SET is_self_reference = {SelfReferenceValueSql}
         WHERE is_self_reference IS NOT ({SelfReferenceValueSql});
         """;
+
+    private static readonly string RefreshReferenceResolutionFreshSparseSql = $"""
+        WITH resolution_facts AS MATERIALIZED (
+            SELECT candidate.reference_id,
+                   COUNT(*) AS candidate_count,
+                   MIN(candidate.symbol_id) AS minimum_symbol_id,
+                   COUNT(DISTINCT target_file.lang || char(31) || target_file.path || char(31) ||
+                                          COALESCE(target.container_qualified_name, target.container_name, '') || char(31) ||
+                                          COALESCE(target.name, '')) AS target_family_count,
+                   MIN(target_file.lang || char(31) || target_file.path || char(31) ||
+                       COALESCE(target.container_qualified_name, target.container_name, '') || char(31) ||
+                       COALESCE(target.name, '')) AS minimum_target_key
+            FROM symbol_reference_candidates AS candidate
+            JOIN symbols AS target ON target.id = candidate.symbol_id
+            JOIN files AS target_file ON target_file.id = target.file_id
+            GROUP BY candidate.reference_id
+        )
+        UPDATE symbol_references AS r
+        SET target_symbol_id = CASE
+                WHEN resolution.candidate_count = 1 THEN resolution.minimum_symbol_id
+            END,
+            target_symbol_key = CASE
+                WHEN resolution.target_family_count = 1 THEN resolution.minimum_target_key
+            END,
+            resolution_candidate_count = resolution.candidate_count,
+            resolution_state = CASE
+                WHEN resolution.candidate_count = 1 THEN 'resolved'
+                WHEN resolution.target_family_count = 1 THEN 'resolved_group'
+                ELSE 'ambiguous'
+            END,
+            is_self_reference = CASE
+                WHEN r.source_symbol_id IS NOT NULL
+                 AND resolution.candidate_count = 1
+                 AND r.source_symbol_id = resolution.minimum_symbol_id THEN 1
+                ELSE 0
+            END
+        FROM resolution_facts AS resolution
+        -- Fresh inserts already carry canonical candidate-free values. Aggregate and write
+        -- only rows that gained a candidate during this graph build.
+        -- fresh insertはcandidate-freeのcanonical値を保持するため、このgraph buildで
+        -- candidateを得たrowだけを集約・更新する。
+        WHERE r.id = resolution.reference_id;
+        """;
+
+    internal static string RefreshReferenceResolutionFreshSparseSqlForTesting
+        => RefreshReferenceResolutionFreshSparseSql;
 
     private static readonly string RefreshMutualRecursionFlagsSql = $"""
         WITH desired_mutual_recursion(id, desired_value) AS MATERIALIZED (
@@ -1854,7 +1903,17 @@ public partial class DbWriter
         Dictionary<string, string?> foldedNameCache)
     {
         var rowsInBatch = end - start;
-        var sql = ReferenceInsertSqlCache.GetOrAdd(rowsInBatch, static count => BuildReferenceInsertSql(count));
+        var useFreshReferenceResolutionDefaults = _referenceGraphRefreshScope is
+        {
+            IsDisposed: false,
+            FreshReferenceResolutionDefaultsPending: true,
+        };
+        var cacheKey = (
+            Rows: rowsInBatch,
+            FreshResolutionDefaults: useFreshReferenceResolutionDefaults);
+        var sql = ReferenceInsertSqlCache.GetOrAdd(
+            cacheKey,
+            static key => BuildReferenceInsertSql(key.Rows, key.FreshResolutionDefaults));
         var cmd = RentCommand(sql, c => AddReferenceInsertParameters(c, rowsInBatch));
         try
         {
@@ -1884,8 +1943,10 @@ public partial class DbWriter
                     reference.ContainerName,
                     reference.IdentityContainerNameFolded,
                     foldedNameCache);
-                cmd.Parameters[parameterIndex++].Value = reference.IsSelfReference ? 1 : 0;
-                cmd.Parameters[parameterIndex++].Value = reference.IsMutualRecursion ? 1 : 0;
+                cmd.Parameters[parameterIndex++].Value =
+                    !useFreshReferenceResolutionDefaults && reference.IsSelfReference ? 1 : 0;
+                cmd.Parameters[parameterIndex++].Value =
+                    !useFreshReferenceResolutionDefaults && reference.IsMutualRecursion ? 1 : 0;
                 cmd.Parameters[parameterIndex++].Value = (object?)ExtractTargetQualifier(reference) ?? DBNull.Value;
             }
 
@@ -1894,7 +1955,8 @@ public partial class DbWriter
                     rowsInBatch,
                     cmd.Parameters.Count,
                     referenceLineIds.ReferenceCount,
-                    referenceLineIds.ReferenceLineCount));
+                    referenceLineIds.ReferenceLineCount,
+                    useFreshReferenceResolutionDefaults));
             ReportBatchStatementForTesting("insert_references", rowsInBatch, rowsInBatch);
             cmd.ExecuteNonQuery();
         }
@@ -2309,33 +2371,42 @@ public partial class DbWriter
                 refreshPlan.DirtyReferenceCount,
                 refreshPlan.TotalReferenceCount));
             cancellationToken.ThrowIfCancellationRequested();
-            // A fresh graph evaluates each correlated identity expression once. Once any
-            // persisted resolution exists, differential SQL avoids rewriting the stable
-            // majority while newly inserted or invalidated rows still repair normally.
-            // fresh graphでは相関identity式を1回だけ評価し、既存resolutionがあれば
-            // differential SQLで安定多数の再書込みを避けつつ新規/無効rowを修復する。
+            var useFreshReferenceResolutionDefaults = graphScope?.FreshReferenceResolutionDefaultsPending == true;
+            if (useFreshReferenceResolutionDefaults && !refreshPlan.UseFullRefresh)
+            {
+                throw new InvalidOperationException(
+                    "Fresh reference resolution defaults require a full graph refresh.");
+            }
+            // A true empty-database graph aggregates candidate-side resolution facts once and
+            // seeks only candidate-bearing references. Other persisted resolutions retain the
+            // differential path so stable rows are not rewritten.
+            // 真に空のdatabaseではcandidate側resolution factsを1回集約し、candidateを持つ
+            // referenceだけをseekする。その他の既存resolutionはstable rowを書き換えない
+            // differential pathを維持する。
             string refreshIdentitySql;
             if (refreshPlan.UseFullRefresh)
             {
-                refreshIdentitySql = HasPersistedReferenceResolutionState(cancellationToken)
-                    ? RefreshReferenceSourceSymbolsDifferentialSql + ";\n" +
-                      RefreshCSharpReferenceFactsFullSql + "\n" +
-                      RefreshCSharpSymbolFactsFullSql + "\n" +
-                      RefreshCSharpTypeIdentityFactsSql + "\n" +
-                      RefreshCSharpConstructorIdentityFactsSql + "\n" +
-                      NormalizeCSharpPropertyReceiverReferencesFullSql + "\n" +
-                      RefreshReferenceUniqueFamiliesSql + "\n" +
-                      RefreshReferenceCandidatesSql + "\n" +
-                      RefreshReferenceResolutionDifferentialSql + "\n"
-                    : RefreshReferenceSourceSymbolsFullSql + ";\n" +
-                      RefreshCSharpReferenceFactsFullSql + "\n" +
-                      RefreshCSharpSymbolFactsFullSql + "\n" +
-                      RefreshCSharpTypeIdentityFactsSql + "\n" +
-                      RefreshCSharpConstructorIdentityFactsSql + "\n" +
-                      NormalizeCSharpPropertyReceiverReferencesFullSql + "\n" +
-                      RefreshReferenceUniqueFamiliesSql + "\n" +
-                      RefreshReferenceCandidatesSql + "\n" +
-                      RefreshReferenceResolutionFullSql + "\n";
+                var hasPersistedReferenceResolutionState = !useFreshReferenceResolutionDefaults
+                    && HasPersistedReferenceResolutionState(cancellationToken);
+                var refreshReferenceSourcesSql = useFreshReferenceResolutionDefaults
+                    ? RefreshReferenceSourceSymbolsFullSql
+                    : hasPersistedReferenceResolutionState
+                        ? RefreshReferenceSourceSymbolsDifferentialSql
+                        : RefreshReferenceSourceSymbolsFullSql;
+                var refreshReferenceResolutionSql = useFreshReferenceResolutionDefaults
+                    ? RefreshReferenceResolutionFreshSparseSql
+                    : hasPersistedReferenceResolutionState
+                        ? RefreshReferenceResolutionDifferentialSql
+                        : RefreshReferenceResolutionFullSql;
+                refreshIdentitySql = refreshReferenceSourcesSql + ";\n" +
+                                     RefreshCSharpReferenceFactsFullSql + "\n" +
+                                     RefreshCSharpSymbolFactsFullSql + "\n" +
+                                     RefreshCSharpTypeIdentityFactsSql + "\n" +
+                                     RefreshCSharpConstructorIdentityFactsSql + "\n" +
+                                     NormalizeCSharpPropertyReceiverReferencesFullSql + "\n" +
+                                     RefreshReferenceUniqueFamiliesSql + "\n" +
+                                     RefreshReferenceCandidatesSql + "\n" +
+                                     refreshReferenceResolutionSql + "\n";
             }
             else
             {
