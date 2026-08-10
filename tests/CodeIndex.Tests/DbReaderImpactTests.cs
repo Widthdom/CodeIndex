@@ -784,7 +784,7 @@ public partial class DbReaderTests
     }
 
     [Fact]
-    public void AnalyzeImpact_PartialClassWithoutReverseEdges_ExplainsMultipleDefinitions()
+    public void AnalyzeImpact_PartialClassWithoutReverseEdges_UsesSingleLogicalRoot()
     {
         InsertIndexedFile("src/Worker.Part1.cs", "csharp",
             """
@@ -801,7 +801,8 @@ public partial class DbReaderTests
             }
             """);
 
-        var analysis = _reader.AnalyzeImpact("Worker", maxDepth: 3, limit: 10);
+        var reader = CreateReferenceIdentityReadyImpactReader();
+        var analysis = reader.AnalyzeImpact("Worker", maxDepth: 3, limit: 10);
 
         Assert.Equal("none", analysis.ImpactMode);
         Assert.Empty(analysis.Callers);
@@ -809,8 +810,253 @@ public partial class DbReaderTests
         Assert.True(analysis.HasClassLikeDefinitions);
         Assert.True(analysis.HasMultipleDefinitions);
         Assert.True(analysis.HasMultipleDefinitionFiles);
+        Assert.Equal("logical_partial_family", analysis.TraversalRootScope);
+        Assert.NotNull(analysis.TraversalPartialFamilyId);
+        Assert.Equal(2, analysis.PartialFamilyMemberCount);
+        Assert.Equal(2, analysis.PartialFamilyMemberRootCount);
+        Assert.False(analysis.PartialFamilyMemberRootTruncated);
+        Assert.Equal(0, analysis.PartialFamilyMemberRootOmitted);
+        Assert.Equal("class_symbol_no_symbol_callers", analysis.ZeroResultReason);
+        Assert.Contains("deps --path", analysis.Suggestion);
+        Assert.Contains("--reverse", analysis.Suggestion);
+    }
+
+    [Fact]
+    public void AnalyzeImpact_StaleReferenceIdentityDoesNotClaimLogicalPartialTraversal()
+    {
+        InsertIndexedFile("src/Stale.Part1.cs", "csharp", "public partial class Stale { public void Start() { } }");
+        InsertIndexedFile("src/Stale.Part2.cs", "csharp", "public partial class Stale { public void Stop() { } }");
+        InsertIndexedFile(
+            "src/StaleConsumer.cs",
+            "csharp",
+            "public class StaleConsumer { public void Run(Stale value) { value.Start(); value.Stop(); } }");
+        _writer.ClearReferenceIdentityContractReady();
+        var reader = new DbReader(_db.Connection);
+
+        var analysis = reader.AnalyzeImpact("Stale", maxDepth: 2, limit: 10);
+
+        Assert.Equal("symbol", analysis.TraversalRootScope);
+        Assert.Null(analysis.TraversalPartialFamilyId);
+        Assert.Null(analysis.PartialFamilyMemberCount);
+        Assert.Null(analysis.PartialFamilyMemberRootCount);
+        Assert.Null(analysis.PartialFamilyMemberRootTruncated);
+        Assert.Equal("none", analysis.ImpactMode);
+        Assert.Empty(analysis.FileImpacts);
         Assert.Equal("multiple_definition_files", analysis.ZeroResultReason);
-        Assert.Contains("deps --path <definition-path> --reverse", analysis.Suggestion);
+        Assert.Equal(["multiple_definition_files"], analysis.ImpactFailureChain);
+    }
+
+    [Fact]
+    public void AnalyzeImpact_PartialClassFileHintsUnionAllMemberFilesAndDeduplicateConsumers()
+    {
+        InsertIndexedFile("src/Worker.Start.cs", "csharp",
+            """
+            namespace Demo;
+            public partial class Worker
+            {
+                public void Start() { }
+            }
+            """);
+        InsertIndexedFile("src/Worker.Stop.cs", "csharp",
+            """
+            namespace Demo;
+            public partial class Worker
+            {
+                public void Stop() { }
+            }
+            """);
+        InsertIndexedFile("src/StartConsumer.cs", "csharp",
+            """
+            namespace Demo;
+            public class StartConsumer
+            {
+                public void Run(Worker worker) => worker.Start();
+            }
+            """);
+        InsertIndexedFile("src/StopConsumer.cs", "csharp",
+            """
+            namespace Demo;
+            public class StopConsumer
+            {
+                public void Run(Worker worker) => worker.Stop();
+            }
+            """);
+        InsertIndexedFile("src/BothConsumer.cs", "csharp",
+            """
+            namespace Demo;
+            public class BothConsumer
+            {
+                public void Run(Worker worker)
+                {
+                    worker.Start();
+                    worker.Stop();
+                }
+            }
+            """);
+
+        var reader = CreateReferenceIdentityReadyImpactReader();
+        var analysis = reader.AnalyzeImpact("Demo.Worker", maxDepth: 3, limit: 10);
+
+        Assert.Equal("file_dependency_hints", analysis.ImpactMode);
+        Assert.True(analysis.Heuristic);
+        Assert.Empty(analysis.Callers);
+        Assert.Equal(3, analysis.FileImpacts.Count);
+        Assert.Equal(
+            ["src/BothConsumer.cs", "src/StartConsumer.cs", "src/StopConsumer.cs"],
+            analysis.FileImpacts.Select(impact => impact.SourcePath).Order(StringComparer.Ordinal));
+        Assert.DoesNotContain(analysis.FileImpacts, impact => impact.SourcePath.StartsWith("src/Worker.", StringComparison.Ordinal));
+        Assert.Equal(analysis.FileImpacts.Count, analysis.FileImpacts.Select(impact => impact.SourcePath).Distinct().Count());
+    }
+
+    [Fact]
+    public void AnalyzeImpact_PartialMethodFamilyTraversesUnionDeduplicatesAndDetectsLogicalCycle()
+    {
+        InsertIndexedFile("src/Worker.Sync.Declaration.cs", "csharp",
+            """
+            namespace Demo;
+            public partial class Worker
+            {
+                partial void Sync();
+                public void Start() => Sync();
+            }
+            """);
+        InsertIndexedFile("src/Worker.Sync.Implementation.cs", "csharp",
+            """
+            namespace Demo;
+            public partial class Worker
+            {
+                partial void Sync() => Finish();
+                public void Finish() => Sync();
+            }
+            """);
+        InsertIndexedFile("src/Entry.cs", "csharp",
+            """
+            namespace Demo;
+            public class Entry
+            {
+                public void Run(Worker worker) => worker.Start();
+            }
+            """);
+        InsertIndexedFile("src/Other.Sync.cs", "csharp",
+            """
+            namespace Other;
+            public class Worker
+            {
+                public void Sync() { }
+            }
+            """);
+
+        var reader = CreateReferenceIdentityReadyImpactReader();
+        var bounded = reader.AnalyzeImpact("Demo.Worker.Sync", maxDepth: 1, limit: 10, withPaths: true);
+        var expanded = reader.AnalyzeImpact("Demo.Worker.Sync", maxDepth: 2, limit: 10, withPaths: true);
+
+        Assert.Equal(2, bounded.DefinitionCount);
+        Assert.Equal(1, bounded.LogicalDefinitionCount);
+        Assert.Equal("logical_partial_family", bounded.TraversalRootScope);
+        Assert.Equal(2, bounded.PartialFamilyMemberRootCount);
+        Assert.Equal(["Finish", "Start"], bounded.Callers.Select(caller => caller.CallerName).Order(StringComparer.Ordinal));
+        Assert.All(bounded.Callers, caller => Assert.Equal(1, caller.Depth));
+        Assert.Equal(bounded.Callers.Count, bounded.Callers.Select(caller => caller.CallerSymbolId).Distinct().Count());
+        Assert.True(bounded.CycleDetected);
+        Assert.Contains(bounded.Cycles!, cycle => cycle.Members.Any(member => member.EndsWith(".Sync", StringComparison.Ordinal)) && cycle.Members.Contains("Finish"));
+        Assert.All(
+            bounded.Callers.SelectMany(caller => caller.PathDetails ?? []),
+            path =>
+            {
+                Assert.EndsWith(".Sync", path[0].Name, StringComparison.Ordinal);
+                Assert.StartsWith("partial:", path[0].PartialFamilyId);
+                Assert.StartsWith("src/Worker.Sync.", path[0].DefinitionPath);
+            });
+
+        Assert.Contains(expanded.Callers, caller => caller.CallerName == "Run" && caller.Depth == 2);
+        Assert.DoesNotContain(expanded.Callers, caller => caller.Path == "src/Other.Sync.cs");
+        Assert.Equal(expanded.Callers.Count, expanded.Callers.Select(caller => caller.CallerSymbolId).Distinct().Count());
+        Assert.True(expanded.CycleDetected);
+        Assert.Contains(expanded.Cycles!, cycle => cycle.Members.Any(member => member.EndsWith(".Sync", StringComparison.Ordinal)) && cycle.Members.Contains("Finish"));
+    }
+
+    [Fact]
+    public void AnalyzeImpact_CallerFreePartialMethodIsOneLogicalNoCallersResult()
+    {
+        InsertIndexedFile("src/Worker.Sync.Declaration.cs", "csharp",
+            """
+            namespace Demo;
+            public partial class Worker
+            {
+                partial void Sync();
+            }
+            """);
+        InsertIndexedFile("src/Worker.Sync.Implementation.cs", "csharp",
+            """
+            namespace Demo;
+            public partial class Worker
+            {
+                partial void Sync() { }
+            }
+            """);
+
+        var reader = CreateReferenceIdentityReadyImpactReader();
+        var analysis = reader.AnalyzeImpact("Demo.Worker.Sync", maxDepth: 2, limit: 10);
+
+        Assert.Equal(2, analysis.DefinitionCount);
+        Assert.Equal(1, analysis.LogicalDefinitionCount);
+        Assert.Equal("logical_partial_family", analysis.TraversalRootScope);
+        Assert.Equal("none", analysis.ImpactMode);
+        Assert.Empty(analysis.Callers);
+        Assert.Null(analysis.ZeroResultReason);
+        Assert.Equal(["no_callers"], analysis.ImpactFailureChain);
+    }
+
+    [Fact]
+    public void AnalyzeImpact_UnrelatedSameNameTypeRemainsAmbiguousBesidePartialFamily()
+    {
+        InsertIndexedFile("src/A.Worker.One.cs", "csharp",
+            """
+            namespace A;
+            public partial class Worker { }
+            """);
+        InsertIndexedFile("src/A.Worker.Two.cs", "csharp",
+            """
+            namespace A;
+            public partial class Worker { }
+            """);
+        InsertIndexedFile("src/B.Worker.cs", "csharp",
+            """
+            namespace B;
+            public class Worker { }
+            """);
+
+        var analysis = _reader.AnalyzeImpact("Worker", maxDepth: 3, limit: 10);
+
+        Assert.Equal(3, analysis.DefinitionCount);
+        Assert.Equal(2, analysis.LogicalDefinitionCount);
+        Assert.Equal("symbol", analysis.TraversalRootScope);
+        Assert.Null(analysis.TraversalPartialFamilyId);
+        Assert.Equal("multiple_definition_files", analysis.ZeroResultReason);
+        Assert.Empty(analysis.Callers);
+        Assert.Empty(analysis.FileImpacts);
+    }
+
+    [Fact]
+    public void AnalyzeImpact_PartialFamilyBudgetIsIndependentFromTraversalTruncation()
+    {
+        InsertIndexedFile("src/Budgeted.One.cs", "csharp", "public partial class Budgeted { }");
+        InsertIndexedFile("src/Budgeted.Two.cs", "csharp", "public partial class Budgeted { }");
+        InsertIndexedFile("src/Budgeted.Three.cs", "csharp", "public partial class Budgeted { }");
+        var reader = CreateReferenceIdentityReadyImpactReader();
+        reader.ImpactPartialFamilyMemberBudget = 2;
+
+        var analysis = reader.AnalyzeImpact("Budgeted", maxDepth: 2, limit: 10);
+
+        Assert.Equal("logical_partial_family", analysis.TraversalRootScope);
+        Assert.Equal(3, analysis.PartialFamilyMemberCount);
+        Assert.Equal(2, analysis.PartialFamilyMemberRootCount);
+        Assert.Equal(2, analysis.PartialFamilyMemberRootLimit);
+        Assert.True(analysis.PartialFamilyMemberRootTruncated);
+        Assert.Equal(1, analysis.PartialFamilyMemberRootOmitted);
+        Assert.False(analysis.Truncated);
+        Assert.Null(analysis.TruncatedReason);
+        Assert.False(analysis.CountIsAuthoritative);
     }
 
     [Fact]
@@ -1348,5 +1594,11 @@ public partial class DbReaderTests
 
         Assert.True(analysis.HasMultipleDefinitions);
         Assert.False(analysis.HasMultipleDefinitionFiles);
+    }
+
+    private DbReader CreateReferenceIdentityReadyImpactReader()
+    {
+        _writer.RefreshMutualRecursionFlags(stampReferenceIdentityContractReady: true);
+        return new DbReader(_db.Connection);
     }
 }

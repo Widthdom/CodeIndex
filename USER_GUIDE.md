@@ -823,6 +823,25 @@ dependencies are intentionally part of the graph. Legacy indexes stored those
 reads as `call`; they remain readable and keep their historical inclusive behavior
 until re-indexed.
 
+When the reference-identity contract is current and every matching C# declaration belongs to one logical partial family, `impact`
+uses the family's stable `partial_family_id` as one traversal root and walks the
+union of all physical member identities. Callers, file hints, and shortest paths
+reached through more than one member are deduplicated; the representative
+definition still carries `family_members` as physical evidence. An unrelated
+same-name type or member remains ambiguous and is never folded into that family.
+With `--with-paths`, the logical root's `path_details` node carries the
+representative `definition_path` plus `partial_family_id`.
+JSON and MCP responses identify this mode with
+`traversal_root_scope: "logical_partial_family"` and
+`traversal_partial_family_id`. The `partial_family_member_*` fields report the
+eligible physical root count, limit, omitted count, and truncation independently
+from the normal result/traversal `truncated` fields. A stale identity contract keeps
+`traversal_root_scope: "symbol"` and omits the family-root metadata because the
+legacy traversal cannot guarantee the physical-ID union. When the separate family
+root limit is reached, CLI count JSON also reports `degraded: true` and
+`authoritative_count: false`, while MCP count-only output reports `total: null`;
+ordinary traversal `truncated` remains unchanged.
+
 On a current index, cycle detection follows the resolved source/target symbol IDs
 on real directed edges. Two distinct methods with the same display name are not a
 cycle, while direct recursion is reported as a singleton cycle. JSON caller rows
@@ -4313,6 +4332,22 @@ member / value read を `member_read` として保存し、callers / callees / i
 （MCP は `includeMemberReads`）を明示してください。legacy index はこれらの read を
 `call` として保存しているため、引き続き読み取り可能で、再 index するまでは従来の
 inclusive な挙動を維持します。
+
+reference-identity contract が current で、一致する C# declaration がすべて 1 つの論理 partial family に属する場合、`impact` は
+安定した `partial_family_id` を 1 つの traversal root として使い、全物理 member identity
+の和集合を辿ります。複数 member から到達する caller、file hint、shortest path は重複排除し、
+代表 definition の `family_members` には物理 evidence を残します。無関係な同名 type / member
+は曖昧なままで、この family へ統合しません。JSON / MCP response はこの mode を
+`traversal_root_scope: "logical_partial_family"` と `traversal_partial_family_id` で示します。
+`--with-paths` では論理 root の `path_details` node に代表 `definition_path` と
+`partial_family_id` も含めます。
+`partial_family_member_*` fields は物理 root 候補の件数、上限、省略件数、truncation
+を通常の result / traversal 用 `truncated` fields とは独立して報告します。identity contract
+が stale の場合、legacy traversal は物理 ID の和集合を保証できないため
+`traversal_root_scope: "symbol"` のままとし、family-root metadata を省略します。独立した
+family root 上限に達した count JSON は CLI で `degraded: true` と
+`authoritative_count: false`、MCP count-only で `total: null` を返しますが、通常の traversal
+用 `truncated` は変更しません。
 
 current index では、cycle 判定は実在する有向辺の解決済み source/target symbol ID を
 辿ります。表示名が同じ別 method は cycle にせず、直接再帰は singleton cycle として
