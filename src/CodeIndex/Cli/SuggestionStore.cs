@@ -694,6 +694,23 @@ public class SuggestionStore
     }
 
     /// <summary>
+    /// Stream a bounded store snapshot and materialize only records accepted by the caller.
+    /// The predicate observes normalized legacy/default fields.
+    /// 上限付き store snapshot をストリーミングし、caller が受理した record だけを実体化する。
+    /// predicate には legacy/default field を正規化した record を渡す。
+    /// </summary>
+    internal List<SuggestionRecord> LoadFiltered(
+        Func<SuggestionRecord, bool> predicate,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(predicate);
+        return ReadFilteredUnlocked(
+            predicate,
+            normalizeDefaults: true,
+            cancellationToken: cancellationToken);
+    }
+
+    /// <summary>
     /// Mark a suggestion as submitted to GitHub by updating its URL and flag.
     /// The entire read-modify-write is protected by a file lock.
     /// NOTE: Prefer TryAddAndSubmit for new submissions — this method exists
@@ -933,14 +950,16 @@ public class SuggestionStore
     private List<SuggestionRecord> ReadFilteredUnlocked(
         Func<SuggestionRecord, bool> predicate,
         int skip = 0,
-        int? take = null)
+        int? take = null,
+        bool normalizeDefaults = false,
+        CancellationToken cancellationToken = default)
     {
         if (!TryReadStoreSnapshot(out var snapshot))
             return new List<SuggestionRecord>();
 
         try
         {
-            return ReadFilteredSnapshotAsync(snapshot, predicate, skip, take, normalizeDefaults: false)
+            return ReadFilteredSnapshotAsync(snapshot, predicate, skip, take, normalizeDefaults, cancellationToken)
                 .GetAwaiter()
                 .GetResult();
         }
@@ -1004,11 +1023,14 @@ public class SuggestionStore
             if (recordsRead > MaxSuggestionStoreRecords)
                 throw new JsonException($"Suggestion store contains more than {MaxSuggestionStoreRecords} records.");
 
-            if (record == null || !predicate(record))
+            if (record == null)
                 continue;
 
             if (normalizeDefaults)
                 NormalizeRecordDefaults(record);
+
+            if (!predicate(record))
+                continue;
 
             if (skipped < skip)
             {

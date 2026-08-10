@@ -9,9 +9,9 @@ using CodeIndex.Models;
 
 namespace CodeIndex.Cli;
 
-internal static class SuggestionsCommandRunner
+internal static partial class SuggestionsCommandRunner
 {
-    private const string Usage = "Usage: cdidx suggestions [list|show|export|add|update|delete] [id|description] [--db <path>] [--json] [--description <text>] [--context <text>] [--title <text>] [--evidence-path <path>] [--status <all|draft|submitted_pending_triage|open_in_upstream|resolved_in_upstream|wont_fix|duplicate|superseded|submitted|unsubmitted>] [--actor <name>] [--reason <text>] [--language <lang>] [--category <category>] [--since <datetime>] [--agent <name>] [--limit <n>] [--offset <n>] [--format <json|markdown|issue-drafts>] [--output <path>] [--overwrite] [--open-issues <path|github|github:owner/name>] [--repo <owner/name>] [--issue-state <open|closed|all>] [--duplicate-confidence <low|medium|high>|--duplicate-threshold <score>]";
+    private const string Usage = "Usage: cdidx suggestions [list|show|export|add|update|delete] [id|description] [--db <path>] [--json] [--description <text>] [--context <text>] [--title <text>] [--evidence-path <path>] [--status <all|draft|submitted_pending_triage|open_in_upstream|resolved_in_upstream|wont_fix|duplicate|superseded|submitted|unsubmitted>] [--actor <name>] [--reason <text>] [--language <lang>] [--category <category>] [--since <datetime>] [--agent <name>] [--query <text>] [--count|--summary-only|--compact] [--max-json-bytes <n>] [--limit <n>] [--offset <n>] [--format <json|markdown|issue-drafts>] [--output <path>] [--overwrite] [--open-issues <path|github|github:owner/name>] [--repo <owner/name>] [--issue-state <open|closed|all>] [--duplicate-confidence <low|medium|high>|--duplicate-threshold <score>]";
     internal const int MaxOpenIssuesJsonBytes = IssueDuplicatePreflight.MaxOpenIssuesJsonBytes;
     internal const int MaxOpenIssuesJsonDepth = IssueDuplicatePreflight.MaxOpenIssuesJsonDepth;
     internal const int MaxSuggestionExportTextFieldLength = 4096;
@@ -78,6 +78,29 @@ internal static class SuggestionsCommandRunner
         {
             return WriteUsageError(StripErrorPrefix(options.Error), options.Json, jsonOptions);
         }
+        if (options.Count && options.SummaryOnly)
+            return WriteUsageError("--count and --summary-only cannot be combined.", options.Json, jsonOptions);
+        if (options.Count && options.Compact)
+            return WriteUsageError("--count and --compact cannot be combined.", options.Json, jsonOptions);
+        if (options.SummaryOnly && options.Compact)
+            return WriteUsageError("--summary-only and --compact cannot be combined.", options.Json, jsonOptions);
+        if (options.Limit == 0
+            && !options.Count
+            && !options.SummaryOnly
+            && (options.Compact || options.MaxJsonBytes != null))
+        {
+            return WriteUsageError(
+                "--limit 0 cannot be used with --compact or --max-json-bytes because the structured page could not provide a progressing continuation offset.",
+                options.Json,
+                jsonOptions,
+                "Use a positive --limit, or remove the page projection options.");
+        }
+        if (options.HasHistoryQueryProjectionOptions && verb is not ("list" or "export"))
+            return WriteUsageError("--query, --count, --summary-only, --compact, and --max-json-bytes can only be used with `suggestions list` or `suggestions export`.", options.Json, jsonOptions);
+        if (verb == "export"
+            && options.HasStructuredProjectionOptions
+            && options.ExportFormat != "json")
+            return WriteUsageError("--count, --summary-only, --compact, and --max-json-bytes require `suggestions export --format json`.", options.Json, jsonOptions);
         if ((options.DuplicateConfidenceSpecified || options.DuplicateThresholdSpecified)
             && (verb != "export" || options.ExportFormat != "issue-drafts"))
             return WriteUsageError("--duplicate-confidence and --duplicate-threshold can only be used with `suggestions export --format issue-drafts`.", options.Json, jsonOptions);
@@ -124,10 +147,17 @@ internal static class SuggestionsCommandRunner
             if (verb == "delete")
                 return RunDelete(store, store.LoadAll(), options, jsonOptions);
 
-            records = ApplyFilters(store.LoadAll(), options)
-                .OrderByDescending(s => s.CreatedAt)
-                .ThenBy(s => s.Id, StringComparer.Ordinal)
-                .ToList();
+            records = store.LoadFiltered(record => MatchesFilters(record, options), cancellationToken);
+            if (!options.Count && !options.SummaryOnly)
+            {
+                records.Sort(static (left, right) =>
+                {
+                    var createdAtComparison = right.CreatedAt.CompareTo(left.CreatedAt);
+                    return createdAtComparison != 0
+                        ? createdAtComparison
+                        : StringComparer.Ordinal.Compare(left.Id, right.Id);
+                });
+            }
         }
         catch (Exception ex) when (IsSuggestionStoreFileSystemException(ex))
         {
@@ -139,10 +169,11 @@ internal static class SuggestionsCommandRunner
 
         return verb switch
         {
-            "list" => RunList(outputRecords, records.Count, options, jsonOptions),
+            "list" => RunList(outputRecords, records, options, jsonOptions),
             "show" => RunShow(records, options, jsonOptions),
             "export" => RunExport(
                 outputRecords,
+                records,
                 options,
                 jsonOptions,
                 cancellationToken,
@@ -402,8 +433,21 @@ internal static class SuggestionsCommandRunner
         return CommandExitCodes.Success;
     }
 
-    private static int RunList(List<SuggestionRecord> records, int totalCount, Options options, JsonSerializerOptions jsonOptions)
+    private static int RunList(
+        List<SuggestionRecord> records,
+        List<SuggestionRecord> filteredRecords,
+        Options options,
+        JsonSerializerOptions jsonOptions)
     {
+        var totalCount = filteredRecords.Count;
+        if (options.Count && !options.Json)
+        {
+            Console.WriteLine(totalCount.ToString(CultureInfo.InvariantCulture));
+            return CommandExitCodes.Success;
+        }
+        if (options.HasStructuredProjectionOptions)
+            return RunStructuredQueryOutput(filteredRecords, records, options, jsonOptions, exportDetails: false);
+
         if (options.Json)
         {
             var offset = Math.Min(options.Offset, totalCount);
@@ -514,12 +558,16 @@ internal static class SuggestionsCommandRunner
 
     private static int RunExport(
         List<SuggestionRecord> records,
+        List<SuggestionRecord> filteredRecords,
         Options options,
         JsonSerializerOptions jsonOptions,
         CancellationToken cancellationToken,
         string suggestionStorePath,
         string databasePath)
     {
+        if (options.HasStructuredProjectionOptions)
+            return RunStructuredQueryOutput(filteredRecords, records, options, jsonOptions, exportDetails: true);
+
         if (options.ExportFormat == "markdown")
         {
             var markdown = FormatMarkdown(records);
@@ -757,26 +805,27 @@ internal static class SuggestionsCommandRunner
             errorCode: CommandErrorCodes.SuggestionStoreUnavailable,
             category: FileSystemBoundary.ClassifyProbeFailure(ex));
 
-    private static IEnumerable<SuggestionRecord> ApplyFilters(IEnumerable<SuggestionRecord> records, Options options)
+    private static bool MatchesFilters(SuggestionRecord record, Options options)
     {
-        foreach (var record in records)
-        {
-            if (options.Status != "all" && !MatchesStatus(record, options.Status))
-                continue;
-            if (options.Language != null && !string.Equals(record.Language, options.Language, StringComparison.OrdinalIgnoreCase))
-                continue;
-            if (options.Category != null && !string.Equals(record.Category, options.Category, StringComparison.OrdinalIgnoreCase))
-                continue;
-            if (options.Agent != null && !MatchesAgent(record, options.Agent))
-                continue;
-            if (options.Since != null && new DateTimeOffset(DateTime.SpecifyKind(record.CreatedAt, DateTimeKind.Utc)) < options.Since.Value)
-                continue;
-            yield return record;
-        }
+        if (options.Status != "all" && !MatchesStatus(record, options.Status))
+            return false;
+        if (options.Language != null && !string.Equals(record.Language, options.Language, StringComparison.OrdinalIgnoreCase))
+            return false;
+        if (options.Category != null && !string.Equals(record.Category, options.Category, StringComparison.OrdinalIgnoreCase))
+            return false;
+        if (options.Agent != null && !MatchesAgent(record, options.Agent))
+            return false;
+        if (options.Since != null && new DateTimeOffset(DateTime.SpecifyKind(record.CreatedAt, DateTimeKind.Utc)) < options.Since.Value)
+            return false;
+        if (options.Query != null && !MatchesQuery(record, options.Query))
+            return false;
+        return true;
     }
 
     private static List<SuggestionRecord> ApplyOutputPage(List<SuggestionRecord> records, Options options)
     {
+        if (options.Count || options.SummaryOnly)
+            return new List<SuggestionRecord>();
         if (options.Offset == 0 && options.Limit == null)
             return records;
 
@@ -879,7 +928,19 @@ internal static class SuggestionsCommandRunner
     private static string FormatTitle(string description, int maxLength)
     {
         var firstLine = description.Replace('\r', ' ').Replace('\n', ' ').Trim();
-        return firstLine.Length <= maxLength ? firstLine : firstLine[..(maxLength - 1)] + "...";
+        if (firstLine.Length <= maxLength)
+            return firstLine;
+
+        var end = maxLength - 1;
+        if (end > 0
+            && end < firstLine.Length
+            && char.IsHighSurrogate(firstLine[end - 1])
+            && char.IsLowSurrogate(firstLine[end]))
+        {
+            end--;
+        }
+
+        return firstLine[..end] + "...";
     }
 
     private static SuggestionListItemJsonResult ToListItem(SuggestionRecord record) => new(
@@ -1418,6 +1479,45 @@ internal static class SuggestionsCommandRunner
                     else
                         options.Since = parsedSince;
                     break;
+                case "--query":
+                    if (!TryReadSchemaValue("--query", out var query, out var queryError))
+                    {
+                        options.Error = queryError;
+                        return options;
+                    }
+                    var normalizedQuery = NormalizeSuggestionQueryText(query);
+                    if (normalizedQuery.Length == 0)
+                        options.Error = "Error: --query must not be empty.";
+                    else if (normalizedQuery.Length > QueryLimits.MaxQueryLength)
+                        options.Error = $"Error: --query must be at most {QueryLimits.MaxQueryLength} characters.";
+                    else
+                        options.Query = normalizedQuery;
+                    break;
+                case "--count":
+                    options.Count = true;
+                    break;
+                case "--summary-only":
+                    options.SummaryOnly = true;
+                    options.Json = true;
+                    break;
+                case "--compact":
+                    options.Compact = true;
+                    options.Json = true;
+                    break;
+                case "--max-json-bytes":
+                    if (!TryReadSchemaValue("--max-json-bytes", out var maxJsonBytes, out var maxJsonBytesError))
+                    {
+                        options.Error = maxJsonBytesError;
+                        return options;
+                    }
+                    if (!TryParsePositiveInt("--max-json-bytes", maxJsonBytes, MaxSuggestionExportFileBytes, out var parsedMaxJsonBytes, out var parsedMaxJsonBytesError))
+                    {
+                        options.Error = parsedMaxJsonBytesError;
+                        return options;
+                    }
+                    options.MaxJsonBytes = parsedMaxJsonBytes;
+                    options.Json = true;
+                    break;
                 case "--format":
                     if (!TryReadSchemaValue("--format", out var format, out var formatError))
                     {
@@ -1542,6 +1642,26 @@ internal static class SuggestionsCommandRunner
         return false;
     }
 
+    private static bool TryParsePositiveInt(
+        string option,
+        string rawValue,
+        int maximum,
+        out int value,
+        out string? error)
+    {
+        if (int.TryParse(rawValue, NumberStyles.None, CultureInfo.InvariantCulture, out value)
+            && value > 0
+            && value <= maximum)
+        {
+            error = null;
+            return true;
+        }
+
+        value = 0;
+        error = $"Error: {option} must be an integer from 1 to {maximum}.";
+        return false;
+    }
+
     private static bool TryParseScoreThreshold(string option, string rawValue, out double value, out string? error)
     {
         if (double.TryParse(rawValue, NumberStyles.Float, CultureInfo.InvariantCulture, out value) &&
@@ -1616,11 +1736,18 @@ internal static class SuggestionsCommandRunner
         public bool DuplicateConfidenceSpecified { get; set; }
         public bool DuplicateThresholdSpecified { get; set; }
         public DateTimeOffset? Since { get; set; }
+        public string? Query { get; set; }
+        public bool Count { get; set; }
+        public bool SummaryOnly { get; set; }
+        public bool Compact { get; set; }
+        public int? MaxJsonBytes { get; set; }
         public string? Error { get; set; }
         public bool HasPagination => Limit.HasValue || OffsetSpecified;
         public bool HasContentEditableFields => LanguageSpecified || CategorySpecified || DescriptionSpecified || ContextSpecified || TitleSpecified || EvidencePathsSpecified || AgentSpecified;
         public bool HasQueryOnlyOptions => HasQueryOnlyOptionsExceptStatus || StatusSpecified;
-        public bool HasQueryOnlyOptionsExceptStatus => HasPagination || Since != null || FormatSpecified || OutputPath != null || Overwrite || OpenIssuesPath != null || OpenIssuesRepository != null || IssueStateSpecified || DuplicateConfidenceSpecified || DuplicateThresholdSpecified;
+        public bool HasQueryOnlyOptionsExceptStatus => HasPagination || Since != null || HasHistoryQueryProjectionOptions || FormatSpecified || OutputPath != null || Overwrite || OpenIssuesPath != null || OpenIssuesRepository != null || IssueStateSpecified || DuplicateConfidenceSpecified || DuplicateThresholdSpecified;
+        public bool HasHistoryQueryProjectionOptions => Query != null || HasStructuredProjectionOptions;
+        public bool HasStructuredProjectionOptions => Count || SummaryOnly || Compact || MaxJsonBytes != null;
     }
 }
 

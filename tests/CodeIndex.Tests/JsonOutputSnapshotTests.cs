@@ -1,7 +1,9 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization.Metadata;
 using CodeIndex.Cli;
 using CodeIndex.Database;
+using CodeIndex.Models;
 
 namespace CodeIndex.Tests;
 
@@ -22,6 +24,7 @@ public class JsonOutputSnapshotTests
     private readonly JsonSerializerOptions _jsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+        TypeInfoResolver = new DefaultJsonTypeInfoResolver(),
     };
 
     private const string LibSource = @"namespace Demo;
@@ -224,6 +227,52 @@ public class Probe
 
             JsonOutputSnapshotHelper.AssertMatches(
                 "excerpt.json",
+                stdout,
+                BuildPathReplacements(projectRoot));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSuggestionsCompact_JsonOutput_MatchesGolden_Issue5061()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_snapshot_suggestions_compact");
+        try
+        {
+            var cdidxDir = Path.Combine(projectRoot, ".cdidx");
+            Directory.CreateDirectory(cdidxDir);
+            var dbPath = Path.Combine(cdidxDir, "codeindex.db");
+            var titlePrefix = new string('a', 118);
+            var store = new SuggestionStore(cdidxDir);
+            Assert.True(store.TryAdd(new SuggestionRecord
+            {
+                Id = new string('1', 64),
+                Category = "output_format",
+                Language = "csharp",
+                Description = "Snapshot query description",
+                SampledTitle = titlePrefix + "😀suffix",
+                EvidencePaths = ["src/Snapshot.cs"],
+                CreatedAt = new DateTime(2026, 8, 11, 0, 0, 0, DateTimeKind.Utc),
+            }));
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => SuggestionsCommandRunner.Run(
+                ["list", "--db", dbPath, "--query", "snapshot query", "--compact"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = JsonDocument.Parse(stdout);
+            var item = Assert.Single(document.RootElement.GetProperty("results").EnumerateArray());
+            var compactTitle = item.GetProperty("title").GetString()
+                ?? throw new InvalidOperationException("Compact suggestion title was null.");
+            Assert.Equal(titlePrefix + "...", compactTitle);
+            Assert.DoesNotContain('\uFFFD', compactTitle);
+
+            JsonOutputSnapshotHelper.AssertMatches(
+                "suggestions-compact.json",
                 stdout,
                 BuildPathReplacements(projectRoot));
         }

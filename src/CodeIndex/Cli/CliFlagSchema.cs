@@ -205,7 +205,7 @@ internal static class CliFlagSchema
     private static readonly string[] QueryCommands =
     [
         "search", "recipes", "definition", "goto", "references", "callers", "callees",
-        "symbols", "files", "find", "inspect", "impact",
+        "symbols", "files", "find", "inspect", "impact", "suggestions",
     ];
 
     private static readonly string[] LimitCapableCommands =
@@ -235,7 +235,7 @@ internal static class CliFlagSchema
     private static readonly string[] CountCommands =
     [
         "search", "definition", "references", "callers", "callees", "symbols",
-        "files", "find", "impact", "unused", "hotspots", "audit", "languages",
+        "files", "find", "impact", "unused", "hotspots", "audit", "languages", "suggestions",
     ];
     private static readonly string[] StrictNotFoundCommands =
     [
@@ -267,7 +267,7 @@ internal static class CliFlagSchema
     private static readonly string[] ByteFormatCommands = ["files", "map"];
     private static readonly string[] EntrypointConfidenceCommands = ["map"];
     private static readonly string[] MapSectionCommands = ["map"];
-    private static readonly string[] SummaryOnlyCommands = ["map", "search", "recipes", "audit", "symbols", "files", "deps", "unused", "hotspots", "languages"];
+    private static readonly string[] SummaryOnlyCommands = ["map", "search", "recipes", "audit", "symbols", "files", "deps", "unused", "hotspots", "languages", "suggestions"];
     private static readonly string[] DependencyCycleCommands = ["deps"];
     private static readonly string[] LanguagesFilterCommands = ["languages"];
 
@@ -335,7 +335,7 @@ internal static class CliFlagSchema
         "validate", "deps", "impact", "unused", "hotspots", "suggestions", "languages", "db", "report", "upgrade", "doctor", "license",
     ];
 
-    private static readonly string[] CompactJsonCommands = ["map", "inspect", "outline", "symbols", "unused", "status", "hotspots", "impact"];
+    private static readonly string[] CompactJsonCommands = ["map", "inspect", "outline", "symbols", "unused", "status", "hotspots", "impact", "suggestions"];
 
     private static readonly string[] FormatCommands =
     [
@@ -578,7 +578,7 @@ internal static class CliFlagSchema
             new() { Name = "--env-domain", ValuePlaceholder = "<domain>", Description = "Doctor full environment inventory: filter by exact domain", PrimaryCommands = Set("doctor") },
             new() { Name = "--env-category", ValuePlaceholder = "<category>", Description = "Doctor full environment inventory: filter by exact category", PrimaryCommands = Set("doctor") },
             new() { Name = "--env-sensitivity", ValuePlaceholder = "<sensitivity>", Description = "Doctor full environment inventory: filter by exact sensitivity", PrimaryCommands = Set("doctor") },
-            new() { Name = "--max-json-bytes", ValuePlaceholder = "<n>", Description = "Bound emitted JSON bytes; bounded responses omit whole rows with recovery metadata, including schema-valid audit SARIF", PrimaryCommands = Set("search", "definition", "find", "status", "references", "callers", "callees", "excerpt", "inspect", "outline", "impact", "recipes", "audit", "map", "files", "symbols", "deps", "hotspots", "languages", "unused", "doctor") },
+            new() { Name = "--max-json-bytes", ValuePlaceholder = "<n>", Description = "Bound emitted JSON bytes; bounded responses omit whole rows with recovery metadata, including schema-valid audit SARIF", PrimaryCommands = Set("search", "definition", "find", "status", "references", "callers", "callees", "excerpt", "inspect", "outline", "impact", "recipes", "audit", "map", "files", "symbols", "deps", "hotspots", "languages", "unused", "doctor", "suggestions") },
             new() { Name = "--next-steps", Description = "Search: print inspect/excerpt follow-up commands for top hits", PrimaryCommands = Set("search") },
             new() { Name = "--exclude-comments", Description = "Search: suppress comment-only matches after origin classification", PrimaryCommands = Set("search") },
             new() { Name = "--exclude-strings", Description = "Search: suppress string, regex, and help-text matches after origin classification", PrimaryCommands = Set("search") },

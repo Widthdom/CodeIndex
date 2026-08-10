@@ -654,6 +654,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   Local suggestion JSON storage: opaque/stable-ID allocation and legacy migration, all-editable-field revision conflicts, dedup hashing, submission-finalization races, persistence, corruption recovery, atomic writes. Keep suggestion-redaction cases table-driven with negative fixtures for structured PascalCase, snake_case, leading-underscore, and recipe identifiers plus positive fixtures for opaque mixed-character and known token formats; the persistence case should retain an identifier and redact a secret from the same context.
 - `DataDirectorySecurityTests.cs`, `ProgramCliTests.cs` suggestion-sidecar coverage
   Shared-temp database routing, owner-only directory/file modes, colocated private-directory behavior, and structured CLI filesystem failures.
+  Suggestion-history query coverage keeps NFKC/case-insensitive matching across every documented field, structured filters before deterministic pagination, aggregate omission reasons, compact redaction, progressing continuations, and whole-document UTF-8 byte budgets in the same production-runtime fixture.
 - `SourceCodeDetectorTests.cs`
   Source code leak prevention: allowed natural-language inputs vs rejected code blocks (fenced, indented, import runs, etc.).
 - `ConsoleUiTests.cs`
@@ -1653,6 +1654,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   ローカル提案JSON蓄積: 不透明で安定した ID の割り当てと legacy migration、全編集対象 field の revision conflict、ハッシュ重複排除、submission finalization race、永続化、破損復旧、アトミック書き込み。提案 redaction のケースは table-driven に保ち、構造化された PascalCase、snake_case、先頭 underscore 付き、recipe 形式の識別子を negative fixture、不透明な混合文字列と既知の token 形式を positive fixture として含めてください。永続化ケースでは、同じ context 内の識別子を保持しつつ secret を伏字化することを確認します。
 - `DataDirectorySecurityTests.cs`、`ProgramCliTests.cs` の suggestion-sidecar coverage
   shared-temp database routing、owner-only の directory / file mode、private directory での隣接配置、structured CLI filesystem failure。
+  suggestion-history query coverage は、全 documented field の NFKC / case-insensitive 照合、決定的 pagination より先の structured filter、aggregate omission reason、compact redaction、進捗可能な continuation、document 全体の UTF-8 byte budget を同じ production-runtime fixture で維持します。
 - `SourceCodeDetectorTests.cs`
   ソースコード漏洩防止: 許容される自然言語入力 vs 拒否されるコードブロック（フェンス、インデント、import連打等）。
 - `ConsoleUiTests.cs`

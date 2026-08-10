@@ -1,0 +1,26 @@
+{
+  "api_version": "1",
+  "mode": "compact",
+  "query": "snapshot query",
+  "total_count": 1,
+  "total_count_authoritative": true,
+  "returned_count": 1,
+  "offset": 0,
+  "omitted_count": 0,
+  "pagination_omitted_count": 0,
+  "byte_limit_omitted_count": 0,
+  "projection_omitted_count": 0,
+  "truncated": false,
+  "has_more": false,
+  "next_offset": null,
+  "results": [
+    {
+      "id": "1111111111111111111111111111111111111111111111111111111111111111",
+      "title": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa...",
+      "status": "draft",
+      "evidence_paths": [
+        "src/Snapshot.cs"
+      ]
+    }
+  ]
+}
