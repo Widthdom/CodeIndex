@@ -379,12 +379,19 @@ public partial class McpServer
         var sentenceEnd = english.IndexOf(". ", StringComparison.Ordinal);
         if (sentenceEnd >= 0)
             english = english[..(sentenceEnd + 1)];
-        if (toolName == "suggest_improvement")
-            english += " Never include source code; describe the issue in natural language only.";
+        var safetyGuidance = toolName switch
+        {
+            "impact_analysis" => " File-level fallback may be heuristic; check `impact_mode`, `heuristic`, and `file_impacts`.",
+            "suggest_improvement" => " Never include source code; describe the issue in natural language only.",
+            "unused_symbols" => " Verify surprising hits before editing; meaningful only for languages with reference extraction.",
+            "validate" => " Totals are authoritative only while `file_issues_data_current` is true.",
+            _ => string.Empty,
+        };
         const int maxDescriptionCharacters = 240;
-        return english.Length <= maxDescriptionCharacters
-            ? english
-            : $"{english[..(maxDescriptionCharacters - 3)].TrimEnd()}...";
+        var baseDescriptionLimit = maxDescriptionCharacters - safetyGuidance.Length;
+        if (english.Length > baseDescriptionLimit)
+            english = $"{english[..(baseDescriptionLimit - 3)].TrimEnd()}...";
+        return english + safetyGuidance;
     }
 
     private static JsonObject BuildCompactToolsListCatalogMeta(

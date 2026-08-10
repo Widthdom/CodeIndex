@@ -171,6 +171,15 @@ public partial class McpServerTests
             mode => mode!["required"]!.AsArray().Any(required => required!.GetValue<string>() == "query"));
         var compactSuggestion = compactTools.Single(tool => tool!["name"]!.GetValue<string>() == "suggest_improvement")!;
         Assert.Contains("Never include source code", compactSuggestion["description"]!.GetValue<string>(), StringComparison.Ordinal);
+        var compactUnused = compactTools.Single(tool => tool!["name"]!.GetValue<string>() == "unused_symbols")!;
+        Assert.Contains("meaningful only for languages with reference extraction", compactUnused["description"]!.GetValue<string>(), StringComparison.Ordinal);
+        var compactValidate = compactTools.Single(tool => tool!["name"]!.GetValue<string>() == "validate")!;
+        Assert.Contains("authoritative only while `file_issues_data_current` is true", compactValidate["description"]!.GetValue<string>(), StringComparison.Ordinal);
+        var compactImpact = compactTools.Single(tool => tool!["name"]!.GetValue<string>() == "impact_analysis")!;
+        Assert.Contains("File-level fallback may be heuristic", compactImpact["description"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.All(
+            compactTools,
+            tool => Assert.True(tool!["description"]!.GetValue<string>().Length <= 240));
 
         var meta = compactResult["_meta"]!;
         Assert.Equal("compact", meta["format"]!.GetValue<string>());
