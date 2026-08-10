@@ -1987,7 +1987,7 @@ public static partial class QueryCommandRunner
                 selectedQueries.Count,
                 resultCount,
                 queryFreshness,
-                totalCount,
+                returnedCount,
                 totalCount,
                 totalCountAuthoritative,
                 totalCountAuthoritative ? null : totalCount,

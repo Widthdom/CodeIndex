@@ -12252,11 +12252,14 @@ public partial class QueryCommandRunnerTests
             Assert.True(Encoding.UTF8.GetByteCount(truncatedStdout) <= truncatedBudget);
             using var truncatedDocument = ParseJsonOutput(truncatedStdout);
             var truncatedRoot = truncatedDocument.RootElement;
+            Assert.Equal(1, truncatedRoot.GetProperty("count").GetInt32());
             Assert.Equal(2, truncatedRoot.GetProperty("total_count").GetInt32());
             Assert.Equal(1, truncatedRoot.GetProperty("returned_count").GetInt32());
             Assert.Equal(1, truncatedRoot.GetProperty("omitted_count").GetInt32());
             Assert.True(truncatedRoot.GetProperty("truncated").GetBoolean());
-            Assert.Single(truncatedRoot.GetProperty("drafts").EnumerateArray());
+            Assert.Equal(
+                truncatedRoot.GetProperty("count").GetInt32(),
+                truncatedRoot.GetProperty("drafts").GetArrayLength());
 
             var utf8Budget = summaryStdout.Length;
             Assert.True(fullByteCount > utf8Budget);
