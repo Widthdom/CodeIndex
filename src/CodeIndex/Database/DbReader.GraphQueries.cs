@@ -1141,12 +1141,15 @@ public partial class DbReader
     /// materialize しないようにする。
     /// </summary>
     private List<CallerResult> GetCallersExact(string symbolName, int limit, int offset = 0, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool includeAmbiguousMSource = false, bool includeMemberReads = false)
-        => GetCallersExactCore(symbolName, limit, offset, lang, pathPatterns, excludePathPatterns, excludeTests, targetSymbolId: null, includeAmbiguousMSource, includeMemberReads);
+        => GetCallersExactCore(symbolName, limit, offset, lang, pathPatterns, excludePathPatterns, excludeTests, targetSymbolIds: null, includeAmbiguousMSource, includeMemberReads);
 
     private List<CallerResult> GetCallersExactForTarget(string symbolName, long targetSymbolId, int limit, int offset, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, bool includeAmbiguousMSource = false, bool includeMemberReads = false)
-        => GetCallersExactCore(symbolName, limit, offset, lang, pathPatterns, excludePathPatterns, excludeTests, targetSymbolId, includeAmbiguousMSource, includeMemberReads);
+        => GetCallersExactCore(symbolName, limit, offset, lang, pathPatterns, excludePathPatterns, excludeTests, [targetSymbolId], includeAmbiguousMSource, includeMemberReads);
 
-    private List<CallerResult> GetCallersExactCore(string symbolName, int limit, int offset, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, long? targetSymbolId, bool includeAmbiguousMSource, bool includeMemberReads)
+    private List<CallerResult> GetCallersExactForTargets(string symbolName, IReadOnlyList<long> targetSymbolIds, int limit, int offset, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, bool includeAmbiguousMSource = false, bool includeMemberReads = false)
+        => GetCallersExactCore(symbolName, limit, offset, lang, pathPatterns, excludePathPatterns, excludeTests, targetSymbolIds, includeAmbiguousMSource, includeMemberReads);
+
+    private List<CallerResult> GetCallersExactCore(string symbolName, int limit, int offset, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, IReadOnlyList<long>? targetSymbolIds, bool includeAmbiguousMSource, bool includeMemberReads)
     {
         if (!_hasReferencesTable) return new List<CallerResult>();
         using var cmd = _conn.CreateCommand();
@@ -1155,20 +1158,21 @@ public partial class DbReader
         var selfReferenceSql = _referenceColumns.Contains("is_self_reference") ? "r.is_self_reference" : "0";
         var mutualRecursionSql = _referenceColumns.Contains("is_mutual_recursion") ? "r.is_mutual_recursion" : "0";
         var sourceSymbolIdSql = _referenceColumns.Contains("source_symbol_id") ? "r.source_symbol_id" : "NULL";
-        var hasIdentityTargetScope = targetSymbolId != null
+        var hasIdentityTargetScope = targetSymbolIds is { Count: > 0 }
                                      && _referenceColumns.Contains("target_symbol_id")
                                      && _referenceColumns.Contains("resolution_state")
                                      && HasTable("symbol_reference_candidates");
+        const string targetSymbolIdsSql = "SELECT CAST(value AS INTEGER) FROM json_each(@targetSymbolIdsJson)";
         var targetSymbolIdSql = hasIdentityTargetScope
-            ? @"CASE
+            ? $@"CASE
                     WHEN r.resolution_state = 'resolved'
                          AND EXISTS (
                              SELECT 1
                              FROM symbol_reference_candidates projected_identity_candidate
                              WHERE projected_identity_candidate.reference_id = r.id
-                               AND projected_identity_candidate.symbol_id = @targetSymbolId
+                               AND projected_identity_candidate.symbol_id IN ({targetSymbolIdsSql})
                          )
-                    THEN @targetSymbolId
+                    THEN r.target_symbol_id
                     ELSE NULL
                 END"
             : _referenceColumns.Contains("target_symbol_id") ? "r.target_symbol_id" : "NULL";
@@ -1215,13 +1219,13 @@ public partial class DbReader
         // の候補にはできるが、一意に resolved した行だけが実際の cycle edge として候補 ID を
         // 公開する。unresolved/ambiguous 行も従来の名前ベース探索に残し、target ID は null にする。
         var targetCondition = hasIdentityTargetScope
-            ? @"
+            ? $@"
               AND (
                   EXISTS (
                       SELECT 1
                       FROM symbol_reference_candidates identity_candidate
                       WHERE identity_candidate.reference_id = r.id
-                        AND identity_candidate.symbol_id = @targetSymbolId
+                        AND identity_candidate.symbol_id IN ({targetSymbolIdsSql})
                         AND r.resolution_state IN ('resolved', 'resolved_group')
                   )
                   OR (
@@ -1301,8 +1305,13 @@ public partial class DbReader
         }
         if (lang != null)
             SqliteCommandPolicy.Add(cmd, "@lang", lang);
-        if (targetSymbolId != null && HasTable("symbol_reference_candidates"))
-            SqliteCommandPolicy.Add(cmd, "@targetSymbolId", targetSymbolId.Value);
+        if (hasIdentityTargetScope)
+        {
+            var targetSymbolIdValues = targetSymbolIds!
+                .Select(static symbolId => symbolId.ToString(System.Globalization.CultureInfo.InvariantCulture))
+                .ToList();
+            SqliteCommandPolicy.Add(cmd, "@targetSymbolIdsJson", JsonStringListCodec.Serialize(targetSymbolIdValues));
+        }
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
         SqliteCommandPolicy.Add(cmd, "@limit", limit);
         SqliteCommandPolicy.Add(cmd, "@offset", offset);
@@ -1342,10 +1351,17 @@ public partial class DbReader
         return results;
     }
 
-    private static string BuildImpactVisitedKey(CallerResult caller, string callerName, bool useCanonicalIdentity)
-        => useCanonicalIdentity && caller.CallerSymbolId is long callerSymbolId
-            ? $"id:{callerSymbolId}:{caller.ReferenceKind}"
-            : $"{caller.Path}:{callerName}:{caller.ReferenceKind}";
+    private static string BuildImpactVisitedKey(
+        CallerResult caller,
+        string callerName,
+        bool useCanonicalIdentity,
+        bool deduplicateLogicalNodes = false)
+    {
+        var identity = useCanonicalIdentity && caller.CallerSymbolId is long callerSymbolId
+            ? $"id:{callerSymbolId}"
+            : $"{caller.Path}:{callerName}";
+        return deduplicateLogicalNodes ? identity : $"{identity}:{caller.ReferenceKind}";
+    }
 
     private static string BuildImpactTraversalNodeKey(long? symbolId, string name)
         => symbolId is long canonicalSymbolId ? $"id:{canonicalSymbolId}" : $"name:{name}";
@@ -1358,6 +1374,8 @@ public partial class DbReader
     // 収束する場合に JSON 膨張を抑える役割があり、超過時は PathsTruncated で通知する。
     private const int DefaultImpactPathsPerResult = 10;
     internal const int DefaultImpactGraphStateEntryBudget = 10_000;
+    internal const int DefaultImpactPartialFamilyMemberBudget = 10_000;
+    internal int ImpactPartialFamilyMemberBudget { get; set; } = DefaultImpactPartialFamilyMemberBudget;
     internal const int ImpactBoundaryCallerProbeBudget = 512;
     private const int ImpactBoundaryCallerProbePageSize = 64;
 
@@ -1406,12 +1424,19 @@ public partial class DbReader
         var rootDefinitionPaths = rootDefinitions
             .Select(definition => definition.Path)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var isLogicalPartialFamilyRoot =
+            hasResolvedIdentityGraph
+            && rootDefinitionResolution.LogicalCount == 1
+            && rootDefinitions.Count == 1
+            && rootDefinitions[0].Lang == "csharp"
+            && rootDefinitions[0].PartialFamilyId != null
+            && rootDefinitionResolution.PhysicalSymbolIds.Count > 0;
         var qualifiedCSharpRootSymbolIds =
-            canResolveQualifiedCSharpIdentity
+            (canResolveQualifiedCSharpIdentity || isLogicalPartialFamilyRoot)
             && rootDefinitions.Count > 0
             && rootDefinitions.All(definition => definition.Lang == "csharp")
             && rootDefinitions.All(definition => definition.SymbolId != null)
-            && rootDefinitionResolution.LogicalCount == rootDefinitions.Count
+            && (isLogicalPartialFamilyRoot || rootDefinitionResolution.LogicalCount == rootDefinitions.Count)
                 ? rootDefinitionResolution.PhysicalSymbolIds.ToHashSet()
                 : [];
         if (hasResolvedIdentityGraph
@@ -1444,18 +1469,29 @@ public partial class DbReader
         var rootTraversalNodeKey = identityRootSymbolIds.Count > 1
             ? $"identity:{NameFold.Fold(symbolName) ?? symbolName}"
             : BuildImpactTraversalNodeKey(singleIdentityRootSymbolId, resolvedName);
-        var queue = new Queue<(string Symbol, long? SymbolId, string NodeKey, int Depth)>();
-        if (identityRootSymbolIds.Count > 0)
+        var queue = new Queue<(string Symbol, long? SymbolId, IReadOnlyList<long>? TargetSymbolIds, string NodeKey, int Depth)>();
+        if (isLogicalPartialFamilyRoot)
+        {
+            queue.Enqueue((resolvedName, null, identityRootSymbolIds.Order().ToArray(), rootTraversalNodeKey, 0));
+        }
+        else if (identityRootSymbolIds.Count > 0)
         {
             foreach (var identityRootSymbolId in identityRootSymbolIds.Order())
-                queue.Enqueue((resolvedName, identityRootSymbolId, rootTraversalNodeKey, 0));
+                queue.Enqueue((resolvedName, identityRootSymbolId, null, rootTraversalNodeKey, 0));
         }
         else
         {
-            queue.Enqueue((resolvedName, null, rootTraversalNodeKey, 0));
+            queue.Enqueue((resolvedName, null, null, rootTraversalNodeKey, 0));
         }
         visited.Add(resolvedName);
-        var truncated = qualifiedCSharpRootSymbolIds.Count > 0
+        // A partial-family root cap is reported independently on ImpactAnalysisResult.
+        // It must not masquerade as a traversal/result cap, because raising --limit does
+        // not expand the family root and the BFS may otherwise have completed normally.
+        // partial family の root 上限は ImpactAnalysisResult で独立して報告する。
+        // --limit 由来の traversal truncation と混同せず、通常完了した BFS を
+        // safety_cap 扱いしない。
+        var truncated = !isLogicalPartialFamilyRoot
+                        && qualifiedCSharpRootSymbolIds.Count > 0
                         && rootDefinitionResolution.PhysicalSymbolIdsTruncated;
         var maxDepthReached = false;
         var cycles = new List<ImpactCycleResult>();
@@ -1487,15 +1523,40 @@ public partial class DbReader
         var resultIndicesByNodeKey = withPaths
             ? new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase)
             : null;
+        var resultIndexByVisitedKey = isLogicalPartialFamilyRoot
+            ? new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
+            : null;
         var pathNodesByKey = withPaths
             ? new Dictionary<string, ImpactPathNode>(StringComparer.OrdinalIgnoreCase)
             : null;
         if (withPaths)
-            pathNodesByKey![rootTraversalNodeKey] = ResolveImpactPathNode(resolvedName, singleIdentityRootSymbolId, kind: null, lang, referencePath: null, referenceLine: null);
+        {
+            var rootPathNode = ResolveImpactPathNode(
+                resolvedName,
+                singleIdentityRootSymbolId,
+                kind: null,
+                lang,
+                referencePath: null,
+                referenceLine: null);
+            if (isLogicalPartialFamilyRoot)
+            {
+                var representative = rootDefinitions[0];
+                rootPathNode.SymbolId = null;
+                rootPathNode.Name = resolvedName;
+                rootPathNode.Kind = representative.Kind;
+                rootPathNode.Lang = representative.Lang;
+                rootPathNode.DefinitionPath = representative.Path;
+                rootPathNode.DefinitionLine = representative.Line;
+                rootPathNode.Container = representative.ContainerQualifiedName ?? representative.ContainerName;
+                rootPathNode.PartialFamilyId = representative.PartialFamilyId;
+                rootPathNode.LogicalTargetKey = $"partial|{representative.PartialFamilyId}";
+            }
+            pathNodesByKey![rootTraversalNodeKey] = rootPathNode;
+        }
 
         while (queue.Count > 0 && discoveredResultCount < resultWindowEnd && !graphStateBudgetHit && !boundaryProbeBudgetHit)
         {
-            var (currentSymbol, currentSymbolId, currentNodeKey, depth) = queue.Dequeue();
+            var (currentSymbol, currentSymbolId, currentTargetSymbolIds, currentNodeKey, depth) = queue.Dequeue();
 
             // Fetch callers in pages, filtering out already-visited before counting toward limit.
             // This prevents diamond graphs from hiding reachable callers behind visited duplicates.
@@ -1509,9 +1570,11 @@ public partial class DbReader
             while (discoveredResultCount < resultWindowEnd && fetchIterations < maxFetchIterations && !graphStateBudgetHit && !boundaryProbeBudgetHit)
             {
                 fetchIterations++;
-                var page = currentSymbolId is long targetSymbolId
-                    ? GetCallersExactForTarget(currentSymbol, targetSymbolId, pageSize, pageOffset, lang, pathPatterns, excludePathPatterns, excludeTests, includeAmbiguousMSource, includeMemberReads)
-                    : GetCallersExact(currentSymbol, pageSize, pageOffset, lang, pathPatterns, excludePathPatterns, excludeTests, includeAmbiguousMSource, includeMemberReads);
+                var page = currentTargetSymbolIds is { Count: > 0 }
+                    ? GetCallersExactForTargets(currentSymbol, currentTargetSymbolIds, pageSize, pageOffset, lang, pathPatterns, excludePathPatterns, excludeTests, includeAmbiguousMSource, includeMemberReads)
+                    : currentSymbolId is long targetSymbolId
+                        ? GetCallersExactForTarget(currentSymbol, targetSymbolId, pageSize, pageOffset, lang, pathPatterns, excludePathPatterns, excludeTests, includeAmbiguousMSource, includeMemberReads)
+                        : GetCallersExact(currentSymbol, pageSize, pageOffset, lang, pathPatterns, excludePathPatterns, excludeTests, includeAmbiguousMSource, includeMemberReads);
 
                 if (page.Count == 0)
                     break; // No more callers for this symbol / このシンボルの caller は尽きた
@@ -1528,7 +1591,14 @@ public partial class DbReader
                     var callerName = caller.CallerName ?? SyntheticTopLevelCallerName;
                     var callerSymbolId = hasResolvedIdentityGraph ? caller.CallerSymbolId : null;
                     var calleeSymbolId = hasResolvedIdentityGraph ? caller.CalleeSymbolId : null;
-                    var cycleEdges = BuildImpactCycleEdges(caller, callerName, currentSymbol, hasResolvedIdentityGraph);
+                    var cycleEdges = BuildImpactCycleEdges(
+                        caller,
+                        callerName,
+                        currentSymbol,
+                        hasResolvedIdentityGraph,
+                        isLogicalPartialFamilyRoot ? identityRootSymbolIds : null,
+                        rootTraversalNodeKey,
+                        resolvedName);
                     foreach (var cycleEdge in cycleEdges)
                     {
                         RegisterImpactCycleNode(cycleNodesByKey, cycleEdge.Caller);
@@ -1539,7 +1609,11 @@ public partial class DbReader
                     if (IsImpactRootCaller(caller, callerName, resolvedName, rootDefinitionPaths, identityRootSymbolIds))
                         continue;
                     var callerNodeKey = BuildImpactTraversalNodeKey(callerSymbolId, callerName);
-                    var key = BuildImpactVisitedKey(caller, callerName, hasResolvedIdentityGraph);
+                    var key = BuildImpactVisitedKey(
+                        caller,
+                        callerName,
+                        hasResolvedIdentityGraph,
+                        deduplicateLogicalNodes: isLogicalPartialFamilyRoot);
                     foreach (var cycleEdge in cycleEdges)
                     {
                         if (!cycleParentsByKey.TryGetValue(cycleEdge.Caller.Key, out var cycleParentSet))
@@ -1559,6 +1633,11 @@ public partial class DbReader
 
                     if (!visited.Add(key))
                     {
+                        if (resultIndexByVisitedKey != null
+                            && resultIndexByVisitedKey.TryGetValue(key, out var existingResultIndex))
+                        {
+                            MergeImpactReferenceEvidence(results[existingResultIndex], caller);
+                        }
                         // Same-depth convergence: record the additional parent so path
                         // enumeration can discover this alternate route. Other-depth re-arrivals
                         // are intentionally dropped — BFS already keeps the shortest route.
@@ -1601,6 +1680,7 @@ public partial class DbReader
                             ReferenceKindCounts = caller.ReferenceKindCounts,
                         });
                         resultIndex = results.Count - 1;
+                        resultIndexByVisitedKey?.Add(key, resultIndex);
                     }
                     discoveredResultCount++;
 
@@ -1655,13 +1735,13 @@ public partial class DbReader
                         && caller.CallerName != SyntheticTopLevelCallerName
                         && depth + 1 < maxDepth)
                     {
-                        queue.Enqueue((caller.CallerName, callerSymbolId, callerNodeKey, depth + 1));
+                        queue.Enqueue((caller.CallerName, callerSymbolId, null, callerNodeKey, depth + 1));
                     }
                     else if (caller.CallerName != null
                              && caller.CallerName != SyntheticTopLevelCallerName
                              && depth + 1 == maxDepth)
                     {
-                        var boundaryInspection = InspectBoundaryCallers(
+                        var boundaryInspection = InspectBoundaryCallersCore(
                             caller.CallerName,
                             callerSymbolId,
                             resolvedName,
@@ -1678,7 +1758,10 @@ public partial class DbReader
                             excludePathPatterns,
                             excludeTests,
                             includeAmbiguousMSource,
-                            includeMemberReads);
+                            includeMemberReads,
+                            isLogicalPartialFamilyRoot ? identityRootSymbolIds : null,
+                            rootTraversalNodeKey,
+                            resolvedName);
                         maxDepthReached |= boundaryInspection.HasUnvisitedCaller;
                         if (boundaryInspection.ProbeBudgetHit)
                         {
@@ -1750,6 +1833,25 @@ public partial class DbReader
         return Math.Max(1024, Math.Min(DefaultImpactGraphStateEntryBudget, limitScaled));
     }
 
+    private static void MergeImpactReferenceEvidence(ImpactResult result, CallerResult caller)
+    {
+        var counts = result.ReferenceKindCounts.ToDictionary(
+            pair => pair.Key,
+            pair => pair.Value,
+            StringComparer.Ordinal);
+        foreach (var (kind, count) in caller.ReferenceKindCounts)
+        {
+            counts[kind] = counts.TryGetValue(kind, out var existingCount)
+                ? Math.Max(existingCount, count)
+                : count;
+        }
+
+        result.ReferenceKindCounts = counts;
+        result.ReferenceKinds = counts.Keys.Order(StringComparer.Ordinal).ToArray();
+        result.ReferenceCount = counts.Values.Sum();
+        result.FirstLine = Math.Min(result.FirstLine, caller.FirstLine);
+    }
+
     private static int ImpactGraphStateEntryCount(
         Dictionary<string, HashSet<string>> parentsByNodeKey,
         Dictionary<string, HashSet<string>> cycleParentsByNodeKey,
@@ -1793,9 +1895,16 @@ public partial class DbReader
         CallerResult caller,
         string callerName,
         string calleeName,
-        bool hasResolvedIdentityGraph)
+        bool hasResolvedIdentityGraph,
+        IReadOnlySet<long>? logicalRootSymbolIds = null,
+        string? logicalRootKey = null,
+        string? logicalRootName = null)
     {
-        var callerNode = BuildImpactCycleNode(caller.CallerSymbolId, callerName, hasResolvedIdentityGraph);
+        var callerNode = NormalizeImpactCycleRootNode(
+            BuildImpactCycleNode(caller.CallerSymbolId, callerName, hasResolvedIdentityGraph),
+            logicalRootSymbolIds,
+            logicalRootKey,
+            logicalRootName);
         if (callerNode is not { } canonicalCaller)
             return [];
 
@@ -1815,8 +1924,31 @@ public partial class DbReader
             .Order()
             .Select(calleeSymbolId => new ImpactCycleEdge(
                 canonicalCaller,
-                new ImpactCycleNode($"id:{calleeSymbolId}", calleeSymbolId, calleeName)))
+                NormalizeImpactCycleRootNode(
+                    new ImpactCycleNode($"id:{calleeSymbolId}", calleeSymbolId, calleeName),
+                    logicalRootSymbolIds,
+                    logicalRootKey,
+                    logicalRootName)!.Value))
             .ToList();
+    }
+
+    private static ImpactCycleNode? NormalizeImpactCycleRootNode(
+        ImpactCycleNode? node,
+        IReadOnlySet<long>? logicalRootSymbolIds,
+        string? logicalRootKey,
+        string? logicalRootName)
+    {
+        if (node is not { SymbolId: long symbolId }
+            || logicalRootSymbolIds is not { Count: > 0 }
+            || !logicalRootSymbolIds.Contains(symbolId))
+        {
+            return node;
+        }
+
+        return new ImpactCycleNode(
+            logicalRootKey ?? "logical-partial-root",
+            SymbolId: null,
+            logicalRootName ?? node.Value.Name);
     }
 
     private static bool IsImpactRootCaller(
@@ -1853,6 +1985,49 @@ public partial class DbReader
         bool excludeTests,
         bool includeAmbiguousMSource,
         bool includeMemberReads)
+        => InspectBoundaryCallersCore(
+            symbolName,
+            symbolId,
+            resolvedName,
+            rootDefinitionPaths,
+            identityRootSymbolIds,
+            visited,
+            cycleParentsByKey,
+            cycleNodesByKey,
+            cycles,
+            cycleKeys,
+            hasResolvedIdentityGraph,
+            lang,
+            pathPatterns,
+            excludePathPatterns,
+            excludeTests,
+            includeAmbiguousMSource,
+            includeMemberReads,
+            logicalRootSymbolIds: null,
+            logicalRootKey: null,
+            logicalRootName: null);
+
+    private ImpactBoundaryInspection InspectBoundaryCallersCore(
+        string symbolName,
+        long? symbolId,
+        string resolvedName,
+        HashSet<string> rootDefinitionPaths,
+        IReadOnlySet<long>? identityRootSymbolIds,
+        HashSet<string> visited,
+        Dictionary<string, HashSet<string>> cycleParentsByKey,
+        Dictionary<string, ImpactCycleMemberResult> cycleNodesByKey,
+        List<ImpactCycleResult> cycles,
+        HashSet<string> cycleKeys,
+        bool hasResolvedIdentityGraph,
+        string? lang,
+        IReadOnlyList<string>? pathPatterns,
+        IReadOnlyList<string>? excludePathPatterns,
+        bool excludeTests,
+        bool includeAmbiguousMSource,
+        bool includeMemberReads,
+        IReadOnlySet<long>? logicalRootSymbolIds,
+        string? logicalRootKey,
+        string? logicalRootName)
     {
         var offset = 0;
         var probes = 0;
@@ -1872,7 +2047,14 @@ public partial class DbReader
             foreach (var caller in page)
             {
                 var callerName = caller.CallerName ?? SyntheticTopLevelCallerName;
-                var cycleEdges = BuildImpactCycleEdges(caller, callerName, symbolName, hasResolvedIdentityGraph);
+                var cycleEdges = BuildImpactCycleEdges(
+                    caller,
+                    callerName,
+                    symbolName,
+                    hasResolvedIdentityGraph,
+                    logicalRootSymbolIds,
+                    logicalRootKey,
+                    logicalRootName);
                 foreach (var cycleEdge in cycleEdges)
                 {
                     RegisterImpactCycleNode(cycleNodesByKey, cycleEdge.Caller);
@@ -1894,7 +2076,11 @@ public partial class DbReader
                     cycleParentSet.Add(cycleEdge.Callee.Key);
                 }
 
-                var key = BuildImpactVisitedKey(caller, callerName, hasResolvedIdentityGraph);
+                var key = BuildImpactVisitedKey(
+                    caller,
+                    callerName,
+                    hasResolvedIdentityGraph,
+                    deduplicateLogicalNodes: logicalRootSymbolIds is not null);
                 if (!visited.Contains(key))
                     return new ImpactBoundaryInspection(HasUnvisitedCaller: true, ProbeBudgetHit: false);
             }
@@ -2213,6 +2399,7 @@ public partial class DbReader
             DefinitionLine = node.DefinitionLine,
             Container = node.Container,
             FamilyKey = node.FamilyKey,
+            PartialFamilyId = node.PartialFamilyId,
             LogicalTargetKey = node.LogicalTargetKey,
             ReferencePath = node.ReferencePath,
             ReferenceLine = node.ReferenceLine,
@@ -2252,9 +2439,33 @@ public partial class DbReader
             .Select(d => d.Path)
             .Distinct(indexedPathComparer)
             .ToList();
-        var hasMultipleFallbackDefinitions = definitionResolution.PreciseDefinitionCount > 1;
+        var hasMultipleFallbackDefinitions = definitionResolution.PreciseLogicalDefinitionCount > 1;
         var hasMultipleFallbackDefinitionFiles = definitionResolution.PreciseDefinitionFileCount > 1;
         var hasClassLikeDefinitions = definitionResolution.PreciseDefinitionCount > 0;
+        var logicalPartialFamilyDefinition = definitionResolution.LogicalCount == 1
+                                             && definitions.Count == 1
+                                             && definitions[0].Lang == "csharp"
+                                             && definitions[0].PartialFamilyId != null
+            ? definitions[0]
+            : null;
+        var traversalRootScope = logicalPartialFamilyDefinition != null
+            ? "logical_partial_family"
+            : "symbol";
+        var partialFamilyMemberCount = logicalPartialFamilyDefinition != null
+            ? definitionResolution.PhysicalCount
+            : (int?)null;
+        var partialFamilyMemberRootCount = logicalPartialFamilyDefinition != null
+            ? definitionResolution.PhysicalSymbolIds.Count
+            : (int?)null;
+        var partialFamilyMemberRootLimit = logicalPartialFamilyDefinition != null
+            ? Math.Max(1, ImpactPartialFamilyMemberBudget)
+            : (int?)null;
+        var partialFamilyMemberRootTruncated = logicalPartialFamilyDefinition != null
+            ? definitionResolution.PhysicalSymbolIdsTruncated
+            : (bool?)null;
+        var partialFamilyMemberRootOmitted = logicalPartialFamilyDefinition != null
+            ? Math.Max(0, definitionResolution.PhysicalCount - definitionResolution.PhysicalSymbolIds.Count)
+            : (int?)null;
 
         if (maxDepth <= 0)
         {
@@ -2272,6 +2483,13 @@ public partial class DbReader
                 HasClassLikeDefinitions = hasClassLikeDefinitions,
                 HasMultipleDefinitions = hasMultipleDefinitions,
                 HasMultipleDefinitionFiles = definitionResolution.PhysicalFileCount > 1,
+                TraversalRootScope = traversalRootScope,
+                TraversalPartialFamilyId = logicalPartialFamilyDefinition?.PartialFamilyId,
+                PartialFamilyMemberCount = partialFamilyMemberCount,
+                PartialFamilyMemberRootCount = partialFamilyMemberRootCount,
+                PartialFamilyMemberRootLimit = partialFamilyMemberRootLimit,
+                PartialFamilyMemberRootTruncated = partialFamilyMemberRootTruncated,
+                PartialFamilyMemberRootOmitted = partialFamilyMemberRootOmitted,
                 Definitions = definitions,
                 Callers = [],
                 FileImpacts = [],
@@ -2342,16 +2560,42 @@ public partial class DbReader
                 }
                 else if (fallbackDefinitions.Count == 1)
                 {
-                    var fallbackNames = ResolveImpactFallbackNames(fallbackDefinitions[0]);
+                    var fallbackNames = ResolveImpactFallbackNames(
+                        fallbackDefinitions[0],
+                        logicalPartialFamilyDefinition != null
+                            ? definitionResolution.PhysicalDefinitionPaths
+                            : null);
                     var fileImpactOffset = responseCollection is null || string.Equals(responseCollection, "file_impacts", StringComparison.Ordinal)
                         ? offset
                         : 0;
-                    var (hintResults, hintTruncated) = GetFileDependencyHintsToResolvedType(fallbackDefinitions[0], fallbackNames, limit, lang, pathPatterns, excludePathPatterns, excludeTests, fileImpactOffset);
+                    var (hintResults, hintTruncated) = GetFileDependencyHintsToResolvedType(
+                        fallbackDefinitions[0],
+                        fallbackNames,
+                        limit,
+                        lang,
+                        pathPatterns,
+                        excludePathPatterns,
+                        excludeTests,
+                        fileImpactOffset,
+                        logicalPartialFamilyDefinition != null
+                            ? definitionResolution.PhysicalDefinitionPaths
+                            : null);
                     fileImpacts = hintResults;
                     var hintExistsBeforeOffset = false;
                     if (fileImpacts.Count == 0 && fileImpactOffset > 0)
                     {
-                        var hintProbe = GetFileDependencyHintsToResolvedType(fallbackDefinitions[0], fallbackNames, 1, lang, pathPatterns, excludePathPatterns, excludeTests, 0);
+                        var hintProbe = GetFileDependencyHintsToResolvedType(
+                            fallbackDefinitions[0],
+                            fallbackNames,
+                            1,
+                            lang,
+                            pathPatterns,
+                            excludePathPatterns,
+                            excludeTests,
+                            0,
+                            logicalPartialFamilyDefinition != null
+                                ? definitionResolution.PhysicalDefinitionPaths
+                                : null);
                         hintExistsBeforeOffset = hintProbe.Results.Count > 0;
                     }
                     if (hintTruncated)
@@ -2415,6 +2659,13 @@ public partial class DbReader
             HasClassLikeDefinitions = hasClassLikeDefinitions,
             HasMultipleDefinitions = hasMultipleDefinitions,
             HasMultipleDefinitionFiles = definitionResolution.PhysicalFileCount > 1,
+            TraversalRootScope = traversalRootScope,
+            TraversalPartialFamilyId = logicalPartialFamilyDefinition?.PartialFamilyId,
+            PartialFamilyMemberCount = partialFamilyMemberCount,
+            PartialFamilyMemberRootCount = partialFamilyMemberRootCount,
+            PartialFamilyMemberRootLimit = partialFamilyMemberRootLimit,
+            PartialFamilyMemberRootTruncated = partialFamilyMemberRootTruncated,
+            PartialFamilyMemberRootOmitted = partialFamilyMemberRootOmitted,
             Definitions = definitions,
             Callers = callers,
             FileImpacts = fileImpacts,
@@ -2437,10 +2688,12 @@ public partial class DbReader
         int PhysicalFileCount,
         int LogicalCount,
         int PreciseDefinitionCount,
+        int PreciseLogicalDefinitionCount,
         int PreciseDefinitionFileCount,
         int NonCallableDefinitionCount,
         SymbolResult? SinglePreciseDefinition,
         HashSet<long> PhysicalSymbolIds,
+        HashSet<string> PhysicalDefinitionPaths,
         bool PhysicalSymbolIdsTruncated);
 
     private ImpactDefinitionResolution ResolveImpactDefinitions(
@@ -2655,6 +2908,7 @@ public partial class DbReader
                        {pathDistinctSql} AS physical_file_count,
                        COUNT(DISTINCT logical_partial_key) AS logical_count,
                        SUM(is_precise) AS precise_count,
+                       COUNT(DISTINCT CASE WHEN is_precise = 1 THEN logical_partial_key END) AS precise_logical_count,
                        {precisePathDistinctSql} AS precise_file_count,
                        SUM(is_non_callable) AS non_callable_count
                 FROM matching_definitions
@@ -2677,7 +2931,8 @@ public partial class DbReader
                    END AS representative_reason,
                    logical.logical_family_members_json,
                    CASE WHEN logical.logical_definition_sites > {LogicalPartialSymbolGrouper.FamilyMemberLimit} THEN 1 ELSE 0 END AS family_members_truncated,
-                   logical.identifier_start_column
+                   logical.identifier_start_column,
+                   stats.precise_logical_count
             FROM selected_definition_keys selected
             JOIN logical_definitions logical
               ON logical.logical_partial_key = selected.logical_partial_key
@@ -2712,6 +2967,7 @@ public partial class DbReader
         var physicalFileCount = 0;
         var logicalCount = 0;
         var preciseCount = 0;
+        var preciseLogicalCount = 0;
         var preciseFileCount = 0;
         var nonCallableCount = 0;
         using var reader = cmd.ExecuteTrackedReader();
@@ -2759,24 +3015,26 @@ public partial class DbReader
             preciseCount = reader.GetInt32(23);
             preciseFileCount = reader.GetInt32(24);
             nonCallableCount = reader.GetInt32(25);
+            preciseLogicalCount = reader.GetInt32(30);
             if (IsPreciseImpactFallbackKind(result.Kind))
                 preciseDefinition ??= result;
             if (reader.GetInt32(19) == 1)
                 results.Add(result);
         }
 
-        // Qualified C# graph traversal is identity-scoped. Keep the representative-only
+        // Identity-scoped C# graph traversal keeps the representative-only
         // definition payload, but retain every selected physical family ID internally so a
         // call resolved to a partial declaration reaches the same graph as its implementation.
-        // qualified C# のグラフ探索は identity 単位で行う。definition の出力は代表1件のまま
+        // identity-scoped C# のグラフ探索では definition の出力は代表1件のまま
         // としつつ、partial 宣言側へ解決された call も実装側と同じグラフへ到達できるよう、
         // 選択された family の全 physical ID を内部的に保持する。
         reader.Dispose();
         var physicalSymbolIds = new HashSet<long>();
+        var physicalDefinitionPaths = new HashSet<string>(GetIndexedPathComparer());
         var physicalSymbolIdsTruncated = false;
         foreach (var definition in results)
         {
-            AddPhysicalSymbolId(definition.SymbolId!.Value);
+            AddPhysicalDefinition(definition.SymbolId!.Value, definition.Path);
             if (physicalSymbolIdsTruncated || definition.DefinitionSites is not > 1)
                 continue;
 
@@ -2785,23 +3043,23 @@ public partial class DbReader
                 foreach (var member in definition.FamilyMembers ?? [])
                 {
                     if (member.SymbolId is long memberSymbolId)
-                        AddPhysicalSymbolId(memberSymbolId);
+                        AddPhysicalDefinition(memberSymbolId, member.Path);
                     if (physicalSymbolIdsTruncated)
                         break;
                 }
                 continue;
             }
 
-            var (familySymbolIds, familyIdsTruncated) = ResolveImpactPhysicalFamilySymbolIds(
+            var (familyMembers, familyIdsTruncated) = ResolveImpactPhysicalFamilyMembers(
                 definition,
                 logicalPartialKeySql,
                 lang,
                 pathPatterns,
                 excludePathPatterns,
                 excludeTests);
-            foreach (var familySymbolId in familySymbolIds)
+            foreach (var familyMember in familyMembers)
             {
-                AddPhysicalSymbolId(familySymbolId);
+                AddPhysicalDefinition(familyMember.SymbolId, familyMember.Path);
                 if (physicalSymbolIdsTruncated)
                     break;
             }
@@ -2814,26 +3072,29 @@ public partial class DbReader
             physicalFileCount,
             logicalCount,
             preciseCount,
+            preciseLogicalCount,
             preciseFileCount,
             nonCallableCount,
-            preciseCount == 1 ? preciseDefinition : null,
+            preciseLogicalCount == 1 ? preciseDefinition : null,
             physicalSymbolIds,
+            physicalDefinitionPaths,
             physicalSymbolIdsTruncated);
 
-        void AddPhysicalSymbolId(long symbolId)
+        void AddPhysicalDefinition(long symbolId, string path)
         {
             if (physicalSymbolIds.Contains(symbolId))
                 return;
-            if (physicalSymbolIds.Count >= DefaultImpactGraphStateEntryBudget)
+            if (physicalSymbolIds.Count >= Math.Max(1, ImpactPartialFamilyMemberBudget))
             {
                 physicalSymbolIdsTruncated = true;
                 return;
             }
             physicalSymbolIds.Add(symbolId);
+            physicalDefinitionPaths.Add(path);
         }
     }
 
-    private (List<long> SymbolIds, bool Truncated) ResolveImpactPhysicalFamilySymbolIds(
+    private (List<(long SymbolId, string Path)> Members, bool Truncated) ResolveImpactPhysicalFamilyMembers(
         SymbolResult definition,
         string logicalPartialKeySql,
         string? lang,
@@ -2847,7 +3108,7 @@ public partial class DbReader
             ? "s.kind IN ('function', 'test.method')"
             : "s.kind = @familyKind";
         var sql = $@"
-            SELECT s.id
+            SELECT s.id, f.path
             FROM symbols s
             JOIN files f ON s.file_id = f.id
             WHERE f.lang = @familyLang
@@ -2868,18 +3129,19 @@ public partial class DbReader
         SqliteCommandPolicy.Add(cmd, "@logicalPartialKey", definition.LogicalPartialKey!);
         if (lang != null)
             SqliteCommandPolicy.Add(cmd, "@lang", lang);
-        SqliteCommandPolicy.Add(cmd, "@familyMemberLimit", DefaultImpactGraphStateEntryBudget + 1);
+        var familyMemberBudget = Math.Max(1, ImpactPartialFamilyMemberBudget);
+        SqliteCommandPolicy.Add(cmd, "@familyMemberLimit", familyMemberBudget + 1);
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
 
-        var symbolIds = new List<long>();
+        var members = new List<(long SymbolId, string Path)>();
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
         {
-            if (symbolIds.Count >= DefaultImpactGraphStateEntryBudget)
-                return (symbolIds, true);
-            symbolIds.Add(reader.GetInt64(0));
+            if (members.Count >= familyMemberBudget)
+                return (members, true);
+            members.Add((reader.GetInt64(0), reader.GetString(1)));
         }
-        return (symbolIds, false);
+        return (members, false);
     }
 
     // C# convention: a class `FooAttribute` is used in source as `[Foo]`, so the reference
@@ -2928,25 +3190,30 @@ public partial class DbReader
         return query[1..];
     }
 
-    private List<string> ResolveImpactFallbackNames(SymbolResult definition)
+    private List<string> ResolveImpactFallbackNames(
+        SymbolResult definition,
+        IReadOnlySet<string>? physicalDefinitionPaths = null)
     {
         if (string.IsNullOrWhiteSpace(definition.Path) || string.IsNullOrWhiteSpace(definition.Name))
             return new List<string>();
 
+        var definitionPaths = physicalDefinitionPaths is { Count: > 0 }
+            ? physicalDefinitionPaths.Order(StringComparer.Ordinal).ToList()
+            : [definition.Path];
         using var cmd = _conn.CreateCommand();
         var supportedLangFilter = BuildGraphSupportedLanguagePredicate(cmd, "f", "impactSafeNameLang");
         cmd.CommandText = @"
             SELECT DISTINCT s.name
             FROM symbols s
             JOIN files f ON s.file_id = f.id
-            WHERE f.path = @targetPath
+            WHERE f.path IN (SELECT value FROM json_each(@targetPathsJson))
               AND " + supportedLangFilter + @"
               AND (
                     (s.name = @containerName AND s.kind = @containerKind)
                     OR s.container_name = @containerName
                   )
             ORDER BY s.name";
-        SqliteCommandPolicy.Add(cmd, "@targetPath", definition.Path);
+        SqliteCommandPolicy.Add(cmd, "@targetPathsJson", JsonStringListCodec.Serialize(definitionPaths));
         SqliteCommandPolicy.Add(cmd, "@containerName", definition.Name);
         SqliteCommandPolicy.Add(cmd, "@containerKind", definition.Kind);
 
@@ -2981,11 +3248,23 @@ public partial class DbReader
         return results;
     }
 
-    private (List<FileDependencyResult> Results, bool Truncated) GetFileDependencyHintsToResolvedType(SymbolResult definition, IReadOnlyList<string> fallbackNames, int limit, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, int offset = 0)
+    private (List<FileDependencyResult> Results, bool Truncated) GetFileDependencyHintsToResolvedType(
+        SymbolResult definition,
+        IReadOnlyList<string> fallbackNames,
+        int limit,
+        string? lang = null,
+        IReadOnlyList<string>? pathPatterns = null,
+        IReadOnlyList<string>? excludePathPatterns = null,
+        bool excludeTests = false,
+        int offset = 0,
+        IReadOnlySet<string>? physicalDefinitionPaths = null)
     {
         if (!_hasReferencesTable || string.IsNullOrWhiteSpace(definition.Path) || fallbackNames.Count == 0)
             return (new List<FileDependencyResult>(), false);
 
+        var definitionPaths = physicalDefinitionPaths is { Count: > 0 }
+            ? physicalDefinitionPaths.Order(StringComparer.Ordinal).ToList()
+            : [definition.Path];
         using var cmd = _conn.CreateCommand();
         var innerSql = @"
                 SELECT src.id AS source_file_id, src.path AS source_path, @impactTargetPath AS target_path,
@@ -2995,7 +3274,7 @@ public partial class DbReader
                        " + GetLogicalReferenceKindSql("r.reference_kind") + @" AS logical_reference_kind
                 FROM symbol_references r
                 JOIN files src ON r.file_id = src.id
-                WHERE src.path != @impactTargetPath";
+                WHERE src.path NOT IN (SELECT value FROM json_each(@impactTargetPathsJson))";
         // `impact` heuristic file hints intentionally include metadata-only reference
         // kinds (`attribute` / `annotation`). A rename or removal of `User` breaks
         // `[JsonConverter(typeof(User))]` / `@Inject(User.class)` at compile time just
@@ -3012,10 +3291,7 @@ public partial class DbReader
         innerSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "src", "impactDepsLang")}";
         if (lang != null)
             innerSql += " AND src.lang = @lang";
-        var nameClauses = new List<string>(fallbackNames.Count);
-        for (int i = 0; i < fallbackNames.Count; i++)
-            nameClauses.Add($"r.symbol_name = @impactFallbackName{i}");
-        innerSql += " AND (" + string.Join(" OR ", nameClauses) + ")";
+        innerSql += " AND r.symbol_name IN (SELECT value FROM json_each(@impactFallbackNamesJson))";
 
         if (pathPatterns is { Count: > 0 })
         {
@@ -3044,8 +3320,8 @@ public partial class DbReader
         if (lang != null)
             SqliteCommandPolicy.Add(cmd, "@lang", lang);
         SqliteCommandPolicy.Add(cmd, "@impactTargetPath", definition.Path);
-        for (int i = 0; i < fallbackNames.Count; i++)
-            SqliteCommandPolicy.Add(cmd, $"@impactFallbackName{i}", fallbackNames[i]);
+        SqliteCommandPolicy.Add(cmd, "@impactTargetPathsJson", JsonStringListCodec.Serialize(definitionPaths));
+        SqliteCommandPolicy.Add(cmd, "@impactFallbackNamesJson", JsonStringListCodec.Serialize(fallbackNames));
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
 
         var candidates = new List<(long SourceFileId, bool HasMetadataRef, FileDependencyResult Edge)>();

@@ -182,6 +182,7 @@ public static partial class QueryCommandRunner
                             ["graph_table_available"] = analysis.GraphTableAvailable,
                             ["degraded"] = !analysis.GraphTableAvailable,
                         };
+                        AddImpactTraversalRootJsonFields(payload, analysis);
                         AddImpactTerminationJsonFields(payload, analysis, jsonOptions);
                         if (analysis.ZeroResultReason != null)
                             payload["zero_result_reason"] = analysis.ZeroResultReason;
@@ -287,6 +288,7 @@ public static partial class QueryCommandRunner
                         ["hint_file_count"] = hintFileCount,
                         ["truncated"] = analysis.Truncated,
                     };
+                    AddImpactTraversalRootJsonFields(payload, analysis);
                     AddImpactTerminationJsonFields(payload, analysis, jsonOptions);
                     if (analysis.TruncatedReason != null)
                         payload["truncated_reason"] = analysis.TruncatedReason;
@@ -401,6 +403,7 @@ public static partial class QueryCommandRunner
 
     private static void AddImpactDefinitionsJsonFields(JsonObject payload, ImpactAnalysisResult analysis, QueryCommandOptions options, JsonSerializerOptions jsonOptions)
     {
+        AddImpactTraversalRootJsonFields(payload, analysis);
         var definitions = BuildImpactDefinitionJsonResults(analysis.Definitions);
         var definitionLimit = Math.Max(1, options.Limit);
         var visibleDefinitions = definitions.Take(definitionLimit).ToList();
@@ -423,6 +426,20 @@ public static partial class QueryCommandRunner
         payload["definitions_truncated"] = true;
         payload["definitions_omitted"] = logicalDefinitionCount - visibleDefinitions.Count;
         payload["definitions_hint"] = "Raise --limit or narrow with --lang, --kind, --path, or --exclude-path to inspect additional matching definitions.";
+    }
+
+    private static void AddImpactTraversalRootJsonFields(JsonObject payload, ImpactAnalysisResult analysis)
+    {
+        payload["traversal_root_scope"] = analysis.TraversalRootScope;
+        if (analysis.TraversalPartialFamilyId == null)
+            return;
+
+        payload["traversal_partial_family_id"] = analysis.TraversalPartialFamilyId;
+        payload["partial_family_member_count"] = analysis.PartialFamilyMemberCount;
+        payload["partial_family_member_root_count"] = analysis.PartialFamilyMemberRootCount;
+        payload["partial_family_member_root_limit"] = analysis.PartialFamilyMemberRootLimit;
+        payload["partial_family_member_root_truncated"] = analysis.PartialFamilyMemberRootTruncated;
+        payload["partial_family_member_root_omitted"] = analysis.PartialFamilyMemberRootOmitted;
     }
 
     private static List<SymbolResult> BuildImpactDefinitionJsonResults(IReadOnlyList<SymbolResult> definitions)

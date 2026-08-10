@@ -10,6 +10,78 @@ namespace CodeIndex.Tests;
 public partial class QueryCommandRunnerTests
 {
     [Fact]
+    public void RunImpact_LogicalPartialFamilyReportsIndependentRootBudget_Issue5060()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_impact_partial_family_issue5060");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Worker.Start.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class Worker
+                {
+                    public void Start() { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Worker.Stop.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class Worker
+                {
+                    public void Stop() { }
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Consumer.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public class Consumer
+                {
+                    public void Run(Worker worker)
+                    {
+                        worker.Start();
+                        worker.Stop();
+                    }
+                }
+                """);
+            MarkGraphAndFoldReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["Demo.Worker", "--db", dbPath, "--json", "--lang", "csharp", "--max-hops", "3", "--limit", "10"],
+                _jsonOptions));
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("logical_partial_family", root.GetProperty("traversal_root_scope").GetString());
+            Assert.StartsWith("partial:", root.GetProperty("traversal_partial_family_id").GetString());
+            Assert.Equal(2, root.GetProperty("partial_family_member_count").GetInt32());
+            Assert.Equal(2, root.GetProperty("partial_family_member_root_count").GetInt32());
+            Assert.Equal(DbReader.DefaultImpactPartialFamilyMemberBudget, root.GetProperty("partial_family_member_root_limit").GetInt32());
+            Assert.False(root.GetProperty("partial_family_member_root_truncated").GetBoolean());
+            Assert.Equal(0, root.GetProperty("partial_family_member_root_omitted").GetInt32());
+            Assert.Equal("file_dependency_hints", root.GetProperty("impact_mode").GetString());
+            Assert.Single(root.GetProperty("file_impacts").EnumerateArray());
+            Assert.Equal("src/Consumer.cs", root.GetProperty("file_impacts")[0].GetProperty("source_path").GetString());
+            Assert.False(root.TryGetProperty("zero_result_reason", out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunImpact_MissingDepthValueShowsPerFlagHint_Issue1507()
     {
         var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(["QueryCommandRunner", "--depth"], _jsonOptions));
@@ -709,7 +781,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunImpact_PartialClassJsonReturnsResolutionHintPayload()
+    public void RunImpact_PartialClassJsonReturnsLogicalFamilyPayload()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_query_runner_impact_partial_hint");
         try
@@ -744,8 +816,14 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(0, json.GetProperty("count").GetInt32());
             Assert.True(json.GetProperty("has_multiple_definitions").GetBoolean());
             Assert.True(json.GetProperty("has_multiple_definition_files").GetBoolean());
-            Assert.Equal("multiple_definition_files", json.GetProperty("zero_result_reason").GetString());
-            Assert.Contains("deps --path <definition-path> --reverse", json.GetProperty("suggestion").GetString());
+            Assert.Equal("class_symbol_no_symbol_callers", json.GetProperty("zero_result_reason").GetString());
+            Assert.Equal("logical_partial_family", json.GetProperty("traversal_root_scope").GetString());
+            Assert.StartsWith("partial:", json.GetProperty("traversal_partial_family_id").GetString());
+            Assert.Equal(2, json.GetProperty("partial_family_member_count").GetInt32());
+            Assert.Equal(2, json.GetProperty("partial_family_member_root_count").GetInt32());
+            Assert.False(json.GetProperty("partial_family_member_root_truncated").GetBoolean());
+            Assert.Contains("deps --path", json.GetProperty("suggestion").GetString());
+            Assert.Contains("--reverse", json.GetProperty("suggestion").GetString());
             Assert.Equal(2, json.GetProperty("definition_file_count").GetInt32());
         }
         finally

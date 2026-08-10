@@ -9415,7 +9415,11 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("none", json.GetProperty("impact_mode").GetString());
             Assert.True(json.GetProperty("has_multiple_definitions").GetBoolean());
             Assert.True(json.GetProperty("has_multiple_definition_files").GetBoolean());
-            Assert.Equal("multiple_definition_files", json.GetProperty("zero_result_reason").GetString());
+            Assert.Equal("class_symbol_no_symbol_callers", json.GetProperty("zero_result_reason").GetString());
+            Assert.Equal("logical_partial_family", json.GetProperty("traversal_root_scope").GetString());
+            Assert.Equal(2, json.GetProperty("partial_family_member_count").GetInt32());
+            Assert.Equal(2, json.GetProperty("partial_family_member_root_count").GetInt32());
+            Assert.False(json.GetProperty("partial_family_member_root_truncated").GetBoolean());
         }
         finally
         {

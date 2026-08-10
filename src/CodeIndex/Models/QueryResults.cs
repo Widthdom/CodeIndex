@@ -1039,6 +1039,8 @@ public class ImpactPathNode
     public int? DefinitionLine { get; set; }
     public string? Container { get; set; }
     public string? FamilyKey { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? PartialFamilyId { get; set; }
     public string? LogicalTargetKey { get; set; }
     public string? ReferencePath { get; set; }
     public int? ReferenceLine { get; set; }
@@ -1067,6 +1069,19 @@ public class ImpactAnalysisResult
     public bool HasClassLikeDefinitions { get; set; }
     public bool HasMultipleDefinitions { get; set; }
     public bool HasMultipleDefinitionFiles { get; set; }
+    public string TraversalRootScope { get; set; } = "symbol";
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? TraversalPartialFamilyId { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? PartialFamilyMemberCount { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? PartialFamilyMemberRootCount { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? PartialFamilyMemberRootLimit { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? PartialFamilyMemberRootTruncated { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? PartialFamilyMemberRootOmitted { get; set; }
     public List<SymbolResult> Definitions { get; set; } = [];
     public List<ImpactResult> Callers { get; set; } = [];
     public List<FileDependencyResult> FileImpacts { get; set; } = [];

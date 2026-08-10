@@ -23,6 +23,7 @@
       "symbols": "ExecuteFolderDiffAsync,FolderDiffService"
     }
   ],
+  "traversal_root_scope": "symbol",
   "definition_count": 1,
   "definition_file_count": 1,
   "has_multiple_definitions": false,
