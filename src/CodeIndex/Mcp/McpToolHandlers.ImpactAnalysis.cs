@@ -81,7 +81,7 @@ public partial class McpServer
                     ["max_hops"] = maxDepth,
                     ["actual_depth"] = maxActualDepth,
                     ["truncated"] = analysis.Truncated,
-                    ["total"] = analysis.Truncated ? null : JsonValue.Create(count),
+                    ["total"] = analysis.CountIsAuthoritative ? JsonValue.Create(count) : null,
                     ["termination_reason"] = analysis.TerminationReason,
                     ["impact_mode"] = analysis.ImpactMode,
                     ["heuristic"] = analysis.Heuristic,

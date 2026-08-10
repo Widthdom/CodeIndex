@@ -194,6 +194,7 @@ public static partial class QueryCommandRunner
                         AddGraphContractJsonFields(payload, reader, jsonOptions, sqlGraphSignal, hdlGraphSignal);
                         AddImpactOptionWarnings(payload, options);
                         AddCountEnvelopeJsonFields(payload, reader, jsonOptions, options);
+                        ApplyImpactCountAuthority(payload, analysis);
                         var writeExitCode = WriteJsonPayloadWithOptionalByteLimit(
                             payload,
                             options,
@@ -295,6 +296,7 @@ public static partial class QueryCommandRunner
                     AddGraphContractJsonFields(payload, reader, jsonOptions, sqlGraphSignal, hdlGraphSignal);
                     AddImpactOptionWarnings(payload, options);
                     AddCountEnvelopeJsonFields(payload, reader, jsonOptions, options);
+                    ApplyImpactCountAuthority(payload, analysis);
                     AddActiveSqliteDiagnostics(payload);
                     Console.WriteLine(payload.ToJsonString(jsonOptions));
                 }
@@ -440,6 +442,15 @@ public static partial class QueryCommandRunner
         payload["partial_family_member_root_limit"] = analysis.PartialFamilyMemberRootLimit;
         payload["partial_family_member_root_truncated"] = analysis.PartialFamilyMemberRootTruncated;
         payload["partial_family_member_root_omitted"] = analysis.PartialFamilyMemberRootOmitted;
+    }
+
+    internal static void ApplyImpactCountAuthority(JsonObject payload, ImpactAnalysisResult analysis)
+    {
+        if (analysis.CountIsAuthoritative)
+            return;
+
+        payload["degraded"] = true;
+        payload["authoritative_count"] = false;
     }
 
     private static List<SymbolResult> BuildImpactDefinitionJsonResults(IReadOnlyList<SymbolResult> definitions)

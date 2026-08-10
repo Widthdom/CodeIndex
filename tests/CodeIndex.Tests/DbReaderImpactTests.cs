@@ -801,7 +801,8 @@ public partial class DbReaderTests
             }
             """);
 
-        var analysis = _reader.AnalyzeImpact("Worker", maxDepth: 3, limit: 10);
+        var reader = CreateReferenceIdentityReadyImpactReader();
+        var analysis = reader.AnalyzeImpact("Worker", maxDepth: 3, limit: 10);
 
         Assert.Equal("none", analysis.ImpactMode);
         Assert.Empty(analysis.Callers);
@@ -818,6 +819,23 @@ public partial class DbReaderTests
         Assert.Equal("class_symbol_no_symbol_callers", analysis.ZeroResultReason);
         Assert.Contains("deps --path", analysis.Suggestion);
         Assert.Contains("--reverse", analysis.Suggestion);
+    }
+
+    [Fact]
+    public void AnalyzeImpact_StaleReferenceIdentityDoesNotClaimLogicalPartialTraversal()
+    {
+        InsertIndexedFile("src/Stale.Part1.cs", "csharp", "public partial class Stale { }");
+        InsertIndexedFile("src/Stale.Part2.cs", "csharp", "public partial class Stale { }");
+        _writer.ClearReferenceIdentityContractReady();
+        var reader = new DbReader(_db.Connection);
+
+        var analysis = reader.AnalyzeImpact("Stale", maxDepth: 2, limit: 10);
+
+        Assert.Equal("symbol", analysis.TraversalRootScope);
+        Assert.Null(analysis.TraversalPartialFamilyId);
+        Assert.Null(analysis.PartialFamilyMemberCount);
+        Assert.Null(analysis.PartialFamilyMemberRootCount);
+        Assert.Null(analysis.PartialFamilyMemberRootTruncated);
     }
 
     [Fact]
@@ -868,7 +886,8 @@ public partial class DbReaderTests
             }
             """);
 
-        var analysis = _reader.AnalyzeImpact("Demo.Worker", maxDepth: 3, limit: 10);
+        var reader = CreateReferenceIdentityReadyImpactReader();
+        var analysis = reader.AnalyzeImpact("Demo.Worker", maxDepth: 3, limit: 10);
 
         Assert.Equal("file_dependency_hints", analysis.ImpactMode);
         Assert.True(analysis.Heuristic);
@@ -919,8 +938,9 @@ public partial class DbReaderTests
             }
             """);
 
-        var bounded = _reader.AnalyzeImpact("Demo.Worker.Sync", maxDepth: 1, limit: 10, withPaths: true);
-        var expanded = _reader.AnalyzeImpact("Demo.Worker.Sync", maxDepth: 2, limit: 10, withPaths: true);
+        var reader = CreateReferenceIdentityReadyImpactReader();
+        var bounded = reader.AnalyzeImpact("Demo.Worker.Sync", maxDepth: 1, limit: 10, withPaths: true);
+        var expanded = reader.AnalyzeImpact("Demo.Worker.Sync", maxDepth: 2, limit: 10, withPaths: true);
 
         Assert.Equal(2, bounded.DefinitionCount);
         Assert.Equal(1, bounded.LogicalDefinitionCount);
@@ -945,6 +965,38 @@ public partial class DbReaderTests
         Assert.Equal(expanded.Callers.Count, expanded.Callers.Select(caller => caller.CallerSymbolId).Distinct().Count());
         Assert.True(expanded.CycleDetected);
         Assert.Contains(expanded.Cycles!, cycle => cycle.Members.Any(member => member.EndsWith(".Sync", StringComparison.Ordinal)) && cycle.Members.Contains("Finish"));
+    }
+
+    [Fact]
+    public void AnalyzeImpact_CallerFreePartialMethodIsOneLogicalNoCallersResult()
+    {
+        InsertIndexedFile("src/Worker.Sync.Declaration.cs", "csharp",
+            """
+            namespace Demo;
+            public partial class Worker
+            {
+                partial void Sync();
+            }
+            """);
+        InsertIndexedFile("src/Worker.Sync.Implementation.cs", "csharp",
+            """
+            namespace Demo;
+            public partial class Worker
+            {
+                partial void Sync() { }
+            }
+            """);
+
+        var reader = CreateReferenceIdentityReadyImpactReader();
+        var analysis = reader.AnalyzeImpact("Demo.Worker.Sync", maxDepth: 2, limit: 10);
+
+        Assert.Equal(2, analysis.DefinitionCount);
+        Assert.Equal(1, analysis.LogicalDefinitionCount);
+        Assert.Equal("logical_partial_family", analysis.TraversalRootScope);
+        Assert.Equal("none", analysis.ImpactMode);
+        Assert.Empty(analysis.Callers);
+        Assert.Null(analysis.ZeroResultReason);
+        Assert.Equal(["no_callers"], analysis.ImpactFailureChain);
     }
 
     [Fact]
@@ -983,9 +1035,10 @@ public partial class DbReaderTests
         InsertIndexedFile("src/Budgeted.One.cs", "csharp", "public partial class Budgeted { }");
         InsertIndexedFile("src/Budgeted.Two.cs", "csharp", "public partial class Budgeted { }");
         InsertIndexedFile("src/Budgeted.Three.cs", "csharp", "public partial class Budgeted { }");
-        _reader.ImpactPartialFamilyMemberBudget = 2;
+        var reader = CreateReferenceIdentityReadyImpactReader();
+        reader.ImpactPartialFamilyMemberBudget = 2;
 
-        var analysis = _reader.AnalyzeImpact("Budgeted", maxDepth: 2, limit: 10);
+        var analysis = reader.AnalyzeImpact("Budgeted", maxDepth: 2, limit: 10);
 
         Assert.Equal("logical_partial_family", analysis.TraversalRootScope);
         Assert.Equal(3, analysis.PartialFamilyMemberCount);
@@ -995,6 +1048,7 @@ public partial class DbReaderTests
         Assert.Equal(1, analysis.PartialFamilyMemberRootOmitted);
         Assert.False(analysis.Truncated);
         Assert.Null(analysis.TruncatedReason);
+        Assert.False(analysis.CountIsAuthoritative);
     }
 
     [Fact]
@@ -1532,5 +1586,11 @@ public partial class DbReaderTests
 
         Assert.True(analysis.HasMultipleDefinitions);
         Assert.False(analysis.HasMultipleDefinitionFiles);
+    }
+
+    private DbReader CreateReferenceIdentityReadyImpactReader()
+    {
+        _writer.RefreshMutualRecursionFlags(stampReferenceIdentityContractReady: true);
+        return new DbReader(_db.Connection);
     }
 }

@@ -9400,7 +9400,7 @@ public partial class QueryCommandRunnerTests
                     public void Stop() { }
                 }
                 """);
-            MarkGraphAndFoldReady(dbPath);
+            MarkImpactLogicalFamilyReady(dbPath);
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
                 ["Worker", "--db", dbPath, "--json"],

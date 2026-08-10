@@ -2442,7 +2442,8 @@ public partial class DbReader
         var hasMultipleFallbackDefinitions = definitionResolution.PreciseLogicalDefinitionCount > 1;
         var hasMultipleFallbackDefinitionFiles = definitionResolution.PreciseDefinitionFileCount > 1;
         var hasClassLikeDefinitions = definitionResolution.PreciseDefinitionCount > 0;
-        var logicalPartialFamilyDefinition = definitionResolution.LogicalCount == 1
+        var logicalPartialFamilyDefinition = _referenceIdentityContractCurrent
+                                             && definitionResolution.LogicalCount == 1
                                              && definitions.Count == 1
                                              && definitions[0].Lang == "csharp"
                                              && definitions[0].PartialFamilyId != null
@@ -2623,7 +2624,7 @@ public partial class DbReader
                         suggestion = BuildImpactSuggestion(definitionPaths, hasClassLikeDefinitions, hasMultipleDefinitions: false, hasMultipleDefinitionFiles: false, lang);
                     }
                 }
-                else if (hasMultipleDefinitions)
+                else if (hasMultipleDefinitions && logicalPartialFamilyDefinition == null)
                 {
                     zeroResultReason = definitionResolution.PhysicalFileCount > 1 ? "multiple_definition_files" : "multiple_definitions";
                     impactFailureChain.Add(zeroResultReason);

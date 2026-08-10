@@ -2592,7 +2592,9 @@ public partial class McpServerTests
                 }
             }
             """, familyScopeKey: "src");
-        new DbWriter(_db.Connection).MarkHotspotFamilyReady("csharp", "issue-5060-fixture");
+        var writer = new DbWriter(_db.Connection);
+        writer.MarkHotspotFamilyReady("csharp", "issue-5060-fixture");
+        writer.MarkReferenceIdentityContractReady();
 
         var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"impact_analysis","arguments":{"query":"Demo.Worker"}}}""")!;
         var response = _server.HandleMessage(request)!;

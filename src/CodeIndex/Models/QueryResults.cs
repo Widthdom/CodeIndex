@@ -1082,6 +1082,8 @@ public class ImpactAnalysisResult
     public bool? PartialFamilyMemberRootTruncated { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? PartialFamilyMemberRootOmitted { get; set; }
+    [JsonIgnore]
+    internal bool CountIsAuthoritative => !Truncated && PartialFamilyMemberRootTruncated != true;
     public List<SymbolResult> Definitions { get; set; } = [];
     public List<ImpactResult> Callers { get; set; } = [];
     public List<FileDependencyResult> FileImpacts { get; set; } = [];

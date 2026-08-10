@@ -53,7 +53,7 @@ public partial class QueryCommandRunnerTests
                     }
                 }
                 """);
-            MarkGraphAndFoldReady(dbPath);
+            MarkImpactLogicalFamilyReady(dbPath);
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
                 ["Demo.Worker", "--db", dbPath, "--json", "--lang", "csharp", "--max-hops", "3", "--limit", "10"],
@@ -79,6 +79,77 @@ public partial class QueryCommandRunnerTests
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
+    }
+
+    [Fact]
+    public void RunImpact_CallerFreePartialMethodStrictTreatsFamilyAsOneNoCallersResult_Issue5060()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_impact_partial_method_no_callers_issue5060");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Worker.Sync.Declaration.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class Worker
+                {
+                    partial void Sync();
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Worker.Sync.Implementation.cs",
+                "csharp",
+                """
+                namespace Demo;
+                public partial class Worker
+                {
+                    partial void Sync() { }
+                }
+                """);
+            MarkImpactLogicalFamilyReady(dbPath);
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["Demo.Worker.Sync", "--db", dbPath, "--json", "--lang", "csharp", "--strict"],
+                _jsonOptions));
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.Equal("logical_partial_family", root.GetProperty("traversal_root_scope").GetString());
+            Assert.False(root.TryGetProperty("zero_result_reason", out _));
+            Assert.Equal("no_callers", Assert.Single(root.GetProperty("impact_failure_chain").EnumerateArray()).GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ApplyImpactCountAuthority_CappedPartialFamilyIsDegradedAndNonAuthoritative_Issue5060()
+    {
+        var payload = new System.Text.Json.Nodes.JsonObject
+        {
+            ["degraded"] = false,
+            ["authoritative_count"] = true,
+        };
+        var analysis = new ImpactAnalysisResult
+        {
+            Truncated = false,
+            PartialFamilyMemberRootTruncated = true,
+        };
+
+        QueryCommandRunner.ApplyImpactCountAuthority(payload, analysis);
+
+        Assert.True(payload["degraded"]!.GetValue<bool>());
+        Assert.False(payload["authoritative_count"]!.GetValue<bool>());
+        Assert.False(analysis.Truncated);
+        Assert.False(analysis.CountIsAuthoritative);
     }
 
     [Fact]
@@ -350,7 +421,7 @@ public partial class QueryCommandRunnerTests
                 {
                 }
                 """);
-            MarkGraphAndFoldReady(dbPath);
+            MarkImpactLogicalFamilyReady(dbPath);
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
                 ["QueryCommandRunner", "--db", dbPath, "--json", "--max-hops", "0"],
@@ -801,7 +872,7 @@ public partial class QueryCommandRunnerTests
                     public void Stop() { }
                 }
                 """);
-            MarkGraphAndFoldReady(dbPath);
+            MarkImpactLogicalFamilyReady(dbPath);
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
                 ["Worker", "--db", dbPath, "--json"],
@@ -1670,5 +1741,12 @@ public partial class QueryCommandRunnerTests
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
+    }
+
+    private static void MarkImpactLogicalFamilyReady(string dbPath)
+    {
+        MarkGraphAndFoldReady(dbPath);
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+        new DbWriter(db.Connection).MarkReferenceIdentityContractReady();
     }
 }
