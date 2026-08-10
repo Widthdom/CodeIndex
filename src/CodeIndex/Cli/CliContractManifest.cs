@@ -76,6 +76,7 @@ internal static class CliContractManifest
         new("references", "references.json"),
         new("impact", "impact.json"),
         new("excerpt", "excerpt.json"),
+        new("suggestions-compact", "suggestions-compact.json"),
     ];
 
     private static IReadOnlyList<Type> LoadCliJsonRootTypes() =>
