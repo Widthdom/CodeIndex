@@ -340,6 +340,10 @@ guard forces any active dirty graph scope onto its full-refresh plan before the
 indexes disappear. Immediately before mutual-recursion evaluation, its graph
 transaction restores only the unresolved-folded, legacy NOCASE, and resolved
 reverse-edge indexes; the remaining query indexes return after the mutual update.
+The full mutual-recursion update materializes one desired flag per call-like or
+non-canonical row before applying changes. Keep the correlated reverse-edge
+expression single-evaluation: repeating it in both `SET` and `WHERE` causes
+fresh large graphs to perform the same random B-tree probes twice.
 When a TypeScript augmentation rebuild owns the sole graph pass, restore every
 ordinary graph/query index before readiness, then drop the reverse candidate-symbol
 lookup immediately before augmentation candidate population and keep it deferred
@@ -4089,6 +4093,10 @@ unchanged、または sparse mutation の target 集合では全 index を維持
 してください。identity / resolution 中は query-only 集合を遅延したままにし、mutual recursion の
 直前に reverse-edge 用3本を復元して、その update 後に残りを戻してください。小規模 scoped
 update は固定的な再構築 cost が更新時間を支配しないよう、全 index を維持します。
+full mutual-recursion update は、call-like または非canonicalな row ごとに望ましい flag を
+1回 materialize してから変更を適用します。相関 reverse-edge 式を `SET` と `WHERE` の
+両方で評価すると、巨大な fresh graph で同じランダム B-tree probe が二重になるため、
+single-evaluation の契約を維持してください。
 
 C# の reference-graph finalization は、reference arity、invocation arity、member receiver、
 definition arity、constructor arity、value-type の fact を、対象 row ごとに TEMP table へ1回だけ

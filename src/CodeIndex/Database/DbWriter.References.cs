@@ -1509,11 +1509,33 @@ public partial class DbWriter
         """;
 
     private static readonly string RefreshMutualRecursionFlagsSql = $"""
+        WITH desired_mutual_recursion(id, desired_value) AS MATERIALIZED (
+            SELECT r.id,
+                   {MutualRecursionValueSql}
+            FROM symbol_references AS r
+            -- Ordinary non-call rows are already persisted with the canonical zero value.
+            -- Keep them out of the materialized working set while still repairing legacy or
+            -- externally modified non-boolean values.
+            -- 通常の非call rowはcanonicalな0で永続化済みなのでwork setから除外しつつ、
+            -- legacyまたは外部変更による非boolean値は引き続き修復する。
+            WHERE r.reference_kind IN (
+                      'call',
+                      'instantiate',
+                      'subscribe',
+                      'unsubscribe',
+                      'razor_event_binding')
+               OR r.is_mutual_recursion IS NOT 0
+        )
         UPDATE symbol_references AS r
-        SET is_mutual_recursion = {MutualRecursionValueSql}
-        -- IS NOT is null-safe and also normalizes legacy non-boolean values.
-        -- IS NOT により NULL と legacy の非boolean値も安全に正規化する。
-        WHERE r.is_mutual_recursion IS NOT ({MutualRecursionValueSql})
+        SET is_mutual_recursion = desired.desired_value
+        FROM desired_mutual_recursion AS desired
+        WHERE r.id = desired.id
+          -- IS NOT is null-safe and also normalizes legacy non-boolean values. Materializing
+          -- the desired value keeps each correlated reverse-edge lookup to one evaluation
+          -- per candidate instead of repeating it in both SET and WHERE.
+          -- IS NOTによりNULLとlegacyの非boolean値も安全に正規化する。desired valueを
+          -- materializeし、相関reverse-edge lookupをSETとWHEREで二重評価しない。
+          AND r.is_mutual_recursion IS NOT desired.desired_value
         """;
 
     internal static string RefreshMutualRecursionFlagsSqlForTesting

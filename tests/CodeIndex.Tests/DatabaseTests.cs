@@ -198,11 +198,22 @@ public class DatabaseTests : IDisposable
     public void MutualRecursionLookups_UsePartialUnresolvedIndexInFullAndScopedPlans()
     {
         const string indexName = "idx_symbol_refs_unresolved_mutual_folded";
+        var fullSql = DbWriter.RefreshMutualRecursionFlagsSqlForTesting;
+        Assert.Contains("AS MATERIALIZED", fullSql, StringComparison.Ordinal);
+        Assert.Equal(
+            1,
+            CountOccurrences(fullSql, "INDEXED BY idx_symbol_refs_resolved_source_target_kind"));
+        Assert.Equal(
+            1,
+            CountOccurrences(fullSql, "INDEXED BY idx_symbol_refs_unresolved_mutual_folded"));
+        Assert.Equal(
+            1,
+            CountOccurrences(fullSql, "INDEXED BY idx_symbol_refs_container_nocase_kind"));
         AssertUsesPartialIndex(
             "full",
             ReadQueryPlanDetails(
                 _db.Connection,
-                DbWriter.RefreshMutualRecursionFlagsSqlForTesting));
+                fullSql));
 
         using var scope = _writer.BeginReferenceGraphRefreshScope();
         var scopedLookups = DbWriter.ScopedUnresolvedMutualLookupStatementsForTesting;
@@ -220,6 +231,19 @@ public class DatabaseTests : IDisposable
                 detail.Equals("SCAN reverse", StringComparison.OrdinalIgnoreCase)
                 || detail.StartsWith("SCAN reverse ", StringComparison.OrdinalIgnoreCase)),
                 $"Unexpected reverse scan in {scopeName} plan:{Environment.NewLine}{string.Join(Environment.NewLine, plan)}");
+        }
+
+        static int CountOccurrences(string value, string search)
+        {
+            var count = 0;
+            for (var start = 0; ;)
+            {
+                var found = value.IndexOf(search, start, StringComparison.Ordinal);
+                if (found < 0)
+                    return count;
+                count++;
+                start = found + search.Length;
+            }
         }
     }
 
