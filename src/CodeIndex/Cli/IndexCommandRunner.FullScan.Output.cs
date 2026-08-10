@@ -54,7 +54,6 @@ public static partial class IndexCommandRunner
         internal bool HeadChangeDetected { get; init; }
         internal string? PriorIndexedHeadCommit { get; init; }
         internal string? CurrentHeadCommit { get; init; }
-        internal string? HeadChangeNotice { get; init; }
         internal bool ShowNextSteps { get; init; }
     }
 
@@ -108,6 +107,11 @@ public static partial class IndexCommandRunner
         var sqlGraphContractDegradedReasonAfter = sqlGraphContractSignalAfter.DegradedReason;
         var hotspotFamilyReadyAfter = hotspotFamilySignalAfter.Ready;
         var hotspotFamilyDegradedReasonAfter = hotspotFamilySignalAfter.DegradedReason;
+        var unresolvedHeadChange = output.HeadChangeDetected && output.Errors > 0;
+        var headChangeNotice = unresolvedHeadChange
+            ? $"Indexed HEAD changed since the last verified full scan (was {output.PriorIndexedHeadCommit}, now {output.CurrentHeadCommit}), but the current full scan did not complete. " +
+              $"Fix the reported errors and rerun `cdidx index {QuoteCommandArgument(output.ProjectRoot)}` to verify the whole workspace."
+            : null;
 
         var foldOnlyRemediation = BuildFoldOnlyReadinessRemediation(
             persistedReadinessAfter.IndexComplete,
@@ -180,10 +184,10 @@ public static partial class IndexCommandRunner
                 DegradedReason = foldOnlyRemediation?.DegradedReason,
                 RecommendedAction = foldOnlyRemediation?.RecommendedAction,
                 AlternativeAction = foldOnlyRemediation?.AlternativeAction,
-                HeadChanged = output.HeadChangeDetected,
+                HeadChanged = unresolvedHeadChange,
                 PriorIndexedHeadCommit = output.PriorIndexedHeadCommit,
                 CurrentHeadCommit = output.CurrentHeadCommit,
-                HeadChangeNotice = output.HeadChangeNotice,
+                HeadChangeNotice = headChangeNotice,
                 CwdDriftDetected = cwdDriftDetected,
                 CwdAtStart = output.InitialCwd,
                 CwdAtFinalize = finalCwd,

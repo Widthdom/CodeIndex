@@ -126,6 +126,8 @@ dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --changed-between <old
 dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll . --json
 ```
 
+`--changed-between` reconciles the requested range with the persisted whole-workspace verification baseline. If that baseline is older or divergent, the local binary adds the missing baseline-to-current paths; if Git can no longer resolve it, follow the emitted fetch/full-scan guidance instead of substituting `--files`.
+
 If you prefer `dotnet run`, that is also acceptable:
 
 ```bash
@@ -456,6 +458,8 @@ dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --files src/CodeIndex/
 commit_id=$(git rev-parse HEAD)
 dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --commits "$commit_id" --json
 ```
+
+`--changed-between` は要求範囲を永続化済みの workspace 全体検証基準と照合します。基準が古い、または分岐している場合は不足する基準→現在 HEAD の path をローカル binary が補完します。Git が基準を解決できない場合は `--files` へ置き換えず、出力された fetch / full scan の案内に従ってください。
 
 `dotnet run` でも構いません:
 

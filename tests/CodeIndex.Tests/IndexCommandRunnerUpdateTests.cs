@@ -657,6 +657,7 @@ public partial class IndexCommandRunnerTests
         var hookInvoked = false;
         try
         {
+            RunGit(projectRoot, "init");
             var firstPath = Path.Combine(projectRoot, "MutualRecursionA.cs");
             var secondPath = Path.Combine(projectRoot, "MutualRecursionB.cs");
             File.WriteAllText(
@@ -665,6 +666,9 @@ public partial class IndexCommandRunnerTests
             File.WriteAllText(
                 secondPath,
                 "public static class MutualRecursionB { public static void CrossCycleB() { CrossCycleA(); } }\n");
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "initial");
+            var initialHead = RunGitCaptureStdOut(projectRoot, "rev-parse", "HEAD").Trim();
 
             var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
             Assert.Equal(CommandExitCodes.Success, initialExitCode);
@@ -673,6 +677,10 @@ public partial class IndexCommandRunnerTests
             File.AppendAllText(secondPath, "// changed B\n");
             File.SetLastWriteTimeUtc(firstPath, DateTime.UtcNow.AddSeconds(2));
             File.SetLastWriteTimeUtc(secondPath, DateTime.UtcNow.AddSeconds(2));
+            RunGit(projectRoot, "add", ".");
+            RunGit(projectRoot, "commit", "-m", "change both");
+            var currentHead = RunGitCaptureStdOut(projectRoot, "rev-parse", "HEAD").Trim();
+            Assert.NotEqual(initialHead, currentHead);
             DbWriter.MutualRecursionRefreshForTesting = () =>
             {
                 hookInvoked = true;
@@ -689,6 +697,7 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(CommandErrorCodes.Interrupted, json.GetProperty("error_code").GetString());
             using var db = new DbContext(DbOpenIntent.WriteIndex, Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
             Assert.Equal(DbContext.HotspotReferenceAggregateFlags, db.GetUserVersion());
+            Assert.Equal(initialHead, db.GetMetaString(DbContext.WorkspaceVerifiedHeadShaMetaKey));
         }
         finally
         {
@@ -6217,7 +6226,7 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_UpdateMode_WithCommits_SkipsMutationWhenIgnoreRulesAreUnreadable()
+    public void Run_UpdateMode_WithCommits_FailsClosedWhenBaselineReconciliationFindsUnreadableIgnoreChange_Issue5054()
     {
         if (OperatingSystem.IsWindows())
             return;
@@ -6231,6 +6240,7 @@ public partial class IndexCommandRunnerTests
             File.WriteAllText(Path.Combine(projectRoot, "secret.py"), "print('secret v1')\n");
             RunGit(projectRoot, "add", ".");
             RunGit(projectRoot, "commit", "-m", "initial");
+            var initialHead = RunGitCaptureStdOut(projectRoot, "rev-parse", "HEAD").Trim();
 
             var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
             Assert.Equal(CommandExitCodes.Success, initialExitCode);
@@ -6250,28 +6260,31 @@ public partial class IndexCommandRunnerTests
 
             var (exitCode, json) = RunAndCaptureJson([projectRoot, "--commits", commitId, "--json"]);
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal("success", json.GetProperty("status").GetString());
-            Assert.Equal(1, json.GetProperty("summary").GetProperty("updated").GetInt32());
-            Assert.Equal(0, json.GetProperty("summary").GetProperty("removed").GetInt32());
-            Assert.Equal(0, json.GetProperty("summary").GetProperty("skipped").GetInt32());
-            Assert.Equal(0, json.GetProperty("summary").GetProperty("errors").GetInt32());
-            Assert.Equal(1, json.GetProperty("summary").GetProperty("warnings").GetInt32());
-            Assert.True(json.GetProperty("graph_table_available").GetBoolean());
-            Assert.True(json.GetProperty("issues_table_available").GetBoolean());
-            Assert.True(json.GetProperty("fold_ready").GetBoolean());
-            Assert.Equal(".gitignore", json.GetProperty("warnings")[0].GetProperty("file").GetString());
-
-            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
-            Assert.Contains("secret.py", indexedPaths);
+            Assert.Equal(CommandExitCodes.PartialResult, exitCode);
+            Assert.Equal("partial", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("files_persisted").GetInt32());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("files_purged").GetInt32());
+            Assert.True(json.GetProperty("summary").GetProperty("errors").GetInt32() > 0);
+            Assert.False(json.GetProperty("index_complete").GetBoolean());
+            Assert.Contains(
+                json.GetProperty("file_errors").EnumerateArray(),
+                error => error.GetProperty("file").GetString() == ".gitignore"
+                    && error.GetProperty("phase").GetString() == "discovery");
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var indexedPaths = ReadIndexedPaths(dbPath);
+            Assert.Contains("secret.py", indexedPaths);
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                Assert.Equal(initialHead, db.GetMetaString(DbContext.IndexedHeadShaMetaKey));
+                Assert.Equal(initialHead, db.GetMetaString(DbContext.WorkspaceVerifiedHeadShaMetaKey));
+            }
+
             var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
             Assert.Equal(CommandExitCodes.Success, statusExitCode);
-            Assert.True(statusJson.GetProperty("graph_table_available").GetBoolean());
-            Assert.True(statusJson.GetProperty("issues_table_available").GetBoolean());
-            Assert.True(statusJson.GetProperty("file_issues_data_current").GetBoolean());
-            Assert.True(statusJson.GetProperty("fold_ready").GetBoolean());
+            Assert.Equal(initialHead, statusJson.GetProperty("indexed_head_sha").GetString());
+            Assert.Equal(initialHead, statusJson.GetProperty("workspace_verified_head_sha").GetString());
+            Assert.True(statusJson.GetProperty("worktree_head_changed").GetBoolean());
         }
         finally
         {
@@ -6919,7 +6932,7 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_UpdateMode_WithChangedBetween_StaleCsharpContractOutsideRangeRefreshesReferences()
+    public void Run_UpdateMode_WithChangedBetween_ReconcilesDivergentBaselineAndRefreshesStaleCsharpContract_Issue5054()
     {
         var projectRoot = CreateTempProject();
         try
@@ -6966,7 +6979,7 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(0, CountMoneyParseImplicitImplementationReferences(projectRoot));
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             Assert.DoesNotContain("IParseable.cs", ReadIndexedPaths(dbPath));
-            Assert.Contains("outside-range.py", ReadIndexedPaths(dbPath));
+            Assert.DoesNotContain("outside-range.py", ReadIndexedPaths(dbPath));
             Assert.False(File.Exists(staleNonCsharpPath));
             using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             Assert.Equal(

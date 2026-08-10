@@ -107,6 +107,12 @@ first pass; graph commands remain degraded until a normal `cdidx .` refresh.
 | Custom extraction | Extension aliases and regex-backed patterns are documented in [Custom Language Extraction](DEVELOPER_GUIDE.md#custom-language-extraction). |
 | Operations | Installation, upgrades, release verification, troubleshooting, and output controls live in the [User Guide](USER_GUIDE.md). |
 
+Git-scoped refreshes reconcile from the last whole-workspace verification baseline, so a
+branch switch still converges when the supplied old ref is newer than or divergent from the
+indexed baseline. `status` and `map` expose that proof as `workspace_verified_head_sha`,
+separately from the latest scoped-update HEAD. Scoped writes retain their affected paths for
+the next verified Git refresh, including when a later commit range has no net file diff.
+
 ## Documentation
 
 | Document | Contents |
@@ -306,6 +312,12 @@ text / symbol だけを先に検索する場合、`cdidx . --symbols-only` で�
 | 対応言語 | `cdidx languages --json` が live capability probe です。詳細は [対応言語](USER_GUIDE.md#対応言語)。 |
 | custom extraction | 拡張子 alias と regex-backed pattern は [カスタム言語抽出](DEVELOPER_GUIDE.md#カスタム言語抽出) を参照してください。 |
 | 運用 | install、upgrade、release 検証、troubleshooting、output control は [ユーザーガイド](USER_GUIDE.md#cdidx日本語) にあります。 |
+
+Git 差分 refresh は最後に workspace 全体を検証した基準から差分を補完するため、指定した
+old ref が indexed 基準より新しい場合や分岐している場合でも branch switch 後に収束します。
+`status` と `map` は、この検証済み HEAD を `workspace_verified_head_sha` として、最新
+scoped-update HEAD とは別に返します。scoped write の対象 path は次回の検証済み Git
+refresh まで保持されるため、後続 commit range の file 差分が相殺された場合も再照合されます。
 
 ## ドキュメント
 

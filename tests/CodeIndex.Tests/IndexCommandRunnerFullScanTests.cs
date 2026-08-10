@@ -1048,7 +1048,8 @@ public partial class IndexCommandRunnerTests
 
                     Assert.Equal(CommandExitCodes.Success, refreshExitCode);
                     Assert.Equal("success", refreshJson.GetProperty("status").GetString());
-                    Assert.True(refreshJson.GetProperty("head_changed").GetBoolean());
+                    Assert.False(refreshJson.GetProperty("head_changed").GetBoolean());
+                    Assert.Equal(JsonValueKind.Null, refreshJson.GetProperty("head_change_notice").ValueKind);
                     Assert.True(parallelized);
                     Assert.Equal("incremental_changes", reason);
                     Assert.Equal(2, queueCapacity);
@@ -6254,7 +6255,7 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_FullScan_AfterBranchSwitch_JsonReportsHeadChangedAndWarning()
+    public void Run_FullScan_AfterBranchSwitch_ConvergesWithoutRebuildWarning_Issue5054()
     {
         var projectRoot = CreateTempProject();
         try
@@ -6277,22 +6278,23 @@ public partial class IndexCommandRunnerTests
             var secondHead = RunGitCaptureStdOut(projectRoot, "rev-parse", "HEAD").Trim();
             Assert.NotEqual(firstHead, secondHead);
 
-            // A subsequent default incremental full scan should flag the HEAD change.
-            // 既定の incremental full scan が HEAD 差分を通知する。
+            // A subsequent default full scan verifies and purges the complete workspace, so
+            // its final response must describe the converged state without recommending rebuild.
+            // 後続の既定 full scan は workspace 全体を検証・purge するため、完了レスポンスは
+            // rebuild を勧めず収束済み状態を返す。
             var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
             Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.True(json.GetProperty("head_changed").GetBoolean());
+            Assert.False(json.GetProperty("head_changed").GetBoolean());
             Assert.Equal(firstHead, json.GetProperty("prior_indexed_head_commit").GetString());
             Assert.Equal(secondHead, json.GetProperty("current_head_commit").GetString());
-            var notice = json.GetProperty("head_change_notice").GetString();
-            Assert.NotNull(notice);
-            Assert.Contains("--rebuild", notice);
+            Assert.Equal(JsonValueKind.Null, json.GetProperty("head_change_notice").ValueKind);
 
             // After a successful re-scan the HEAD pointer should be updated to the new value.
             // 再スキャン成功後は HEAD が新しい値に更新される。
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             Assert.Equal(secondHead, db.GetMetaString(DbContext.IndexedHeadCommitMetaKey));
+            Assert.Equal(secondHead, db.GetMetaString(DbContext.WorkspaceVerifiedHeadShaMetaKey));
         }
         finally
         {

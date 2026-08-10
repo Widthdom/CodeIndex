@@ -27,27 +27,23 @@ internal static class IndexFreshnessChecker
         }
 
         var indexedHeadCommit = reader.GetMetaString(DbContext.IndexedHeadCommitMetaKey);
-        var indexedHeadSha = reader.GetMetaString(DbContext.IndexedHeadShaMetaKey);
-        var commitScopedFreshHeadSha = reader.GetMetaString(DbContext.CommitScopedFreshHeadShaMetaKey);
+        var workspaceVerifiedHeadSha = reader.GetMetaString(DbContext.WorkspaceVerifiedHeadShaMetaKey);
         var workspaceHeadCommit = GitHelper.TryGetHeadCommit(projectRoot, cancellationToken);
-        var currentHeadCoveredByCommitRefresh = !string.IsNullOrWhiteSpace(indexedHeadSha)
-            && !string.IsNullOrWhiteSpace(commitScopedFreshHeadSha)
+        var comparisonHead = string.IsNullOrWhiteSpace(workspaceVerifiedHeadSha)
+            ? indexedHeadCommit
+            : workspaceVerifiedHeadSha;
+        // Only treat HEAD as diverged when both sides are available. Prefer the explicit
+        // whole-workspace verification stamp; legacy databases fall back conservatively to
+        // the full-scan baseline, while non-git workspaces retain no HEAD signal.
+        // 比較材料が揃ったときのみ HEAD 不一致と判定する。workspace 全体を検証した明示 stamp
+        // を優先し、旧 DB は full-scan stamp へ保守的に fallback する。非 git workspace は
+        // HEAD signal を持たない。
+        var headChanged = !string.IsNullOrWhiteSpace(comparisonHead)
             && !string.IsNullOrWhiteSpace(workspaceHeadCommit)
-            && string.Equals(indexedHeadSha, workspaceHeadCommit, StringComparison.Ordinal)
-            && string.Equals(commitScopedFreshHeadSha, workspaceHeadCommit, StringComparison.Ordinal);
-        // Only treat HEAD as diverged when we have both sides to compare. A legacy DB (no
-        // captured HEAD) or a non-git workspace (no current HEAD) intentionally degrades to
-        // "no signal" rather than spuriously flagging every status check as stale. A newer
-        // commit-scoped coverage stamp also satisfies the check after targeted commit refreshes.
-        // 比較材料が揃ったときのみ HEAD 不一致と判定する。片側でも欠ければ意図せず stale 化しない。
-        // commit-scoped refresh が現在 HEAD を cover した stamp を持つ場合だけ stale 化しない。
-        var headChanged = !string.IsNullOrWhiteSpace(indexedHeadCommit)
-            && !string.IsNullOrWhiteSpace(workspaceHeadCommit)
-            && !string.Equals(indexedHeadCommit, workspaceHeadCommit, StringComparison.Ordinal)
-            && !currentHeadCoveredByCommitRefresh;
+            && !string.Equals(comparisonHead, workspaceHeadCommit, StringComparison.Ordinal);
         var result = new IndexFreshnessCheckResult
         {
-            IndexedHeadCommit = string.IsNullOrWhiteSpace(indexedHeadCommit) ? null : indexedHeadCommit,
+            IndexedHeadCommit = string.IsNullOrWhiteSpace(comparisonHead) ? null : comparisonHead,
             WorkspaceHeadCommit = string.IsNullOrWhiteSpace(workspaceHeadCommit) ? null : workspaceHeadCommit,
             HeadChanged = headChanged,
         };

@@ -33,7 +33,7 @@ public static partial class IndexCommandRunner
         JsonSerializerOptions jsonOptions,
         int priorReadiness,
         bool priorIndexComplete,
-        bool priorFileIndexIncomplete,
+        bool priorScopedUpdateRequiresFullScan,
         bool priorSymbolsOnlyGraphOmitted,
         string? priorFoldVersion,
         string? priorFoldFingerprint,
@@ -47,6 +47,9 @@ public static partial class IndexCommandRunner
         IReadOnlyDictionary<string, FileIndexer.ProjectMarkerFingerprintResult> currentHotspotFamilyMarkerFingerprints,
         string? priorIndexedProjectRoot,
         string? priorIndexedHeadCommit,
+        string? priorWorkspaceVerifiedHead,
+        IReadOnlyList<string> priorWorkspaceVerificationPendingPaths,
+        bool priorWorkspaceVerificationPendingPathsComplete,
         string? currentHeadCommit,
         string? priorSymbolKindFilterSignature,
         string? initialCwd,
@@ -87,11 +90,16 @@ public static partial class IndexCommandRunner
             options,
             spinnerFrames,
             jsonOptions,
+            priorWorkspaceVerifiedHead,
+            priorWorkspaceVerificationPendingPaths,
+            priorWorkspaceVerificationPendingPathsComplete,
+            currentHeadCommit,
             cancellationToken,
             out var targetPaths,
             out var gitTargetPaths,
             out var explicitFileTargetPaths,
-            out var relevantIgnoreFileChanged);
+            out var relevantIgnoreFileChanged,
+            out var workspaceHeadCoverageVerified);
         if (resolveTargetsExitCode != null)
             return resolveTargetsExitCode.Value;
 
@@ -105,7 +113,7 @@ public static partial class IndexCommandRunner
         var typeScriptJavaScriptConfigChanged = ContainsJavaScriptTypeScriptConfigPath(targetPaths);
         var extractorConfigurationChanged = ContainsExtractorConfigurationPath(projectRoot, targetPaths);
         var ambiguousLanguageProjectMarkerChanged = targetPaths.Any(FileIndexer.IsAmbiguousLanguageProjectMarkerPath);
-        if (priorFileIndexIncomplete
+        if (priorScopedUpdateRequiresFullScan
             || relevantIgnoreFileChanged
             || ContainsIgnoreFilePath(targetPaths)
             || typeScriptJavaScriptConfigChanged
@@ -117,8 +125,8 @@ public static partial class IndexCommandRunner
 
             if (!options.Json && !options.Quiet)
             {
-                var reason = priorFileIndexIncomplete
-                    ? "an earlier partial index still has unresolved file failures"
+                var reason = priorScopedUpdateRequiresFullScan
+                    ? "an earlier partial index still requires a full workspace scan"
                     : extractorConfigurationChanged
                     ? "extractor configuration changes"
                     : typeScriptJavaScriptConfigChanged
@@ -130,14 +138,13 @@ public static partial class IndexCommandRunner
                 CommandOutputWriter.WriteLine();
             }
 
-            // A scoped pass cannot prove that failures outside its target set recovered, and
-            // the partial pass deliberately cleared workspace-wide readiness stamps. Reuse the
-            // normal incremental full-scan path until every failed file has been revisited; this
-            // preserves the failure on unrelated updates and restores all contracts without a
-            // destructive rebuild once the source problem is fixed. Issue #4609 review.
-            // scoped pass だけでは対象外の失敗回復を証明できず、partial pass は workspace 全体の
-            // readiness を落としている。失敗解消までは通常の incremental full-scan に切り替え、
-            // 無関係 update で failure を消さず、修正後は rebuild なしで全 contract を復元する。
+            // A scoped pass cannot prove that failures or archive omissions outside its target
+            // set recovered. Reuse the normal incremental full-scan path until every file has
+            // been revisited; this preserves partial trust on unrelated updates and restores all
+            // contracts without a destructive rebuild. Issues #4609 and #5053.
+            // scoped pass だけでは対象外の failure / archive omission の回復を証明できない。
+            // 全 file を再確認するまでは通常の incremental full-scan に切り替え、無関係 update で
+            // partial trust を消さず、destructive rebuild なしで全 contract を復元する。
             return RunFullScan(
                 db,
                 writer,
@@ -569,6 +576,12 @@ public static partial class IndexCommandRunner
         // tracking only now, then publish conservative C# evidence immediately before the
         // first possible cleanup/reference/file mutation.
         // expanded discovery の write前 barrier 通過後に graph tracking と mutation を開始する。
+        PersistWorkspaceVerificationPendingPathsBeforeScopedMutation(
+            writer,
+            priorWorkspaceVerificationPendingPaths,
+            priorWorkspaceVerificationPendingPathsComplete,
+            targetPaths,
+            cancellationToken);
         using var referenceGraphRefresh = writer.BeginReferenceGraphRefreshScope();
         using var hotspotAggregateRefresh = writer.BeginDeferredHotspotReferenceAggregateRefresh();
         mutationPhaseStarted = true;
@@ -950,6 +963,9 @@ public static partial class IndexCommandRunner
         hotspotAggregateRefresh.Complete(cancellationToken);
         if (errors == 0)
         {
+            using var successMetadataTxn = writer.BeginTransaction(
+                cancellationToken,
+                "update success metadata");
             if (csharpSourceEvidenceForStamp.HasValue && csharpSourceEvidenceCompleteForStamp)
             {
                 writer.SetCSharpStaticInterfaceSourceEvidence(
@@ -957,7 +973,12 @@ public static partial class IndexCommandRunner
             }
             StampIndexedHeadMetadata(writer, projectRoot, indexRunDiagnostics, cancellationToken);
             StampIndexedSymlinkPolicy(writer, options.SymlinkPolicy, indexRunDiagnostics);
-            StampCommitScopedFreshHeadMetadata(writer, options, projectRoot, currentHeadCommit, indexRunDiagnostics, cancellationToken);
+            StampCommitScopedFreshHeadMetadata(
+                writer,
+                priorWorkspaceVerifiedHead,
+                currentHeadCommit,
+                workspaceHeadCoverageVerified,
+                indexRunDiagnostics);
             if (options.MemoryTrace)
                 memorySamples.Add(CaptureMemorySample("finalize", stopwatch));
             var memoryTimelineForStamp = BuildMemoryTimeline(memorySamples);
@@ -978,6 +999,7 @@ public static partial class IndexCommandRunner
                 indexRunDiagnostics,
                 writer.GetReferenceExtractionCapHits(issuesTableAvailableAfter),
                 writer.GetPersistedIndexOmissionReasons());
+            successMetadataTxn.Commit();
         }
         return WriteUpdateFinalOutput(new UpdateFinalOutputContext
         {

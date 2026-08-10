@@ -584,7 +584,7 @@ public partial class McpServer
         {
             "api_version", "fileCount", "totalLines", "totalSymbols", "totalReferences",
             "indexedAt", "latestModified", "workspaceIndexedAt", "workspaceLatestModified",
-            "projectRoot", "gitHead", "gitIsDirty", "indexed_head_commit", "indexed_head_sha",
+            "projectRoot", "gitHead", "gitIsDirty", "indexed_head_commit", "workspace_verified_head_sha", "indexed_head_sha",
             "indexed_head_branch", "indexed_head_timestamp", "commits_ahead_of_indexed_head",
             "worktree_head_changed", "head_freshness",
             "graphTableAvailable", "limit", "lang", "path", "excludeTests", "depth", "minEntrypointConfidence",

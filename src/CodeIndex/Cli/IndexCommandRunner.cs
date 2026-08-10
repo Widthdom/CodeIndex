@@ -426,6 +426,9 @@ public static partial class IndexCommandRunner
                     DbContext.IndexedProjectRootMetaKey,
                     SymbolKindFilterMetaKey,
                     DbContext.IndexedHeadCommitMetaKey,
+                    DbContext.WorkspaceVerifiedHeadShaMetaKey,
+                    DbContext.WorkspaceVerificationPendingPathsMetaKey,
+                    DbContext.WorkspaceVerificationPendingPathsCompleteMetaKey,
                     DbContext.IndexCompletenessMetaKey,
                     DbContext.IndexIncompleteReasonsMetaKey,
                 ]);
@@ -446,11 +449,13 @@ public static partial class IndexCommandRunner
                     PriorMeta(DbContext.IndexCompletenessMetaKey),
                     "complete",
                     StringComparison.OrdinalIgnoreCase);
-                var priorFileIndexIncomplete = string.Equals(
+                var priorScopedUpdateRequiresFullScan = string.Equals(
                         PriorMeta(DbContext.IndexCompletenessMetaKey),
                         "incomplete",
                         StringComparison.OrdinalIgnoreCase)
-                    && priorIndexIncompleteReasons?.Contains("file_index_error", StringComparer.Ordinal) == true;
+                    && priorIndexIncompleteReasons?.Any(reason =>
+                        reason is "file_index_error"
+                            or ExportImportCommandRunner.PartialArchiveIncompleteReason) == true;
                 var priorHotspotFamilyVersions = GetHotspotFamilyMetaSnapshot(db, DbContext.GetHotspotFamilyVersionMetaKey);
                 var priorHotspotFamilyMarkerFingerprints = GetHotspotFamilyMetaSnapshot(db, DbContext.GetHotspotFamilyMarkerFingerprintMetaKey);
                 var priorIndexedProjectRoot = PriorMeta(DbContext.IndexedProjectRootMetaKey);
@@ -462,6 +467,21 @@ public static partial class IndexCommandRunner
                 // `--rebuild` が DB を消す前に取り出す。incremental 経路で HEAD 差分を検知し、`status`
                 // (no `--check`) でも worktree の HEAD 切替検出に利用する。
                 var priorIndexedHeadCommit = PriorMeta(DbContext.IndexedHeadCommitMetaKey);
+                var priorWorkspaceVerifiedHead =
+                    PriorMeta(DbContext.WorkspaceVerifiedHeadShaMetaKey) ?? priorIndexedHeadCommit;
+                var priorWorkspaceVerificationPendingPathsJson =
+                    PriorMeta(DbContext.WorkspaceVerificationPendingPathsMetaKey);
+                var decodedPriorWorkspaceVerificationPendingPaths =
+                    JsonStringListCodec.Deserialize(priorWorkspaceVerificationPendingPathsJson);
+                var priorWorkspaceVerificationPendingPaths =
+                    decodedPriorWorkspaceVerificationPendingPaths ?? [];
+                var priorWorkspaceVerificationPendingPathsComplete =
+                    priorWorkspaceVerificationPendingPathsJson == null
+                    || (decodedPriorWorkspaceVerificationPendingPaths != null
+                        && !string.Equals(
+                            PriorMeta(DbContext.WorkspaceVerificationPendingPathsCompleteMetaKey),
+                            "false",
+                            StringComparison.OrdinalIgnoreCase));
                 var currentHeadCommit = GitHelper.TryGetHeadCommit(options.ProjectPath!, indexCancellation.Token);
 
                 // Don't demote readiness yet. A transient usage error in update-mode preflight
@@ -491,7 +511,7 @@ public static partial class IndexCommandRunner
                 var projectRoot = Path.GetFullPath(options.ProjectPath!);
 
                 initialExitCode = isUpdateMode
-                    ? RunUpdateMode(db, writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, runStartedAtUtc, spinnerFrames, jsonOptions, priorReadiness, priorIndexComplete, priorFileIndexIncomplete, priorSymbolsOnlyGraphOmitted, priorFoldVersion, priorFoldFingerprint, priorSymbolExtractorVersionsMatchCurrent, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHdlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints!, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, priorSymbolKindFilterSignature, initialCwd, indexRunDiagnostics, indexCancellation.Token)
+                    ? RunUpdateMode(db, writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, runStartedAtUtc, spinnerFrames, jsonOptions, priorReadiness, priorIndexComplete, priorScopedUpdateRequiresFullScan, priorSymbolsOnlyGraphOmitted, priorFoldVersion, priorFoldFingerprint, priorSymbolExtractorVersionsMatchCurrent, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHdlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, currentHotspotFamilyMarkerFingerprints!, priorIndexedProjectRoot, priorIndexedHeadCommit, priorWorkspaceVerifiedHead, priorWorkspaceVerificationPendingPaths, priorWorkspaceVerificationPendingPathsComplete, currentHeadCommit, priorSymbolKindFilterSignature, initialCwd, indexRunDiagnostics, indexCancellation.Token)
                     : RunFullScan(db, writer, indexer, projectRoot, resolvedDbPath, options, stopwatch, runStartedAtUtc, spinnerFrames, jsonOptions, priorReadiness, priorIndexComplete, priorSymbolsOnlyGraphOmitted, priorFoldVersion, priorFoldFingerprint, priorSymbolExtractorVersionsMatchCurrent, priorCSharpSymbolNameContractVersion, priorMetadataTargetCsharp, priorSqlGraphContractVersion, priorHdlGraphContractVersion, priorHotspotFamilyVersions, priorHotspotFamilyMarkerFingerprints, priorIndexedProjectRoot, priorIndexedHeadCommit, currentHeadCommit, priorSymbolKindFilterSignature, initialCwd, indexRunDiagnostics, showNextSteps: !databaseExistedBeforeIndex, indexCancellation.Token);
                 if (initialExitCode == CommandExitCodes.Success)
                 {

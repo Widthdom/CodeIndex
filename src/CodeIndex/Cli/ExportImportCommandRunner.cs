@@ -30,6 +30,10 @@ internal static partial class ExportImportCommandRunner
     internal const int MaxArchiveScopeValues = 64;
     internal const int MaxArchiveScopeValueChars = 4096;
     internal const int MaxArchiveScopeTotalChars = 32 * 1024;
+    internal const int MaxArchiveIncompleteReasons = 64;
+    internal const int MaxArchiveIncompleteReasonChars = 128;
+    internal const int MaxArchiveIncompleteReasonsTotalChars = 4096;
+    internal const string PartialArchiveIncompleteReason = "partial_archive";
     private static readonly DateTimeOffset DeterministicZipTimestamp = new(1980, 1, 1, 0, 0, 0, TimeSpan.Zero);
     private const string ExportCommandName = "export";
     private const string ImportCommandName = "import";

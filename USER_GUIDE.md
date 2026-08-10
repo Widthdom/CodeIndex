@@ -505,7 +505,17 @@ exclusion, and test filters then narrow that scope. The exported SQLite
 snapshot contains only the retained files and their dependent chunks, symbols,
 references, and diagnostics, and is vacuumed before packaging. JSON output and
 `manifest.json` include the requested scope, resolved project paths, and source
-and exported file counts. An export without scope flags remains a full archive.
+and exported file counts. The scope also reports
+`represents_entire_source_database`. An export without scope flags remains a
+full archive and preserves the source database's index completeness,
+indexed-HEAD provenance, run telemetry, and unknown-extension summary. A
+filtered archive is instead stamped `index_complete: false` with the stable
+`partial_archive` reason, clears source-wide indexed-HEAD and run metadata, and
+omits unavailable unknown-extension summaries so `status` cannot present the
+subset as a fresh full index or an authoritative zero-result scan. This
+normalization applies only to the exported snapshot and does not mutate the
+source database. A later scoped index request falls back to a full workspace
+scan before clearing `partial_archive`.
 Portable export refuses an existing destination by default; pass `--overwrite`
 only when replacing it is intentional. The archive is built in an owner-only
 sibling temporary file and atomically published, and POSIX archives are verified
@@ -521,8 +531,11 @@ database. `--prune-paths` rewrites the imported `indexed_project_root` metadata
 to the import target project root. Imports targeting `.../.cdidx/codeindex.db`
 use the sibling project directory; other database paths fall back to the process
 current directory. `--dry-run` and its `--check` alias also compare an existing
-destination DB with the validated archive without replacing it. JSON
-`destination_delta.comparison` reports schema and count deltas plus bounded
+destination DB with the validated archive without replacing it. JSON results
+expose the normalized `index_complete`, `index_incomplete_reasons`, and `scope`
+values. Archives with no scope metadata are treated conservatively as partial
+during import; current unfiltered archives explicitly preserve full-snapshot
+trust. JSON `destination_delta.comparison` reports schema and count deltas plus bounded
 file, symbol, reference-edge, chunk, and metadata records. Text fields in those
 records are represented by named SHA-256 and UTF-8 byte-length metadata rather
 than source content or paths. Use `--limit <n<=10000>` and `--offset <n>` to
@@ -2042,7 +2055,7 @@ cannot silently fall back to ordinary status. Check-mode JSON records whether th
 check was `explicit` or `implied_by_stale_after` in `query_context.check_mode` and
 repeats the effective threshold in `query_context.stale_after_seconds`.
 
-`cdidx index <projectPath>` also detects the same HEAD movement on incremental runs: if the recorded HEAD differs from the workspace HEAD it emits a `head_changed` warning (also exposed as `head_changed`, `prior_indexed_head_commit`, `current_head_commit`, and `head_change_notice` in `--json` output). When a branch-switch workflow knows the previous and current refs, refresh with `cdidx index <projectPath> --changed-between <old-ref> <new-ref>` instead of rebuilding the whole project; it updates only files changed between the refs and includes rename/delete old paths for purging. Use a full `cdidx index <projectPath> --rebuild` or `cdidx <projectPath> --json` refresh when the refs are unavailable, after history-moving operations, or when you need a whole-checkout stale-path purge.
+`cdidx index <projectPath>` also detects the same HEAD movement. A successful full scan reconciles and purges the complete workspace, advances `workspace_verified_head_sha`, and returns `head_changed: false` without recommending a rebuild. If that scan is partial, `head_changed`, `prior_indexed_head_commit`, `current_head_commit`, and `head_change_notice` explain that verification did not advance and recommend rerunning the normal full scan after fixing the reported errors. When a branch-switch workflow knows the previous and current refs, `cdidx index <projectPath> --changed-between <old-ref> <new-ref>` reconciles the requested range with the persisted verified baseline, carries forward paths changed by earlier scoped updates even when the requested refs have no net file diff, and includes rename/delete old paths for purging. If pending-path coverage is incomplete, run the normal full scan before another scoped Git refresh. Use `cdidx <projectPath> --json` when the refs are unavailable or after history-moving operations; reserve `--rebuild` for damaged or incompatible index state.
 
 Run it at the start of AI-agent work to decide whether `.cdidx/codeindex.db` can be trusted without reindexing.
 
@@ -2052,7 +2065,8 @@ Run it at the start of AI-agent work to decide whether `.cdidx/codeindex.db` can
 - reference-graph completeness: `reference_extraction_limits`, `reference_graph_complete`, `reference_graph_incomplete_reasons`, `reference_extraction_cap_hits`, and `last_index_run.reference_extraction_cap_hits`;
 - SQL graph readiness: `sql_graph_contract_ready`, `sql_graph_contract_degraded_reason`;
 - hotspot and C# metadata readiness: `hotspot_family_ready`, `hotspot_family_degraded_reason`, `csharp_symbol_name_ready`, `csharp_metadata_target_ready`;
-- worktree HEAD freshness (#1508 / #1512): `indexed_head_commit` (the HEAD SHA captured at the last successful full-scan) and `worktree_head_changed` (`true` when the runtime HEAD differs — detects per-worktree `git switch` / `git worktree add` that silently invalidate the index);
+- full-scan compatibility baseline (#1508 / #1512): `indexed_head_commit` is the HEAD SHA captured by the last successful full scan;
+- whole-workspace HEAD verification (#5054): `workspace_verified_head_sha` is advanced only by a successful full scan or by a Git-scoped refresh reconciled from the prior verified baseline. `worktree_head_changed` compares the runtime HEAD with this value, falling back conservatively to `indexed_head_commit` on legacy databases. `head_freshness.indexed_head_source` reports `workspace_verified` when the explicit stamp is available; `latest_index` is an unverified provenance fallback only when neither a verified nor legacy baseline exists, while `head_freshness.latest_index_head` keeps the latest-write provenance visible. The historical `workspace_check.indexed_head_commit` name contains the baseline that the check actually compared, so current databases return the workspace-verified SHA there;
 - indexed-HEAD freshness (#1509): `indexed_head_sha`, `indexed_head_branch`, `indexed_head_timestamp`, and `commits_ahead_of_indexed_head` — the SHA / branch / ISO-8601 timestamp captured when the index was last written (full scan AND partial update, unlike `indexed_head_commit` which is full-scan only), plus the count of git commits reachable from the current `HEAD` that are not reachable from the indexed SHA. `commits_ahead_of_indexed_head` is `0` when the index is up to date, a positive integer when the workspace is ahead, and `null` when the indexed SHA is unknown or no longer an ancestor of the current `HEAD` (force-pushed or divergent history). All four fields are omitted on non-git workspaces or legacy DBs that pre-date the stamp.
 - filesystem case-sensitivity (#1546): `path_case_sensitive` — `true` when the workspace volume treats `Foo.cs` and `foo.cs` as distinct files, `false` when case-insensitive. Stamped on every successful `cdidx index` (full scan AND partial update, plus MCP-driven indexes) from `core.ignorecase` + a live filesystem probe, replacing the prior OS-keyed heuristic. Use it to audit path-equality decisions on case-sensitive APFS, WSL NTFS / dev-drive, and ReFS mounts. Omitted on legacy DBs that pre-date the stamp.
 
@@ -3999,7 +4013,15 @@ archive export では `--lang`、繰り返し指定できる `--path` / `--exclu
 さらに絞り込みます。出力する SQLite snapshot には残した file と、それに従属する
 chunk、symbol、reference、diagnostic だけを保持し、packaging 前に vacuum します。
 JSON output と `manifest.json` には指定 scope、解決済み project path、元と出力後の
-file count が含まれます。scope flag を指定しなければ従来どおり full archive です。
+file count が含まれます。scope には `represents_entire_source_database` も含まれます。
+scope flag を指定しない full archive は source database の index completeness、
+indexed-HEAD provenance、run telemetry、unknown-extension summary を維持します。一方、
+filter 済み archive は `index_complete: false` と stable reason `partial_archive` を記録し、
+source 全体に対する indexed-HEAD / run metadata を消去し、未計測の unknown-extension
+summary を省略するため、`status` が subset を fresh な full index や authoritative な
+0 件 scan として表示することはありません。この正規化は export snapshot だけに適用され、
+source database は変更しません。後続の scoped index request は `partial_archive` を解除する前に
+full workspace scan へ fallback します。
 portable export は既存 destination を既定で拒否します。意図して置き換える場合だけ
 `--overwrite` を指定してください。archive は owner-only の sibling temporary file に
 構築して atomic に publish し、POSIX では mode `0600` であることも検証します。
@@ -4014,7 +4036,10 @@ SQLite file が CodeIndex DB であることを検証してから destination da
 `.../.cdidx/codeindex.db` を import 先にした場合は sibling の project directory を使い、
 それ以外の database path では process current directory に fallback します。
 `--dry-run` と alias の `--check` は置換せず、既存 destination DB と検証済み archive を
-比較します。JSON の `destination_delta.comparison` には schema / count delta と、
+比較します。JSON result は正規化後の `index_complete`、`index_incomplete_reasons`、
+`scope` を公開します。scope metadata がない archive は import 時に保守的に partial と
+扱い、現行の filter なし archive だけが full snapshot の trust を明示的に維持します。
+JSON の `destination_delta.comparison` には schema / count delta と、
 file、symbol、reference edge、chunk、metadata の bounded record が含まれます。
 これらの record の text field は source content や path そのものではなく、名前付きの
 SHA-256 と UTF-8 byte length metadata として表現されます。record の paging には
@@ -5482,7 +5507,7 @@ Languages:
 
 `status --check` は既定で 24 時間の index-age しきい値を使って stale-index hint を説明します。呼び出しごとに `--stale-after <duration>`（`30m` / `2h` / `7d`、最大 `30d`）、プロセスや CI 単位で `CDIDX_STALE_AFTER`、リポジトリ単位で `.cdidxrc.json` の `"stale_after": "2h"` により上書きできます。有効なしきい値は human 出力に表示され、JSON では `stale_after_seconds` として返ります。
 
-`cdidx index <projectPath>` も incremental 実行時に同じ HEAD 変化を検知します。記録済み HEAD と worktree の HEAD が異なる場合は `head_changed` 警告を表示し、`--json` 出力には `head_changed`、`prior_indexed_head_commit`、`current_head_commit`、`head_change_notice` を含めます。ブランチ切り替え workflow が切り替え前後の ref を持っているなら、プロジェクト全体を再構築せず `cdidx index <projectPath> --changed-between <old-ref> <new-ref>` で更新してください。2つの ref 間で変更されたファイルだけを更新し、rename/delete の旧 path も purge 対象に含めます。ref が分からない場合、履歴を動かす操作の後、または checkout 全体の stale path purge が必要な場合は、`cdidx index <projectPath> --rebuild` または `cdidx <projectPath> --json` の full refresh を使います。
+`cdidx index <projectPath>` も同じ HEAD 変化を検知します。full scan が成功すると workspace 全体を照合・purge して `workspace_verified_head_sha` を進め、rebuild を勧めず `head_changed: false` を返します。scan が partial なら、`head_changed`、`prior_indexed_head_commit`、`current_head_commit`、`head_change_notice` で検証値が進まなかったことを説明し、報告された error の修正後に通常の full scan を再実行するよう案内します。ブランチ切り替え前後の ref が分かる場合、`cdidx index <projectPath> --changed-between <old-ref> <new-ref>` は要求範囲を永続化済みの検証基準と照合し、指定 ref 間の file 差分が相殺されていても以前の scoped update で変更した path を引き継ぎ、rename/delete の旧 path も purge 対象に含めます。pending-path coverage が不完全な場合は、次の scoped Git refresh より先に通常の full scan を実行してください。ref が不明な場合や履歴を動かす操作の後は `cdidx <projectPath> --json` を使い、`--rebuild` は index が破損または非互換な場合に限定します。
 
 AI agent の作業開始時はこれを先に実行し、`.cdidx/codeindex.db` を再構築せず信頼できるか判断してください。
 
@@ -5493,7 +5518,8 @@ AI agent の作業開始時はこれを先に実行し、`.cdidx/codeindex.db` �
 - SQL graph: `sql_graph_contract_ready`、`sql_graph_contract_degraded_reason`
 - hotspot metadata: `hotspot_family_ready`、`hotspot_family_degraded_reason`
 - C# metadata: `csharp_symbol_name_ready`、`csharp_metadata_target_ready`
-- worktree HEAD: `indexed_head_commit`（直近 full-scan 成功時点で保存した HEAD コミット。#1508）、`worktree_head_changed`（現在の HEAD と差分がある場合 `true`。`git worktree add` / worktree 内の `git switch` 検出に使う。`#1512`）
+- full-scan 互換基準 (#1508 / #1512): `indexed_head_commit` は直近の成功 full scan が保存した HEAD コミットです。
+- workspace 全体の HEAD 検証 (#5054): `workspace_verified_head_sha` は成功した full scan、または直前の検証済み基準から差分を補完した Git scoped refresh だけが進めます。`worktree_head_changed` は現在 HEAD とこの値を比較し、旧 database では `indexed_head_commit` へ保守的に fallback します。明示 stamp があれば `head_freshness.indexed_head_source` は `workspace_verified` を返します。検証済み基準も legacy 基準も無い場合だけ `latest_index` を未検証 provenance fallback として返し、`head_freshness.latest_index_head` には最新 write の provenance を残します。歴史的名称の `workspace_check.indexed_head_commit` にはcheckが実際に比較した基準が入るため、現行 database ではworkspace検証済みSHAを返します。
 - indexed HEAD 鮮度 (#1509): `indexed_head_sha`、`indexed_head_branch`、`indexed_head_timestamp`、`commits_ahead_of_indexed_head` — index 書き込み時 (full scan / partial update 問わず) の SHA / branch / ISO-8601 タイムスタンプと、現在の `HEAD` から到達可能で indexed SHA から到達不能な commit 数。index が最新なら `0`、ワークスペースが先行していれば正の整数、indexed SHA が未知または現 `HEAD` の祖先ではなくなった（force-push / divergent history）場合は `null` です。非 git ワークスペースや stamp 以前の legacy DB ではこれら 4 フィールドは省略されます。`indexed_head_commit` (#1508/#1512) と異なり、partial update でも更新されるため cross-session のドリフトを常に正確に反映します。
 - ファイルシステムの大小区別 (#1546): `path_case_sensitive` — ワークスペースの FS が `Foo.cs` と `foo.cs` を別ファイルとして扱うなら `true`、case-insensitive なら `false`。`core.ignorecase` と実 FS プローブを使って `cdidx index` の成功時 (full scan / partial update / MCP 経由 index) に毎回 stamp され、これまでの OS 系列だけに依存したヒューリスティックを置き換えます。case-sensitive APFS、WSL NTFS / dev-drive、ReFS マウントでのパス突き合わせ判定を監査するために使ってください。stamp 以前の legacy DB では省略されます。
 

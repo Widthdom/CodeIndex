@@ -148,6 +148,7 @@ internal sealed class RepoMapBuilder
             LatestModified = aggregate.LatestModified,
             WorkspaceIndexedAt = freshness.IndexedAt,
             WorkspaceLatestModified = freshness.LatestModified,
+            ProjectRoot = indexedHeadSnapshot.ProjectRoot,
             LanguageCount = includeLanguages ? aggregate.Languages.Count : null,
             ModuleCount = includeModules ? aggregate.Modules.Count : null,
             EntrypointCount = includeEntrypoints ? entrypointPage.TotalCount : null,
@@ -639,7 +640,9 @@ internal sealed class RepoMapBuilder
 
     private RepoMapIndexedHeadSnapshot LoadIndexedHeadSnapshot()
     {
+        string? projectRoot = null;
         string? legacyHead = null;
+        string? workspaceVerifiedHead = null;
         string? latestHead = null;
         string? latestBranch = null;
         string? latestTimestamp = null;
@@ -653,9 +656,11 @@ internal sealed class RepoMapBuilder
             cmd.CommandText = """
                 SELECT key, value
                 FROM codeindex_meta
-                WHERE key IN (@legacyHead, @latestHead, @latestBranch, @latestTimestamp, @legacyBranch)
+                WHERE key IN (@projectRoot, @legacyHead, @workspaceVerifiedHead, @latestHead, @latestBranch, @latestTimestamp, @legacyBranch)
                 """;
+            SqliteCommandPolicy.Add(cmd, "@projectRoot", DbContext.IndexedProjectRootMetaKey);
             SqliteCommandPolicy.Add(cmd, "@legacyHead", DbContext.IndexedHeadCommitMetaKey);
+            SqliteCommandPolicy.Add(cmd, "@workspaceVerifiedHead", DbContext.WorkspaceVerifiedHeadShaMetaKey);
             SqliteCommandPolicy.Add(cmd, "@latestHead", DbContext.IndexedHeadShaMetaKey);
             SqliteCommandPolicy.Add(cmd, "@latestBranch", DbContext.IndexedHeadBranchMetaKey);
             SqliteCommandPolicy.Add(cmd, "@latestTimestamp", DbContext.IndexedHeadTimestampMetaKey);
@@ -668,8 +673,14 @@ internal sealed class RepoMapBuilder
                 var value = reader.IsDBNull(1) ? null : reader.GetString(1);
                 switch (key)
                 {
+                    case DbContext.IndexedProjectRootMetaKey:
+                        projectRoot = value;
+                        break;
                     case DbContext.IndexedHeadCommitMetaKey:
                         legacyHead = value;
+                        break;
+                    case DbContext.WorkspaceVerifiedHeadShaMetaKey:
+                        workspaceVerifiedHead = value;
                         break;
                     case DbContext.IndexedHeadShaMetaKey:
                         latestHead = value;
@@ -695,7 +706,9 @@ internal sealed class RepoMapBuilder
         }
 
         return new RepoMapIndexedHeadSnapshot(
+            projectRoot,
             legacyHead,
+            workspaceVerifiedHead,
             latestHead,
             latestBranch,
             ParseIndexedHeadTimestamp(latestTimestamp),
