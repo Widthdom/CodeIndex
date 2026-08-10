@@ -2221,6 +2221,64 @@ public partial class FileIndexerTests
         Assert.True(CSharpStaticInterfacePrepass.MayContainCSharpStaticInterfaceContract(candidateContent!));
     }
 
+    [Theory]
+    [InlineData("utf8-normalized")]
+    [InlineData("utf16-le")]
+    [InlineData("utf16-be")]
+    [InlineData("invalid-utf8")]
+    public void LoadCSharpStaticInterfaceCandidateContentWithChecksumForPrepass_MatchesAuthoritativeLoad(
+        string encodingName)
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope(
+            "cdidx_csharp_prepass_checksum_encoding");
+        const string source =
+            "\uFEFFpublic interface I { static abstract int M(); }\r\n"
+            + "\u200Bpublic static class C { }\r\n";
+        byte[] bytes = encodingName switch
+        {
+            "utf8-normalized" => Encoding.UTF8.GetBytes(source),
+            "utf16-le" => new UnicodeEncoding(
+                    bigEndian: false,
+                    byteOrderMark: true)
+                .GetPreamble()
+                .Concat(new UnicodeEncoding(false, true).GetBytes(source))
+                .ToArray(),
+            "utf16-be" => new UnicodeEncoding(
+                    bigEndian: true,
+                    byteOrderMark: true)
+                .GetPreamble()
+                .Concat(new UnicodeEncoding(true, true).GetBytes(source))
+                .ToArray(),
+            "invalid-utf8" => Encoding.UTF8
+                .GetBytes(source)
+                .Concat([(byte)0xFF, (byte)'\n'])
+                .ToArray(),
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(encodingName),
+                encodingName,
+                null),
+        };
+        var path = TestProjectHelper.WriteBinaryFile(
+            project.Root,
+            "Fixture.cs",
+            bytes);
+        var indexer = new FileIndexer(project.Root, ignoreCase: false);
+
+        var prepass = indexer
+            .LoadCSharpStaticInterfaceCandidateContentWithChecksumForPrepass(
+                path,
+                "Fixture.cs",
+                includeQualifiedMemberAccessCandidate: false);
+        var authoritative = indexer.BuildLoadedRecordWithRawBytes(
+            path,
+            "Fixture.cs",
+            knownLanguage: "csharp");
+
+        Assert.NotNull(prepass);
+        Assert.Equal(authoritative.Content, prepass.Value.Content);
+        Assert.Equal(authoritative.Record.Checksum, prepass.Value.Checksum);
+    }
+
     [Fact]
     public void LoadCSharpStaticInterfaceCandidateContentForPrepass_IndexBlockingNullPreservesBinaryRejection()
     {

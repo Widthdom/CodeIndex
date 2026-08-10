@@ -69,6 +69,9 @@ public static partial class IndexCommandRunner
         internal required Func<CSharpStaticInterfaceWorkspaceSymbols>
             GetCSharpWorkspace
         { get; init; }
+        internal required Func<CSharpPrepassSymbolArtifactCache?>
+            GetCSharpPrepassSymbolArtifacts
+        { get; init; }
         internal required Func<Dictionary<string,
             CSharpStaticInterfacePrepass.FileStatSnapshot>?>
             GetCSharpWorkspaceFileSnapshots
@@ -126,6 +129,7 @@ public static partial class IndexCommandRunner
     {
         if (context.ExtractionWorkItemCount == 0)
         {
+            context.GetCSharpPrepassSymbolArtifacts()?.Clear();
             FullScanExtractionSchedulingForTesting?.Invoke(false, null);
             return new FullScanExtractionPipelineResult(null, null);
         }
@@ -154,6 +158,7 @@ public static partial class IndexCommandRunner
         }
         finally
         {
+            context.GetCSharpPrepassSymbolArtifacts()?.Clear();
             context.SetCurrentJsonIndexFile(null);
             context.FullScanProgress.StopJsonHeartbeat();
             postExtractionHooks.Dispose();
@@ -326,6 +331,8 @@ public static partial class IndexCommandRunner
                 ParallelizeExtraction = parallelizeExtraction,
                 ExtractionTailSchedule = extractionTailSchedule,
                 CSharpWorkspace = context.GetCSharpWorkspace(),
+                CSharpPrepassSymbolArtifacts =
+                    context.GetCSharpPrepassSymbolArtifacts(),
                 CSharpWorkspaceFileSnapshots =
                     context.GetCSharpWorkspaceFileSnapshots(),
                 PostExtractionHooks = postExtractionHooks,
@@ -437,6 +444,8 @@ public static partial class IndexCommandRunner
                 context.GetDeferCSharpMutationsForIncompleteScan,
             GetFtsMutated = context.GetFtsMutated,
             GetCSharpWorkspace = context.GetCSharpWorkspace,
+            GetCSharpPrepassSymbolArtifacts =
+                context.GetCSharpPrepassSymbolArtifacts,
             GetCSharpWorkspaceFileSnapshots =
                 context.GetCSharpWorkspaceFileSnapshots,
             DeferCSharpMutationsForLoadedSnapshotDrift =

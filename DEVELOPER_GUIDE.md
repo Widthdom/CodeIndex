@@ -415,6 +415,24 @@ Rows with missing or invalid legacy stat values are excluded so normal checksum
 reuse or reindexing can repair them, and CLI/MCP cancellation must interrupt the
 snapshot query as well as the later extraction pipeline.
 
+Only a first-time full index that started with no indexed files may reuse raw
+built-in C# symbol artifacts from the static-interface prepass. The CLI excludes
+rebuilds and symbols-only runs; MCP evaluates the same empty-database condition
+before any rebuild mutation. The cache never owns source text or bytes: the main
+pass still performs its authoritative content read and hook, stat-snapshot and
+TOCTOU validation, and checksum calculation. It consumes a normalized-path
+artifact once only after that checksum matches. Cached symbols are deep clones.
+Artifact-producing extraction receives the main pass's absolute file path and
+project root so file-local family identities stay identical. File ID assignment,
+family scope, source observation, post-extraction hooks,
+kind filtering, caps, line validation, persistence, reference extraction, and
+bounded-regex issue reporting remain on the normal main-pass path. Incomplete
+prepasses, extraction-stall test seams, checksum drift, regex timeouts, and cache
+admission limits fall back to ordinary extraction. A timed-out prepass result is
+partial and must not make that transient result authoritative. Keep admission
+bounded to 4,096 files, 131,072 symbols, and an estimated 32 MiB, and clear all
+unconsumed artifacts before reference-graph work begins.
+
 Authoritative full scans collect the C#, VB, F#, and MSBuild project-marker
 fingerprints during the shared source-directory enumeration. The same pass also
 builds a budget-independent directory marker-count snapshot used by
@@ -4153,6 +4171,20 @@ CLI full scan、scoped update、MCP indexing は、この prepass より前に w
 1回だけ読み込みます。C# candidate extraction は candidate ごとに default plugin を refresh せず、
 その読込済み snapshot を再利用してください。直接 prepass を呼ぶ側は、snapshot 読込済みを明示的に
 保証しない限り、従来どおり discovery 有効の既定経路を維持します。
+
+static-interface prepass の raw built-in C# symbol artifact を再利用できるのは、indexed file が
+0件の状態から開始した初回 full index だけです。CLI は rebuild と symbols-only を除外し、MCP は
+rebuild mutation より前の空 database 条件を使います。cache は source text / byte を保持せず、main
+pass は引き続き authoritative な content read と hook、stat snapshot / TOCTOU 検証、checksum 計算を
+実行します。正規化 path の artifact は checksum 一致後に1回だけ取り出します。cached symbol は deep
+clone とします。artifact を生成する extraction には main pass と同じ absolute file path / project root を
+渡し、file-local family identity を一致させてください。FileId、family scope、source observation、
+post-extraction hook、kind filter、cap、line 検証、
+persistence、reference extraction、bounded-regex issue は通常の main-pass 経路で処理してください。
+不完全な prepass、extraction-stall test seam、checksum drift、regex timeout、cache 上限では通常
+extraction へ fallback します。timeout した prepass 結果は partial であり、一過性の結果を
+authoritative にしてはいけません。admission は 4,096 file、131,072 symbol、推定 32 MiB に制限し、未消費
+artifact は reference graph 開始前にすべて clear してください。
 
 authoritative な full scan は、共有 source-directory enumeration 中に C#、VB、F#、
 MSBuild の project-marker fingerprint を収集します。同じ pass で budget 非依存の

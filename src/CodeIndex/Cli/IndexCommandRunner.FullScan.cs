@@ -445,6 +445,8 @@ public static partial class IndexCommandRunner
         var csharpWorkspaceFileSnapshots =
             csharpPreflight.CSharpWorkspaceFileSnapshots;
         var csharpWorkspace = csharpPreflight.CSharpWorkspace;
+        var csharpPrepassSymbolArtifacts =
+            csharpPreflight.CSharpPrepassSymbolArtifacts;
         var forceFullCSharpRefreshFromInvalidatedNoOp =
             csharpPreflight.ForceFullCSharpRefreshFromInvalidatedNoOp;
         var preservePriorPositiveCSharpSourceNoOp =
@@ -456,6 +458,8 @@ public static partial class IndexCommandRunner
 
         void DeferCSharpMutationsForLoadedSnapshotDrift(string path)
         {
+            csharpPrepassSymbolArtifacts?.Clear();
+            csharpPrepassSymbolArtifacts = null;
             path = FormatCSharpWorkspaceSnapshotPath(projectRoot, path);
             deferCSharpMutationsForIncompleteScan = true;
             preservePriorPositiveCSharpSourceNoOp = false;
@@ -759,6 +763,8 @@ public static partial class IndexCommandRunner
                     cancellationToken);
             if (!stableFiles)
             {
+                csharpPrepassSymbolArtifacts?.Clear();
+                csharpPrepassSymbolArtifacts = null;
                 var driftPath = FormatCSharpWorkspaceSnapshotPath(projectRoot, changedFilePath);
                 var incompleteWorkspace = new CSharpStaticInterfaceWorkspaceSymbols(
                     [],
@@ -968,6 +974,8 @@ public static partial class IndexCommandRunner
                     () => deferCSharpMutationsForIncompleteScan,
                 GetFtsMutated = () => ftsMutated,
                 GetCSharpWorkspace = () => csharpWorkspace,
+                GetCSharpPrepassSymbolArtifacts =
+                    () => csharpPrepassSymbolArtifacts,
                 GetCSharpWorkspaceFileSnapshots =
                     () => csharpWorkspaceFileSnapshots,
                 DeferCSharpMutationsForLoadedSnapshotDrift =

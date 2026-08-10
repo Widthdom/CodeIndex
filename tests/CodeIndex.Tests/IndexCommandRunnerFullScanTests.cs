@@ -1122,6 +1122,10 @@ public partial class IndexCommandRunnerTests
     public void Run_FullScan_IncludeSymbolKindKeepsOnlyMatchingSymbols()
     {
         var projectRoot = CreateTempProject();
+        var previousArtifactHook =
+            CSharpPrepassSymbolArtifactCache.EventForTesting;
+        var artifactEvents =
+            new ConcurrentQueue<CSharpPrepassSymbolArtifactCacheEvent>();
         try
         {
             File.WriteAllText(Path.Combine(projectRoot, "app.py"), """
@@ -1131,20 +1135,69 @@ public partial class IndexCommandRunnerTests
                 def helper():
                     return App()
                 """);
+            const string csharpRelativePath = "Cafe\u0301.cs";
+            var csharpIndexPath = FileIndexer.NormalizeIndexPath(csharpRelativePath);
+            var csharpPath = Path.Combine(projectRoot, csharpRelativePath);
+            const string csharpSource = """
+                namespace Demo;
+                file partial class Fixture
+                {
+                    public static int RemovedByFilter() => 1;
+                }
+                """;
+            File.WriteAllText(csharpPath, csharpSource);
+            var indexer = new FileIndexer(projectRoot, ignoreCase: false);
+            var expectedCSharpSymbols = SymbolExtractor.Extract(
+                0,
+                "csharp",
+                csharpSource,
+                csharpPath,
+                projectRoot);
+            SymbolExtractor.ApplyFamilyScope(
+                expectedCSharpSymbols,
+                indexer.GetFamilyScopeKey(csharpPath, "csharp"),
+                "csharp");
+            var expectedFamilyKey = Assert.Single(
+                expectedCSharpSymbols,
+                symbol => symbol.Kind == "class"
+                          && symbol.Name == "Fixture").FamilyKey;
+            CSharpPrepassSymbolArtifactCache.EventForTesting =
+                artifactEvents.Enqueue;
 
-            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--include-symbol-kind", "class", "--json"]);
+            var (exitCode, json) = RunAndCaptureJson(
+                [projectRoot, "--include-symbol-kind", "class", "--parallelism", "1", "--json"]);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal("success", json.GetProperty("status").GetString());
             Assert.True(json.GetProperty("summary").GetProperty("symbols_dropped_by_kind_filter").GetInt32() > 0);
+            Assert.Contains(
+                artifactEvents,
+                item => item.Phase == "taken"
+                        && item.Path == csharpIndexPath);
 
-            var counts = ReadSymbolKindCounts(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var counts = ReadSymbolKindCounts(dbPath);
             Assert.True(counts.GetValueOrDefault("class") > 0);
             Assert.DoesNotContain(counts.Keys, kind => !string.Equals(kind, "class", StringComparison.OrdinalIgnoreCase));
+            using var connection = OpenNonPoolingConnection(dbPath);
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT family_key
+                FROM symbols
+                WHERE file_id = (SELECT id FROM files WHERE path = $path)
+                  AND kind = 'class'
+                  AND name = 'Fixture'
+                """;
+            command.Parameters.AddWithValue("$path", csharpIndexPath);
+            Assert.Equal(expectedFamilyKey, command.ExecuteScalar());
         }
         finally
         {
+            CSharpPrepassSymbolArtifactCache.EventForTesting =
+                previousArtifactHook;
             DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
         }
     }
 
@@ -2131,11 +2184,17 @@ public partial class IndexCommandRunnerTests
         var previousLookupHook = ReferenceExtractor.CSharpStaticInterfaceMemberLookupsBuiltForTesting;
         var previousPrepassHook = IndexCommandRunner.FullScanCSharpPrepassForTesting;
         var previousContentLoadHook = IndexCommandRunner.FullScanFileContentLoadForTesting;
+        var previousArtifactHook =
+            CSharpPrepassSymbolArtifactCache.EventForTesting;
+        var artifactEvents =
+            new ConcurrentQueue<CSharpPrepassSymbolArtifactCacheEvent>();
         var matchingLookupBuilds = 0;
         var noOpPrepassCount = 0;
         var noOpContentLoadCount = 0;
         try
         {
+            CSharpPrepassSymbolArtifactCache.EventForTesting =
+                artifactEvents.Enqueue;
             ReferenceExtractor.CSharpStaticInterfaceMemberLookupsBuiltForTesting = symbols =>
             {
                 if (symbols.Any(symbol =>
@@ -2171,6 +2230,16 @@ public partial class IndexCommandRunnerTests
                 [projectRoot, "--parallelism", "4", "--json", "--quiet"],
                 _jsonOptions);
             Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(
+                implementationFileCount + 1,
+                artifactEvents.Count(item => item.Phase == "admitted"));
+            Assert.Equal(
+                implementationFileCount + 1,
+                artifactEvents.Count(item => item.Phase == "taken"));
+            Assert.Contains(
+                artifactEvents,
+                item => item.Phase == "cleared");
+            artifactEvents.Clear();
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             InstallCSharpEvidenceWriteAudit(dbPath);
 
@@ -2182,6 +2251,7 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, noOpExitCode);
             Assert.Equal(0, noOpPrepassCount);
             Assert.Equal(0, noOpContentLoadCount);
+            Assert.Empty(artifactEvents);
             Assert.Equal(0L, CountCSharpEvidenceWrites(dbPath));
 
             using var conn = OpenNonPoolingConnection(dbPath);
@@ -2243,6 +2313,160 @@ public partial class IndexCommandRunnerTests
             ReferenceExtractor.CSharpStaticInterfaceMemberLookupsBuiltForTesting = previousLookupHook;
             IndexCommandRunner.FullScanCSharpPrepassForTesting = previousPrepassHook;
             IndexCommandRunner.FullScanFileContentLoadForTesting = previousContentLoadHook;
+            CSharpPrepassSymbolArtifactCache.EventForTesting =
+                previousArtifactHook;
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Fact]
+    public void Run_FreshFullScan_CSharpPrepassArtifactChecksumMismatchFallsBackToAuthoritativeMainRead()
+    {
+        var projectRoot = CreateTempProject();
+        var sourcePath = Path.Combine(projectRoot, "Fixture.cs");
+        const string originalSource =
+            "public class Fixture { public static int Alpha() => 1; }\n";
+        const string mutatedSource =
+            "public class Fixture { public static int Bravo() => 1; }\n";
+        Assert.Equal(
+            Encoding.UTF8.GetByteCount(originalSource),
+            Encoding.UTF8.GetByteCount(mutatedSource));
+        File.WriteAllText(sourcePath, originalSource);
+        var originalModified = File.GetLastWriteTimeUtc(sourcePath);
+        var previousContentLoadHook =
+            IndexCommandRunner.FullScanFileContentLoadForTesting;
+        var previousArtifactHook =
+            CSharpPrepassSymbolArtifactCache.EventForTesting;
+        var artifactEvents =
+            new ConcurrentQueue<CSharpPrepassSymbolArtifactCacheEvent>();
+        var mutated = 0;
+        try
+        {
+            CSharpPrepassSymbolArtifactCache.EventForTesting =
+                artifactEvents.Enqueue;
+            IndexCommandRunner.FullScanFileContentLoadForTesting = path =>
+            {
+                if (path != "Fixture.cs"
+                    || Interlocked.Exchange(ref mutated, 1) != 0)
+                {
+                    return;
+                }
+
+                File.WriteAllText(sourcePath, mutatedSource);
+                File.SetLastWriteTimeUtc(sourcePath, originalModified);
+            };
+
+            var exitCode = IndexCommandRunner.Run(
+                [projectRoot, "--parallelism", "2", "--json", "--quiet"],
+                _jsonOptions);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(1, Volatile.Read(ref mutated));
+            Assert.Contains(
+                artifactEvents,
+                item => item.Phase == "admitted"
+                        && item.Path == "Fixture.cs");
+            Assert.Contains(
+                artifactEvents,
+                item => item.Phase == "checksum_mismatch"
+                        && item.Path == "Fixture.cs");
+            Assert.DoesNotContain(
+                artifactEvents,
+                item => item.Phase == "taken"
+                        && item.Path == "Fixture.cs");
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using var connection = OpenNonPoolingConnection(dbPath);
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT name
+                FROM symbols
+                WHERE file_id = (SELECT id FROM files WHERE path = 'Fixture.cs')
+                """;
+            using var reader = command.ExecuteReader();
+            var names = new List<string>();
+            while (reader.Read())
+                names.Add(reader.GetString(0));
+            Assert.Contains("Bravo", names);
+            Assert.DoesNotContain("Alpha", names);
+        }
+        finally
+        {
+            IndexCommandRunner.FullScanFileContentLoadForTesting =
+                previousContentLoadHook;
+            CSharpPrepassSymbolArtifactCache.EventForTesting =
+                previousArtifactHook;
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Theory]
+    [InlineData("rebuild")]
+    [InlineData("symbols-only")]
+    [InlineData("stall-seam")]
+    public void Run_CSharpPrepassArtifactReuse_IsDisabledOutsideFreshFullIndex(
+        string mode)
+    {
+        var projectRoot = CreateTempProject();
+        var sourcePath = Path.Combine(projectRoot, "Fixture.cs");
+        File.WriteAllText(
+            sourcePath,
+            "public class Fixture { public static int Run() => 1; }\n");
+        var previousArtifactHook =
+            CSharpPrepassSymbolArtifactCache.EventForTesting;
+        var previousStallTimeout =
+            IndexCommandRunner.IndexExtractionStallTimeoutForTesting;
+        var artifactEvents =
+            new ConcurrentQueue<CSharpPrepassSymbolArtifactCacheEvent>();
+        try
+        {
+            CSharpPrepassSymbolArtifactCache.EventForTesting =
+                artifactEvents.Enqueue;
+            if (mode == "stall-seam")
+            {
+                IndexCommandRunner.IndexExtractionStallTimeoutForTesting =
+                    () => TimeSpan.FromMinutes(1);
+            }
+            var args = new List<string>
+            {
+                projectRoot,
+                "--json",
+                "--quiet",
+            };
+            if (mode == "rebuild")
+            {
+                args.Add("--rebuild");
+                args.Add("--yes");
+            }
+            else if (mode == "symbols-only")
+                args.Add("--symbols-only");
+
+            var exitCode = IndexCommandRunner.Run(args.ToArray(), _jsonOptions);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.DoesNotContain(
+                artifactEvents,
+                item => item.Phase is "admitted" or "taken");
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using var connection = OpenNonPoolingConnection(dbPath);
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT COUNT(*)
+                FROM symbols
+                WHERE name = 'Fixture'
+                """;
+            Assert.Equal(1L, command.ExecuteScalar());
+        }
+        finally
+        {
+            CSharpPrepassSymbolArtifactCache.EventForTesting =
+                previousArtifactHook;
+            IndexCommandRunner.IndexExtractionStallTimeoutForTesting =
+                previousStallTimeout;
             DeleteDirectory(projectRoot);
             SqliteConnection.ClearAllPools();
         }

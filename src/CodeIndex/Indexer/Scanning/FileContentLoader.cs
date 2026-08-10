@@ -32,6 +32,10 @@ internal sealed partial class FileContentLoader(
         internal int ConflictMarkerLine => Facts.ConflictMarkerLine;
     }
 
+    internal readonly record struct CSharpPrepassCandidateContent(
+        string Content,
+        string Checksum);
+
     internal LoadedFileContent Load(
         string absolutePath,
         string normalizedRelativePath,
@@ -103,12 +107,14 @@ internal sealed partial class FileContentLoader(
         return NormalizeContentForPrepass(content);
     }
 
-    internal (string? Content, bool RequiresRetry) LoadCSharpStaticInterfaceCandidateContentForPrepass(
+    internal (CSharpPrepassCandidateContent? Content, bool RequiresRetry)
+        LoadCSharpStaticInterfaceCandidateContentForPrepass(
         string absolutePath,
         string normalizedRelativePath,
         string relativePath,
         bool retryOnMutation,
         bool includeQualifiedMemberAccessCandidate,
+        bool includeChecksum,
         CancellationToken cancellationToken)
     {
         var readPath = _resolveFileReadPath(absolutePath);
@@ -161,8 +167,21 @@ internal sealed partial class FileContentLoader(
         if (bytes is null || IsGitLfsPointer(bytes))
             return (null, RequiresRetry: false);
 
-        var (content, _, _, _) = DecodeIndexableContent(bytes, relativePath, inspectRawByteContent: false);
-        return (NormalizeContentForPrepass(content), RequiresRetry: false);
+        var (content, warning, inspection, _) = DecodeIndexableContent(
+            bytes,
+            relativePath,
+            inspectRawByteContent: false);
+        var normalized = NormalizeContentForPrepass(content);
+        var checksum = includeChecksum
+            ? warning is null
+                && !inspection.IsUtf16
+                && ReferenceEquals(normalized, content)
+                    ? ComputeRawChecksum(bytes)
+                    : ComputeChecksumFromNormalizedContent(normalized)
+            : string.Empty;
+        return (
+            new CSharpPrepassCandidateContent(normalized, checksum),
+            RequiresRetry: false);
     }
 
     internal static string NormalizeLineEndings(string content)

@@ -44,6 +44,7 @@ public static partial class IndexCommandRunner
         Dictionary<string, IndexedFileStatReuseResult?>? CSharpPrepassStatReuse,
         Dictionary<string, CSharpStaticInterfacePrepass.FileStatSnapshot>? CSharpWorkspaceFileSnapshots,
         CSharpStaticInterfaceWorkspaceSymbols CSharpWorkspace,
+        CSharpPrepassSymbolArtifactCache? CSharpPrepassSymbolArtifacts,
         bool ForceFullCSharpRefreshFromInvalidatedNoOp,
         bool PreservePriorPositiveCSharpSourceNoOp,
         bool CSharpSourceEvidenceForStamp,
@@ -177,6 +178,13 @@ public static partial class IndexCommandRunner
             && context.CSharpPrepassTargets.Count > 0
             && !(priorPositiveCSharpSourceNoOpCandidate
                 && allCSharpPrepassTargetsReusable);
+        var csharpPrepassSymbolArtifacts = CSharpPrepassSymbolArtifactCache
+            .CreateForFreshBuiltInExtraction(
+                csharpWorkspaceMaterialized
+                && context.StartedWithNoIndexedFiles
+                && !options.Rebuild
+                && !options.SymbolsOnly
+                && IndexExtractionStallTimeoutForTesting == null);
         if (options.SymbolsOnly
             || context.GetDeferCSharpMutationsForIncompleteScan())
         {
@@ -190,6 +198,7 @@ public static partial class IndexCommandRunner
                 priorPositiveCSharpSourceNoOpCandidate,
                 allCSharpPrepassTargetsReusable,
                 CanReuseCSharpPrepassTargetWithoutRead,
+                csharpPrepassSymbolArtifacts,
                 out csharpWorkspaceFileSnapshots);
             forceFullCSharpRefreshFromInvalidatedNoOp =
                 csharpWorkspaceMaterialized
@@ -202,6 +211,8 @@ public static partial class IndexCommandRunner
         if (!options.SymbolsOnly
             && !csharpWorkspace.SourceContractEvidenceComplete)
         {
+            csharpPrepassSymbolArtifacts?.Clear();
+            csharpPrepassSymbolArtifacts = null;
             var incompleteSourcePaths =
                 csharpWorkspace.IncompleteSourcePaths;
             context.DeferCSharpMutationsForIncompleteWorkspace(
@@ -248,6 +259,7 @@ public static partial class IndexCommandRunner
             csharpPrepassStatReuse,
             csharpWorkspaceFileSnapshots,
             csharpWorkspace,
+            csharpPrepassSymbolArtifacts,
             forceFullCSharpRefreshFromInvalidatedNoOp,
             preservePriorPositiveCSharpSourceNoOp,
             csharpSourceEvidenceForStamp,
@@ -261,6 +273,7 @@ public static partial class IndexCommandRunner
             bool allCSharpPrepassTargetsReusable,
             Func<CSharpStaticInterfacePrepass.FileTarget, bool>
                 canReuseCSharpPrepassTargetWithoutRead,
+            CSharpPrepassSymbolArtifactCache? symbolArtifactCache,
             out Dictionary<string,
                 CSharpStaticInterfacePrepass.FileStatSnapshot>?
                 csharpWorkspaceFileSnapshots)
@@ -313,7 +326,8 @@ public static partial class IndexCommandRunner
                         context
                             .IsExistingCSharpSymbolPathNowNonCSharp,
                     patternConfigsAlreadyLoaded: true,
-                    cancellationToken: context.CancellationToken),
+                    cancellationToken: context.CancellationToken,
+                    symbolArtifactCache: symbolArtifactCache),
                 context.CancellationToken);
         }
         catch (OperationCanceledException) when (

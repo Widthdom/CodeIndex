@@ -20,6 +20,7 @@ public static partial class IndexCommandRunner
         internal required bool StartedWithNoIndexedFiles { get; init; }
         internal required bool DeferCSharpMutationsForIncompleteScan { get; init; }
         internal required CSharpStaticInterfaceWorkspaceSymbols CSharpWorkspace { get; init; }
+        internal CSharpPrepassSymbolArtifactCache? CSharpPrepassSymbolArtifacts { get; init; }
         internal required PostExtractionHookRunner PostExtractionHooks { get; init; }
         internal required SymbolExtractionWorkerClient SymbolExtractionWorker { get; init; }
         internal required CancellationToken CancellationToken { get; init; }
@@ -117,8 +118,23 @@ public static partial class IndexCommandRunner
         context.SetPhase(FormatIndexPhasePath(record.Path, "symbols"), "symbols");
         FullScanFilePhaseForTesting?.Invoke(record.Path, "symbols");
         SymbolExtractionResult? symbolExtraction = null;
-        var symbols = item.Symbols == null
-            ? (symbolExtraction = ExtractSymbolsWithStallTimeout(
+        IReadOnlyList<SymbolRecord> symbols;
+        if (item.Symbols != null)
+        {
+            symbols = ReassignSymbolFileIds(item.Symbols, fileId);
+        }
+        else if (string.Equals(record.Lang, "csharp", StringComparison.Ordinal)
+                 && record.Checksum is { } checksum
+                 && context.CSharpPrepassSymbolArtifacts?.TryTake(
+                     record.Path,
+                     checksum,
+                     out var symbolArtifact) == true)
+        {
+            symbols = ReassignSymbolFileIds(symbolArtifact.Symbols, fileId);
+        }
+        else
+        {
+            symbolExtraction = ExtractSymbolsWithStallTimeout(
                 fileId,
                 record.Lang,
                 item.Content!,
@@ -130,8 +146,9 @@ public static partial class IndexCommandRunner
                 item.HasOversizeLine,
                 item.ConflictMarkerLine,
                 context.SymbolExtractionWorker,
-                cancellationToken)).Symbols
-            : ReassignSymbolFileIds(item.Symbols, fileId);
+                cancellationToken);
+            symbols = symbolExtraction.Symbols;
+        }
         var extractedSymbolCount = symbols.Count;
         var symbolRegexTimeoutIssue = symbolExtraction?.RegexTimeoutIssue;
         var fileContext = new FileContext(

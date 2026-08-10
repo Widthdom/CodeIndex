@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json.Nodes;
 using System.Text.Json;
@@ -10100,6 +10101,10 @@ public partial class McpServerTests
         var previousLookupHook = ReferenceExtractor.CSharpStaticInterfaceMemberLookupsBuiltForTesting;
         var previousCSharpPrepassHook = McpServer.McpIndexCSharpPrepassForTesting;
         var previousContentLoadHook = McpServer.McpIndexFileContentLoadForTesting;
+        var previousArtifactHook =
+            CSharpPrepassSymbolArtifactCache.EventForTesting;
+        var artifactEvents =
+            new ConcurrentQueue<CSharpPrepassSymbolArtifactCacheEvent>();
         using var extensionProject = TestProjectHelper.CreateExecutableExtensionTestProjectScope(
             "cdidx_mcp_csharp_source_evidence_hook");
         using var env = EnvironmentVariableScope.Capture(
@@ -10110,6 +10115,8 @@ public partial class McpServerTests
         var noOpContentLoadCount = 0;
         try
         {
+            CSharpPrepassSymbolArtifactCache.EventForTesting =
+                artifactEvents.Enqueue;
             DbWriter.CSharpContractPreflightForTesting = () =>
             {
                 preflightCount++;
@@ -10155,6 +10162,16 @@ public partial class McpServerTests
             using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
             var initialResponse = CallIndex(server, fixtureDir);
             Assert.False(initialResponse["result"]?["isError"]?.GetValue<bool>() ?? false, initialResponse.ToJsonString());
+            Assert.Equal(
+                2,
+                artifactEvents.Count(item => item.Phase == "admitted"));
+            Assert.Equal(
+                2,
+                artifactEvents.Count(item => item.Phase == "taken"));
+            Assert.Contains(
+                artifactEvents,
+                item => item.Phase == "cleared");
+            artifactEvents.Clear();
             Assert.Equal(1, matchingLookupBuilds);
             Assert.Equal(0L, CountPersistedContractMembers());
             Assert.True(ReadSourceEvidence());
@@ -10173,6 +10190,7 @@ public partial class McpServerTests
             Assert.Equal(1, matchingLookupBuilds);
             Assert.Equal(0, noOpCSharpPrepassCount);
             Assert.Equal(0, noOpContentLoadCount);
+            Assert.Empty(artifactEvents);
             Assert.Equal(0L, CountCSharpEvidenceWrites());
             var noOpSummary = noOpResponse["result"]!["structuredContent"]!["summary"]!;
             Assert.Equal(2L, noOpSummary["files"]!.GetValue<long>());
@@ -10278,6 +10296,8 @@ public partial class McpServerTests
             ReferenceExtractor.CSharpStaticInterfaceMemberLookupsBuiltForTesting = previousLookupHook;
             McpServer.McpIndexCSharpPrepassForTesting = previousCSharpPrepassHook;
             McpServer.McpIndexFileContentLoadForTesting = previousContentLoadHook;
+            CSharpPrepassSymbolArtifactCache.EventForTesting =
+                previousArtifactHook;
             GC.Collect();
             GC.WaitForPendingFinalizers();
             GC.Collect();
@@ -13156,12 +13176,18 @@ public partial class McpServerTests
         var fixtureDir = Path.Combine(Path.GetFullPath("."), $"mcp_index_rebuild_fresh_{Guid.NewGuid():N}");
         Directory.CreateDirectory(fixtureDir);
         var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_rebuild_fresh");
+        var previousArtifactHook =
+            CSharpPrepassSymbolArtifactCache.EventForTesting;
+        var artifactEvents =
+            new ConcurrentQueue<CSharpPrepassSymbolArtifactCacheEvent>();
         var statSnapshotReads = 0;
         try
         {
             File.WriteAllText(Path.Combine(fixtureDir, "app.cs"), "public class App { }");
             using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
             DbWriter.ReusableStatSnapshotReadForTesting = () => statSnapshotReads++;
+            CSharpPrepassSymbolArtifactCache.EventForTesting =
+                artifactEvents.Enqueue;
 
             var request = new JsonObject
             {
@@ -13183,10 +13209,15 @@ public partial class McpServerTests
             Assert.False(response["result"]!["isError"]?.GetValue<bool>() ?? false);
             Assert.True(response["result"]!["structuredContent"]!["summary"]!["files"]!.GetValue<long>() >= 1L);
             Assert.Equal(0, statSnapshotReads);
+            Assert.DoesNotContain(
+                artifactEvents,
+                item => item.Phase is "admitted" or "taken");
         }
         finally
         {
             DbWriter.ReusableStatSnapshotReadForTesting = null;
+            CSharpPrepassSymbolArtifactCache.EventForTesting =
+                previousArtifactHook;
             TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
             TestProjectHelper.DeleteDirectory(fixtureDir);
         }

@@ -327,6 +327,9 @@ public partial class McpServer
         // Load current reference-language support before the deferred mutation phase.
         // deferred mutation phase の前に現在の reference-language support を読み込む。
         ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(projectPath);
+        var csharpPrepassSymbolArtifacts = CSharpPrepassSymbolArtifactCache
+            .CreateForFreshBuiltInExtraction(
+                startedWithNoIndexedFilesBeforeRebuild && !rebuild);
         var purgedRefs = 0;
 
         // Scan and index / スキャン・インデックス
@@ -717,7 +720,8 @@ public partial class McpServer
                     excludedExistingFileIds: staleFilePurgePlan.FileIds,
                     isExistingSymbolPathExcluded: IsExistingCSharpSymbolPathNowNonCSharp,
                     patternConfigsAlreadyLoaded: true,
-                    cancellationToken: requestToken));
+                    cancellationToken: requestToken,
+                    symbolArtifactCache: csharpPrepassSymbolArtifacts));
             forceFullCSharpRefreshFromInvalidatedNoOp =
                 indexSnapshot.CSharpStaticInterfaceSourceEvidence == true
                 || csharpWorkspace.HasStaticInterfaceContracts
@@ -725,6 +729,8 @@ public partial class McpServer
         }
         if (!csharpWorkspace.SourceContractEvidenceComplete)
         {
+            csharpPrepassSymbolArtifacts?.Clear();
+            csharpPrepassSymbolArtifacts = null;
             incompleteCSharpPrepassPaths = csharpWorkspace.IncompleteSourcePaths ?? [];
             deferCSharpMutationsForIncompleteScan = true;
             staleFilePurgePlan = FilePurgePlan.Empty;
@@ -804,6 +810,8 @@ public partial class McpServer
 
         void DeferCSharpMutationsForLoadedSnapshotDrift(string path)
         {
+            csharpPrepassSymbolArtifacts?.Clear();
+            csharpPrepassSymbolArtifacts = null;
             deferCSharpMutationsForIncompleteScan = true;
             preservePriorPositiveCSharpSourceNoOp = false;
             csharpSourceEvidenceForStamp = false;
@@ -1224,6 +1232,8 @@ public partial class McpServer
             }
             if (!stableFiles)
             {
+                csharpPrepassSymbolArtifacts?.Clear();
+                csharpPrepassSymbolArtifacts = null;
                 var driftPath = FormatCSharpWorkspaceSnapshotPath(changedFilePath);
                 incompleteCSharpPrepassPaths = [driftPath];
                 deferCSharpMutationsForIncompleteScan = true;
@@ -1514,8 +1524,23 @@ public partial class McpServer
                 }
                 List<SymbolRecord> symbols;
                 FileIssue? symbolRegexTimeoutIssue;
-                using (var regexTimeouts = BoundedRegex.CaptureTimeouts(record.Lang, "symbol_extraction"))
+                if (string.Equals(record.Lang, "csharp", StringComparison.Ordinal)
+                    && record.Checksum is { } checksum
+                    && csharpPrepassSymbolArtifacts?.TryTake(
+                        record.Path,
+                        checksum,
+                        out var symbolArtifact) == true)
                 {
+                    symbols = symbolArtifact.Symbols;
+                    foreach (var symbol in symbols)
+                        symbol.FileId = fileId;
+                    symbolRegexTimeoutIssue = null;
+                }
+                else
+                {
+                    using var regexTimeouts = BoundedRegex.CaptureTimeouts(
+                        record.Lang,
+                        "symbol_extraction");
                     symbols = SymbolExtractor.ExtractNormalized(
                         fileId,
                         record.Lang,
@@ -1526,7 +1551,10 @@ public partial class McpServer
                         requestToken,
                         loaded.ConflictMarkerLine,
                         patternConfigsAlreadyLoaded: true);
-                    symbolRegexTimeoutIssue = IndexCommandRunner.BuildRegexTimeoutIssue(record.Path, regexTimeouts);
+                    symbolRegexTimeoutIssue =
+                        IndexCommandRunner.BuildRegexTimeoutIssue(
+                            record.Path,
+                            regexTimeouts);
                 }
                 var familyScopeKey = indexer.GetFamilyScopeKey(filePath, record.Lang);
                 SymbolExtractor.ApplyFamilyScope(symbols, familyScopeKey, record.Lang);
@@ -1769,6 +1797,9 @@ public partial class McpServer
             processed++;
             await EmitProgressNotificationAsync(progressToken, processed, files.Count).ConfigureAwait(false);
         }
+
+        csharpPrepassSymbolArtifacts?.Clear();
+        csharpPrepassSymbolArtifacts = null;
 
         var referenceIdentityReadyForMutualRecursionRefresh =
             !deferCSharpMutationsForIncompleteScan && mutualRecursionRefreshNeeded

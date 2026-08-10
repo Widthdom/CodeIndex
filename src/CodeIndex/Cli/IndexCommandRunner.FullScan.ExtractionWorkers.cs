@@ -20,6 +20,7 @@ public static partial class IndexCommandRunner
         internal required bool ParallelizeExtraction { get; init; }
         internal required int[] ExtractionTailSchedule { get; init; }
         internal required CSharpStaticInterfaceWorkspaceSymbols CSharpWorkspace { get; init; }
+        internal CSharpPrepassSymbolArtifactCache? CSharpPrepassSymbolArtifacts { get; init; }
         internal Dictionary<string, CSharpStaticInterfacePrepass.FileStatSnapshot>? CSharpWorkspaceFileSnapshots { get; init; }
         internal required PostExtractionHookRunner PostExtractionHooks { get; init; }
         internal required ActiveExtractionPhase?[] ActiveExtractionPhases { get; init; }
@@ -41,6 +42,7 @@ public static partial class IndexCommandRunner
         var parallelizeExtraction = context.ParallelizeExtraction;
         var extractionTailSchedule = context.ExtractionTailSchedule;
         var csharpWorkspace = context.CSharpWorkspace;
+        var csharpPrepassSymbolArtifacts = context.CSharpPrepassSymbolArtifacts;
         var csharpWorkspaceFileSnapshots = context.CSharpWorkspaceFileSnapshots;
         var postExtractionHooks = context.PostExtractionHooks;
         var activeExtractionPhases = context.ActiveExtractionPhases;
@@ -146,21 +148,36 @@ public static partial class IndexCommandRunner
                             }
                             Volatile.Write(ref activeExtractionPhases[workerIndex], new(record.Path, "symbols"));
                             FullScanFilePhaseForTesting?.Invoke(record.Path, "symbols");
-                            var symbolExtraction = ExtractSymbolsWithStallTimeout(
-                                0,
-                                record.Lang,
-                                content,
-                                filePath,
-                                projectRoot,
-                                record.Path,
-                                Volatile.Read(ref activeExtractionPhases[workerIndex])!.Format(),
-                                true,
-                                hasOversizeLine,
-                                loaded.ConflictMarkerLine,
-                                workerSymbolExtractionWorker.Value,
-                                extractionCancellationToken);
-                            symbols = symbolExtraction.Symbols;
-                            var symbolRegexTimeoutIssue = symbolExtraction.RegexTimeoutIssue;
+                            FileIssue? symbolRegexTimeoutIssue;
+                            if (string.Equals(record.Lang, "csharp", StringComparison.Ordinal)
+                                && record.Checksum is { } checksum
+                                && csharpPrepassSymbolArtifacts?.TryTake(
+                                    record.Path,
+                                    checksum,
+                                    out var symbolArtifact) == true)
+                            {
+                                symbols = symbolArtifact.Symbols;
+                                symbolRegexTimeoutIssue = null;
+                            }
+                            else
+                            {
+                                var symbolExtraction = ExtractSymbolsWithStallTimeout(
+                                    0,
+                                    record.Lang,
+                                    content,
+                                    filePath,
+                                    projectRoot,
+                                    record.Path,
+                                    Volatile.Read(ref activeExtractionPhases[workerIndex])!.Format(),
+                                    true,
+                                    hasOversizeLine,
+                                    loaded.ConflictMarkerLine,
+                                    workerSymbolExtractionWorker.Value,
+                                    extractionCancellationToken);
+                                symbols = symbolExtraction.Symbols;
+                                symbolRegexTimeoutIssue =
+                                    symbolExtraction.RegexTimeoutIssue;
+                            }
                             if (string.Equals(record.Lang, "csharp", StringComparison.Ordinal))
                             {
                                 var sourceFileContext = new FileContext(

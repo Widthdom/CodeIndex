@@ -8,11 +8,16 @@ affected:
   - src/CodeIndex/Database/DbWriter.ReferenceGraphRefreshScope.cs
   - src/CodeIndex/Database/ReferenceSecondaryIndexBulkLoadGuard.cs
   - src/CodeIndex/Indexer/CSharpStaticInterfacePrepass.cs
+  - src/CodeIndex/Indexer/CSharpPrepassSymbolArtifactCache.cs
   - src/CodeIndex/Indexer/Extensibility/ExtractorPluginRegistry.cs
+  - src/CodeIndex/Indexer/Scanning/FileContentLoader.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractionWorker.cs
   - src/CodeIndex/Mcp/McpToolHandlers.Indexing.Execution.cs
   - tests/CodeIndex.Tests/ExtractorPluginRegistryTests.cs
+  - tests/CodeIndex.Tests/CSharpPrepassSymbolArtifactCacheTests.cs
+  - tests/CodeIndex.Tests/FileIndexerTests.cs
   - tests/CodeIndex.Tests/FreshReferenceResolutionTests.cs
+  - tests/CodeIndex.Tests/IndexCommandRunnerFullScanTests.cs
   - tests/CodeIndex.Tests/IndexCommandRunnerTests.cs
   - tests/CodeIndex.Tests/IndexCommandRunnerReferenceIndexBulkLoadTests.cs
   - tests/CodeIndex.Tests/McpServerToolsCallTests.cs
@@ -29,6 +34,7 @@ affected:
 - **First-time full indexes resolve only references that have candidates** — empty-database CLI scans persist canonical unresolved defaults during bulk insertion, aggregate the candidate table once, and update candidate-bearing references by primary key instead of probing every reference row. Rebuilds, updates, retained graphs, and MCP indexing keep their existing recovery contracts.
 - **Fresh graph planning uses post-load cardinalities** — truly empty CLI and MCP bulk loads now analyze the populated file, symbol, and reference tables immediately before candidate resolution, allowing SQLite to plan the expensive first graph build from current statistics. Rebuilds, updates, existing databases, and symbols-only runs keep their prior lifecycle; cancellation still aborts, while a statistics-only SQLite failure rolls back its savepoint and continues best-effort.
 - **Persistent symbol workers reuse bounded pattern-directory snapshots across languages** — each project-root reload discovers user and root configs once, while nested ancestor directories, including missing and rejected results, are observed once per worker command. The cache follows live filesystem casing and falls back to uncached discovery when full so configs are never skipped; direct registry callers keep dynamic discovery.
+- **First-time C# extraction reuses checksum-verified prepass symbols** — empty-database CLI and MCP full indexes can consume bounded, take-once deep clones of built-in symbols already extracted for the static-interface workspace. The main pass still rereads and validates every file and falls back on checksum drift, incomplete prepasses, regex timeouts, or cache limits; rebuilds, updates, and symbols-only runs remain unchanged.
 
 ## 日本語
 
@@ -38,3 +44,4 @@ affected:
 - **初回full indexでcandidateを持つreferenceだけを解決するようにしました** — 空databaseからのCLI scanではbulk insert中にcanonicalな未解決値を保存し、candidate tableを1回集約して、全reference rowをprobeせずcandidateを持つrowだけをprimary keyで更新します。rebuild、update、retained graph、MCP indexingの既存recovery契約は変更しません。
 - **新規graph planningでbulk load後のcardinalityを使うようにしました** — 真に空のdatabaseから始まるCLI / MCP bulk loadでは、candidate解決の直前に投入済みのfile、symbol、reference tableを解析し、SQLiteが初回の高コストなgraph構築を最新統計から計画できるようにします。rebuild、update、既存database、symbols-onlyのlifecycleは従来どおりです。cancellationは引き続き中断し、統計更新だけのSQLite failureはsavepointを戻してbest-effortで継続します。
 - **persistent symbol worker が全言語で上限付き pattern-directory snapshot を再利用するようにしました** — project-root reload ごとに user / root config を1回だけ探索し、missing や reject を含む nested ancestor directory は worker command ごとに初回結果を再利用します。cache は実 filesystem の case policy に従い、飽和時は uncached discovery に fallback して config を skip しません。registry の direct caller は従来どおり動的に探索します。
+- **初回 C# extraction で checksum 検証済み prepass symbol を再利用するようにしました** — 空 database からの CLI / MCP full index は、static-interface workspace 用に抽出済みの built-in symbol を上限付き・take-once の deep clone として利用できます。main pass は各 file を引き続き再読込・検証し、checksum drift、不完全な prepass、regex timeout、cache 上限では通常 extraction へ fallback します。rebuild、update、symbols-only は従来どおりです。

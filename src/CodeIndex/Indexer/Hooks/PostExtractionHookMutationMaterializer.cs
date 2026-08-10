@@ -178,7 +178,7 @@ internal static class PostExtractionHookMutationMaterializer
         }
     }
 
-    private static SymbolRecord CloneSymbol(SymbolRecord symbol)
+    internal static SymbolRecord CloneSymbol(SymbolRecord symbol)
         => new()
         {
             Id = symbol.Id,
