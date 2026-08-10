@@ -928,7 +928,19 @@ internal static partial class SuggestionsCommandRunner
     private static string FormatTitle(string description, int maxLength)
     {
         var firstLine = description.Replace('\r', ' ').Replace('\n', ' ').Trim();
-        return firstLine.Length <= maxLength ? firstLine : firstLine[..(maxLength - 1)] + "...";
+        if (firstLine.Length <= maxLength)
+            return firstLine;
+
+        var end = maxLength - 1;
+        if (end > 0
+            && end < firstLine.Length
+            && char.IsHighSurrogate(firstLine[end - 1])
+            && char.IsLowSurrogate(firstLine[end]))
+        {
+            end--;
+        }
+
+        return firstLine[..end] + "...";
     }
 
     private static SuggestionListItemJsonResult ToListItem(SuggestionRecord record) => new(
