@@ -26,7 +26,7 @@ public partial class McpServerTests
             "public class App { public void Run() { } }");
 
         var listResponse = _server.HandleMessage(JsonNode.Parse(
-            """{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!)!;
+            """{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"format":"full"}}""")!)!;
         var toolDefinitions = listResponse["result"]!["tools"]!.AsArray();
         var schemas = toolDefinitions
             .ToDictionary(
