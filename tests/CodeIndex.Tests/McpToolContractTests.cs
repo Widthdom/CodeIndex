@@ -120,7 +120,7 @@ public class McpToolContractTests
                 properties["cursor"]["maxLength"]!.GetValue<int>());
         }
 
-        var validateDescription = GetAdvertisedTools()["validate"]["description"]!.GetValue<string>();
+        var validateDescription = GetAdvertisedTools(full: true)["validate"]["description"]!.GetValue<string>();
         Assert.Contains(
             "authoritative only while `file_issues_data_current` is true",
             validateDescription,
@@ -246,7 +246,7 @@ public class McpToolContractTests
     [Fact]
     public void ToolsList_CatalogAndSchemaMetadataContractsStaySynchronized_Issue4177()
     {
-        var result = GetToolsListResult();
+        var result = GetToolsListResult(full: true);
         var tools = GetAdvertisedTools(result);
         var advertisedNames = tools.Keys.ToHashSet(StringComparer.Ordinal);
         var failures = new List<string>();
@@ -325,7 +325,9 @@ public class McpToolContractTests
     [Fact]
     public void ToolsList_FilteredCatalogMetaReferencesOnlyAdvertisedTools_Issue4177()
     {
-        var result = GetToolsListResult(McpToolFilter.Parse(null, "index,backfill_fold,suggest_improvement"));
+        var result = GetToolsListResult(
+            McpToolFilter.Parse(null, "index,backfill_fold,suggest_improvement"),
+            full: true);
         var tools = GetAdvertisedTools(result);
         var advertisedNames = tools.Keys.ToHashSet(StringComparer.Ordinal);
         var failures = new List<string>();
@@ -421,7 +423,7 @@ public class McpToolContractTests
         return result;
     }
 
-    private static JsonObject GetToolsListResult(McpToolFilter? filter = null)
+    private static JsonObject GetToolsListResult(McpToolFilter? filter = null, bool full = false)
     {
         using var server = new McpServer("unused.db", "test", dbPathExplicit: false, filter ?? McpToolFilter.AllowAll());
         var request = new JsonObject
@@ -430,6 +432,8 @@ public class McpToolContractTests
             ["id"] = 1,
             ["method"] = "tools/list",
         };
+        if (full)
+            request["params"] = new JsonObject { ["format"] = "full" };
         var response = server.HandleMessage(request)
             ?? throw new InvalidOperationException("tools/list returned no response.");
 
@@ -437,8 +441,8 @@ public class McpToolContractTests
             ?? throw new InvalidOperationException("tools/list response did not contain a result object.");
     }
 
-    private static Dictionary<string, JsonObject> GetAdvertisedTools()
-        => GetAdvertisedTools(GetToolsListResult());
+    private static Dictionary<string, JsonObject> GetAdvertisedTools(bool full = false)
+        => GetAdvertisedTools(GetToolsListResult(full: full));
 
     private static Dictionary<string, JsonObject> GetAdvertisedTools(JsonObject resultObject)
     {

@@ -24,7 +24,7 @@ public partial class McpServerTests
     [Fact]
     public void ToolsList_OutlinePublishesPaginationProjectionAndByteControls_Issue4897()
     {
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":4897,"method":"tools/list"}""")!;
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":4897,"method":"tools/list","params":{"format":"full"}}""")!;
         var response = _server.HandleMessage(request)!;
 
         var outline = response["result"]!["tools"]!.AsArray()
@@ -48,7 +48,7 @@ public partial class McpServerTests
     [Fact]
     public void ToolsList_IndexPathSchemaReflectsProjectPathContract_Issue3186()
     {
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"format":"full"}}""")!;
         var response = _server.HandleMessage(request)!;
 
         var tools = response["result"]!["tools"]!.AsArray();
@@ -99,7 +99,7 @@ public partial class McpServerTests
     [Fact]
     public void ToolsList_EachToolPublishesSchemaAndExampleContract()
     {
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"format":"full"}}""")!;
         var response = _server.HandleMessage(request)!;
 
         var tools = response["result"]!["tools"]!.AsArray();
@@ -130,17 +130,24 @@ public partial class McpServerTests
     }
 
     [Fact]
-    public void ToolsList_CompactCatalogIsLightweightAndPointsToFullDefinitions_Issue4724()
+    public void ToolsList_DefaultCatalogIsAgentSafeAndPointsToFullDefinitions_Issues4724_5059()
     {
-        var fullRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
-        var compactRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{"format":"compact"}}""")!;
+        var fullRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"format":"full"}}""")!;
+        var compactRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/list"}""")!;
 
         var fullResponse = _server.HandleMessage(fullRequest)!;
         var compactResponse = _server.HandleMessage(compactRequest)!;
         var compactResult = compactResponse["result"]!;
         var compactTools = compactResult["tools"]!.AsArray();
+        var fullTools = fullResponse["result"]!["tools"]!.AsArray();
 
         Assert.Equal(McpToolFilter.KnownToolNames.Count, compactTools.Count);
+        Assert.Equal(
+            fullTools.Select(tool => tool!["name"]!.GetValue<string>()),
+            compactTools.Select(tool => tool!["name"]!.GetValue<string>()));
+        Assert.True(
+            Encoding.UTF8.GetByteCount(compactResponse.ToJsonString())
+            <= McpServer.DefaultToolsListResponseByteBudget);
         Assert.True(
             Encoding.UTF8.GetByteCount(compactResponse.ToJsonString())
             < Encoding.UTF8.GetByteCount(fullResponse.ToJsonString()) / 3);
@@ -149,20 +156,46 @@ public partial class McpServerTests
             Assert.False(string.IsNullOrWhiteSpace(tool!["name"]!.GetValue<string>()));
             Assert.False(string.IsNullOrWhiteSpace(tool["description"]!.GetValue<string>()));
             Assert.Equal("object", tool["inputSchema"]!["type"]!.GetValue<string>());
-            Assert.Single(tool["inputSchema"]!.AsObject());
+            Assert.True(tool["inputSchema"]!.AsObject().Count > 1);
             Assert.Null(tool["outputSchema"]);
             Assert.Null(tool["examples"]);
             Assert.NotNull(tool["annotations"]);
             Assert.NotNull(tool["x-stability"]);
         }
 
+        var compactSearch = compactTools.Single(tool => tool!["name"]!.GetValue<string>() == "search")!;
+        Assert.Null(compactSearch["inputSchema"]!["properties"]!["query"]!["description"]);
+        Assert.Equal(1, compactSearch["inputSchema"]!["properties"]!["query"]!["minLength"]!.GetValue<int>());
+        Assert.Contains(
+            compactSearch["inputSchema"]!["anyOf"]!.AsArray(),
+            mode => mode!["required"]!.AsArray().Any(required => required!.GetValue<string>() == "query"));
+
         var meta = compactResult["_meta"]!;
         Assert.Equal("compact", meta["format"]!.GetValue<string>());
         Assert.False(meta["definitions_complete"]!.GetValue<bool>());
-        Assert.False(meta["discovery_contract"]!["input_schemas_are_authoritative"]!.GetValue<bool>());
+        Assert.True(meta["discovery_contract"]!["input_schemas_are_authoritative"]!.GetValue<bool>());
+        Assert.False(meta["discovery_contract"]!["output_schemas_are_included"]!.GetValue<bool>());
+        Assert.False(meta["discovery_contract"]!["examples_are_included"]!.GetValue<bool>());
         Assert.True(meta["discovery_contract"]!["full_definitions_available_on_demand"]!.GetValue<bool>());
         Assert.Equal("tools/list", meta["full_definition_request"]!["method"]!.GetValue<string>());
         Assert.Equal("full", meta["full_definition_request"]!["params"]!["format"]!.GetValue<string>());
+
+        var sections = meta["size_telemetry"]!["sections"]!;
+        Assert.True(sections["input_schemas"]!["utf8_bytes"]!.GetValue<int>() > 0);
+        Assert.Equal(0, sections["output_schemas"]!["utf8_bytes"]!.GetValue<int>());
+        Assert.Equal(0, sections["examples"]!["utf8_bytes"]!.GetValue<int>());
+        Assert.False(meta["size_telemetry"]!["contains_tool_arguments"]!.GetValue<bool>());
+
+        var fullSections = fullResponse["result"]!["_meta"]!["size_telemetry"]!["sections"]!;
+        var measuredFullDescriptionBytes = fullTools.Sum(tool =>
+            Encoding.UTF8.GetByteCount(tool!["description"]!.ToJsonString()));
+        Assert.Equal(measuredFullDescriptionBytes, fullSections["descriptions"]!["utf8_bytes"]!.GetValue<int>());
+        Assert.Contains(
+            fullTools,
+            tool => tool!["description"]!.GetValue<string>().Any(character => character > 127));
+        Assert.True(fullSections["output_schemas"]!["utf8_bytes"]!.GetValue<int>() > 0);
+        Assert.True(fullSections["examples"]!["utf8_bytes"]!.GetValue<int>() > 0);
+        Assert.True(fullSections["capability_metadata"]!["utf8_bytes"]!.GetValue<int>() > 0);
     }
 
     [Fact]
@@ -207,7 +240,7 @@ public partial class McpServerTests
         var tool = Assert.Single(secondResponse["result"]!["tools"]!.AsArray())!;
         Assert.Equal("status", tool["name"]!.GetValue<string>());
         Assert.Null(tool["examples"]);
-        Assert.Single(tool["inputSchema"]!.AsObject());
+        Assert.True(tool["inputSchema"]!.AsObject().Count > 1);
         Assert.Equal("compact", secondResponse["result"]!["_meta"]!["format"]!.GetValue<string>());
         Assert.True(secondResponse["result"]!["_meta"]!["response_controls"]!["names_filtered"]!.GetValue<bool>());
 
@@ -227,10 +260,10 @@ public partial class McpServerTests
     }
 
     [Fact]
-    public void ToolsList_ExplicitFullMatchesDefaultResponse_Issue4724()
+    public void ToolsList_ExplicitCompactMatchesDefaultResponse_Issues4724_5059()
     {
         var defaultRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
-        var explicitRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{"format":"full"}}""")!;
+        var explicitRequest = JsonNode.Parse("""{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{"format":"compact"}}""")!;
 
         var defaultResponse = _server.HandleMessage(defaultRequest)!;
         var explicitResponse = _server.HandleMessage(explicitRequest)!;
@@ -315,7 +348,7 @@ public partial class McpServerTests
     [Fact]
     public void ToolsList_MetaAdvertisesFirstTimeAiDiscoveryCatalog()
     {
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"format":"full"}}""")!;
         var response = _server.HandleMessage(request)!;
 
         var meta = response["result"]!["_meta"]!;
@@ -363,7 +396,7 @@ public partial class McpServerTests
         var firstResult = firstResponse["result"]!;
         var firstTools = firstResult["tools"]!.AsArray();
         Assert.Equal(3, firstTools.Count);
-        Assert.Equal("3", firstResult["nextCursor"]!.GetValue<string>());
+        Assert.StartsWith("v1.", firstResult["nextCursor"]!.GetValue<string>(), StringComparison.Ordinal);
         Assert.Equal(new[] { "search", "definition", "references" }, firstTools.Select(tool => tool!["name"]!.GetValue<string>()).ToArray());
 
         var controls = firstResult["_meta"]!["response_controls"]!;
@@ -396,8 +429,28 @@ public partial class McpServerTests
 
         Assert.Equal(3, secondTools.Count);
         Assert.Equal(new[] { "callers", "callees", "symbols" }, secondTools.Select(tool => tool!["name"]!.GetValue<string>()).ToArray());
-        Assert.Equal("6", secondResponse["result"]!["nextCursor"]!.GetValue<string>());
+        Assert.StartsWith("v1.", secondResponse["result"]!["nextCursor"]!.GetValue<string>(), StringComparison.Ordinal);
         Assert.Equal(3, secondResponse["result"]!["_meta"]!["response_controls"]!["tools_offset"]!.GetValue<int>());
+    }
+
+    [Fact]
+    public void ToolsList_LegacyNumericCursorContinuesFullCatalog_Issue5059()
+    {
+        var request = JsonNode.Parse(
+            """{"jsonrpc":"2.0","id":5059,"method":"tools/list","params":{"cursor":"3","limit":3}}""")!;
+
+        var response = _server.HandleMessage(request)!;
+        var result = response["result"]!;
+        var tools = result["tools"]!.AsArray();
+
+        Assert.Equal(new[] { "callers", "callees", "symbols" }, tools.Select(tool => tool!["name"]!.GetValue<string>()).ToArray());
+        Assert.All(tools, tool =>
+        {
+            Assert.NotNull(tool!["outputSchema"]);
+            Assert.NotNull(tool["examples"]);
+        });
+        Assert.Equal("full", result["_meta"]!["size_telemetry"]!["format"]!.GetValue<string>());
+        Assert.Equal("6", result["nextCursor"]!.GetValue<string>());
     }
 
     [Fact]
@@ -445,7 +498,7 @@ public partial class McpServerTests
     [Fact]
     public void ToolsList_EveryDescriptionIncludesLanguageSupportClause()
     {
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"format":"full"}}""")!;
         var response = _server.HandleMessage(request)!;
 
         var tools = response["result"]!["tools"]!.AsArray();
@@ -515,7 +568,7 @@ public partial class McpServerTests
     [Fact]
     public void ToolsList_SearchDescriptionStaysCompact()
     {
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"format":"full"}}""")!;
         var response = _server.HandleMessage(request)!;
 
         var tools = response["result"]!["tools"]!.AsArray();
@@ -569,7 +622,7 @@ public partial class McpServerTests
     [Fact]
     public void ToolsList_NavigationDescriptionsIncludeConcreteExamples()
     {
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"format":"full"}}""")!;
         var response = _server.HandleMessage(request)!;
 
         var tools = response["result"]!["tools"]!.AsArray();
@@ -595,7 +648,7 @@ public partial class McpServerTests
     [Fact]
     public void ToolsList_NavigationDescriptionsExplainWhenAndNextStep()
     {
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"format":"full"}}""")!;
         var response = _server.HandleMessage(request)!;
 
         var tools = response["result"]!["tools"]!.AsArray();
@@ -614,7 +667,7 @@ public partial class McpServerTests
     [Fact]
     public void ToolsList_CommonSchemaDescriptionsGuideDisambiguation()
     {
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"format":"full"}}""")!;
         var response = _server.HandleMessage(request)!;
 
         var tools = response["result"]!["tools"]!.AsArray();
@@ -657,7 +710,7 @@ public partial class McpServerTests
         // not advertise them as valid filter values.
         // callers/callees の handler は metadata kinds (`attribute` / `annotation`) を拒否するため、
         // schema の `kind` description も有効値として列挙しないこと。
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"format":"full"}}""")!;
         var response = _server.HandleMessage(request)!;
 
         var tools = response["result"]!["tools"]!.AsArray();
@@ -677,7 +730,7 @@ public partial class McpServerTests
     public void ToolsList_CallersCalleesAnalyzeSymbolDescriptions_PinSnakeCaseMixedKindFields()
     {
         // MCP structured JSON follows the same snake_case convention as CLI JSON.
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"format":"full"}}""")!;
         var response = _server.HandleMessage(request)!;
 
         var tools = response["result"]!["tools"]!.AsArray();
@@ -697,7 +750,7 @@ public partial class McpServerTests
     [Fact]
     public void ToolsList_ImpactAnalysisDescribesHeuristicFallback()
     {
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"format":"full"}}""")!;
         var response = _server.HandleMessage(request)!;
 
         var tools = response["result"]!["tools"]!.AsArray();
@@ -715,7 +768,7 @@ public partial class McpServerTests
     [Fact]
     public void ToolsList_DepsExposesGeneratedCodeFilter_Issue3544()
     {
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"format":"full"}}""")!;
         var response = _server.HandleMessage(request)!;
 
         var tools = response["result"]!["tools"]!.AsArray();
@@ -830,7 +883,7 @@ public partial class McpServerTests
         var deny = McpToolFilter.Parse(null, "index,backfill_fold,suggest_improvement");
         using var server = new McpServer(_dbPath, ConsoleUi.LoadVersion(), false, deny);
 
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"format":"full"}}""")!;
         var response = server.HandleMessage(request)!;
         var groups = response["result"]!["_meta"]!["capability_groups"]!;
 
@@ -850,7 +903,7 @@ public partial class McpServerTests
     [Fact]
     public void ToolsList_ImpactAnalysisMaxHopsSchemaDocumentsCap()
     {
-        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")!;
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"format":"full"}}""")!;
         var response = _server.HandleMessage(request)!;
 
         var tools = response["result"]!["tools"]!.AsArray();

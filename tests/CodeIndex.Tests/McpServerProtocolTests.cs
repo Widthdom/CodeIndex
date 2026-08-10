@@ -1217,39 +1217,28 @@ public partial class McpServerTests
 
         var instructions = response["result"]!["instructions"]?.GetValue<string>();
         Assert.NotNull(instructions);
-        Assert.Contains("map", instructions!);
-        Assert.Contains("analyze_symbol", instructions);
-        Assert.Contains("search", instructions);
-        Assert.Contains("CodeIndex MCP tools", instructions);
+        Assert.True(Encoding.UTF8.GetByteCount(instructions!) <= McpServer.DefaultInitializeInstructionsByteBudget);
+        Assert.Contains("'map'", instructions);
+        Assert.Contains("'search'", instructions);
+        Assert.Contains("MCP tools", instructions);
         Assert.Contains("grep/find/cat", instructions);
+        Assert.Contains("tools/list", instructions);
+        Assert.Contains("format=full", instructions);
+        Assert.Contains("authoritative invocation schemas", instructions);
+        Assert.Contains("nextCursor unchanged", instructions);
+        Assert.Contains("prompts/list", instructions);
+        Assert.Contains("prompts/get", instructions);
+        Assert.Contains("investigate_before_edit", instructions);
         Assert.Contains("resources/templates/list", instructions);
         Assert.Contains("cdidx://file-path/{path}", instructions);
-        Assert.Contains("resources/list", instructions);
-        Assert.Contains("optional path, lang, includeGenerated, and maxBytes", instructions);
-        Assert.Contains("result.nextCursor", instructions);
-        Assert.Contains("unchanged filters", instructions);
-        Assert.Contains("read_resource", instructions);
+        Assert.Contains("'read_resource'", instructions);
         Assert.Contains("resources/read", instructions);
-        Assert.Contains("startLine/endLine", instructions);
-        Assert.Contains("maxBytes", instructions);
-        Assert.Contains("structuredContent._meta.nextCursor", instructions);
-        Assert.Contains("result._meta.nextCursor", instructions);
         Assert.Contains("whole-file reads", instructions);
-        Assert.Contains("definition", instructions);
-        Assert.Contains("references", instructions);
-        Assert.Contains("callers/callees", instructions);
-        Assert.Contains("excerpt", instructions);
-        // Verify index-first bootstrap guidance / インデックス未作成時の案内を検証
-        Assert.Contains("index", instructions);
-        Assert.Contains("backfill_fold", instructions);
-        Assert.Contains("impact_mode", instructions);
-        Assert.Contains("file_impacts", instructions);
-        Assert.Contains("heuristic file-level dependency hints", instructions);
-        // Verify language list comes from ReferenceExtractor / 言語リストがReferenceExtractorから来ることを検証
-        foreach (var lang in ReferenceExtractor.GetSupportedLanguages())
-        {
-            Assert.Contains(lang, instructions);
-        }
+        Assert.Contains("'definition'", instructions);
+        Assert.Contains("'references'", instructions);
+        Assert.Contains("'callers'", instructions);
+        Assert.Contains("'excerpt'", instructions);
+        Assert.Contains("'index'", instructions);
     }
 
     [Fact]
