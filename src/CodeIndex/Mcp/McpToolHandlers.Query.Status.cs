@@ -438,7 +438,7 @@ public partial class McpServer
         return array;
     }
 
-    private static JsonObject BuildMcpCompactStatusPayload(StatusResult status, IReadOnlyList<McpStatusCheckFailure> failures)
+    private JsonObject BuildMcpCompactStatusPayload(StatusResult status, IReadOnlyList<McpStatusCheckFailure> failures)
     {
         var payload = new JsonObject
         {
@@ -473,7 +473,16 @@ public partial class McpServer
             ["readiness"] = BuildMcpStatusReadiness(status),
         };
         if (status.WorkspaceCheck is not null)
-            payload["workspace_check"] = JsonSerializer.SerializeToNode(status.WorkspaceCheck);
+        {
+            var workspaceCheckJsonOptions = new JsonSerializerOptions(_jsonOptions)
+            {
+                PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+            };
+            var workspaceCheck = JsonSerializer.SerializeToNode(
+                status.WorkspaceCheck,
+                CliJsonSerializerContextFactory.Create(workspaceCheckJsonOptions).IndexFreshnessCheckResult)!.AsObject();
+            payload["workspace_check"] = ProjectionFieldRegistry.ProjectCompactStatusWorkspaceCheck(workspaceCheck);
+        }
         if (status.TrustOverrides is { Count: > 0 })
             payload["trust_overrides"] = JsonSerializer.SerializeToNode(status.TrustOverrides);
         if (status.GitExecutable is not null)
