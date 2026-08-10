@@ -156,6 +156,7 @@ public partial class DbContext : IDisposable
     public const string LastIndexRunDiagnosticCountMetaKey = "last_index_run_diagnostic_count";
     public const string LastIndexRunDiagnosticsTruncatedMetaKey = "last_index_run_diagnostics_truncated";
     public const string LastIndexRunReferenceExtractionCapHitsMetaKey = "last_index_run_reference_extraction_cap_hits_json";
+    public const string LastIndexRunRebuildReclaimMetaKey = "last_index_run_rebuild_reclaim_json";
     public const int LastIndexRunDiagnosticSampleLimit = 50;
     public const string LastFailedIndexRunStatusMetaKey = "last_failed_index_run_status";
     public const string LastFailedIndexRunModeMetaKey = "last_failed_index_run_mode";

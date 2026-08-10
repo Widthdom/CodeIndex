@@ -4769,6 +4769,183 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void RunRebuildReclaimIfRecommended_ReclaimsHighFreelistAndReportsBoundaries_Issue5057()
+    {
+        var dbDir = TestProjectHelper.CreateTempProject("codeindex_rebuild_reclaim");
+        var dbPath = Path.Combine(dbDir, "codeindex.db");
+        var progress = new List<string>();
+        try
+        {
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            db.InitializeSchema();
+            using (var cmd = db.Connection.CreateCommand())
+            {
+                cmd.CommandText = @"
+                    CREATE TABLE rebuild_payload (id INTEGER PRIMARY KEY, payload BLOB);
+                    WITH RECURSIVE n(value) AS (
+                        SELECT 1
+                        UNION ALL
+                        SELECT value + 1 FROM n WHERE value < 256
+                    )
+                    INSERT INTO rebuild_payload (payload)
+                    SELECT randomblob(4096) FROM n;
+                    DELETE FROM rebuild_payload;";
+                cmd.ExecuteNonQuery();
+            }
+            DbContext.MaintenanceProgressForTesting =
+                (operation, phase) => progress.Add($"{operation}:{phase}");
+
+            var result = db.RunRebuildReclaimIfRecommended(CancellationToken.None);
+
+            Assert.Equal("completed", result.State);
+            Assert.Equal("threshold_exceeded", result.Reason);
+            Assert.Equal(2, result.AutoVacuumMode);
+            Assert.NotNull(result.FreelistRatioBefore);
+            Assert.NotNull(result.FreelistThresholdRatio);
+            Assert.True(result.FreelistRatioBefore >= result.FreelistThresholdRatio);
+            Assert.NotNull(result.FreelistRatioAfter);
+            Assert.True(result.FreelistRatioAfter < result.FreelistThresholdRatio);
+            Assert.True(result.PagesReclaimed > 0);
+            Assert.True(result.BytesReclaimed > 0);
+            Assert.True(result.LogicalDatabaseBytesBefore > result.LogicalDatabaseBytesAfter);
+            Assert.Contains("rebuild_reclaim:metrics_before", progress);
+            Assert.Contains("rebuild_reclaim:incremental_vacuum", progress);
+            Assert.Contains("rebuild_reclaim:metrics_after", progress);
+        }
+        finally
+        {
+            DbContext.MaintenanceProgressForTesting = null;
+            SqliteConnection.ClearAllPools();
+            TestProjectHelper.DeleteDirectory(dbDir);
+        }
+    }
+
+    [Fact]
+    public void RunRebuildReclaimIfRecommended_PostReclaimMetricsFailureDoesNotFabricateAfterValues_Issue5057()
+    {
+        var dbDir = TestProjectHelper.CreateTempProject("codeindex_rebuild_reclaim_metrics_failure");
+        var dbPath = Path.Combine(dbDir, "codeindex.db");
+        try
+        {
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            db.InitializeSchema();
+            using (var cmd = db.Connection.CreateCommand())
+            {
+                cmd.CommandText = @"
+                    CREATE TABLE rebuild_metrics_failure_payload (id INTEGER PRIMARY KEY, payload BLOB);
+                    WITH RECURSIVE n(value) AS (
+                        SELECT 1
+                        UNION ALL
+                        SELECT value + 1 FROM n WHERE value < 256
+                    )
+                    INSERT INTO rebuild_metrics_failure_payload (payload)
+                    SELECT randomblob(4096) FROM n;
+                    DELETE FROM rebuild_metrics_failure_payload;";
+                cmd.ExecuteNonQuery();
+            }
+            DbContext.MaintenanceProgressForTesting = (operation, phase) =>
+            {
+                if (operation == "rebuild_reclaim" && phase == "metrics_after")
+                    throw new IOException("injected post-reclaim metrics failure");
+            };
+
+            var result = db.RunRebuildReclaimIfRecommended(CancellationToken.None);
+
+            Assert.Equal("failed", result.State);
+            Assert.Equal("io_error", result.Reason);
+            Assert.NotNull(result.PageCountBefore);
+            Assert.Null(result.PageCountAfter);
+            Assert.Null(result.FreelistCountAfter);
+            Assert.Null(result.FreelistRatioAfter);
+            Assert.Null(result.PagesReclaimed);
+            Assert.Null(result.BytesReclaimed);
+            Assert.Null(result.LogicalDatabaseBytesAfter);
+            Assert.Null(result.DbSizeBytesAfter);
+            using var pageCountCommand = db.Connection.CreateCommand();
+            pageCountCommand.CommandText = "PRAGMA page_count";
+            Assert.True((long)pageCountCommand.ExecuteScalar()! < result.PageCountBefore);
+        }
+        finally
+        {
+            DbContext.MaintenanceProgressForTesting = null;
+            SqliteConnection.ClearAllPools();
+            TestProjectHelper.DeleteDirectory(dbDir);
+        }
+    }
+
+    [Fact]
+    public void RunRebuildReclaimIfRecommended_BelowThresholdDoesNotVacuum_Issue5057()
+    {
+        var dbDir = TestProjectHelper.CreateTempProject("codeindex_rebuild_reclaim_not_needed");
+        var dbPath = Path.Combine(dbDir, "codeindex.db");
+        try
+        {
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            db.InitializeSchema();
+
+            var result = db.RunRebuildReclaimIfRecommended(CancellationToken.None);
+
+            Assert.Equal("not_needed", result.State);
+            Assert.Equal("freelist_below_threshold", result.Reason);
+            Assert.Equal(0, result.PagesReclaimed);
+            Assert.Equal(result.FreelistCountBefore, result.FreelistCountAfter);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            TestProjectHelper.DeleteDirectory(dbDir);
+        }
+    }
+
+    [Fact]
+    public void RunRebuildReclaimIfRecommended_LegacyDatabaseSkipsAutomaticFullVacuum_Issue5057()
+    {
+        var dbDir = TestProjectHelper.CreateTempProject("codeindex_rebuild_reclaim_legacy");
+        var dbPath = Path.Combine(dbDir, "codeindex.db");
+        try
+        {
+            using (var legacyConnection = new SqliteConnection($"Data Source={dbPath};Pooling=False"))
+            {
+                legacyConnection.Open();
+                using var legacyCommand = legacyConnection.CreateCommand();
+                legacyCommand.CommandText = "CREATE TABLE legacy_marker (id INTEGER PRIMARY KEY)";
+                legacyCommand.ExecuteNonQuery();
+            }
+
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            db.InitializeSchema();
+            using (var cmd = db.Connection.CreateCommand())
+            {
+                cmd.CommandText = @"
+                    CREATE TABLE rebuild_legacy_payload (id INTEGER PRIMARY KEY, payload BLOB);
+                    WITH RECURSIVE n(value) AS (
+                        SELECT 1
+                        UNION ALL
+                        SELECT value + 1 FROM n WHERE value < 256
+                    )
+                    INSERT INTO rebuild_legacy_payload (payload)
+                    SELECT randomblob(4096) FROM n;
+                    DELETE FROM rebuild_legacy_payload;";
+                cmd.ExecuteNonQuery();
+            }
+
+            var result = db.RunRebuildReclaimIfRecommended(CancellationToken.None);
+
+            Assert.Equal("skipped", result.State);
+            Assert.Equal("auto_vacuum_not_incremental", result.Reason);
+            Assert.Equal(0, result.AutoVacuumMode);
+            Assert.Equal(result.PageCountBefore, result.PageCountAfter);
+            Assert.Equal(result.FreelistCountBefore, result.FreelistCountAfter);
+            Assert.Equal(0, result.PagesReclaimed);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            TestProjectHelper.DeleteDirectory(dbDir);
+        }
+    }
+
+    [Fact]
     public void RunIncrementalVacuum_CancellationBeforeMetrics_ThrowsOperationCanceled_Issue3811()
     {
         var dbDir = TestProjectHelper.CreateTempProject("codeindex_vacuum_cancel");

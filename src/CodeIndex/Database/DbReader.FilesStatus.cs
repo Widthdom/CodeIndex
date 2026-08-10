@@ -2092,11 +2092,13 @@ public partial class DbReader
         var diagnosticsTruncated = ParseMetaBool(TryGetMetaStringInternal(DbContext.LastIndexRunDiagnosticsTruncatedMetaKey));
         var referenceExtractionCapHits = ParseReferenceExtractionCapHits(
             TryGetMetaStringInternal(DbContext.LastIndexRunReferenceExtractionCapHitsMetaKey));
+        var rebuildReclaim = ParseRebuildReclaim(
+            TryGetMetaStringInternal(DbContext.LastIndexRunRebuildReclaimMetaKey));
         if (mode == null && startedAt == null && durationMs == null && filesScanned == null && filesSkipped == null
             && parseErrors == null && bytesRead == null && bytesReadSkippedFileCount == null && bytesReadIncomplete == null
             && rowsUpserted == null && rowsDeleted == null && peakMemoryMb == null
             && diagnostics == null && diagnosticCount == null && diagnosticsTruncated == null
-            && referenceExtractionCapHits == null)
+            && referenceExtractionCapHits == null && rebuildReclaim == null)
         {
             return null;
         }
@@ -2119,7 +2121,22 @@ public partial class DbReader
             DiagnosticCount = diagnosticCount,
             DiagnosticsTruncated = diagnosticsTruncated,
             ReferenceExtractionCapHits = referenceExtractionCapHits,
+            RebuildReclaim = rebuildReclaim,
         };
+    }
+
+    private static StatusRebuildReclaim? ParseRebuildReclaim(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+            return null;
+        try
+        {
+            return JsonSerializer.Deserialize(json, StatusMetadataJsonContext.Default.StatusRebuildReclaim);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     private static ReferenceExtractionCapHitSummary? ParseReferenceExtractionCapHits(string? json)
