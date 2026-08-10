@@ -257,7 +257,7 @@ public class CiWorkflowTests
     }
 
     [Fact]
-    public void WindowsTestHostSetup_SplitsFastAndTrustedTempAndBatchesDefenderExclusions()
+    public void WindowsTestHostSetup_SplitsTempAndSkipsExclusionsOnlyWhenDefenderIsUnavailable()
     {
         var dotnetWorkflow = RepositoryTestPaths.ReadNormalizedDotnetWorkflow();
         var releaseWorkflow = RepositoryTestPaths.ReadNormalizedReleaseWorkflow();
@@ -297,10 +297,16 @@ public class CiWorkflowTests
             "Protected current-user root for executable plugin, hook, and Git fixtures.",
             "$path = $_.Path.TrimEnd('\\','/')",
             "Group-Object -Property Path",
+            "$defenderService = Get-Service -Name \"WinDefend\" -ErrorAction SilentlyContinue",
+            "if (-not $defenderService -or $defenderService.Status -ne \"Running\")",
+            "$defenderServiceStatus = if ($defenderService) { $defenderService.Status } else { \"unavailable\" }",
+            "Windows Defender service is $defenderServiceStatus; skipping exclusion configuration and verification.",
+            "if ($_.Exception.Message -notmatch \"(?i)0x800106ba\")",
+            "Windows Defender service became unavailable during exclusion configuration; continuing without exclusions.",
             "[string[]]$exclusionPaths = @($exclusions | ForEach-Object { $_.Path })",
             "if ($exclusionPaths.Count -gt 0)",
             "Add-MpPreference -ExclusionPath $exclusionPaths -ErrorAction Stop",
-            "Get-MpPreference",
+            "Get-MpPreference -ErrorAction Stop",
             "if ($prefs.ExclusionPath -notcontains $entry.Path)",
             "Windows Defender exclusion was not applied: $($entry.Path)",
             "Windows Defender exclusion audit:",

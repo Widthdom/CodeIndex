@@ -134,14 +134,30 @@ if ($env:GITHUB_STEP_SUMMARY) {
   }
 }
 
-[string[]]$exclusionPaths = @($exclusions | ForEach-Object { $_.Path })
-if ($exclusionPaths.Count -gt 0) {
-  Add-MpPreference -ExclusionPath $exclusionPaths -ErrorAction Stop
+$defenderService = Get-Service -Name "WinDefend" -ErrorAction SilentlyContinue
+if (-not $defenderService -or $defenderService.Status -ne "Running") {
+  $defenderServiceStatus = if ($defenderService) { $defenderService.Status } else { "unavailable" }
+  Write-Warning "Windows Defender service is $defenderServiceStatus; skipping exclusion configuration and verification."
 }
+else {
+  try {
+    [string[]]$exclusionPaths = @($exclusions | ForEach-Object { $_.Path })
+    if ($exclusionPaths.Count -gt 0) {
+      Add-MpPreference -ExclusionPath $exclusionPaths -ErrorAction Stop
+    }
 
-$prefs = Get-MpPreference
-foreach ($entry in $exclusions) {
-  if ($prefs.ExclusionPath -notcontains $entry.Path) {
-    throw "Windows Defender exclusion was not applied: $($entry.Path)"
+    $prefs = Get-MpPreference -ErrorAction Stop
+    foreach ($entry in $exclusions) {
+      if ($prefs.ExclusionPath -notcontains $entry.Path) {
+        throw "Windows Defender exclusion was not applied: $($entry.Path)"
+      }
+    }
+  }
+  catch {
+    if ($_.Exception.Message -notmatch "(?i)0x800106ba") {
+      throw
+    }
+
+    Write-Warning "Windows Defender service became unavailable during exclusion configuration; continuing without exclusions."
   }
 }

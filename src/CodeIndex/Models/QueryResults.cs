@@ -651,12 +651,55 @@ public class IndexFreshnessCheckResult
     public List<string> UnindexedFiles { get; set; } = [];
     public List<string> UnverifiableFiles { get; set; } = [];
     public List<string> ScanErrors { get; set; } = [];
+    public bool ChangedFilesTruncated => ChangedFilesOmittedCount > 0;
+    public int ChangedFilesPathLimit => WorkspaceCheckPathSamples.PathLimit;
+    public int ChangedFilesOmittedCount => WorkspaceCheckPathSamples.GetOmittedCount(ChangedFileCount, ChangedFiles);
+    public bool MissingFilesTruncated => MissingFilesOmittedCount > 0;
+    public int MissingFilesPathLimit => WorkspaceCheckPathSamples.PathLimit;
+    public int MissingFilesOmittedCount => WorkspaceCheckPathSamples.GetOmittedCount(MissingFileCount, MissingFiles);
+    public bool OutsideSparseConeFilesTruncated => OutsideSparseConeFilesOmittedCount > 0;
+    public int OutsideSparseConeFilesPathLimit => WorkspaceCheckPathSamples.PathLimit;
+    public int OutsideSparseConeFilesOmittedCount => WorkspaceCheckPathSamples.GetOmittedCount(OutsideSparseConeFileCount, OutsideSparseConeFiles);
+    public bool UnindexedFilesTruncated => UnindexedFilesOmittedCount > 0;
+    public int UnindexedFilesPathLimit => WorkspaceCheckPathSamples.PathLimit;
+    public int UnindexedFilesOmittedCount => WorkspaceCheckPathSamples.GetOmittedCount(UnindexedFileCount, UnindexedFiles);
+    public bool UnverifiableFilesTruncated => UnverifiableFilesOmittedCount > 0;
+    public int UnverifiableFilesPathLimit => WorkspaceCheckPathSamples.PathLimit;
+    public int UnverifiableFilesOmittedCount => WorkspaceCheckPathSamples.GetOmittedCount(UnverifiableFileCount, UnverifiableFiles);
+    public bool ScanErrorsTruncated => ScanErrorsOmittedCount > 0;
+    public int ScanErrorsPathLimit => WorkspaceCheckPathSamples.PathLimit;
+    public int ScanErrorsOmittedCount => WorkspaceCheckPathSamples.GetOmittedCount(ScanErrorCount, ScanErrors);
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? IndexedHeadCommit { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? WorkspaceHeadCommit { get; set; }
     public bool HeadChanged { get; set; }
 }
+
+internal static class WorkspaceCheckPathSamples
+{
+    internal const int PathLimit = 20;
+
+    internal static IReadOnlyList<WorkspaceCheckPathSampleDescriptor> Descriptors { get; } =
+    [
+        new("changed_file_count", "changed_files", "changed_files_truncated", "changed_files_path_limit", "changed_files_omitted_count"),
+        new("missing_file_count", "missing_files", "missing_files_truncated", "missing_files_path_limit", "missing_files_omitted_count"),
+        new("outside_sparse_cone_file_count", "outside_sparse_cone_files", "outside_sparse_cone_files_truncated", "outside_sparse_cone_files_path_limit", "outside_sparse_cone_files_omitted_count"),
+        new("unindexed_file_count", "unindexed_files", "unindexed_files_truncated", "unindexed_files_path_limit", "unindexed_files_omitted_count"),
+        new("unverifiable_file_count", "unverifiable_files", "unverifiable_files_truncated", "unverifiable_files_path_limit", "unverifiable_files_omitted_count"),
+        new("scan_error_count", "scan_errors", "scan_errors_truncated", "scan_errors_path_limit", "scan_errors_omitted_count"),
+    ];
+
+    internal static int GetOmittedCount(int authoritativeCount, IReadOnlyCollection<string> samples)
+        => Math.Max(0, authoritativeCount - samples.Count);
+}
+
+internal readonly record struct WorkspaceCheckPathSampleDescriptor(
+    string CountPropertyName,
+    string ListPropertyName,
+    string TruncatedPropertyName,
+    string PathLimitPropertyName,
+    string OmittedCountPropertyName);
 
 public class DefinitionResult : SymbolResult
 {

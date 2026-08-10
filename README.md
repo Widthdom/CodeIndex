@@ -160,6 +160,7 @@ visible here as a compact compatibility index.
 | Readiness and graph trust | `fold_ready`, `fold_ready_reason`, `graph_table_available`, `graph_data_current`, `reference_extraction_limits`, `reference_graph_complete`, `reference_graph_incomplete_reasons`, `reference_extraction_cap_hits`, `index_complete`, `index_incomplete_reasons`, `issues_table_available`, `file_issues_data_current`, `migration_in_progress`, `sql_graph_contract_ready`, `sql_graph_contract_degraded_reason`. |
 | Language readiness | `hotspot_family_ready`, `hotspot_family_degraded_reason`, `language_readiness`, `csharp_symbol_name_ready`, `csharp_metadata_target_ready`, `csharp_metadata_target_degraded_reason`. |
 | Workspace and HEAD freshness | `indexed_head_commit`, `worktree_head_changed`, `indexed_head_sha`, `indexed_head_branch`, `indexed_head_timestamp`, `commits_ahead_of_indexed_head`, `head_freshness`. |
+| Workspace-check path samples | `workspace_check.changed_files`, `workspace_check.missing_files`, `workspace_check.outside_sparse_cone_files`, `workspace_check.unindexed_files`, `workspace_check.unverifiable_files`, and `workspace_check.scan_errors`, each paired with authoritative `*_count`, `*_truncated`, `*_path_limit`, and `*_omitted_count` fields. |
 | Version compatibility | `index_writer_version`, `index_newer_than_reader`, `index_newer_than_reader_reason`. |
 | Extension and extractor diagnostics | `unknown_extension_file_count`, `unknown_extension_files`, `unknown_extension_files_truncated`, `unknown_extension_file_path_limit`, `unknown_extension_extension_counts`, `unknown_extension_category_counts`, `unknown_extension_groups`, `extractors`, `hooks`, `hook_diagnostics`. |
 | Runtime trust and permissions | `trust_overrides`, `git_executable`, `path_case_sensitive`, `data_dir_mode`, `db_file_mode`, `database_permission_policy`, `database_permission_diagnostics`, `mac_profile`, `mac_profile_diagnostics`. |
@@ -175,6 +176,9 @@ Use `cdidx status --explain <field>` for bounded field guidance. Detailed
 semantics, repair-action structure, readiness degradation, SQLite/WAL handling,
 and MCP diagnostics live in the [Developer Guide](DEVELOPER_GUIDE.md#ai-integration);
 the everyday status workflow is in [Check status](USER_GUIDE.md#check-status).
+Selecting one of these lists through `--fields` also retains its count and
+truncation signals. Compact output keeps the signals without the paths, and a
+JSON byte budget may shorten a path sample while increasing its omitted count.
 
 ## Verifying Releases
 
@@ -355,6 +359,7 @@ field group を表に残します。
 | readiness / graph trust | `fold_ready`、`fold_ready_reason`、`graph_table_available`、`graph_data_current`、`reference_extraction_limits`、`reference_graph_complete`、`reference_graph_incomplete_reasons`、`reference_extraction_cap_hits`、`index_complete`、`index_incomplete_reasons`、`issues_table_available`、`file_issues_data_current`、`migration_in_progress`、`sql_graph_contract_ready`、`sql_graph_contract_degraded_reason`。 |
 | language readiness | `hotspot_family_ready`、`hotspot_family_degraded_reason`、`language_readiness`、`csharp_symbol_name_ready`、`csharp_metadata_target_ready`、`csharp_metadata_target_degraded_reason`。 |
 | workspace / HEAD freshness | `indexed_head_commit`、`worktree_head_changed`、`indexed_head_sha`、`indexed_head_branch`、`indexed_head_timestamp`、`commits_ahead_of_indexed_head`、`head_freshness`。 |
+| workspace-check の path sample | `workspace_check.changed_files`、`workspace_check.missing_files`、`workspace_check.outside_sparse_cone_files`、`workspace_check.unindexed_files`、`workspace_check.unverifiable_files`、`workspace_check.scan_errors`。各一覧には authoritative な `*_count`、`*_truncated`、`*_path_limit`、`*_omitted_count` が対応します。 |
 | version compatibility | `index_writer_version`、`index_newer_than_reader`、`index_newer_than_reader_reason`。 |
 | extension / extractor diagnostics | `unknown_extension_file_count`、`unknown_extension_files`、`unknown_extension_files_truncated`、`unknown_extension_file_path_limit`、`unknown_extension_extension_counts`、`unknown_extension_category_counts`、`unknown_extension_groups`、`extractors`、`hooks`、`hook_diagnostics`。 |
 | runtime trust / permissions | `trust_overrides`、`git_executable`、`path_case_sensitive`、`data_dir_mode`、`db_file_mode`、`database_permission_policy`、`database_permission_diagnostics`、`mac_profile`、`mac_profile_diagnostics`。 |
@@ -370,6 +375,9 @@ field group を表に残します。
 repair action、readiness degradation、SQLite/WAL、MCP diagnostic の詳細は
 [開発者ガイド](DEVELOPER_GUIDE.md#ai連携)、日常的な使い方は
 [クイックスタート](USER_GUIDE.md#クイックスタート)を参照してください。
+これらの一覧を `--fields` で選択した場合も count と truncation signal は残ります。
+compact 出力は path を省いて signal を維持し、JSON byte budget で path sample が
+さらに短縮された場合は omitted count が増加します。
 
 ## リリース成果物の検証
 
