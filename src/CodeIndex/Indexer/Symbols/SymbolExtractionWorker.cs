@@ -387,6 +387,138 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
     }
 }
 
+internal sealed class WorkerPatternConfigRootSnapshot(string projectRoot)
+{
+    private readonly HashSet<string> inspectedOrdinal = new(StringComparer.Ordinal);
+    private readonly HashSet<string> inspectedIgnoreCase = new(StringComparer.OrdinalIgnoreCase);
+
+    internal string ProjectRoot { get; } = projectRoot;
+    internal long LastAccessSequence { get; set; }
+    internal int RetainedDirectoryCount => inspectedOrdinal.Count + inspectedIgnoreCase.Count;
+
+    internal bool Contains(string normalizedPatternDirectory, bool ignoreCase)
+        => (ignoreCase ? inspectedIgnoreCase : inspectedOrdinal).Contains(normalizedPatternDirectory);
+
+    internal bool Add(string normalizedPatternDirectory, bool ignoreCase)
+        => (ignoreCase ? inspectedIgnoreCase : inspectedOrdinal).Add(normalizedPatternDirectory);
+}
+
+internal sealed class WorkerPatternConfigDiscoveryCache
+{
+    internal const int DefaultMaxRootSnapshots = ExtractorPluginRegistry.MaxRetainedWorkspaceSnapshots;
+    internal const int DefaultMaxDirectoriesPerRoot = 4096;
+    internal const int DefaultMaxDirectoriesPerWorker = 8192;
+
+    private readonly int maxRootSnapshots;
+    private readonly int maxDirectoriesPerRoot;
+    private readonly int maxDirectoriesPerWorker;
+    private readonly List<WorkerPatternConfigRootSnapshot> roots = [];
+    private long accessSequence;
+
+    internal WorkerPatternConfigDiscoveryCache(
+        int maxRootSnapshots = DefaultMaxRootSnapshots,
+        int maxDirectoriesPerRoot = DefaultMaxDirectoriesPerRoot,
+        int maxDirectoriesPerWorker = DefaultMaxDirectoriesPerWorker)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxRootSnapshots, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxDirectoriesPerRoot, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxDirectoriesPerWorker, 1);
+        this.maxRootSnapshots = maxRootSnapshots;
+        this.maxDirectoriesPerRoot = maxDirectoriesPerRoot;
+        this.maxDirectoriesPerWorker = maxDirectoriesPerWorker;
+    }
+
+    internal int RootCount => roots.Count;
+    internal int RetainedDirectoryCount { get; private set; }
+
+    internal bool TryGetRoot(string projectRoot, out WorkerPatternConfigRootSnapshot snapshot)
+    {
+        var normalizedRoot = PathCasing.NormalizeBoundaryPath(projectRoot);
+        foreach (var candidate in roots)
+        {
+            if (!PathCasing.PathsEqual(candidate.ProjectRoot, normalizedRoot))
+                continue;
+
+            Touch(candidate);
+            snapshot = candidate;
+            return true;
+        }
+
+        snapshot = null!;
+        return false;
+    }
+
+    internal WorkerPatternConfigRootSnapshot AddReloadedRoot(string projectRoot)
+    {
+        var normalizedRoot = PathCasing.NormalizeBoundaryPath(projectRoot);
+        if (TryGetRoot(normalizedRoot, out var existing))
+            return existing;
+
+        if (roots.Count >= maxRootSnapshots)
+        {
+            var evicted = roots.MinBy(candidate => candidate.LastAccessSequence)!;
+            roots.Remove(evicted);
+            RetainedDirectoryCount -= evicted.RetainedDirectoryCount;
+        }
+
+        var snapshot = new WorkerPatternConfigRootSnapshot(normalizedRoot);
+        Touch(snapshot);
+        roots.Add(snapshot);
+        return snapshot;
+    }
+
+    internal bool ShouldInspectPatternDirectory(
+        WorkerPatternConfigRootSnapshot root,
+        string patternDirectory)
+    {
+        var normalizedDirectory = PathCasing.NormalizeBoundaryPath(patternDirectory);
+        var ignoreCase = PathCasing.IsIgnoreCase(GetPatternDirectoryCaseReference(normalizedDirectory));
+        return !root.Contains(normalizedDirectory, ignoreCase);
+    }
+
+    internal void RecordInspectedPatternDirectory(
+        WorkerPatternConfigRootSnapshot root,
+        string patternDirectory)
+    {
+        var normalizedDirectory = PathCasing.NormalizeBoundaryPath(patternDirectory);
+        var ignoreCase = PathCasing.IsIgnoreCase(GetPatternDirectoryCaseReference(normalizedDirectory));
+        if (root.Contains(normalizedDirectory, ignoreCase))
+            return;
+
+        // Retain existing entries when saturated. New directories continue through
+        // uncached discovery so a bounded cache never causes a config to be skipped.
+        if (root.RetainedDirectoryCount >= maxDirectoriesPerRoot
+            || RetainedDirectoryCount >= maxDirectoriesPerWorker)
+        {
+            return;
+        }
+
+        if (root.Add(normalizedDirectory, ignoreCase))
+            RetainedDirectoryCount++;
+    }
+
+    internal void Reset()
+    {
+        roots.Clear();
+        RetainedDirectoryCount = 0;
+        accessSequence = 0;
+    }
+
+    private void Touch(WorkerPatternConfigRootSnapshot root)
+        => root.LastAccessSequence = ++accessSequence;
+
+    private static string GetPatternDirectoryCaseReference(string normalizedPatternDirectory)
+    {
+        // The registry has not performed its reparse-point checks when the cache
+        // predicate runs. Probe the owning source directory, not an untrusted
+        // .cdidx/patterns link target, while retaining the full lexical cache key.
+        var cdidxDirectory = Path.GetDirectoryName(normalizedPatternDirectory);
+        return string.IsNullOrEmpty(cdidxDirectory)
+            ? normalizedPatternDirectory
+            : Path.GetDirectoryName(cdidxDirectory) ?? normalizedPatternDirectory;
+    }
+}
+
 internal static class SymbolExtractionWorker
 {
     internal const string CommandName = "__cdidx-symbol-extraction";
@@ -395,8 +527,8 @@ internal static class SymbolExtractionWorker
     private const string TestDelayMillisecondsOption = "--test-delay-ms";
     private const string TestConsoleStdoutOption = "--test-console-stdout";
     private const int CapturedConsoleMaxChars = 32 * 1024;
-    private static readonly object PatternConfigProjectRootsGate = new();
-    private static readonly List<string> LoadedPatternConfigProjectRoots = [];
+    private static readonly object PatternConfigDiscoveryGate = new();
+    private static WorkerPatternConfigDiscoveryCache patternConfigDiscoveryCache = new();
 
     internal static string FormatExecutionFailure(Exception ex)
         => SafeDiagnosticFormatter.FormatExceptionCategoryWithOrigin("worker_execution_failed", ex);
@@ -404,6 +536,7 @@ internal static class SymbolExtractionWorker
         WorkerProtocolJsonValidator.CreateSerializerOptions(SymbolExtractionWorkerJsonContext.Default.Options);
     internal static int? DelayMillisecondsForTesting { get; set; }
     internal static string? ConsoleStdoutForTesting { get; set; }
+    internal static Func<WorkerPatternConfigDiscoveryCache>? PatternConfigDiscoveryCacheFactoryForTesting { get; set; }
 
     internal static bool TryRunCommand(
         string[] args,
@@ -554,7 +687,7 @@ internal static class SymbolExtractionWorker
             return 2;
         }
 
-        ResetPatternConfigProjectRootsForWorker();
+        ResetPatternConfigDiscoveryForWorker();
         maxProtocolLineCharacters = workerOptions.MaxProtocolLineCharacters;
         maxProtocolLineUtf8Bytes = workerOptions.MaxProtocolLineUtf8Bytes;
 
@@ -724,23 +857,13 @@ internal static class SymbolExtractionWorker
         if (string.IsNullOrWhiteSpace(projectRoot))
             return false;
 
-        var fullRoot = Path.GetFullPath(projectRoot);
-        lock (PatternConfigProjectRootsGate)
+        var fullRoot = PathCasing.NormalizeBoundaryPath(projectRoot);
+        lock (PatternConfigDiscoveryGate)
         {
-            var rootAlreadyLoaded = false;
-            foreach (var loadedRoot in LoadedPatternConfigProjectRoots)
-            {
-                if (PathCasing.PathsEqual(loadedRoot, fullRoot))
-                {
-                    rootAlreadyLoaded = true;
-                    break;
-                }
-            }
-
-            if (!rootAlreadyLoaded)
+            if (!patternConfigDiscoveryCache.TryGetRoot(fullRoot, out var rootSnapshot))
             {
                 ExtractorPluginRegistry.ReloadPatternConfigsForProjectRoot(fullRoot);
-                LoadedPatternConfigProjectRoots.Add(fullRoot);
+                rootSnapshot = patternConfigDiscoveryCache.AddReloadedRoot(fullRoot);
             }
 
             if (!string.IsNullOrWhiteSpace(filePath))
@@ -748,17 +871,29 @@ internal static class SymbolExtractionWorker
                 var fullPath = Path.IsPathRooted(filePath)
                     ? Path.GetFullPath(filePath)
                     : Path.GetFullPath(Path.Combine(fullRoot, filePath));
-                ExtractorPluginRegistry.LoadPatternConfigsForPath(fullPath, fullRoot, includeWorkspaceRoot: false);
+                ExtractorPluginRegistry.LoadPatternConfigsForPath(
+                    fullPath,
+                    fullRoot,
+                    includeWorkspaceRoot: false,
+                    includeUserDirectory: false,
+                    shouldInspectWorkspacePatternDirectory: patternDirectory =>
+                        patternConfigDiscoveryCache.ShouldInspectPatternDirectory(rootSnapshot, patternDirectory),
+                    workspacePatternDirectoryInspected: patternDirectory =>
+                        patternConfigDiscoveryCache.RecordInspectedPatternDirectory(rootSnapshot, patternDirectory));
             }
 
             return true;
         }
     }
 
-    private static void ResetPatternConfigProjectRootsForWorker()
+    private static void ResetPatternConfigDiscoveryForWorker()
     {
-        lock (PatternConfigProjectRootsGate)
-            LoadedPatternConfigProjectRoots.Clear();
+        lock (PatternConfigDiscoveryGate)
+        {
+            patternConfigDiscoveryCache = PatternConfigDiscoveryCacheFactoryForTesting?.Invoke()
+                ?? new WorkerPatternConfigDiscoveryCache();
+            patternConfigDiscoveryCache.Reset();
+        }
     }
 
     private static void AddTestingArguments(ProcessStartInfo startInfo)

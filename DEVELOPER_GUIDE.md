@@ -3636,18 +3636,28 @@ Downstream users can add lightweight language support without rebuilding
 | Sidecar size | 64 KiB per file |
 | Rules per sidecar | 128 |
 | Configured rules | 128 per immutable workspace snapshot |
+| Worker project-root snapshots | 32 per persistent symbol worker |
+| Worker pattern-directory snapshots | 4,096 per root and 8,192 per worker; overflow uses live discovery |
 | Regex match timeout | 100 ms |
 | Timed-out rule cooldown | At most one minute in the owning workspace snapshot |
 
 - Sidecars must be regular files inside non-symlink pattern directories.
 - Each sidecar is parsed, compiled, and checked against `SymbolKindCatalog`
   before its path, rules, or budget are committed.
-- Rejected content is fingerprinted to suppress duplicate diagnostics. Content
-  or metadata changes and recovery from a transient read failure trigger a retry
-  without restarting the process.
+- Rejected content is fingerprinted to suppress duplicate diagnostics. On paths
+  that perform another discovery or explicit refresh, content or metadata changes
+  and recovery from a transient read failure trigger a retry without restarting
+  the process.
 - Workspace discovery requires an explicit trust root and never probes above
   it. Nested sidecars inside that boundary are loaded for the current file by
   the bounded extraction worker.
+- A persistent symbol-worker command treats pattern discovery as a project-root
+  snapshot. Root reload reads user and workspace-root configs once; each nested
+  pattern directory's first result, including missing, unsafe, and known discovery
+  failures, remains fixed for the run. Sidecars added or repaired afterward become
+  visible on the next worker command, while unexpected exceptions remain retryable.
+  A saturated directory cache falls back to uncached discovery and never skips a
+  config merely to preserve the memory bound.
 - Path identity follows the active filesystem's case-sensitivity, so
   case-distinct sidecars remain distinct on case-sensitive volumes.
 - `status --json` reports accepted files in `extractors.pattern_configs[]`,
@@ -6754,16 +6764,25 @@ cleared range を証明するテストが必要です。Bounded accumulation pat
 | sidecar size | 1 file あたり 64 KiB |
 | sidecar 内の rule | 128 件 |
 | configured rule | immutable workspace snapshot ごとに 128 件 |
+| worker の project-root snapshot | persistent symbol worker ごとに 32 件 |
+| worker の pattern-directory snapshot | root ごとに 4,096 件、worker ごとに 8,192 件。超過分は live discovery |
 | regex match timeout | 100 ms |
 | timeout rule の cooldown | 所有する workspace snapshot 内で最大 1 分 |
 
 - sidecar は symlink ではない pattern directory 配下の通常 file に限定します。
 - 各 sidecar は path・rule・budget を commit する前に parse / compile し、
   `SymbolKindCatalog` に対して kind を検証します。
-- 拒否された内容は fingerprint で重複診断を抑制します。内容や metadata の変更、
-  一時的な read failure からの回復後は、process を再起動せず再試行します。
+- 拒否された内容は fingerprint で重複診断を抑制します。再度 discovery または明示的
+  refresh を行う経路では、内容や metadata の変更、一時的な read failure からの回復後に
+  process を再起動せず再試行します。
 - workspace 探索には明示的な trust root が必要で、それより上は探索しません。
   境界内の nested sidecar は対象 file の上限付き extraction worker で読み込みます。
+- persistent symbol-worker command は pattern discovery を project-root snapshot として扱います。
+  root reload は user / workspace-root config を1回だけ読み込み、missing、unsafe、既知の
+  discovery failure を含む各 nested pattern directory の初回結果を run 中は固定します。
+  その後に追加または修復された sidecar は次の worker command で可視になり、想定外例外は
+  引き続き再試行します。directory cache が飽和した場合は uncached discovery に fallback し、
+  memory 上限を守るために config を skip することはありません。
 - path identity は実際の filesystem の case-sensitivity に従うため、case-sensitive
   volume では大小文字だけが異なる sidecar も別々に扱います。
 - `status --json` の `extractors.pattern_configs[]` は、受理済み file の

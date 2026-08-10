@@ -1143,6 +1143,40 @@ public class ExtractorPluginRegistryTests
     }
 
     [Fact]
+    public void LoadPatternConfigsForPath_DefaultCallerDiscoversSidecarAddedAfterEarlierLookup()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_dynamic_pattern_sidecar");
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                var sourceDirectory = Path.Combine(projectRoot, "src", "nested");
+                var filePath = Path.Combine(sourceDirectory, "sample.dynamicpattern");
+                Directory.CreateDirectory(sourceDirectory);
+                ExtractorPluginRegistry.ResetForTests();
+                ExtractorPluginRegistry.UserPatternDirectoryOverrideForTests =
+                    Path.Combine(projectRoot, "missing-user-patterns");
+
+                ExtractorPluginRegistry.LoadPatternConfigsForPath(filePath, projectRoot);
+                Assert.False(ExtractorPluginRegistry.TryGetSymbolExtractor("dynamicpatterndsl", projectRoot, out _));
+
+                WritePatternConfig(
+                    sourceDirectory,
+                    "dynamic.yaml",
+                    "language: \"dynamicpatterndsl\"\nextensions:\n  - extension: \".dynamicpattern\"\npatterns:\n  - kind: \"class\"\n    regex: \"^dynamic (?<name>\\\\w+)\"\n");
+                ExtractorPluginRegistry.LoadPatternConfigsForPath(filePath, projectRoot);
+
+                Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("dynamicpatterndsl", projectRoot, out _));
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
     public void LoadPatternConfigsForProjectRoot_LoadsCaseDistinctFilesWhenFilesystemIsCaseSensitive_Issue4597()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_case_distinct_patterns_4597");

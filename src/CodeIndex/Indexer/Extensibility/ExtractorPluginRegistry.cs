@@ -585,7 +585,10 @@ public static partial class ExtractorPluginRegistry
         bool includeWorkspaceRoot = true,
         Func<string, Stream>? openFile = null,
         Func<string, bool, bool>? directoryExists = null,
-        Action<string, ReadOnlyMemory<byte>?, long?>? observeInput = null)
+        Action<string, ReadOnlyMemory<byte>?, long?>? observeInput = null,
+        bool includeUserDirectory = true,
+        Func<string, bool>? shouldInspectWorkspacePatternDirectory = null,
+        Action<string>? workspacePatternDirectoryInspected = null)
     {
         EnsurePluginsLoaded();
         if (string.IsNullOrWhiteSpace(path) || string.IsNullOrWhiteSpace(workspaceRoot))
@@ -600,25 +603,39 @@ public static partial class ExtractorPluginRegistry
             return;
 
         var state = GetOrCreatePatternWorkspace(fullRoot);
-        foreach (var patternPath in EnumerateUserPatternConfigPaths(
-                     state,
-                     directoryExists,
-                     observeInput))
-            TryLoadPatternConfig(state, patternPath, "user", openFile, observeInput);
+        if (includeUserDirectory)
+        {
+            foreach (var patternPath in EnumerateUserPatternConfigPaths(
+                         state,
+                         directoryExists,
+                         observeInput))
+            {
+                TryLoadPatternConfig(state, patternPath, "user", openFile, observeInput);
+            }
+        }
 
         while (PathCasing.IsFullPathEqualOrParent(fullRoot, directory))
         {
             if (!includeWorkspaceRoot && PathCasing.PathsEqual(directory, fullRoot))
                 break;
 
-            foreach (var patternPath in EnumeratePatternConfigPaths(
-                         state,
-                         directory,
-                         includeUserDirectory: false,
-                         directoryExists,
-                         observeInput))
+            var patternDirectory = Path.Combine(directory, ".cdidx", "patterns");
+            if (shouldInspectWorkspacePatternDirectory?.Invoke(patternDirectory) != false)
             {
-                TryLoadPatternConfig(state, patternPath, "workspace", openFile, observeInput);
+                foreach (var patternPath in EnumeratePatternConfigPaths(
+                             state,
+                             directory,
+                             includeUserDirectory: false,
+                             directoryExists,
+                             observeInput))
+                {
+                    TryLoadPatternConfig(state, patternPath, "workspace", openFile, observeInput);
+                }
+
+                // Complete only after the existing discovery/diagnostic path returns.
+                // Expected missing, unsafe, and enumeration-failure outcomes therefore
+                // become snapshot entries, while unexpected exceptions remain retryable.
+                workspacePatternDirectoryInspected?.Invoke(patternDirectory);
             }
 
             if (PathCasing.PathsEqual(directory, fullRoot))
