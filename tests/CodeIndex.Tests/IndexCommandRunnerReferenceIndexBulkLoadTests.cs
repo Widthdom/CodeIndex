@@ -58,12 +58,15 @@ public partial class IndexCommandRunnerTests
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_reference_index_bulk_load");
         var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
         var previousStateHook = DbWriter.ReferenceSecondaryIndexBulkLoadStateForTesting;
+        var previousStatisticsHook = DbWriter.FreshBulkLoadPlannerStatisticsStateForTesting;
         var previousStatementHook = DbWriter.BatchStatementExecutingForTesting;
         var previousGraphHook = DbWriter.MutualRecursionRefreshForTesting;
         var previousScopeHook = DbWriter.ReferenceGraphRefreshScopeForTesting;
         var previousHotspotHook = DbWriter.HotspotAggregateRefreshStatementExecutingForTesting;
         var snapshots = new ConcurrentQueue<ReferenceIndexStageSnapshot>();
         var scopeSnapshots = new ConcurrentQueue<DbWriter.ReferenceGraphRefreshScopeStats>();
+        var lifecycle = new ConcurrentQueue<string>();
+        var statisticsPhases = new ConcurrentQueue<string>();
         SqliteConnection? activeConnection = null;
         string[]? hotspotIndexNamesDuringRefresh = null;
         ProvisionalReferenceRows? provisionalRowsAtIdentityStart = null;
@@ -82,9 +85,16 @@ public partial class IndexCommandRunnerTests
             {
                 Volatile.Write(ref activeConnection, connection);
                 snapshots.Enqueue(CaptureReferenceIndexSnapshot(phase, connection));
+                lifecycle.Enqueue(phase);
                 if (string.Equals(phase, "identity_started", StringComparison.Ordinal))
                     provisionalRowsAtIdentityStart = CaptureProvisionalReferenceRows(connection);
                 previousStateHook?.Invoke(connection, phase);
+            };
+            DbWriter.FreshBulkLoadPlannerStatisticsStateForTesting = (connection, phase) =>
+            {
+                statisticsPhases.Enqueue(phase);
+                lifecycle.Enqueue(phase);
+                previousStatisticsHook?.Invoke(connection, phase);
             };
             DbWriter.BatchStatementExecutingForTesting = statement =>
             {
@@ -146,6 +156,16 @@ public partial class IndexCommandRunnerTests
                 captured
                     .Where(snapshot => snapshot.Stage != "insert_references")
                     .Select(snapshot => snapshot.Stage));
+            Assert.Equal(
+                rebuild
+                    ? []
+                    : ["post_load_statistics_started", "post_load_statistics_completed"],
+                statisticsPhases);
+            Assert.Equal(
+                rebuild
+                    ? ["dropped", "deferred_graph_prepared", "candidate_deferred", "identity_started", "graph_required_restored", "mutual_started", "readiness_completed", "restored", "full_scan_committed"]
+                    : ["dropped", "deferred_graph_prepared", "candidate_deferred", "post_load_statistics_started", "post_load_statistics_completed", "identity_started", "graph_required_restored", "mutual_started", "readiness_completed", "restored", "full_scan_committed"],
+                lifecycle);
 
             var requiredNames = GetRequiredReferenceIndexNames();
             var initialBulkNames = GetInitialBulkPersistenceReferenceIndexNames();
@@ -202,10 +222,66 @@ public partial class IndexCommandRunnerTests
         finally
         {
             DbWriter.ReferenceSecondaryIndexBulkLoadStateForTesting = previousStateHook;
+            DbWriter.FreshBulkLoadPlannerStatisticsStateForTesting = previousStatisticsHook;
             DbWriter.BatchStatementExecutingForTesting = previousStatementHook;
             DbWriter.MutualRecursionRefreshForTesting = previousGraphHook;
             DbWriter.ReferenceGraphRefreshScopeForTesting = previousScopeHook;
             DbWriter.HotspotAggregateRefreshStatementExecutingForTesting = previousHotspotHook;
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FreshFullScan_DirectGraphRefreshesPostLoadPlannerStatistics()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_reference_index_direct_graph_statistics");
+        var previousStateHook = DbWriter.ReferenceSecondaryIndexBulkLoadStateForTesting;
+        var previousStatisticsHook = DbWriter.FreshBulkLoadPlannerStatisticsStateForTesting;
+        var previousGraphHook = DbWriter.MutualRecursionRefreshForTesting;
+        var previousAugmentationGroupingHook = DbWriter.TypeScriptAugmentationGroupingForTesting;
+        var lifecycle = new ConcurrentQueue<string>();
+        var graphRefreshCount = 0;
+        var augmentationGroupingCount = 0;
+        try
+        {
+            WriteDirectReferenceIndexCycleFixture(projectRoot);
+            DbWriter.ReferenceSecondaryIndexBulkLoadStateForTesting = (connection, phase) =>
+            {
+                lifecycle.Enqueue(phase);
+                previousStateHook?.Invoke(connection, phase);
+            };
+            DbWriter.FreshBulkLoadPlannerStatisticsStateForTesting = (connection, phase) =>
+            {
+                lifecycle.Enqueue(phase);
+                previousStatisticsHook?.Invoke(connection, phase);
+            };
+            DbWriter.MutualRecursionRefreshForTesting = () =>
+            {
+                Interlocked.Increment(ref graphRefreshCount);
+                previousGraphHook?.Invoke();
+            };
+            DbWriter.TypeScriptAugmentationGroupingForTesting = stats =>
+            {
+                Interlocked.Increment(ref augmentationGroupingCount);
+                previousAugmentationGroupingHook?.Invoke(stats);
+            };
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json", "--quiet"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(1, graphRefreshCount);
+            Assert.Equal(0, augmentationGroupingCount);
+            Assert.Equal(
+                ["dropped", "candidate_deferred", "post_load_statistics_started", "post_load_statistics_completed", "identity_started", "graph_required_restored", "mutual_started", "restored"],
+                lifecycle);
+        }
+        finally
+        {
+            DbWriter.ReferenceSecondaryIndexBulkLoadStateForTesting = previousStateHook;
+            DbWriter.FreshBulkLoadPlannerStatisticsStateForTesting = previousStatisticsHook;
+            DbWriter.MutualRecursionRefreshForTesting = previousGraphHook;
+            DbWriter.TypeScriptAugmentationGroupingForTesting = previousAugmentationGroupingHook;
             DeleteDirectory(projectRoot);
         }
     }
@@ -889,12 +965,7 @@ public partial class IndexCommandRunnerTests
 
     private static void WriteReferenceIndexCycleFixture(string projectRoot)
     {
-        File.WriteAllText(
-            Path.Combine(projectRoot, "cycle_a.cs"),
-            "public static class BulkCycleA { public static void CallA() { CallB(); } }\n");
-        File.WriteAllText(
-            Path.Combine(projectRoot, "cycle_b.cs"),
-            "public static class BulkCycleB { public static void CallB() { CallA(); } }\n");
+        WriteDirectReferenceIndexCycleFixture(projectRoot);
         for (var index = 0;
              index < IndexCommandRunner.UpdateReferenceSecondaryIndexBulkLoadMinimumTargetCount;
              index++)
@@ -904,6 +975,16 @@ public partial class IndexCommandRunnerTests
                 $"export function bulkTarget{index:D2}(): number {{ return {index}; }}\n"
                 + $"export function bulkCaller{index:D2}(): number {{ return bulkTarget{index:D2}(); }}\n");
         }
+    }
+
+    private static void WriteDirectReferenceIndexCycleFixture(string projectRoot)
+    {
+        File.WriteAllText(
+            Path.Combine(projectRoot, "cycle_a.cs"),
+            "public static class BulkCycleA { public static void CallA() { CallB(); } }\n");
+        File.WriteAllText(
+            Path.Combine(projectRoot, "cycle_b.cs"),
+            "public static class BulkCycleB { public static void CallB() { CallA(); } }\n");
     }
 
     private static string[] WriteHighCardinalityTypeScriptReferenceFixture(string projectRoot)

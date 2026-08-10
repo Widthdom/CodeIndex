@@ -868,7 +868,9 @@ public static partial class IndexCommandRunner
             ReferenceSecondaryIndexBulkLoadGuard.StartTransactional(
                 writer,
                 enabled: !options.SymbolsOnly && useFtsBulkLoad,
-                cancellationToken);
+                cancellationToken,
+                refreshPlannerStatisticsBeforeCandidatePopulation:
+                    useFreshReferenceResolutionDefaults);
         using var ftsBulkLoad = FtsBulkLoadTriggerGuard.Start(writer, useFtsBulkLoad);
 
         if (staleFilePurgePlan.Count > 0)

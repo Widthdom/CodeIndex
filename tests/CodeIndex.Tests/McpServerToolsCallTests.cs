@@ -7743,9 +7743,12 @@ public partial class McpServerTests
         var previousRefreshHook = DbWriter.MutualRecursionRefreshForTesting;
         var previousReferenceIndexHook =
             DbWriter.ReferenceSecondaryIndexBulkLoadStateForTesting;
+        var previousStatisticsHook =
+            DbWriter.FreshBulkLoadPlannerStatisticsStateForTesting;
         var previousHotspotRefreshHook =
             DbWriter.HotspotAggregateRefreshStatementExecutingForTesting;
         var referenceIndexStates = new List<(string Phase, string[] PresentIndexNames)>();
+        var statisticsPhases = new List<string>();
         var hotspotIndexStates = new List<string[]>();
         var lifecycle = new List<string>();
         SqliteConnection? writerConnection = null;
@@ -7818,6 +7821,12 @@ public partial class McpServerTests
                     ReadPresentIndexes(connection, canonicalReferenceIndexNames)));
                 previousReferenceIndexHook?.Invoke(connection, phase);
             };
+            DbWriter.FreshBulkLoadPlannerStatisticsStateForTesting = (connection, phase) =>
+            {
+                lifecycle.Add(phase);
+                statisticsPhases.Add(phase);
+                previousStatisticsHook?.Invoke(connection, phase);
+            };
             McpServer.McpIndexTypeScriptAugmentationRebuildForTesting = () =>
             {
                 augmentationRebuildCount++;
@@ -7869,6 +7878,8 @@ public partial class McpServerTests
                     "typescript_augmentation",
                     "graph_refresh",
                     "candidate_deferred",
+                    "post_load_statistics_started",
+                    "post_load_statistics_completed",
                     "identity_started",
                     "graph_required_restored",
                     "mutual_started",
@@ -7877,6 +7888,9 @@ public partial class McpServerTests
                     "hotspot_refresh",
                 },
                 lifecycle);
+            Assert.Equal(
+                ["post_load_statistics_started", "post_load_statistics_completed"],
+                statisticsPhases);
 
             Assert.Equal(
                 new[]
@@ -7933,6 +7947,8 @@ public partial class McpServerTests
             DbWriter.MutualRecursionRefreshForTesting = previousRefreshHook;
             DbWriter.ReferenceSecondaryIndexBulkLoadStateForTesting =
                 previousReferenceIndexHook;
+            DbWriter.FreshBulkLoadPlannerStatisticsStateForTesting =
+                previousStatisticsHook;
             DbWriter.HotspotAggregateRefreshStatementExecutingForTesting =
                 previousHotspotRefreshHook;
             TestProjectHelper.DeleteDirectory(fixtureDir);

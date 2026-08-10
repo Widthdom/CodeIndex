@@ -1,3 +1,5 @@
+using Microsoft.Data.Sqlite;
+
 namespace CodeIndex.Database;
 
 /// <summary>
@@ -8,14 +10,19 @@ namespace CodeIndex.Database;
 internal sealed class ReferenceSecondaryIndexBulkLoadGuard : IDisposable
 {
     private readonly bool _restoreOnDispose;
+    private readonly bool _refreshPlannerStatisticsBeforeCandidatePopulation;
     private DbWriter? _writer;
+    private bool _plannerStatisticsRefreshAttempted;
 
     private ReferenceSecondaryIndexBulkLoadGuard(
         DbWriter writer,
         bool restoreOnDispose,
+        bool refreshPlannerStatisticsBeforeCandidatePopulation,
         CancellationToken cancellationToken)
     {
         _restoreOnDispose = restoreOnDispose;
+        _refreshPlannerStatisticsBeforeCandidatePopulation =
+            refreshPlannerStatisticsBeforeCandidatePopulation;
         try
         {
             // Scoped graph planning names deferred indexes explicitly. Force the active
@@ -75,7 +82,8 @@ internal sealed class ReferenceSecondaryIndexBulkLoadGuard : IDisposable
     internal static ReferenceSecondaryIndexBulkLoadGuard? StartTransactional(
         DbWriter writer,
         bool enabled,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool refreshPlannerStatisticsBeforeCandidatePopulation = false)
     {
         if (!enabled)
             return null;
@@ -84,17 +92,20 @@ internal sealed class ReferenceSecondaryIndexBulkLoadGuard : IDisposable
         return new ReferenceSecondaryIndexBulkLoadGuard(
             writer,
             restoreOnDispose: false,
+            refreshPlannerStatisticsBeforeCandidatePopulation,
             cancellationToken);
     }
 
     internal static ReferenceSecondaryIndexBulkLoadGuard? StartRecoverable(
         DbWriter writer,
         bool enabled,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool refreshPlannerStatisticsBeforeCandidatePopulation = false)
         => enabled
             ? new ReferenceSecondaryIndexBulkLoadGuard(
                 writer,
                 restoreOnDispose: true,
+                refreshPlannerStatisticsBeforeCandidatePopulation,
                 cancellationToken)
             : null;
 
@@ -118,7 +129,19 @@ internal sealed class ReferenceSecondaryIndexBulkLoadGuard : IDisposable
     /// graph更新がcandidate rowを実際に再構築する直前だけ逆引きindexをdropする。
     /// </summary>
     internal void PrepareForCandidatePopulation(CancellationToken cancellationToken = default)
-        => _writer?.DropCandidatePopulationReferenceSecondaryIndexes(cancellationToken);
+    {
+        var writer = _writer;
+        if (writer == null)
+            return;
+
+        writer.DropCandidatePopulationReferenceSecondaryIndexes(cancellationToken);
+        if (!_refreshPlannerStatisticsBeforeCandidatePopulation
+            || _plannerStatisticsRefreshAttempted)
+            return;
+
+        _plannerStatisticsRefreshAttempted = true;
+        writer.RefreshFreshBulkLoadPlannerStatistics(cancellationToken);
+    }
 
     internal void PrepareForMutualRecursion(CancellationToken cancellationToken = default)
         => _writer?.RestoreGraphFinalizationRequiredReferenceSecondaryIndexes(cancellationToken);
@@ -160,6 +183,12 @@ internal sealed class ReferenceSecondaryIndexBulkLoadGuard : IDisposable
 
 public partial class DbWriter
 {
+    private const string RefreshFreshBulkLoadPlannerStatisticsSql = """
+        ANALYZE main.files;
+        ANALYZE main.symbols;
+        ANALYZE main.symbol_references;
+        """;
+
     internal void DropDeferredReferenceSecondaryIndexes(CancellationToken cancellationToken)
     {
         // Old binaries may have recreated retired indexes after a database was pruned by a
@@ -240,6 +269,44 @@ public partial class DbWriter
 
     internal void ReportReferenceSecondaryIndexBulkLoadState(string phase)
         => ReferenceSecondaryIndexBulkLoadStateForTesting?.Invoke(_conn, phase);
+
+    internal void RefreshFreshBulkLoadPlannerStatistics(
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        try
+        {
+            using var transaction = BeginTransaction(
+                cancellationToken,
+                "refresh fresh bulk-load planner statistics");
+            try
+            {
+                FreshBulkLoadPlannerStatisticsStateForTesting?.Invoke(
+                    _conn,
+                    "post_load_statistics_started");
+                Execute(RefreshFreshBulkLoadPlannerStatisticsSql, cancellationToken);
+                FreshBulkLoadPlannerStatisticsStateForTesting?.Invoke(
+                    _conn,
+                    "post_load_statistics_completed");
+                transaction.Commit();
+            }
+            catch
+            {
+                transaction.Rollback();
+                throw;
+            }
+        }
+        catch (SqliteException)
+        {
+            // Fresh statistics improve only this graph plan. If SQLite rejects ANALYZE,
+            // keep the enclosing bulk load alive with the prior planner state.
+            // fresh statisticsは今回のgraph planだけを改善するため、SQLiteがANALYZEを
+            // 拒否した場合はsavepointを戻し、従来のplanner stateでbulk loadを続行する。
+            FreshBulkLoadPlannerStatisticsStateForTesting?.Invoke(
+                _conn,
+                "post_load_statistics_failed");
+        }
+    }
 
     internal void RequireCallerOwnedTransactionForReferenceSecondaryIndexBulkLoad()
         => RequireCallerOwnedTransaction(nameof(ReferenceSecondaryIndexBulkLoadGuard));

@@ -1273,6 +1273,8 @@ Operators can override the defaults with environment variables:
 
 After a successful `cdidx index` run, the writer refreshes SQLite planner statistics so large repositories do not rely on default selectivity estimates for `search`, `references`, `callers`, and related joins. A brand-new index database runs full `ANALYZE` once after the initial population; later successful index runs use SQLite's lighter `PRAGMA optimize`. This maintenance is best-effort and never changes the schema contract.
 
+Truly empty-database bulk loads also perform a separate, targeted planner-statistics refresh immediately before reference-candidate population. An enabled reference-secondary-index bulk-load guard runs `ANALYZE main.files`, `ANALYZE main.symbols`, and `ANALYZE main.symbol_references` exactly once after dropping the candidate reverse index and before preparing the identity-resolution SQL; the TypeScript-deferred path has already restored its ordinary graph/query indexes at this point, while the direct graph path proceeds without that extra restoration phase. The CLI enables this only when it started with no indexed files and is neither rebuilding nor symbols-only; MCP captures the same pre-rebuild empty state explicitly. Existing-database runs, updates, rebuilds, symbols-only runs, and disabled guards retain the prior behavior. Cancellation aborts the indexing operation, while a non-cancellation SQLite failure rolls back the nested statistics savepoint and continues graph construction with the previous planner state. This pre-graph phase has a dedicated testing hook and is independent of final planner maintenance.
+
 ### MCP request correlation
 
 Each JSON-RPC MCP request gets a server-generated `correlation_id` in addition to the client-controlled JSON-RPC `id`. Successful MCP responses include it under `result._meta.correlation_id`, and error responses include it in `error.data.correlation_id` or tool-error `result.structuredContent.correlation_id`. The serialized JSON-RPC id is echoed as `request_id` in the same metadata when one exists. `batch_query` assigns child correlation IDs to each slot by suffixing the parent value with `.1`, `.2`, and so on.
@@ -4944,6 +4946,8 @@ operator は environment variable で既定値を上書きできる。
 | `CDIDX_PREPARED_COMMAND_CACHE_CAPACITY` | `64` | connection ごとの prepared SQLite command cache capacity。正の整数、上限 `512`。invalid / oversized value は既定値に戻る。 |
 
 `cdidx index` が成功すると、writer は SQLite planner statistics を更新し、大規模 repository で `search`、`references`、`callers` などの join が default selectivity estimate に依存しないようにする。新規 index database は初回 population 後に full `ANALYZE` を一度実行し、それ以降の成功した index run では軽量な `PRAGMA optimize` を使う。この maintenance は best-effort であり、schema contract は変更しない。
+
+真に空の database からの bulk load では、reference candidate の構築直前にも独立した対象限定の planner-statistics refresh を実行する。有効な reference-secondary-index bulk-load guard は candidate reverse index の drop 後、identity-resolution SQL の prepare 前に `ANALYZE main.files`、`ANALYZE main.symbols`、`ANALYZE main.symbol_references` を正確に1回実行する。TypeScript に委譲する経路ではこの時点までに通常の graph / query index が復元済みであり、direct graph 経路では追加の復元 phase を挟まずに進む。CLI は indexed file が0件の状態から開始し、rebuild でも symbols-only でもない場合だけ有効化する。MCP も rebuild 前の空状態を明示的に保持して同じ条件を適用する。既存 database、update、rebuild、symbols-only、guard 無効時は従来どおりである。cancellation は indexing 全体へ伝播し、cancellation 以外の SQLite failure は nested statistics savepoint だけを rollback して、従来の planner state で graph 構築を続ける。この pre-graph phase は専用 testing hook を持ち、最終 planner maintenance とは独立している。
 
 ### MCP リクエスト相関
 

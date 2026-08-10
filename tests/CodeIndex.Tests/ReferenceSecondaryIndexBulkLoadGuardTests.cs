@@ -296,6 +296,262 @@ public sealed class ReferenceSecondaryIndexBulkLoadGuardTests : IDisposable
     }
 
     [Fact]
+    public void FreshPlannerStatistics_RunOnceAfterCandidateDropAndAnalyzeOnlyGraphTables()
+    {
+        SeedPlannerStatisticsFixture();
+        ResetPlannerStatistics();
+        var previousBulkStateHook = DbWriter.ReferenceSecondaryIndexBulkLoadStateForTesting;
+        var previousStatisticsHook = DbWriter.FreshBulkLoadPlannerStatisticsStateForTesting;
+        var previousFinalMaintenanceHook = DbContext.PlannerStatisticsCommandCreatedForTesting;
+        var lifecycle = new List<string>();
+        string[]? tablesBeforeAnalyze = null;
+        string[]? tablesAfterAnalyze = null;
+        string[]? indexesBeforeAnalyze = null;
+        string[]? indexesAfterAnalyze = null;
+        var finalMaintenanceHookCalls = 0;
+        try
+        {
+            DbWriter.ReferenceSecondaryIndexBulkLoadStateForTesting = (connection, phase) =>
+            {
+                lifecycle.Add(phase);
+                previousBulkStateHook?.Invoke(connection, phase);
+            };
+            DbWriter.FreshBulkLoadPlannerStatisticsStateForTesting = (connection, phase) =>
+            {
+                lifecycle.Add(phase);
+                if (phase == "post_load_statistics_started")
+                {
+                    tablesBeforeAnalyze = ReadPlannerStatisticTables(connection);
+                    indexesBeforeAnalyze = ReadPlannerStatisticIndexes(connection);
+                    Assert.DoesNotContain(
+                        "idx_symbol_ref_candidates_symbol",
+                        ReadReferenceIndexNames(connection));
+                }
+                else if (phase == "post_load_statistics_completed")
+                {
+                    tablesAfterAnalyze = ReadPlannerStatisticTables(connection);
+                    indexesAfterAnalyze = ReadPlannerStatisticIndexes(connection);
+                }
+                previousStatisticsHook?.Invoke(connection, phase);
+            };
+            DbContext.PlannerStatisticsCommandCreatedForTesting = command =>
+            {
+                finalMaintenanceHookCalls++;
+                previousFinalMaintenanceHook?.Invoke(command);
+            };
+
+            using var transaction = _writer.BeginTransaction();
+            using var guard = ReferenceSecondaryIndexBulkLoadGuard.StartTransactional(
+                _writer,
+                enabled: true,
+                refreshPlannerStatisticsBeforeCandidatePopulation: true);
+            Assert.NotNull(guard);
+
+            guard.PrepareForDeferredGraphRefresh();
+            guard.PrepareForCandidatePopulation();
+            guard.PrepareForCandidatePopulation();
+            guard.ReportIdentityRefreshStarted();
+            guard.Complete();
+            transaction.Commit();
+
+            Assert.Equal(
+                [
+                    "dropped",
+                    "deferred_graph_prepared",
+                    "candidate_deferred",
+                    "post_load_statistics_started",
+                    "post_load_statistics_completed",
+                    "candidate_deferred",
+                    "identity_started",
+                    "restored",
+                ],
+                lifecycle);
+            Assert.Empty(Assert.IsType<string[]>(tablesBeforeAnalyze));
+            Assert.Empty(Assert.IsType<string[]>(indexesBeforeAnalyze));
+            Assert.Equal(
+                ["files", "symbol_references", "symbols"],
+                Assert.IsType<string[]>(tablesAfterAnalyze));
+            var analyzedIndexes = Assert.IsType<string[]>(indexesAfterAnalyze);
+            Assert.All(
+                ReferenceSecondaryIndexSql.DeferredGraphPreparation,
+                definition => Assert.Contains(definition.Name, analyzedIndexes));
+            Assert.DoesNotContain("idx_symbol_ref_candidates_symbol", analyzedIndexes);
+            Assert.DoesNotContain("symbol_reference_candidates", tablesAfterAnalyze);
+            Assert.Equal(0, finalMaintenanceHookCalls);
+        }
+        finally
+        {
+            DbWriter.ReferenceSecondaryIndexBulkLoadStateForTesting = previousBulkStateHook;
+            DbWriter.FreshBulkLoadPlannerStatisticsStateForTesting = previousStatisticsHook;
+            DbContext.PlannerStatisticsCommandCreatedForTesting = previousFinalMaintenanceHook;
+        }
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    public void FreshPlannerStatistics_DisabledGuardOrFlagLeavesStatisticsUntouched(
+        bool guardEnabled,
+        bool statisticsEnabled)
+    {
+        SeedPlannerStatisticsFixture();
+        ResetPlannerStatistics();
+        var previousStatisticsHook = DbWriter.FreshBulkLoadPlannerStatisticsStateForTesting;
+        var phases = new List<string>();
+        try
+        {
+            DbWriter.FreshBulkLoadPlannerStatisticsStateForTesting = (connection, phase) =>
+            {
+                phases.Add(phase);
+                previousStatisticsHook?.Invoke(connection, phase);
+            };
+
+            using var transaction = _writer.BeginTransaction();
+            using var guard = ReferenceSecondaryIndexBulkLoadGuard.StartTransactional(
+                _writer,
+                guardEnabled,
+                refreshPlannerStatisticsBeforeCandidatePopulation: statisticsEnabled);
+            if (guard != null)
+            {
+                guard.PrepareForDeferredGraphRefresh();
+                guard.PrepareForCandidatePopulation();
+                guard.Complete();
+            }
+            transaction.Commit();
+
+            Assert.Empty(phases);
+            Assert.Empty(ReadPlannerStatisticTables(_db.Connection));
+        }
+        finally
+        {
+            DbWriter.FreshBulkLoadPlannerStatisticsStateForTesting = previousStatisticsHook;
+        }
+    }
+
+    [Fact]
+    public void FreshPlannerStatistics_OuterRollbackRemovesAnalyzeResults()
+    {
+        SeedPlannerStatisticsFixture();
+        ResetPlannerStatistics();
+
+        using (var transaction = _writer.BeginTransaction())
+        {
+            using var guard = ReferenceSecondaryIndexBulkLoadGuard.StartTransactional(
+                _writer,
+                enabled: true,
+                refreshPlannerStatisticsBeforeCandidatePopulation: true);
+            Assert.NotNull(guard);
+
+            guard.PrepareForDeferredGraphRefresh();
+            guard.PrepareForCandidatePopulation();
+
+            Assert.Equal(
+                ["files", "symbol_references", "symbols"],
+                ReadPlannerStatisticTables(_db.Connection));
+        }
+
+        Assert.Empty(ReadPlannerStatisticTables(_db.Connection));
+        AssertDeferredIndexesPresent(_db.Connection);
+    }
+
+    [Fact]
+    public void FreshPlannerStatistics_NonCancellationSqliteFailureRollsBackAndGraphContinues()
+    {
+        SeedPlannerStatisticsFixture();
+        ResetPlannerStatistics();
+        var previousStatisticsHook = DbWriter.FreshBulkLoadPlannerStatisticsStateForTesting;
+        var phases = new List<string>();
+        try
+        {
+            DbWriter.FreshBulkLoadPlannerStatisticsStateForTesting = (connection, phase) =>
+            {
+                phases.Add(phase);
+                if (phase == "post_load_statistics_started")
+                {
+                    ExecuteNonQuery(connection, """
+                        INSERT INTO codeindex_meta(key, value)
+                        VALUES ('fresh_statistics_savepoint_probe', 'pending');
+                        ANALYZE main.files;
+                        """);
+                    throw new SqliteException("forced fresh statistics failure", 1);
+                }
+                previousStatisticsHook?.Invoke(connection, phase);
+            };
+
+            using var guard = ReferenceSecondaryIndexBulkLoadGuard.StartRecoverable(
+                _writer,
+                enabled: true,
+                refreshPlannerStatisticsBeforeCandidatePopulation: true);
+            Assert.NotNull(guard);
+            guard.PrepareForDeferredGraphRefresh();
+
+            _writer.RefreshMutualRecursionFlags(
+                stampReferenceIdentityContractReady: false,
+                referenceSecondaryIndexBulkLoad: guard);
+
+            Assert.Equal(
+                ["post_load_statistics_started", "post_load_statistics_failed"],
+                phases);
+            Assert.Equal(
+                0,
+                ReadScalarLong(
+                    _db.Connection,
+                    "SELECT COUNT(*) FROM codeindex_meta WHERE key = 'fresh_statistics_savepoint_probe'"));
+            Assert.Empty(ReadPlannerStatisticTables(_db.Connection));
+            Assert.Equal(
+                1,
+                ReadScalarLong(
+                    _db.Connection,
+                    "SELECT COUNT(*) FROM symbol_references WHERE resolution_state IS NOT NULL"));
+            guard.Complete();
+        }
+        finally
+        {
+            DbWriter.FreshBulkLoadPlannerStatisticsStateForTesting = previousStatisticsHook;
+        }
+    }
+
+    [Fact]
+    public void FreshPlannerStatistics_CancellationPropagatesAndRollsBackSavepoint()
+    {
+        SeedPlannerStatisticsFixture();
+        ResetPlannerStatistics();
+        var previousStatisticsHook = DbWriter.FreshBulkLoadPlannerStatisticsStateForTesting;
+        using var cancellation = new CancellationTokenSource();
+        var phases = new List<string>();
+        try
+        {
+            DbWriter.FreshBulkLoadPlannerStatisticsStateForTesting = (connection, phase) =>
+            {
+                phases.Add(phase);
+                if (phase == "post_load_statistics_started")
+                    cancellation.Cancel();
+                previousStatisticsHook?.Invoke(connection, phase);
+            };
+
+            using var transaction = _writer.BeginTransaction();
+            using var guard = ReferenceSecondaryIndexBulkLoadGuard.StartTransactional(
+                _writer,
+                enabled: true,
+                refreshPlannerStatisticsBeforeCandidatePopulation: true);
+            Assert.NotNull(guard);
+            guard.PrepareForDeferredGraphRefresh();
+
+            var exception = Assert.Throws<OperationCanceledException>(
+                () => guard.PrepareForCandidatePopulation(cancellation.Token));
+
+            Assert.Equal(cancellation.Token, exception.CancellationToken);
+            Assert.Equal(["post_load_statistics_started"], phases);
+            Assert.Empty(ReadPlannerStatisticTables(_db.Connection));
+        }
+        finally
+        {
+            DbWriter.FreshBulkLoadPlannerStatisticsStateForTesting = previousStatisticsHook;
+        }
+    }
+
+    [Fact]
     public void StagedRefresh_PreservesMutualChangesCountAcrossRemainingIndexRestore()
     {
         var fileId = _writer.UpsertFile(new FileRecord
@@ -437,6 +693,91 @@ public sealed class ReferenceSecondaryIndexBulkLoadGuardTests : IDisposable
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT changes()";
         return (long)command.ExecuteScalar()!;
+    }
+
+    private void SeedPlannerStatisticsFixture()
+    {
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/fresh-statistics.cs",
+            Lang = "csharp",
+            Size = 100,
+            Lines = 3,
+            Modified = new DateTime(2026, 8, 11, 0, 0, 0, DateTimeKind.Utc),
+            Checksum = "fresh-statistics",
+        });
+        _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "Run",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 3,
+            },
+        ]);
+        _writer.InsertReferences(
+        [
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "Run",
+                ReferenceKind = "call",
+                Line = 2,
+                Column = 1,
+                Context = "Run();",
+                ContainerName = "Run",
+            },
+        ],
+        refreshMutualRecursionFlags: false);
+    }
+
+    private void ResetPlannerStatistics()
+    {
+        ExecuteNonQuery(_db.Connection, """
+            ANALYZE main.files;
+            ANALYZE main.symbols;
+            ANALYZE main.symbol_references;
+            DELETE FROM sqlite_stat1;
+            """);
+    }
+
+    private static string[] ReadPlannerStatisticTables(SqliteConnection connection)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT DISTINCT tbl FROM sqlite_stat1 ORDER BY tbl";
+        using var reader = command.ExecuteReader();
+        var tables = new List<string>();
+        while (reader.Read())
+            tables.Add(reader.GetString(0));
+        return tables.ToArray();
+    }
+
+    private static string[] ReadPlannerStatisticIndexes(SqliteConnection connection)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT idx FROM sqlite_stat1 WHERE idx IS NOT NULL ORDER BY idx";
+        using var reader = command.ExecuteReader();
+        var indexes = new List<string>();
+        while (reader.Read())
+            indexes.Add(reader.GetString(0));
+        return indexes.ToArray();
+    }
+
+    private static long ReadScalarLong(SqliteConnection connection, string sql)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        return Convert.ToInt64(command.ExecuteScalar());
+    }
+
+    private static void ExecuteNonQuery(SqliteConnection connection, string sql)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        command.ExecuteNonQuery();
     }
 
     private static void AssertRetiredIndexesAbsent(SqliteConnection connection)

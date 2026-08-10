@@ -6,9 +6,13 @@ affected:
   - src/CodeIndex/Database/DbWriter.References.cs
   - src/CodeIndex/Database/DbWriter.ReferenceSql.cs
   - src/CodeIndex/Database/DbWriter.ReferenceGraphRefreshScope.cs
+  - src/CodeIndex/Database/ReferenceSecondaryIndexBulkLoadGuard.cs
   - src/CodeIndex/Indexer/CSharpStaticInterfacePrepass.cs
+  - src/CodeIndex/Mcp/McpToolHandlers.Indexing.Execution.cs
   - tests/CodeIndex.Tests/FreshReferenceResolutionTests.cs
   - tests/CodeIndex.Tests/IndexCommandRunnerReferenceIndexBulkLoadTests.cs
+  - tests/CodeIndex.Tests/McpServerToolsCallTests.cs
+  - tests/CodeIndex.Tests/ReferenceSecondaryIndexBulkLoadGuardTests.cs
   - DEVELOPER_GUIDE.md
   - TESTING_GUIDE.md
 ---
@@ -19,6 +23,7 @@ affected:
 - **Fresh and rebuilt indexes skip unused incremental graph bookkeeping** — once a full reference-graph refresh is known, symbol and reference batches no longer populate dirty-scope tables that the full plan never reads, removing repeated set construction across all indexed languages.
 - **Initial C# workspace prepasses reuse the loaded extractor configuration** — CLI and MCP indexing no longer rediscover default plugins under a shared lock for every static/enum/const candidate after the workspace pattern snapshot has already been loaded.
 - **First-time full indexes resolve only references that have candidates** — empty-database CLI scans persist canonical unresolved defaults during bulk insertion, aggregate the candidate table once, and update candidate-bearing references by primary key instead of probing every reference row. Rebuilds, updates, retained graphs, and MCP indexing keep their existing recovery contracts.
+- **Fresh graph planning uses post-load cardinalities** — truly empty CLI and MCP bulk loads now analyze the populated file, symbol, and reference tables immediately before candidate resolution, allowing SQLite to plan the expensive first graph build from current statistics. Rebuilds, updates, existing databases, and symbols-only runs keep their prior lifecycle; cancellation still aborts, while a statistics-only SQLite failure rolls back its savepoint and continues best-effort.
 
 ## 日本語
 
@@ -26,3 +31,4 @@ affected:
 - **新規作成および rebuild 時に未使用の差分 graph bookkeeping を省くようにしました** — reference graph の full refresh が確定した後は、その plan が参照しない dirty scope table を symbol / reference batch ごとに投入せず、全インデックス対象言語にまたがる反復的な set 構築を取り除きます。
 - **初回 C# workspace prepass で読込済み extractor config を再利用するようにしました** — workspace pattern snapshot の読込後に、static / enum / const の候補ごとに共有lock下でdefault pluginを再探索しないよう、CLIとMCP indexingを既読込経路へ接続します。
 - **初回full indexでcandidateを持つreferenceだけを解決するようにしました** — 空databaseからのCLI scanではbulk insert中にcanonicalな未解決値を保存し、candidate tableを1回集約して、全reference rowをprobeせずcandidateを持つrowだけをprimary keyで更新します。rebuild、update、retained graph、MCP indexingの既存recovery契約は変更しません。
+- **新規graph planningでbulk load後のcardinalityを使うようにしました** — 真に空のdatabaseから始まるCLI / MCP bulk loadでは、candidate解決の直前に投入済みのfile、symbol、reference tableを解析し、SQLiteが初回の高コストなgraph構築を最新統計から計画できるようにします。rebuild、update、既存database、symbols-onlyのlifecycleは従来どおりです。cancellationは引き続き中断し、統計更新だけのSQLite failureはsavepointを戻してbest-effortで継続します。

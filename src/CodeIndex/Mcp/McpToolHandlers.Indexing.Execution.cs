@@ -163,7 +163,8 @@ public partial class McpServer
             || !typeScriptAugmentationVersionMatchesCurrent;
         var typeScriptAugmentationReadyCleared = !typeScriptAugmentationVersionMatchesCurrent;
         var ftsMutated = false;
-        var startedWithNoIndexedFiles = rebuild || !writer.HasAnyIndexedFiles();
+        var startedWithNoIndexedFilesBeforeRebuild = !writer.HasAnyIndexedFiles();
+        var startedWithNoIndexedFiles = rebuild || startedWithNoIndexedFilesBeforeRebuild;
         if (rebuild || startedWithNoIndexedFiles)
             indexSnapshot.CSharpStaticInterfaceSourceEvidence = null;
         var requiresConservativeCSharpSourceRefresh = !rebuild
@@ -1288,7 +1289,9 @@ public partial class McpServer
             ReferenceSecondaryIndexBulkLoadGuard.StartRecoverable(
                 writer,
                 enabled: useFtsBulkLoad,
-                requestToken);
+                requestToken,
+                refreshPlannerStatisticsBeforeCandidatePopulation:
+                    startedWithNoIndexedFilesBeforeRebuild && !rebuild);
 
         if (staleFilePurgePlan.Count > 0)
         {
