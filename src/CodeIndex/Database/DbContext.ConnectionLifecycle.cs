@@ -3,6 +3,7 @@ using CodeIndex.Diagnostics;
 using CodeIndex.Indexer;
 using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
+using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.ExceptionServices;
 
@@ -522,6 +523,145 @@ public partial class DbContext : IDisposable
             AutoVacuumModeAfterName: MaintenanceGuidanceBuilder.FormatAutoVacuumMode(after.AutoVacuumMode) ?? "unknown",
             MaintenanceGuidance: guidance);
     }
+
+    internal StatusRebuildReclaim RunRebuildReclaimIfRecommended(CancellationToken cancellationToken)
+    {
+        var started = Stopwatch.GetTimestamp();
+        VacuumMetrics? before = null;
+        StatusMaintenanceGuidance? guidanceBefore = null;
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            ReportMaintenanceProgress("rebuild_reclaim", "metrics_before", _connection.DataSource);
+            var beforeMetrics = ReadVacuumMetrics();
+            before = beforeMetrics;
+            guidanceBefore = MaintenanceGuidanceBuilder.Build(new MaintenanceMetrics(
+                beforeMetrics.PageCount,
+                beforeMetrics.FreelistCount,
+                beforeMetrics.PageSize,
+                beforeMetrics.WalSizeBytes,
+                beforeMetrics.DbSizeBytes,
+                beforeMetrics.AutoVacuumMode));
+
+            if (guidanceBefore.FreelistState != "vacuum_recommended")
+            {
+                return BuildRebuildReclaimResult(
+                    state: "not_needed",
+                    reason: "freelist_below_threshold",
+                    beforeMetrics,
+                    beforeMetrics,
+                    guidanceBefore,
+                    started);
+            }
+
+            // Automatic rebuild maintenance must stay bounded to incremental auto-vacuum.
+            // Legacy databases continue to use the explicit `cdidx vacuum` full-VACUUM path.
+            // rebuild の自動 maintenance は incremental auto-vacuum に限定する。
+            // legacy DB の full VACUUM は明示的な `cdidx vacuum` に残す。
+            if (beforeMetrics.AutoVacuumMode != 2)
+            {
+                return BuildRebuildReclaimResult(
+                    state: "skipped",
+                    reason: "auto_vacuum_not_incremental",
+                    beforeMetrics,
+                    beforeMetrics,
+                    guidanceBefore,
+                    started);
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            ReportMaintenanceProgress("rebuild_reclaim", "incremental_vacuum", _connection.DataSource);
+            Execute(DbPragmaPolicy.IncrementalVacuumPragmaSql(beforeMetrics.FreelistCount));
+            cancellationToken.ThrowIfCancellationRequested();
+            ReportMaintenanceProgress("rebuild_reclaim", "metrics_after", _connection.DataSource);
+            var after = ReadVacuumMetrics();
+            var guidanceAfter = MaintenanceGuidanceBuilder.Build(new MaintenanceMetrics(
+                after.PageCount,
+                after.FreelistCount,
+                after.PageSize,
+                after.WalSizeBytes,
+                after.DbSizeBytes,
+                after.AutoVacuumMode));
+            var completed = guidanceAfter.FreelistState != "vacuum_recommended";
+            return BuildRebuildReclaimResult(
+                state: completed ? "completed" : "incomplete",
+                reason: completed ? "threshold_exceeded" : "freelist_still_above_threshold",
+                beforeMetrics,
+                after,
+                guidanceBefore,
+                started,
+                guidanceAfter.FreelistRatio);
+        }
+        catch (Exception ex)
+        {
+            GlobalToolLog.Error("rebuild_reclaim_failed", ex, includeStacks: false);
+            return BuildRebuildReclaimResult(
+                state: ex is OperationCanceledException ? "cancelled" : "failed",
+                reason: ClassifyRebuildReclaimFailure(ex),
+                before,
+                after: null,
+                guidanceBefore,
+                started);
+        }
+    }
+
+    private static StatusRebuildReclaim BuildRebuildReclaimResult(
+        string state,
+        string reason,
+        VacuumMetrics? before,
+        VacuumMetrics? after,
+        StatusMaintenanceGuidance? guidanceBefore,
+        long startedTimestamp,
+        double? freelistRatioAfter = null)
+    {
+        long? pagesReclaimed = before.HasValue && after.HasValue
+            ? Math.Max(0, before.Value.PageCount - after.Value.PageCount)
+            : null;
+        var pageSize = after?.PageSize ?? before?.PageSize;
+        return new StatusRebuildReclaim
+        {
+            State = state,
+            Reason = reason,
+            DurationMs = (long)Stopwatch.GetElapsedTime(startedTimestamp).TotalMilliseconds,
+            PageSizeBytes = pageSize,
+            PageCountBefore = before?.PageCount,
+            FreelistCountBefore = before?.FreelistCount,
+            FreelistRatioBefore = guidanceBefore?.FreelistRatio,
+            FreelistThresholdRatio = guidanceBefore?.FreelistThresholdRatio,
+            EstimatedBytesReclaimableBefore = guidanceBefore?.EstimatedBytesReclaimable,
+            PageCountAfter = after?.PageCount,
+            FreelistCountAfter = after?.FreelistCount,
+            FreelistRatioAfter = after.HasValue
+                ? freelistRatioAfter ?? guidanceBefore?.FreelistRatio
+                : null,
+            PagesReclaimed = pagesReclaimed,
+            BytesReclaimed = pagesReclaimed.HasValue && pageSize.HasValue
+                ? pagesReclaimed.Value * pageSize.Value
+                : null,
+            LogicalDatabaseBytesBefore = before.HasValue
+                ? before.Value.PageCount * before.Value.PageSize
+                : null,
+            LogicalDatabaseBytesAfter = after.HasValue
+                ? after.Value.PageCount * after.Value.PageSize
+                : null,
+            DbSizeBytesBefore = before?.DbSizeBytes,
+            DbSizeBytesAfter = after?.DbSizeBytes,
+            AutoVacuumMode = before?.AutoVacuumMode,
+        };
+    }
+
+    private static string ClassifyRebuildReclaimFailure(Exception exception)
+        => exception switch
+        {
+            OperationCanceledException => "cancelled",
+            SqliteException { SqliteErrorCode: 5 } => "sqlite_busy",
+            SqliteException { SqliteErrorCode: 6 } => "sqlite_locked",
+            SqliteException { SqliteErrorCode: 8 } => "sqlite_read_only",
+            SqliteException => "sqlite_error",
+            UnauthorizedAccessException => "access_denied",
+            IOException => "io_error",
+            _ => "unexpected_error",
+        };
 
     private static string? BuildWalCheckpointTimingNote(bool dryRun)
         => dryRun

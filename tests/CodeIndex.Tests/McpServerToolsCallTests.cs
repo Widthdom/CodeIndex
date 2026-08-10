@@ -8320,6 +8320,11 @@ public partial class McpServerTests
             var rebuildResponse = CallIndex(server, fixtureDir, args => args["rebuild"] = true);
 
             Assert.False(rebuildResponse["result"]?["isError"]?.GetValue<bool>() ?? false, rebuildResponse.ToJsonString());
+            var rebuildReclaim = rebuildResponse["result"]?["structuredContent"]?["rebuild_reclaim"];
+            Assert.NotNull(rebuildReclaim);
+            Assert.Contains(
+                rebuildReclaim!["state"]!.GetValue<string>(),
+                new[] { "completed", "not_needed" });
             Assert.NotNull(groupingStats);
             Assert.Equal(2, groupingStats!.DeclarationCount);
             Assert.Null(groupingStats.ScopedNameCount);

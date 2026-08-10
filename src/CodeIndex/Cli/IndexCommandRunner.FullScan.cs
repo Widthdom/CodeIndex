@@ -1338,9 +1338,34 @@ public static partial class IndexCommandRunner
         hotspotAggregateRefresh.Complete(cancellationToken);
         writer.ClearBatchInProgress();
         fullScanTxn.Commit();
+        if (options.MemoryTrace)
+            memorySamples.Add(CaptureMemorySample("commit", stopwatch));
         if (referenceSecondaryIndexBulkLoad != null
             && willRebuildTypeScriptAugmentationAfterReadinessValidation)
             writer.ReportReferenceSecondaryIndexBulkLoadState("full_scan_committed");
+        StatusRebuildReclaim? rebuildReclaim = null;
+        if (options.Rebuild && errors == 0)
+        {
+            WriteFullScanJsonLiveness(options, "evaluating rebuild free-page reclaim...");
+            CancellationTokenSource? reclaimCts = null;
+            if (!options.Json && !options.Quiet)
+                reclaimCts = ConsoleUi.StartSpinner("Reclaiming rebuild free space...", spinnerFrames);
+            try
+            {
+                rebuildReclaim = db.RunRebuildReclaimIfRecommended(cancellationToken);
+            }
+            finally
+            {
+                ConsoleUi.StopSpinner(reclaimCts);
+            }
+            if (options.MemoryTrace)
+                memorySamples.Add(CaptureMemorySample("rebuild_reclaim", stopwatch));
+            TryStampRebuildReclaimMetadata(
+                writer,
+                rebuildReclaim,
+                stopwatch.ElapsedMilliseconds,
+                BuildMemoryTimeline(memorySamples));
+        }
         return WriteFullScanFinalOutput(new FullScanFinalOutputContext
         {
             Writer = writer,
@@ -1388,6 +1413,7 @@ public static partial class IndexCommandRunner
             PriorIndexedHeadCommit = priorIndexedHeadCommit,
             CurrentHeadCommit = currentHeadCommit,
             ShowNextSteps = showNextSteps,
+            RebuildReclaim = rebuildReclaim,
         });
     }
 }

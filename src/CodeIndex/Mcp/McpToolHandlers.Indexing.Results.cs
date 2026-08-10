@@ -35,6 +35,7 @@ public partial class McpServer
         bool CSharpMetadataTargetReady,
         bool FoldReady,
         string? FoldReadyReason,
+        StatusRebuildReclaim? RebuildReclaim,
         JsonArray? MemoryTrace,
         IReadOnlyList<IndexFileFailure> Failures,
         IReadOnlyList<McpIndexDiagnostic> Diagnostics,
@@ -145,6 +146,12 @@ public partial class McpServer
             ["fold_ready"] = details.FoldReady,
             ["fold_ready_reason"] = details.FoldReadyReason
         };
+        if (details.RebuildReclaim != null)
+        {
+            structured["rebuild_reclaim"] = System.Text.Json.JsonSerializer.SerializeToNode(
+                details.RebuildReclaim,
+                _jsonOptions);
+        }
         if (details.MemoryTrace != null)
             structured["memory_trace"] = details.MemoryTrace;
         if (details.Failures.Count > 0)

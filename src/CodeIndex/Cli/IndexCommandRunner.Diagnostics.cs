@@ -150,12 +150,38 @@ public static partial class IndexCommandRunner
             (DbContext.LastIndexRunReferenceExtractionCapHitsMetaKey, referenceExtractionCapHits == null
                 ? null
                 : JsonSerializer.Serialize(referenceExtractionCapHits, StatusMetadataJsonContext.Default.ReferenceExtractionCapHitSummary)),
+            (DbContext.LastIndexRunRebuildReclaimMetaKey, null),
             (DbContext.LastIndexRunPeakMemoryMbMetaKey, memoryTimeline == null
                 ? null
                 : (memoryTimeline.PeakWorkingSetBytes / (1024 * 1024)).ToString(System.Globalization.CultureInfo.InvariantCulture)));
         StampLastIndexRunDiagnostics(writer, diagnostics);
         writer.MarkIndexCompleteness(indexIncompleteReasons ?? []);
         writer.ClearLastFailedIndexRunMetadata();
+    }
+
+    internal static bool TryStampRebuildReclaimMetadata(
+        DbWriter writer,
+        StatusRebuildReclaim rebuildReclaim,
+        long durationMs,
+        IndexMemoryTimelineJsonResult? memoryTimeline)
+    {
+        try
+        {
+            writer.SetMetaValues(
+                (DbContext.LastIndexRunDurationMsMetaKey,
+                    durationMs.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                (DbContext.LastIndexRunPeakMemoryMbMetaKey, memoryTimeline == null
+                    ? null
+                    : (memoryTimeline.PeakWorkingSetBytes / (1024 * 1024)).ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                (DbContext.LastIndexRunRebuildReclaimMetaKey,
+                    JsonSerializer.Serialize(rebuildReclaim, StatusMetadataJsonContext.Default.StatusRebuildReclaim)));
+            return true;
+        }
+        catch (Exception ex)
+        {
+            GlobalToolLog.Error("rebuild_reclaim_metadata_write_failed", ex, includeStacks: false);
+            return false;
+        }
     }
 
     internal static void StampLastIndexRunDiagnostics(DbWriter writer, IReadOnlyList<string>? diagnostics)

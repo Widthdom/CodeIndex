@@ -55,12 +55,11 @@ public static partial class IndexCommandRunner
         internal string? PriorIndexedHeadCommit { get; init; }
         internal string? CurrentHeadCommit { get; init; }
         internal bool ShowNextSteps { get; init; }
+        internal StatusRebuildReclaim? RebuildReclaim { get; init; }
     }
 
     private static int WriteFullScanFinalOutput(FullScanFinalOutputContext output)
     {
-        if (output.Options.MemoryTrace)
-            output.MemorySamples.Add(CaptureMemorySample("commit", output.Stopwatch));
         output.Stopwatch.Stop();
         var memoryTimeline = BuildMemoryTimeline(output.MemorySamples);
         WarnIfMemoryThresholdExceeded(memoryTimeline);
@@ -196,6 +195,7 @@ public static partial class IndexCommandRunner
                 FileErrors = output.FileErrorList.Count > 0 ? output.FileErrorList : null,
                 Warnings = output.WarningList.Count > 0 ? output.WarningList : null,
                 MemoryTimeline = memoryTimeline,
+                RebuildReclaim = output.RebuildReclaim,
                 ElapsedMs = output.Stopwatch.ElapsedMilliseconds,
             }, output.JsonContext.IndexFullScanJsonResult));
         }
@@ -236,6 +236,13 @@ public static partial class IndexCommandRunner
             CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("C# names", output.CSharpSymbolNameReadyAfter ? "ready" : "degraded", indent: "  "));
             CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("C# meta", output.CSharpMetadataTargetReadyAfter ? "ready" : "degraded", indent: "  "));
             CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Fold", output.FoldReadyAfter ? "ready" : "degraded", indent: "  "));
+            if (output.RebuildReclaim is { State: "completed", BytesReclaimed: long reclaimedBytes })
+            {
+                CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine(
+                    "Reclaimed",
+                    ConsoleUi.FormatBytes(reclaimedBytes),
+                    indent: "  "));
+            }
             CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Elapsed", ConsoleUi.FormatDuration(output.Stopwatch.Elapsed, output.Options.DurationFormat), indent: "  "));
             CommandOutputWriter.WriteLine();
             if (output.Errors > 0)

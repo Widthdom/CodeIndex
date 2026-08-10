@@ -19,6 +19,206 @@ namespace CodeIndex.Tests;
 public partial class IndexCommandRunnerTests
 {
     [Fact]
+    public void Run_RebuildReclaimsHighFreelistWithConcurrentReaderAndPersistsTelemetry_Issue5057()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "app.cs"),
+                "public class App { public string Run() => \"ready\"; }\n");
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json", "--quiet"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var connection = OpenNonPoolingConnection(dbPath))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = @"
+                    CREATE TABLE rebuild_payload (id INTEGER PRIMARY KEY, payload BLOB);
+                    WITH RECURSIVE n(value) AS (
+                        SELECT 1
+                        UNION ALL
+                        SELECT value + 1 FROM n WHERE value < 256
+                    )
+                    INSERT INTO rebuild_payload (payload)
+                    SELECT randomblob(4096) FROM n;
+                    DELETE FROM rebuild_payload;";
+                command.ExecuteNonQuery();
+            }
+
+            using var readerConnection = OpenNonPoolingConnection(dbPath);
+            readerConnection.Open();
+            using var readerCommand = readerConnection.CreateCommand();
+            readerCommand.CommandText = "SELECT COUNT(*) FROM files";
+            Assert.Equal(1L, (long)readerCommand.ExecuteScalar()!);
+
+            var (rebuildExitCode, rebuildJson) = RunAndCaptureJson(
+                [projectRoot, "--rebuild", "--yes", "--json", "--quiet", "--memory-trace"]);
+
+            Assert.Equal(CommandExitCodes.Success, rebuildExitCode);
+            Assert.Equal(1L, (long)readerCommand.ExecuteScalar()!);
+            var memoryPhases = rebuildJson
+                .GetProperty("memory_timeline")
+                .GetProperty("samples")
+                .EnumerateArray()
+                .Select(sample => sample.GetProperty("phase").GetString())
+                .ToArray();
+            Assert.Equal(["commit", "rebuild_reclaim"], memoryPhases[^2..]);
+            var reclaim = rebuildJson.GetProperty("rebuild_reclaim");
+            Assert.Equal("completed", reclaim.GetProperty("state").GetString());
+            Assert.Equal("threshold_exceeded", reclaim.GetProperty("reason").GetString());
+            Assert.True(reclaim.GetProperty("freelist_ratio_before").GetDouble()
+                >= reclaim.GetProperty("freelist_threshold_ratio").GetDouble());
+            Assert.True(reclaim.GetProperty("freelist_ratio_after").GetDouble()
+                < reclaim.GetProperty("freelist_threshold_ratio").GetDouble());
+            Assert.True(reclaim.GetProperty("pages_reclaimed").GetInt64() > 0);
+            Assert.True(reclaim.GetProperty("bytes_reclaimed").GetInt64() > 0);
+            Assert.True(
+                reclaim.GetProperty("logical_database_bytes_before").GetInt64()
+                > reclaim.GetProperty("logical_database_bytes_after").GetInt64());
+
+            var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, statusExitCode);
+            var statusReclaim = statusJson.GetProperty("last_index_run").GetProperty("rebuild_reclaim");
+            Assert.Equal("completed", statusReclaim.GetProperty("state").GetString());
+            Assert.Equal(
+                reclaim.GetProperty("pages_reclaimed").GetInt64(),
+                statusReclaim.GetProperty("pages_reclaimed").GetInt64());
+            Assert.Equal(
+                reclaim.GetProperty("logical_database_bytes_after").GetInt64(),
+                statusReclaim.GetProperty("logical_database_bytes_after").GetInt64());
+            Assert.NotEqual(
+                "vacuum_recommended",
+                statusJson.GetProperty("maintenance_guidance").GetProperty("freelist_state").GetString());
+
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            using var integrityCommand = db.Connection.CreateCommand();
+            integrityCommand.CommandText = "PRAGMA integrity_check";
+            Assert.Equal("ok", integrityCommand.ExecuteScalar());
+            var explicitDryRun = db.RunIncrementalVacuum(dryRun: true);
+            Assert.Equal("dry_run", explicitDryRun.Status);
+            Assert.Equal(
+                statusReclaim.GetProperty("freelist_count_after").GetInt64(),
+                explicitDryRun.FreelistCountBefore);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_RebuildReclaimFailureKeepsCommittedDatabaseUsable_Issue5057()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { }\n");
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json", "--quiet"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using (var connection = OpenNonPoolingConnection(dbPath))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = @"
+                    CREATE TABLE rebuild_failure_payload (id INTEGER PRIMARY KEY, payload BLOB);
+                    WITH RECURSIVE n(value) AS (
+                        SELECT 1
+                        UNION ALL
+                        SELECT value + 1 FROM n WHERE value < 256
+                    )
+                    INSERT INTO rebuild_failure_payload (payload)
+                    SELECT randomblob(4096) FROM n;
+                    DELETE FROM rebuild_failure_payload;";
+                command.ExecuteNonQuery();
+            }
+            DbContext.MaintenanceProgressForTesting = (operation, phase) =>
+            {
+                if (operation == "rebuild_reclaim" && phase == "incremental_vacuum")
+                    throw new InvalidOperationException("injected rebuild reclaim failure");
+            };
+
+            var (rebuildExitCode, rebuildJson) = RunAndCaptureJson(
+                [projectRoot, "--rebuild", "--yes", "--json", "--quiet"]);
+
+            Assert.Equal(CommandExitCodes.Success, rebuildExitCode);
+            var reclaim = rebuildJson.GetProperty("rebuild_reclaim");
+            Assert.Equal("failed", reclaim.GetProperty("state").GetString());
+            Assert.Equal("unexpected_error", reclaim.GetProperty("reason").GetString());
+            using var connectionAfter = OpenNonPoolingConnection(dbPath);
+            connectionAfter.Open();
+            using var integrityCommand = connectionAfter.CreateCommand();
+            integrityCommand.CommandText = "PRAGMA integrity_check";
+            Assert.Equal("ok", integrityCommand.ExecuteScalar());
+            using var countCommand = connectionAfter.CreateCommand();
+            countCommand.CommandText = "SELECT COUNT(*) FROM files";
+            Assert.Equal(1L, (long)countCommand.ExecuteScalar()!);
+
+            var (statusExitCode, statusJson) = RunStatusAndCaptureJson(["--db", dbPath, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, statusExitCode);
+            Assert.Equal(
+                "failed",
+                statusJson.GetProperty("last_index_run")
+                    .GetProperty("rebuild_reclaim")
+                    .GetProperty("state")
+                    .GetString());
+            Assert.Equal(
+                "vacuum_recommended",
+                statusJson.GetProperty("maintenance_guidance").GetProperty("freelist_state").GetString());
+        }
+        finally
+        {
+            DbContext.MaintenanceProgressForTesting = null;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_InterruptedRebuildPreservesPreviouslyCommittedDatabase_Issue5057()
+    {
+        var projectRoot = CreateTempProject();
+        using var cancellation = new CancellationTokenSource();
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            File.WriteAllText(sourcePath, "public class App { public int Value => 1; }\n");
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json", "--quiet"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var checksumBefore = ReadIndexedChecksum(dbPath, "app.cs");
+            Assert.NotNull(checksumBefore);
+
+            File.WriteAllText(sourcePath, "public class App { public int Value => 2; }\n");
+            IndexCommandRunner.FullScanFtsOptimizeForTesting = cancellation.Cancel;
+
+            var (rebuildExitCode, rebuildJson) = RunAndCaptureJson(
+                [projectRoot, "--rebuild", "--yes", "--json", "--quiet"],
+                cancellation);
+
+            Assert.Equal(CommandExitCodes.Interrupted, rebuildExitCode);
+            Assert.Equal(CommandErrorCodes.Interrupted, rebuildJson.GetProperty("error_code").GetString());
+            Assert.Equal(checksumBefore, ReadIndexedChecksum(dbPath, "app.cs"));
+            using var connection = OpenNonPoolingConnection(dbPath);
+            connection.Open();
+            using var integrityCommand = connection.CreateCommand();
+            integrityCommand.CommandText = "PRAGMA integrity_check";
+            Assert.Equal("ok", integrityCommand.ExecuteScalar());
+        }
+        finally
+        {
+            IndexCommandRunner.FullScanFtsOptimizeForTesting = null;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void Run_FullScanAndScopedUpdateUseGuardedAtomicFileReferenceScope()
     {
         var projectRoot = CreateTempProject();
