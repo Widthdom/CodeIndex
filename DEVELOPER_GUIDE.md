@@ -89,10 +89,10 @@ POSIX-only enforcement.
 Production `File.Delete`, `Directory.Delete`, and `File.Move` call sites are allowed only for owned CodeIndex state or caller-approved outputs. Re-run the audit with the local binary when changing these areas:
 
 ```bash
-dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll search File.Delete --path src/ --exclude-tests --exact-substring --count-by file --limit 80
-dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll search Directory.Delete --path src/ --exclude-tests --exact-substring --count-by file --limit 80
-dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll search File.Move --path src/ --exclude-tests --exact-substring --count-by file --limit 80
-dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll search --recipe filesystem-mutation-boundaries --format count --limit 80
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll search File.Delete --path src/ --exclude-tests --exact-substring --count-by file --limit 80 --db .cdidx/codeindex.db
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll search Directory.Delete --path src/ --exclude-tests --exact-substring --count-by file --limit 80 --db .cdidx/codeindex.db
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll search File.Move --path src/ --exclude-tests --exact-substring --count-by file --limit 80 --db .cdidx/codeindex.db
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll search --recipe filesystem-mutation-boundaries --format count --limit 80 --db .cdidx/codeindex.db
 ```
 
 | Surface | Ownership and boundary policy | Cleanup or rollback policy |
@@ -232,6 +232,13 @@ ownership boundaries so behavior changes remain reviewable and testable.
 ### Workspaces
 
 `cdidx.workspace.json` and `.cdidx-workspace.json` declare monorepo members without adding a YAML dependency. Workspace manifests are capped at 64 KiB, 16 JSON nesting levels, 1024 members, 4096 characters per member path, and 255 characters for `default_db_name`. The supported schema is additive: `members` is an array of member paths that must be relative to and resolve under the manifest directory, `index_strategy` is `per_member` or `single` with unknown values rejected, `default_db_name` is a plain file name that overrides `codeindex.db`, and `shared_ignores` is reserved for shared ignore policy. Invalid `members` entries are rejected with bounded diagnostics, and valid entries are normalized and deduplicated with the workspace path casing policy before DB paths are materialized. `cdidx workspace list` and `cdidx workspace status` report member DB paths. `workspace status` also reports each member's project-directory and database existence as the unambiguous sibling fields `project_exists` and `db_exists`; the older `exists` field remains a compatibility alias for `project_exists`. Per-member `index_health` reports probe status and stable reason, a structured `repair_action`, schema compatibility, exact workspace freshness, timestamps, index completeness, and graph readiness. It probes at most 64 distinct existing member databases per invocation, reuses a probe when members share a database under the `single` strategy, and marks later members as `not_checked` with a top-level truncation summary.
+
+This repository's checked-in manifest deliberately selects `index_strategy: single`. The canonical dogfood topology indexes the repository root into `.cdidx/codeindex.db`, which keeps source, tests, root documentation, scripts, workflows, and agent policy in one searchable database while `workspace status` reuses that database for every declared member. Repository dogfood CLI queries, MCP, LSP, and maintenance commands (`optimize`, `vacuum`, `db integrity`, and related previews) always pass `--db .cdidx/codeindex.db`; running from the root alone does not pin the database because `CDIDX_DATA_DIR` and active-workspace settings take precedence over CWD discovery. Repository validation runs the explicitly pinned `status --check --json` plus manifest-driven `workspace status --check --json`; neither workflow creates per-member databases.
+
+```bash
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll status --check --db .cdidx/codeindex.db --json
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll workspace status --check --json
+```
 
 `member_health_summary` aggregates healthy, degraded, and missing members, reports the exit code that enforcement would use, and deduplicates recommended action codes. `cdidx workspace status --check` returns success `0` only when every required member is `ready`; it returns not-found `2` when the manifest is missing, the manifest has no members, or any required project/database is missing, and stale-index `5` for every other degraded aggregate (including stale, incomplete, incompatible, invalid, unavailable, or probe-limit-skipped members). Missing takes precedence over degraded in a mixed workspace. Without `--check`, `workspace status` remains informational and returns `0` after a successful report. Invalid manifest schema or safety failures remain usage exit `1` and, in JSON mode, are returned as a structured `workspace_manifest_invalid` error instead of falling through to the top-level crash handler. Repair commands are emitted as `name` plus `args[]`, not shell-quoted strings, so paths remain portable across Windows and POSIX shells.
 
@@ -3766,9 +3773,9 @@ Windows と明示的な SQLite file URI では、この POSIX 限定 enforcement
 本番コードの `File.Delete`、`Directory.Delete`、`File.Move` 呼び出しは、CodeIndex が所有する状態、または caller が承認した出力に限って許可します。これらの領域を変更する場合は、ローカル binary で次の監査を再実行してください:
 
 ```bash
-dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll search File.Delete --path src/ --exclude-tests --exact-substring --count-by file --limit 80
-dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll search Directory.Delete --path src/ --exclude-tests --exact-substring --count-by file --limit 80
-dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll search File.Move --path src/ --exclude-tests --exact-substring --count-by file --limit 80
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll search File.Delete --path src/ --exclude-tests --exact-substring --count-by file --limit 80 --db .cdidx/codeindex.db
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll search Directory.Delete --path src/ --exclude-tests --exact-substring --count-by file --limit 80 --db .cdidx/codeindex.db
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll search File.Move --path src/ --exclude-tests --exact-substring --count-by file --limit 80 --db .cdidx/codeindex.db
 ```
 
 | surface | ownership / boundary policy | cleanup / rollback policy |
@@ -3923,6 +3930,14 @@ graph readiness を報告します。project directory と database の存在有
 1 回の実行で probe する既存の異なる member database は最大 64 個で、
 `single` strategy で database が共有される場合は probe 結果を再利用し、それ以降の member は
 `not_checked` として top-level の truncation summary に反映します。
+
+このリポジトリで追跡している manifest は、意図的に `index_strategy: single` を選択します。正規の dogfood topology はリポジトリルートを `.cdidx/codeindex.db` に index し、source、tests、ルートの documentation、scripts、workflows、agent policy を1つの検索可能な database に保ちながら、`workspace status` がすべての宣言済み member に同じ database を再利用します。リポジトリの dogfood では、CLI query、MCP / LSP、maintenance command（`optimize`、`vacuum`、`db integrity` と関連 preview）のすべてに `--db .cdidx/codeindex.db` を明示します。`CDIDX_DATA_DIR` と active workspace の設定は CWD discovery より優先されるため、リポジトリルートで実行するだけでは database を固定できません。リポジトリ検証では明示的に固定した `status --check --json` と manifest 駆動の `workspace status --check --json` の両方を実行し、per-member database は作成しません。
+
+```bash
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll status --check --db .cdidx/codeindex.db --json
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll workspace status --check --json
+```
+
 `member_health_summary` は healthy / degraded / missing member を集約し、enforcement 時の exit code と
 重複排除した recommended action code を返します。`cdidx workspace status --check` はすべての
 required member が `ready` の場合だけ success `0`、manifest 不在、member 0件、required project /

@@ -15,9 +15,9 @@ paths to committed config files.
 For CodeIndex work, dogfood the repo-built binary for code search:
 
 ```bash
-dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll search SymbolExtractor
-dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll symbols --lang csharp
-dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll inspect src/CodeIndex/Indexer/SymbolExtractor.cs
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll search SymbolExtractor --db .cdidx/codeindex.db
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll symbols --lang csharp --db .cdidx/codeindex.db
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll inspect src/CodeIndex/Indexer/SymbolExtractor.cs --db .cdidx/codeindex.db
 ```
 
 The guard hooks block grep-like search escape hatches, global `cdidx`, and

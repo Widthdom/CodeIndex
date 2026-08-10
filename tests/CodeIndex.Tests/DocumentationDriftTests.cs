@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using CodeIndex.Cli;
 using CodeIndex.Database;
@@ -21,6 +22,10 @@ public sealed class DocumentationDriftTests
 
     private static readonly Regex InlineCdidxCommandReferenceRegex = new(
         @"`(?:[A-Z_][A-Z0-9_]*=\S+\s+)*(?<prefix>cdidx|dotnet\s+\./src/CodeIndex/bin/Debug/net8\.0/cdidx\.dll|dotnet\s+run\s+--project\s+src/CodeIndex\s+--)\s+(?<token>[^\s`|;&]+)[^`]*`",
+        RegexOptions.Compiled);
+
+    private static readonly Regex LocalRepositoryCdidxInvocationRegex = new(
+        @"dotnet\s+\./src/CodeIndex/bin/Debug/net8\.0/cdidx\.dll(?:\s+(?<token>[^\s`|;&]+))?",
         RegexOptions.Compiled);
 
     private static readonly Regex ErrorCodeTableRowRegex = new(
@@ -150,6 +155,63 @@ public sealed class DocumentationDriftTests
     }
 
     [Fact]
+    public void RepositoryDogfoodManifestAndGuidance_StaySynchronized_Issue5062()
+    {
+        using var manifest = JsonDocument.Parse(RepositoryTestPaths.ReadText("cdidx.workspace.json"));
+        var root = manifest.RootElement;
+
+        Assert.Equal("single", root.GetProperty("index_strategy").GetString());
+        Assert.Equal("codeindex.db", root.GetProperty("default_db_name").GetString());
+        Assert.Equal(
+            ["src/CodeIndex", "tests/CodeIndex.Tests"],
+            root.GetProperty("members").EnumerateArray().Select(member => member.GetString()).ToArray());
+
+        const string canonicalDb = ".cdidx/codeindex.db";
+        const string rootStatus = "dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll status --check --db .cdidx/codeindex.db --json";
+        const string workspaceStatus = "dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll workspace status --check --json";
+        var guidancePaths = new[]
+        {
+            "AGENT_GUIDE.md",
+            "SELF_IMPROVEMENT.md",
+            "DEVELOPER_GUIDE.md",
+            ".codex/workflows/issue-fix.md",
+        };
+
+        foreach (var relativePath in guidancePaths)
+        {
+            var content = RepositoryTestPaths.ReadText(relativePath.Split('/'));
+            Assert.Contains(canonicalDb, content, StringComparison.Ordinal);
+            Assert.Contains(rootStatus, content, StringComparison.Ordinal);
+            Assert.Contains(workspaceStatus, content, StringComparison.Ordinal);
+        }
+
+        var unpinnedInvocations = new List<string>();
+        foreach (var relativePath in EnumerateDocumentationCommandReferenceFiles())
+        {
+            var lines = RepositoryTestPaths.ReadNormalizedLines(relativePath.Split('/'));
+            for (var lineNumber = 0; lineNumber < lines.Length; lineNumber++)
+            {
+                var line = lines[lineNumber];
+                foreach (Match match in LocalRepositoryCdidxInvocationRegex.Matches(line))
+                {
+                    var token = NormalizeCdidxToken(match.Groups["token"].Value);
+                    if (string.IsNullOrWhiteSpace(token) || RepositoryDogfoodCommandDoesNotSelectDatabase(token))
+                        continue;
+
+                    if (!line.Contains("--db .cdidx/codeindex.db", StringComparison.Ordinal)
+                        && !line.Contains("--db=.cdidx/codeindex.db", StringComparison.Ordinal))
+                    {
+                        unpinnedInvocations.Add(
+                            $"{relativePath}:{lineNumber + 1}: repository dogfood command does not select {canonicalDb}: {line.Trim()}");
+                    }
+                }
+            }
+        }
+
+        Assert.Empty(unpinnedInvocations);
+    }
+
+    [Fact]
     public void PreparedCommandCacheDefault_DocumentationMatchesRuntime()
     {
         var content = RepositoryTestPaths.ReadText("DEVELOPER_GUIDE.md");
@@ -259,6 +321,7 @@ public sealed class DocumentationDriftTests
     {
         var rootFiles = new[]
         {
+            ".codex/README.md",
             "AGENT_GUIDE.md",
             "README.md",
             "USER_GUIDE.md",
@@ -307,6 +370,27 @@ public sealed class DocumentationDriftTests
             return true;
 
         return token[0] is '.' or '/' or '\\' or '~' or '$' or '%' or '<' or '[' or '{' or '"';
+    }
+
+    private static bool RepositoryDogfoodCommandDoesNotSelectDatabase(string token)
+    {
+        return token is
+            "--check-updates" or
+            "--completions" or
+            "--help" or
+            "--help-all" or
+            "--help-flags" or
+            "--sushi" or
+            "--version" or
+            "completions" or
+            "config" or
+            "help" or
+            "languages" or
+            "license" or
+            "test-extractor" or
+            "upgrade" or
+            "validate-config" or
+            "workspace";
     }
 
     private static string ToRepositoryRelativePath(string absolutePath)

@@ -77,7 +77,7 @@ candidate before changing a skip.
 Before adding or retaining a skip, run:
 
 ```bash
-dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll search --exact-substring --query "Skip =" --path tests/CodeIndex.Tests --limit 80 --json
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll search --exact-substring --query "Skip =" --path tests/CodeIndex.Tests --limit 80 --db .cdidx/codeindex.db --json
 ```
 
 ## Split Sequence
@@ -211,7 +211,7 @@ exact-substring query を使い、変更前に候補を 1 件ずつ確認して�
 skip を追加または維持する前に次を実行してください。
 
 ```bash
-dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll search --exact-substring --query "Skip =" --path tests/CodeIndex.Tests --limit 80 --json
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll search --exact-substring --query "Skip =" --path tests/CodeIndex.Tests --limit 80 --db .cdidx/codeindex.db --json
 ```
 
 ## 分割順序

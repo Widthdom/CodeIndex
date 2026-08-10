@@ -3,8 +3,8 @@
 Issue #4070 audited `CommandText` and `PRAGMA` construction in production code. The current dogfood commands are:
 
 ```bash
-dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll search --recipe dogfood-risk-patterns/raw-sql-command-text --path src/ --exclude-tests --count --group-by file --limit 80
-dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll search --recipe dogfood-risk-patterns/pragma-command --path src/ --exclude-tests --count --group-by file --limit 80
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll search --recipe dogfood-risk-patterns/raw-sql-command-text --path src/ --exclude-tests --count --group-by file --limit 80 --db .cdidx/codeindex.db
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll search --recipe dogfood-risk-patterns/pragma-command --path src/ --exclude-tests --count --group-by file --limit 80 --db .cdidx/codeindex.db
 ```
 
 | Category | Files / examples | Policy |
