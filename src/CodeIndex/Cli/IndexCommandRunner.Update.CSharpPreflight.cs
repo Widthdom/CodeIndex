@@ -282,6 +282,7 @@ public static partial class IndexCommandRunner
                 loadExistingSymbolsOnlyForPendingQualifiedMemberAccess:
                     true,
                 parallelism: context.Options.Parallelism,
+                patternConfigsAlreadyLoaded: true,
                 cancellationToken: context.CancellationToken);
         if (!CSharpStaticInterfacePrepass.TryValidateFileStatSnapshots(
                 state.CSharpPrepassTargets,
@@ -424,6 +425,7 @@ public static partial class IndexCommandRunner
                     parallelism: context.Options.Parallelism,
                     excludedExistingFileIds:
                         context.ScopedCleanupPlan.FileIds,
+                    patternConfigsAlreadyLoaded: true,
                     cancellationToken: cancellationToken);
         }
 

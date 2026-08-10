@@ -312,6 +312,7 @@ public static partial class IndexCommandRunner
                     isExistingSymbolPathExcluded:
                         context
                             .IsExistingCSharpSymbolPathNowNonCSharp,
+                    patternConfigsAlreadyLoaded: true,
                     cancellationToken: context.CancellationToken),
                 context.CancellationToken);
         }

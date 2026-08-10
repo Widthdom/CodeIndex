@@ -25,6 +25,7 @@ internal static class CSharpStaticInterfacePrepass
         IReadOnlyList<long>? excludedExistingFileIds = null,
         Func<string, bool>? isExistingSymbolPathExcluded = null,
         bool loadExistingSymbolsOnlyForPendingQualifiedMemberAccess = false,
+        bool patternConfigsAlreadyLoaded = false,
         CancellationToken cancellationToken = default)
     {
         var targetCount = fileTargets.TryGetNonEnumeratedCount(out var count) ? count : 0;
@@ -114,12 +115,19 @@ internal static class CSharpStaticInterfacePrepass
                         if (MayContainCSharpWorkspaceReferenceTargets(content))
                         {
                             extractedByCandidate[candidateIndex] =
-                                SymbolExtractor.Extract(
-                                    0,
-                                    "csharp",
-                                    content,
-                                    target.IndexPath,
-                                    cancellationToken: cancellationToken);
+                                patternConfigsAlreadyLoaded
+                                    ? SymbolExtractor.ExtractWithPatternConfigsLoaded(
+                                        0,
+                                        "csharp",
+                                        content,
+                                        target.IndexPath,
+                                        cancellationToken: cancellationToken)
+                                    : SymbolExtractor.Extract(
+                                        0,
+                                        "csharp",
+                                        content,
+                                        target.IndexPath,
+                                        cancellationToken: cancellationToken);
                         }
                     }
                 }
@@ -216,6 +224,7 @@ internal static class CSharpStaticInterfacePrepass
             parallelism: 1,
             excludedExistingFileIds: null,
             loadExistingSymbolsOnlyForPendingQualifiedMemberAccess: false,
+            patternConfigsAlreadyLoaded: false,
             cancellationToken: cancellationToken);
     }
 

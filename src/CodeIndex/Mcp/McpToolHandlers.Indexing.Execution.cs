@@ -715,6 +715,7 @@ public partial class McpServer
                     parallelism: 1,
                     excludedExistingFileIds: staleFilePurgePlan.FileIds,
                     isExistingSymbolPathExcluded: IsExistingCSharpSymbolPathNowNonCSharp,
+                    patternConfigsAlreadyLoaded: true,
                     cancellationToken: requestToken));
             forceFullCSharpRefreshFromInvalidatedNoOp =
                 indexSnapshot.CSharpStaticInterfaceSourceEvidence == true
@@ -1036,6 +1037,7 @@ public partial class McpServer
                         parallelism: 1,
                         excludedExistingFileIds: staleFilePurgePlan.FileIds,
                         isExistingSymbolPathExcluded: IsExistingCSharpSymbolPathNowNonCSharp,
+                        patternConfigsAlreadyLoaded: true,
                         cancellationToken: requestToken));
                 preservePriorPositiveCSharpSourceNoOp = false;
                 if (!csharpWorkspace.SourceContractEvidenceComplete)

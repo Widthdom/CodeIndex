@@ -556,6 +556,77 @@ public class ExtractorPluginRegistryTests
     }
 
     [Fact]
+    public void CSharpWorkspacePrepass_ReusesLoadedPatternConfigSnapshot()
+    {
+        var projectRoot = TestProjectHelper.CreateExecutableExtensionTestProject(
+            "extractor_registry_csharp_prepass_snapshot");
+        lock (TestConsoleLock.Gate)
+        {
+            var pluginDirectory = Path.Combine(projectRoot, "plugins");
+            var pluginPath = Path.Combine(pluginDirectory, "invalid.dll");
+            var pluginStageCount = 0;
+            try
+            {
+                Directory.CreateDirectory(pluginDirectory);
+                File.WriteAllText(pluginPath, "invalid plugin assembly");
+                var sourceDirectory = Path.Combine(projectRoot, "src");
+                Directory.CreateDirectory(sourceDirectory);
+                var targets = new List<CodeIndex.Indexer.CSharpStaticInterfacePrepass.FileTarget>();
+                for (var index = 0; index < 8; index++)
+                {
+                    var sourcePath = Path.Combine(sourceDirectory, $"Static{index}.cs");
+                    File.WriteAllText(
+                        sourcePath,
+                        $"public static class Static{index} {{ public const int Value = {index}; }}");
+                    targets.Add(CodeIndex.Indexer.CSharpStaticInterfacePrepass.FileTarget.Create(
+                        projectRoot,
+                        sourcePath,
+                        "csharp"));
+                }
+
+                ExtractorPluginRegistry.ReloadForTests();
+                ExtractorPluginRegistry.UserPluginDirectoryForTesting = pluginDirectory;
+                ExecutableExtensionBoundary.StagedForTesting = (source, _) =>
+                {
+                    if (string.Equals(source, pluginPath, StringComparison.Ordinal))
+                        pluginStageCount++;
+                };
+                ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(projectRoot);
+                Assert.Equal(1, pluginStageCount);
+
+                var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+                using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+                var writer = new DbWriter(db.Connection);
+                var indexer = new CodeIndex.Indexer.FileIndexer(projectRoot, ignoreCase: false);
+
+                var workspace = CodeIndex.Indexer.CSharpStaticInterfacePrepass.BuildWorkspaceSymbols(
+                    writer,
+                    indexer,
+                    targets,
+                    includeExistingSymbols: false,
+                    parallelism: 4,
+                    patternConfigsAlreadyLoaded: true);
+
+                Assert.True(workspace.SourceContractEvidenceComplete);
+                Assert.Equal(1, pluginStageCount);
+
+                CodeIndex.Indexer.CSharpStaticInterfacePrepass.BuildWorkspaceSymbols(
+                    writer,
+                    indexer,
+                    [targets[0]],
+                    includeExistingSymbols: false);
+                Assert.Equal(2, pluginStageCount);
+            }
+            finally
+            {
+                ExecutableExtensionBoundary.StagedForTesting = null;
+                ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
     public void LoadPlugin_KillsTimedOutAndCrashedConstructorWorkers_Issue4598()
     {
         lock (TestConsoleLock.Gate)

@@ -406,6 +406,11 @@ is still compared with a fresh filesystem size and UTC modification time, and
 language extractor versions, extraction caps, stale issue metadata, and generated
 code suppression must all remain part of the snapshot eligibility contract. Do
 not replace this snapshot with per-file database probes in either CLI or MCP.
+CLI full scans, scoped updates, and MCP indexing also load the workspace pattern
+configuration once before this prepass. Their C# candidate extraction must reuse
+that loaded snapshot instead of refreshing default plugins for every candidate;
+direct prepass callers retain the discovery-enabled default unless they explicitly
+prove the snapshot is already loaded.
 Rows with missing or invalid legacy stat values are excluded so normal checksum
 reuse or reindexing can repair them, and CLI/MCP cancellation must interrupt the
 snapshot query as well as the later extraction pipeline.
@@ -4120,6 +4125,10 @@ generated-code suppression も snapshot eligibility contract に含めます。C
 この snapshot を file ごとの database probe に戻さないでください。旧 DB の欠損または不正な
 stat 値を持つ row は除外して通常の checksum reuse / 再 index で修復し、CLI/MCP の cancellation は
 後続の extraction pipeline だけでなく snapshot query も中断できる状態を保ってください。
+CLI full scan、scoped update、MCP indexing は、この prepass より前に workspace pattern config も
+1回だけ読み込みます。C# candidate extraction は candidate ごとに default plugin を refresh せず、
+その読込済み snapshot を再利用してください。直接 prepass を呼ぶ側は、snapshot 読込済みを明示的に
+保証しない限り、従来どおり discovery 有効の既定経路を維持します。
 
 authoritative な full scan は、共有 source-directory enumeration 中に C#、VB、F#、
 MSBuild の project-marker fingerprint を収集します。同じ pass で budget 非依存の

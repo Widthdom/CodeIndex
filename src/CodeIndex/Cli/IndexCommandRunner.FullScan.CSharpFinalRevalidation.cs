@@ -158,6 +158,7 @@ public static partial class IndexCommandRunner
                     context.StaleFilePurgePlan.FileIds,
                 isExistingSymbolPathExcluded:
                     context.IsExistingCSharpSymbolPathNowNonCSharp,
+                patternConfigsAlreadyLoaded: true,
                 cancellationToken: context.CancellationToken),
             context.CancellationToken);
         if (!workspace.SourceContractEvidenceComplete)
