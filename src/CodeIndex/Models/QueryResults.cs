@@ -2150,9 +2150,11 @@ public sealed class StatusRebuildReclaim
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public double? FreelistRatioAfter { get; set; }
     [JsonPropertyName("pages_reclaimed")]
-    public long PagesReclaimed { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? PagesReclaimed { get; set; }
     [JsonPropertyName("bytes_reclaimed")]
-    public long BytesReclaimed { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? BytesReclaimed { get; set; }
     [JsonPropertyName("logical_database_bytes_before")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public long? LogicalDatabaseBytesBefore { get; set; }

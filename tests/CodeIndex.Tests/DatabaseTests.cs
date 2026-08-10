@@ -4821,6 +4821,59 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void RunRebuildReclaimIfRecommended_PostReclaimMetricsFailureDoesNotFabricateAfterValues_Issue5057()
+    {
+        var dbDir = TestProjectHelper.CreateTempProject("codeindex_rebuild_reclaim_metrics_failure");
+        var dbPath = Path.Combine(dbDir, "codeindex.db");
+        try
+        {
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            db.InitializeSchema();
+            using (var cmd = db.Connection.CreateCommand())
+            {
+                cmd.CommandText = @"
+                    CREATE TABLE rebuild_metrics_failure_payload (id INTEGER PRIMARY KEY, payload BLOB);
+                    WITH RECURSIVE n(value) AS (
+                        SELECT 1
+                        UNION ALL
+                        SELECT value + 1 FROM n WHERE value < 256
+                    )
+                    INSERT INTO rebuild_metrics_failure_payload (payload)
+                    SELECT randomblob(4096) FROM n;
+                    DELETE FROM rebuild_metrics_failure_payload;";
+                cmd.ExecuteNonQuery();
+            }
+            DbContext.MaintenanceProgressForTesting = (operation, phase) =>
+            {
+                if (operation == "rebuild_reclaim" && phase == "metrics_after")
+                    throw new IOException("injected post-reclaim metrics failure");
+            };
+
+            var result = db.RunRebuildReclaimIfRecommended(CancellationToken.None);
+
+            Assert.Equal("failed", result.State);
+            Assert.Equal("io_error", result.Reason);
+            Assert.NotNull(result.PageCountBefore);
+            Assert.Null(result.PageCountAfter);
+            Assert.Null(result.FreelistCountAfter);
+            Assert.Null(result.FreelistRatioAfter);
+            Assert.Null(result.PagesReclaimed);
+            Assert.Null(result.BytesReclaimed);
+            Assert.Null(result.LogicalDatabaseBytesAfter);
+            Assert.Null(result.DbSizeBytesAfter);
+            using var pageCountCommand = db.Connection.CreateCommand();
+            pageCountCommand.CommandText = "PRAGMA page_count";
+            Assert.True((long)pageCountCommand.ExecuteScalar()! < result.PageCountBefore);
+        }
+        finally
+        {
+            DbContext.MaintenanceProgressForTesting = null;
+            SqliteConnection.ClearAllPools();
+            TestProjectHelper.DeleteDirectory(dbDir);
+        }
+    }
+
+    [Fact]
     public void RunRebuildReclaimIfRecommended_BelowThresholdDoesNotVacuum_Issue5057()
     {
         var dbDir = TestProjectHelper.CreateTempProject("codeindex_rebuild_reclaim_not_needed");

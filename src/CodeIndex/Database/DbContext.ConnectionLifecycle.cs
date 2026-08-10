@@ -599,7 +599,7 @@ public partial class DbContext : IDisposable
                 state: ex is OperationCanceledException ? "cancelled" : "failed",
                 reason: ClassifyRebuildReclaimFailure(ex),
                 before,
-                before,
+                after: null,
                 guidanceBefore,
                 started);
         }
@@ -614,9 +614,9 @@ public partial class DbContext : IDisposable
         long startedTimestamp,
         double? freelistRatioAfter = null)
     {
-        var pagesReclaimed = before.HasValue && after.HasValue
+        long? pagesReclaimed = before.HasValue && after.HasValue
             ? Math.Max(0, before.Value.PageCount - after.Value.PageCount)
-            : 0;
+            : null;
         var pageSize = after?.PageSize ?? before?.PageSize;
         return new StatusRebuildReclaim
         {
@@ -631,9 +631,13 @@ public partial class DbContext : IDisposable
             EstimatedBytesReclaimableBefore = guidanceBefore?.EstimatedBytesReclaimable,
             PageCountAfter = after?.PageCount,
             FreelistCountAfter = after?.FreelistCount,
-            FreelistRatioAfter = freelistRatioAfter ?? guidanceBefore?.FreelistRatio,
+            FreelistRatioAfter = after.HasValue
+                ? freelistRatioAfter ?? guidanceBefore?.FreelistRatio
+                : null,
             PagesReclaimed = pagesReclaimed,
-            BytesReclaimed = pagesReclaimed * pageSize.GetValueOrDefault(),
+            BytesReclaimed = pagesReclaimed.HasValue && pageSize.HasValue
+                ? pagesReclaimed.Value * pageSize.Value
+                : null,
             LogicalDatabaseBytesBefore = before.HasValue
                 ? before.Value.PageCount * before.Value.PageSize
                 : null,

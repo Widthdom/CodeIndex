@@ -238,11 +238,11 @@ public static partial class IndexCommandRunner
             CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("C# names", output.CSharpSymbolNameReadyAfter ? "ready" : "degraded", indent: "  "));
             CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("C# meta", output.CSharpMetadataTargetReadyAfter ? "ready" : "degraded", indent: "  "));
             CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Fold", output.FoldReadyAfter ? "ready" : "degraded", indent: "  "));
-            if (output.RebuildReclaim is { State: "completed" } rebuildReclaim)
+            if (output.RebuildReclaim is { State: "completed", BytesReclaimed: long reclaimedBytes })
             {
                 CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine(
                     "Reclaimed",
-                    ConsoleUi.FormatBytes(rebuildReclaim.BytesReclaimed),
+                    ConsoleUi.FormatBytes(reclaimedBytes),
                     indent: "  "));
             }
             CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Elapsed", ConsoleUi.FormatDuration(output.Stopwatch.Elapsed, output.Options.DurationFormat), indent: "  "));
