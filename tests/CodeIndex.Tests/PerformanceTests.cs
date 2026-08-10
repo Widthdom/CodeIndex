@@ -243,6 +243,28 @@ public class PerformanceTests : IDisposable
 #else
     [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
 #endif
+    public void SymbolExtraction_CsharpSameLineRecoveryDecisions_StayWithinAllocationBudget()
+    {
+        const int propertyCount = 1_000;
+        var content = "public sealed class Fixture\n{\n"
+            + string.Join('\n', Enumerable.Range(0, propertyCount).Select(index =>
+                $"    public static Dictionary<string, List<(int Left, int Right)>> Property{index} {{ get; }} = new();"))
+            + "\n}";
+        var symbols = SymbolExtractor.Extract(1, "csharp", content);
+        Assert.Equal(propertyCount, symbols.Count(symbol => symbol.Kind == "property"));
+
+        var allocatedBytes = MeasureAllocatedBytes(() => SymbolExtractor.Extract(1, "csharp", content));
+
+        Assert.True(
+            allocatedBytes < 6_800_000,
+            $"C# same-line recovery extraction allocated {allocatedBytes:N0} bytes");
+    }
+
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
     public void CSharpStaticInterfacePrepass_LargeSemanticProbeStaysWithinAllocationBudget()
     {
         const int repeats = 12;
