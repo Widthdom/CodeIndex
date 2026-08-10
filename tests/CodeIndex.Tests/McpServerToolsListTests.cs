@@ -169,6 +169,8 @@ public partial class McpServerTests
         Assert.Contains(
             compactSearch["inputSchema"]!["anyOf"]!.AsArray(),
             mode => mode!["required"]!.AsArray().Any(required => required!.GetValue<string>() == "query"));
+        var compactSuggestion = compactTools.Single(tool => tool!["name"]!.GetValue<string>() == "suggest_improvement")!;
+        Assert.Contains("Never include source code", compactSuggestion["description"]!.GetValue<string>(), StringComparison.Ordinal);
 
         var meta = compactResult["_meta"]!;
         Assert.Equal("compact", meta["format"]!.GetValue<string>());

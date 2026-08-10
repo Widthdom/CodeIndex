@@ -326,7 +326,9 @@ public partial class McpServer
         var compact = new JsonObject
         {
             ["name"] = tool["name"]?.DeepClone(),
-            ["description"] = BuildCompactToolDescription(tool["description"]?.GetValue<string>()),
+            ["description"] = BuildCompactToolDescription(
+                tool["name"]?.GetValue<string>(),
+                tool["description"]?.GetValue<string>()),
             ["inputSchema"] = BuildInvocationSchema(tool["inputSchema"]),
         };
         if (tool["annotations"] is not null)
@@ -368,7 +370,7 @@ public partial class McpServer
         return invocationSchemaMap;
     }
 
-    private static string BuildCompactToolDescription(string? description)
+    private static string BuildCompactToolDescription(string? toolName, string? description)
     {
         if (string.IsNullOrWhiteSpace(description))
             return string.Empty;
@@ -377,6 +379,8 @@ public partial class McpServer
         var sentenceEnd = english.IndexOf(". ", StringComparison.Ordinal);
         if (sentenceEnd >= 0)
             english = english[..(sentenceEnd + 1)];
+        if (toolName == "suggest_improvement")
+            english += " Never include source code; describe the issue in natural language only.";
         const int maxDescriptionCharacters = 240;
         return english.Length <= maxDescriptionCharacters
             ? english

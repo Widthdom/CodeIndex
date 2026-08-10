@@ -1280,6 +1280,7 @@ public partial class McpServerTests
         Assert.DoesNotContain("'unused_symbols'", instructions);
         Assert.DoesNotContain("'symbol_hotspots'", instructions);
         Assert.DoesNotContain("'impact_analysis'", instructions);
+        Assert.DoesNotContain("investigate_before_edit", instructions);
         // The exactName-guidance sentence used to enumerate "symbols/definition/references/
         // callers/callees/analyze_symbol" verbatim. With only 'search' and 'definition'
         // enabled, none of those disabled names should leak into the guidance.

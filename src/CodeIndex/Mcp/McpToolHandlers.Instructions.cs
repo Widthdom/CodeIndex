@@ -21,12 +21,15 @@ public partial class McpServer
     private string BuildInstructions()
     {
         bool On(string name) => _toolFilter.IsEnabled(name);
+        bool All(params string[] names) => names.All(On);
         var parts = new List<string>
         {
             "cdidx is a local-first code-index server. Prefer its focused MCP tools before shell grep/find/cat or whole-file reads. cdidx は local-first なコード索引サーバーです。shell の grep/find/cat やファイル全体の読み取りより、絞り込んだ MCP tool を優先してください。",
             "The default tools/list page is a bounded catalog with authoritative invocation schemas. Request format=full with exact names only when detailed descriptions, output schemas, or examples are needed, and continue pagination with nextCursor unchanged. 既定の tools/list は呼び出し用 schema を保持した bounded catalog です。詳細説明、output schema、example が必要な場合だけ正確な names と format=full を指定し、nextCursor は変更せず継続してください。",
-            "Use prompts/list and prompts/get for extended workflows such as investigate_before_edit. 詳細な workflow は prompts/list と prompts/get（例: investigate_before_edit）から取得してください。",
         };
+
+        if (All("map", "search", "symbols", "definition", "references", "excerpt"))
+            parts.Add("Use prompts/list and prompts/get for extended workflows such as investigate_before_edit. 詳細な workflow は prompts/list と prompts/get（例: investigate_before_edit）から取得してください。");
 
         if (On("index"))
             parts.Add("If no index exists, call 'index' first. index が無い場合は最初に 'index' を呼んでください。");
