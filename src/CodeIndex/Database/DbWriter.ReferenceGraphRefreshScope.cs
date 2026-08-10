@@ -541,7 +541,17 @@ public partial class DbWriter
     }
 
     private bool IsTrackingReferenceGraphRefresh
-        => _referenceGraphRefreshScope is { IsCompleting: false, IsDisposed: false };
+        // A forced full refresh never consumes the dirty TEMP tables. Fresh indexes and
+        // rebuilds can therefore skip the per-batch Distinct/materialization work across
+        // every language while preserving the scoped path for existing databases.
+        // forced full refreshはdirty TEMP tableを参照しないため、全言語のbatchごとの
+        // Distinct/materializeを省き、既存DBのscoped pathだけ追跡する。
+        => _referenceGraphRefreshScope is
+        {
+            IsCompleting: false,
+            IsDisposed: false,
+            ForceFullRefresh: false,
+        };
 
     private void RequireFullReferenceGraphRefresh()
     {

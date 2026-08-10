@@ -1183,6 +1183,75 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void ReferenceGraphDirtyScope_ForcedFullRefreshSkipsUnusedDirtyTracking()
+    {
+        DbWriter.ReferenceGraphRefreshScopeStats? observed = null;
+        var previousHook = DbWriter.ReferenceGraphRefreshScopeForTesting;
+        try
+        {
+            DbWriter.ReferenceGraphRefreshScopeForTesting = stats => observed = stats;
+            using var scope = _writer.BeginReferenceGraphRefreshScope(forceFullRefresh: true);
+            long fileId;
+            using (var transaction = _writer.BeginTransaction())
+            {
+                fileId = _writer.UpsertFile(new FileRecord
+                {
+                    Path = "src/forced-full.py",
+                    Lang = "python",
+                    Size = 100,
+                    Lines = 1,
+                    Modified = new DateTime(2025, 1, 2, 0, 0, 0, DateTimeKind.Utc),
+                    Checksum = "forced-full-replacement",
+                });
+                _writer.InsertSymbols([
+                    new SymbolRecord
+                    {
+                        FileId = fileId,
+                        Kind = "function",
+                        Name = "After",
+                        Line = 1,
+                    },
+                ]);
+                _writer.InsertReferences([
+                    new ReferenceRecord
+                    {
+                        FileId = fileId,
+                        SymbolName = "After",
+                        ReferenceKind = "call",
+                        Line = 1,
+                        Column = 1,
+                        Context = "After()",
+                    },
+                ], refreshMutualRecursionFlags: false);
+                transaction.Commit();
+            }
+
+            Assert.Equal(0, ExecuteScalarLong(
+                "SELECT COUNT(*) FROM temp.reference_graph_dirty_files"));
+            Assert.Equal(0, ExecuteScalarLong(
+                "SELECT COUNT(*) FROM temp.reference_graph_dirty_names"));
+            Assert.Equal(0, ExecuteScalarLong(
+                "SELECT COUNT(*) FROM temp.reference_graph_removed_references"));
+            Assert.Equal(0, ExecuteScalarLong(
+                "SELECT COUNT(*) FROM temp.reference_graph_dirty_references"));
+
+            _writer.RefreshMutualRecursionFlags();
+
+            Assert.NotNull(observed);
+            Assert.True(observed!.UsedFullRefresh);
+            Assert.Equal(0, observed.DirtyFileCount);
+            Assert.Equal(0, observed.DirtyNameCount);
+            Assert.Equal(1, observed.DirtyReferenceCount);
+            Assert.Equal(1, observed.TotalReferenceCount);
+            Assert.Equal("resolved", ReadReferenceResolutionState(fileId));
+        }
+        finally
+        {
+            DbWriter.ReferenceGraphRefreshScopeForTesting = previousHook;
+        }
+    }
+
+    [Fact]
     public void ReferenceGraphDirtyScope_TracksLanguageTransitionsAndMatchesFullRefresh()
     {
         var csharpCallerId = UpsertTestFileWithLanguage("src/caller.cs", "csharp", "dirty-csharp-caller");

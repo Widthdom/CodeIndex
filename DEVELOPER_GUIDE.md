@@ -337,7 +337,10 @@ materialization and resolution, and the file and reference-line maintenance inde
 remain available during the load, while identity and resolution finalization
 continues without query indexes. The
 guard forces any active dirty graph scope onto its full-refresh plan before the
-indexes disappear. Immediately before mutual-recursion evaluation, its graph
+indexes disappear. While that force-full plan is known, do not populate the
+dirty-file/name/reference TEMP scope: fresh indexes and rebuilds never consume
+it, and per-batch tracking otherwise adds avoidable set materialization across
+every language. Immediately before mutual-recursion evaluation, its graph
 transaction restores only the unresolved-folded, legacy NOCASE, and resolved
 reverse-edge indexes; the remaining query indexes return after the mutual update.
 The full mutual-recursion update materializes one desired flag per call-like or
@@ -4058,7 +4061,9 @@ reverse lookup は raw persistence 中は維持し、実際の graph refresh が
 再構築しません。reference scope の materialization / resolution に使う candidate primary key は
 維持します。load 中も file と reference-line の保守用 index は残し、identity / resolution
 finalization 中は query index を遅延したままにします。guard は index を外す前に active な dirty graph scope を full refresh へ
-昇格します。mutual-recursion 評価の直前に、その graph transaction 内で unresolved-folded、
+昇格します。この force-full plan が確定している間は dirty file / name / reference の TEMP scope を
+投入しないでください。fresh index と rebuild はその scope を参照せず、追跡すると全言語の batch ごとに
+不要な set materialization が発生します。mutual-recursion 評価の直前に、その graph transaction 内で unresolved-folded、
 legacy NOCASE、resolved reverse-edge の3本だけを復元し、残りの query index は mutual update
 後に戻します。TypeScript augmentation rebuild が唯一の graph pass を担当する場合は、readiness
 前に通常の graph / query index を復元し、augmentation の candidate 構築直前にだけ
