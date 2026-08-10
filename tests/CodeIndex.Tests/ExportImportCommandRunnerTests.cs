@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using Microsoft.Data.Sqlite;
@@ -967,18 +968,24 @@ public class ExportImportCommandRunnerTests
     }
 
     [Fact]
-    public void RunExportArchive_AppliesProjectPathLanguageAndTestScope_Issue4714()
+    public void RunExportArchive_AppliesProjectPathLanguageAndTestScope_Issue4714_Issue5053()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("export_archive_scope");
         try
         {
             TestProjectHelper.WriteTextFile(projectRoot, "src/App/App.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+            TestProjectHelper.WriteTextFile(projectRoot, "src/App/App.cs", "public class AppType { }");
+            TestProjectHelper.WriteTextFile(projectRoot, "src/shared/Shared.cs", "public class SharedType { }");
+            TestProjectHelper.WriteTextFile(projectRoot, "src/Other/Other.cs", "public class OtherType { }");
+            TestProjectHelper.WriteTextFile(projectRoot, "src/App/tool.py", "def tool(): pass");
+            TestProjectHelper.WriteTextFile(projectRoot, "src/App/tests/AppTests.cs", "public class AppTests { }");
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
             TestProjectHelper.InsertIndexedFile(dbPath, "src/App/App.cs", "csharp", "public class AppType { }");
             TestProjectHelper.InsertIndexedFile(dbPath, "src/shared/Shared.cs", "csharp", "public class SharedType { }");
             TestProjectHelper.InsertIndexedFile(dbPath, "src/Other/Other.cs", "csharp", "public class OtherType { }");
             TestProjectHelper.InsertIndexedFile(dbPath, "src/App/tool.py", "python", "def tool(): pass");
             TestProjectHelper.InsertIndexedFile(dbPath, "src/App/tests/AppTests.cs", "csharp", "public class AppTests { }");
+            SetArchiveTrustMetadata(dbPath, 5);
             var archivePath = Path.Combine(projectRoot, "scoped.cdidx.zip");
             var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
 
@@ -1004,26 +1011,104 @@ public class ExportImportCommandRunnerTests
             Assert.Equal(5, scope.GetProperty("source_file_count").GetInt64());
             Assert.Equal(2, scope.GetProperty("exported_file_count").GetInt64());
             Assert.Equal("src/App/*", scope.GetProperty("resolved_project_path")[0].GetString());
+            Assert.False(scope.GetProperty("represents_entire_source_database").GetBoolean());
+            var resultManifest = result.RootElement.GetProperty("manifest");
+            Assert.False(resultManifest.GetProperty("index_complete").GetBoolean());
+            Assert.Contains(
+                resultManifest.GetProperty("index_incomplete_reasons").EnumerateArray(),
+                reason => reason.GetString() == ExportImportCommandRunner.PartialArchiveIncompleteReason);
+            Assert.Equal(JsonValueKind.Null, resultManifest.GetProperty("unknown_extension_file_count").ValueKind);
+            Assert.Equal(string.Empty, ReadMetaValue(dbPath, DbContext.IndexIncompleteReasonsMetaKey));
+            Assert.Equal("source-head", ReadMetaValue(dbPath, DbContext.IndexedHeadShaMetaKey));
+            Assert.Equal("source-head", ReadMetaValue(dbPath, DbContext.CommitScopedFreshHeadShaMetaKey));
+            Assert.Equal("5", ReadMetaValue(dbPath, DbContext.LastIndexRunFilesScannedMetaKey));
+            Assert.Equal("2", ReadMetaValue(dbPath, DbContext.UnknownExtensionFileCountMetaKey));
 
             var extractedDb = Path.Combine(projectRoot, "scoped.db");
             using (var archive = ZipFile.OpenRead(archivePath))
                 archive.GetEntry("codeindex.db")!.ExtractToFile(extractedDb);
-            using var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = extractedDb }.ConnectionString);
-            connection.Open();
-            using (var filesCommand = connection.CreateCommand())
+            using (var connection = new SqliteConnection(
+                       new SqliteConnectionStringBuilder { DataSource = extractedDb }.ConnectionString))
             {
-                filesCommand.CommandText = "SELECT path FROM files ORDER BY path";
-                using var reader = filesCommand.ExecuteReader();
-                var paths = new List<string>();
-                while (reader.Read())
-                    paths.Add(reader.GetString(0));
-                Assert.Equal(["src/App/App.cs", "src/shared/Shared.cs"], paths);
+                connection.Open();
+                using (var filesCommand = connection.CreateCommand())
+                {
+                    filesCommand.CommandText = "SELECT path FROM files ORDER BY path";
+                    using var reader = filesCommand.ExecuteReader();
+                    var paths = new List<string>();
+                    while (reader.Read())
+                        paths.Add(reader.GetString(0));
+                    Assert.Equal(["src/App/App.cs", "src/shared/Shared.cs"], paths);
+                }
+                using (var integrityCommand = connection.CreateCommand())
+                {
+                    integrityCommand.CommandText = "PRAGMA foreign_key_check";
+                    using var reader = integrityCommand.ExecuteReader();
+                    Assert.False(reader.Read());
+                }
             }
-            using (var integrityCommand = connection.CreateCommand())
+
+            Assert.Equal("incomplete", ReadMetaValue(extractedDb, DbContext.IndexCompletenessMetaKey));
+            using (var incompleteReasons = JsonDocument.Parse(
+                       ReadMetaValue(extractedDb, DbContext.IndexIncompleteReasonsMetaKey)!))
             {
-                integrityCommand.CommandText = "PRAGMA foreign_key_check";
-                using var reader = integrityCommand.ExecuteReader();
-                Assert.False(reader.Read());
+                Assert.Contains(
+                    incompleteReasons.RootElement.EnumerateArray(),
+                    reason => reason.GetString() == ExportImportCommandRunner.PartialArchiveIncompleteReason);
+            }
+            Assert.Null(ReadMetaValue(extractedDb, DbContext.IndexedHeadShaMetaKey));
+            Assert.Null(ReadMetaValue(extractedDb, DbContext.CommitScopedFreshHeadShaMetaKey));
+            Assert.Null(ReadMetaValue(extractedDb, DbContext.LastIndexRunFilesScannedMetaKey));
+            Assert.Null(ReadMetaValue(extractedDb, DbContext.UnknownExtensionFileCountMetaKey));
+            Assert.Null(ReadMetaValue(extractedDb, DbContext.UnknownExtensionFilePathsMetaKey));
+            AssertPartialArchiveStatus(extractedDb);
+
+            var importedDb = Path.Combine(projectRoot, "imported", "codeindex.db");
+            var (importExitCode, _, importStderr) = ConsoleCapture.Capture(() =>
+                ExportImportCommandRunner.RunImport(
+                    [archivePath, "--db", importedDb, "--json"],
+                    jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, importExitCode);
+            Assert.Equal(string.Empty, importStderr);
+            Assert.Equal(
+                Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(extractedDb))),
+                Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(importedDb))));
+            AssertPartialArchiveStatus(importedDb);
+
+            var (refreshExitCode, refreshStdout, _) = ConsoleCapture.Capture(() =>
+                ProgramRunner.Run(
+                    [
+                        "index", projectRoot,
+                        "--files", "src/App/App.cs",
+                        "--db", importedDb,
+                        "--json",
+                        "--no-progress",
+                        "--notify", "none",
+                    ],
+                    appVersion: "test"));
+            Assert.Equal(CommandExitCodes.Success, refreshExitCode);
+            using (var refreshResult = JsonDocument.Parse(refreshStdout))
+            {
+                Assert.Equal(6, refreshResult.RootElement
+                    .GetProperty("summary")
+                    .GetProperty("files_total")
+                    .GetInt32());
+                Assert.True(refreshResult.RootElement.GetProperty("index_complete").GetBoolean());
+            }
+            Assert.Equal("complete", ReadMetaValue(importedDb, DbContext.IndexCompletenessMetaKey));
+            Assert.Null(ReadMetaValue(importedDb, DbContext.IndexIncompleteReasonsMetaKey));
+
+            var (refreshedStatusExitCode, refreshedStatusStdout, refreshedStatusStderr) =
+                ConsoleCapture.Capture(() =>
+                    ProgramRunner.Run(
+                        ["status", "--check", "--db", importedDb, "--json"],
+                        appVersion: "test"));
+            Assert.Equal(CommandExitCodes.Success, refreshedStatusExitCode);
+            Assert.Equal(string.Empty, refreshedStatusStderr);
+            using (var refreshedStatus = JsonDocument.Parse(refreshedStatusStdout))
+            {
+                Assert.True(refreshedStatus.RootElement.GetProperty("index_complete").GetBoolean());
+                Assert.True(refreshedStatus.RootElement.GetProperty("index_matches_workspace").GetBoolean());
             }
 
             using var manifest = ZipFile.OpenRead(archivePath);
@@ -1031,6 +1116,122 @@ public class ExportImportCommandRunnerTests
             using var manifestDocument = JsonDocument.Parse(manifestStream);
             Assert.Equal(2, manifestDocument.RootElement.GetProperty("file_count").GetInt64());
             Assert.True(manifestDocument.RootElement.GetProperty("scope").GetProperty("scoped").GetBoolean());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunImport_FullAndLegacyArchivesMaterializeConservativeTrust_Issue5053()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("import_archive_trust_scope");
+        try
+        {
+            var sourceDbPath = TestProjectHelper.CreateProjectDb(Path.Combine(projectRoot, "source"));
+            TestProjectHelper.InsertIndexedFile(
+                sourceDbPath,
+                "src/App.cs",
+                "csharp",
+                "public class App { public void Run() { } }");
+            SetArchiveTrustMetadata(sourceDbPath, 1);
+            var pristineArchivePath = ExportArchive(projectRoot, sourceDbPath);
+            var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
+
+            var fullImportDbPath = Path.Combine(projectRoot, "full", "codeindex.db");
+            var (fullExitCode, fullStdout, fullStderr) = ConsoleCapture.Capture(() =>
+                ExportImportCommandRunner.RunImport(
+                    [pristineArchivePath, "--db", fullImportDbPath, "--json"],
+                    jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, fullExitCode);
+            Assert.Equal(string.Empty, fullStderr);
+            using (var fullResult = JsonDocument.Parse(fullStdout))
+            {
+                Assert.True(fullResult.RootElement.GetProperty("index_complete").GetBoolean());
+                Assert.True(fullResult.RootElement
+                    .GetProperty("scope")
+                    .GetProperty("represents_entire_source_database")
+                    .GetBoolean());
+                Assert.Equal(2, fullResult.RootElement.GetProperty("unknown_extension_file_count").GetInt64());
+            }
+            Assert.Equal("complete", ReadMetaValue(fullImportDbPath, DbContext.IndexCompletenessMetaKey));
+            Assert.Equal("source-head", ReadMetaValue(fullImportDbPath, DbContext.IndexedHeadShaMetaKey));
+            Assert.Equal("1", ReadMetaValue(fullImportDbPath, DbContext.LastIndexRunFilesScannedMetaKey));
+            Assert.Equal("2", ReadMetaValue(fullImportDbPath, DbContext.UnknownExtensionFileCountMetaKey));
+
+            using (var sourceDb = new DbContext(DbOpenIntent.WriteIndex, sourceDbPath))
+            {
+                var writer = new DbWriter(sourceDb.Connection);
+                writer.SetMeta(DbContext.IndexCompletenessMetaKey, "incomplete");
+                writer.SetMeta(
+                    DbContext.IndexIncompleteReasonsMetaKey,
+                    "[\"legacy_source_incomplete\"]");
+            }
+            var incompleteArchivePath = ExportArchive(projectRoot, sourceDbPath);
+            var legacyArchivePath = CopyArchiveWithoutTrustScopeMarker(projectRoot, incompleteArchivePath);
+            var legacyImportDbPath = Path.Combine(projectRoot, "legacy", "codeindex.db");
+            var (legacyExitCode, legacyStdout, legacyStderr) = ConsoleCapture.Capture(() =>
+                ExportImportCommandRunner.RunImport(
+                    [legacyArchivePath, "--db", legacyImportDbPath, "--json"],
+                    jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, legacyExitCode);
+            Assert.Equal(string.Empty, legacyStderr);
+            using (var legacyResult = JsonDocument.Parse(legacyStdout))
+            {
+                Assert.False(legacyResult.RootElement.GetProperty("index_complete").GetBoolean());
+                Assert.Equal(
+                    ["legacy_source_incomplete", ExportImportCommandRunner.PartialArchiveIncompleteReason],
+                    legacyResult.RootElement
+                        .GetProperty("index_incomplete_reasons")
+                        .EnumerateArray()
+                        .Select(reason => reason.GetString()));
+                var legacyScope = legacyResult.RootElement.GetProperty("scope");
+                Assert.True(
+                    !legacyScope.TryGetProperty("represents_entire_source_database", out var wholeSource)
+                    || wholeSource.ValueKind == JsonValueKind.Null);
+                Assert.Equal(
+                    JsonValueKind.Null,
+                    legacyResult.RootElement.GetProperty("unknown_extension_file_count").ValueKind);
+            }
+            Assert.Equal("incomplete", ReadMetaValue(legacyImportDbPath, DbContext.IndexCompletenessMetaKey));
+            Assert.Null(ReadMetaValue(legacyImportDbPath, DbContext.IndexedHeadShaMetaKey));
+            Assert.Null(ReadMetaValue(legacyImportDbPath, DbContext.CommitScopedFreshHeadShaMetaKey));
+            Assert.Null(ReadMetaValue(legacyImportDbPath, DbContext.LastIndexRunFilesScannedMetaKey));
+            Assert.Null(ReadMetaValue(legacyImportDbPath, DbContext.UnknownExtensionFileCountMetaKey));
+            Assert.Equal(
+                "[\"legacy_source_incomplete\",\"partial_archive\"]",
+                ReadMetaValue(legacyImportDbPath, DbContext.IndexIncompleteReasonsMetaKey));
+            AssertPartialArchiveStatus(legacyImportDbPath);
+
+            var noMetaArchivePath = CopyArchiveWithoutTrustScopeMarker(
+                projectRoot,
+                pristineArchivePath,
+                removeMetadataTable: true);
+            var noMetaImportDbPath = Path.Combine(projectRoot, "no-meta", "codeindex.db");
+            var (noMetaExitCode, noMetaStdout, noMetaStderr) = ConsoleCapture.Capture(() =>
+                ExportImportCommandRunner.RunImport(
+                    [noMetaArchivePath, "--db", noMetaImportDbPath, "--json"],
+                    jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, noMetaExitCode);
+            Assert.Equal(string.Empty, noMetaStderr);
+            using (var noMetaResult = JsonDocument.Parse(noMetaStdout))
+            {
+                Assert.False(noMetaResult.RootElement.GetProperty("index_complete").GetBoolean());
+                Assert.Equal(
+                    [ExportImportCommandRunner.PartialArchiveIncompleteReason],
+                    noMetaResult.RootElement
+                        .GetProperty("index_incomplete_reasons")
+                        .EnumerateArray()
+                        .Select(reason => reason.GetString()));
+            }
+            Assert.Equal(
+                "[\"partial_archive\"]",
+                ReadMetaValue(noMetaImportDbPath, DbContext.IndexIncompleteReasonsMetaKey));
+            AssertPartialArchiveStatus(noMetaImportDbPath);
         }
         finally
         {
@@ -2156,6 +2357,122 @@ public class ExportImportCommandRunnerTests
         Assert.Contains("Exported CodeIndex archive", stdout);
         Assert.Equal(string.Empty, stderr);
         return archivePath;
+    }
+
+    private static string CopyArchiveWithoutTrustScopeMarker(
+        string projectRoot,
+        string archivePath,
+        bool removeMetadataTable = false)
+    {
+        var legacyArchivePath = Path.Combine(projectRoot, $"legacy-{Guid.NewGuid():N}.cdidx.zip");
+        File.Copy(archivePath, legacyArchivePath);
+        using var archive = ZipFile.Open(legacyArchivePath, ZipArchiveMode.Update);
+        var manifestEntry = archive.GetEntry("manifest.json")
+            ?? throw new InvalidOperationException("manifest.json entry was not found");
+        JsonObject manifest;
+        using (var stream = manifestEntry.Open())
+        {
+            manifest = JsonNode.Parse(stream)?.AsObject()
+                ?? throw new InvalidOperationException("manifest.json did not contain an object");
+        }
+        manifest["scope"]?.AsObject().Remove("represents_entire_source_database");
+        manifest.Remove("index_complete");
+        manifest.Remove("index_incomplete_reasons");
+        if (removeMetadataTable)
+        {
+            var databaseEntry = archive.GetEntry("codeindex.db")
+                ?? throw new InvalidOperationException("codeindex.db entry was not found");
+            var stagedDatabasePath = Path.Combine(projectRoot, $"legacy-{Guid.NewGuid():N}.db");
+            databaseEntry.ExtractToFile(stagedDatabasePath);
+            databaseEntry.Delete();
+            using (var connection = new SqliteConnection(
+                       new SqliteConnectionStringBuilder { DataSource = stagedDatabasePath }.ConnectionString))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = "DROP TABLE codeindex_meta";
+                command.ExecuteNonQuery();
+            }
+            SqliteConnection.ClearAllPools();
+            manifest["database_sha256"] = Convert.ToHexString(
+                    SHA256.HashData(File.ReadAllBytes(stagedDatabasePath)))
+                .ToLowerInvariant();
+            var replacementDatabase = archive.CreateEntry("codeindex.db", CompressionLevel.SmallestSize);
+            using (var source = File.OpenRead(stagedDatabasePath))
+            using (var destination = replacementDatabase.Open())
+                source.CopyTo(destination);
+            File.Delete(stagedDatabasePath);
+        }
+        manifestEntry.Delete();
+        var replacement = archive.CreateEntry("manifest.json", CompressionLevel.SmallestSize);
+        using var writer = new StreamWriter(replacement.Open(), new UTF8Encoding(false));
+        writer.Write(manifest.ToJsonString());
+        return legacyArchivePath;
+    }
+
+    private static void SetArchiveTrustMetadata(string dbPath, int filesScanned)
+    {
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+        var writer = new DbWriter(db.Connection);
+        writer.SetMeta(DbContext.IndexCompletenessMetaKey, "complete");
+        writer.SetMeta(DbContext.IndexIncompleteReasonsMetaKey, string.Empty);
+        writer.SetMeta(DbContext.IndexedHeadCommitMetaKey, "source-full-head");
+        writer.SetMeta(DbContext.IndexedHeadShaMetaKey, "source-head");
+        writer.SetMeta(DbContext.CommitScopedFreshHeadShaMetaKey, "source-head");
+        writer.SetMeta(DbContext.IndexedHeadBranchMetaKey, "main");
+        writer.SetMeta(DbContext.IndexedHeadTimestampMetaKey, "2026-08-09T00:00:00Z");
+        writer.SetMeta(DbContext.LastIndexRunModeMetaKey, "rebuild");
+        writer.SetMeta(DbContext.LastIndexRunFilesScannedMetaKey, filesScanned.ToString(CultureInfo.InvariantCulture));
+        writer.SetMeta(DbContext.LastIndexRunPeakMemoryMbMetaKey, "1298");
+        writer.SetMeta(DbContext.UnknownExtensionFileCountMetaKey, "2");
+        writer.SetMeta(
+            DbContext.UnknownExtensionFilePathsMetaKey,
+            JsonSerializer.Serialize(new[] { "docs/archive.foo", "tools/cache.bar" }));
+        writer.SetMeta(DbContext.UnknownExtensionFilesTruncatedMetaKey, bool.FalseString);
+        writer.SetMeta(
+            DbContext.UnknownExtensionFilePathLimitMetaKey,
+            DbContext.UnknownExtensionFilePathSampleLimit.ToString(CultureInfo.InvariantCulture));
+        writer.SetMeta(DbContext.UnknownExtensionExtensionCountsMetaKey, "{\".bar\":1,\".foo\":1}");
+        writer.SetMeta(DbContext.UnknownExtensionCategoryCountsMetaKey, "{\"language_support\":2}");
+        writer.SetMeta(DbContext.UnknownExtensionGroupsMetaKey, "[]");
+    }
+
+    private static void AssertPartialArchiveStatus(string dbPath)
+    {
+        var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
+            ProgramRunner.Run(["status", "--db", dbPath, "--json"], appVersion: "test"));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var status = JsonDocument.Parse(stdout);
+        Assert.False(status.RootElement.GetProperty("index_complete").GetBoolean());
+        Assert.Contains(
+            status.RootElement.GetProperty("index_incomplete_reasons").EnumerateArray(),
+            reason => reason.GetString() == ExportImportCommandRunner.PartialArchiveIncompleteReason);
+        Assert.False(status.RootElement.GetProperty("graph_data_current").GetBoolean());
+        Assert.False(status.RootElement.GetProperty("reference_graph_complete").GetBoolean());
+        Assert.True(
+            !status.RootElement.TryGetProperty("head_freshness", out var headFreshness)
+            || headFreshness.GetProperty("state").GetString() != "head_current");
+        Assert.False(status.RootElement.TryGetProperty("unknown_extension_file_count", out _));
+        Assert.True(
+            !status.RootElement.TryGetProperty("last_index_run", out var lastIndexRun)
+            || lastIndexRun.ValueKind == JsonValueKind.Null);
+        Assert.Contains("INCOMPLETE", status.RootElement.GetProperty("summary").GetString(), StringComparison.Ordinal);
+
+        var (checkExitCode, checkStdout, checkStderr) = ConsoleCapture.Capture(() =>
+            ProgramRunner.Run(["status", "--check", "--db", dbPath, "--json"], appVersion: "test"));
+        Assert.NotEqual(CommandExitCodes.Success, checkExitCode);
+        Assert.Equal(string.Empty, checkStderr);
+        using var checkStatus = JsonDocument.Parse(checkStdout);
+        Assert.False(checkStatus.RootElement.GetProperty("index_complete").GetBoolean());
+        Assert.Contains(
+            checkStatus.RootElement.GetProperty("index_incomplete_reasons").EnumerateArray(),
+            reason => reason.GetString() == ExportImportCommandRunner.PartialArchiveIncompleteReason);
+        Assert.True(
+            !checkStatus.RootElement.TryGetProperty("head_freshness", out var checkHeadFreshness)
+            || checkHeadFreshness.GetProperty("state").GetString() != "head_current");
+        Assert.Contains("INCOMPLETE", checkStatus.RootElement.GetProperty("summary").GetString(), StringComparison.Ordinal);
     }
 
     private static void SetUnknownExtensionPathSamples(string dbPath, string[] paths)

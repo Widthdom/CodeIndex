@@ -211,9 +211,13 @@ internal static partial class ExportImportCommandRunner
         return count;
     }
 
-    private static string? ReadMetaString(SqliteConnection connection, string key)
+    private static string? ReadMetaString(
+        SqliteConnection connection,
+        string key,
+        SqliteTransaction? transaction = null)
     {
         using var cmd = connection.CreateCommand();
+        cmd.Transaction = transaction;
         cmd.CommandText = "SELECT value FROM codeindex_meta WHERE key = @key LIMIT 1";
         SqliteCommandPolicy.Add(cmd, "@key", key);
         return cmd.ExecuteScalar() as string;
@@ -239,6 +243,51 @@ internal static partial class ExportImportCommandRunner
     {
         var value = ReadMetaString(connection, key);
         return bool.TryParse(value, out var parsed) ? parsed : null;
+    }
+
+    private static string[]? ReadArchiveIncompleteReasons(SqliteConnection connection)
+    {
+        var rawReasons = ReadMetaString(connection, DbContext.IndexIncompleteReasonsMetaKey);
+        if (string.IsNullOrWhiteSpace(rawReasons)
+            || Encoding.UTF8.GetByteCount(rawReasons) > MaxImportManifestBytes)
+        {
+            return null;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(
+                rawReasons,
+                new JsonDocumentOptions { MaxDepth = 4 });
+            if (document.RootElement.ValueKind != JsonValueKind.Array)
+                return null;
+
+            var reasons = new List<string>(MaxArchiveIncompleteReasons);
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            var totalChars = 0;
+            foreach (var item in document.RootElement.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.String || reasons.Count >= MaxArchiveIncompleteReasons)
+                    return null;
+                var reason = item.GetString();
+                if (string.IsNullOrWhiteSpace(reason)
+                    || reason.Length > MaxArchiveIncompleteReasonChars)
+                {
+                    return null;
+                }
+                if (!seen.Add(reason))
+                    continue;
+                if (totalChars + reason.Length > MaxArchiveIncompleteReasonsTotalChars)
+                    return null;
+                reasons.Add(reason);
+                totalChars += reason.Length;
+            }
+            return reasons.ToArray();
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     private readonly record struct UnknownExtensionFileSample(string[]? Files, int? Count, int? Limit, bool? Truncated);

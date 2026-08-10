@@ -505,7 +505,17 @@ exclusion, and test filters then narrow that scope. The exported SQLite
 snapshot contains only the retained files and their dependent chunks, symbols,
 references, and diagnostics, and is vacuumed before packaging. JSON output and
 `manifest.json` include the requested scope, resolved project paths, and source
-and exported file counts. An export without scope flags remains a full archive.
+and exported file counts. The scope also reports
+`represents_entire_source_database`. An export without scope flags remains a
+full archive and preserves the source database's index completeness,
+indexed-HEAD provenance, run telemetry, and unknown-extension summary. A
+filtered archive is instead stamped `index_complete: false` with the stable
+`partial_archive` reason, clears source-wide indexed-HEAD and run metadata, and
+omits unavailable unknown-extension summaries so `status` cannot present the
+subset as a fresh full index or an authoritative zero-result scan. This
+normalization applies only to the exported snapshot and does not mutate the
+source database. A later scoped index request falls back to a full workspace
+scan before clearing `partial_archive`.
 Portable export refuses an existing destination by default; pass `--overwrite`
 only when replacing it is intentional. The archive is built in an owner-only
 sibling temporary file and atomically published, and POSIX archives are verified
@@ -521,8 +531,11 @@ database. `--prune-paths` rewrites the imported `indexed_project_root` metadata
 to the import target project root. Imports targeting `.../.cdidx/codeindex.db`
 use the sibling project directory; other database paths fall back to the process
 current directory. `--dry-run` and its `--check` alias also compare an existing
-destination DB with the validated archive without replacing it. JSON
-`destination_delta.comparison` reports schema and count deltas plus bounded
+destination DB with the validated archive without replacing it. JSON results
+expose the normalized `index_complete`, `index_incomplete_reasons`, and `scope`
+values. Archives with no scope metadata are treated conservatively as partial
+during import; current unfiltered archives explicitly preserve full-snapshot
+trust. JSON `destination_delta.comparison` reports schema and count deltas plus bounded
 file, symbol, reference-edge, chunk, and metadata records. Text fields in those
 records are represented by named SHA-256 and UTF-8 byte-length metadata rather
 than source content or paths. Use `--limit <n<=10000>` and `--offset <n>` to
@@ -4000,7 +4013,15 @@ archive export では `--lang`、繰り返し指定できる `--path` / `--exclu
 さらに絞り込みます。出力する SQLite snapshot には残した file と、それに従属する
 chunk、symbol、reference、diagnostic だけを保持し、packaging 前に vacuum します。
 JSON output と `manifest.json` には指定 scope、解決済み project path、元と出力後の
-file count が含まれます。scope flag を指定しなければ従来どおり full archive です。
+file count が含まれます。scope には `represents_entire_source_database` も含まれます。
+scope flag を指定しない full archive は source database の index completeness、
+indexed-HEAD provenance、run telemetry、unknown-extension summary を維持します。一方、
+filter 済み archive は `index_complete: false` と stable reason `partial_archive` を記録し、
+source 全体に対する indexed-HEAD / run metadata を消去し、未計測の unknown-extension
+summary を省略するため、`status` が subset を fresh な full index や authoritative な
+0 件 scan として表示することはありません。この正規化は export snapshot だけに適用され、
+source database は変更しません。後続の scoped index request は `partial_archive` を解除する前に
+full workspace scan へ fallback します。
 portable export は既存 destination を既定で拒否します。意図して置き換える場合だけ
 `--overwrite` を指定してください。archive は owner-only の sibling temporary file に
 構築して atomic に publish し、POSIX では mode `0600` であることも検証します。
@@ -4015,7 +4036,10 @@ SQLite file が CodeIndex DB であることを検証してから destination da
 `.../.cdidx/codeindex.db` を import 先にした場合は sibling の project directory を使い、
 それ以外の database path では process current directory に fallback します。
 `--dry-run` と alias の `--check` は置換せず、既存 destination DB と検証済み archive を
-比較します。JSON の `destination_delta.comparison` には schema / count delta と、
+比較します。JSON result は正規化後の `index_complete`、`index_incomplete_reasons`、
+`scope` を公開します。scope metadata がない archive は import 時に保守的に partial と
+扱い、現行の filter なし archive だけが full snapshot の trust を明示的に維持します。
+JSON の `destination_delta.comparison` には schema / count delta と、
 file、symbol、reference edge、chunk、metadata の bounded record が含まれます。
 これらの record の text field は source content や path そのものではなく、名前付きの
 SHA-256 と UTF-8 byte length metadata として表現されます。record の paging には
