@@ -2562,6 +2562,56 @@ public partial class McpServerTests
     }
 
     [Fact]
+    public void ToolsCall_ImpactAnalysis_LogicalPartialFamilyReportsRootScope_Issue5060()
+    {
+        InsertIndexedFile("src/Worker.Start.cs", "csharp",
+            """
+            namespace Demo;
+            public partial class Worker
+            {
+                public void Start() { }
+            }
+            """, familyScopeKey: "src");
+        InsertIndexedFile("src/Worker.Stop.cs", "csharp",
+            """
+            namespace Demo;
+            public partial class Worker
+            {
+                public void Stop() { }
+            }
+            """, familyScopeKey: "src");
+        InsertIndexedFile("src/Consumer.cs", "csharp",
+            """
+            namespace Demo;
+            public class Consumer
+            {
+                public void Run(Worker worker)
+                {
+                    worker.Start();
+                    worker.Stop();
+                }
+            }
+            """, familyScopeKey: "src");
+        var writer = new DbWriter(_db.Connection);
+        writer.MarkHotspotFamilyReady("csharp", "issue-5060-fixture");
+        writer.MarkReferenceIdentityContractReady();
+
+        var request = JsonNode.Parse("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"impact_analysis","arguments":{"query":"Demo.Worker"}}}""")!;
+        var response = _server.HandleMessage(request)!;
+        var structured = response["result"]!["structuredContent"]!;
+
+        Assert.Equal("logical_partial_family", structured["traversal_root_scope"]!.GetValue<string>());
+        Assert.StartsWith("partial:", structured["traversal_partial_family_id"]!.GetValue<string>());
+        Assert.Equal(2, structured["partial_family_member_count"]!.GetValue<int>());
+        Assert.Equal(2, structured["partial_family_member_root_count"]!.GetValue<int>());
+        Assert.Equal(DbReader.DefaultImpactPartialFamilyMemberBudget, structured["partial_family_member_root_limit"]!.GetValue<int>());
+        Assert.False(structured["partial_family_member_root_truncated"]!.GetValue<bool>());
+        Assert.Equal(0, structured["partial_family_member_root_omitted"]!.GetValue<int>());
+        Assert.Equal("file_dependency_hints", structured["impact_mode"]!.GetValue<string>());
+        Assert.Single(structured["file_impacts"]!.AsArray());
+    }
+
+    [Fact]
     public void ToolsCall_ImpactAnalysis_ClassAndNamespaceWithSameNameStillReturnsHeuristicHints()
     {
         InsertIndexedFile("src/FooService.cs", "csharp",

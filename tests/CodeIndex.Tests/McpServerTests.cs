@@ -796,7 +796,8 @@ public partial class McpServerTests : IDisposable
         string content,
         bool generated = false,
         bool splitIntoProductionChunks = false,
-        int? lineCountOverride = null)
+        int? lineCountOverride = null,
+        string? familyScopeKey = null)
     {
         var normalized = content.Replace("\r\n", "\n");
         var lines = normalized.Split('\n');
@@ -828,9 +829,11 @@ public partial class McpServerTests : IDisposable
                 },
             ]);
 
-        var symbols = SymbolExtractor.Extract(fileId, lang, normalized);
+        var symbols = SymbolExtractor.Extract(fileId, lang, normalized, filePath: familyScopeKey != null ? path : null);
+        if (familyScopeKey != null)
+            SymbolExtractor.ApplyFamilyScope(symbols, familyScopeKey, lang);
         writer.InsertSymbols(symbols);
-        writer.InsertReferences(ReferenceExtractor.Extract(fileId, lang, normalized, symbols));
+        writer.InsertReferences(ReferenceExtractor.Extract(fileId, lang, normalized, symbols, path: familyScopeKey != null ? path : null));
         return fileId;
     }
 

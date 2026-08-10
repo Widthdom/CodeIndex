@@ -81,7 +81,7 @@ public partial class McpServer
                     ["max_hops"] = maxDepth,
                     ["actual_depth"] = maxActualDepth,
                     ["truncated"] = analysis.Truncated,
-                    ["total"] = analysis.Truncated ? null : JsonValue.Create(count),
+                    ["total"] = analysis.CountIsAuthoritative ? JsonValue.Create(count) : null,
                     ["termination_reason"] = analysis.TerminationReason,
                     ["impact_mode"] = analysis.ImpactMode,
                     ["heuristic"] = analysis.Heuristic,
@@ -89,6 +89,7 @@ public partial class McpServer
                     ["top_files"] = topFiles,
                     ["results"] = new JsonArray(),
                 };
+                AddImpactTraversalRootFields(countOnlyPayload, analysis);
                 AddImpactFailureFields(countOnlyPayload, analysis);
                 AddSqlGraphContractSignal(countOnlyPayload, sqlGraphSignal);
                 AddReferenceGraphCompletenessSignal(
@@ -133,6 +134,7 @@ public partial class McpServer
                 ["definitions"] = ToJsonArray(analysis.Definitions),
                 ["graph_table_available"] = analysis.GraphTableAvailable,
             };
+            AddImpactTraversalRootFields(payload, analysis);
             if (analysis.TruncatedReason != null)
                 payload["truncated_reason"] = analysis.TruncatedReason;
             if (analysis.Cycles is { Count: > 0 })
@@ -193,6 +195,20 @@ public partial class McpServer
             adjustments.ApplyTo(payload);
             return CreateToolResult(id, summary, payload);
         });
+    }
+
+    private static void AddImpactTraversalRootFields(JsonObject payload, ImpactAnalysisResult analysis)
+    {
+        payload["traversal_root_scope"] = analysis.TraversalRootScope;
+        if (analysis.TraversalPartialFamilyId == null)
+            return;
+
+        payload["traversal_partial_family_id"] = analysis.TraversalPartialFamilyId;
+        payload["partial_family_member_count"] = analysis.PartialFamilyMemberCount;
+        payload["partial_family_member_root_count"] = analysis.PartialFamilyMemberRootCount;
+        payload["partial_family_member_root_limit"] = analysis.PartialFamilyMemberRootLimit;
+        payload["partial_family_member_root_truncated"] = analysis.PartialFamilyMemberRootTruncated;
+        payload["partial_family_member_root_omitted"] = analysis.PartialFamilyMemberRootOmitted;
     }
 
 
