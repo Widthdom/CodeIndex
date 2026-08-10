@@ -1027,22 +1027,25 @@ public class ExportImportCommandRunnerTests
             var extractedDb = Path.Combine(projectRoot, "scoped.db");
             using (var archive = ZipFile.OpenRead(archivePath))
                 archive.GetEntry("codeindex.db")!.ExtractToFile(extractedDb);
-            using var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = extractedDb }.ConnectionString);
-            connection.Open();
-            using (var filesCommand = connection.CreateCommand())
+            using (var connection = new SqliteConnection(
+                       new SqliteConnectionStringBuilder { DataSource = extractedDb }.ConnectionString))
             {
-                filesCommand.CommandText = "SELECT path FROM files ORDER BY path";
-                using var reader = filesCommand.ExecuteReader();
-                var paths = new List<string>();
-                while (reader.Read())
-                    paths.Add(reader.GetString(0));
-                Assert.Equal(["src/App/App.cs", "src/shared/Shared.cs"], paths);
-            }
-            using (var integrityCommand = connection.CreateCommand())
-            {
-                integrityCommand.CommandText = "PRAGMA foreign_key_check";
-                using var reader = integrityCommand.ExecuteReader();
-                Assert.False(reader.Read());
+                connection.Open();
+                using (var filesCommand = connection.CreateCommand())
+                {
+                    filesCommand.CommandText = "SELECT path FROM files ORDER BY path";
+                    using var reader = filesCommand.ExecuteReader();
+                    var paths = new List<string>();
+                    while (reader.Read())
+                        paths.Add(reader.GetString(0));
+                    Assert.Equal(["src/App/App.cs", "src/shared/Shared.cs"], paths);
+                }
+                using (var integrityCommand = connection.CreateCommand())
+                {
+                    integrityCommand.CommandText = "PRAGMA foreign_key_check";
+                    using var reader = integrityCommand.ExecuteReader();
+                    Assert.False(reader.Read());
+                }
             }
 
             Assert.Equal("incomplete", ReadMetaValue(extractedDb, DbContext.IndexCompletenessMetaKey));
