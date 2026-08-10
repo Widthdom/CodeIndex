@@ -25,9 +25,9 @@ Issue #4061 refreshes the baseline with a fresh local index and tracks every
 split with the same dogfood queries before and after each move:
 
 ```bash
-dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll files --bytes --path src/ --exclude-tests --limit 40 --json
-dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll hotspots --group-by file --path src/ --exclude-tests --limit 40 --json
-dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll symbols --sort size --lang csharp --exclude-tests --limit 120 --json
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll files --bytes --path src/ --exclude-tests --limit 40 --db .cdidx/codeindex.db --json
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll hotspots --group-by file --path src/ --exclude-tests --limit 40 --db .cdidx/codeindex.db --json
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll symbols --sort size --lang csharp --exclude-tests --limit 120 --db .cdidx/codeindex.db --json
 ```
 
 The pre-split snapshot on `origin/main` at
@@ -192,9 +192,9 @@ issue #4061 では、fresh なローカル index でベースラインを更新�
 の前後を同じ dogfood query で追跡します。
 
 ```bash
-dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll files --bytes --path src/ --exclude-tests --limit 40 --json
-dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll hotspots --group-by file --path src/ --exclude-tests --limit 40 --json
-dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll symbols --sort size --lang csharp --exclude-tests --limit 120 --json
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll files --bytes --path src/ --exclude-tests --limit 40 --db .cdidx/codeindex.db --json
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll hotspots --group-by file --path src/ --exclude-tests --limit 40 --db .cdidx/codeindex.db --json
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll symbols --sort size --lang csharp --exclude-tests --limit 120 --db .cdidx/codeindex.db --json
 ```
 
 `origin/main` の `eaf0e9114c945598e44b11d8ac6010f2087ea046` で取得した

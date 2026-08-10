@@ -24,6 +24,10 @@ public sealed class DocumentationDriftTests
         @"`(?:[A-Z_][A-Z0-9_]*=\S+\s+)*(?<prefix>cdidx|dotnet\s+\./src/CodeIndex/bin/Debug/net8\.0/cdidx\.dll|dotnet\s+run\s+--project\s+src/CodeIndex\s+--)\s+(?<token>[^\s`|;&]+)[^`]*`",
         RegexOptions.Compiled);
 
+    private static readonly Regex LocalRepositoryCdidxInvocationRegex = new(
+        @"dotnet\s+\./src/CodeIndex/bin/Debug/net8\.0/cdidx\.dll(?:\s+(?<token>[^\s`|;&]+))?",
+        RegexOptions.Compiled);
+
     private static readonly Regex ErrorCodeTableRowRegex = new(
         @"^\| `(?<code>E[0-9]{3}_[A-Z0-9_]+)` \|",
         RegexOptions.Compiled | RegexOptions.Multiline);
@@ -180,6 +184,31 @@ public sealed class DocumentationDriftTests
             Assert.Contains(rootStatus, content, StringComparison.Ordinal);
             Assert.Contains(workspaceStatus, content, StringComparison.Ordinal);
         }
+
+        var unpinnedInvocations = new List<string>();
+        foreach (var relativePath in EnumerateDocumentationCommandReferenceFiles())
+        {
+            var lines = RepositoryTestPaths.ReadNormalizedLines(relativePath.Split('/'));
+            for (var lineNumber = 0; lineNumber < lines.Length; lineNumber++)
+            {
+                var line = lines[lineNumber];
+                foreach (Match match in LocalRepositoryCdidxInvocationRegex.Matches(line))
+                {
+                    var token = NormalizeCdidxToken(match.Groups["token"].Value);
+                    if (string.IsNullOrWhiteSpace(token) || RepositoryDogfoodCommandDoesNotSelectDatabase(token))
+                        continue;
+
+                    if (!line.Contains("--db .cdidx/codeindex.db", StringComparison.Ordinal)
+                        && !line.Contains("--db=.cdidx/codeindex.db", StringComparison.Ordinal))
+                    {
+                        unpinnedInvocations.Add(
+                            $"{relativePath}:{lineNumber + 1}: repository dogfood command does not select {canonicalDb}: {line.Trim()}");
+                    }
+                }
+            }
+        }
+
+        Assert.Empty(unpinnedInvocations);
     }
 
     [Fact]
@@ -292,6 +321,7 @@ public sealed class DocumentationDriftTests
     {
         var rootFiles = new[]
         {
+            ".codex/README.md",
             "AGENT_GUIDE.md",
             "README.md",
             "USER_GUIDE.md",
@@ -340,6 +370,27 @@ public sealed class DocumentationDriftTests
             return true;
 
         return token[0] is '.' or '/' or '\\' or '~' or '$' or '%' or '<' or '[' or '{' or '"';
+    }
+
+    private static bool RepositoryDogfoodCommandDoesNotSelectDatabase(string token)
+    {
+        return token is
+            "--check-updates" or
+            "--completions" or
+            "--help" or
+            "--help-all" or
+            "--help-flags" or
+            "--sushi" or
+            "--version" or
+            "completions" or
+            "config" or
+            "help" or
+            "languages" or
+            "license" or
+            "test-extractor" or
+            "upgrade" or
+            "validate-config" or
+            "workspace";
     }
 
     private static string ToRepositoryRelativePath(string absolutePath)
