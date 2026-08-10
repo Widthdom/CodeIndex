@@ -71,7 +71,8 @@ internal static partial class SuggestionsCommandRunner
 
         var totalCount = filteredRecords.Count;
         var offset = Math.Min(options.Offset, totalCount);
-        var pageCount = options.Count || options.SummaryOnly ? 0 : pageRecords.Count;
+        var aggregateMode = options.Count || options.SummaryOnly;
+        var pageCount = aggregateMode ? 0 : pageRecords.Count;
         var payload = new JsonObject
         {
             ["api_version"] = JsonOutputContract.ApiVersion,
@@ -82,7 +83,7 @@ internal static partial class SuggestionsCommandRunner
             ["returned_count"] = resultNodes.Count,
             ["offset"] = offset,
             ["omitted_count"] = Math.Max(0, totalCount - resultNodes.Count),
-            ["pagination_omitted_count"] = Math.Max(0, totalCount - pageCount),
+            ["pagination_omitted_count"] = aggregateMode ? 0 : Math.Max(0, totalCount - pageCount),
             ["byte_limit_omitted_count"] = 0,
             ["projection_omitted_count"] = options.Count || options.SummaryOnly ? totalCount : 0,
             ["truncated"] = false,
@@ -179,45 +180,85 @@ internal static partial class SuggestionsCommandRunner
         Options options,
         JsonSerializerOptions jsonOptions)
     {
-        string json;
-        while (true)
+        UpdateStructuredQueryPayloadMetadata(payload, results.Count, totalCount, offset, pageCount, options);
+        var json = payload.ToJsonString(jsonOptions);
+        if (options.MaxJsonBytes == null || GetTerminatedUtf8ByteCount(json) <= options.MaxJsonBytes.Value)
         {
-            var returnedCount = results.Count;
-            var byteLimitOmittedCount = Math.Max(0, pageCount - returnedCount);
-            var nextOffset = offset + returnedCount;
-            var hasMore = !options.Count && !options.SummaryOnly && nextOffset < totalCount;
-            payload["returned_count"] = returnedCount;
-            payload["omitted_count"] = Math.Max(0, totalCount - returnedCount);
-            payload["byte_limit_omitted_count"] = byteLimitOmittedCount;
-            payload["truncated"] = byteLimitOmittedCount > 0;
-            payload["has_more"] = hasMore;
-            payload["next_offset"] = hasMore && returnedCount > 0 ? nextOffset : null;
-            if (byteLimitOmittedCount > 0)
-            {
-                payload["recovery_guidance"] = returnedCount > 0
-                    ? $"Increase --max-json-bytes or resume with --offset {nextOffset}."
-                    : "Increase --max-json-bytes; the first remaining row does not fit the current byte limit.";
-            }
-            else
-                payload.Remove("recovery_guidance");
-
-            json = payload.ToJsonString(jsonOptions);
-            if (options.MaxJsonBytes == null || GetTerminatedUtf8ByteCount(json) <= options.MaxJsonBytes.Value)
-                break;
-            if (results.Count == 0)
-            {
-                return WriteUsageError(
-                    $"--max-json-bytes {options.MaxJsonBytes.Value} is too small for the suggestion metadata envelope; at least {GetTerminatedUtf8ByteCount(json)} bytes are required.",
-                    json: false,
-                    jsonOptions,
-                    "Increase --max-json-bytes; no partial JSON was emitted.");
-            }
-
-            results.RemoveAt(results.Count - 1);
+            CommandOutputWriter.WriteRawJson(json);
+            return CommandExitCodes.Success;
         }
 
+        var resultRows = results.Select(static node => node!).ToArray();
+        ResizeStructuredQueryResults(results, resultRows, 0);
+        UpdateStructuredQueryPayloadMetadata(payload, 0, totalCount, offset, pageCount, options);
+        var emptyJson = payload.ToJsonString(jsonOptions);
+        var emptyByteCount = GetTerminatedUtf8ByteCount(emptyJson);
+        if (emptyByteCount > options.MaxJsonBytes.Value)
+        {
+            return WriteUsageError(
+                $"--max-json-bytes {options.MaxJsonBytes.Value} is too small for the suggestion metadata envelope; at least {emptyByteCount} bytes are required.",
+                json: false,
+                jsonOptions,
+                "Increase --max-json-bytes; no partial JSON was emitted.");
+        }
+
+        var fittingCount = 0;
+        var failingCount = resultRows.Length;
+        while (fittingCount + 1 < failingCount)
+        {
+            var candidateCount = fittingCount + ((failingCount - fittingCount) / 2);
+            ResizeStructuredQueryResults(results, resultRows, candidateCount);
+            UpdateStructuredQueryPayloadMetadata(payload, candidateCount, totalCount, offset, pageCount, options);
+            var candidateJson = payload.ToJsonString(jsonOptions);
+            if (GetTerminatedUtf8ByteCount(candidateJson) <= options.MaxJsonBytes.Value)
+                fittingCount = candidateCount;
+            else
+                failingCount = candidateCount;
+        }
+
+        ResizeStructuredQueryResults(results, resultRows, fittingCount);
+        UpdateStructuredQueryPayloadMetadata(payload, fittingCount, totalCount, offset, pageCount, options);
+        json = payload.ToJsonString(jsonOptions);
         CommandOutputWriter.WriteRawJson(json);
         return CommandExitCodes.Success;
+    }
+
+    private static void UpdateStructuredQueryPayloadMetadata(
+        JsonObject payload,
+        int returnedCount,
+        int totalCount,
+        int offset,
+        int pageCount,
+        Options options)
+    {
+        var byteLimitOmittedCount = Math.Max(0, pageCount - returnedCount);
+        var nextOffset = offset + returnedCount;
+        var hasMore = !options.Count && !options.SummaryOnly && nextOffset < totalCount;
+        payload["returned_count"] = returnedCount;
+        payload["omitted_count"] = Math.Max(0, totalCount - returnedCount);
+        payload["byte_limit_omitted_count"] = byteLimitOmittedCount;
+        payload["truncated"] = byteLimitOmittedCount > 0;
+        payload["has_more"] = hasMore;
+        payload["next_offset"] = hasMore && returnedCount > 0 ? nextOffset : null;
+        if (byteLimitOmittedCount > 0)
+        {
+            payload["recovery_guidance"] = returnedCount > 0
+                ? $"Increase --max-json-bytes or resume with --offset {nextOffset}."
+                : "Increase --max-json-bytes; the first remaining row does not fit the current byte limit.";
+        }
+        else
+            payload.Remove("recovery_guidance");
+    }
+
+    private static void ResizeStructuredQueryResults(
+        JsonArray results,
+        IReadOnlyList<JsonNode> resultRows,
+        int count)
+    {
+        while (results.Count > count)
+            results.RemoveAt(results.Count - 1);
+        while (results.Count < count)
+            results.Add(resultRows[results.Count]);
     }
 
     private static int GetTerminatedUtf8ByteCount(string json)

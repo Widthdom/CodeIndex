@@ -1275,6 +1275,10 @@ public class ProgramCliTests
             "suggestions", "list", "--db", fixture.DbPath,
             "--query", $"api-token={rawSecret}", "--count", "--json"
         ]);
+        var (zeroPageExitCode, zeroPageStdout, zeroPageStderr) = RunCliInSubprocess([
+            "suggestions", "list", "--db", fixture.DbPath,
+            "--query", "bulk-marker-5061", "--compact", "--limit", "0"
+        ]);
 
         Assert.Equal(CommandExitCodes.Success, countExitCode);
         Assert.Equal(string.Empty, countStderr);
@@ -1283,6 +1287,8 @@ public class ProgramCliTests
         Assert.Equal(24, countDoc.RootElement.GetProperty("count").GetInt32());
         Assert.True(countDoc.RootElement.GetProperty("total_count_authoritative").GetBoolean());
         Assert.Equal(0, countDoc.RootElement.GetProperty("results").GetArrayLength());
+        Assert.Equal(0, countDoc.RootElement.GetProperty("pagination_omitted_count").GetInt32());
+        Assert.Equal(24, countDoc.RootElement.GetProperty("projection_omitted_count").GetInt32());
         Assert.True(Encoding.UTF8.GetByteCount(countStdout) < 1024);
 
         Assert.Equal(CommandExitCodes.Success, summaryExitCode);
@@ -1295,6 +1301,8 @@ public class ProgramCliTests
         Assert.Equal(12, summary.GetProperty("by_category").GetProperty("counts").GetProperty("output_format").GetInt32());
         Assert.Equal(12, summary.GetProperty("by_category").GetProperty("counts").GetProperty("language_support").GetInt32());
         Assert.Equal(0, summaryDoc.RootElement.GetProperty("results").GetArrayLength());
+        Assert.Equal(0, summaryDoc.RootElement.GetProperty("pagination_omitted_count").GetInt32());
+        Assert.Equal(24, summaryDoc.RootElement.GetProperty("projection_omitted_count").GetInt32());
         Assert.True(Encoding.UTF8.GetByteCount(summaryStdout) < 4096);
 
         Assert.Equal(CommandExitCodes.Success, compactExitCode);
@@ -1326,6 +1334,10 @@ public class ProgramCliTests
         using var secretDoc = JsonDocument.Parse(secretStdout);
         Assert.Equal(0, secretDoc.RootElement.GetProperty("count").GetInt32());
         Assert.DoesNotContain(rawSecret, secretStdout, StringComparison.Ordinal);
+
+        Assert.Equal(CommandExitCodes.UsageError, zeroPageExitCode);
+        Assert.Equal(string.Empty, zeroPageStderr);
+        Assert.Contains("--limit 0", zeroPageStdout, StringComparison.Ordinal);
     }
 
     [ProductionRuntimeFact]

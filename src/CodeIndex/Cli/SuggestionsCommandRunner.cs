@@ -84,6 +84,17 @@ internal static partial class SuggestionsCommandRunner
             return WriteUsageError("--count and --compact cannot be combined.", options.Json, jsonOptions);
         if (options.SummaryOnly && options.Compact)
             return WriteUsageError("--summary-only and --compact cannot be combined.", options.Json, jsonOptions);
+        if (options.Limit == 0
+            && !options.Count
+            && !options.SummaryOnly
+            && (options.Compact || options.MaxJsonBytes != null))
+        {
+            return WriteUsageError(
+                "--limit 0 cannot be used with --compact or --max-json-bytes because the structured page could not provide a progressing continuation offset.",
+                options.Json,
+                jsonOptions,
+                "Use a positive --limit, or remove the page projection options.");
+        }
         if (options.HasHistoryQueryProjectionOptions && verb is not ("list" or "export"))
             return WriteUsageError("--query, --count, --summary-only, --compact, and --max-json-bytes can only be used with `suggestions list` or `suggestions export`.", options.Json, jsonOptions);
         if (verb == "export"
