@@ -1851,18 +1851,31 @@ public static partial class QueryCommandRunner
                 out _,
                 out var freshnessObservations,
                 out var hasFailures);
+            if (options.SummaryOnly)
+            {
+                return WriteSearchRecipeIssueDraftSummary(
+                    recipe,
+                    selection.Queries,
+                    scope,
+                    total,
+                    BuildSearchRecipeQueryFreshness(freshnessContext, freshnessObservations),
+                    queryResults,
+                    preflight,
+                    options,
+                    jsonOptions,
+                    hasFailures);
+            }
+
             var drafts = queryResults
                 .Where(queryResult => queryResult.Count > 0)
                 .Select(queryResult => ToSearchIssueDraft(recipe, queryResult, preflight, options))
                 .ToList();
-            var fullRecipeMetadata = options.SummaryOnly ? null : ToSearchRecipeListItem(recipe, selection.Queries);
-            var recipeSummaryMetadata = options.SummaryOnly ? ToSearchRecipeCompactListItem(recipe, selection.Queries) : null;
             var json = JsonSerializer.Serialize(
                 new SearchIssueDraftExportJsonResult(
                     JsonOutputContract.ApiVersion,
-                    fullRecipeMetadata,
-                    recipeSummaryMetadata,
-                    options.SummaryOnly ? "summary" : "full",
+                    ToSearchRecipeListItem(recipe, selection.Queries),
+                    null,
+                    "full",
                     scope,
                     selection.Queries.Count,
                     total,
@@ -1883,10 +1896,137 @@ public static partial class QueryCommandRunner
                     options,
                     "issue-draft",
                     "Reduce --limit, use --snippet-lines 0, or increase --max-json-bytes.",
-                    jsonOptions),
+                    jsonOptions,
+                    options.InvocationContext.CommandName),
                 hasFailures);
         });
     }
+
+    private static int WriteSearchRecipeIssueDraftSummary(
+        SearchAuditRecipe recipe,
+        IReadOnlyList<SearchAuditRecipeQuery> selectedQueries,
+        SearchRecipeScopeJsonResult scope,
+        int resultCount,
+        SearchRecipeQueryFreshnessJsonResult queryFreshness,
+        IReadOnlyList<SearchRecipeQueryResultJsonResult> queryResults,
+        IssueDuplicatePreflight preflight,
+        QueryCommandOptions options,
+        JsonSerializerOptions jsonOptions,
+        bool hasFailures)
+    {
+        const int evidencePathLimit = 5;
+        var summaries = queryResults
+            .Where(queryResult => queryResult.MinimumMatchedCount > 0)
+            .Select(queryResult =>
+            {
+                var labels = queryResult.RecommendedLabels
+                    .Concat(options.IssueLabels)
+                    .Where(label => !string.IsNullOrWhiteSpace(label))
+                    .Select(label => label.Trim())
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(label => label, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                var fileCount = queryResult.SummaryEvidencePathCount;
+                var fileCountAuthoritative = queryResult.SummaryEvidencePathCountAuthoritative;
+                var evidencePaths = queryResult.SummaryEvidencePaths
+                    .Take(evidencePathLimit)
+                    .ToList();
+                var omittedEvidencePathCount = Math.Max(0, fileCount - evidencePaths.Count);
+                return new SearchIssueDraftSummaryJsonResult(
+                    $"{recipe.Name}/{queryResult.Name}",
+                    queryResult.Name,
+                    BuildSearchIssueDraftTitle(recipe, queryResult),
+                    queryResult.Count,
+                    fileCount,
+                    fileCountAuthoritative,
+                    fileCountAuthoritative ? null : fileCount,
+                    queryResult.MinimumMatchedCount,
+                    queryResult.MinimumOmittedResultCount,
+                    queryResult.Truncated,
+                    evidencePaths,
+                    fileCount,
+                    fileCountAuthoritative,
+                    fileCountAuthoritative ? null : fileCount,
+                    evidencePaths.Count,
+                    omittedEvidencePathCount,
+                    fileCountAuthoritative,
+                    fileCountAuthoritative ? null : omittedEvidencePathCount,
+                    omittedEvidencePathCount > 0 || !fileCountAuthoritative,
+                    labels,
+                    queryResult.Severity,
+                    GetSearchRecipeConfidence(queryResult.MinimumMatchedCount),
+                    queryResult.NextCursor,
+                    BuildSearchRecipeReplayCommand(
+                        recipe,
+                        options,
+                        queryResult.Name,
+                        includeMaxJsonBytes: false));
+            })
+            .ToList();
+        var duplicatePreflight = new SuggestionIssueDraftPreflightSummaryJsonResult(
+            preflight.Checked,
+            preflight.Source,
+            preflight.OpenIssueCount,
+            options.DuplicateConfidence,
+            options.DuplicateThreshold);
+        var recipeSummary = ToSearchRecipeCompactListItem(recipe, selectedQueries);
+        var recoveryCommand = BuildSearchRecipeReplayCommand(
+            recipe,
+            options,
+            summaryOnly: true,
+            includeMaxJsonBytes: false,
+            includeTotalLimit: false);
+        var totalCount = summaries.Count;
+        var totalCountAuthoritative = !hasFailures;
+        string? envelopeJson = null;
+
+        for (var returnedCount = totalCount; returnedCount >= 0; returnedCount--)
+        {
+            var omittedCount = totalCount - returnedCount;
+            var payload = new SearchIssueDraftSummaryExportJsonResult(
+                JsonOutputContract.ApiVersion,
+                recipeSummary,
+                "summary",
+                scope,
+                selectedQueries.Count,
+                resultCount,
+                queryFreshness,
+                returnedCount,
+                totalCount,
+                totalCountAuthoritative,
+                totalCountAuthoritative ? null : totalCount,
+                returnedCount,
+                omittedCount,
+                omittedCount > 0,
+                duplicatePreflight,
+                summaries.Take(returnedCount).ToList(),
+                recoveryCommand);
+            var json = JsonSerializer.Serialize(
+                payload,
+                CliJsonSerializerContextFactory.Create(jsonOptions).SearchIssueDraftSummaryExportJsonResult);
+            json = AddActiveSqliteDiagnostics(json);
+            envelopeJson = json;
+            if (!options.MaxJsonBytes.HasValue
+                || GetJsonDocumentByteCount(json) <= options.MaxJsonBytes.Value)
+            {
+                Console.WriteLine(json);
+                return CompleteSearchRecipeOutput(CommandExitCodes.Success, hasFailures);
+            }
+        }
+
+        return CompleteSearchRecipeOutput(
+            WriteJsonObjectWithOptionalByteLimit(
+                envelopeJson!,
+                options,
+                "issue-draft summary envelope",
+                "Increase --max-json-bytes; the summary envelope cannot be reduced further.",
+                jsonOptions,
+                options.InvocationContext.CommandName),
+            hasFailures);
+    }
+
+    private static int GetJsonDocumentByteCount(string json)
+        => Encoding.UTF8.GetByteCount(json) + Encoding.UTF8.GetByteCount(Environment.NewLine);
 
     private static int RunSearchRecipeCount(QueryCommandOptions options, JsonSerializerOptions jsonOptions, bool userExact)
     {
@@ -2188,6 +2328,12 @@ public static partial class QueryCommandRunner
                 results = ApplySearchRecipeFileRejectQueries(reader, results, options, recipeQuery);
                 var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, rawFtsOverride: false, recipeQuery: recipeQuery);
                 rows = ApplySearchRecipeSemanticFilter(reader, options, recipeQuery, rows);
+                var summaryEvidencePaths = BuildSearchRecipeTopFiles(rows);
+                var summaryEvidencePathCount = rows
+                    .Select(row => row.Result.Path)
+                    .Where(path => !string.IsNullOrWhiteSpace(path))
+                    .Distinct(StringComparer.Ordinal)
+                    .Count();
                 var outputSelection = ApplySearchOutputSelection(rows, options, resultLimit, sourceTotalAuthoritative);
                 rows = outputSelection.Rows;
                 if (includeAuditClassifications)
@@ -2240,7 +2386,12 @@ public static partial class QueryCommandRunner
                     outputSelection.Returned,
                     outputSelection.SelectorOmittedCount,
                     outputSelection.LimitOmittedCount,
-                    outputSelection.Selectors));
+                    outputSelection.Selectors)
+                {
+                    SummaryEvidencePaths = summaryEvidencePaths,
+                    SummaryEvidencePathCount = summaryEvidencePathCount,
+                    SummaryEvidencePathCountAuthoritative = sourceTotalAuthoritative,
+                });
                 if (freshnessContext != null)
                 {
                     freshnessObservations.Add(SuccessfulSearchQueryObservation(
@@ -5740,7 +5891,13 @@ public static partial class QueryCommandRunner
             sb.AppendLine($"- next_cursor: `{queryResult.NextCursor}`");
     }
 
-    private static string BuildSearchRecipeReplayCommand(SearchAuditRecipe recipe, QueryCommandOptions options, string? queryName = null)
+    private static string BuildSearchRecipeReplayCommand(
+        SearchAuditRecipe recipe,
+        QueryCommandOptions options,
+        string? queryName = null,
+        bool summaryOnly = false,
+        bool includeMaxJsonBytes = true,
+        bool includeTotalLimit = true)
     {
         var recipeSelector = string.IsNullOrWhiteSpace(queryName)
             ? recipe.Name
@@ -5749,6 +5906,8 @@ public static partial class QueryCommandRunner
         options.InvocationContext.AddRecipeCommandPrefix(args, recipeSelector);
         args.Add("--format");
         args.Add(OutputFormatIssueDrafts);
+        if (summaryOnly)
+            args.Add("--summary-only");
         args.Add("--limit");
         args.Add(options.Limit.ToString(CultureInfo.InvariantCulture));
 
@@ -5799,12 +5958,12 @@ public static partial class QueryCommandRunner
             AddReplayValueOption(args, "--exclude-origin", origin);
         foreach (var kind in options.ResultKinds)
             AddReplayValueOption(args, "--result-kind", kind);
-        if (options.TotalLimit.HasValue)
+        if (includeTotalLimit && options.TotalLimit.HasValue)
             AddReplayValueOption(args, "--total-limit", options.TotalLimit.Value.ToString(CultureInfo.InvariantCulture));
         AddReplayValueOption(args, "--snippet-lines", options.SnippetLines.ToString(CultureInfo.InvariantCulture));
         AddReplayValueOption(args, "--snippet-focus", FormatSearchSnippetFocusMode(options.SnippetFocus));
         AddReplayValueOption(args, "--max-line-width", options.MaxLineWidth.ToString(CultureInfo.InvariantCulture));
-        if (options.MaxJsonBytes.HasValue)
+        if (includeMaxJsonBytes && options.MaxJsonBytes.HasValue)
             AddReplayValueOption(args, "--max-json-bytes", options.MaxJsonBytes.Value.ToString(CultureInfo.InvariantCulture));
         if (!string.IsNullOrWhiteSpace(options.OpenIssuesPath))
             AddReplayValueOption(args, "--open-issues", options.OpenIssuesPath);
