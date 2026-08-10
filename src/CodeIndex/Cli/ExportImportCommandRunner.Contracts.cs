@@ -163,6 +163,10 @@ internal static partial class ExportImportCommandRunner
         int? UnknownExtensionFileSampleLimit = null,
         [property: JsonPropertyName("unknown_extension_file_sample_truncated")]
         bool? UnknownExtensionFileSampleTruncated = null,
+        [property: JsonPropertyName("index_complete")]
+        bool? IndexComplete = null,
+        [property: JsonPropertyName("index_incomplete_reasons")]
+        string[]? IndexIncompleteReasons = null,
         [property: JsonPropertyName("scope")]
         ArchiveExportScopeResult? Scope = null);
     internal sealed record ExportImportErrorResult(
@@ -214,7 +218,10 @@ internal static partial class ExportImportCommandRunner
         [property: JsonPropertyName("unknown_extension_file_path_limit")] int? UnknownExtensionFilePathLimit = null,
         [property: JsonPropertyName("unknown_extension_file_sample_count")] int? UnknownExtensionFileSampleCount = null,
         [property: JsonPropertyName("unknown_extension_file_sample_limit")] int? UnknownExtensionFileSampleLimit = null,
-        [property: JsonPropertyName("unknown_extension_file_sample_truncated")] bool? UnknownExtensionFileSampleTruncated = null);
+        [property: JsonPropertyName("unknown_extension_file_sample_truncated")] bool? UnknownExtensionFileSampleTruncated = null,
+        [property: JsonPropertyName("index_complete")] bool? IndexComplete = null,
+        [property: JsonPropertyName("index_incomplete_reasons")] string[]? IndexIncompleteReasons = null,
+        [property: JsonPropertyName("scope")] ArchiveExportScopeResult? Scope = null);
     internal sealed record ImportDestinationDeltaResult(
         [property: JsonPropertyName("destination_exists")] bool DestinationExists,
         [property: JsonPropertyName("comparable")] bool Comparable,
@@ -257,7 +264,9 @@ internal static partial class ExportImportCommandRunner
         [property: JsonPropertyName("exclude_tests")] bool ExcludeTests,
         [property: JsonPropertyName("resolved_project_path")] IReadOnlyList<string> ResolvedProjectPathPatterns,
         [property: JsonPropertyName("source_file_count")] long SourceFileCount,
-        [property: JsonPropertyName("exported_file_count")] long ExportedFileCount);
+        [property: JsonPropertyName("exported_file_count")] long ExportedFileCount,
+        [property: JsonPropertyName("represents_entire_source_database")]
+        bool? RepresentsEntireSourceDatabase = null);
     private sealed record CtagsExportOptions(
         string? Lang,
         IReadOnlyList<string> PathPatterns,
@@ -306,7 +315,10 @@ internal static partial class ExportImportCommandRunner
         [property: JsonPropertyName("unknown_extension_file_path_limit")] int? UnknownExtensionFilePathLimit = null,
         [property: JsonPropertyName("unknown_extension_file_sample_count")] int? UnknownExtensionFileSampleCount = null,
         [property: JsonPropertyName("unknown_extension_file_sample_limit")] int? UnknownExtensionFileSampleLimit = null,
-        [property: JsonPropertyName("unknown_extension_file_sample_truncated")] bool? UnknownExtensionFileSampleTruncated = null);
+        [property: JsonPropertyName("unknown_extension_file_sample_truncated")] bool? UnknownExtensionFileSampleTruncated = null,
+        [property: JsonPropertyName("index_complete")] bool? IndexComplete = null,
+        [property: JsonPropertyName("index_incomplete_reasons")] string[]? IndexIncompleteReasons = null,
+        [property: JsonPropertyName("scope")] ArchiveExportScopeResult? Scope = null);
 
     private sealed class ImportReplacementException : IOException
     {

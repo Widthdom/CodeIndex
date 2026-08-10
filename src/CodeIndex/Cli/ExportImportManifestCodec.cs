@@ -171,8 +171,14 @@ internal static class ExportImportManifestCodec
             }
         }
 
-        if (manifest.Scope != null && !TryValidateScope(manifest.Scope, out message))
+        if (!TryValidateIncompleteReasons(manifest, out message))
             return false;
+
+        if (manifest.Scope != null)
+        {
+            if (!TryValidateScope(manifest.Scope, out message))
+                return false;
+        }
 
         message = string.Empty;
         return true;
@@ -195,6 +201,24 @@ internal static class ExportImportManifestCodec
             || scope.ExportedFileCount > scope.SourceFileCount)
         {
             message = "scope file counts are invalid";
+            return false;
+        }
+
+        var hasSelection = !string.IsNullOrWhiteSpace(scope.Lang)
+            || scope.PathPatterns.Count > 0
+            || scope.ExcludePathPatterns.Count > 0
+            || scope.Projects.Count > 0
+            || !string.IsNullOrWhiteSpace(scope.Solution)
+            || scope.ExcludeTests;
+        if (scope.Scoped != hasSelection)
+        {
+            message = "scope.scoped does not match the recorded selection metadata";
+            return false;
+        }
+        if (scope.RepresentsEntireSourceDatabase == true
+            && (scope.Scoped || scope.SourceFileCount != scope.ExportedFileCount))
+        {
+            message = "scope cannot represent the entire source database when filters or omitted files are recorded";
             return false;
         }
 
@@ -230,6 +254,58 @@ internal static class ExportImportManifestCodec
                 message = $"scope value text exceeds {ExportImportCommandRunner.MaxArchiveScopeTotalChars * 2} characters";
                 return false;
             }
+        }
+
+        message = string.Empty;
+        return true;
+    }
+
+    private static bool TryValidateIncompleteReasons(
+        ExportImportCommandRunner.ExportManifest manifest,
+        out string message)
+    {
+        if (manifest.IndexIncompleteReasons is not { } reasons)
+        {
+            message = string.Empty;
+            return true;
+        }
+        if (reasons.Length > ExportImportCommandRunner.MaxArchiveIncompleteReasons)
+        {
+            message = $"index_incomplete_reasons exceeds the manifest limit of {ExportImportCommandRunner.MaxArchiveIncompleteReasons}";
+            return false;
+        }
+
+        var totalChars = 0;
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var reason in reasons)
+        {
+            if (string.IsNullOrWhiteSpace(reason))
+            {
+                message = "index_incomplete_reasons contains an empty reason";
+                return false;
+            }
+            if (reason.Length > ExportImportCommandRunner.MaxArchiveIncompleteReasonChars)
+            {
+                message = $"index_incomplete_reasons contains a reason longer than {ExportImportCommandRunner.MaxArchiveIncompleteReasonChars} characters";
+                return false;
+            }
+            totalChars += reason.Length;
+            if (totalChars > ExportImportCommandRunner.MaxArchiveIncompleteReasonsTotalChars)
+            {
+                message = $"index_incomplete_reasons exceeds {ExportImportCommandRunner.MaxArchiveIncompleteReasonsTotalChars} total characters";
+                return false;
+            }
+            if (!seen.Add(reason))
+            {
+                message = "index_incomplete_reasons contains a duplicate reason";
+                return false;
+            }
+        }
+
+        if (manifest.IndexComplete == true && reasons.Length > 0)
+        {
+            message = "index_complete cannot be true when index_incomplete_reasons are present";
+            return false;
         }
 
         message = string.Empty;

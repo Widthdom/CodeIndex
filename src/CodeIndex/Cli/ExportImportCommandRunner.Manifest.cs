@@ -25,6 +25,8 @@ internal static partial class ExportImportCommandRunner
         var projectRoot = ReadMetaString(connection, DbContext.IndexedProjectRootMetaKey);
         var indexedHead = ReadMetaString(connection, DbContext.IndexedHeadShaMetaKey);
         var unknownExtensionFiles = ReadUnknownExtensionFileSample(connection);
+        var indexCompleteness = ReadMetaString(connection, DbContext.IndexCompletenessMetaKey);
+        var indexIncompleteReasons = ReadArchiveIncompleteReasons(connection);
         cancellationToken.ThrowIfCancellationRequested();
         return new ExportManifest(
             "1",
@@ -54,6 +56,10 @@ internal static partial class ExportImportCommandRunner
             UnknownExtensionFileSampleCount: unknownExtensionFiles.Count,
             UnknownExtensionFileSampleLimit: unknownExtensionFiles.Limit,
             UnknownExtensionFileSampleTruncated: unknownExtensionFiles.Truncated,
+            IndexComplete: indexCompleteness == null
+                ? null
+                : string.Equals(indexCompleteness, "complete", StringComparison.Ordinal),
+            IndexIncompleteReasons: indexIncompleteReasons,
             Scope: scope);
     }
 

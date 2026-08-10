@@ -48,7 +48,10 @@ internal static partial class ExportImportCommandRunner
                     UnknownExtensionFilePathLimit: manifest.UnknownExtensionFilePathLimit,
                     UnknownExtensionFileSampleCount: manifest.UnknownExtensionFileSampleCount,
                     UnknownExtensionFileSampleLimit: manifest.UnknownExtensionFileSampleLimit,
-                    UnknownExtensionFileSampleTruncated: manifest.UnknownExtensionFileSampleTruncated),
+                    UnknownExtensionFileSampleTruncated: manifest.UnknownExtensionFileSampleTruncated,
+                    IndexComplete: manifest.IndexComplete,
+                    IndexIncompleteReasons: manifest.IndexIncompleteReasons,
+                    Scope: manifest.Scope),
                 CliJsonSerializerContextFactory.Create(jsonOptions).ImportDryRunResult));
         }
         else
@@ -92,7 +95,10 @@ internal static partial class ExportImportCommandRunner
                     UnknownExtensionFilePathLimit: manifest.UnknownExtensionFilePathLimit,
                     UnknownExtensionFileSampleCount: manifest.UnknownExtensionFileSampleCount,
                     UnknownExtensionFileSampleLimit: manifest.UnknownExtensionFileSampleLimit,
-                    UnknownExtensionFileSampleTruncated: manifest.UnknownExtensionFileSampleTruncated),
+                    UnknownExtensionFileSampleTruncated: manifest.UnknownExtensionFileSampleTruncated,
+                    IndexComplete: manifest.IndexComplete,
+                    IndexIncompleteReasons: manifest.IndexIncompleteReasons,
+                    Scope: manifest.Scope),
                 jsonOptions));
         }
         else
