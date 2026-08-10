@@ -1339,6 +1339,8 @@ internal sealed record ValidateConfigJsonResult(
 [JsonSerializable(typeof(SearchRecipeScopeJsonResult))]
 [JsonSerializable(typeof(SearchRecipeExcludedDiagnosticJsonResult))]
 [JsonSerializable(typeof(SearchIssueDraftExportJsonResult))]
+[JsonSerializable(typeof(SearchIssueDraftSummaryExportJsonResult))]
+[JsonSerializable(typeof(SearchIssueDraftSummaryJsonResult))]
 [JsonSerializable(typeof(SearchIssueDraftJsonResult))]
 [JsonSerializable(typeof(SearchIssueDraftEvidenceJsonResult))]
 [JsonSerializable(typeof(SearchIssueDraftSourceJsonResult))]

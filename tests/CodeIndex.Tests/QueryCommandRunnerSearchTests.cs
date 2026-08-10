@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Reflection;
 using System.Text;
+using System.Text.Encodings.Web;
 using System.Text.RegularExpressions;
 using System.Text.Json;
 using CodeIndex.Cli;
@@ -12075,7 +12076,6 @@ public partial class QueryCommandRunnerTests
             var recipeSummary = root.GetProperty("recipe_summary");
             var freshness = root.GetProperty("query_freshness");
             var draft = Assert.Single(root.GetProperty("drafts").EnumerateArray());
-            var source = draft.GetProperty("source");
 
             if (root.TryGetProperty("recipe", out var recipeMetadata))
                 Assert.Equal(JsonValueKind.Null, recipeMetadata.ValueKind);
@@ -12085,6 +12085,11 @@ public partial class QueryCommandRunnerTests
             Assert.False(recipeSummary.TryGetProperty("queries", out _));
             Assert.Equal(1, root.GetProperty("count").GetInt32());
             Assert.Equal(1, root.GetProperty("result_count").GetInt32());
+            Assert.Equal(1, root.GetProperty("total_count").GetInt32());
+            Assert.True(root.GetProperty("total_count_authoritative").GetBoolean());
+            Assert.Equal(1, root.GetProperty("returned_count").GetInt32());
+            Assert.Equal(0, root.GetProperty("omitted_count").GetInt32());
+            Assert.False(root.GetProperty("truncated").GetBoolean());
             Assert.Equal(1, freshness.GetProperty("positive_evidence_query_count").GetInt32());
             Assert.Equal(1, freshness.GetProperty("zero_result_query_count").GetInt32());
             Assert.Equal("clean", freshness.GetProperty("state").GetString());
@@ -12092,8 +12097,12 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(1, freshness.GetProperty("clean_zero_match_query_count").GetInt32());
             Assert.Contains(freshness.GetProperty("clean_zero_match_query_names").EnumerateArray(), name => name.GetString() == "unbounded-json-parse");
             Assert.Empty(freshness.GetProperty("stale_query_names").EnumerateArray());
-            Assert.Equal("raw-diagnostic-echo", source.GetProperty("query_name").GetString());
-            Assert.Contains(source.GetProperty("risk_evidence").EnumerateArray(), evidence => evidence.GetString()!.Contains("raw exception messages", StringComparison.Ordinal));
+            Assert.Equal("raw-diagnostic-echo", draft.GetProperty("query_name").GetString());
+            Assert.Equal("low", draft.GetProperty("confidence").GetString());
+            Assert.True(draft.GetProperty("file_count").GetInt32() > 0);
+            Assert.False(draft.TryGetProperty("body", out _));
+            Assert.False(draft.TryGetProperty("source", out _));
+            Assert.False(draft.TryGetProperty("evidence", out _));
         }
         finally
         {
@@ -12156,6 +12165,147 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(2, freshness.GetProperty("clean_query_count").GetInt32());
             Assert.Equal(0, freshness.GetProperty("clean_zero_match_query_count").GetInt32());
             Assert.Empty(freshness.GetProperty("stale_query_names").EnumerateArray());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_RecipeIssueDraftSummaryBudgetsWholeUtf8RowsAndPreservesFullOutput_Issue5058()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_recipe_issue_draft_summary_5058");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            for (var index = 0; index < 6; index++)
+            {
+                TestProjectHelper.InsertFreshIndexedFile(
+                    projectRoot,
+                    dbPath,
+                    $"src/日本語-{index}.cs",
+                    "csharp",
+                    "Console.Error.WriteLine(ex.Message);\n");
+            }
+            TestProjectHelper.InsertFreshIndexedFile(
+                projectRoot,
+                dbPath,
+                "src/broad-catch.cs",
+                "csharp",
+                "try { } catch (Exception ex) { Console.Error.WriteLine(ex.Message); }\n");
+
+            string[] SummaryArgs(params string[] extraArgs) =>
+            [
+                "--recipe", "risky-code",
+                "--include-query", "raw-diagnostic-echo",
+                "--include-query", "broad-exception-catch",
+                "--db", dbPath,
+                "--format", "issue-drafts",
+                "--summary-only",
+                "--snippet-lines", "0",
+                .. extraArgs,
+            ];
+            var relaxedJsonOptions = new JsonSerializerOptions(_jsonOptions)
+            {
+                Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+            };
+
+            var (summaryExitCode, summaryStdout, summaryStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                SummaryArgs("--max-json-bytes", "120000"),
+                relaxedJsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, summaryExitCode);
+            Assert.Equal(string.Empty, summaryStderr);
+            Assert.True(Encoding.UTF8.GetByteCount(summaryStdout) <= 120000);
+            using var summaryDocument = ParseJsonOutput(summaryStdout);
+            var summaryRoot = summaryDocument.RootElement;
+            Assert.Equal(2, summaryRoot.GetProperty("total_count").GetInt32());
+            Assert.Equal(2, summaryRoot.GetProperty("returned_count").GetInt32());
+            Assert.Equal(0, summaryRoot.GetProperty("omitted_count").GetInt32());
+            Assert.False(summaryRoot.GetProperty("truncated").GetBoolean());
+            var summaries = summaryRoot.GetProperty("drafts").EnumerateArray().ToArray();
+            Assert.Equal(2, summaries.Length);
+            var rawDiagnosticSummary = Assert.Single(
+                summaries,
+                item => item.GetProperty("query_name").GetString() == "raw-diagnostic-echo");
+            Assert.Equal(7, rawDiagnosticSummary.GetProperty("file_count").GetInt32());
+            Assert.Equal(5, rawDiagnosticSummary.GetProperty("evidence_paths_returned_count").GetInt32());
+            Assert.Equal(2, rawDiagnosticSummary.GetProperty("evidence_paths_omitted_count").GetInt32());
+            Assert.True(rawDiagnosticSummary.GetProperty("evidence_paths_truncated").GetBoolean());
+            Assert.Contains(
+                "cdidx search --recipe risky-code/raw-diagnostic-echo --format issue-drafts",
+                rawDiagnosticSummary.GetProperty("replay_command").GetString(),
+                StringComparison.Ordinal);
+            Assert.False(rawDiagnosticSummary.TryGetProperty("body", out _));
+            Assert.False(rawDiagnosticSummary.TryGetProperty("source", out _));
+            Assert.False(rawDiagnosticSummary.TryGetProperty("evidence", out _));
+
+            var fullByteCount = Encoding.UTF8.GetByteCount(summaryStdout);
+            var truncatedBudget = fullByteCount - 1;
+            var (truncatedExitCode, truncatedStdout, truncatedStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                SummaryArgs("--max-json-bytes", truncatedBudget.ToString(CultureInfo.InvariantCulture)),
+                relaxedJsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, truncatedExitCode);
+            Assert.Equal(string.Empty, truncatedStderr);
+            Assert.True(Encoding.UTF8.GetByteCount(truncatedStdout) <= truncatedBudget);
+            using var truncatedDocument = ParseJsonOutput(truncatedStdout);
+            var truncatedRoot = truncatedDocument.RootElement;
+            Assert.Equal(2, truncatedRoot.GetProperty("total_count").GetInt32());
+            Assert.Equal(1, truncatedRoot.GetProperty("returned_count").GetInt32());
+            Assert.Equal(1, truncatedRoot.GetProperty("omitted_count").GetInt32());
+            Assert.True(truncatedRoot.GetProperty("truncated").GetBoolean());
+            Assert.Single(truncatedRoot.GetProperty("drafts").EnumerateArray());
+
+            var utf8Budget = summaryStdout.Length;
+            Assert.True(fullByteCount > utf8Budget);
+            var (utf8ExitCode, utf8Stdout, utf8Stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                SummaryArgs("--max-json-bytes", utf8Budget.ToString(CultureInfo.InvariantCulture)),
+                relaxedJsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, utf8ExitCode);
+            Assert.Equal(string.Empty, utf8Stderr);
+            Assert.True(Encoding.UTF8.GetByteCount(utf8Stdout) <= utf8Budget);
+            using var utf8Document = ParseJsonOutput(utf8Stdout);
+            Assert.True(utf8Document.RootElement.GetProperty("returned_count").GetInt32() < 2);
+
+            var (envelopeExitCode, envelopeStdout, envelopeStderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["audit", "risky-code", .. SummaryArgs("--max-json-bytes", "1").Skip(2)],
+                relaxedJsonOptions,
+                "test"));
+
+            Assert.Equal(CommandExitCodes.UsageError, envelopeExitCode);
+            Assert.Equal(string.Empty, envelopeStderr);
+            using var envelopeDocument = ParseJsonOutput(envelopeStdout);
+            var envelopeRoot = envelopeDocument.RootElement;
+            Assert.Equal("E028_RESPONSE_BUDGET_TOO_SMALL", envelopeRoot.GetProperty("error_code").GetString());
+            Assert.Equal("audit", envelopeRoot.GetProperty("command").GetString());
+            Assert.StartsWith("cdidx audit ", envelopeRoot.GetProperty("usage").GetString(), StringComparison.Ordinal);
+            Assert.Equal(
+                "audit",
+                envelopeRoot.GetProperty("retry").GetProperty("command").GetString());
+
+            var (fullExitCode, fullStdout, fullStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [
+                    "--recipe", "risky-code/raw-diagnostic-echo",
+                    "--db", dbPath,
+                    "--format", "issue-drafts",
+                    "--snippet-lines", "0",
+                ],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, fullExitCode);
+            Assert.Equal(string.Empty, fullStderr);
+            using var fullDocument = ParseJsonOutput(fullStdout);
+            var fullRoot = fullDocument.RootElement;
+            Assert.Equal("full", fullRoot.GetProperty("metadata_mode").GetString());
+            Assert.True(fullRoot.TryGetProperty("recipe", out _));
+            Assert.False(fullRoot.TryGetProperty("recipe_summary", out _));
+            var fullDraft = Assert.Single(fullRoot.GetProperty("drafts").EnumerateArray());
+            Assert.True(fullDraft.TryGetProperty("body", out _));
+            Assert.True(fullDraft.TryGetProperty("source", out _));
+            Assert.True(fullDraft.TryGetProperty("evidence", out _));
         }
         finally
         {

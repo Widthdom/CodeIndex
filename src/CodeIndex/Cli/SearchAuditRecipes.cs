@@ -4892,6 +4892,49 @@ internal sealed record SearchIssueDraftExportJsonResult(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     List<SearchIssueDraftSelectionAccountingJsonResult>? SelectionAccounting);
 
+internal sealed record SearchIssueDraftSummaryExportJsonResult(
+    [property: JsonPropertyName("api_version")] string ApiVersion,
+    [property: JsonPropertyName("recipe_summary")] SearchRecipeCompactListItemJsonResult RecipeSummary,
+    [property: JsonPropertyName("metadata_mode")] string MetadataMode,
+    [property: JsonPropertyName("scope")] SearchRecipeScopeJsonResult Scope,
+    [property: JsonPropertyName("query_count")] int QueryCount,
+    [property: JsonPropertyName("result_count")] int ResultCount,
+    [property: JsonPropertyName("query_freshness")] SearchRecipeQueryFreshnessJsonResult QueryFreshness,
+    [property: JsonPropertyName("count")] int Count,
+    [property: JsonPropertyName("total_count")] int TotalCount,
+    [property: JsonPropertyName("total_count_authoritative")] bool TotalCountAuthoritative,
+    [property: JsonPropertyName("total_count_lower_bound")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    int? TotalCountLowerBound,
+    [property: JsonPropertyName("returned_count")] int ReturnedCount,
+    [property: JsonPropertyName("omitted_count")] int OmittedCount,
+    [property: JsonPropertyName("truncated")] bool Truncated,
+    [property: JsonPropertyName("duplicate_preflight")] SuggestionIssueDraftPreflightSummaryJsonResult DuplicatePreflight,
+    [property: JsonPropertyName("drafts")] List<SearchIssueDraftSummaryJsonResult> Drafts,
+    [property: JsonPropertyName("recovery_command")] string RecoveryCommand);
+
+internal sealed record SearchIssueDraftSummaryJsonResult(
+    [property: JsonPropertyName("draft_id")] string DraftId,
+    [property: JsonPropertyName("query_name")] string QueryName,
+    [property: JsonPropertyName("title")] string Title,
+    [property: JsonPropertyName("result_count")] int ResultCount,
+    [property: JsonPropertyName("file_count")] int FileCount,
+    [property: JsonPropertyName("minimum_matched_count")] int MinimumMatchedCount,
+    [property: JsonPropertyName("minimum_omitted_result_count")] int MinimumOmittedResultCount,
+    [property: JsonPropertyName("results_truncated")] bool ResultsTruncated,
+    [property: JsonPropertyName("evidence_paths")] List<SearchRecipeTopFileJsonResult> EvidencePaths,
+    [property: JsonPropertyName("evidence_path_count")] int EvidencePathCount,
+    [property: JsonPropertyName("evidence_paths_returned_count")] int EvidencePathsReturnedCount,
+    [property: JsonPropertyName("evidence_paths_omitted_count")] int EvidencePathsOmittedCount,
+    [property: JsonPropertyName("evidence_paths_truncated")] bool EvidencePathsTruncated,
+    [property: JsonPropertyName("labels")] List<string> Labels,
+    [property: JsonPropertyName("severity")] string Severity,
+    [property: JsonPropertyName("confidence")] string Confidence,
+    [property: JsonPropertyName("next_cursor")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? NextCursor,
+    [property: JsonPropertyName("replay_command")] string ReplayCommand);
+
 internal sealed record SearchIssueDraftSelectionAccountingJsonResult(
     [property: JsonPropertyName("recipe")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
