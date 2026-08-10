@@ -5248,7 +5248,14 @@ public partial class McpServerTests
         Assert.Contains("1 files, 2 symbols, 0 refs", structured["summary"]!.GetValue<string>());
         Assert.Equal(1, structured["symbol_kinds"]!["function"]!.GetValue<long>());
         Assert.Equal(60, structured["stale_after_seconds"]!.GetValue<long>());
-        Assert.NotNull(structured["workspace_check"]);
+        var workspaceCheck = structured["workspace_check"]!.AsObject();
+        Assert.NotNull(workspaceCheck["checked"]);
+        Assert.NotNull(workspaceCheck["changed_file_count"]);
+        Assert.NotNull(workspaceCheck["changed_files_truncated"]);
+        Assert.NotNull(workspaceCheck["changed_files_path_limit"]);
+        Assert.NotNull(workspaceCheck["changed_files_omitted_count"]);
+        Assert.Null(workspaceCheck["changed_files"]);
+        Assert.Null(workspaceCheck["ChangedFilesTruncated"]);
         Assert.Empty(structured["failed_checks"]!.AsArray());
         Assert.True(structured["readiness"]!["issues_table_available"]!.GetValue<bool>());
         Assert.True(structured["explain"]!["readiness"]!["issues_table_available"]!.GetValue<bool>());

@@ -11,6 +11,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Pending changelog fragments live under `changelog.d/unreleased/`** — this section stays empty during ordinary work; see `changelog.d/unreleased/` for the release notes that are waiting to be aggregated.
 
+### [1.41.2] - 2026-08-10
+
+#### Fixed
+
+- **Windows CI setup now tolerates an unavailable Defender service** — Windows test and release jobs warn and continue when `WinDefend` is stopped or unavailable, while still treating exclusion configuration and verification failures as fatal whenever Defender is running.
+
+### [1.41.1] - 2026-08-10
+
+#### Changed
+
+- **Lazy regex match enumeration no longer allocates iterator wrappers on indexing hot paths** — instance-regex scans now use concrete value enumerables and enumerators through reference extraction and SQL helpers. Direct scans and already-full reference caps avoid iterator and interface-boxing allocations while preserving timeout diagnostics, zero-length and `\G` progression, explicit and right-to-left start positions, early termination, and LINQ compatibility.
+- **Large TypeScript indexes avoid refreshing the reference graph twice** — CLI full scans, scoped updates, and MCP indexing now let a planned declaration-augmentation rebuild perform the single graph-finalization pass while keeping candidate-index staging active through that pass. Empty results still finalize deletions or an inherited graph pass, marker-only validation skips a whole-graph scan, late validation failures fall back before partial readiness, and `--memory-trace` attributes the graph sample after the augmentation work. Authoritative scans without TypeScript stamp the contract without rebuilding augmentation rows.
+- **Large reference graphs no longer maintain the reverse candidate-symbol index row by row during candidate materialization** — Fresh, rebuilt, and high-churn full-graph indexing keeps this query-only index during raw reference persistence and drops it only when a graph refresh will actually repopulate candidates, including a TypeScript augmentation-owned pass. A filtered stat preflight skips reference and hotspot secondary-index staging when high-cardinality scoped targets are unchanged or only a sparse subset is expected to mutate indexed state; staging begins only when that estimate crosses the existing bulk threshold. Marker-only work also avoids rebuilding the candidate index. The candidate primary key remains available and success, cancellation, and recovery still converge on the identical final schema.
+- **Fresh and rebuilt indexes persist large reference sets without maintaining every query index row by row** — CLI indexing now defers reference query and graph secondary indexes inside its outer transaction and restores them once before graph finalization. Empty-database MCP indexing uses the same optimization with recoverable cleanup, while maintenance indexes, rollback safety, read repair, and the final database schema remain unchanged.
+- **Large multi-language indexes avoid impossible per-line reference regex work** — reference extraction now checks cheap syntax markers before entering expensive call, type, framework, and markup patterns across C#, Java, Kotlin, JavaScript/TypeScript, Go, Dockerfile, GraphQL, HTML, Markdown, XAML/XML, Terraform, JSON, and GitHub Actions. Stateful multi-line parsing and syntax without the shared markers retain their existing references, while markerless source lines complete with substantially less regex work.
+- **Large authoritative C# scoped updates now extract files concurrently within bounded ordered windows** — eligible static-interface workspace updates reuse a fixed worker pool, cap each window at twice the worker count, and keep SQLite persistence, hooks, readiness, byte accounting, and progress on one target-ordered consumer. Three file-stat barriers, nullable language re-detection, serial probe/hook/filter fallbacks, phase-aware cancellation and stall handling, and source-contract candidate ordering preserve the existing update semantics while reducing extraction time on large C# workspaces.
+- **Parallel full scans start large tail files earlier** — extraction now skips metadata probes with a single worker or when all work fits in the first worker wave; otherwise it checks only a fixed-size suffix of at most 64 work items and starts known in-limit files largest-first, reducing the final worker-wave tail without adding a repository-wide metadata pass.
+- **Large reference graphs rebuild fewer redundant index pages** — canonical schema creation, read migration, and bulk-load recovery now retire six single-column name/container indexes already covered by retained composite prefixes. The former all-row folded mutual-recursion index is replaced by a partial index containing only unresolved callable edges, while folded and legacy NOCASE exact queries continue to use retained composite indexes and older databases are pruned on open.
+- **JavaScript and TypeScript symbol extraction reuses its sanitized snapshot** — module, supplemental-symbol, and private-scope analysis now share one column-preserving snapshot, avoiding a duplicate full-file lexical pass on scope-heavy files while retaining the flat-file pre-scan fast path.
+- **Full indexing no longer walks large directory trees again for project-family metadata** — authoritative scans now collect C#, VB, F#, and MSBuild marker fingerprints during normal discovery and reuse a complete marker-directory snapshot for per-file family scopes. Fingerprint limits, ignore boundaries, incomplete-scan warnings, and live fallbacks remain fail-closed.
+- **Large multi-language files are normalized, analyzed, chunked, and validated with one shared content scan** — full scans, scoped updates, dry runs, and MCP indexing now carry normalized line, size, conflict-marker, replacement-character, FTS-token, and chunk-boundary facts through every language-independent path instead of rediscovering them in each consumer. Short files avoid unused boundary/token tracking, and high-ratio invalid UTF-8 input no longer retains one replacement-line entry per damaged line.
+- **Large indexing runs rebuild hotspot aggregate query indexes once instead of maintaining four trees row by row** — Full scans, rebuilds, high-churn scoped updates, and MCP bulk indexing now stage the cross-language hotspot indexes inside the existing aggregate refresh transaction when at least 64 dirty files account for most aggregate rows, including an empty pre-refresh aggregate during fresh/rebuild work. An exact probe bounded by dirty-row cardinality keeps the indexes for small or highly skewed updates, and success, cancellation, and failure preserve the same ready state and final schema.
+- **Large multi-language reference batches perform less index maintenance, parameter binding, and tuple hashing** — existing-database full scans that cross the established FTS bulk-load threshold now defer reference-query indexes transactionally, while scoped updates do the same recoverably only after at least 64 targets reach 60% of indexed files. Reference inserts also write the normalized legacy context column as a SQL `NULL` literal and carry materialized reference-line IDs through compact ordinal arrays, avoiding one binding and a repeated file/line/context dictionary lookup per edge across fresh and replacement paths. Small updates retain every query index and avoid rebuild overhead.
+- **Large FTS rebuilds avoid repeated automatic segment merges before their final optimize** — The standard and trigram indexes now disable routine automerge only around each transactional rebuild, restore their prior settings before commit, and retain crisis merging as a safety valve. Cancellation and failure roll back the configuration together with the rebuild.
+
+#### Fixed
+
+- **Exact-case path comparisons no longer mutate directories during indexing** — path equality now resolves ordinal matches and impossible unequal-length matches, while parent-boundary checks accept exact-case matches and descendants, before either operation probes filesystem case sensitivity. Empty nested workspace members therefore keep their discovery snapshot stable instead of receiving a temporary case-probe entry after traversal.
+- **Project family scopes now honor case policy changes inside mixed filesystems** — the completed scan snapshot keeps case-only marker directories distinct under case-sensitive children while still resolving aliases under case-insensitive children, without returning to live marker enumeration or adding filesystem probes.
+
+#### Internal
+
+- **C# graph finalization reuses materialized scalar facts** — full, scoped, and retained reference-graph refreshes now compute C# reference and symbol arity, receiver, constructor, and value-type facts once per applicable row, avoiding repeated managed SQLite callbacks for every candidate in large graphs.
+- **C# graph finalization reuses materialized type and constructor identities** — full, scoped, and retained reference-graph refreshes now build project/file-local type identities and ranked constructor-owner identities once per applicable symbol, replacing repeated candidate-side string construction and range scans with TEMP primary-key lookups.
+- **Reference-index restoration is staged around graph finalization** — large CLI and MCP bulk loads now keep query-only reference indexes absent through identity resolution, restore only three reverse-edge indexes for mutual-recursion evaluation, and rebuild the remaining query indexes afterwards. Active scoped graph refreshes are promoted to full plans before deferral, while cancellation, rollback, recovery, heartbeat, and SQLite `changes()` contracts remain intact.
+
 ### [1.41.0] - 2026-08-04
 
 #### Added
@@ -6455,6 +6491,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **未リリースの変更内容は `changelog.d/unreleased/` にまとまっています** — 通常の作業ではこのセクションは空のままにし、リリース待ちの変更は `changelog.d/unreleased/` を参照してください。
 
+### [1.41.2] - 2026-08-10
+
+#### 修正
+
+- **Windows CI setup が Defender service の利用不能を許容するようになりました** — Windows の test / release job は `WinDefend` が停止中または利用不能の場合に warning を出して継続し、Defender が稼働中の除外設定失敗と検証失敗は引き続き fatal として扱います。
+
+### [1.41.1] - 2026-08-10
+
+#### 変更
+
+- **indexing の hot path で lazy regex match 列挙の iterator wrapper allocation を解消しました** — instance regex の走査は、reference extraction と SQL helper を通して concrete な value enumerable / enumerator を使います。direct scan と既に満杯の reference cap は iterator および interface boxing allocation を避けながら、timeout diagnostic、zero-length と `\G` の進行、明示的および right-to-left の開始位置、早期終了、LINQ 互換性を維持します。
+- **大規模 TypeScript index で reference graph を2回 refresh しないようになりました** — CLI full scan、scoped update、MCP indexing は、candidate index の遅延を維持したまま予定された declaration augmentation rebuild に1回だけの graph finalization を担当させます。結果が空でも削除または引き継いだgraph passは確定し、marker検証だけなら全graph走査を省きます。late validation failureではpartial readiness前にfallbackし、`--memory-trace` の graph sample はaugmentation作業後へ帰属させます。TypeScriptのないauthoritative scanはaugmentation rowを再構築せずcontractをstampします。
+- **大規模 reference graph の candidate 構築中に candidate-symbol reverse index を行ごとに保守しなくなりました** — fresh、rebuild、および高 churn の full-graph indexing は、この query 専用 index を raw reference persistence 中は維持し、TypeScript augmentation が担当する pass を含め、graph refresh が candidate を実際に再構築するときだけ外します。filtered stat preflight は高 cardinality scoped target が全て unchanged、または indexed state を変更し得る target が疎な場合に reference / hotspot secondary-index staging を省き、その見積もり件数が既存 bulk threshold を超えた場合だけ staging を開始します。marker-only work も candidate index の再構築を避けます。candidate primary key を維持したまま、成功・cancellation・recovery の全経路で同一の最終 schema に収束します。
+- **fresh / rebuild index が、大量の reference を query index ごとに逐次更新せず永続化するようになりました** — CLI indexing は外側 transaction 内で reference query / graph 用 secondary index を遅延し、graph finalization 前に1回だけ復元します。空 database から始める MCP indexing も recoverable cleanup 付きで同じ最適化を使い、保守用 index、rollback safety、read repair、最終 database schema は従来どおり維持します。
+- **大規模な multi-language index で成立しない行単位 reference regex の実行を回避しました** — C#、Java、Kotlin、JavaScript/TypeScript、Go、Dockerfile、GraphQL、HTML、Markdown、XAML/XML、Terraform、JSON、GitHub Actions の call、type、framework、markup pattern を処理する前に、安価な構文 marker を確認します。stateful な複数行解析と共有 marker を持たない構文の既存 reference は維持しつつ、marker のない source 行に対する regex work を大幅に減らします。
+- **大規模な authoritative C# scoped update が、上限付き ordered window 内で file extraction を並列実行するようになりました** — static-interface workspace の対象 update は固定 worker pool を再利用し、各 window を worker 数の2倍までに制限します。SQLite persistence、hook、readiness、byte accounting、progress は target 順の single consumer に維持します。3段階の file-stat barrier、nullable language re-detection、probe / hook / filter の serial fallback、phase-aware な cancellation / stall 処理、source-contract candidate の順序制御により既存の update semantics を保ちながら、大規模 C# workspace の extraction 時間を短縮します。
+- **parallel full scanが末尾の大きなfileを早く開始します** — workerが1つ、または全workが最初のworker waveに収まる場合はmetadata probeを省き、それ以外では最大64件の固定長suffixだけを確認してsize取得済みで上限内のfileを大きい順に開始するため、repository全体のmetadata passを増やさず最終worker waveの長い尾を短縮します。
+- **大規模なreference graphで冗長なindex pageの再構築を削減しました** — canonical schema作成、read migration、bulk-load recoveryは、保持済みcomposite prefixで代替できるname/container単一カラムindex 6本を退役させます。全rowを保持していた旧folded mutual-recursion indexは未解決のcallable edgeだけを含むpartial indexへ置き換え、folded/legacy NOCASEのexact queryは保持済みcomposite indexを引き続き利用し、旧databaseもopen時にpruneします。
+- **JavaScript / TypeScript の symbol extraction が sanitized snapshot を再利用します** — module、supplemental symbol、private-scope 解析は列位置を保つ snapshot を共有し、flat file の pre-scan fast path を維持しながら scope の多い file で重複していた全file lexical passを避けます。
+- **full indexing が project-family metadata のために巨大な directory tree を再走査しなくなりました** — authoritative scan は通常 discovery 中に C#、VB、F#、MSBuild の marker fingerprint を収集し、complete な marker-directory snapshot を file ごとの family scope に再利用します。fingerprint 上限、ignore 境界、不完全 scan warning、live fallback は引き続き fail-closed です。
+- **大規模な multi-language file の正規化・解析・chunk 分割・validation を1回の共有 content scan にまとめました** — full scan、scoped update、dry-run、MCP indexing は、正規化後の行数、size、conflict marker、replacement character、FTS token、chunk 境界の facts を全言語共通経路で引き回し、consumer ごとの再検出を省きます。短い file では不要な境界 / token 追跡を避け、高比率の invalid UTF-8 input では破損行ごとの replacement-line entry を保持しません。
+- **大規模 indexing では hotspot aggregate の query index 4本を行ごとに保守せず、最後に1回だけ再構築するようになりました** — full scan、rebuild、高 churn の scoped update、MCP bulk indexing は、64件以上のdirty fileがaggregate rowの大半を占める場合に既存のaggregate refresh transaction内で全言語共通のhotspot indexを遅延し、fresh / rebuildでrefresh前aggregateが空の場合も対象にします。dirty-row cardinalityで上限を設けたexact probeにより小規模または偏りの大きいupdateではindexを維持し、成功・cancellation・失敗の各経路で同じready stateと最終schemaを保ちます。
+- **大規模な multi-language reference batch の index maintenance、parameter binding、tuple hashing を削減しました** — 既存DBの full scan が既定の FTS bulk-load 閾値を超えた場合は reference query index を transaction 内で一時退避し、scoped update では64 target以上かつ indexed fileの60%以上の場合だけ recoverable に同じ処理を行います。reference insert は正規化済み legacy context column を SQL の `NULL` literal として書き込み、materialize 済み reference-line ID を compact な ordinal array で渡します。fresh / replacement の全経路で edge ごとの binding 1件と file / line / context dictionary の再 lookup を省きます。小規模 update は全 query index を維持し、再構築 overhead を避けます。
+- **大規模 FTS rebuild では最終 optimize 前の自動 segment merge を繰り返さないようになりました** — standard / trigram index は各 transaction 内の rebuild 中だけ通常 automerge を無効化し、commit 前に以前の設定へ戻します。crisis merge は安全弁として維持し、cancellation / failure 時は設定と rebuild を一緒に rollback します。
+
+#### 修正
+
+- **大小文字まで一致する path 比較で index 中の directory を変更しないよう修正しました** — filesystem の case sensitivity を probe する前に、path equality は ordinal 一致と長さの異なる不一致を確定し、親境界の判定は大小文字まで一致する同一 path と descendant を受理します。これにより、空の nested workspace member は走査後に一時 case-probe entry を作られず、discovery snapshot を安定して維持します。
+- **混在 filesystem 内で case policy が変わる場合も project family scope が正しくなりました** — 完了した scan snapshot は case-sensitive child 配下の大小文字だけが異なる marker directory を分離しつつ、case-insensitive child 配下の alias は同一 scope として解決し、live marker 列挙への後退や filesystem probe の追加も行いません。
+
+#### 内部変更
+
+- **C# graph finalization が materialize 済み scalar fact を再利用します** — full / scoped / retained の reference-graph refresh は、C# reference と symbol の arity、receiver、constructor、value-type fact を対象 row ごとに1回だけ計算し、巨大 graph の candidate ごとに managed SQLite callback を反復する処理を避けるようになりました。
+- **C# graph finalization が materialize 済み type / constructor identity を再利用します** — full / scoped / retained の reference-graph refresh は project / file-local type identity と順位付き constructor-owner identity を対象 symbol ごとに1回だけ構築し、candidate 側で反復していた文字列生成と range scan を TEMP 主キー lookup に置き換えます。
+- **reference index の復元を graph finalization の前後に段階化しました** — 大規模な CLI / MCP bulk load は identity resolution 中も query-only reference index を外したままにし、mutual-recursion 評価には reverse-edge 用3本だけを復元して、残りの query index はその後に再構築します。active な scoped graph refresh は遅延前に full plan へ昇格し、cancellation、rollback、recovery、heartbeat、SQLite `changes()` の各契約を維持します。
+
 ### [1.41.0] - 2026-08-04
 
 #### 追加
@@ -12871,7 +12943,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **テストスイート** — 60件のxUnitテスト。ChunkSplitter（6件）、SymbolExtractor（18件）、FileIndexer（8件）、Database統合（14件、FTS孤立防止・チェックサム検出含む）、DbReaderクエリ（14件）をカバー。対象: `tests/CodeIndex.Tests/UnitTest1.cs`。
 
-[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.41.0...HEAD
+[Unreleased]: https://github.com/Widthdom/CodeIndex/compare/v1.41.2...HEAD
+[1.41.2]: https://github.com/Widthdom/CodeIndex/compare/v1.41.1...v1.41.2
+[1.41.1]: https://github.com/Widthdom/CodeIndex/compare/v1.41.0...v1.41.1
 [1.41.0]: https://github.com/Widthdom/CodeIndex/compare/v1.40.3...v1.41.0
 [1.40.3]: https://github.com/Widthdom/CodeIndex/compare/v1.40.2...v1.40.3
 [1.40.2]: https://github.com/Widthdom/CodeIndex/compare/v1.40.1...v1.40.2

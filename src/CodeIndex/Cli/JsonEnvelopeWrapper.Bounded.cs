@@ -536,11 +536,15 @@ internal static partial class JsonEnvelopeWrapper
     {
         emittedJson = string.Empty;
         emittedCount = 0;
-        JsonObject BuildCandidate(int count)
+        JsonObject BuildCandidate(
+            int count,
+            IReadOnlyList<JsonNode?>? candidateItems = null,
+            int byteLimitOmittedPathCount = 0)
         {
+            var sourceItems = candidateItems ?? pageItems;
             var results = new JsonArray();
             for (var i = 0; i < count; i++)
-                results.Add(pageItems[i]?.DeepClone());
+                results.Add(sourceItems[i]?.DeepClone());
             var adjustedStreamTerminal = AdjustSearchSelectionAccountingForBoundedRows(
                 command,
                 streamTerminal,
@@ -614,7 +618,7 @@ internal static partial class JsonEnvelopeWrapper
                         controls.ResumeMatchOrdinal,
                         controls.ResumeByteOffset)
                     : null);
-            metadata["truncated"] = scanCursor is not null || totalCount > count;
+            metadata["truncated"] = scanCursor is not null || totalCount > count || byteLimitOmittedPathCount > 0;
             metadata["pagination_window_limit"] = MaxPageWindow;
             metadata["pagination_window_exhausted"] = paginationWindowExhausted;
             if (controls.Compact)
@@ -632,6 +636,11 @@ internal static partial class JsonEnvelopeWrapper
             {
                 metadata["byte_limit_reached"] = true;
                 metadata["byte_limit_omitted_count"] = pageItems.Count - count;
+            }
+            if (byteLimitOmittedPathCount > 0)
+            {
+                metadata["byte_limit_reached"] = true;
+                metadata["byte_limit_omitted_path_count"] = byteLimitOmittedPathCount;
             }
             if (extraction.PrimaryCollection is not null)
                 metadata["primary_collection"] = extraction.PrimaryCollection;
@@ -687,6 +696,45 @@ internal static partial class JsonEnvelopeWrapper
             emittedJson = candidateJson;
             emittedCount = requestedCount;
             return candidate;
+        }
+
+        if (command == "status"
+            && requestedCount == 1
+            && TryGetStatusWorkspaceCheckMaxSampleCount(pageItems[0], out var maxSampleCount))
+        {
+            JsonObject? bestStatusCandidate = null;
+            string? bestStatusJson = null;
+            var lowStatusLimit = 0;
+            var highStatusLimit = Math.Max(0, maxSampleCount - 1);
+            while (lowStatusLimit <= highStatusLimit)
+            {
+                var sampleLimit = lowStatusLimit + ((highStatusLimit - lowStatusLimit) / 2);
+                TryTrimStatusWorkspaceCheckSamples(
+                    pageItems[0],
+                    sampleLimit,
+                    out var trimmedStatus,
+                    out var omittedPathCount);
+                var current = BuildCandidate(1, [trimmedStatus], omittedPathCount);
+                var currentJson = SerializeBoundedEnvelope(current, jsonOptions);
+                minimumRequiredBytes = Math.Min(minimumRequiredBytes, GetJsonResponseByteCount(currentJson));
+                if (JsonFitsResponseBudget(currentJson, controls.MaxJsonBytes.Value))
+                {
+                    bestStatusCandidate = current;
+                    bestStatusJson = currentJson;
+                    emittedCount = 1;
+                    lowStatusLimit = sampleLimit + 1;
+                }
+                else
+                {
+                    highStatusLimit = sampleLimit - 1;
+                }
+            }
+
+            if (bestStatusCandidate is not null)
+            {
+                emittedJson = bestStatusJson!;
+                return bestStatusCandidate;
+            }
         }
 
         JsonObject? best = null;
@@ -1204,8 +1252,127 @@ internal static partial class JsonEnvelopeWrapper
             else if (string.Equals(field, "file", StringComparison.Ordinal)
                      && obj.TryGetPropertyValue("path", out var path))
                 projected[field] = path?.DeepClone();
+            else if (TryProjectNestedResponseField(obj, projected, field))
+                AddStatusWorkspaceCheckProjectionSignals(obj, projected, command, field);
         }
         return projected;
+    }
+
+    private static bool TryProjectNestedResponseField(
+        JsonObject source,
+        JsonObject projected,
+        string field)
+    {
+        var segments = field.Split('.', StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length < 2)
+            return false;
+
+        JsonObject currentSource = source;
+        JsonObject currentProjected = projected;
+        for (var i = 0; i < segments.Length - 1; i++)
+        {
+            if (currentSource[segments[i]] is not JsonObject nextSource)
+                return false;
+            currentSource = nextSource;
+            if (currentProjected[segments[i]] is not JsonObject nextProjected)
+            {
+                nextProjected = new JsonObject();
+                currentProjected[segments[i]] = nextProjected;
+            }
+            currentProjected = nextProjected;
+        }
+
+        var leaf = segments[^1];
+        if (!currentSource.TryGetPropertyValue(leaf, out var value))
+            return false;
+        currentProjected[leaf] = value?.DeepClone();
+        return true;
+    }
+
+    private static void AddStatusWorkspaceCheckProjectionSignals(
+        JsonObject source,
+        JsonObject projected,
+        string command,
+        string field)
+    {
+        if (!string.Equals(command, "status", StringComparison.Ordinal)
+            || source["workspace_check"] is not JsonObject sourceCheck
+            || projected["workspace_check"] is not JsonObject projectedCheck)
+        {
+            return;
+        }
+
+        var descriptor = WorkspaceCheckPathSamples.Descriptors.FirstOrDefault(candidate =>
+            string.Equals(
+                field,
+                $"workspace_check.{candidate.ListPropertyName}",
+                StringComparison.Ordinal));
+        if (string.IsNullOrEmpty(descriptor.ListPropertyName))
+            return;
+
+        foreach (var signal in new[]
+                 {
+                     descriptor.CountPropertyName,
+                     descriptor.TruncatedPropertyName,
+                     descriptor.PathLimitPropertyName,
+                     descriptor.OmittedCountPropertyName,
+                 })
+        {
+            if (sourceCheck.TryGetPropertyValue(signal, out var value))
+                projectedCheck[signal] = value?.DeepClone();
+        }
+    }
+
+    private static bool TryGetStatusWorkspaceCheckMaxSampleCount(JsonNode? source, out int maxSampleCount)
+    {
+        maxSampleCount = 0;
+        if (source is not JsonObject status
+            || status["workspace_check"] is not JsonObject check)
+        {
+            return false;
+        }
+
+        foreach (var descriptor in WorkspaceCheckPathSamples.Descriptors)
+        {
+            if (check[descriptor.ListPropertyName] is JsonArray samples)
+                maxSampleCount = Math.Max(maxSampleCount, samples.Count);
+        }
+        return maxSampleCount > 0;
+    }
+
+    private static bool TryTrimStatusWorkspaceCheckSamples(
+        JsonNode? source,
+        int sampleLimit,
+        out JsonNode? trimmed,
+        out int omittedPathCount)
+    {
+        trimmed = source?.DeepClone();
+        omittedPathCount = 0;
+        if (trimmed is not JsonObject status
+            || status["workspace_check"] is not JsonObject check)
+        {
+            return false;
+        }
+
+        foreach (var descriptor in WorkspaceCheckPathSamples.Descriptors)
+        {
+            if (check[descriptor.ListPropertyName] is not JsonArray samples)
+                continue;
+
+            var originalSampleCount = samples.Count;
+            while (samples.Count > sampleLimit)
+                samples.RemoveAt(samples.Count - 1);
+            omittedPathCount += originalSampleCount - samples.Count;
+
+            var authoritativeCount = TryReadInt(check, descriptor.CountPropertyName, out var count)
+                ? count
+                : originalSampleCount;
+            var totalOmittedCount = Math.Max(0, authoritativeCount - samples.Count);
+            check[descriptor.TruncatedPropertyName] = totalOmittedCount > 0;
+            check[descriptor.PathLimitPropertyName] = WorkspaceCheckPathSamples.PathLimit;
+            check[descriptor.OmittedCountPropertyName] = totalOmittedCount;
+        }
+        return omittedPathCount > 0;
     }
 
     private static ResponseCount ResolveTotalCount(

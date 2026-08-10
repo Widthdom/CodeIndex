@@ -250,6 +250,19 @@ internal static partial class ExportImportCommandRunner
                 exitCode: CommandExitCodes.DatabaseError,
                 diagnostics: ConvertBackupDiagnostics(ex.Diagnostics));
         }
+        catch (DiffComparisonBudgetExceededException ex)
+        {
+            return WriteImportError(
+                wantsJson,
+                jsonOptions,
+                phase,
+                "import_destination_comparison_budget_exceeded",
+                $"import destination comparison could not complete ({CommandErrorWriter.FormatSanitizedExceptionMessage(ex)}).",
+                "the destination was left unchanged; create a smaller filtered archive (for example with `cdidx export <filtered-archive> --lang <language>`) and rerun `cdidx import <filtered-archive> --check`.",
+                ImportUsage,
+                exitCode: CommandExitCodes.DatabaseError,
+                rootCause: "comparison_budget_exceeded");
+        }
         catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or SqliteException)
         {
             return WriteImportError(

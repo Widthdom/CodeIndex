@@ -48,6 +48,23 @@ internal static class ProjectionFieldRegistry
     internal static IReadOnlyList<string>? GetCompactFields(string command)
         => Schemas.TryGetValue(command, out var schema) ? schema.CompactFields : null;
 
+    internal static JsonObject ProjectCompactStatusWorkspaceCheck(
+        JsonObject workspaceCheck)
+    {
+        const string prefix = "workspace_check.";
+        var projected = new JsonObject();
+        foreach (var field in GetCompactFields("status")!)
+        {
+            if (!field.StartsWith(prefix, StringComparison.Ordinal))
+                continue;
+
+            var propertyName = field[prefix.Length..];
+            if (workspaceCheck.TryGetPropertyValue(propertyName, out var value))
+                projected[propertyName] = value?.DeepClone();
+        }
+        return projected;
+    }
+
     internal static bool TryResolveAlias(
         string command,
         string? collection,
@@ -201,9 +218,24 @@ internal static class ProjectionFieldRegistry
                 "api_version", "files", "chunks", "symbols", "references", "indexed_at", "git_head",
                 "git_is_dirty", "head_freshness", "version", "graph_table_available",
                 "hotspot_family_ready", "summary",
+                "workspace_check.checked", "workspace_check.matches_workspace", "workspace_check.reason",
+                "workspace_check.changed_file_count", "workspace_check.changed_files_truncated",
+                "workspace_check.changed_files_path_limit", "workspace_check.changed_files_omitted_count",
+                "workspace_check.missing_file_count", "workspace_check.missing_files_truncated",
+                "workspace_check.missing_files_path_limit", "workspace_check.missing_files_omitted_count",
+                "workspace_check.outside_sparse_cone_file_count", "workspace_check.outside_sparse_cone_files_truncated",
+                "workspace_check.outside_sparse_cone_files_path_limit", "workspace_check.outside_sparse_cone_files_omitted_count",
+                "workspace_check.unindexed_file_count", "workspace_check.unindexed_files_truncated",
+                "workspace_check.unindexed_files_path_limit", "workspace_check.unindexed_files_omitted_count",
+                "workspace_check.unverifiable_file_count", "workspace_check.unverifiable_files_truncated",
+                "workspace_check.unverifiable_files_path_limit", "workspace_check.unverifiable_files_omitted_count",
+                "workspace_check.scan_error_count", "workspace_check.scan_errors_truncated",
+                "workspace_check.scan_errors_path_limit", "workspace_check.scan_errors_omitted_count",
             ],
             builder => builder
                 .Fields(GetJsonFieldNames<StatusResult>())
+                .Fields(GetJsonFieldNames<IndexFreshnessCheckResult>()
+                    .Select(field => $"workspace_check.{field}"))
                 .Fields(
                     "effective_config", "log_path", "field", "label", "ready", "degraded",
                     "remediation", "known_fields", "scope", "meaning", "source", "dependencies",

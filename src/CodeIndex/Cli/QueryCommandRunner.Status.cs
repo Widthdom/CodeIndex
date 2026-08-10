@@ -211,6 +211,9 @@ public static partial class QueryCommandRunner
                 if (checkFailures.Count > 0)
                 {
                     WriteStatusCheckDiagnostics(checkFailures);
+                    if (status.WorkspaceCheck != null
+                        && checkFailures.Any(failure => failure.Name == "workspace_stale"))
+                        WriteWorkspaceCheckSampleDiagnostics(status.WorkspaceCheck);
                     WriteStatusRepairCommands(status.RepairCommands);
                 }
             }
@@ -1271,6 +1274,69 @@ public static partial class QueryCommandRunner
     {
         foreach (var failure in failures)
             CommandErrorWriter.WriteStderr(failure.Diagnostic);
+    }
+
+    private static void WriteWorkspaceCheckSampleDiagnostics(IndexFreshnessCheckResult check)
+    {
+        WriteWorkspaceCheckSampleDiagnostic(
+            "changed_files",
+            check.ChangedFileCount,
+            check.ChangedFiles,
+            check.ChangedFilesTruncated,
+            check.ChangedFilesPathLimit,
+            check.ChangedFilesOmittedCount);
+        WriteWorkspaceCheckSampleDiagnostic(
+            "missing_files",
+            check.MissingFileCount,
+            check.MissingFiles,
+            check.MissingFilesTruncated,
+            check.MissingFilesPathLimit,
+            check.MissingFilesOmittedCount);
+        WriteWorkspaceCheckSampleDiagnostic(
+            "outside_sparse_cone_files",
+            check.OutsideSparseConeFileCount,
+            check.OutsideSparseConeFiles,
+            check.OutsideSparseConeFilesTruncated,
+            check.OutsideSparseConeFilesPathLimit,
+            check.OutsideSparseConeFilesOmittedCount);
+        WriteWorkspaceCheckSampleDiagnostic(
+            "unindexed_files",
+            check.UnindexedFileCount,
+            check.UnindexedFiles,
+            check.UnindexedFilesTruncated,
+            check.UnindexedFilesPathLimit,
+            check.UnindexedFilesOmittedCount);
+        WriteWorkspaceCheckSampleDiagnostic(
+            "unverifiable_files",
+            check.UnverifiableFileCount,
+            check.UnverifiableFiles,
+            check.UnverifiableFilesTruncated,
+            check.UnverifiableFilesPathLimit,
+            check.UnverifiableFilesOmittedCount);
+        WriteWorkspaceCheckSampleDiagnostic(
+            "scan_errors",
+            check.ScanErrorCount,
+            check.ScanErrors,
+            check.ScanErrorsTruncated,
+            check.ScanErrorsPathLimit,
+            check.ScanErrorsOmittedCount);
+    }
+
+    private static void WriteWorkspaceCheckSampleDiagnostic(
+        string field,
+        int totalCount,
+        IReadOnlyList<string> samples,
+        bool truncated,
+        int pathLimit,
+        int omittedCount)
+    {
+        if (totalCount <= 0)
+            return;
+
+        CommandErrorWriter.WriteStderr(
+            $"[stale] workspace_check.{field} coverage={(truncated ? "sample" : "complete")} "
+            + $"returned={samples.Count} total={totalCount} omitted={omittedCount} path_limit={pathLimit} "
+            + $"paths=[{string.Join(", ", samples.Select(EscapeStatusRepairControlCharacters))}]");
     }
 
     private static int GetStatusCheckExitCode(IReadOnlyList<StatusCheckFailure> failures)
