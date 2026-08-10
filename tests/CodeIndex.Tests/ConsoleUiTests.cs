@@ -1471,9 +1471,12 @@ public class ConsoleUiTests
     {
         var flagSets = ExtractComparableSubcommandFlagSets("suggestions", "export");
 
-        Assert.Contains("output", flagSets.Bash);
-        Assert.Contains("output", flagSets.Zsh);
-        Assert.Contains("output", flagSets.Fish);
+        foreach (var flag in new[] { "output", "query", "count", "summary-only", "compact", "max-json-bytes" })
+        {
+            Assert.Contains(flag, flagSets.Bash);
+            Assert.Contains(flag, flagSets.Zsh);
+            Assert.Contains(flag, flagSets.Fish);
+        }
 
         var powerShell = ConsoleCompletionRenderer.GetCompletionScript("powershell");
         var suggestionsBranch = ExtractBetween(
@@ -1482,6 +1485,11 @@ public class ConsoleUiTests
             ") }");
         Assert.Contains("'--output'", suggestionsBranch, StringComparison.Ordinal);
         Assert.Contains("'-o'", suggestionsBranch, StringComparison.Ordinal);
+        Assert.Contains("'--query'", suggestionsBranch, StringComparison.Ordinal);
+        Assert.Contains("'--count'", suggestionsBranch, StringComparison.Ordinal);
+        Assert.Contains("'--summary-only'", suggestionsBranch, StringComparison.Ordinal);
+        Assert.Contains("'--compact'", suggestionsBranch, StringComparison.Ordinal);
+        Assert.Contains("'--max-json-bytes'", suggestionsBranch, StringComparison.Ordinal);
     }
 
     private static (SortedSet<string> Bash, SortedSet<string> Zsh, SortedSet<string> Fish, string BashScript, string ZshScript, string FishScript)

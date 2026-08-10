@@ -289,13 +289,20 @@ public class CliFlagSchemaTests
         var accepted = CliFlagSchema.GetAcceptedFlagNamesForCommand("suggestions");
         Assert.Contains("--language", accepted);
         Assert.Contains("--lang", accepted);
+        Assert.Contains("--query", accepted);
+        Assert.Contains("--max-json-bytes", accepted);
 
         var (withValues, flagOnly) = CliFlagSchema.GetParserFlagsPartitionedByValueBearing("suggestions");
         Assert.Contains("--lang", withValues);
         Assert.Contains("--language", withValues);
         Assert.Contains("--description", withValues);
         Assert.Contains("--evidence-path", withValues);
+        Assert.Contains("--query", withValues);
+        Assert.Contains("--max-json-bytes", withValues);
         Assert.Contains("--json", flagOnly);
+        Assert.Contains("--count", flagOnly);
+        Assert.Contains("--summary-only", flagOnly);
+        Assert.Contains("--compact", flagOnly);
         Assert.DoesNotContain("--json", withValues);
 
         Assert.DoesNotContain(CliFlagSchema.GetCompletionFlagsForCommand("suggestions"), flag => flag.Name == "--lang");
@@ -303,11 +310,20 @@ public class CliFlagSchemaTests
         var parse = typeof(SuggestionsCommandRunner).GetMethod("Parse", BindingFlags.NonPublic | BindingFlags.Static);
         Assert.NotNull(parse);
 
-        var parsed = parse!.Invoke(null, [new[] { "--lang=csharp", "--json" }]);
+        var parsed = parse!.Invoke(null, [new[] { "--lang=csharp", "--query=needle", "--compact", "--max-json-bytes=4096" }]);
         Assert.NotNull(parsed);
         Assert.Equal("csharp", parsed!.GetType().GetProperty("Language")!.GetValue(parsed));
+        Assert.Equal("needle", parsed.GetType().GetProperty("Query")!.GetValue(parsed));
+        Assert.Equal(true, parsed.GetType().GetProperty("Compact")!.GetValue(parsed));
+        Assert.Equal(4096, parsed.GetType().GetProperty("MaxJsonBytes")!.GetValue(parsed));
         Assert.Equal(true, parsed.GetType().GetProperty("Json")!.GetValue(parsed));
         Assert.Null(parsed.GetType().GetProperty("Error")!.GetValue(parsed));
+
+        var oversizedQuery = parse.Invoke(null, [new[] { $"--query={new string('q', QueryLimits.MaxQueryLength + 1)}" }]);
+        Assert.NotNull(oversizedQuery);
+        Assert.Equal(
+            $"Error: --query must be at most {QueryLimits.MaxQueryLength} characters.",
+            oversizedQuery!.GetType().GetProperty("Error")!.GetValue(oversizedQuery));
 
         var rejected = parse.Invoke(null, [new[] { "--json=true" }]);
         Assert.NotNull(rejected);

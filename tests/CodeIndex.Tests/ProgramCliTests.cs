@@ -1174,6 +1174,161 @@ public class ProgramCliTests
     }
 
     [ProductionRuntimeFact]
+    public void Suggestions_QuerySearchesRedactedHistoryBeforePagination_Issue5061()
+    {
+        using var fixture = SuggestionFixture.Create();
+        var title = fixture.Add(
+            "title_query_category",
+            "title_query_language",
+            "Unrelated description",
+            submitted: false,
+            sampledTitle: "Ｆｕｌｌｗｉｄｔｈ　Ｔｉｔｌｅ");
+        var description = fixture.Add("description_query_category", null, "Unique description needle 5061", submitted: false);
+        var context = fixture.Add(
+            "context_query_category",
+            null,
+            "Unrelated context description",
+            submitted: false,
+            context: "Unique context needle 5061");
+        var evidence = fixture.Add(
+            "evidence_query_category",
+            null,
+            "Unrelated evidence description",
+            submitted: false,
+            evidencePaths: ["src/UniqueEvidenceNeedle5061.cs"]);
+        var category = fixture.Add("unique_category_needle_5061", null, "Unrelated category description", submitted: false);
+        var language = fixture.Add("language_query_category", "unique_language_needle_5061", "Unrelated language description", submitted: false);
+
+        AssertQueryReturns("fullwidth title", title);
+        AssertQueryReturns("DESCRIPTION NEEDLE 5061", description);
+        AssertQueryReturns("context needle 5061", context);
+        AssertQueryReturns("uniqueevidenceneedle5061", evidence);
+        AssertQueryReturns("unique_category_needle_5061", category);
+        AssertQueryReturns("unique_language_needle_5061", language);
+        AssertQueryReturns(title.Hash[..16], title);
+
+        var olderMatch = fixture.Add("output_format", "csharp", "Pagination needle 5061 older", submitted: false);
+        fixture.Add("output_format", "csharp", "Newest but unrelated", submitted: false);
+        fixture.Add("output_format", "csharp", "Pagination needle 5061 newer", submitted: false);
+        var (pageExitCode, pageStdout, pageStderr) = RunCliInSubprocess([
+            "suggestions", "list", "--db", fixture.DbPath,
+            "--category", "output_format", "--language", "csharp",
+            "--query", "pagination NEEDLE 5061", "--limit", "1", "--offset", "1", "--json"
+        ]);
+
+        Assert.Equal(CommandExitCodes.Success, pageExitCode);
+        Assert.Equal(string.Empty, pageStderr);
+        using var pageDoc = JsonDocument.Parse(pageStdout);
+        Assert.Equal(2, pageDoc.RootElement.GetProperty("total_count").GetInt32());
+        var pageItem = Assert.Single(pageDoc.RootElement.GetProperty("results").EnumerateArray());
+        Assert.Equal(olderMatch.Hash, pageItem.GetProperty("id").GetString());
+
+        void AssertQueryReturns(string query, SuggestionRecord expected)
+        {
+            var (exitCode, stdout, stderr) = RunCliInSubprocess([
+                "suggestions", "list", "--db", fixture.DbPath, "--query", query, "--json"
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.True(string.IsNullOrEmpty(stderr), stderr);
+            using var doc = JsonDocument.Parse(stdout);
+            Assert.Equal(1, doc.RootElement.GetProperty("total_count").GetInt32());
+            var result = Assert.Single(doc.RootElement.GetProperty("results").EnumerateArray());
+            Assert.Equal(expected.Hash, result.GetProperty("id").GetString());
+        }
+    }
+
+    [ProductionRuntimeFact]
+    public void Suggestions_QueryProjectionsAreBoundedAndRedacted_Issue5061()
+    {
+        using var fixture = SuggestionFixture.Create();
+        const string rawSecret = "query_secret_5061";
+        for (var i = 0; i < 24; i++)
+        {
+            fixture.Add(
+                i % 2 == 0 ? "output_format" : "language_support",
+                i % 3 == 0 ? "csharp" : "rust",
+                $"bulk-marker-5061 suggestion {i:D2} {new string((char)('a' + i % 26), 1024)}",
+                submitted: false,
+                sampledTitle: i == 0 ? $"api-token={rawSecret}" : $"Bulk suggestion {i:D2}",
+                evidencePaths: i == 0 ? [$"src/api-token={rawSecret}.cs"] : [$"src/Bulk{i:D2}.cs"]);
+        }
+
+        var (countExitCode, countStdout, countStderr) = RunCliInSubprocess([
+            "suggestions", "list", "--db", fixture.DbPath, "--query", "BULK-MARKER-5061", "--count", "--json"
+        ]);
+        var (summaryExitCode, summaryStdout, summaryStderr) = RunCliInSubprocess([
+            "suggestions", "list", "--db", fixture.DbPath, "--query", "bulk-marker-5061", "--summary-only"
+        ]);
+        var (compactExitCode, compactStdout, compactStderr) = RunCliInSubprocess([
+            "suggestions", "export", "--db", fixture.DbPath, "--format", "json",
+            "--query", "bulk-marker-5061", "--compact", "--limit", "24"
+        ]);
+        var fullCompactBytes = Encoding.UTF8.GetByteCount(compactStdout);
+        var byteBudget = fullCompactBytes - 256;
+        var (boundedExitCode, boundedStdout, boundedStderr) = RunCliInSubprocess([
+            "suggestions", "export", "--db", fixture.DbPath, "--format", "json",
+            "--query", "bulk-marker-5061", "--compact", "--limit", "24",
+            "--max-json-bytes", byteBudget.ToString(CultureInfo.InvariantCulture)
+        ]);
+        var (secretExitCode, secretStdout, secretStderr) = RunCliInSubprocess([
+            "suggestions", "list", "--db", fixture.DbPath,
+            "--query", $"api-token={rawSecret}", "--count", "--json"
+        ]);
+
+        Assert.Equal(CommandExitCodes.Success, countExitCode);
+        Assert.Equal(string.Empty, countStderr);
+        using var countDoc = JsonDocument.Parse(countStdout);
+        Assert.Equal("count", countDoc.RootElement.GetProperty("mode").GetString());
+        Assert.Equal(24, countDoc.RootElement.GetProperty("count").GetInt32());
+        Assert.True(countDoc.RootElement.GetProperty("total_count_authoritative").GetBoolean());
+        Assert.Equal(0, countDoc.RootElement.GetProperty("results").GetArrayLength());
+        Assert.True(Encoding.UTF8.GetByteCount(countStdout) < 1024);
+
+        Assert.Equal(CommandExitCodes.Success, summaryExitCode);
+        Assert.Equal(string.Empty, summaryStderr);
+        using var summaryDoc = JsonDocument.Parse(summaryStdout);
+        Assert.Equal("summary", summaryDoc.RootElement.GetProperty("mode").GetString());
+        Assert.Equal(24, summaryDoc.RootElement.GetProperty("total_count").GetInt32());
+        var summary = summaryDoc.RootElement.GetProperty("summary");
+        Assert.Equal(24, summary.GetProperty("by_status").GetProperty("counts").GetProperty("draft").GetInt32());
+        Assert.Equal(12, summary.GetProperty("by_category").GetProperty("counts").GetProperty("output_format").GetInt32());
+        Assert.Equal(12, summary.GetProperty("by_category").GetProperty("counts").GetProperty("language_support").GetInt32());
+        Assert.Equal(0, summaryDoc.RootElement.GetProperty("results").GetArrayLength());
+        Assert.True(Encoding.UTF8.GetByteCount(summaryStdout) < 4096);
+
+        Assert.Equal(CommandExitCodes.Success, compactExitCode);
+        Assert.Equal(string.Empty, compactStderr);
+        Assert.DoesNotContain(rawSecret, compactStdout, StringComparison.Ordinal);
+        using var compactDoc = JsonDocument.Parse(compactStdout);
+        var compactItem = compactDoc.RootElement.GetProperty("results")[0];
+        Assert.Equal(4, compactItem.EnumerateObject().Count());
+        Assert.False(compactItem.TryGetProperty("description", out _));
+        Assert.False(compactItem.TryGetProperty("category", out _));
+        Assert.False(compactItem.TryGetProperty("language", out _));
+        Assert.Contains(
+            compactDoc.RootElement.GetProperty("results").EnumerateArray(),
+            item => item.GetProperty("title").GetString()!.Contains("redact", StringComparison.OrdinalIgnoreCase));
+
+        Assert.Equal(CommandExitCodes.Success, boundedExitCode);
+        Assert.Equal(string.Empty, boundedStderr);
+        Assert.True(Encoding.UTF8.GetByteCount(boundedStdout) <= byteBudget);
+        using var boundedDoc = JsonDocument.Parse(boundedStdout);
+        Assert.True(boundedDoc.RootElement.GetProperty("truncated").GetBoolean());
+        Assert.True(boundedDoc.RootElement.GetProperty("byte_limit_omitted_count").GetInt32() > 0);
+        Assert.True(boundedDoc.RootElement.GetProperty("returned_count").GetInt32() < 24);
+        Assert.True(boundedDoc.RootElement.GetProperty("has_more").GetBoolean());
+        Assert.True(boundedDoc.RootElement.GetProperty("next_offset").GetInt32() > 0);
+        Assert.Contains("--offset", boundedDoc.RootElement.GetProperty("recovery_guidance").GetString());
+
+        Assert.Equal(CommandExitCodes.Success, secretExitCode);
+        Assert.Equal(string.Empty, secretStderr);
+        using var secretDoc = JsonDocument.Parse(secretStdout);
+        Assert.Equal(0, secretDoc.RootElement.GetProperty("count").GetInt32());
+        Assert.DoesNotContain(rawSecret, secretStdout, StringComparison.Ordinal);
+    }
+
+    [ProductionRuntimeFact]
     public void Suggestions_ListDefaultVerbAcceptsTopLevelJsonFlags_Issue4171()
     {
         using var fixture = SuggestionFixture.Create();
