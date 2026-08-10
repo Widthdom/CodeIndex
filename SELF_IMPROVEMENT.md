@@ -38,13 +38,13 @@ The loop is not just "suggest ideas". It is:
 - Keep **one task per commit**.
 - Before every commit, explicitly work through `.codex/workflows/precommit.md`.
 - Before every commit, review the authoritative [Search and Indexing Rules](AGENT_GUIDE.md#search-and-indexing-rules); strengthen `AGENT_GUIDE.md` or the relevant workflow if AI search behavior should change.
-- After every commit, rebuild `cdidx` from the latest local source, run `dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll status --check --json`, and refresh `.cdidx/codeindex.db` with that freshly built binary only when the check does not report `index_matches_workspace: true`.
-- The checked-in `cdidx.workspace.json` uses `index_strategy: single`, so the root `.cdidx/codeindex.db` is the only canonical dogfood database. Index `.` so source, tests, docs, scripts, workflows, and policy stay searchable; do not maintain redundant member databases. Run CLI queries from the repository root or pass `--db .cdidx/codeindex.db`; start MCP/LSP from the root or pass the same `--db`; and target maintenance commands at that database. After the root status is healthy, require `dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll workspace status --check --json` to be healthy too.
-- Prefer the lightest truthful refresh mode: use `--files` only for known in-place edits or new files, use `--commits HEAD` after a normal commit because it tracks renames/deletes from git history, use `--changed-between <old-ref> <new-ref>` after branch switches when both refs are known, and reserve `cdidx . --json` for full-workspace scans after history-moving operations or cases where repo-wide stale files must be purged. `cdidx . --json` is not a forced rebuild and may report `mode:"incremental"` while skipping unchanged files; if `status --check --json` still reports stale after that scan, escalate to `dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --rebuild --yes --json`.
+- After every commit, rebuild `cdidx` from the latest local source, run `dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll status --check --db .cdidx/codeindex.db --json`, and refresh `.cdidx/codeindex.db` with that freshly built binary only when the check does not report `index_matches_workspace: true`.
+- The checked-in `cdidx.workspace.json` uses `index_strategy: single`, so the root `.cdidx/codeindex.db` is the only canonical dogfood database. Index `.` so source, tests, docs, scripts, workflows, and policy stay searchable; do not maintain redundant member databases. Always pass `--db .cdidx/codeindex.db` to dogfood CLI queries, MCP/LSP, and maintenance commands; starting from the repository root alone does not pin the DB because data-directory and active-workspace overrides take precedence. After the pinned root status is healthy, require `dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll workspace status --check --json` to be healthy too.
+- Prefer the lightest truthful refresh mode: use `--files` only for known in-place edits or new files, use `--commits HEAD` after a normal commit because it tracks renames/deletes from git history, use `--changed-between <old-ref> <new-ref>` after branch switches when both refs are known, and reserve `cdidx . --db .cdidx/codeindex.db --json` for full-workspace scans after history-moving operations or cases where repo-wide stale files must be purged. That full scan is not a forced rebuild and may report `mode:"incremental"` while skipping unchanged files; if the explicitly pinned `status --check --json` still reports stale after that scan, escalate to `dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --rebuild --yes --db .cdidx/codeindex.db --json`.
 - Prefer the **locally built latest binary** (`dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll`) over an older globally installed `cdidx` whenever the repository code has changed. **Never fall back to a global `cdidx`** — the global version may have an older DB schema, missing query features, or stale extraction logic that silently produces wrong results. This is enforced at the Claude Code harness level via the repo-tracked `.claude/settings.json`, which denies the full set of shell code-search and file-discovery commands: `rg`, `grep`, `egrep`, `fgrep`, `zgrep`, `rgrep`, `ripgrep`, `ag`, `ack`, `ack-grep`, `git grep`, `find`, `locate`, `mlocate`, `mdfind`, and `cdidx`. Use the built-in Grep / Glob tools or the locally built binary instead.
 - Treat repo-tracked `.claude/settings.json`, `.claude/hooks/bash-guard.py`, `.codex/hooks.json`, and `.codex/hooks/bash_guard.py` as tool-specific guard adapters. Do not edit them during ordinary self-improvement work unless the task is explicitly about agent guard behavior. Shared Bash command policy lives in `.agent_harness/command_guard_core.py`; update that shared core for common policy and review both adapters only when tool-specific behavior changes. The current guard is deny-oriented: it is intentionally permissive for routine `dotnet`, `git`, `gh`, `codex exec`, `/tmp` work, and read-only shell inspection, while still blocking dangerous shell patterns and sensitive local read paths.
 - Respect the current local-privacy boundary in Claude Code: home-directory personal areas and credential-like files are intentionally read-denied by policy. Do not weaken those restrictions as a convenience workaround for self-improvement tasks; if the task genuinely requires changing the guard, treat that as the task itself and update docs accordingly.
-- After `git switch`, re-index with the **locally built binary** using `dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --changed-between <old-ref> <new-ref> --json` when the workflow has both the previous and current refs; this updates only the files changed between branches while still purging rename/delete old paths included by git. If the refs are not available, or after `git reset`, `git rebase`, `git commit --amend`, or `git merge`, use `dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll . --json` so stale files are purged against the current checkout. If the follow-up status check remains stale, run `dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --rebuild --yes --json` instead of repeating `cdidx . --json`.
+- After `git switch`, re-index with the **locally built binary** using `dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --changed-between <old-ref> <new-ref> --db .cdidx/codeindex.db --json` when the workflow has both the previous and current refs; this updates only the files changed between branches while still purging rename/delete old paths included by git. If the refs are not available, or after `git reset`, `git rebase`, `git commit --amend`, or `git merge`, use `dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll . --db .cdidx/codeindex.db --json` so stale files are purged against the current checkout. If the follow-up status check remains stale, run `dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --rebuild --yes --db .cdidx/codeindex.db --json` instead of repeating the full scan.
 - When searching and navigating code to investigate bugs, plan fixes, or verify changes, always use the **locally built binary** — not the globally installed version. This ensures query results reflect the latest extraction rules and DB schema from this branch.
 - If the **locally built binary** crashes, aborts unexpectedly, or exposes a new defect during this loop, do not silently work around it or fall back to an older/global binary. Notify the user with the concrete failure, explain that the self-improvement loop is now blocked or tainted by that defect, and propose fixing it as a separate task or as the next approved priority.
 - Treat the loop itself as ongoing regression coverage and light monkey testing. Do not limit yourself to only the safest or most standard workflows; actively exercise recent features, edge features, and less-traveled commands/options so the loop can indirectly surface crashes, bad assumptions, stale help text, and integration defects.
@@ -101,7 +101,7 @@ Use the binary produced from the current commit, not an older global tool, so th
 Start with the exact workspace match check:
 
 ```bash
-dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll status --check --json
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll status --check --db .cdidx/codeindex.db --json
 ```
 
 If it exits `0` and reports `index_matches_workspace: true`, keep the existing `.cdidx/codeindex.db`. Otherwise, refresh the index.
@@ -113,18 +113,18 @@ Choose the one refresh mode that matches your situation:
 ```bash
 # During local in-place edits or new-file additions, refresh only the files you touched
 # Old paths from renames/deletes are NOT purged unless you also pass them explicitly
-dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --files src/CodeIndex/Cli/QueryCommandRunner.cs tests/CodeIndex.Tests/QueryCommandRunnerTests.cs --json
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --files src/CodeIndex/Cli/QueryCommandRunner.cs tests/CodeIndex.Tests/QueryCommandRunnerTests.cs --db .cdidx/codeindex.db --json
 
 # After a normal commit, prefer git-aware diff refresh because it sees renames/deletes
 commit_id=$(git rev-parse HEAD)
-dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --commits "$commit_id" --json
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --commits "$commit_id" --db .cdidx/codeindex.db --json
 
 # After a branch switch, prefer the before/after refs when your workflow has both
-dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --changed-between <old-ref> <new-ref> --json
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --changed-between <old-ref> <new-ref> --db .cdidx/codeindex.db --json
 
 # First sync on a checkout, after history-moving git operations,
 # or when branch-switch refs are unavailable
-dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll . --json
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll . --db .cdidx/codeindex.db --json
 ```
 
 `--changed-between` reconciles the requested range with the persisted whole-workspace verification baseline. If that baseline is older or divergent, the local binary adds the missing baseline-to-current paths; if Git can no longer resolve it, follow the emitted fetch/full-scan guidance instead of substituting `--files`.
@@ -132,7 +132,7 @@ dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll . --json
 If you prefer `dotnet run`, that is also acceptable:
 
 ```bash
-dotnet run --project src/CodeIndex -- . --json
+dotnet run --project src/CodeIndex -- . --db .cdidx/codeindex.db --json
 ```
 
 ### 4. Explore the repo with cdidx itself
@@ -144,18 +144,18 @@ Do not only exercise the obvious happy-path commands. Regularly touch newer feat
 If `status --json` reports `fold_ready: false` and you only need Unicode-aware `--exact` semantics on an older DB, prefer upgrading in place with:
 
 ```bash
-dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll backfill-fold --json
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll backfill-fold --db .cdidx/codeindex.db --json
 ```
 
-Use `cdidx . --json` as a full-workspace scan only when you need a fresh source scan, when history-moving git operations just happened, when branch-switch refs are unavailable, or when repo-wide stale-file purge matters more than speed. This path is not a forced rebuild: it may report `mode:"incremental"` and skip unchanged files. If `status --check --json` remains stale after that scan, run `dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --rebuild --yes --json`. In the ordinary commit-to-commit loop, prefer `--commits` first; after branch switches with known refs, prefer `--changed-between`; and use `--files` only for in-place edits/new files where no old path needs purging.
+Use `cdidx . --db .cdidx/codeindex.db --json` as a full-workspace scan only when you need a fresh source scan, when history-moving git operations just happened, when branch-switch refs are unavailable, or when repo-wide stale-file purge matters more than speed. This path is not a forced rebuild: it may report `mode:"incremental"` and skip unchanged files. If `status --check --db .cdidx/codeindex.db --json` remains stale after that scan, run `dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --rebuild --yes --db .cdidx/codeindex.db --json`. In the ordinary commit-to-commit loop, prefer `--commits` first; after branch switches with known refs, prefer `--changed-between`; and use `--files` only for in-place edits/new files where no old path needs purging.
 
 Typical sequence:
 
 ```bash
-dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll status --json
-dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll map --json --limit 10 --path src/ --exclude-tests
-dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll inspect QueryCommandRunner --exclude-tests --limit 5
-dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll search "AI" --path src/ --exclude-tests --snippet-lines 6 --json
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll status --db .cdidx/codeindex.db --json
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll map --db .cdidx/codeindex.db --json --limit 10 --path src/ --exclude-tests
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll inspect QueryCommandRunner --db .cdidx/codeindex.db --exclude-tests --limit 5
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll search "AI" --db .cdidx/codeindex.db --path src/ --exclude-tests --snippet-lines 6 --json
 ```
 
 Use `inspect` when you already have a likely symbol name. Use `search` for raw text or unsupported languages. Use `map` first when you need orientation.
@@ -201,9 +201,9 @@ Examples:
 
 ```bash
 dotnet test
-dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll status --json
-dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll map --json --path src/ --exclude-tests
-dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll inspect ResolveGitCommonDir --json --exclude-tests --limit 5
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll status --db .cdidx/codeindex.db --json
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll map --db .cdidx/codeindex.db --json --path src/ --exclude-tests
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll inspect ResolveGitCommonDir --db .cdidx/codeindex.db --json --exclude-tests --limit 5
 ```
 
 ### 8. Commit exactly one task
@@ -233,14 +233,14 @@ dotnet build
 # Default post-commit path: refresh from the last commit's diff
 # This is safer than --files because git diff sees renames/deletes
 commit_id=$(git rev-parse HEAD)
-dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --commits "$commit_id" --json
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --commits "$commit_id" --db .cdidx/codeindex.db --json
 
 # Branch switch path when the before/after refs are known
-dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --changed-between <old-ref> <new-ref> --json
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --changed-between <old-ref> <new-ref> --db .cdidx/codeindex.db --json
 
 # Escalate to a full scan after git reset/rebase/amend/merge,
 # when branch-switch refs are unavailable, or whenever repo-wide stale purge is required
-dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll . --json
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll . --db .cdidx/codeindex.db --json
 ```
 
 ### 10. Use the refreshed index to choose the next task
@@ -371,13 +371,13 @@ Read `SELF_IMPROVEMENT.md`, inspect the current repo with cdidx itself, identify
 - **1案件1コミット** を守る。
 - 毎コミット前に、`.codex/workflows/precommit.md` を明示的に確認する。
 - 毎コミット前に、正本である [Search and Indexing Rules](AGENT_GUIDE.md#search-and-indexing-rules) を見直し、AIの検索行動を変えるべきなら `AGENT_GUIDE.md` または関連 workflow を強化する。
-- 毎コミット後に、ローカルソースの最新状態から `cdidx` を再ビルドし、`dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll status --check --json` を実行する。`index_matches_workspace: true` でなければ、その新しいバイナリで `.cdidx/codeindex.db` を更新する。
-- リポジトリ追跡の `cdidx.workspace.json` は `index_strategy: single` を使うため、ルートの `.cdidx/codeindex.db` だけを正規のドッグフード用データベースとする。source、tests、docs、scripts、workflows、policy をすべて検索可能にするため `.` を index し、重複する member database は維持しない。CLI query はリポジトリルートで実行するか `--db .cdidx/codeindex.db` を渡し、MCP/LSP もルートから起動するか同じ `--db` を渡し、maintenance command も同じ DB を対象にする。root status が healthy になった後、`dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll workspace status --check --json` も healthy であることを必須とする。
-- 更新モードは「正しさを保てる範囲で最も軽いもの」を優先する。`--files` は把握している in-place 編集や新規追加だけに使い、通常のコミット後は rename/delete も拾える `--commits HEAD` を使う。ブランチ切り替え後は前後の ref が分かるなら `--changed-between <old-ref> <new-ref>` を使い、履歴を動かす操作や repo 全体で stale file を掃除したい場合だけ `cdidx . --json` の全 workspace scan へ上げる。`cdidx . --json` は強制 rebuild ではなく、`mode:"incremental"` と表示して unchanged file を skip する場合があるため、その後の `status --check --json` がまだ stale なら `dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --rebuild --yes --json` に上げる。
+- 毎コミット後に、ローカルソースの最新状態から `cdidx` を再ビルドし、`dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll status --check --db .cdidx/codeindex.db --json` を実行する。`index_matches_workspace: true` でなければ、その新しいバイナリで `.cdidx/codeindex.db` を更新する。
+- リポジトリ追跡の `cdidx.workspace.json` は `index_strategy: single` を使うため、ルートの `.cdidx/codeindex.db` だけを正規のドッグフード用データベースとする。source、tests、docs、scripts、workflows、policy をすべて検索可能にするため `.` を index し、重複する member database は維持しない。dogfood の CLI query、MCP/LSP、maintenance command には常に `--db .cdidx/codeindex.db` を渡す。data-directory と active-workspace の override は CWD discovery より優先されるため、リポジトリルートから実行するだけでは DB を固定できない。明示的に固定した root status が healthy になった後、`dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll workspace status --check --json` も healthy であることを必須とする。
+- 更新モードは「正しさを保てる範囲で最も軽いもの」を優先する。`--files` は把握している in-place 編集や新規追加だけに使い、通常のコミット後は rename/delete も拾える `--commits HEAD` を使う。ブランチ切り替え後は前後の ref が分かるなら `--changed-between <old-ref> <new-ref>` を使い、履歴を動かす操作や repo 全体で stale file を掃除したい場合だけ `cdidx . --db .cdidx/codeindex.db --json` の全 workspace scan へ上げる。この full scan は強制 rebuild ではなく、`mode:"incremental"` と表示して unchanged file を skip する場合があるため、明示的に DB を固定した `status --check --json` がまだ stale なら `dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --rebuild --yes --db .cdidx/codeindex.db --json` に上げる。
 - リポジトリのコードを変更した後は、古いグローバルインストール版ではなく **ローカルでビルドした最新版バイナリ** (`dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll`) を使う。**グローバル版には絶対に戻らないこと** — グローバル版は DB スキーマが古い、クエリ機能が欠けている、抽出ロジックが古くて誤った結果を返す、といった問題が起こりうる。このルールはリポジトリ追跡の `.claude/settings.json` で harness レベルでも強制されており、shell のコード検索・ファイル探索系コマンドを網羅的に deny している（`rg`、`grep`、`egrep`、`fgrep`、`zgrep`、`rgrep`、`ripgrep`、`ag`、`ack`、`ack-grep`、`git grep`、`find`、`locate`、`mlocate`、`mdfind`、`cdidx`）。代わりに組み込みの Grep / Glob ツールかローカルビルド版を使うこと。
 - リポジトリ追跡の `.claude/settings.json`、`.claude/hooks/bash-guard.py`、`.codex/hooks.json`、`.codex/hooks/bash_guard.py` は tool-specific guard adapter として扱う。通常の自己改善作業では編集せず、agent guard 挙動自体を変えるタスクのときだけ触る。共通の Bash command policy は `.agent_harness/command_guard_core.py` に置かれているため、共通ポリシーを変える場合は shared core を更新し、tool 固有挙動が変わる場合だけ両 adapter を見直す。現在のガードは deny ベースで、日常的な `dotnet`、`git`、`gh`、`codex exec`、`/tmp` 作業、読み取り中心の shell 確認は止めにくくしつつ、危険な shell パターンと機微なローカル read path は止める設計になっている。
 - Claude Code のローカルプライバシー境界を尊重すること。ホーム配下の私物領域や資格情報系ファイルはポリシーで read deny されているため、自己改善タスクを進めやすくする目的でそれを緩めない。もし guard の変更自体が本当に必要なら、それを独立したタスクとして扱い、関連ドキュメントも同じコミットで更新する。
-- `git switch` の後は、切り替え前後の ref が分かる場合、**ローカルビルド版** で `dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --changed-between <old-ref> <new-ref> --json` を実行する。これにより、ブランチ間で変わったファイルだけを更新しつつ、git が返す rename/delete の旧 path も purge できる。ref が分からない場合や、`git reset`、`git rebase`、`git commit --amend`、`git merge` の後は、`dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll . --json` の full-workspace scan で現在の checkout に対する stale file を掃除する。その後も status check が stale なら、`cdidx . --json` を繰り返さず `dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --rebuild --yes --json` を実行する。
+- `git switch` の後は、切り替え前後の ref が分かる場合、**ローカルビルド版** で `dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --changed-between <old-ref> <new-ref> --db .cdidx/codeindex.db --json` を実行する。これにより、ブランチ間で変わったファイルだけを更新しつつ、git が返す rename/delete の旧 path も purge できる。ref が分からない場合や、`git reset`、`git rebase`、`git commit --amend`、`git merge` の後は、`dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll . --db .cdidx/codeindex.db --json` の full-workspace scan で現在の checkout に対する stale file を掃除する。その後も status check が stale なら、full scan を繰り返さず `dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --rebuild --yes --db .cdidx/codeindex.db --json` を実行する。
 - バグ調査、修正計画、変更検証のためにコード検索・ナビゲーションを行うときも、常に **ローカルビルド版** を使う。グローバルインストール版は使わない。これにより、このブランチの最新の抽出ルールと DB スキーマを反映した検索結果が得られる。
 - このループ中に **ローカルビルド版** がクラッシュしたり、異常終了したり、新しい不具合を露呈した場合は、黙って回避したり古い版・グローバル版へ逃げたりしないこと。具体的な失敗内容をユーザーに通知し、その不具合によって自己改善ループがブロックされている、または結果の信頼性が損なわれていることを説明したうえで、別タスクまたは次の承認済み優先事項として修正提案を出すこと。
 - このループ自体を、継続的なリグレッション確認と軽いモンキーテストとして扱うこと。最も安全で標準的なワークフローだけに偏らず、新しい機能、利用頻度の低い機能、枝葉末節のオプションも積極的に触り、間接的にクラッシュ、古いヘルプ文、想定漏れ、統合不具合をあぶり出すこと。
@@ -434,7 +434,7 @@ dotnet build
 まず現在の workspace と DB が一致しているか確認します:
 
 ```bash
-dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll status --check --json
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll status --check --db .cdidx/codeindex.db --json
 ```
 
 終了コード `0` かつ `index_matches_workspace: true` なら、既存の `.cdidx/codeindex.db` をそのまま使って構いません。それ以外ならインデックスを更新してください。
@@ -445,20 +445,20 @@ dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll status --check --json
 
 ```bash
 # ブランチ切り替え後、前後の ref が分かる場合
-dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --changed-between <old-ref> <new-ref> --json
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --changed-between <old-ref> <new-ref> --db .cdidx/codeindex.db --json
 
 # checkout 直後の初回同期、履歴を動かす git 操作の直後、
 # またはブランチ切り替え前後の ref が分からない場合
-dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll . --json
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll . --db .cdidx/codeindex.db --json
 
 # 手元の in-place 編集や新規追加だけを反映
 # rename/delete の旧 path は、明示しない限り purge されない
-dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --files src/CodeIndex/Cli/QueryCommandRunner.cs tests/CodeIndex.Tests/QueryCommandRunnerTests.cs --json
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --files src/CodeIndex/Cli/QueryCommandRunner.cs tests/CodeIndex.Tests/QueryCommandRunnerTests.cs --db .cdidx/codeindex.db --json
 
 # 通常のコミット直後は、そのコミット差分だけを反映
 # git diff が rename/delete も見られるので、こちらを既定にする
 commit_id=$(git rev-parse HEAD)
-dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --commits "$commit_id" --json
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --commits "$commit_id" --db .cdidx/codeindex.db --json
 ```
 
 `--changed-between` は要求範囲を永続化済みの workspace 全体検証基準と照合します。基準が古い、または分岐している場合は不足する基準→現在 HEAD の path をローカル binary が補完します。Git が基準を解決できない場合は `--files` へ置き換えず、出力された fetch / full scan の案内に従ってください。
@@ -466,7 +466,7 @@ dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --commits "$commit_id"
 `dotnet run` でも構いません:
 
 ```bash
-dotnet run --project src/CodeIndex -- . --json
+dotnet run --project src/CodeIndex -- . --db .cdidx/codeindex.db --json
 ```
 
 ### 4. cdidx 自身でリポジトリを観察する
@@ -478,18 +478,18 @@ dotnet run --project src/CodeIndex -- . --json
 `status --json` が `fold_ready: false` を返し、古い DB に対して Unicode-aware な `--exact` だけを有効化したい場合は、まず次で in-place upgrade することを優先してください:
 
 ```bash
-dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll backfill-fold --json
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll backfill-fold --db .cdidx/codeindex.db --json
 ```
 
-ソース再走査も必要なとき、履歴を動かす git 操作の直後、ブランチ切り替え前後の ref が分からないとき、または repo 全体で stale file を掃除したいときだけ、`cdidx . --json` の full-workspace scan を使います。この経路は強制 rebuild ではなく、`mode:"incremental"` と表示して unchanged file を skip する場合があります。その後の `status --check --json` がまだ stale なら、`dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --rebuild --yes --json` を実行してください。通常のコミット間ループでは rename/delete も追える `--commits`、ブランチ切り替えでは前後 ref を渡す `--changed-between` を先に考え、`--files` は in-place 編集や新規追加に限定してください。
+ソース再走査も必要なとき、履歴を動かす git 操作の直後、ブランチ切り替え前後の ref が分からないとき、または repo 全体で stale file を掃除したいときだけ、`cdidx . --db .cdidx/codeindex.db --json` の full-workspace scan を使います。この経路は強制 rebuild ではなく、`mode:"incremental"` と表示して unchanged file を skip する場合があります。その後の `status --check --db .cdidx/codeindex.db --json` がまだ stale なら、`dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --rebuild --yes --db .cdidx/codeindex.db --json` を実行してください。通常のコミット間ループでは rename/delete も追える `--commits`、ブランチ切り替えでは前後 ref を渡す `--changed-between` を先に考え、`--files` は in-place 編集や新規追加に限定してください。
 
 典型例:
 
 ```bash
-dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll status --json
-dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll map --json --limit 10 --path src/ --exclude-tests
-dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll inspect QueryCommandRunner --exclude-tests --limit 5
-dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll search "AI" --path src/ --exclude-tests --snippet-lines 6 --json
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll status --db .cdidx/codeindex.db --json
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll map --db .cdidx/codeindex.db --json --limit 10 --path src/ --exclude-tests
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll inspect QueryCommandRunner --db .cdidx/codeindex.db --exclude-tests --limit 5
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll search "AI" --db .cdidx/codeindex.db --path src/ --exclude-tests --snippet-lines 6 --json
 ```
 
 候補シンボル名が分かっているなら `inspect`、生テキストや未対応言語なら `search`、全体像が欲しいなら `map` を優先します。
@@ -535,9 +535,9 @@ dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll search "AI" --path src/ --excl
 
 ```bash
 dotnet test
-dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll status --json
-dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll map --json --path src/ --exclude-tests
-dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll inspect ResolveGitCommonDir --json --exclude-tests --limit 5
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll status --db .cdidx/codeindex.db --json
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll map --db .cdidx/codeindex.db --json --path src/ --exclude-tests
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll inspect ResolveGitCommonDir --db .cdidx/codeindex.db --json --exclude-tests --limit 5
 ```
 
 ### 8. 1案件だけコミットする
@@ -567,15 +567,15 @@ dotnet build
 # 通常の post-commit 経路: 直前コミットの差分を反映
 # git diff が rename/delete も拾えるため、--files より安全
 commit_id=$(git rev-parse HEAD)
-dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --commits "$commit_id" --json
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --commits "$commit_id" --db .cdidx/codeindex.db --json
 
 # ブランチ切り替え後、前後の ref が分かる場合
-dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --changed-between <old-ref> <new-ref> --json
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll index . --changed-between <old-ref> <new-ref> --db .cdidx/codeindex.db --json
 
 # git reset/rebase/amend/merge の後、
 # ブランチ切り替え前後の ref が分からない場合、
 # または repo 全体の stale file purge が必要な場合はフル更新
-dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll . --json
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll . --db .cdidx/codeindex.db --json
 ```
 
 ### 10. 更新済みインデックスから次の案件を選ぶ

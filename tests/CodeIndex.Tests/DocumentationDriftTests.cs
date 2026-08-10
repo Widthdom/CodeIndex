@@ -163,7 +163,7 @@ public sealed class DocumentationDriftTests
             root.GetProperty("members").EnumerateArray().Select(member => member.GetString()).ToArray());
 
         const string canonicalDb = ".cdidx/codeindex.db";
-        const string rootStatus = "dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll status --check --json";
+        const string rootStatus = "dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll status --check --db .cdidx/codeindex.db --json";
         const string workspaceStatus = "dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll workspace status --check --json";
         var guidancePaths = new[]
         {
