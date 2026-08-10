@@ -3795,7 +3795,6 @@ public partial class IndexCommandRunnerTests
                 }
             };
 
-            var stopwatch = Stopwatch.StartNew();
             var (exitCode, json) = RunAndCaptureJson(
                 [
                     projectRoot,
@@ -3806,13 +3805,12 @@ public partial class IndexCommandRunnerTests
                     "--parallelism",
                     "2",
                 ]);
-            stopwatch.Stop();
 
             Assert.True(candidateWorkerEntered.IsSet);
             Assert.DoesNotContain("Source00.cs", completedExtractions.Keys);
-            Assert.True(
-                stopwatch.Elapsed < TimeSpan.FromSeconds(5),
-                $"The candidate-ordered serial recovery took {stopwatch.Elapsed}.");
+            Assert.False(
+                workersStopped.IsSet,
+                "The candidate-ordered parallel pipeline stopped before the earlier candidate was released.");
             Assert.Equal(CommandExitCodes.PartialResult, exitCode);
             Assert.Equal("partial", json.GetProperty("status").GetString());
             Assert.Equal(sourceZeroChecksum, ReadIndexedChecksum(dbPath, "Source00.cs"));

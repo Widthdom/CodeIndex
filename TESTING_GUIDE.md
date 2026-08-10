@@ -81,6 +81,7 @@ Use the full suite by default. Use targeted filters only while iterating locally
 
 The test project mirrors the production areas closely.
 Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding `Skip =` cases; it tracks the current split sequence, skip classifications, and large-document boundaries.
+Candidate-ordered parallel-index recovery tests must prove that the fatal result returns while the earlier contract candidate remains blocked and the parallel workers have not stopped. Assert those synchronization states instead of a narrow wall-clock threshold so the regression remains detectable under full-suite contention.
 
 - `ChunkSplitterTests.cs`, `SymbolExtractorTests.cs`, `ReferenceExtractorTests.cs`, `SearchSnippetFormatterTests.cs`, `DbPathResolverTests.cs`, `DbReaderUtilityTests.cs`, `ExcerptRecoveryCommandFormatterTests.cs`, `ConsoleUiTests.cs`
   Pure or mostly pure behavior tests with in-memory inputs.
@@ -1083,6 +1084,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 
 テストプロジェクトは、本番コードの責務にかなり近い形で分かれています。
 巨大 suite を移動する場合や `Skip =` case を追加する場合は、現在の分割順序、skip 分類、巨大ドキュメントの境界を追跡する `docs/test-doc-maintenance-plan.md` を先に確認してください。
+候補順序に基づく parallel index recovery のテストでは、先行する contract 候補が block されたまま、かつ parallel worker が停止する前に fatal result が返ることを検証してください。full-suite の競合下でも回帰を検出できるよう、狭い wall-clock threshold の代わりにこれらの同期状態を assertion にします。
 
 - `ChunkSplitterTests.cs`、`SymbolExtractorTests.cs`、`ReferenceExtractorTests.cs`、`SearchSnippetFormatterTests.cs`、`DbPathResolverTests.cs`、`DbReaderUtilityTests.cs`、`ExcerptRecoveryCommandFormatterTests.cs`、`ConsoleUiTests.cs`
   インメモリ入力中心の、純粋またはほぼ純粋な振る舞いのテスト。
