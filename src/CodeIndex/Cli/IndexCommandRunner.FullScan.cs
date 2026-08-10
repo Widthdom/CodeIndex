@@ -813,6 +813,7 @@ public static partial class IndexCommandRunner
         // outer write scopes immediately afterwards so no durable readiness, evidence, purge,
         // or file mutation can precede the validation above.
         // scan snapshot の write前 authority barrier 通過直後に outer write scope を開始する。
+        using var mmapBulkWrite = SqliteMmapBulkWriteGuard.Start(writer, useFtsBulkLoad);
         if (options.Rebuild)
             db.RepairIncompleteBatchReadiness();
         using var referenceGraphRefresh = writer.BeginReferenceGraphRefreshScope(

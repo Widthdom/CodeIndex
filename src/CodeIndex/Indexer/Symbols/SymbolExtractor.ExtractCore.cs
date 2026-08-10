@@ -172,6 +172,11 @@ public static partial class SymbolExtractor
                 var stopAfterFirstPatternMatch = false;
                 var restartPatternScanOffset = -1;
                 CSharpPropertyMatchCandidate? csharpPropertyCandidateForLine = null;
+                bool? deferCSharpBracePropertyAtPatternStart = null;
+                bool? deferCSharpFunctionAtPatternStart = null;
+                bool? deferCSharpEventAtPatternStart = null;
+                bool? deferCSharpDelegateAtPatternStart = null;
+                bool? recoverableCSharpPatternAtPatternStart = null;
                 foreach (var pattern in patterns)
                 {
                     if (prologClauseContinuationLines?[i] == true
@@ -267,14 +272,20 @@ public static partial class SymbolExtractor
                             if (lang == "csharp"
                                 && pattern.Kind == "property"
                                 && pattern.BodyStyle == BodyStyle.Brace
-                                && ShouldDeferCSharpBracePropertySameLineAdvance(matchLine, lineOffset))
+                                && (lineOffset != patternStartOffset
+                                    ? ShouldDeferCSharpBracePropertySameLineAdvance(matchLine, lineOffset)
+                                    : deferCSharpBracePropertyAtPatternStart ??=
+                                        ShouldDeferCSharpBracePropertySameLineAdvance(matchLine, lineOffset)))
                             {
                                 break;
                             }
 
                             if (lang == "csharp"
                                 && pattern.Kind == "function"
-                                && ShouldDeferCSharpFunctionSameLineAdvance(matchLine, lineOffset))
+                                && (lineOffset != patternStartOffset
+                                    ? ShouldDeferCSharpFunctionSameLineAdvance(matchLine, lineOffset)
+                                    : deferCSharpFunctionAtPatternStart ??=
+                                        ShouldDeferCSharpFunctionSameLineAdvance(matchLine, lineOffset)))
                             {
                                 break;
                             }
@@ -282,7 +293,13 @@ public static partial class SymbolExtractor
                             if (lang == "csharp"
                                 && pattern.Kind is "event" or "delegate"
                                 && pattern.BodyStyle == BodyStyle.None
-                                && ShouldDeferCSharpEventOrDelegateSameLineAdvance(matchLine, lineOffset, pattern.Kind))
+                                && (lineOffset != patternStartOffset
+                                    ? ShouldDeferCSharpEventOrDelegateSameLineAdvance(matchLine, lineOffset, pattern.Kind)
+                                    : pattern.Kind == "event"
+                                        ? deferCSharpEventAtPatternStart ??=
+                                            ShouldDeferCSharpEventOrDelegateSameLineAdvance(matchLine, lineOffset, pattern.Kind)
+                                        : deferCSharpDelegateAtPatternStart ??=
+                                            ShouldDeferCSharpEventOrDelegateSameLineAdvance(matchLine, lineOffset, pattern.Kind)))
                             {
                                 break;
                             }
@@ -295,10 +312,16 @@ public static partial class SymbolExtractor
                                 || (lang == "csharp"
                                     && pattern.Kind == "property"
                                     && pattern.BodyStyle == BodyStyle.None
-                                    && !TryMatchAnyRecoverableCSharpPattern(
-                                        matchLine[lineOffset..],
-                                        insideEnumBody: false,
-                                        attributeParenDepth: 0)))
+                                    && !(lineOffset != patternStartOffset
+                                        ? TryMatchAnyRecoverableCSharpPattern(
+                                            matchLine[lineOffset..],
+                                            insideEnumBody: false,
+                                            attributeParenDepth: 0)
+                                        : recoverableCSharpPatternAtPatternStart ??=
+                                            TryMatchAnyRecoverableCSharpPattern(
+                                                matchLine[lineOffset..],
+                                                insideEnumBody: false,
+                                                attributeParenDepth: 0))))
                             {
                                 lineOffset = FindNextSameLineBraceStatementStart(matchLine, lineOffset + 1, lang);
                                 continue;
