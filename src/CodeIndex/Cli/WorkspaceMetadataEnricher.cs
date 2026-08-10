@@ -194,7 +194,11 @@ public static class WorkspaceMetadataEnricher
         bool projectRootSnapshotCaptured = false)
     {
         var projectRoot = projectRootSnapshotCaptured
-            ? capturedProjectRoot
+            ? DbPathResolver.ResolveProjectLocalRootForQuery(
+                    dbPath,
+                    dbPathExplicit,
+                    capturedProjectRoot)
+                ?? capturedProjectRoot
             : capturedProjectRoot ?? DbPathResolver.ResolveProjectRootForQuery(dbPath, dbPathExplicit);
         if (projectRoot == null)
             return new(null, null, null, null);

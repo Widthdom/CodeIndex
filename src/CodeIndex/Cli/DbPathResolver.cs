@@ -203,6 +203,21 @@ public static class DbPathResolver
     }
 
     /// <summary>
+    /// Resolve only the project-local DB layout override while preserving a project-root
+    /// value already captured by the caller's SQLite snapshot.
+    /// caller の SQLite snapshot で取得済みの project root を維持しつつ、
+    /// project-local DB layout の override だけを解決する。
+    /// </summary>
+    internal static string? ResolveProjectLocalRootForQuery(
+        string dbPath,
+        bool dbPathExplicit,
+        string? indexedProjectRoot)
+    {
+        var fullDbPath = Path.GetFullPath(NormalizeDbPath(dbPath));
+        return TryResolveProjectLocalRoot(fullDbPath, dbPath, dbPathExplicit, indexedProjectRoot);
+    }
+
+    /// <summary>
     /// Normalize a file query path against the indexed project root when the DB exposes one.
     /// If the caller supplied an absolute path under the indexed root, convert it to the
     /// stored index-relative path before lookup. Relative paths pass through unchanged.
