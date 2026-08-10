@@ -21,7 +21,7 @@ Use this workflow for GitHub issue implementation tasks.
 
 6. Comment in English on each in-scope issue that work has started on that branch.
 7. Read required project guidance, including `SELF_IMPROVEMENT.md` and any files referenced by `AGENT_GUIDE.md`.
-8. Check the local CodeIndex index first with `dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll status --check --json`. If it exits `0` with `index_matches_workspace: true`, keep the existing DB; otherwise refresh it using the documented project procedure.
+8. Check the local CodeIndex index first with `dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll status --check --json`. The checked-in workspace manifest uses the root `.cdidx/codeindex.db` through `index_strategy: single`; do not create per-member databases. If the command exits `0` with `index_matches_workspace: true`, keep the existing DB; otherwise refresh it using the documented project procedure. Then run `dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll workspace status --check --json` and require the manifest view to be healthy too.
 9. For code search, use only the locally built binary:
 
    ```bash

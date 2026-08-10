@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using CodeIndex.Cli;
 using CodeIndex.Database;
@@ -147,6 +148,38 @@ public sealed class DocumentationDriftTests
         }
 
         Assert.Empty(failures);
+    }
+
+    [Fact]
+    public void RepositoryDogfoodManifestAndGuidance_StaySynchronized_Issue5062()
+    {
+        using var manifest = JsonDocument.Parse(RepositoryTestPaths.ReadText("cdidx.workspace.json"));
+        var root = manifest.RootElement;
+
+        Assert.Equal("single", root.GetProperty("index_strategy").GetString());
+        Assert.Equal("codeindex.db", root.GetProperty("default_db_name").GetString());
+        Assert.Equal(
+            ["src/CodeIndex", "tests/CodeIndex.Tests"],
+            root.GetProperty("members").EnumerateArray().Select(member => member.GetString()).ToArray());
+
+        const string canonicalDb = ".cdidx/codeindex.db";
+        const string rootStatus = "dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll status --check --json";
+        const string workspaceStatus = "dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll workspace status --check --json";
+        var guidancePaths = new[]
+        {
+            "AGENT_GUIDE.md",
+            "SELF_IMPROVEMENT.md",
+            "DEVELOPER_GUIDE.md",
+            ".codex/workflows/issue-fix.md",
+        };
+
+        foreach (var relativePath in guidancePaths)
+        {
+            var content = RepositoryTestPaths.ReadText(relativePath.Split('/'));
+            Assert.Contains(canonicalDb, content, StringComparison.Ordinal);
+            Assert.Contains(rootStatus, content, StringComparison.Ordinal);
+            Assert.Contains(workspaceStatus, content, StringComparison.Ordinal);
+        }
     }
 
     [Fact]

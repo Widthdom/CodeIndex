@@ -3,7 +3,7 @@
     "src/CodeIndex",
     "tests/CodeIndex.Tests"
   ],
-  "index_strategy": "per_member",
+  "index_strategy": "single",
   "default_db_name": "codeindex.db",
   "shared_ignores": [
     "bin/",

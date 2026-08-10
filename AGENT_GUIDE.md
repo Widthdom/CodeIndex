@@ -50,7 +50,15 @@ Before implementation, first check whether the local index already matches the c
 dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll status --check --json
 ```
 
-If the command exits `0` and reports `index_matches_workspace: true`, you may trust the existing `.cdidx/codeindex.db` without rebuilding it. If it exits with stale-index status or reports mismatched `workspace_check` counts, refresh the local index as documented by the project guidance. If the exact index-refresh command is documented elsewhere, use that documented command instead of inventing a new one.
+The checked-in `cdidx.workspace.json` intentionally uses `index_strategy: single`. The canonical repository-wide database is the root `.cdidx/codeindex.db`; do not create or select `src/CodeIndex/.cdidx/codeindex.db` or `tests/CodeIndex.Tests/.cdidx/codeindex.db` for repository work. Run CLI queries from the repository root or pass `--db .cdidx/codeindex.db`. Start MCP and LSP from the repository root or pass that same `--db`, and point maintenance commands such as `optimize`, `vacuum`, and `db integrity` at the same root database.
+
+If the root status command exits `0` and reports `index_matches_workspace: true`, you may trust the existing `.cdidx/codeindex.db` without rebuilding it. If it exits with stale-index status or reports mismatched `workspace_check` counts, refresh the local index as documented by the project guidance. If the exact index-refresh command is documented elsewhere, use that documented command instead of inventing a new one. After the root status is healthy, also verify the manifest view:
+
+```bash
+dotnet ./src/CodeIndex/bin/Debug/net8.0/cdidx.dll workspace status --check --json
+```
+
+Both checks must be healthy. Under the `single` strategy, `workspace status` evaluates each declared member through the shared root database, while repository-root docs, scripts, workflows, and policy remain searchable because indexing always targets `.`.
 
 This rule applies to code search and repository understanding. It does not forbid Git commands, build tools, test runners, package managers, or small shell checks that are not being used to search implementation code. Enforcement of forbidden tools is provided separately by the Claude and Codex guard hooks.
 

@@ -382,6 +382,7 @@ Use `docs/test-doc-maintenance-plan.md` before moving oversized suites or adding
   Shared extractor-regex safety coverage. Demand-driven enumeration tests must take only the requested prefix and keep a catastrophic suffix unvisited, while timeout tests continue to verify best-effort empty results and captured diagnostics.
 - `DocumentationStatusContractTests.cs`, `DocumentationDriftTests.cs`
   Checked-in documentation contract tests. They use `RepositoryTestPaths` to keep status fields, workflow references, documented `cdidx` command examples, release/changelog workflow snippets, and representative English/Japanese guide sections synchronized.
+  Repository dogfood coverage keeps `cdidx.workspace.json` on the shared root database topology and requires the agent, self-improvement, developer, and issue-fix guidance to name the same `.cdidx/codeindex.db` and both root/workspace status checks.
   `DocumentationStatusContractTests.cs` includes readiness, maintenance, and MCP status fields so status JSON support contracts stay visible in the user and agent guides.
   Workflow tests that compare multiline YAML snippets should use `RepositoryTestPaths.ReadNormalizedWorkflow(...)` so line-ending normalization stays centralized across CI, release, package-lock, and mutation workflow contracts.
   Reuse that normalized value for all assertions in a test instead of reading or retaining both raw and normalized copies of the same workflow.
@@ -1385,6 +1386,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   共有 extractor-regex safety のカバレッジです。demand-driven enumeration test は要求された prefix だけを取得して catastrophic suffix を未走査のまま保ち、timeout test は引き続き best-effort の empty result と captured diagnostic を検証してください。
 - `DocumentationStatusContractTests.cs`、`DocumentationDriftTests.cs`
   checked-in documentation の契約テスト。`RepositoryTestPaths` を使って、status field、workflow 参照、文書化された `cdidx` コマンド例、release/changelog workflow の snippet、代表的な英日 guide セクションの同期を維持します。
+  repository dogfood coverage は `cdidx.workspace.json` を共有 root database topology に固定し、agent、self-improvement、developer、issue-fix guidance が同じ `.cdidx/codeindex.db` と root/workspace 両方の status check を記載することを要求します。
   `DocumentationStatusContractTests.cs` は readiness、maintenance、MCP status field も含め、status JSON support contract が user guide と agent guide に残るようにします。
   複数行の YAML snippet を比較する workflow test は `RepositoryTestPaths.ReadNormalizedWorkflow(...)` を使い、CI、release、package-lock、mutation workflow contract 間の line-ending normalization を一か所に集約します。
   同じ test 内の全 assertion でその normalized value を再利用し、同じ workflow の raw copy と normalized copy を重複して読み込んだり保持したりしません。
