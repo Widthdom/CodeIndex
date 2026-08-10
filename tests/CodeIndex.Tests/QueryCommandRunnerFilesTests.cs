@@ -1027,7 +1027,7 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
-    public void RunStatus_Json_ReportsWorktreeHeadChangedWhenIndexedHeadDiffersFromRuntime()
+    public void RunStatus_ReportsVerifiedHeadDriftWithoutMixingLegacyOrLatestProvenance_Issue5054()
     {
         // #1512: after `git worktree add` / `git switch` inside a worktree, the runtime HEAD
         // diverges from the HEAD captured at index time. status JSON must surface that so MCP /
@@ -1045,12 +1045,15 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions));
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var legacyHead = new string('a', 40);
             var staleHead = new string('b', 40);
+            var latestHead = new string('c', 40);
             using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 var writer = new DbWriter(db.Connection);
-                writer.SetMeta(DbContext.IndexedHeadCommitMetaKey, staleHead);
-                writer.SetMeta(DbContext.IndexedHeadShaMetaKey, staleHead);
+                writer.SetMeta(DbContext.IndexedHeadCommitMetaKey, legacyHead);
+                writer.SetMeta(DbContext.WorkspaceVerifiedHeadShaMetaKey, staleHead);
+                writer.SetMeta(DbContext.IndexedHeadShaMetaKey, latestHead);
             }
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
@@ -1062,16 +1065,30 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Equal(staleHead, json.GetProperty("indexed_head_commit").GetString());
-            Assert.Equal(staleHead, json.GetProperty("indexed_head_sha").GetString());
+            Assert.Equal(legacyHead, json.GetProperty("indexed_head_commit").GetString());
+            Assert.Equal(staleHead, json.GetProperty("workspace_verified_head_sha").GetString());
+            Assert.Equal(latestHead, json.GetProperty("indexed_head_sha").GetString());
             Assert.True(json.GetProperty("worktree_head_changed").GetBoolean());
             var headFreshness = json.GetProperty("head_freshness");
             Assert.Equal("head_changed", headFreshness.GetProperty("state").GetString());
             Assert.Equal("worktree_head_changed", headFreshness.GetProperty("state_reason").GetString());
             Assert.Equal(staleHead, headFreshness.GetProperty("indexed_head").GetString());
-            Assert.Equal("latest_index", headFreshness.GetProperty("indexed_head_source").GetString());
-            Assert.Equal(staleHead, headFreshness.GetProperty("legacy_full_scan_head").GetString());
+            Assert.Equal("workspace_verified", headFreshness.GetProperty("indexed_head_source").GetString());
+            Assert.Equal(legacyHead, headFreshness.GetProperty("legacy_full_scan_head").GetString());
+            Assert.Equal(latestHead, headFreshness.GetProperty("latest_index_head").GetString());
+            Assert.False(headFreshness.TryGetProperty("indexed_head_branch", out _));
+            Assert.False(headFreshness.TryGetProperty("indexed_head_timestamp", out _));
+            Assert.False(headFreshness.TryGetProperty("commits_ahead_of_indexed_head", out _));
             Assert.True(headFreshness.GetProperty("worktree_head_changed").GetBoolean());
+
+            var (humanExitCode, humanStdout, humanStderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
+                ["--db", dbPath],
+                _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, humanExitCode);
+            Assert.Equal(string.Empty, humanStderr);
+            Assert.Contains($"Verified : {staleHead}", humanStdout, StringComparison.Ordinal);
+            Assert.Contains($"({staleHead[..12]} ->", humanStdout, StringComparison.Ordinal);
+            Assert.DoesNotContain($"({legacyHead[..12]} ->", humanStdout, StringComparison.Ordinal);
         }
         finally
         {
@@ -1185,6 +1202,7 @@ public partial class QueryCommandRunnerTests
             {
                 var writer = new DbWriter(db.Connection);
                 writer.SetMeta(DbContext.IndexedHeadCommitMetaKey, staleHead);
+                writer.SetMeta(DbContext.WorkspaceVerifiedHeadShaMetaKey, staleHead);
                 writer.SetMeta(DbContext.IndexedHeadShaMetaKey, staleHead);
             }
 
@@ -1194,7 +1212,7 @@ public partial class QueryCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
-            Assert.Contains("WARN     : worktree HEAD changed since the index was built", stdout);
+            Assert.Contains("WARN     : worktree HEAD changed since the workspace was verified", stdout);
             Assert.Contains(staleHead[..12], stdout);
             Assert.Contains("cdidx index", stdout);
         }
@@ -1850,7 +1868,7 @@ public partial class QueryCommandRunnerTests
         Assert.Equal(string.Empty, stderr);
         Assert.Contains("Legacy full-scan HEAD stamp (indexed_head_commit)", stdout);
         Assert.Contains("full-scan-only", stdout);
-        Assert.Contains("indexed_head_sha", stdout);
+        Assert.Contains("workspace_verified_head_sha", stdout);
     }
 
     [Fact]
@@ -2131,7 +2149,8 @@ public partial class QueryCommandRunnerTests
         Assert.Equal("Compact HEAD freshness summary", json.GetProperty("label").GetString());
         Assert.Contains("status --check", json.GetProperty("ready").GetString());
         Assert.Contains("state=stale", json.GetProperty("degraded").GetString());
-        Assert.Contains("indexed_head_source=latest_index", json.GetProperty("remediation").GetString());
+        Assert.Contains("indexed_head_source=workspace_verified", json.GetProperty("remediation").GetString());
+        Assert.Contains("latest_index_head", json.GetProperty("remediation").GetString());
     }
 
     [Fact]
@@ -2148,7 +2167,7 @@ public partial class QueryCommandRunnerTests
         Assert.Equal("indexed_head_sha", json.GetProperty("field").GetString());
         Assert.Equal("Latest index HEAD stamp", json.GetProperty("label").GetString());
         Assert.Contains("including incremental updates", json.GetProperty("ready").GetString());
-        Assert.Contains("indexed_head_commit", json.GetProperty("remediation").GetString());
+        Assert.Contains("workspace_verified_head_sha", json.GetProperty("remediation").GetString());
     }
 
     [Theory]

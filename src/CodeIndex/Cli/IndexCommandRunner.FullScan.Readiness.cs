@@ -242,6 +242,9 @@ public static partial class IndexCommandRunner
             writer.SetMetaValues(
                 (DbContext.IndexedHeadCommitMetaKey, context.CurrentHeadCommit),
                 (DbContext.IndexedHeadCommitBranchMetaKey, currentHeadBranch),
+                (DbContext.WorkspaceVerifiedHeadShaMetaKey, context.CurrentHeadCommit),
+                (DbContext.WorkspaceVerificationPendingPathsMetaKey, null),
+                (DbContext.WorkspaceVerificationPendingPathsCompleteMetaKey, null),
                 (DbContext.LastFullScanElapsedMsMetaKey, lastFullScanElapsedMs));
             TryStampIndexedHeadMetadata(
                 writer,

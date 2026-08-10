@@ -89,26 +89,17 @@ public static partial class IndexCommandRunner
             SymbolKindFilter.SignatureRetainsCSharpStaticInterfaceContractMembers(
                 priorSymbolKindFilterSignature);
 
-        // Detect HEAD divergence on the default incremental path (no `--rebuild`). `--rebuild`
-        // already wipes the DB, so the prior captured HEAD is irrelevant there. We only signal
-        // when both sides are known so legacy DBs / non-git workspaces never spuriously trigger.
-        // Issue #1508.
-        // 既定の incremental 経路で HEAD 差分を検出する。`--rebuild` は DB を消すので比較不要。
-        // 双方の HEAD が分かるときのみ警告し、legacy DB / 非 git workspace では誤検知させない。
+        // Remember HEAD divergence on the default full-scan path so a partial run can explain
+        // that whole-workspace verification did not advance. A successful full scan reconciles
+        // and purges the complete workspace, so the final response must not keep reporting the
+        // pre-scan difference or recommend a rebuild. Issues #1508 and #5054.
+        // 既定の full-scan 経路では、partial 終了時に workspace 全体の検証値が進まなかった
+        // ことを説明できるよう事前 HEAD 差分を保持する。成功時は全 workspace を照合・purge
+        // 済みなので、完了レスポンスで事前差分や rebuild 推奨を残さない。Issues #1508 / #5054。
         var headChangeDetected = !options.Rebuild
             && !string.IsNullOrWhiteSpace(priorIndexedHeadCommit)
             && !string.IsNullOrWhiteSpace(currentHeadCommit)
             && !string.Equals(priorIndexedHeadCommit, currentHeadCommit, StringComparison.Ordinal);
-        string? headChangeNotice = null;
-        if (headChangeDetected)
-        {
-            headChangeNotice =
-                $"Indexed HEAD changed since the last full scan (was {priorIndexedHeadCommit}, now {currentHeadCommit}). " +
-                $"Incremental indexing only refreshes files it can scan in the current worktree, so rows for files that exist only on the previously indexed branch may remain. " +
-                $"Run `cdidx index {QuoteCommandArgument(projectRoot)} --rebuild` to fully refresh the index.";
-            if (!options.Json && !options.Quiet)
-                ConsoleUi.PrintWarning(headChangeNotice);
-        }
 
         void WriteProjectRootOnce()
         {
@@ -830,6 +821,9 @@ public static partial class IndexCommandRunner
             deferSecondaryIndexes: !options.SymbolsOnly && useFtsBulkLoad);
         using var fullScanTxn = writer.BeginTransaction(cancellationToken, "full scan write phase");
         fullScanWritePhaseStarted = true;
+        writer.SetMeta(
+            DbContext.WorkspaceVerificationPendingPathsCompleteMetaKey,
+            false.ToString(System.Globalization.CultureInfo.InvariantCulture));
         writer.RecoverInterruptedFtsBulkLoadIfNeeded(cancellationToken);
         writer.MarkBatchInProgress();
         writer.ClearReadyFlags();
@@ -1392,7 +1386,6 @@ public static partial class IndexCommandRunner
             HeadChangeDetected = headChangeDetected,
             PriorIndexedHeadCommit = priorIndexedHeadCommit,
             CurrentHeadCommit = currentHeadCommit,
-            HeadChangeNotice = headChangeNotice,
             ShowNextSteps = showNextSteps,
         });
     }

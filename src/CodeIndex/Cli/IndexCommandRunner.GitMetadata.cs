@@ -78,24 +78,35 @@ public static partial class IndexCommandRunner
 
     private static void StampCommitScopedFreshHeadMetadata(
         DbWriter writer,
-        IndexCommandOptions options,
-        string projectRoot,
+        string? priorWorkspaceVerifiedHead,
         string? currentHeadCommit,
-        List<string>? diagnostics,
-        CancellationToken cancellationToken = default)
+        bool workspaceHeadCoverageVerified,
+        List<string>? diagnostics)
     {
         try
         {
+            var verifiedHead = workspaceHeadCoverageVerified
+                && !string.IsNullOrWhiteSpace(currentHeadCommit)
+                    ? currentHeadCommit
+                    : priorWorkspaceVerifiedHead;
             var coveredHead = !string.IsNullOrWhiteSpace(currentHeadCommit)
-                && (options.Commits.Any(commit => GitRefCoversCurrentHead(projectRoot, commit, currentHeadCommit, cancellationToken))
-                    || TryChangedBetweenCoversCurrentHead(options, projectRoot, currentHeadCommit, cancellationToken))
-                ? currentHeadCommit
-                : null;
-            writer.SetMeta(DbContext.CommitScopedFreshHeadShaMetaKey, coveredHead);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
+                && string.Equals(verifiedHead, currentHeadCommit, StringComparison.OrdinalIgnoreCase)
+                    ? currentHeadCommit
+                    : null;
+            if (workspaceHeadCoverageVerified)
+            {
+                writer.SetMetaValues(
+                    (DbContext.WorkspaceVerifiedHeadShaMetaKey, verifiedHead),
+                    (DbContext.CommitScopedFreshHeadShaMetaKey, coveredHead),
+                    (DbContext.WorkspaceVerificationPendingPathsMetaKey, null),
+                    (DbContext.WorkspaceVerificationPendingPathsCompleteMetaKey, null));
+            }
+            else
+            {
+                writer.SetMetaValues(
+                    (DbContext.WorkspaceVerifiedHeadShaMetaKey, verifiedHead),
+                    (DbContext.CommitScopedFreshHeadShaMetaKey, coveredHead));
+            }
         }
         catch (Exception ex)
         {
@@ -103,6 +114,42 @@ public static partial class IndexCommandRunner
             // best-effort のみ。stamp 失敗で index 全体を落とさない。
             RecordIndexRunDiagnostic(diagnostics, "commit_scoped_head_metadata_write_failed", ex);
         }
+    }
+
+    private static void PersistWorkspaceVerificationPendingPathsBeforeScopedMutation(
+        DbWriter writer,
+        IReadOnlyList<string> priorPendingPaths,
+        bool priorPendingPathsComplete,
+        IReadOnlyCollection<string> currentTargetPaths,
+        CancellationToken cancellationToken)
+    {
+        var combinedPaths = priorPendingPaths
+            .Concat(currentTargetPaths)
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Select(FileIndexer.NormalizeIndexPath)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToList();
+        var serializablePaths = JsonStringListCodec.TakeSerializableSample(
+            combinedPaths,
+            JsonStringListCodec.MaxArrayItems);
+        var coverageComplete = priorPendingPathsComplete
+            && serializablePaths.Count == combinedPaths.Count;
+
+        // This guard must commit before any scoped row mutation. If the run later fails or
+        // is cancelled, a future Git refresh revisits every possibly changed path instead of
+        // reusing a baseline the database no longer represents.
+        // scoped row の mutation より先に guard を commit する。後続処理が失敗・cancel しても、
+        // 次回 Git refresh は変更可能性のある path を必ず再照合する。
+        using var pendingTxn = writer.BeginTransaction(
+            cancellationToken,
+            "workspace verification pending paths");
+        writer.SetMetaValues(
+            (DbContext.WorkspaceVerificationPendingPathsMetaKey,
+                JsonStringListCodec.Serialize(serializablePaths)),
+            (DbContext.WorkspaceVerificationPendingPathsCompleteMetaKey,
+                coverageComplete.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+        pendingTxn.Commit();
     }
 
     private static bool GitRefCoversCurrentHead(
@@ -116,18 +163,6 @@ public static partial class IndexCommandRunner
 
         var resolvedRef = GitHelper.TryResolveCommit(projectRoot, refName, cancellationToken);
         return string.Equals(resolvedRef, currentHeadCommit, StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static bool TryChangedBetweenCoversCurrentHead(
-        IndexCommandOptions options,
-        string projectRoot,
-        string currentHeadCommit,
-        CancellationToken cancellationToken)
-    {
-        if (options.ChangedBetweenRefs.Count != 2)
-            return false;
-
-        return GitRefCoversCurrentHead(projectRoot, options.ChangedBetweenRefs[1], currentHeadCommit, cancellationToken);
     }
 
     // Issue #1546: capture the actual case-sensitivity of the workspace filesystem so

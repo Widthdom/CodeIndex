@@ -1434,23 +1434,32 @@ public class StatusResult
     public List<MacProfileDiagnostic>? MacProfileDiagnostics { get; set; }
     /// <summary>
     /// Git HEAD commit captured at the end of the most recent successful full-scan
-    /// index run (Issue #1508). Compared with the runtime `GitHead` to surface a
-    /// worktree branch / HEAD switch that silently invalidates the on-disk index
-    /// without requiring a `--check` workspace scan. Null when the DB has no
-    /// `indexed_head_commit` meta (legacy DBs or projects indexed outside a git
-    /// checkout). Issues #1508 / #1512.
-    /// 直近 full-scan 成功時点で記録された git HEAD。runtime の `GitHead` と突き合わせ、
-    /// `--check` を介さずに worktree 内の branch / HEAD 切替を検出する。
+    /// index run (Issue #1508). Current databases expose it as legacy compatibility
+    /// provenance; HEAD freshness prefers <see cref="WorkspaceVerifiedHeadSha"/>.
+    /// Null when the DB has no `indexed_head_commit` metadata.
+    /// 直近 full-scan 成功時点で記録された git HEAD。現行 DB では互換 provenance として公開し、
+    /// HEAD freshness は <see cref="WorkspaceVerifiedHeadSha"/> を優先する。
     /// </summary>
     [JsonPropertyName("indexed_head_commit")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? IndexedHeadCommit { get; set; }
     /// <summary>
-    /// True when the persisted `IndexedHeadCommit` differs from the runtime `GitHead`,
-    /// indicating that the index was built against a different branch / commit and a
-    /// re-index is needed to keep results trustworthy. Null when comparison is not
-    /// possible (no persisted head, no runtime head). Issue #1512.
-    /// 永続 HEAD と runtime HEAD が異なれば true。比較不能なら null。
+    /// Git HEAD whose complete workspace contents were last verified by a full scan or a
+    /// baseline-reconciled Git refresh. This provenance is distinct from the latest scoped
+    /// update stamp in <see cref="IndexedHeadSha"/>. Issue #5054.
+    /// full scan または基準差分を補完した Git refresh により、workspace 全体との一致を
+    /// 最後に検証した Git HEAD。最新 scoped update の stamp とは別物。Issue #5054。
+    /// </summary>
+    [JsonPropertyName("workspace_verified_head_sha")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? WorkspaceVerifiedHeadSha { get; set; }
+    /// <summary>
+    /// True when the whole-workspace verified HEAD (or its legacy full-scan fallback)
+    /// differs from the runtime `GitHead`, indicating that a refresh is needed before
+    /// freshness-sensitive results are trustworthy. Null when comparison is not possible.
+    /// Issues #1512 and #5054.
+    /// workspace 全体の検証済み HEAD（または旧 full-scan fallback）と runtime HEAD が
+    /// 異なれば true。比較不能なら null。
     /// </summary>
     [JsonPropertyName("worktree_head_changed")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -1466,6 +1475,19 @@ public class StatusResult
     [JsonPropertyName("indexed_head_sha")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? IndexedHeadSha { get; set; }
+    // Persisted HEAD provenance is captured by DbReader in one SQLite snapshot. These
+    // non-contract fields let runtime Git enrichment derive branch/HEAD drift without
+    // reopening the database and mixing generations. Issue #5054.
+    // persisted HEAD provenance は DbReader の同一 SQLite snapshot で取得する。
+    // runtime Git 補強時に DB を再読込して世代を混在させないための非公開情報。
+    [JsonIgnore]
+    internal bool HeadMetadataSnapshotCaptured { get; set; }
+    [JsonIgnore]
+    internal string? IndexedHeadCommitBranchSnapshot { get; set; }
+    [JsonIgnore]
+    internal bool IndexedHeadCommitBranchStampPresentSnapshot { get; set; }
+    [JsonIgnore]
+    internal bool IndexedHeadBranchStampPresentSnapshot { get; set; }
     /// <summary>
     /// Branch short name (e.g. `main`) captured at the same time as <see cref="IndexedHeadSha"/>.
     /// Null when the branch could not be resolved (detached HEAD) or the DB was indexed before
@@ -1782,6 +1804,12 @@ public sealed class StatusHeadFreshness
     [JsonPropertyName("legacy_full_scan_head")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? LegacyFullScanHead { get; init; }
+    [JsonPropertyName("workspace_verified_head")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? WorkspaceVerifiedHead { get; init; }
+    [JsonPropertyName("latest_index_head")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? LatestIndexHead { get; init; }
     [JsonPropertyName("indexed_head_branch")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? IndexedHeadBranch { get; init; }
@@ -1809,7 +1837,12 @@ public sealed class StatusHeadFreshness
         if (!HasHeadFreshnessSignal(status))
             return null;
 
-        var indexedHead = NullIfWhiteSpace(status.IndexedHeadSha) ?? NullIfWhiteSpace(status.IndexedHeadCommit);
+        var indexedHead = NullIfWhiteSpace(status.WorkspaceVerifiedHeadSha)
+            ?? NullIfWhiteSpace(status.IndexedHeadCommit)
+            ?? NullIfWhiteSpace(status.IndexedHeadSha);
+        var latestIndexHead = NullIfWhiteSpace(status.IndexedHeadSha);
+        var indexedHeadMatchesLatest = indexedHead != null
+            && string.Equals(indexedHead, latestIndexHead, StringComparison.OrdinalIgnoreCase);
         var workspaceCheck = status.WorkspaceCheck;
 
         return new StatusHeadFreshness
@@ -1821,13 +1854,15 @@ public sealed class StatusHeadFreshness
             IndexedHead = indexedHead,
             IndexedHeadSource = ResolveIndexedHeadSource(status),
             LegacyFullScanHead = NullIfWhiteSpace(status.IndexedHeadCommit),
-            IndexedHeadBranch = NullIfWhiteSpace(status.IndexedHeadBranch),
-            IndexedHeadTimestamp = status.IndexedHeadTimestamp,
+            WorkspaceVerifiedHead = NullIfWhiteSpace(status.WorkspaceVerifiedHeadSha),
+            LatestIndexHead = latestIndexHead,
+            IndexedHeadBranch = indexedHeadMatchesLatest ? NullIfWhiteSpace(status.IndexedHeadBranch) : null,
+            IndexedHeadTimestamp = indexedHeadMatchesLatest ? status.IndexedHeadTimestamp : null,
             WorkspaceCheckIndexedHeadCommit = NullIfWhiteSpace(workspaceCheck?.IndexedHeadCommit),
             WorkspaceCheckWorkspaceHeadCommit = NullIfWhiteSpace(workspaceCheck?.WorkspaceHeadCommit),
             WorkspaceMatchesIndex = status.IndexMatchesWorkspace ?? workspaceCheck?.MatchesWorkspace,
             WorktreeHeadChanged = status.WorktreeHeadChanged,
-            CommitsAheadOfIndexedHead = status.CommitsAheadOfIndexedHead,
+            CommitsAheadOfIndexedHead = indexedHeadMatchesLatest ? status.CommitsAheadOfIndexedHead : null,
         };
     }
 
@@ -1835,6 +1870,7 @@ public sealed class StatusHeadFreshness
     {
         if (string.IsNullOrWhiteSpace(map.GitHead)
             && string.IsNullOrWhiteSpace(map.IndexedHeadSha)
+            && string.IsNullOrWhiteSpace(map.WorkspaceVerifiedHeadSha)
             && string.IsNullOrWhiteSpace(map.IndexedHeadCommit)
             && string.IsNullOrWhiteSpace(map.IndexedHeadBranch)
             && !map.IndexedHeadTimestamp.HasValue
@@ -1844,7 +1880,12 @@ public sealed class StatusHeadFreshness
             return null;
         }
 
-        var indexedHead = NullIfWhiteSpace(map.IndexedHeadSha) ?? NullIfWhiteSpace(map.IndexedHeadCommit);
+        var indexedHead = NullIfWhiteSpace(map.WorkspaceVerifiedHeadSha)
+            ?? NullIfWhiteSpace(map.IndexedHeadCommit)
+            ?? NullIfWhiteSpace(map.IndexedHeadSha);
+        var latestIndexHead = NullIfWhiteSpace(map.IndexedHeadSha);
+        var indexedHeadMatchesLatest = indexedHead != null
+            && string.Equals(indexedHead, latestIndexHead, StringComparison.OrdinalIgnoreCase);
         return new StatusHeadFreshness
         {
             State = map.WorktreeHeadChanged switch
@@ -1862,16 +1903,20 @@ public sealed class StatusHeadFreshness
             },
             RuntimeHead = NullIfWhiteSpace(map.GitHead),
             IndexedHead = indexedHead,
-            IndexedHeadSource = !string.IsNullOrWhiteSpace(map.IndexedHeadSha)
-                ? "latest_index"
+            IndexedHeadSource = !string.IsNullOrWhiteSpace(map.WorkspaceVerifiedHeadSha)
+                ? "workspace_verified"
                 : !string.IsNullOrWhiteSpace(map.IndexedHeadCommit)
                     ? "legacy_full_scan"
-                    : "unavailable",
+                    : !string.IsNullOrWhiteSpace(map.IndexedHeadSha)
+                        ? "latest_index"
+                        : "unavailable",
             LegacyFullScanHead = NullIfWhiteSpace(map.IndexedHeadCommit),
-            IndexedHeadBranch = NullIfWhiteSpace(map.IndexedHeadBranch),
-            IndexedHeadTimestamp = map.IndexedHeadTimestamp,
+            WorkspaceVerifiedHead = NullIfWhiteSpace(map.WorkspaceVerifiedHeadSha),
+            LatestIndexHead = latestIndexHead,
+            IndexedHeadBranch = indexedHeadMatchesLatest ? NullIfWhiteSpace(map.IndexedHeadBranch) : null,
+            IndexedHeadTimestamp = indexedHeadMatchesLatest ? map.IndexedHeadTimestamp : null,
             WorktreeHeadChanged = map.WorktreeHeadChanged,
-            CommitsAheadOfIndexedHead = map.CommitsAheadOfIndexedHead,
+            CommitsAheadOfIndexedHead = indexedHeadMatchesLatest ? map.CommitsAheadOfIndexedHead : null,
         };
     }
 
@@ -1879,6 +1924,7 @@ public sealed class StatusHeadFreshness
         status.WorkspaceCheck is not null
         || !string.IsNullOrWhiteSpace(status.GitHead)
         || !string.IsNullOrWhiteSpace(status.IndexedHeadSha)
+        || !string.IsNullOrWhiteSpace(status.WorkspaceVerifiedHeadSha)
         || !string.IsNullOrWhiteSpace(status.IndexedHeadCommit)
         || !string.IsNullOrWhiteSpace(status.IndexedHeadBranch)
         || status.IndexedHeadTimestamp.HasValue
@@ -1926,10 +1972,12 @@ public sealed class StatusHeadFreshness
 
     private static string ResolveIndexedHeadSource(StatusResult status)
     {
-        if (!string.IsNullOrWhiteSpace(status.IndexedHeadSha))
-            return "latest_index";
+        if (!string.IsNullOrWhiteSpace(status.WorkspaceVerifiedHeadSha))
+            return "workspace_verified";
         if (!string.IsNullOrWhiteSpace(status.IndexedHeadCommit))
             return "legacy_full_scan";
+        if (!string.IsNullOrWhiteSpace(status.IndexedHeadSha))
+            return "latest_index";
         return "unavailable";
     }
 
@@ -2218,6 +2266,9 @@ public class RepoMapResult
     [JsonPropertyName("indexed_head_sha")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? IndexedHeadSha { get; set; }
+    [JsonPropertyName("workspace_verified_head_sha")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? WorkspaceVerifiedHeadSha { get; set; }
     [JsonPropertyName("indexed_head_branch")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? IndexedHeadBranch { get; set; }
@@ -2263,7 +2314,9 @@ public class RepoMapResult
 }
 
 internal sealed record RepoMapIndexedHeadSnapshot(
+    string? ProjectRoot,
     string? LegacyFullScanHead,
+    string? WorkspaceVerifiedHead,
     string? LatestIndexHead,
     string? LatestIndexBranch,
     DateTimeOffset? LatestIndexTimestamp,
@@ -2327,6 +2380,27 @@ public class SymbolAnalysisResult
     [JsonPropertyName("indexed_head_commit")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? IndexedHeadCommit { get; set; }
+    [JsonPropertyName("workspace_verified_head_sha")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? WorkspaceVerifiedHeadSha { get; set; }
+    [JsonPropertyName("indexed_head_sha")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? IndexedHeadSha { get; set; }
+    // AnalyzeSymbol captures persisted provenance in the same SQLite transaction as the
+    // analysis body. Runtime Git enrichment consumes these ignored fields without reopening
+    // the database or mixing index generations. Issue #5054.
+    // AnalyzeSymbol の本文と同じ SQLite transaction で persisted provenance を取得し、
+    // runtime Git 補強では DB を再読込せず index 世代を混在させない。
+    [JsonIgnore]
+    internal bool HeadMetadataSnapshotCaptured { get; set; }
+    [JsonIgnore]
+    internal string? IndexedHeadCommitBranchSnapshot { get; set; }
+    [JsonIgnore]
+    internal bool IndexedHeadCommitBranchStampPresentSnapshot { get; set; }
+    [JsonIgnore]
+    internal string? IndexedHeadBranchSnapshot { get; set; }
+    [JsonIgnore]
+    internal bool IndexedHeadBranchStampPresentSnapshot { get; set; }
     [JsonPropertyName("worktree_head_changed")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public bool? WorktreeHeadChanged { get; set; }

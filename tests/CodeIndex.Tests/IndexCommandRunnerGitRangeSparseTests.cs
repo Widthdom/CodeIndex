@@ -1,4 +1,5 @@
 using CodeIndex.Cli;
+using CodeIndex.Database;
 
 namespace CodeIndex.Tests;
 
@@ -62,6 +63,7 @@ public partial class IndexCommandRunnerTests
             File.WriteAllText(sparsePath, "class Sparse { }\n");
             RunGit(projectRoot, "add", "src/sparse.cs");
             RunGit(projectRoot, "commit", "-m", "initial");
+            var verifiedHead = RunGitCaptureStdOut(projectRoot, "rev-parse", "HEAD").Trim();
 
             var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
             Assert.Equal(CommandExitCodes.Success, initialExitCode);
@@ -71,6 +73,8 @@ public partial class IndexCommandRunnerTests
             File.WriteAllText(sparsePath, "class Sparse { void Changed() { } }\n");
             RunGit(projectRoot, "add", "src/sparse.cs");
             RunGit(projectRoot, "commit", "-m", "change sparse file");
+            var currentHead = RunGitCaptureStdOut(projectRoot, "rev-parse", "HEAD").Trim();
+            Assert.NotEqual(verifiedHead, currentHead);
             RunGit(projectRoot, "update-index", "--skip-worktree", "src/sparse.cs");
             File.Delete(sparsePath);
 
@@ -101,6 +105,9 @@ public partial class IndexCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, updateExitCode);
             Assert.Equal(1, CountRows(dbPath, "files"));
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            Assert.Equal(verifiedHead, db.GetMetaString(DbContext.WorkspaceVerifiedHeadShaMetaKey));
+            Assert.Equal(currentHead, db.GetMetaString(DbContext.IndexedHeadShaMetaKey));
         }
         finally
         {

@@ -663,6 +663,7 @@ public partial class QueryCommandRunnerTests
                 var writer = new DbWriter(db.Connection);
                 writer.SetMetaValues(
                     (DbContext.IndexedHeadCommitMetaKey, legacyHead),
+                    (DbContext.WorkspaceVerifiedHeadShaMetaKey, expectedHead),
                     (DbContext.IndexedHeadShaMetaKey, expectedHead),
                     (DbContext.IndexedHeadBranchMetaKey, expectedBranch),
                     (DbContext.IndexedHeadTimestampMetaKey, indexedHeadTimestamp.ToString("O", CultureInfo.InvariantCulture)));
@@ -672,6 +673,7 @@ public partial class QueryCommandRunnerTests
                 using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
                 var writer = new DbWriter(db.Connection);
                 writer.SetMetaValues(
+                    (DbContext.IndexedProjectRootMetaKey, Path.Combine(projectRoot, "after-map-snapshot")),
                     (DbContext.IndexedHeadCommitMetaKey, nextLegacyHead),
                     (DbContext.IndexedHeadShaMetaKey, nextIndexedHead),
                     (DbContext.IndexedHeadTimestampMetaKey, nextIndexedHeadTimestamp.ToString("O", CultureInfo.InvariantCulture)));
@@ -690,6 +692,7 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(expectedHead, json.GetProperty("git_head").GetString());
             Assert.False(json.GetProperty("git_is_dirty").GetBoolean());
             Assert.Equal(legacyHead, json.GetProperty("indexed_head_commit").GetString());
+            Assert.Equal(expectedHead, json.GetProperty("workspace_verified_head_sha").GetString());
             Assert.Equal(expectedHead, json.GetProperty("indexed_head_sha").GetString());
             Assert.Equal(expectedBranch, json.GetProperty("indexed_head_branch").GetString());
             Assert.Equal(indexedHeadTimestamp, json.GetProperty("indexed_head_timestamp").GetDateTimeOffset());
@@ -697,7 +700,9 @@ public partial class QueryCommandRunnerTests
             var headFreshness = json.GetProperty("head_freshness");
             Assert.Equal("head_current", headFreshness.GetProperty("state").GetString());
             Assert.Equal("workspace", headFreshness.GetProperty("scope").GetString());
-            Assert.Equal("latest_index", headFreshness.GetProperty("indexed_head_source").GetString());
+            Assert.Equal("workspace_verified", headFreshness.GetProperty("indexed_head_source").GetString());
+            Assert.Equal(expectedHead, headFreshness.GetProperty("workspace_verified_head").GetString());
+            Assert.Equal(expectedHead, headFreshness.GetProperty("latest_index_head").GetString());
             Assert.Equal(legacyHead, headFreshness.GetProperty("legacy_full_scan_head").GetString());
         }
         finally
@@ -705,6 +710,33 @@ public partial class QueryCommandRunnerTests
             RepoMapBuilder.HeadMetadataCapturedForTesting.Value = null;
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
+    }
+
+    [Fact]
+    public void HeadFreshness_DoesNotMixLatestBranchContextWithOlderWorkspaceVerification_Issue5054()
+    {
+        var verifiedHead = new string('a', 40);
+        var latestHead = new string('b', 40);
+        var latestTimestamp = DateTimeOffset.Parse("2026-08-10T01:02:03Z", CultureInfo.InvariantCulture);
+        var freshness = StatusHeadFreshness.FromMap(new RepoMapResult
+        {
+            GitHead = verifiedHead,
+            IndexedHeadCommit = new string('c', 40),
+            WorkspaceVerifiedHeadSha = verifiedHead,
+            IndexedHeadSha = latestHead,
+            IndexedHeadBranch = "latest-write-branch",
+            IndexedHeadTimestamp = latestTimestamp,
+            WorktreeHeadChanged = false,
+            CommitsAheadOfIndexedHead = 2,
+        });
+
+        Assert.NotNull(freshness);
+        Assert.Equal(verifiedHead, freshness.IndexedHead);
+        Assert.Equal("workspace_verified", freshness.IndexedHeadSource);
+        Assert.Equal(latestHead, freshness.LatestIndexHead);
+        Assert.Null(freshness.IndexedHeadBranch);
+        Assert.Null(freshness.IndexedHeadTimestamp);
+        Assert.Null(freshness.CommitsAheadOfIndexedHead);
     }
 
     [Fact]

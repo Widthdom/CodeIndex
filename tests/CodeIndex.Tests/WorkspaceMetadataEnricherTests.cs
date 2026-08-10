@@ -238,7 +238,7 @@ public class WorkspaceMetadataEnricherTests
     }
 
     [Fact]
-    public void Enrich_ResultTypes_UseLatestIndexedHeadShaBeforeFullScanHeadForWorktreeHeadChanged()
+    public void Enrich_ResultTypes_UseConservativeLegacyBaselineUntilWorkspaceVerificationExists_Issue5054()
     {
         var (projectRoot, dbPath, originalHead) = CreateDirtyGitProject("cdidx_workspace_current_head_preferred");
         try
@@ -258,10 +258,27 @@ public class WorkspaceMetadataEnricherTests
             WorkspaceMetadataEnricher.Enrich(analysis, dbPath);
 
             Assert.Equal(staleFullScanHead, status.IndexedHeadCommit);
-            Assert.False(status.WorktreeHeadChanged);
+            Assert.Null(status.WorkspaceVerifiedHeadSha);
+            Assert.True(status.WorktreeHeadChanged);
             Assert.Equal(0, status.CommitsAheadOfIndexedHead);
             Assert.Equal(staleFullScanHead, analysis.IndexedHeadCommit);
-            Assert.False(analysis.WorktreeHeadChanged);
+            Assert.Null(analysis.WorkspaceVerifiedHeadSha);
+            Assert.Equal(originalHead, analysis.IndexedHeadSha);
+            Assert.True(analysis.WorktreeHeadChanged);
+
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+                new DbWriter(db.Connection).SetMeta(DbContext.WorkspaceVerifiedHeadShaMetaKey, originalHead);
+
+            var verifiedStatus = new StatusResult { IndexedHeadSha = originalHead };
+            var verifiedAnalysis = new SymbolAnalysisResult();
+            WorkspaceMetadataEnricher.Enrich(verifiedStatus, dbPath);
+            WorkspaceMetadataEnricher.Enrich(verifiedAnalysis, dbPath);
+
+            Assert.Equal(originalHead, verifiedStatus.WorkspaceVerifiedHeadSha);
+            Assert.False(verifiedStatus.WorktreeHeadChanged);
+            Assert.Equal(originalHead, verifiedAnalysis.WorkspaceVerifiedHeadSha);
+            Assert.Equal(originalHead, verifiedAnalysis.IndexedHeadSha);
+            Assert.False(verifiedAnalysis.WorktreeHeadChanged);
         }
         finally
         {
@@ -357,6 +374,136 @@ public class WorkspaceMetadataEnricherTests
         finally
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Enrich_StatusResult_PreservesSingleReaderSnapshotAcrossConcurrentMetadataCommit_Issue5054()
+    {
+        var (projectRoot, dbPath, snapshotHead) = CreateDirtyGitProject("cdidx_workspace_snapshot_provenance");
+        var nextHead = new string('b', 40);
+        try
+        {
+            string? branch;
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                branch = TestProjectHelper.RunGit(projectRoot, "rev-parse", "--abbrev-ref", "HEAD").Trim();
+                var writer = new DbWriter(db.Connection);
+                writer.SetMetaValues(
+                    (DbContext.IndexedHeadCommitMetaKey, snapshotHead),
+                    (DbContext.IndexedHeadCommitBranchMetaKey, branch),
+                    (DbContext.WorkspaceVerifiedHeadShaMetaKey, snapshotHead),
+                    (DbContext.IndexedHeadShaMetaKey, snapshotHead),
+                    (DbContext.IndexedHeadBranchMetaKey, branch));
+            }
+
+            StatusResult status;
+            using (var db = new DbContext(DbOpenIntent.QueryOnly, dbPath))
+            using (var reader = new DbReader(db.Connection))
+                status = reader.GetStatus();
+
+            WorkspaceMetadataEnricher.StatusRuntimeMetadataResolvedForTesting.Value = () =>
+            {
+                using var concurrentDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+                new DbWriter(concurrentDb.Connection).SetMetaValues(
+                    (DbContext.IndexedHeadCommitMetaKey, nextHead),
+                    (DbContext.WorkspaceVerifiedHeadShaMetaKey, nextHead),
+                    (DbContext.IndexedHeadShaMetaKey, nextHead));
+            };
+
+            WorkspaceMetadataEnricher.Enrich(status, dbPath);
+
+            Assert.Equal(snapshotHead, status.IndexedHeadCommit);
+            Assert.Equal(snapshotHead, status.WorkspaceVerifiedHeadSha);
+            Assert.Equal(snapshotHead, status.IndexedHeadSha);
+            Assert.False(status.WorktreeHeadChanged);
+            using var verificationDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            Assert.Equal(nextHead, verificationDb.GetMetaString(DbContext.WorkspaceVerifiedHeadShaMetaKey));
+        }
+        finally
+        {
+            WorkspaceMetadataEnricher.StatusRuntimeMetadataResolvedForTesting.Value = null;
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Enrich_AnalysisResult_PreservesReaderSnapshotAcrossConcurrentMetadataCommit_Issue5054()
+    {
+        var (projectRoot, dbPath, snapshotHead) = CreateDirtyGitProject("cdidx_analysis_snapshot_provenance");
+        var nextHead = new string('c', 40);
+        try
+        {
+            string? branch;
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                branch = TestProjectHelper.RunGit(projectRoot, "rev-parse", "--abbrev-ref", "HEAD").Trim();
+                var writer = new DbWriter(db.Connection);
+                writer.SetMetaValues(
+                    (DbContext.IndexedHeadCommitMetaKey, snapshotHead),
+                    (DbContext.IndexedHeadCommitBranchMetaKey, branch),
+                    (DbContext.WorkspaceVerifiedHeadShaMetaKey, snapshotHead),
+                    (DbContext.IndexedHeadShaMetaKey, snapshotHead),
+                    (DbContext.IndexedHeadBranchMetaKey, branch));
+            }
+
+            SymbolAnalysisResult analysis;
+            using (var db = new DbContext(DbOpenIntent.QueryOnly, dbPath))
+            using (var reader = new DbReader(db.Connection))
+                analysis = reader.AnalyzeSymbol("App");
+
+            WorkspaceMetadataEnricher.AnalysisRuntimeMetadataResolvedForTesting.Value = () =>
+            {
+                using var concurrentDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+                new DbWriter(concurrentDb.Connection).SetMetaValues(
+                    (DbContext.IndexedHeadCommitMetaKey, nextHead),
+                    (DbContext.WorkspaceVerifiedHeadShaMetaKey, nextHead),
+                    (DbContext.IndexedHeadShaMetaKey, nextHead));
+            };
+
+            WorkspaceMetadataEnricher.Enrich(analysis, dbPath);
+
+            Assert.Equal(snapshotHead, analysis.IndexedHeadCommit);
+            Assert.Equal(snapshotHead, analysis.WorkspaceVerifiedHeadSha);
+            Assert.Equal(snapshotHead, analysis.IndexedHeadSha);
+            Assert.False(analysis.WorktreeHeadChanged);
+            using var verificationDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            Assert.Equal(nextHead, verificationDb.GetMetaString(DbContext.WorkspaceVerifiedHeadShaMetaKey));
+        }
+        finally
+        {
+            WorkspaceMetadataEnricher.AnalysisRuntimeMetadataResolvedForTesting.Value = null;
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Enrich_StatusSnapshotWithNullProjectRoot_DoesNotReopenDatabase_Issue5054()
+    {
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_status_null_root_snapshot");
+        try
+        {
+            StatusResult status;
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                db.InitializeSchema();
+                using var reader = new DbReader(db.Connection);
+                status = reader.GetStatus();
+            }
+            Assert.Null(status.ProjectRoot);
+
+            DbPathResolver.OpenMetadataConnectionForTesting = _ =>
+                throw new InvalidOperationException("captured null project root must not reopen SQLite");
+
+            WorkspaceMetadataEnricher.Enrich(status, dbPath, dbPathExplicit: true);
+
+            Assert.Null(status.ProjectRoot);
+            Assert.Null(status.GitHead);
+        }
+        finally
+        {
+            DbPathResolver.OpenMetadataConnectionForTesting = null;
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
         }
     }
 

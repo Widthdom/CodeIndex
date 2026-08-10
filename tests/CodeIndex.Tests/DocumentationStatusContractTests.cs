@@ -24,6 +24,7 @@ public class DocumentationStatusContractTests
         "csharp_metadata_target_ready",
         "csharp_metadata_target_degraded_reason",
         "indexed_head_commit",
+        "workspace_verified_head_sha",
         "worktree_head_changed",
         "indexed_head_sha",
         "indexed_head_branch",
