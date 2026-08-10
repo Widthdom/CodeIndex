@@ -1916,7 +1916,7 @@ public static partial class QueryCommandRunner
     {
         const int evidencePathLimit = 5;
         var summaries = queryResults
-            .Where(queryResult => queryResult.Count > 0)
+            .Where(queryResult => queryResult.MinimumMatchedCount > 0)
             .Select(queryResult =>
             {
                 var labels = queryResult.RecommendedLabels
@@ -1926,12 +1926,9 @@ public static partial class QueryCommandRunner
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .OrderBy(label => label, StringComparer.OrdinalIgnoreCase)
                     .ToList();
-                var fileCount = queryResult.Results
-                    .Select(result => result.Path)
-                    .Where(path => !string.IsNullOrWhiteSpace(path))
-                    .Distinct(StringComparer.Ordinal)
-                    .Count();
-                var evidencePaths = queryResult.TopFiles
+                var fileCount = queryResult.SummaryEvidencePathCount;
+                var fileCountAuthoritative = queryResult.SummaryEvidencePathCountAuthoritative;
+                var evidencePaths = queryResult.SummaryEvidencePaths
                     .Take(evidencePathLimit)
                     .ToList();
                 var omittedEvidencePathCount = Math.Max(0, fileCount - evidencePaths.Count);
@@ -1941,17 +1938,23 @@ public static partial class QueryCommandRunner
                     BuildSearchIssueDraftTitle(recipe, queryResult),
                     queryResult.Count,
                     fileCount,
+                    fileCountAuthoritative,
+                    fileCountAuthoritative ? null : fileCount,
                     queryResult.MinimumMatchedCount,
                     queryResult.MinimumOmittedResultCount,
                     queryResult.Truncated,
                     evidencePaths,
                     fileCount,
+                    fileCountAuthoritative,
+                    fileCountAuthoritative ? null : fileCount,
                     evidencePaths.Count,
                     omittedEvidencePathCount,
-                    omittedEvidencePathCount > 0,
+                    fileCountAuthoritative,
+                    fileCountAuthoritative ? null : omittedEvidencePathCount,
+                    omittedEvidencePathCount > 0 || !fileCountAuthoritative,
                     labels,
                     queryResult.Severity,
-                    GetSearchRecipeConfidence(queryResult.Count),
+                    GetSearchRecipeConfidence(queryResult.MinimumMatchedCount),
                     queryResult.NextCursor,
                     BuildSearchRecipeReplayCommand(
                         recipe,
@@ -1971,7 +1974,8 @@ public static partial class QueryCommandRunner
             recipe,
             options,
             summaryOnly: true,
-            includeMaxJsonBytes: false);
+            includeMaxJsonBytes: false,
+            includeTotalLimit: false);
         var totalCount = summaries.Count;
         var totalCountAuthoritative = !hasFailures;
         string? envelopeJson = null;
@@ -2324,6 +2328,12 @@ public static partial class QueryCommandRunner
                 results = ApplySearchRecipeFileRejectQueries(reader, results, options, recipeQuery);
                 var rows = BuildSearchDisplayRows(results, options, exact, recipeQuery.Query, rawFtsOverride: false, recipeQuery: recipeQuery);
                 rows = ApplySearchRecipeSemanticFilter(reader, options, recipeQuery, rows);
+                var summaryEvidencePaths = BuildSearchRecipeTopFiles(rows);
+                var summaryEvidencePathCount = rows
+                    .Select(row => row.Result.Path)
+                    .Where(path => !string.IsNullOrWhiteSpace(path))
+                    .Distinct(StringComparer.Ordinal)
+                    .Count();
                 var outputSelection = ApplySearchOutputSelection(rows, options, resultLimit, sourceTotalAuthoritative);
                 rows = outputSelection.Rows;
                 if (includeAuditClassifications)
@@ -2376,7 +2386,12 @@ public static partial class QueryCommandRunner
                     outputSelection.Returned,
                     outputSelection.SelectorOmittedCount,
                     outputSelection.LimitOmittedCount,
-                    outputSelection.Selectors));
+                    outputSelection.Selectors)
+                {
+                    SummaryEvidencePaths = summaryEvidencePaths,
+                    SummaryEvidencePathCount = summaryEvidencePathCount,
+                    SummaryEvidencePathCountAuthoritative = sourceTotalAuthoritative,
+                });
                 if (freshnessContext != null)
                 {
                     freshnessObservations.Add(SuccessfulSearchQueryObservation(
@@ -5881,7 +5896,8 @@ public static partial class QueryCommandRunner
         QueryCommandOptions options,
         string? queryName = null,
         bool summaryOnly = false,
-        bool includeMaxJsonBytes = true)
+        bool includeMaxJsonBytes = true,
+        bool includeTotalLimit = true)
     {
         var recipeSelector = string.IsNullOrWhiteSpace(queryName)
             ? recipe.Name
@@ -5942,7 +5958,7 @@ public static partial class QueryCommandRunner
             AddReplayValueOption(args, "--exclude-origin", origin);
         foreach (var kind in options.ResultKinds)
             AddReplayValueOption(args, "--result-kind", kind);
-        if (options.TotalLimit.HasValue)
+        if (includeTotalLimit && options.TotalLimit.HasValue)
             AddReplayValueOption(args, "--total-limit", options.TotalLimit.Value.ToString(CultureInfo.InvariantCulture));
         AddReplayValueOption(args, "--snippet-lines", options.SnippetLines.ToString(CultureInfo.InvariantCulture));
         AddReplayValueOption(args, "--snippet-focus", FormatSearchSnippetFocusMode(options.SnippetFocus));

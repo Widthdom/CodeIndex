@@ -4718,7 +4718,17 @@ internal sealed record SearchRecipeQueryResultJsonResult(
     [property: JsonPropertyName("returned")] int Returned,
     [property: JsonPropertyName("selector_omitted_count")] int SelectorOmittedCount,
     [property: JsonPropertyName("limit_omitted_count")] int LimitOmittedCount,
-    [property: JsonPropertyName("selectors")] List<SearchRowSelectorJsonResult> Selectors);
+    [property: JsonPropertyName("selectors")] List<SearchRowSelectorJsonResult> Selectors)
+{
+    [JsonIgnore]
+    public List<SearchRecipeTopFileJsonResult> SummaryEvidencePaths { get; init; } = [];
+
+    [JsonIgnore]
+    public int SummaryEvidencePathCount { get; init; }
+
+    [JsonIgnore]
+    public bool SummaryEvidencePathCountAuthoritative { get; init; }
+}
 
 internal sealed record SearchNamedBatchCountSummaryRunJsonResult(
     [property: JsonPropertyName("api_version")] string ApiVersion,
@@ -4919,13 +4929,25 @@ internal sealed record SearchIssueDraftSummaryJsonResult(
     [property: JsonPropertyName("title")] string Title,
     [property: JsonPropertyName("result_count")] int ResultCount,
     [property: JsonPropertyName("file_count")] int FileCount,
+    [property: JsonPropertyName("file_count_authoritative")] bool FileCountAuthoritative,
+    [property: JsonPropertyName("file_count_lower_bound")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    int? FileCountLowerBound,
     [property: JsonPropertyName("minimum_matched_count")] int MinimumMatchedCount,
     [property: JsonPropertyName("minimum_omitted_result_count")] int MinimumOmittedResultCount,
     [property: JsonPropertyName("results_truncated")] bool ResultsTruncated,
     [property: JsonPropertyName("evidence_paths")] List<SearchRecipeTopFileJsonResult> EvidencePaths,
     [property: JsonPropertyName("evidence_path_count")] int EvidencePathCount,
+    [property: JsonPropertyName("evidence_path_count_authoritative")] bool EvidencePathCountAuthoritative,
+    [property: JsonPropertyName("evidence_path_count_lower_bound")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    int? EvidencePathCountLowerBound,
     [property: JsonPropertyName("evidence_paths_returned_count")] int EvidencePathsReturnedCount,
     [property: JsonPropertyName("evidence_paths_omitted_count")] int EvidencePathsOmittedCount,
+    [property: JsonPropertyName("evidence_paths_omitted_count_authoritative")] bool EvidencePathsOmittedCountAuthoritative,
+    [property: JsonPropertyName("evidence_paths_omitted_count_lower_bound")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    int? EvidencePathsOmittedCountLowerBound,
     [property: JsonPropertyName("evidence_paths_truncated")] bool EvidencePathsTruncated,
     [property: JsonPropertyName("labels")] List<string> Labels,
     [property: JsonPropertyName("severity")] string Severity,

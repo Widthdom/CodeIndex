@@ -12156,15 +12156,34 @@ public partial class QueryCommandRunnerTests
             using var document = ParseJsonOutput(stdout);
             var root = document.RootElement;
             var freshness = root.GetProperty("query_freshness");
+            var drafts = root.GetProperty("drafts").EnumerateArray().ToArray();
 
-            Assert.Equal(1, root.GetProperty("count").GetInt32());
+            Assert.Equal(2, root.GetProperty("count").GetInt32());
             Assert.Equal(1, root.GetProperty("result_count").GetInt32());
+            Assert.Equal(2, root.GetProperty("total_count").GetInt32());
+            Assert.Equal(2, root.GetProperty("returned_count").GetInt32());
+            Assert.Equal(0, root.GetProperty("omitted_count").GetInt32());
+            Assert.False(root.GetProperty("truncated").GetBoolean());
             Assert.Equal(2, freshness.GetProperty("positive_evidence_query_count").GetInt32());
             Assert.Equal(0, freshness.GetProperty("zero_result_query_count").GetInt32());
             Assert.Equal("clean", freshness.GetProperty("state").GetString());
             Assert.Equal(2, freshness.GetProperty("clean_query_count").GetInt32());
             Assert.Equal(0, freshness.GetProperty("clean_zero_match_query_count").GetInt32());
             Assert.Empty(freshness.GetProperty("stale_query_names").EnumerateArray());
+            Assert.Equal(2, drafts.Length);
+            var totalLimitedDraft = Assert.Single(
+                drafts,
+                draft => draft.GetProperty("query_name").GetString() == "broad-exception-catch");
+            Assert.Equal(0, totalLimitedDraft.GetProperty("result_count").GetInt32());
+            Assert.Equal(1, totalLimitedDraft.GetProperty("minimum_matched_count").GetInt32());
+            Assert.Equal(1, totalLimitedDraft.GetProperty("minimum_omitted_result_count").GetInt32());
+            Assert.True(totalLimitedDraft.GetProperty("results_truncated").GetBoolean());
+            Assert.False(totalLimitedDraft.GetProperty("evidence_path_count_authoritative").GetBoolean());
+            Assert.True(totalLimitedDraft.GetProperty("evidence_paths_truncated").GetBoolean());
+            Assert.DoesNotContain(
+                "--total-limit",
+                root.GetProperty("recovery_command").GetString(),
+                StringComparison.Ordinal);
         }
         finally
         {
@@ -12240,6 +12259,29 @@ public partial class QueryCommandRunnerTests
             Assert.False(rawDiagnosticSummary.TryGetProperty("body", out _));
             Assert.False(rawDiagnosticSummary.TryGetProperty("source", out _));
             Assert.False(rawDiagnosticSummary.TryGetProperty("evidence", out _));
+
+            var (limitedExitCode, limitedStdout, limitedStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                SummaryArgs("--limit", "1"),
+                relaxedJsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, limitedExitCode);
+            Assert.Equal(string.Empty, limitedStderr);
+            using var limitedDocument = ParseJsonOutput(limitedStdout);
+            var limitedRawDiagnosticSummary = Assert.Single(
+                limitedDocument.RootElement.GetProperty("drafts").EnumerateArray(),
+                item => item.GetProperty("query_name").GetString() == "raw-diagnostic-echo");
+            Assert.Equal(1, limitedRawDiagnosticSummary.GetProperty("result_count").GetInt32());
+            Assert.Equal(7, limitedRawDiagnosticSummary.GetProperty("minimum_matched_count").GetInt32());
+            Assert.Equal(7, limitedRawDiagnosticSummary.GetProperty("file_count").GetInt32());
+            Assert.False(limitedRawDiagnosticSummary.GetProperty("file_count_authoritative").GetBoolean());
+            Assert.Equal(7, limitedRawDiagnosticSummary.GetProperty("file_count_lower_bound").GetInt32());
+            Assert.Equal(7, limitedRawDiagnosticSummary.GetProperty("evidence_path_count").GetInt32());
+            Assert.False(limitedRawDiagnosticSummary.GetProperty("evidence_path_count_authoritative").GetBoolean());
+            Assert.Equal(7, limitedRawDiagnosticSummary.GetProperty("evidence_path_count_lower_bound").GetInt32());
+            Assert.Equal(5, limitedRawDiagnosticSummary.GetProperty("evidence_paths_returned_count").GetInt32());
+            Assert.Equal(2, limitedRawDiagnosticSummary.GetProperty("evidence_paths_omitted_count").GetInt32());
+            Assert.False(limitedRawDiagnosticSummary.GetProperty("evidence_paths_omitted_count_authoritative").GetBoolean());
+            Assert.Equal(2, limitedRawDiagnosticSummary.GetProperty("evidence_paths_omitted_count_lower_bound").GetInt32());
 
             var fullByteCount = Encoding.UTF8.GetByteCount(summaryStdout);
             var truncatedBudget = fullByteCount - 1;

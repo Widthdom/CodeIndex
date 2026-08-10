@@ -1677,7 +1677,10 @@ to recipe issue-draft export when agents only need compact top-level metadata:
 the output uses a dedicated summary contract with one compact row per positive
 query instead of embedding full issue bodies, source rows, or repeated recipe
 metadata. Each row reports counts, severity/confidence, labels, at most five
-evidence paths with explicit omission counts, and a full-detail replay command.
+evidence paths with explicit omission counts, count authority/lower bounds when
+the candidate window is incomplete, and a full-detail replay command. Positive
+queries remain represented even when `--total-limit` leaves them with zero
+returned results; the uncapped recovery command omits that run-wide limit.
 The root reports total/returned/omitted row counts, whether the total is
 authoritative, `query_freshness`, and an uncapped `recovery_command`. Combine it
 with `--max-json-bytes <n>` to measure the complete UTF-8 document (including
@@ -5147,8 +5150,10 @@ JSON summary には `confidence` と `minimum_score` が出力されます。dra
 top-level metadata だけを必要とする場合は、recipe issue-draft export に `--summary-only` を追加します。
 この出力は専用の summary contract を使い、完全な Issue body、source row、query ごとに重複する
 recipe metadata を埋め込まず、結果がある query ごとに compact な row を1件出力します。各 row は
-count、severity / confidence、label、最大5件の evidence path と明示的な省略件数、完全な詳細を取得する
-replay command を返します。root は total / returned / omitted row count、total が authoritative か、
+count、severity / confidence、label、最大5件の evidence path、明示的な省略件数、candidate window が
+不完全な場合の count authority / lower bound、完全な詳細を取得する replay command を返します。
+`--total-limit` により返却 result が0件になった positive query も row として保持し、上限なしの recovery
+command からは run 全体のその limit を除外します。root は total / returned / omitted row count、total が authoritative か、
 `query_freshness`、上限なしの `recovery_command` を返します。`--max-json-bytes <n>` を併用すると、末尾の
 改行を含む UTF-8 document 全体を計測し、上限に収まる完全な row だけを保持します。row 0件の envelope
 さえ収まらない場合は `E028` で fail-closed にし、retry guidance でも実行元の `search` または `audit`
