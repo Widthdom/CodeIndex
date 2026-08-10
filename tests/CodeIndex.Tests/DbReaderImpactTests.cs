@@ -824,8 +824,12 @@ public partial class DbReaderTests
     [Fact]
     public void AnalyzeImpact_StaleReferenceIdentityDoesNotClaimLogicalPartialTraversal()
     {
-        InsertIndexedFile("src/Stale.Part1.cs", "csharp", "public partial class Stale { }");
-        InsertIndexedFile("src/Stale.Part2.cs", "csharp", "public partial class Stale { }");
+        InsertIndexedFile("src/Stale.Part1.cs", "csharp", "public partial class Stale { public void Start() { } }");
+        InsertIndexedFile("src/Stale.Part2.cs", "csharp", "public partial class Stale { public void Stop() { } }");
+        InsertIndexedFile(
+            "src/StaleConsumer.cs",
+            "csharp",
+            "public class StaleConsumer { public void Run(Stale value) { value.Start(); value.Stop(); } }");
         _writer.ClearReferenceIdentityContractReady();
         var reader = new DbReader(_db.Connection);
 
@@ -836,6 +840,10 @@ public partial class DbReaderTests
         Assert.Null(analysis.PartialFamilyMemberCount);
         Assert.Null(analysis.PartialFamilyMemberRootCount);
         Assert.Null(analysis.PartialFamilyMemberRootTruncated);
+        Assert.Equal("none", analysis.ImpactMode);
+        Assert.Empty(analysis.FileImpacts);
+        Assert.Equal("multiple_definition_files", analysis.ZeroResultReason);
+        Assert.Equal(["multiple_definition_files"], analysis.ImpactFailureChain);
     }
 
     [Fact]

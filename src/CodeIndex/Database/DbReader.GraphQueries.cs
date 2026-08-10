@@ -2439,7 +2439,15 @@ public partial class DbReader
             .Select(d => d.Path)
             .Distinct(indexedPathComparer)
             .ToList();
-        var hasMultipleFallbackDefinitions = definitionResolution.PreciseLogicalDefinitionCount > 1;
+        // Logical partial-family collapse is only safe when reference identity is current.
+        // A stale graph cannot union every physical family path, so retain the physical
+        // ambiguity guard instead of producing hints from only the representative file.
+        // 論理 partial-family の集約は reference identity が current の場合だけ安全。
+        // stale graph では全物理 family path を統合できないため、代表 file だけの hint を
+        // 返さず、物理 definition の ambiguity guard を維持する。
+        var hasMultipleFallbackDefinitions = _referenceIdentityContractCurrent
+            ? definitionResolution.PreciseLogicalDefinitionCount > 1
+            : definitionResolution.PreciseDefinitionCount > 1;
         var hasMultipleFallbackDefinitionFiles = definitionResolution.PreciseDefinitionFileCount > 1;
         var hasClassLikeDefinitions = definitionResolution.PreciseDefinitionCount > 0;
         var logicalPartialFamilyDefinition = _referenceIdentityContractCurrent
