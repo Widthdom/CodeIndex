@@ -1246,6 +1246,7 @@ public partial class McpServer
         // leaves prior indexed rows and trust metadata untouched even for rebuild requests.
         // rebuild破棄とFTS recoveryもwrite前scan barrier通過後まで遅延する。
         requestToken.ThrowIfCancellationRequested();
+        using var mmapBulkWrite = SqliteMmapBulkWriteGuard.Start(writer, useFtsBulkLoad);
         if (rebuild)
         {
             db.RepairIncompleteBatchReadiness();

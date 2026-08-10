@@ -1238,6 +1238,8 @@ When `--db <path>` is omitted, cdidx resolves the SQLite location from a data di
 
 Every `DbContext` connection sets `PRAGMA cache_size=-65536` (64 MiB), `PRAGMA temp_store=MEMORY`, and on 64-bit processes `PRAGMA mmap_size=268435456` (256 MiB). These are connection-scoped query-performance knobs; they do not alter the on-disk schema and are skipped only where SQLite cannot apply them.
 
+High-churn index runs that enter the bulk-load path temporarily set `mmap_size=0` after the input-snapshot validation barrier. This prevents the SQLite mapping from overlapping the largest managed reference-graph working set. The configured mapping is restored after all write scopes unwind, including failure and cancellation paths; ordinary queries, no-op indexing, and low-churn incremental runs retain the configured value.
+
 Operators can override the defaults with environment variables:
 
 | Variable | Default | Meaning |
@@ -4864,6 +4866,8 @@ apply 時は `PRAGMA optimize` を実行します。
 ### SQLite パフォーマンス調整
 
 すべての `DbContext` connection は `PRAGMA cache_size=-65536` (64 MiB)、`PRAGMA temp_store=MEMORY`、64-bit process では `PRAGMA mmap_size=268435456` (256 MiB) を設定する。これらは connection-scoped な query-performance knob であり、on-disk schema は変更せず、SQLite が適用できない場合だけ skip される。
+
+bulk-load 経路に入る高 churn な index run は、input-snapshot validation barrier の通過後に一時的に `mmap_size=0` を設定する。これにより SQLite mapping と最大の managed reference-graph working set が重ならないようにする。設定済みの mapping は failure / cancellation を含め、すべての write scope が unwind した後に復元される。通常 query、no-op indexing、低 churn の incremental run は設定値を維持する。
 
 operator は environment variable で既定値を上書きできる。
 

@@ -5958,6 +5958,27 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void SqliteMmapBulkWriteGuard_DisablesAndRestoresMappingAfterFailure()
+    {
+        if (!Environment.Is64BitProcess)
+            return;
+
+        var configuredMmapSizeBytes = ExecuteScalarLong("PRAGMA mmap_size");
+        if (configuredMmapSizeBytes == 0)
+            return;
+
+        Assert.Throws<InvalidOperationException>((Action)(() =>
+        {
+            using var guard = SqliteMmapBulkWriteGuard.Start(_writer, enabled: true);
+            Assert.NotNull(guard);
+            Assert.Equal(0L, ExecuteScalarLong("PRAGMA mmap_size"));
+            throw new InvalidOperationException("Simulated bulk-write failure.");
+        }));
+
+        Assert.Equal(configuredMmapSizeBytes, ExecuteScalarLong("PRAGMA mmap_size"));
+    }
+
+    [Fact]
     public void Constructor_UsesSqlitePerformanceEnvironmentOverrides()
     {
         AssertSqlitePerformancePragmas("4096", "1048576", 4096, 1048576);
