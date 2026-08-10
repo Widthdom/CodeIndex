@@ -246,6 +246,8 @@ public partial class McpServer : IDisposable
     internal const int MaxResourceReadCursorCharacters = 128;
     internal const int DefaultToolsListPageSize = 25;
     internal const int MaxToolsListPageSize = 25;
+    internal const int DefaultToolsListResponseByteBudget = 64 * 1024;
+    internal const int DefaultInitializeInstructionsByteBudget = 2 * 1024;
     internal const int MaxToolsListNameFilters = 24;
     internal const int MaxToolsListNameCharacters = 128;
     internal const int MaxToolsListCursorCharacters = 8_192;

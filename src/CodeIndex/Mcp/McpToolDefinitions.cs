@@ -42,7 +42,7 @@ public partial class McpServer
             return CreateToolsListParamsError(id);
 
         var paramsObject = listParams as JsonObject;
-        var catalogFormat = "full";
+        var catalogFormat = "compact";
         if (paramsObject?.ContainsKey("format") == true
             && (paramsObject["format"] is not JsonValue formatValue
                 || !formatValue.TryGetValue<string>(out catalogFormat)
@@ -85,6 +85,23 @@ public partial class McpServer
                 catalogFormat = cursorFormat;
                 requestedNames = cursorNames;
             }
+            else
+            {
+                // Numeric cursors were emitted by the legacy unfiltered full catalog.
+                // Keep accepting them as full-catalog continuations so clients that persisted
+                // a cursor across the default-format change do not silently switch schemas.
+                // 数値 cursor は従来の filter なし full catalog が返していた値。既定 format
+                // 変更をまたいで cursor を保持した client が schema を暗黙変更しないよう、
+                // full catalog の継続として受理する。
+                if ((paramsObject.ContainsKey("format") && catalogFormat != "full")
+                    || paramsObject.ContainsKey("names"))
+                {
+                    return CreateToolsListCursorError(id);
+                }
+
+                catalogFormat = "full";
+                requestedNames = null;
+            }
         }
 
         var selected = filtered;
@@ -122,6 +139,7 @@ public partial class McpServer
         var nextOffset = offset + pageSize;
         if (nextOffset <= MaxMcpPaginationOffset && nextOffset < selected.Count)
             result["nextCursor"] = CreateToolsListCursor(nextOffset, catalogFormat, requestedNames);
+        AddToolsListSizeTelemetry(page, catalogMeta, catalogFormat);
         return CreateSuccessResponse(id, result);
     }
 
@@ -308,8 +326,10 @@ public partial class McpServer
         var compact = new JsonObject
         {
             ["name"] = tool["name"]?.DeepClone(),
-            ["description"] = BuildCompactToolDescription(tool["description"]?.GetValue<string>()),
-            ["inputSchema"] = new JsonObject { ["type"] = "object" },
+            ["description"] = BuildCompactToolDescription(
+                tool["name"]?.GetValue<string>(),
+                tool["description"]?.GetValue<string>()),
+            ["inputSchema"] = BuildInvocationSchema(tool["inputSchema"]),
         };
         if (tool["annotations"] is not null)
             compact["annotations"] = tool["annotations"]!.DeepClone();
@@ -318,7 +338,39 @@ public partial class McpServer
         return compact;
     }
 
-    private static string BuildCompactToolDescription(string? description)
+    private static JsonNode? BuildInvocationSchema(JsonNode? schema) => schema switch
+    {
+        JsonObject schemaObject => BuildInvocationSchemaObject(schemaObject),
+        JsonArray schemaArray => new JsonArray(schemaArray.Select(BuildInvocationSchema).ToArray()),
+        null => null,
+        _ => schema.DeepClone(),
+    };
+
+    private static JsonObject BuildInvocationSchemaObject(JsonObject schema)
+    {
+        var invocationSchema = new JsonObject();
+        foreach (var (name, value) in schema)
+        {
+            if (name is "description" or "title" or "examples" or "$comment")
+                continue;
+            invocationSchema[name] = name is "properties" or "patternProperties" or "$defs" or "definitions"
+                or "dependentSchemas" or "dependentRequired" or "dependencies"
+                && value is JsonObject schemaMap
+                    ? BuildInvocationSchemaMap(schemaMap)
+                    : BuildInvocationSchema(value);
+        }
+        return invocationSchema;
+    }
+
+    private static JsonObject BuildInvocationSchemaMap(JsonObject schemaMap)
+    {
+        var invocationSchemaMap = new JsonObject();
+        foreach (var (name, value) in schemaMap)
+            invocationSchemaMap[name] = BuildInvocationSchema(value);
+        return invocationSchemaMap;
+    }
+
+    private static string BuildCompactToolDescription(string? toolName, string? description)
     {
         if (string.IsNullOrWhiteSpace(description))
             return string.Empty;
@@ -327,10 +379,19 @@ public partial class McpServer
         var sentenceEnd = english.IndexOf(". ", StringComparison.Ordinal);
         if (sentenceEnd >= 0)
             english = english[..(sentenceEnd + 1)];
+        var safetyGuidance = toolName switch
+        {
+            "impact_analysis" => " File-level fallback may be heuristic; check `impact_mode`, `heuristic`, and `file_impacts`.",
+            "suggest_improvement" => " Never include source code; describe the issue in natural language only.",
+            "unused_symbols" => " Verify surprising hits before editing; meaningful only for languages with reference extraction.",
+            "validate" => " Totals are authoritative only while `file_issues_data_current` is true.",
+            _ => string.Empty,
+        };
         const int maxDescriptionCharacters = 240;
-        return english.Length <= maxDescriptionCharacters
-            ? english
-            : $"{english[..(maxDescriptionCharacters - 3)].TrimEnd()}...";
+        var baseDescriptionLimit = maxDescriptionCharacters - safetyGuidance.Length;
+        if (english.Length > baseDescriptionLimit)
+            english = $"{english[..(baseDescriptionLimit - 3)].TrimEnd()}...";
+        return english + safetyGuidance;
     }
 
     private static JsonObject BuildCompactToolsListCatalogMeta(
@@ -355,11 +416,18 @@ public partial class McpServer
             },
             ["discovery_contract"] = new JsonObject
             {
+                ["tools_list_is_authoritative"] = !namesFiltered,
                 ["disabled_tools_are_omitted"] = true,
-                ["input_schemas_are_authoritative"] = false,
+                ["input_schemas_are_authoritative"] = true,
+                ["descriptions_are_complete"] = false,
+                ["output_schemas_are_included"] = false,
+                ["examples_are_included"] = false,
                 ["full_definitions_available_on_demand"] = true,
                 ["name_filter_param"] = "params.names",
                 ["pagination_supported"] = true,
+                ["cursor_param"] = "params.cursor",
+                ["limit_param"] = "params.limit",
+                ["next_cursor_field"] = "result.nextCursor",
             },
             ["response_controls"] = new JsonObject
             {
@@ -369,10 +437,65 @@ public partial class McpServer
                 ["tools_offset"] = offset,
                 ["tools_page_size"] = pageSize,
                 ["names_filtered"] = namesFiltered,
+                ["default_tools_list_page_size"] = DefaultToolsListPageSize,
+                ["max_tools_list_page_size"] = MaxToolsListPageSize,
+                ["default_response_budget_utf8_bytes"] = DefaultToolsListResponseByteBudget,
                 ["max_tool_name_filters"] = MaxToolsListNameFilters,
                 ["max_pagination_offset"] = MaxMcpPaginationOffset,
             },
         };
+
+    private static void AddToolsListSizeTelemetry(JsonArray tools, JsonObject catalogMeta, string format)
+    {
+        var descriptions = 0;
+        var inputSchemas = 0;
+        var outputSchemas = 0;
+        var examples = 0;
+        var annotationsAndStability = 0;
+        foreach (var tool in tools.OfType<JsonObject>())
+        {
+            descriptions += GetJsonUtf8ByteCount(tool["description"]);
+            inputSchemas += GetJsonUtf8ByteCount(tool["inputSchema"]);
+            outputSchemas += GetJsonUtf8ByteCount(tool["outputSchema"]);
+            examples += GetJsonUtf8ByteCount(tool["examples"]);
+            annotationsAndStability += GetJsonUtf8ByteCount(tool["annotations"]);
+            annotationsAndStability += GetJsonUtf8ByteCount(tool["x-stability"]);
+        }
+
+        var capabilityMetadata = GetJsonUtf8ByteCount(catalogMeta["purpose"])
+            + GetJsonUtf8ByteCount(catalogMeta["first_time_ai_guide"])
+            + GetJsonUtf8ByteCount(catalogMeta["capability_groups"])
+            + GetJsonUtf8ByteCount(catalogMeta["recommended_workflows"]);
+        var metadataBytes = GetJsonUtf8ByteCount(catalogMeta);
+        catalogMeta["size_telemetry"] = new JsonObject
+        {
+            ["measurement"] = "serialized JSON value UTF-8 bytes",
+            ["approximate_tokens"] = "ceil(utf8_bytes / 4)",
+            ["contains_tool_arguments"] = false,
+            ["format"] = format,
+            ["sections"] = new JsonObject
+            {
+                ["tools"] = CreateToolsListSizeMetric(GetJsonUtf8ByteCount(tools)),
+                ["descriptions"] = CreateToolsListSizeMetric(descriptions),
+                ["input_schemas"] = CreateToolsListSizeMetric(inputSchemas),
+                ["output_schemas"] = CreateToolsListSizeMetric(outputSchemas),
+                ["examples"] = CreateToolsListSizeMetric(examples),
+                ["annotations_and_stability"] = CreateToolsListSizeMetric(annotationsAndStability),
+                ["capability_metadata"] = CreateToolsListSizeMetric(capabilityMetadata),
+                ["catalog_metadata_before_size_telemetry"] = CreateToolsListSizeMetric(metadataBytes),
+            },
+        };
+    }
+
+    private static JsonObject CreateToolsListSizeMetric(int utf8Bytes) => new()
+    {
+        ["utf8_bytes"] = utf8Bytes,
+        ["approximate_tokens"] = (utf8Bytes + 3) / 4,
+    };
+
+    private static int GetJsonUtf8ByteCount(JsonNode? node) => node is null
+        ? 0
+        : Encoding.UTF8.GetByteCount(node.ToJsonString());
 
     private static JsonObject BuildToolsListCatalogMeta(JsonArray tools, int returnedToolCount, int offset, int pageSize)
     {
