@@ -1338,6 +1338,8 @@ public static partial class IndexCommandRunner
         hotspotAggregateRefresh.Complete(cancellationToken);
         writer.ClearBatchInProgress();
         fullScanTxn.Commit();
+        if (options.MemoryTrace)
+            memorySamples.Add(CaptureMemorySample("commit", stopwatch));
         if (referenceSecondaryIndexBulkLoad != null
             && willRebuildTypeScriptAugmentationAfterReadinessValidation)
             writer.ReportReferenceSecondaryIndexBulkLoadState("full_scan_committed");

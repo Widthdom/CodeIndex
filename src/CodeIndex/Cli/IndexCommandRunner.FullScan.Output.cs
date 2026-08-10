@@ -60,8 +60,6 @@ public static partial class IndexCommandRunner
 
     private static int WriteFullScanFinalOutput(FullScanFinalOutputContext output)
     {
-        if (output.Options.MemoryTrace)
-            output.MemorySamples.Add(CaptureMemorySample("commit", output.Stopwatch));
         output.Stopwatch.Stop();
         var memoryTimeline = BuildMemoryTimeline(output.MemorySamples);
         WarnIfMemoryThresholdExceeded(memoryTimeline);

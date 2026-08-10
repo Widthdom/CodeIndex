@@ -55,10 +55,17 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(1L, (long)readerCommand.ExecuteScalar()!);
 
             var (rebuildExitCode, rebuildJson) = RunAndCaptureJson(
-                [projectRoot, "--rebuild", "--yes", "--json", "--quiet"]);
+                [projectRoot, "--rebuild", "--yes", "--json", "--quiet", "--memory-trace"]);
 
             Assert.Equal(CommandExitCodes.Success, rebuildExitCode);
             Assert.Equal(1L, (long)readerCommand.ExecuteScalar()!);
+            var memoryPhases = rebuildJson
+                .GetProperty("memory_timeline")
+                .GetProperty("samples")
+                .EnumerateArray()
+                .Select(sample => sample.GetProperty("phase").GetString())
+                .ToArray();
+            Assert.Equal(["commit", "rebuild_reclaim"], memoryPhases[^2..]);
             var reclaim = rebuildJson.GetProperty("rebuild_reclaim");
             Assert.Equal("completed", reclaim.GetProperty("state").GetString());
             Assert.Equal("threshold_exceeded", reclaim.GetProperty("reason").GetString());
