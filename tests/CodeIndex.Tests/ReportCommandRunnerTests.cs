@@ -19,7 +19,7 @@ namespace CodeIndex.Tests;
 /// 生の引数が混入しないことを担保する。
 /// </summary>
 [Collection("SQLite pool sensitive")]
-public class ReportCommandRunnerTests
+public partial class ReportCommandRunnerTests
 {
     private const UnixFileMode PermissionBits =
         UnixFileMode.UserRead |
@@ -36,7 +36,10 @@ public class ReportCommandRunnerTests
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
     };
+}
 
+public class ReportCommandRunnerParseTests
+{
     [Fact]
     public void ParseArgs_OutputFlagCapturesValue()
     {
@@ -135,7 +138,10 @@ public class ReportCommandRunnerTests
         Assert.NotNull(options.ParseError);
         Assert.Contains("positional", options.ParseError);
     }
+}
 
+public partial class ReportCommandRunnerTests
+{
     [Fact]
     public void Run_MissingOutputFlag_ReturnsUsageError()
     {
