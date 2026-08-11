@@ -13,6 +13,15 @@ internal static class QueryCommandTestSupport
     internal static (int Result, string Stdout, string Stderr) CaptureConsole(Func<int> action)
         => ConsoleCapture.Capture(action);
 
+    internal static (int Result, string Stdout, string Stderr) CaptureConsoleWithInput(
+        string input,
+        Func<int> action)
+    {
+        using var reader = new StringReader(input);
+        using var capture = ConsoleCapture.StartWithInput(reader, captureOut: true, captureError: true);
+        return (action(), capture.Out!.ToString()!, capture.Error!.ToString()!);
+    }
+
     internal static JsonDocument ParseJsonOutput(string stdout)
     {
         var jsonLine = stdout

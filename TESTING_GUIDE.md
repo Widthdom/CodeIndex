@@ -823,6 +823,7 @@ Use the inventory below before adding or moving a test class:
 - Search fixture classification and count-mode guard-filter regressions are standalone for the same reason; their per-test databases and self-locking console captures do not require SQLite pool serialization.
 - Status hotspot-readiness regressions are standalone and reuse the shared partial-type database fixture from `QueryCommandTestSupport`; keep the fixture centralized even though the status class runs outside the pool-sensitive collection.
 - Pure query-bound parser coverage for visibility, status scopes, paths, and map sections stays in the standalone `QueryCommandRunnerBoundsTests` class so validation-only cases are not serialized behind database tests.
+- Find line-scan and symmetric-context limit regressions use standalone classes and the shared console-input capture, keeping their independent databases and parser failures outside the pool-sensitive query megaclass.
 - LSP telemetry fixtures scope captured activities to an ambient parent trace so unrelated parallel requests cannot enter their assertions. The external-WAL snapshot fixture keeps its writer open through the before/after artifact comparison, then disposes its readers and writers before resilient project cleanup; it must not reintroduce process-wide pool resets.
 - Reader issue fixtures with per-instance DB ownership and external-process fixtures with per-instance directories are likewise parallel-safe when their `Dispose` paths release those resources through the shared helpers.
 - Schema-constraint fixtures dispose every `DbContext`, connection, command, and reader before directory cleanup; do not add unconditional pool resets that serialize these independent schema checks.
@@ -1865,6 +1866,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - search fixture classification と count-mode guard-filter の regression も同じ理由で standalone にします。test ごとの database と self-locking console capture は SQLite pool の直列化を必要としません。
 - status hotspot-readiness regression は standalone とし、共有 partial-type database fixture を `QueryCommandTestSupport` から再利用します。status class を pool-sensitive collection の外で実行しても fixture は一元化してください。
 - visibility、status scope、path、map section の pure query-bound parser coverage は standalone `QueryCommandRunnerBoundsTests` class に置き、validation-only case を database test の後ろで直列化しないでください。
+- find の line-scan と symmetric-context limit regression は standalone class と共有 console-input capture を使い、独立 database と parser failure を pool-sensitive な query megaclass の外で実行してください。
 - LSP telemetry fixture は capture した activity を ambient parent trace に限定し、無関係な parallel request が assertion に入らないようにする。external-WAL snapshot fixture は before / after の artifact 比較が終わるまで writer を開いたままにし、その後 resilient な project cleanup 前に reader / writer を dispose する。process-wide pool reset を再導入しないこと。
 - instance ごとに DB を所有する reader issue fixture と、instance ごとに directory を所有する external-process fixture も、`Dispose` で共有 helper を通して resource を解放する限り parallel-safe である。
 - schema-constraint fixture は directory cleanup 前にすべての `DbContext`、connection、command、reader を dispose する。独立した schema check を直列化する無条件 pool reset を追加しないこと。

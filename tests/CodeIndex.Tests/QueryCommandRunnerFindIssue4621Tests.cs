@@ -1,10 +1,11 @@
 using System.Text.Json;
 using CodeIndex.Cli;
 using Xunit;
+using static CodeIndex.Tests.QueryCommandTestSupport;
 
 namespace CodeIndex.Tests;
 
-public partial class QueryCommandRunnerTests
+public sealed class QueryCommandRunnerFindIssue4621Tests
 {
     [Theory]
     [InlineData(new[] { "--context", "2" }, 2, 2)]
@@ -30,7 +31,7 @@ public partial class QueryCommandRunnerTests
         {
             "Issue4621Needle", "--db", dbPath, "--path", "src/context.cs", "--json",
         }.Concat(contextArgs).ToArray();
-        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(args, _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(args, JsonOptions));
 
         Assert.Equal(CommandExitCodes.Success, exitCode);
         Assert.Equal(string.Empty, stderr);
@@ -53,7 +54,7 @@ public partial class QueryCommandRunnerTests
 
         var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
             input,
-            () => QueryCommandRunner.RunBatch(["--db", dbPath], _jsonOptions));
+            () => QueryCommandRunner.RunBatch(["--db", dbPath], JsonOptions));
 
         Assert.Equal(CommandExitCodes.Success, exitCode);
         Assert.Equal(string.Empty, stderr);
@@ -75,7 +76,7 @@ public partial class QueryCommandRunnerTests
 
         var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
             ["--db", dbPath, "--path", "src/context.cs", "--json", "--", "--context=2"],
-            _jsonOptions));
+            JsonOptions));
 
         Assert.Equal(CommandExitCodes.Success, exitCode);
         Assert.Equal(string.Empty, stderr);
@@ -91,7 +92,7 @@ public partial class QueryCommandRunnerTests
     {
         var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
             ["needle", "--path", "src/**", "--context", value],
-            _jsonOptions));
+            JsonOptions));
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
         Assert.Contains("--context", stderr, StringComparison.Ordinal);
@@ -104,7 +105,7 @@ public partial class QueryCommandRunnerTests
     {
         var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
             ["needle", "--path", "src/**", "--format", "compact", "--context", "1"],
-            _jsonOptions));
+            JsonOptions));
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
         Assert.Contains("--context", stderr, StringComparison.Ordinal);
