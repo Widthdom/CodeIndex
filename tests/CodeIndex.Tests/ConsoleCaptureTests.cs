@@ -16,6 +16,7 @@ public class ConsoleCaptureTests
             typeof(DiffCommandHelpersTests),
             typeof(ExportImportCommandRunnerCancellationTests),
             typeof(LicensePolicyTests),
+            typeof(McpAuditLogTests),
             typeof(ProgramCliTests),
             typeof(SymbolExtractorTests),
             typeof(TestTelemetryTests),

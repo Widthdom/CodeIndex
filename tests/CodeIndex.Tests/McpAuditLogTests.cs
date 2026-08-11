@@ -13,6 +13,7 @@ namespace CodeIndex.Tests;
 /// MCP audit ログ配線の統合テスト (#1562)。実際の AuditLogSink を組み込んだ McpServer を駆動し、
 /// ディスク上の JSONL レコードがワイヤーレスポンスと一致することを確認する。
 /// </summary>
+[Collection("Console sensitive")]
 public class McpAuditLogTests : IDisposable
 {
     private readonly string _projectRoot;
