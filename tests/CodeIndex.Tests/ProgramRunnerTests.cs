@@ -16,8 +16,7 @@ using CodeIndex.Models;
 
 namespace CodeIndex.Tests;
 
-[Collection("SQLite pool sensitive")]
-public class ProgramRunnerTests
+public class ProgramRunnerProjectPathTests
 {
     [Theory]
     [InlineData("foo.cs", false)]
@@ -48,7 +47,11 @@ public class ProgramRunnerTests
 
         Assert.True(ProgramRunner.IsProjectPathArg(arg));
     }
+}
 
+[Collection("SQLite pool sensitive")]
+public class ProgramRunnerTests
+{
     [Fact]
     public void ResolveMcpHttpBearerTokenFromEnvironment_HttpTokenWinsThenFallsBackToGeneric()
     {
