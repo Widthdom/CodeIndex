@@ -1059,12 +1059,14 @@ Do not add mutable static caches, shared `StringBuilder` instances, reused `Matc
 
 `symbols.kind`, `symbols.container_kind`, and `symbol_references.container_kind` use the public symbol kind taxonomy below. New extractors must register new kind values in `SymbolKindCatalog` before writing them so schema checks, writer validation, CLI filters, and downstream JSON consumers stay aligned.
 
-The ordered `SymbolKinds` and `ReferenceKinds` arrays are process-static schema and
-enumeration contracts; treat their elements as immutable after type initialization.
-`IsValidSymbolKind` and `IsValidReferenceKind` use immutable Ordinal lookup sets so
-per-row writer validation stays constant-time across every indexed language. Add new
-values in the catalog source and update the exhaustive catalog and schema-parity tests;
-do not mutate the public arrays at runtime.
+The ordered `SymbolKinds` and `ReferenceKinds` arrays remain public compatibility
+snapshots; callers must treat their elements as immutable after type initialization.
+A private canonical ordered taxonomy is the sole source for immutable Ordinal writer
+lookups, SQLite schema checks and migrations, and ctags filters. This keeps those
+internal contracts aligned even if legacy consumer code accidentally replaces an
+element in a public array. Add new values in the catalog source and update the
+exhaustive catalog, schema-parity, and public-mutation isolation tests; do not mutate
+the public arrays at runtime.
 
 | Kind | Current producers / meaning | Graph behavior |
 |---|---|---|
@@ -4789,11 +4791,12 @@ regression には、scope rule の focused correctness test と、ユーザー�
 書き込み前に `SymbolKindCatalog` へ登録し、schema check、writer validation、CLI
 filter、downstream JSON consumer が同じ値を理解できるようにしてください。
 
-順序付きの `SymbolKinds` / `ReferenceKinds` array は process-static な schema・列挙契約であり、
-型初期化後は要素を immutable として扱います。`IsValidSymbolKind` と
-`IsValidReferenceKind` は immutable な Ordinal lookup set を使い、全インデックス対象言語の
-行ごとの writer validation を定数時間に保ちます。値を追加する場合は catalog source を変更し、
-catalog 全件と schema parity の test も更新してください。公開 array を実行時に変更してはいけません。
+順序付きの `SymbolKinds` / `ReferenceKinds` array は公開互換 snapshot として維持し、caller は
+型初期化後の要素を immutable として扱います。private な canonical 順序付き taxonomy だけを、
+immutable な Ordinal writer lookup、SQLite schema check / migration、ctags filter の source にします。
+そのため legacy consumer が公開 array の要素を誤って置換しても、内部契約は同期したままです。
+値を追加する場合は catalog source を変更し、catalog 全件、schema parity、公開 mutation 隔離の
+test も更新してください。公開 array を実行時に変更してはいけません。
 
 | Kind | 現在の producer / 意味 | Graph behavior |
 |---|---|---|

@@ -8,7 +8,7 @@ namespace CodeIndex.Models;
 /// </summary>
 public static class SymbolKindCatalog
 {
-    public static readonly string[] SymbolKinds =
+    private static readonly string[] CanonicalSymbolKinds =
     [
         "accessor",
         "add",
@@ -83,6 +83,13 @@ public static class SymbolKindCatalog
         "workdir",
     ];
 
+    // Preserve the public field and ordered array surface for compatibility, but do not use
+    // this mutable array as an internal source of truth. Callers have historically been able
+    // to replace individual elements even though the field itself is readonly.
+    // 公開 field と順序付き array の互換 surface は維持するが、この mutable array を内部の
+    // source of truth にはしない。field 自体は readonly でも caller は従来から要素を置換できる。
+    public static readonly string[] SymbolKinds = [.. CanonicalSymbolKinds];
+
     /// <summary>
     /// Broad compatibility families for consumers that do not recognize newer semantic kinds.
     /// 新しい semantic kind を認識しない consumer 向けの広い互換 family。
@@ -95,7 +102,7 @@ public static class SymbolKindCatalog
                 ["typealias"] = "type",
             });
 
-    public static readonly string[] ReferenceKinds =
+    private static readonly string[] CanonicalReferenceKinds =
     [
         "annotation",
         "attribute",
@@ -137,18 +144,31 @@ public static class SymbolKindCatalog
         "use",
     ];
 
-    // The schema, extractors, and writer share one process-static taxonomy. Keep the public
-    // arrays for ordered enumeration and schema generation, but validate hot persistence rows
-    // through immutable ordinal lookups instead of scanning the arrays for every symbol and
-    // reference. Taxonomy tables are immutable after type initialization by contract.
-    // schema・extractor・writer は process-static な taxonomy を共有する。順序付き列挙と
-    // schema 生成には公開 array を維持し、hot な永続化行の検証は行ごとの array 走査ではなく
-    // immutable な ordinal lookup を使う。taxonomy table は型初期化後 immutable という契約である。
+    public static readonly string[] ReferenceKinds = [.. CanonicalReferenceKinds];
+
+    // The private ordered snapshots are the sole source for persistence validation, schema
+    // checks/migrations, and ctags filters. Public arrays remain compatibility copies, so an
+    // accidental element mutation cannot split those internal contracts.
+    // private な順序付き snapshot だけを persistence validation、schema check / migration、
+    // ctags filter の source とする。公開 array は互換用 copy のため、誤った要素変更でも
+    // これらの内部契約が分裂しない。
+    internal static IReadOnlyList<string> PersistedSymbolKinds { get; } =
+        Array.AsReadOnly(CanonicalSymbolKinds);
+
+    internal static IReadOnlyList<string> PersistedReferenceKinds { get; } =
+        Array.AsReadOnly(CanonicalReferenceKinds);
+
+    internal static string PersistedSymbolKindSqlCheckInList { get; } =
+        ToSqlCheckInList(CanonicalSymbolKinds);
+
+    internal static string PersistedReferenceKindSqlCheckInList { get; } =
+        ToSqlCheckInList(CanonicalReferenceKinds);
+
     private static readonly FrozenSet<string> ValidSymbolKinds =
-        SymbolKinds.ToFrozenSet(StringComparer.Ordinal);
+        CanonicalSymbolKinds.ToFrozenSet(StringComparer.Ordinal);
 
     private static readonly FrozenSet<string> ValidReferenceKinds =
-        ReferenceKinds.ToFrozenSet(StringComparer.Ordinal);
+        CanonicalReferenceKinds.ToFrozenSet(StringComparer.Ordinal);
 
     public static bool IsValidSymbolKind(string? kind)
         => kind != null && ValidSymbolKinds.Contains(kind);

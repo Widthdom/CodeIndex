@@ -33,7 +33,7 @@ internal static partial class ExportImportCommandRunner
               AND trim(s.name) != ''
               AND s.kind IS NOT NULL
               AND trim(s.kind) != ''
-              AND s.kind IN ({SymbolKindCatalog.ToSqlCheckInList(SymbolKindCatalog.SymbolKinds)})
+              AND s.kind IN ({SymbolKindCatalog.PersistedSymbolKindSqlCheckInList})
             """;
         AppendCtagsFilters(ref sql, filters);
         sql += " ORDER BY s.name COLLATE NOCASE, f.path, COALESCE(s.start_line, s.line, 1)";
@@ -48,7 +48,7 @@ internal static partial class ExportImportCommandRunner
         var skipReasonCases = new List<string>
         {
             $"WHEN s.name IS NULL OR trim(s.name) = '' THEN '{CtagsSkipInvalidName}'",
-            $"WHEN s.kind IS NULL OR trim(s.kind) = '' OR s.kind NOT IN ({SymbolKindCatalog.ToSqlCheckInList(SymbolKindCatalog.SymbolKinds)}) THEN '{CtagsSkipUnsupportedKind}'",
+            $"WHEN s.kind IS NULL OR trim(s.kind) = '' OR s.kind NOT IN ({SymbolKindCatalog.PersistedSymbolKindSqlCheckInList}) THEN '{CtagsSkipUnsupportedKind}'",
         };
         if (filters.GeneratedFileFilterAvailable && !filters.IncludeGenerated)
             skipReasonCases.Add($"WHEN COALESCE(f.generated, 0) != 0 THEN '{CtagsSkipGeneratedCode}'");

@@ -2,6 +2,7 @@
 category: fixed
 affected:
   - src/CodeIndex/Cli/ProgramRunner.cs
+  - src/CodeIndex/Cli/ExportImportCommandRunner.Ctags.cs
   - src/CodeIndex/Cli/IndexCommandRunner.FullScan.ExtractionPipeline.cs
   - src/CodeIndex/Cli/IndexCommandRunner.FullScan.cs
   - src/CodeIndex/Cli/IndexCommandRunner.FullScan.Readiness.cs
@@ -12,6 +13,7 @@ affected:
   - src/CodeIndex/Database/DbWriter.References.cs
   - src/CodeIndex/Database/DbWriter.ReferenceSql.cs
   - src/CodeIndex/Database/DbWriter.ReferenceGraphRefreshScope.cs
+  - src/CodeIndex/Database/DbContext.SchemaInitialization.cs
   - src/CodeIndex/Database/ReferenceSecondaryIndexBulkLoadGuard.cs
   - src/CodeIndex/Indexer/CSharpStaticInterfacePrepass.cs
   - src/CodeIndex/Indexer/CSharpPrepassSymbolArtifactCache.cs
@@ -34,6 +36,7 @@ affected:
   - tests/CodeIndex.Tests/ExtractorPluginRegistryTests.cs
   - tests/CodeIndex.Tests/CSharpPrepassSymbolArtifactCacheTests.cs
   - tests/CodeIndex.Tests/DatabaseTests.cs
+  - tests/CodeIndex.Tests/DbSchemaConstraintTests.cs
   - tests/CodeIndex.Tests/FileIndexerTests.cs
   - tests/CodeIndex.Tests/FreshReferenceResolutionTests.cs
   - tests/CodeIndex.Tests/IndexCommandRunnerFullScanTests.cs
@@ -60,7 +63,7 @@ affected:
 - **Initial indexes skip regex patterns whose mandatory literals are absent** — built-in case-sensitive symbol patterns now opt into an audited, Ordinal two-or-more-character literal gate both at file selection and immediately before each regex call against its exact transformed input. Pattern order and output stay unchanged across C#/Fortran merges, Java/Kotlin annotation stripping, C# wrapped-modifier and incomplete-attribute recovery, C++ same-line members, and CSS reconstructed selector segments; a bare C# static-constructor gate miss still reaches the synthesized `static ...` retry. IgnoreCase, custom/plugin, one-character, and no-common-literal patterns remain ungated.
 - **Symbol workers consume the existing UTF-8 request frames without decoding them twice** — the parent keeps its single `SerializeToUtf8Bytes` write, while the all-language child path now performs bounded newline framing, validation, and deserialization directly from raw standard-input bytes. CRLF/final-EOF framing, protocol and JSON bounds, cancellation, Unicode behavior, and sanitized invalid-UTF-8/JSON errors remain unchanged; the decoded `TextReader` path stays available for diagnostics.
 - **Fresh built-in indexes finalize fold readiness without re-folding every stored name** — when ordinary CLI or MCP indexing owns a database proven empty across `files`, `symbols`, and `symbol_references`, an opaque one-use claim guarded by SQLite `data_version` keeps the final SQL NULL-completeness check while avoiding materializing and re-folding every symbol/reference string. A monotonic accepted-producer generation also invalidates the claim when custom plugins or patterns were transiently active and later removed before readiness. This removes row-count-proportional finalization work and hundreds of MiB of managed allocation on large first indexes; rebuilds, updates, legacy or existing indexes, public writer calls, custom plugins, patterns, post-extraction hooks, reused claims, and externally changed databases fail closed to full value validation.
-- **All-language persistence validates kind taxonomies through immutable lookups** — symbol, reference, and container-kind validation now uses process-static Ordinal sets instead of rescanning the ordered public taxonomy arrays for every persisted row. Schema generation, public taxonomy enumeration, exact case-sensitive membership, invalid-kind diagnostics, and CLI/MCP behavior remain unchanged.
+- **All-language persistence validates kind taxonomies through immutable lookups** — symbol, reference, and container-kind validation now uses process-static Ordinal sets instead of rescanning the ordered public taxonomy arrays for every persisted row. A private canonical ordered taxonomy also drives schema checks, migrations, and ctags filters, so accidental mutation of a public compatibility-array element cannot split validation from persisted constraints. Public taxonomy enumeration, exact case-sensitive membership, invalid-kind diagnostics, and CLI/MCP behavior remain unchanged.
 
 ## 日本語
 
@@ -74,4 +77,4 @@ affected:
 - **初回 index で必須 literal がない正規表現 pattern を skip するようにしました** — built-in の case-sensitive symbol pattern は、file 選択時と各 regex call の直前に、実際の変換済み input に対して監査済みの2文字以上の literal を Ordinal で判定します。C# / Fortran の結合、Java / Kotlin annotation 除去、C# wrapped-modifier / 不完全 attribute recovery、C++ same-line member、CSS の再構成済み selector segment でも pattern 順と出力を変えず、bare C# static constructor の初回 gate miss 後も合成した `static ...` を再試行します。IgnoreCase、custom/plugin、1文字、共通 literal を持たない pattern は gate 対象外です。
 - **symbol worker が既存の UTF-8 request frame を二重 decode せず処理するようにしました** — parent 側の `SerializeToUtf8Bytes` による1回の書き込みは変えず、全言語共通の child 経路で標準入力の raw byte から上限付き newline framing、validation、deserialize を直接行います。CRLF / final EOF の framing、protocol / JSON 上限、cancellation、Unicode の挙動、不正 UTF-8 / JSON の sanitization 済み error は従来どおりで、decoded `TextReader` 経路も診断用に維持します。
 - **新規 built-in index の fold readiness 確定で、保存済みの全名前を再 fold しないようにしました** — 通常の CLI / MCP indexing が `files`、`symbols`、`symbol_references` のすべてが空であると証明された database を所有する場合、SQLite `data_version` で保護された opaque で一回限りの claim により、最後の SQL NULL completeness check を維持しながら、全 symbol / reference string の materialize と再 fold を省きます。単調増加する accepted-producer generation により、custom plugin / pattern が一時的に active になり readiness 前に削除された場合も claim を無効化します。巨大な初回 index で row 数に比例する finalization work と数百 MiB の managed allocation を取り除きます。rebuild、update、legacy または既存 index、public writer 呼び出し、custom plugin / pattern、post-extraction hook、再利用 claim、外部変更された database は fail closed で full value validation に戻ります。
-- **全言語の永続化で kind taxonomy を immutable lookup により検証するようにしました** — symbol、reference、container kind の検証は、永続化する各行で順序付き公開 taxonomy array を再走査せず、process-static な Ordinal set を使います。schema 生成、公開 taxonomy の列挙、case-sensitive な完全一致、invalid-kind 診断、CLI / MCP の挙動は変わりません。
+- **全言語の永続化で kind taxonomy を immutable lookup により検証するようにしました** — symbol、reference、container kind の検証は、永続化する各行で順序付き公開 taxonomy array を再走査せず、process-static な Ordinal set を使います。private な canonical 順序付き taxonomy を schema check、migration、ctags filter にも使うため、公開互換 array の要素が誤って変更されても validation と永続 constraint は分裂しません。公開 taxonomy の列挙、case-sensitive な完全一致、invalid-kind 診断、CLI / MCP の挙動は変わりません。
