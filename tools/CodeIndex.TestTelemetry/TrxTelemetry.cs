@@ -9,7 +9,7 @@ public static class TrxTelemetry
     public const int MaxTrxFiles = 256;
     public const int MaxTraversalDirectories = 256;
     public const int MaxTraversalEntries = 4096;
-    public const long MaxTrxFileBytes = 16 * 1024 * 1024;
+    public const long MaxTrxFileBytes = 64L * 1024 * 1024;
 
     public static TrxTelemetrySummary Load(string resultsDirectory, int top)
     {
@@ -286,9 +286,21 @@ public static class TrxTelemetry
 
     private static void AddTopResult(List<TrxTestResult> results, TrxTestResult result, int limit)
     {
-        results.Add(result);
-        results.Sort(CompareByDurationDescendingThenName);
+        var low = 0;
+        var high = results.Count;
+        while (low < high)
+        {
+            var middle = low + ((high - low) / 2);
+            if (CompareByDurationDescendingThenName(result, results[middle]) < 0)
+                high = middle;
+            else
+                low = middle + 1;
+        }
 
+        if (low >= limit)
+            return;
+
+        results.Insert(low, result);
         if (results.Count > limit)
             results.RemoveAt(limit);
     }

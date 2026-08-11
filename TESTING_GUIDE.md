@@ -74,7 +74,7 @@ Use the full suite by default. Use targeted filters only while iterating locally
 - CI matrix contract tests build each expected lane through one shared lane assertion. Keep OS/framework/SDK/coverage/shard/filter values explicit at the call sites instead of copying the full YAML block for every lane.
 - Workflow path filters do not repeat individual Markdown files already covered by `**.md`; keep equivalent push and pull-request filters aligned. Build/Test and CodeQL also ignore license text paths owned by the focused license-policy workflow.
 - Test workflows group pull-request runs by workflow and pull request, use a unique run ID otherwise, and cancel only superseded pull-request runs so push, schedule, and manual runs remain independent.
-- TRX telemetry summarization reuses the Release telemetry tool already built through the test project's direct reference and must not restore or build it again after the test step.
+- TRX telemetry summarization reuses the Release telemetry tool already built through the test project's direct reference and must not restore or build it again after the test step. Its streaming reader accepts up to 64 MiB per TRX so the current full suite remains observable while retaining a bounded XML-document guard; bounded slow/failure lists use ordered insertion instead of re-sorting on every result.
 - The changelog-fragments workflow caches packages from the changelog tool lock file, performs one locked restore, and validates with `dotnet run --no-restore`.
 - The focused license-policy workflow caches NuGet packages, performs a locked `net8.0`-only restore, and runs its filtered tests with `--no-restore` so dependency resolution is not repeated.
 - The C# CodeQL lane uses setup-dotnet's lock-file-keyed NuGet cache; the Actions-only lane skips both SDK setup and package caching.
@@ -1109,7 +1109,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - CI matrix の contract test は、期待する各 lane を1つの共有 lane assertion で組み立てます。lane ごとに YAML block 全体を複製せず、OS/framework/SDK/coverage/shard/filter の値は call site に明示してください。
 - workflow path filter では `**.md` がすでに対象とする個別 Markdown file を重複して列挙せず、同等の push / pull-request filter を同期させます。Build/Test と CodeQL は focused license-policy workflow が所有する license text path も無視します。
 - test workflow は pull-request run を workflow と pull request ごとに group 化し、それ以外は一意な run ID を使ってください。古い pull-request run だけを cancel し、push、schedule、manual run は独立させます。
-- TRX telemetry summary は test project の direct reference 経由で build 済みの Release telemetry tool を再利用し、test step 後に restore/build を繰り返さないでください。
+- TRX telemetry summary は test project の direct reference 経由で build 済みの Release telemetry tool を再利用し、test step 後に restore/build を繰り返さないでください。streaming reader は TRX ごとに 64 MiB まで受け入れ、現行 full suite を観測可能にしつつ XML document guard を有界に保ちます。上限付き slow/failure list は result ごとの再 sort ではなく ordered insertion を使ってください。
 - changelog-fragments workflow は changelog tool の lock file を使って package を cache し、locked restore を1回行ってから `dotnet run --no-restore` で検証してください。
 - focused license-policy workflow は NuGet package を cache し、`net8.0` だけを locked restore した後、dependency resolution を繰り返さないよう filtered test を `--no-restore` で実行します。
 - C# CodeQL lane は setup-dotnet の lock-file-keyed NuGet cache を使い、Actions だけの lane は SDK setup と package cache の両方を skip します。
