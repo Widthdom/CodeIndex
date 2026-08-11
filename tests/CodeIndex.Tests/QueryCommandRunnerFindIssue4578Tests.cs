@@ -1,9 +1,10 @@
 using System.Text.Json;
 using CodeIndex.Cli;
+using static CodeIndex.Tests.QueryCommandTestSupport;
 
 namespace CodeIndex.Tests;
 
-public partial class QueryCommandRunnerTests
+public class QueryCommandRunnerFindIssue4578Tests
 {
     [Fact]
     public void RunFind_AllScopeRowsAndCountsExposeTerminalScanStateAndPartialOptIn_Issue4578()
@@ -16,7 +17,7 @@ public partial class QueryCommandRunnerTests
 
             var (rowExitCode, rowStdout, rowStderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
                 ["alpha", "--db", dbPath, "--all", "--json", "--line-scan-limit", "1"],
-                _jsonOptions));
+                JsonOptions));
 
             Assert.Equal(CommandExitCodes.PartialResult, rowExitCode);
             Assert.Equal(string.Empty, rowStderr);
@@ -29,7 +30,7 @@ public partial class QueryCommandRunnerTests
 
             var (allowedRowExitCode, allowedRowStdout, allowedRowStderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
                 ["alpha", "--db", dbPath, "--all", "--json", "--line-scan-limit", "1", "--allow-partial"],
-                _jsonOptions));
+                JsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, allowedRowExitCode);
             Assert.Equal(string.Empty, allowedRowStderr);
@@ -38,7 +39,7 @@ public partial class QueryCommandRunnerTests
 
             var (countExitCode, countStdout, countStderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
                 ["alpha", "--db", dbPath, "--all", "--json", "--count", "--line-scan-limit", "1"],
-                _jsonOptions));
+                JsonOptions));
 
             Assert.Equal(CommandExitCodes.PartialResult, countExitCode);
             Assert.Equal(string.Empty, countStderr);
@@ -47,7 +48,7 @@ public partial class QueryCommandRunnerTests
 
             var (allowedCountExitCode, allowedCountStdout, allowedCountStderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
                 ["alpha", "--db", dbPath, "--all", "--json", "--count", "--line-scan-limit", "1", "--allow-partial"],
-                _jsonOptions));
+                JsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, allowedCountExitCode);
             Assert.Equal(string.Empty, allowedCountStderr);
@@ -56,7 +57,7 @@ public partial class QueryCommandRunnerTests
 
             var (completeExitCode, completeStdout, completeStderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
                 ["alpha", "--db", dbPath, "--all", "--json"],
-                _jsonOptions));
+                JsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, completeExitCode);
             Assert.Equal(string.Empty, completeStderr);
@@ -72,7 +73,7 @@ public partial class QueryCommandRunnerTests
 
             var (limitedExitCode, limitedStdout, limitedStderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
                 ["alpha", "--db", dbPath, "--all", "--json", "--limit", "1"],
-                _jsonOptions));
+                JsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, limitedExitCode);
             Assert.Equal(string.Empty, limitedStderr);
@@ -119,7 +120,7 @@ public partial class QueryCommandRunnerTests
                 var args = new List<string> { "alpha", "--db", dbPath, "--all" };
                 args.AddRange(formatArgs);
                 var (exitCode, stdout, stderr) = CaptureConsole(() =>
-                    QueryCommandRunner.RunFind([.. args], _jsonOptions));
+                    QueryCommandRunner.RunFind([.. args], JsonOptions));
 
                 Assert.Equal(CommandExitCodes.UsageError, exitCode);
                 Assert.Equal(string.Empty, stdout);
@@ -129,7 +130,7 @@ public partial class QueryCommandRunnerTests
             var (normalizedExitCode, normalizedStdout, normalizedStderr) = CaptureConsole(() =>
                 QueryCommandRunner.RunFind(
                     ["alpha", "--db", dbPath, "--all", "--format", "text", "--json"],
-                    _jsonOptions));
+                    JsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, normalizedExitCode);
             Assert.Equal(string.Empty, normalizedStderr);
@@ -154,7 +155,7 @@ public partial class QueryCommandRunnerTests
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
                 ["find", "alpha", "--db", dbPath, "--all", "--json-envelope", "--line-scan-limit", "1"],
-                _jsonOptions,
+                JsonOptions,
                 "test"));
 
             Assert.Equal(CommandExitCodes.PartialResult, exitCode);
@@ -172,7 +173,7 @@ public partial class QueryCommandRunnerTests
 
             var (countExitCode, countStdout, countStderr) = CaptureConsole(() => ProgramRunner.Run(
                 ["find", "alpha", "--db", dbPath, "--all", "--count", "--json-envelope", "--line-scan-limit", "1"],
-                _jsonOptions,
+                JsonOptions,
                 "test"));
 
             Assert.Equal(CommandExitCodes.PartialResult, countExitCode);
@@ -201,7 +202,7 @@ public partial class QueryCommandRunnerTests
 
             var (rowExitCode, _, rowStderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
                 ["alpha", "--db", dbPath, "--all", "--line-scan-limit", "1"],
-                _jsonOptions));
+                JsonOptions));
 
             Assert.Equal(CommandExitCodes.PartialResult, rowExitCode);
             Assert.Contains("candidate_file_limit=", rowStderr, StringComparison.Ordinal);
@@ -213,7 +214,7 @@ public partial class QueryCommandRunnerTests
 
             var (countExitCode, _, countStderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
                 ["alpha", "--db", dbPath, "--all", "--count", "--line-scan-limit", "1"],
-                _jsonOptions));
+                JsonOptions));
 
             Assert.Equal(CommandExitCodes.PartialResult, countExitCode);
             Assert.Contains("authoritative_count=false", countStderr, StringComparison.Ordinal);
@@ -222,7 +223,7 @@ public partial class QueryCommandRunnerTests
 
             var (completeExitCode, _, completeStderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
                 ["alpha", "--db", dbPath, "--all", "--limit", "10"],
-                _jsonOptions));
+                JsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, completeExitCode);
             Assert.Contains("scan_complete=true", completeStderr, StringComparison.Ordinal);
@@ -268,5 +269,12 @@ public partial class QueryCommandRunnerTests
             Assert.False(json.GetProperty("authoritative_rows").GetBoolean());
             Assert.Equal(20, json.GetProperty("applied_limit").GetInt32());
         }
+    }
+
+    private static JsonDocument ParseLastNdjsonRecord(string stdout)
+    {
+        var lines = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        Assert.NotEmpty(lines);
+        return JsonDocument.Parse(lines[^1]);
     }
 }
