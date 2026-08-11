@@ -12,6 +12,7 @@ public partial class DbWriter
 
     private static readonly AsyncLocal<Action?> ScopedFoldBackfillRowUpdatedForTesting = new();
     private static readonly AsyncLocal<Action?> ScopedFoldBackfillVerificationForTesting = new();
+    private static readonly AsyncLocal<Action?> ScopedFoldValueVerificationForTesting = new();
 
     internal static Action? FoldBackfillRowUpdatedForTesting
     {
@@ -23,6 +24,12 @@ public partial class DbWriter
     {
         get => ScopedFoldBackfillVerificationForTesting.Value;
         set => ScopedFoldBackfillVerificationForTesting.Value = value;
+    }
+
+    internal static Action? FoldValueVerificationForTesting
+    {
+        get => ScopedFoldValueVerificationForTesting.Value;
+        set => ScopedFoldValueVerificationForTesting.Value = value;
     }
 
     /// <summary>
@@ -134,6 +141,7 @@ public partial class DbWriter
 
     private bool AllFoldedColumnValuesMatchCurrentFoldCore(bool allowMissingValues)
     {
+        FoldValueVerificationForTesting?.Invoke();
         var markdownSymbolIdentityFolds = BuildMarkdownSymbolIdentityFoldMap();
         var hasDisplayNameFolded =
             DbSchemaCache.LoadColumns(_conn, "symbols").Contains("display_name_folded");

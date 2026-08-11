@@ -327,6 +327,13 @@ public partial class McpServer
         // Load current reference-language support before the deferred mutation phase.
         // deferred mutation phase の前に現在の reference-language support を読み込む。
         ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(projectPath);
+        var freshFoldProducerSnapshot =
+            ExtractorPluginRegistry.CaptureFoldProducerReadinessSnapshot(projectPath);
+        var authoritativeFreshFoldRowsClaim = startedWithNoIndexedFilesBeforeRebuild
+            && !rebuild
+            && freshFoldProducerSnapshot.UsesOnlyBuiltInProducers
+            ? writer.TryClaimAuthoritativeFreshFoldRows(requestToken)
+            : null;
         var csharpPrepassSymbolArtifacts = CSharpPrepassSymbolArtifactCache
             .CreateForFreshBuiltInExtraction(
                 startedWithNoIndexedFilesBeforeRebuild && !rebuild);
@@ -2113,13 +2120,23 @@ public partial class McpServer
             var canRestampExistingFoldTrust = foldVersionMatchesCurrent && foldFingerprintMatchesCurrent;
             if (skipped == 0 || canRestampExistingFoldTrust)
             {
+                var currentFoldProducerSnapshot =
+                    ExtractorPluginRegistry.CaptureFoldProducerReadinessSnapshot(projectPath);
+                if (!currentFoldProducerSnapshot.UsesOnlyBuiltInProducers
+                    || currentFoldProducerSnapshot.MutationGeneration
+                        != freshFoldProducerSnapshot.MutationGeneration
+                    || postExtractionHooks.ValueIfCreated?.HasHooks == true)
+                {
+                    authoritativeFreshFoldRowsClaim?.Invalidate();
+                }
                 // The stamp transaction performs the only row verification for the common
                 // current-metadata path and reports whether NULL or stale values blocked it.
                 // current metadata 経路の row 検証は stamp transaction 内の一度だけにまとめ、
                 // NULL と stale value のどちらが妨げたかも保持する。
                 var foldStampResult = writer.MarkFoldReadyWithResult(
                     stampCurrentSymbolExtractorVersions: skipped == 0,
-                    symbolExtractorLanguagesToStamp: skipped == 0 ? indexedSymbolExtractorLanguages : null);
+                    symbolExtractorLanguagesToStamp: skipped == 0 ? indexedSymbolExtractorLanguages : null,
+                    authoritativeFreshRowsClaim: authoritativeFreshFoldRowsClaim);
                 foldReadyAfter = foldStampResult == FoldReadyStampResult.Ready;
                 if (foldStampResult == FoldReadyStampResult.MissingBackfill)
                     foldReadyReason = DegradationReasonCodes.MissingFoldBackfill;

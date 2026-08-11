@@ -176,6 +176,7 @@ public static partial class ExtractorPluginRegistry
                         worker,
                         fullPath,
                         workspaceState: null);
+                    AdvanceAcceptedFoldProducerMutationGeneration();
                     pluginAssemblyCount++;
                     LoadedPluginWorkers.Add(worker);
                     LoadedPluginStagingHandles.Add(staging!);

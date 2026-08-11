@@ -2922,6 +2922,7 @@ public sealed class Caller
         var rebuiltTypeScriptAugmentation = false;
         var refreshCount = 0;
         var foldBackfillVerifications = 0;
+        var foldValueVerifications = 0;
         var languagePresenceChecks = 0;
         var indexedLanguageReads = 0;
         var statReuseLookups = 0;
@@ -2939,6 +2940,7 @@ public sealed class Caller
                 previousRefreshHook?.Invoke();
             };
             DbWriter.FoldBackfillVerificationForTesting = () => foldBackfillVerifications++;
+            DbWriter.FoldValueVerificationForTesting = () => foldValueVerifications++;
             DbWriter.LanguagePresenceCheckForTesting = _ => languagePresenceChecks++;
             DbWriter.IndexedLanguagesReadForTesting = () => indexedLanguageReads++;
             DbWriter.ReusableUnchangedFileLookupForTesting = _ => reusableLookups++;
@@ -2952,6 +2954,7 @@ public sealed class Caller
             Assert.False(rebuiltTypeScriptAugmentation);
             Assert.Equal(1, refreshCount);
             Assert.Equal(1, foldBackfillVerifications);
+            Assert.Equal(0, foldValueVerifications);
             Assert.Equal(0, languagePresenceChecks);
             Assert.Equal(0, indexedLanguageReads);
             Assert.Equal(0, statReuseLookups);
@@ -2960,6 +2963,7 @@ public sealed class Caller
             Assert.Equal(2, json.GetProperty("summary").GetProperty("files_total").GetInt64());
 
             refreshCount = 0;
+            foldValueVerifications = 0;
             var (rebuildExitCode, rebuildJson) = RunAndCaptureJson([
                 projectRoot,
                 "--db",
@@ -2972,6 +2976,7 @@ public sealed class Caller
             Assert.Equal("success", rebuildJson.GetProperty("status").GetString());
             Assert.False(rebuiltTypeScriptAugmentation);
             Assert.Equal(1, refreshCount);
+            Assert.Equal(1, foldValueVerifications);
             using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             Assert.Equal(
                 DbContext.TypeScriptAugmentationVersion.ToString(CultureInfo.InvariantCulture),
@@ -2982,6 +2987,7 @@ public sealed class Caller
             IndexCommandRunner.FullScanTypeScriptAugmentationRebuildForTesting = null;
             DbWriter.MutualRecursionRefreshForTesting = previousRefreshHook;
             DbWriter.FoldBackfillVerificationForTesting = null;
+            DbWriter.FoldValueVerificationForTesting = null;
             DbWriter.LanguagePresenceCheckForTesting = null;
             DbWriter.IndexedLanguagesReadForTesting = null;
             DbWriter.ReusableUnchangedFileLookupForTesting = null;

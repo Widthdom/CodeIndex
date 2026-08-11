@@ -1956,6 +1956,126 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FreshBuiltInSpecialFoldIdentitiesMatchFullValidator()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_fresh_special_fold_identities");
+        var foldValueVerifications = 0;
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "guide.md"),
+                "# Café Guide\n\n## Shared Heading\n\n## Shared Heading\n\n[again](#shared-heading-1)\n");
+            File.WriteAllText(
+                Path.Combine(projectRoot, "service.cs"),
+                "public interface IFoo { void Run(); }\n"
+                + "public class Service : IFoo { void IFoo.Run() { } }\n");
+            File.WriteAllText(
+                Path.Combine(projectRoot, "style.nim"),
+                "proc My_Proc*() = discard\nproc call*() = myProc()\n");
+            File.WriteAllText(
+                Path.Combine(projectRoot, "worker.ts"),
+                "interface Worker { runTask(): void; }\n"
+                + "class Impl implements Worker { runTask(): void {} }\n");
+            File.WriteAllText(
+                Path.Combine(projectRoot, "unicode.py"),
+                "def Straße():\n    return 1\n");
+            DbWriter.FoldValueVerificationForTesting = () => foldValueVerifications++;
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(0, foldValueVerifications);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            var writer = new DbWriter(db.Connection);
+            Assert.True(writer.AllFoldedColumnValuesMatchCurrentFold());
+            Assert.Equal(1, foldValueVerifications);
+            Assert.Equal(
+                DbContext.FoldReadyFlag,
+                db.GetUserVersion() & DbContext.FoldReadyFlag);
+        }
+        finally
+        {
+            DbWriter.FoldValueVerificationForTesting = null;
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FreshFoldClaim_TransientCustomProducerHistoryFailsClosed()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var projectRoot = TestProjectHelper.CreateTempProject(
+                "cdidx_fresh_fold_transient_custom_producer");
+            var foldValueVerifications = 0;
+            var reloaded = 0;
+            ExtractorPluginRegistry.FoldProducerReadinessSnapshot? customSnapshot = null;
+            ExtractorPluginRegistry.FoldProducerReadinessSnapshot? restoredSnapshot = null;
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                File.WriteAllText(
+                    Path.Combine(projectRoot, "app.py"),
+                    "def Straße():\n    return 1\n");
+                var initialSnapshot =
+                    ExtractorPluginRegistry.CaptureFoldProducerReadinessSnapshot(projectRoot);
+                Assert.True(initialSnapshot.UsesOnlyBuiltInProducers);
+
+                DbWriter.FoldValueVerificationForTesting = () => foldValueVerifications++;
+                IndexCommandRunner.FullScanInputSnapshotBarrierForTesting = phase =>
+                {
+                    if (!string.Equals(phase, "before_readiness", StringComparison.Ordinal)
+                        || Interlocked.Exchange(ref reloaded, 1) != 0)
+                    {
+                        return;
+                    }
+
+                    var patternsDirectory = Path.Combine(projectRoot, ".cdidx", "patterns");
+                    Directory.CreateDirectory(patternsDirectory);
+                    var patternPath = Path.Combine(patternsDirectory, "transient.yaml");
+                    File.WriteAllText(
+                        patternPath,
+                        "language: \"transientdsl\"\n"
+                        + "extensions:\n  - extension: \".transient\"\n"
+                        + "patterns:\n  - kind: \"class\"\n"
+                        + "    regex: \"^entity (?<name>\\\\w+)\"\n");
+                    ExtractorPluginRegistry.ReloadPatternConfigsForProjectRoot(projectRoot);
+                    customSnapshot =
+                        ExtractorPluginRegistry.CaptureFoldProducerReadinessSnapshot(projectRoot);
+
+                    File.Delete(patternPath);
+                    Directory.Delete(patternsDirectory);
+                    ExtractorPluginRegistry.ReloadPatternConfigsForProjectRoot(projectRoot);
+                    restoredSnapshot =
+                        ExtractorPluginRegistry.CaptureFoldProducerReadinessSnapshot(projectRoot);
+                };
+
+                var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal("success", json.GetProperty("status").GetString());
+                Assert.Equal(1, reloaded);
+                Assert.False(customSnapshot!.Value.UsesOnlyBuiltInProducers);
+                Assert.True(restoredSnapshot!.Value.UsesOnlyBuiltInProducers);
+                Assert.NotEqual(
+                    initialSnapshot.MutationGeneration,
+                    restoredSnapshot.Value.MutationGeneration);
+                Assert.Equal(1, foldValueVerifications);
+            }
+            finally
+            {
+                IndexCommandRunner.FullScanInputSnapshotBarrierForTesting = null;
+                DbWriter.FoldValueVerificationForTesting = null;
+                ExtractorPluginRegistry.ResetForTests();
+                DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
     public void Run_FullScanAfterHeadChange_WithPostExtractionHooksKeepsSequentialReferences()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_head_changed_hooks_sequential");
@@ -1963,6 +2083,8 @@ public partial class IndexCommandRunnerTests
             "cdidx_head_changed_hook_extensions_sequential");
         bool? parallelized = null;
         var originalHooksDir = Environment.GetEnvironmentVariable("CDIDX_HOOKS_DIR");
+        var previousFoldValueVerification = DbWriter.FoldValueVerificationForTesting;
+        var foldValueVerifications = 0;
         try
         {
             var hooksDir = Path.Combine(extensionProject.Root, "hooks");
@@ -1973,6 +2095,11 @@ public partial class IndexCommandRunnerTests
                 hookAssemblyPath,
                 Path.Combine(hooksDir, Path.GetFileName(hookAssemblyPath)));
             Environment.SetEnvironmentVariable("CDIDX_HOOKS_DIR", hooksDir);
+            DbWriter.FoldValueVerificationForTesting = () =>
+            {
+                foldValueVerifications++;
+                previousFoldValueVerification?.Invoke();
+            };
 
             RunGit(projectRoot, "init");
             File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { public void Run() { } }\n");
@@ -1985,6 +2112,8 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(
                 initialStatus == "partial" ? CommandExitCodes.PartialResult : CommandExitCodes.Success,
                 initialExitCode);
+            Assert.Equal(initialStatus == "success" ? 1 : 0, foldValueVerifications);
+            DbWriter.FoldValueVerificationForTesting = previousFoldValueVerification;
 
             File.AppendAllText(Path.Combine(projectRoot, "app.cs"), "public class Next { public void Run() { } }\n");
             RunGit(projectRoot, "add", "app.cs");
@@ -2004,6 +2133,7 @@ public partial class IndexCommandRunnerTests
         finally
         {
             Environment.SetEnvironmentVariable("CDIDX_HOOKS_DIR", originalHooksDir);
+            DbWriter.FoldValueVerificationForTesting = previousFoldValueVerification;
             IndexCommandRunner.FullScanExtractionSchedulingForTesting = null;
             SqliteConnection.ClearAllPools();
             GC.Collect();

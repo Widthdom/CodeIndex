@@ -10597,6 +10597,222 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void MarkFoldReady_AuthoritativeFreshClaimSkipsValueVerificationOnceForOwnerWrites()
+    {
+        var claim = _writer.TryClaimAuthoritativeFreshFoldRows();
+        Assert.NotNull(claim);
+
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/fresh.py",
+            Lang = "python",
+            Size = 30,
+            Lines = 3,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertSymbols([
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "Straße",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 1,
+            },
+        ]);
+
+        var nullChecks = 0;
+        var valueChecks = 0;
+        try
+        {
+            DbWriter.FoldBackfillVerificationForTesting = () => nullChecks++;
+            DbWriter.FoldValueVerificationForTesting = () => valueChecks++;
+
+            Assert.Equal(
+                FoldReadyStampResult.Ready,
+                _writer.MarkFoldReadyWithResult(authoritativeFreshRowsClaim: claim));
+            Assert.Equal(1, nullChecks);
+            Assert.Equal(0, valueChecks);
+
+            Assert.Equal(
+                FoldReadyStampResult.Ready,
+                _writer.MarkFoldReadyWithResult(authoritativeFreshRowsClaim: claim));
+            Assert.Equal(2, nullChecks);
+            Assert.Equal(1, valueChecks);
+            Assert.Null(_writer.TryClaimAuthoritativeFreshFoldRows());
+        }
+        finally
+        {
+            DbWriter.FoldBackfillVerificationForTesting = null;
+            DbWriter.FoldValueVerificationForTesting = null;
+        }
+    }
+
+    [Fact]
+    public void MarkFoldReady_AuthoritativeFreshClaimStillRejectsNullFoldValues()
+    {
+        var claim = _writer.TryClaimAuthoritativeFreshFoldRows();
+        Assert.NotNull(claim);
+
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/fresh_null.py",
+            Lang = "python",
+            Size = 30,
+            Lines = 3,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertSymbols([
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "Straße",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 1,
+            },
+        ]);
+        using (var command = _db.Connection.CreateCommand())
+        {
+            command.CommandText = "UPDATE symbols SET name_folded = NULL";
+            Assert.Equal(1, command.ExecuteNonQuery());
+        }
+
+        var nullChecks = 0;
+        var valueChecks = 0;
+        try
+        {
+            DbWriter.FoldBackfillVerificationForTesting = () => nullChecks++;
+            DbWriter.FoldValueVerificationForTesting = () => valueChecks++;
+
+            Assert.Equal(
+                FoldReadyStampResult.MissingBackfill,
+                _writer.MarkFoldReadyWithResult(authoritativeFreshRowsClaim: claim));
+            Assert.Equal(1, nullChecks);
+            Assert.Equal(0, valueChecks);
+            Assert.Equal(0, _db.GetUserVersion() & DbContext.FoldReadyFlag);
+        }
+        finally
+        {
+            DbWriter.FoldBackfillVerificationForTesting = null;
+            DbWriter.FoldValueVerificationForTesting = null;
+        }
+    }
+
+    [Fact]
+    public void MarkFoldReady_AuthoritativeFreshClaimFailsClosedAfterExternalCommit()
+    {
+        var claim = _writer.TryClaimAuthoritativeFreshFoldRows();
+        Assert.NotNull(claim);
+
+        using (var externalDb = new DbContext(DbOpenIntent.WriteIndex, _dbPath))
+        {
+            externalDb.InitializeSchema();
+            var externalWriter = new DbWriter(externalDb.Connection);
+            var fileId = externalWriter.UpsertFile(new FileRecord
+            {
+                Path = "src/external.py",
+                Lang = "python",
+                Size = 30,
+                Lines = 3,
+                Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+            });
+            externalWriter.InsertSymbols([
+                new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "function",
+                    Name = "Straße",
+                    Line = 1,
+                    StartLine = 1,
+                    EndLine = 1,
+                },
+            ]);
+            using var corrupt = externalDb.Connection.CreateCommand();
+            corrupt.CommandText = "UPDATE symbols SET name_folded = 'not-current'";
+            Assert.Equal(1, corrupt.ExecuteNonQuery());
+        }
+
+        var valueChecks = 0;
+        try
+        {
+            DbWriter.FoldValueVerificationForTesting = () => valueChecks++;
+
+            Assert.Equal(
+                FoldReadyStampResult.NonCurrentFoldValues,
+                _writer.MarkFoldReadyWithResult(authoritativeFreshRowsClaim: claim));
+            Assert.Equal(1, valueChecks);
+            Assert.Equal(0, _db.GetUserVersion() & DbContext.FoldReadyFlag);
+        }
+        finally
+        {
+            DbWriter.FoldValueVerificationForTesting = null;
+        }
+    }
+
+    [Fact]
+    public void MarkFoldReady_AuthoritativeFreshClaimFailsClosedForDifferentWriter()
+    {
+        var claim = _writer.TryClaimAuthoritativeFreshFoldRows();
+        Assert.NotNull(claim);
+
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/wrong_owner.py",
+            Lang = "python",
+            Size = 30,
+            Lines = 3,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertSymbols([
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "Straße",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 1,
+            },
+        ]);
+        using (var corrupt = _db.Connection.CreateCommand())
+        {
+            corrupt.CommandText = "UPDATE symbols SET name_folded = 'not-current'";
+            Assert.Equal(1, corrupt.ExecuteNonQuery());
+        }
+
+        var otherWriter = new DbWriter(_db.Connection);
+        var valueChecks = 0;
+        try
+        {
+            DbWriter.FoldValueVerificationForTesting = () => valueChecks++;
+
+            Assert.Equal(
+                FoldReadyStampResult.NonCurrentFoldValues,
+                otherWriter.MarkFoldReadyWithResult(authoritativeFreshRowsClaim: claim));
+            Assert.Equal(1, valueChecks);
+            Assert.Equal(0, _db.GetUserVersion() & DbContext.FoldReadyFlag);
+        }
+        finally
+        {
+            DbWriter.FoldValueVerificationForTesting = null;
+        }
+    }
+
+    [Fact]
+    public void TryClaimAuthoritativeFreshFoldRows_PreCancelledRequestLeavesWriterUsable()
+    {
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        Assert.Throws<OperationCanceledException>(() =>
+            _writer.TryClaimAuthoritativeFreshFoldRows(cancellation.Token));
+        Assert.NotNull(_writer.TryClaimAuthoritativeFreshFoldRows());
+    }
+
+    [Fact]
     public void MarkFoldReady_LeavesFoldReadyUnsetWhenNullFoldedRowExists()
     {
         // Reproduces issue #1535: a concurrent writer inserting a NULL-folded row between

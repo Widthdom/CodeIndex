@@ -235,6 +235,13 @@ public static partial class IndexCommandRunner
 
         ThrowIfFullScanCancelled(0, files.Count);
         ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(projectRoot);
+        var freshFoldProducerSnapshot =
+            ExtractorPluginRegistry.CaptureFoldProducerReadinessSnapshot(projectRoot);
+        var authoritativeFreshFoldRowsClaim = !options.Rebuild
+            && startedWithNoIndexedFiles
+            && freshFoldProducerSnapshot.UsesOnlyBuiltInProducers
+            ? writer.TryClaimAuthoritativeFreshFoldRows(cancellationToken)
+            : null;
         var purgedRefs = 0;
 
         int processed = 0, skipped = 0, warnings = warningList.Count, errors = errorList.Count;
@@ -942,6 +949,7 @@ public static partial class IndexCommandRunner
                 FilesCount = files.Count,
                 ForceExtractorRefresh = forceExtractorRefresh,
                 StartedWithNoIndexedFiles = startedWithNoIndexedFiles,
+                AuthoritativeFreshFoldRowsClaim = authoritativeFreshFoldRowsClaim,
                 PriorSymbolsOnlyGraphOmitted =
                     priorSymbolsOnlyGraphOmitted,
                 SymbolKindFilterMatchesPrior =
@@ -1313,6 +1321,8 @@ public static partial class IndexCommandRunner
             Purged = purged,
             ScanHadErrors = scanHadErrors,
             StartedWithNoIndexedFiles = startedWithNoIndexedFiles,
+            AuthoritativeFreshFoldRowsClaim = authoritativeFreshFoldRowsClaim,
+            FreshFoldProducerSnapshot = freshFoldProducerSnapshot,
             HasCSharpFilesAfter = hasCSharpFilesAfter,
             CSharpSourceEvidenceComplete = csharpSourceEvidenceComplete,
             CSharpSourceEvidenceForStamp = csharpSourceEvidenceForStamp,

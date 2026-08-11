@@ -1090,6 +1090,7 @@ public class ExtractorPluginRegistryTests
 
                 Assert.Equal("projectdsl", extensions[".projecttoy"]);
                 Assert.False(extensions.ContainsKey(".cwdtoy"));
+                Assert.False(ExtractorPluginRegistry.UsesOnlyBuiltInFoldProducers(projectRoot));
             }
             finally
             {
@@ -1097,6 +1098,45 @@ public class ExtractorPluginRegistryTests
                 ExtractorPluginRegistry.ResetForTests();
                 TestProjectHelper.DeleteDirectory(projectRoot);
                 TestProjectHelper.DeleteDirectory(cwdRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void FoldProducerReadinessSnapshot_DiagnosticAndMissingReloadDoNotAdvanceGeneration()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject(
+            "extractor_registry_fold_generation_diagnostics");
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                var initial =
+                    ExtractorPluginRegistry.CaptureFoldProducerReadinessSnapshot(projectRoot);
+
+                ExtractorPluginRegistry.ReloadPatternConfigsForProjectRoot(
+                    projectRoot,
+                    directoryExists: static (_, _) => false);
+                var afterMissing =
+                    ExtractorPluginRegistry.CaptureFoldProducerReadinessSnapshot(projectRoot);
+                Assert.True(afterMissing.UsesOnlyBuiltInProducers);
+                Assert.Equal(initial.MutationGeneration, afterMissing.MutationGeneration);
+
+                WritePatternConfig(
+                    projectRoot,
+                    "broken.yaml",
+                    "language: \"broken\"\nextensions:\n  - extension: \".broken\"\n");
+                ExtractorPluginRegistry.ReloadPatternConfigsForProjectRoot(projectRoot);
+                var afterDiagnostic =
+                    ExtractorPluginRegistry.CaptureFoldProducerReadinessSnapshot(projectRoot);
+                Assert.True(afterDiagnostic.UsesOnlyBuiltInProducers);
+                Assert.Equal(initial.MutationGeneration, afterDiagnostic.MutationGeneration);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.DeleteDirectory(projectRoot);
             }
         }
     }

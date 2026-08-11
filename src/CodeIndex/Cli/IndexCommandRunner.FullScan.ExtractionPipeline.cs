@@ -23,6 +23,11 @@ public static partial class IndexCommandRunner
         internal required int FilesCount { get; init; }
         internal required bool ForceExtractorRefresh { get; init; }
         internal required bool StartedWithNoIndexedFiles { get; init; }
+        internal DbWriter.AuthoritativeFreshFoldRowsClaim? AuthoritativeFreshFoldRowsClaim
+        {
+            get;
+            init;
+        }
         internal required bool PriorSymbolsOnlyGraphOmitted { get; init; }
         internal required bool SymbolKindFilterMatchesPrior { get; init; }
         internal required bool CSharpIndexedProjectRootCompatible
@@ -138,6 +143,8 @@ public static partial class IndexCommandRunner
             context.Options.MaxFileSizeBytes,
             maxSymbolCount: context.Options.MaxSymbolsPerFile + 1,
             maxReferenceCount: context.Options.MaxReferencesPerFile + 1);
+        if (postExtractionHooks.HasHooks)
+            context.AuthoritativeFreshFoldRowsClaim?.Invalidate();
         var scheduling = ResolveFullScanExtractionScheduling(
             context,
             postExtractionHooks);

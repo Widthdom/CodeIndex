@@ -8069,6 +8069,7 @@ public partial class McpServerTests
         var rebuiltTypeScriptAugmentation = false;
         var refreshCount = 0;
         var foldBackfillVerifications = 0;
+        var foldValueVerifications = 0;
         var languagePresenceChecks = 0;
         var indexedLanguageReads = 0;
         var statReuseLookups = 0;
@@ -8087,6 +8088,7 @@ public partial class McpServerTests
                 previousRefreshHook?.Invoke();
             };
             DbWriter.FoldBackfillVerificationForTesting = () => foldBackfillVerifications++;
+            DbWriter.FoldValueVerificationForTesting = () => foldValueVerifications++;
             DbWriter.LanguagePresenceCheckForTesting = _ => languagePresenceChecks++;
             DbWriter.IndexedLanguagesReadForTesting = () => indexedLanguageReads++;
             DbWriter.ReusableUnchangedFileLookupForTesting = _ => reusableLookups++;
@@ -8099,6 +8101,7 @@ public partial class McpServerTests
             Assert.False(rebuiltTypeScriptAugmentation);
             Assert.Equal(1, refreshCount);
             Assert.Equal(1, foldBackfillVerifications);
+            Assert.Equal(0, foldValueVerifications);
             Assert.Equal(0, languagePresenceChecks);
             Assert.Equal(0, indexedLanguageReads);
             Assert.Equal(0, statReuseLookups);
@@ -8107,12 +8110,14 @@ public partial class McpServerTests
             Assert.Equal(2, response["result"]!["structuredContent"]!["summary"]!["files"]!.GetValue<long>());
 
             refreshCount = 0;
+            foldValueVerifications = 0;
             var rebuildResponse = CallIndex(server, fixtureDir, args => args["rebuild"] = true);
             Assert.False(
                 rebuildResponse["result"]?["isError"]?.GetValue<bool>() ?? false,
                 rebuildResponse.ToJsonString());
             Assert.False(rebuiltTypeScriptAugmentation);
             Assert.Equal(1, refreshCount);
+            Assert.Equal(1, foldValueVerifications);
             using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             db.TryMigrateForRead();
             Assert.Equal(
@@ -8124,6 +8129,7 @@ public partial class McpServerTests
             McpServer.McpIndexTypeScriptAugmentationRebuildForTesting = null;
             DbWriter.MutualRecursionRefreshForTesting = previousRefreshHook;
             DbWriter.FoldBackfillVerificationForTesting = null;
+            DbWriter.FoldValueVerificationForTesting = null;
             DbWriter.LanguagePresenceCheckForTesting = null;
             DbWriter.IndexedLanguagesReadForTesting = null;
             DbWriter.ReusableUnchangedFileLookupForTesting = null;
@@ -10103,6 +10109,7 @@ public partial class McpServerTests
         var previousContentLoadHook = McpServer.McpIndexFileContentLoadForTesting;
         var previousArtifactHook =
             CSharpPrepassSymbolArtifactCache.EventForTesting;
+        var previousFoldValueVerification = DbWriter.FoldValueVerificationForTesting;
         var artifactEvents =
             new ConcurrentQueue<CSharpPrepassSymbolArtifactCacheEvent>();
         using var extensionProject = TestProjectHelper.CreateExecutableExtensionTestProjectScope(
@@ -10113,10 +10120,16 @@ public partial class McpServerTests
         var matchingLookupBuilds = 0;
         var noOpCSharpPrepassCount = 0;
         var noOpContentLoadCount = 0;
+        var foldValueVerifications = 0;
         try
         {
             CSharpPrepassSymbolArtifactCache.EventForTesting =
                 artifactEvents.Enqueue;
+            DbWriter.FoldValueVerificationForTesting = () =>
+            {
+                foldValueVerifications++;
+                previousFoldValueVerification?.Invoke();
+            };
             DbWriter.CSharpContractPreflightForTesting = () =>
             {
                 preflightCount++;
@@ -10162,6 +10175,8 @@ public partial class McpServerTests
             using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
             var initialResponse = CallIndex(server, fixtureDir);
             Assert.False(initialResponse["result"]?["isError"]?.GetValue<bool>() ?? false, initialResponse.ToJsonString());
+            Assert.Equal(1, foldValueVerifications);
+            DbWriter.FoldValueVerificationForTesting = previousFoldValueVerification;
             Assert.Equal(
                 2,
                 artifactEvents.Count(item => item.Phase == "admitted"));
@@ -10298,6 +10313,7 @@ public partial class McpServerTests
             McpServer.McpIndexFileContentLoadForTesting = previousContentLoadHook;
             CSharpPrepassSymbolArtifactCache.EventForTesting =
                 previousArtifactHook;
+            DbWriter.FoldValueVerificationForTesting = previousFoldValueVerification;
             GC.Collect();
             GC.WaitForPendingFinalizers();
             GC.Collect();

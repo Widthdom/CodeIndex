@@ -1574,6 +1574,25 @@ updates, rebuilds, retained-graph rebuilds, and MCP indexing keep the establishe
 particular, MCP can durably commit per-file batches before graph finalization, so it must retain
 its existing retry semantics until a separately designed recovery contract can cover that state.
 
+Fold readiness has a narrower authoritative-fresh optimization shared by ordinary CLI and MCP
+full indexing. Before the first write, `DbWriter` may issue an opaque, one-shot claim only from a
+`BEGIN IMMEDIATE` snapshot in which `files`, `symbols`, and `symbol_references` are all empty. The
+claim is bound to its writer/connection and captured `PRAGMA data_version`; only that writer may
+consume it once, and an intervening commit from another connection invalidates it. When the
+built-in extractor pipeline completes successfully, finalization may use the claim to omit the
+allocation-heavy read and re-fold of every persisted symbol/reference value, but it still runs
+the SQL NULL-completeness check before stamping FoldReady.
+The run also captures the registry's monotonic accepted-producer mutation generation. Any
+generation change invalidates the claim even if a transient custom producer was later removed and
+the final registry is built-in-only again; staged workspace replacement commits participate in
+that history, while diagnostic-only publication and unchanged missing-directory discovery do not.
+
+This shortcut is deliberately fail-closed. Rebuilds, updates, legacy or existing indexes, public
+`DbWriter` readiness APIs, custom plugins or pattern configurations, post-extraction hooks, incorrectly
+owned or reused claims, and any externally committed database change use the established full
+value validation. The shortcut changes neither the folded values produced during insertion nor
+the readiness transaction and rollback semantics.
+
 For C# explicit-interface members, `symbols.name` remains the short display/discovery alias,
 while `symbols.name_folded` stores the normalized interface qualifier plus terminal method
 generic arity. When that identity differs, `symbols.display_name_folded` stores the short
@@ -5318,6 +5337,26 @@ pendingのまま残り、graph commit後にだけ解除します。既存index�
 rebuild、MCP indexingは従来経路を維持します。特にMCPはgraph finalization前にfile batchをdurable
 commitできるため、その状態を扱う独立したrecovery契約が設計されるまでは既存の再試行semanticsを
 変更してはいけません。
+
+fold readiness には、通常の CLI / MCP full indexing が共有する、より限定的な authoritative-fresh
+最適化があります。最初の書き込み前に、`DbWriter` は `files`、`symbols`、
+`symbol_references` がすべて空である同一の `BEGIN IMMEDIATE` snapshot からのみ、opaque で
+一回限りの claim を発行できます。claim は writer / connection と取得時の
+`PRAGMA data_version` に束縛され、同じ writer が一度だけ consume できます。stamp 決定前に
+別 connection が commit した場合は無効になります。built-in extractor pipeline が正常完了した
+場合、finalization は claim を使って、永続化済みの全 symbol / reference value を読み出して
+再 fold する allocation-heavy な処理を省けますが、FoldReady を stamp する前の SQL による
+NULL completeness check は引き続き実行します。
+run は registry の accepted-producer mutation generation も取得します。一時的な custom producer
+が後で削除され、最終 registry が再び built-in-only になっていても、generation が変化していれば
+claim を無効化します。staged workspace replacement の commit もこの履歴に含めますが、
+diagnostic-only publication と状態が変わらない missing-directory discovery は generation を進めません。
+
+この shortcut は意図的に fail closed です。rebuild、update、legacy または既存 index、public な
+`DbWriter` readiness API、custom plugin / pattern config、post-extraction hook、owner が異なるか
+再利用された claim、外部 connection が commit した database では、従来の full value validation
+を使います。shortcut は insert 時に生成する folded value も、readiness transaction / rollback の
+semantics も変更しません。
 
 C# の明示的 interface member では、`symbols.name` は短い表示用 / discovery alias のままにし、
 `symbols.name_folded` に正規化した interface qualifier と末尾 method の generic arity を
