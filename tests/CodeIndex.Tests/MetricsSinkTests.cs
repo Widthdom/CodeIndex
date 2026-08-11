@@ -5,8 +5,7 @@ using CodeIndex.Cli;
 
 namespace CodeIndex.Tests;
 
-[Collection("SQLite pool sensitive")]
-public class MetricsSinkTests
+public class MetricsSinkArgumentTests
 {
     [Fact]
     public void TryConsumeMetricsFlag_StripsSeparatedFormAndReturnsPath()
@@ -72,6 +71,27 @@ public class MetricsSinkTests
         Assert.Null(ProgramRunner.TryParseLanguageFromArgs(["search", "--", "--lang=csharp"]));
     }
 
+    [Theory]
+    [InlineData(1, 100)]
+    [InlineData(2, 200)]
+    [InlineData(3, 400)]
+    [InlineData(8, 12_800)]
+    [InlineData(9, 25_600)]
+    [InlineData(10, 30_000)]
+    [InlineData(21, 30_000)]
+    public void CalculateRetryDelay_GrowsExponentiallyAndCapsAtThirtySeconds_Issue4552(
+        int consecutiveFailureCount,
+        int expectedMilliseconds)
+    {
+        Assert.Equal(
+            TimeSpan.FromMilliseconds(expectedMilliseconds),
+            MetricsSink.Session.CalculateRetryDelay(consecutiveFailureCount));
+    }
+}
+
+[Collection("SQLite pool sensitive")]
+public class MetricsSinkTests
+{
     [Fact]
     public void Run_WithMetricsFlag_AppendsJsonlRecordForEachInvocation()
     {
@@ -283,23 +303,6 @@ public class MetricsSinkTests
             TestProjectHelper.DeleteFile(metricsPath);
             TestProjectHelper.DeleteDirectory(metricsPath);
         }
-    }
-
-    [Theory]
-    [InlineData(1, 100)]
-    [InlineData(2, 200)]
-    [InlineData(3, 400)]
-    [InlineData(8, 12_800)]
-    [InlineData(9, 25_600)]
-    [InlineData(10, 30_000)]
-    [InlineData(21, 30_000)]
-    public void CalculateRetryDelay_GrowsExponentiallyAndCapsAtThirtySeconds_Issue4552(
-        int consecutiveFailureCount,
-        int expectedMilliseconds)
-    {
-        Assert.Equal(
-            TimeSpan.FromMilliseconds(expectedMilliseconds),
-            MetricsSink.Session.CalculateRetryDelay(consecutiveFailureCount));
     }
 
     [Fact]
