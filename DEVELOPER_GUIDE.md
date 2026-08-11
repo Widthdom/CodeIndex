@@ -421,10 +421,15 @@ rebuilds and symbols-only runs; MCP evaluates the same empty-database condition
 before any rebuild mutation. The cache never owns source text or bytes: the main
 pass still performs its authoritative content read and hook, stat-snapshot and
 TOCTOU validation, and checksum calculation. It consumes a normalized-path
-artifact once only after that checksum matches. Cached symbols are deep clones.
-Artifact-producing extraction receives the main pass's absolute file path and
-project root so file-local family identities stay identical. File ID assignment,
-family scope, source observation, post-extraction hooks,
+artifact once only after that checksum matches. Generic cache admission keeps
+deep-clone isolation for direct callers. The fresh-index production path instead
+materializes both workspace lookup snapshots first, then transfers ownership of
+each admitted per-file symbol list and releases the redundant workspace-symbol
+fallback list. Main-pass mutation therefore remains isolated from the lookup
+snapshots without retaining duplicate `SymbolRecord` objects. Artifact-producing
+extraction receives the main pass's absolute file path and project root so
+file-local family identities stay identical. File ID assignment, family scope,
+source observation, post-extraction hooks,
 kind filtering, caps, line validation, persistence, reference extraction, and
 bounded-regex issue reporting remain on the normal main-pass path. Incomplete
 prepasses, extraction-stall test seams, checksum drift, regex timeouts, and cache
@@ -4176,10 +4181,13 @@ static-interface prepass の raw built-in C# symbol artifact を再利用でき�
 0件の状態から開始した初回 full index だけです。CLI は rebuild と symbols-only を除外し、MCP は
 rebuild mutation より前の空 database 条件を使います。cache は source text / byte を保持せず、main
 pass は引き続き authoritative な content read と hook、stat snapshot / TOCTOU 検証、checksum 計算を
-実行します。正規化 path の artifact は checksum 一致後に1回だけ取り出します。cached symbol は deep
-clone とします。artifact を生成する extraction には main pass と同じ absolute file path / project root を
-渡し、file-local family identity を一致させてください。FileId、family scope、source observation、
-post-extraction hook、kind filter、cap、line 検証、
+実行します。正規化 path の artifact は checksum 一致後に1回だけ取り出します。汎用 cache admission は
+direct caller 向けの deep-clone isolation を維持します。fresh-index の production 経路では、先に2種類の
+workspace lookup snapshot を materialize し、その後で admit した file ごとの symbol list の所有権を
+cache へ移し、重複する workspace-symbol fallback list を解放します。これにより main-pass mutation と
+lookup snapshot の分離を保ったまま、重複する `SymbolRecord` object を保持しません。artifact を生成する
+extraction には main pass と同じ absolute file path / project root を渡し、file-local family identity を
+一致させてください。FileId、family scope、source observation、post-extraction hook、kind filter、cap、line 検証、
 persistence、reference extraction、bounded-regex issue は通常の main-pass 経路で処理してください。
 不完全な prepass、extraction-stall test seam、checksum drift、regex timeout、cache 上限では通常
 extraction へ fallback します。timeout した prepass 結果は partial であり、一過性の結果を

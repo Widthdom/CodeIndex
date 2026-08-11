@@ -209,19 +209,7 @@ internal static class CSharpStaticInterfacePrepass
         {
             var extracted = extractedByCandidate[candidateIndex];
             if (extracted != null)
-            {
-                var checksum = artifactChecksums?[candidateIndex];
-                if (symbolArtifactCache != null && checksum != null)
-                {
-                    symbolArtifactCache.TryAdmit(
-                        candidates[candidateIndex].IndexPath,
-                        checksum,
-                        extracted,
-                        artifactHadRegexTimeouts![candidateIndex],
-                        cancellationToken);
-                }
                 pendingSymbols.AddRange(extracted);
-            }
         }
 
         var hasSourceStaticInterfaceContracts = HasCSharpStaticInterfaceContractSymbol(pendingSymbols);
@@ -248,14 +236,45 @@ internal static class CSharpStaticInterfacePrepass
         IReadOnlyList<string> incompletePaths = firstIncompleteSourcePath == null
             ? []
             : [firstIncompleteSourcePath];
+        var isSourceEvidenceComplete = sourceEvidenceComplete != 0;
+        var staticInterfaceMemberLookups =
+            ReferenceExtractor.BuildCSharpStaticInterfaceMemberLookups(symbols);
+        var qualifiedPatternLookups =
+            ReferenceExtractor.BuildCSharpQualifiedPatternLookups(symbols);
+        // Materialize every immutable workspace lookup before transferring the raw
+        // per-file lists. The main pass may mutate owned symbols after take, while
+        // reference extraction must continue to observe this prepass snapshot.
+        // raw list の所有権移譲前に lookup を確定し、main pass の mutation から
+        // prepass snapshot を分離する。
+        if (symbolArtifactCache != null)
+        {
+            for (var candidateIndex = 0;
+                 candidateIndex < extractedByCandidate.Length;
+                 candidateIndex++)
+            {
+                var extracted = extractedByCandidate[candidateIndex];
+                var checksum = artifactChecksums![candidateIndex];
+                if (extracted == null || checksum == null)
+                    continue;
+
+                symbolArtifactCache.TryAdmitOwned(
+                    candidates[candidateIndex].IndexPath,
+                    checksum,
+                    extracted,
+                    artifactHadRegexTimeouts![candidateIndex],
+                    cancellationToken);
+            }
+        }
+        IReadOnlyList<SymbolRecord> referenceFallbackSymbols =
+            symbolArtifactCache == null ? symbols : [];
         return new CSharpStaticInterfaceWorkspaceSymbols(
-            symbols,
+            referenceFallbackSymbols,
             hasStaticInterfaceContracts,
-            ReferenceExtractor.BuildCSharpStaticInterfaceMemberLookups(symbols),
+            staticInterfaceMemberLookups,
             hasSourceStaticInterfaceContracts,
-            sourceEvidenceComplete != 0,
+            isSourceEvidenceComplete,
             incompletePaths,
-            ReferenceExtractor.BuildCSharpQualifiedPatternLookups(symbols),
+            qualifiedPatternLookups,
             requiresMemberReadReferenceRefresh);
     }
 

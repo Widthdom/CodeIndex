@@ -61,6 +61,39 @@ internal sealed class CSharpPrepassSymbolArtifactCache
         IReadOnlyList<SymbolRecord> symbols,
         bool hadRegexTimeout,
         CancellationToken cancellationToken = default)
+        => TryAdmitCore(
+            path,
+            checksum,
+            symbols,
+            ownedSymbols: null,
+            hadRegexTimeout,
+            cancellationToken);
+
+    // A successful publish transfers the list and every mutable record to the cache.
+    // Publish failure leaves ownership with the caller.
+    // publish 成功時だけ list と mutable record の所有権を cache へ移す。
+    // failure 時は caller が所有権を保持する。
+    internal bool TryAdmitOwned(
+        string path,
+        string checksum,
+        List<SymbolRecord> symbols,
+        bool hadRegexTimeout,
+        CancellationToken cancellationToken = default)
+        => TryAdmitCore(
+            path,
+            checksum,
+            symbols,
+            symbols,
+            hadRegexTimeout,
+            cancellationToken);
+
+    private bool TryAdmitCore(
+        string path,
+        string checksum,
+        IReadOnlyList<SymbolRecord> symbols,
+        List<SymbolRecord>? ownedSymbols,
+        bool hadRegexTimeout,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(path);
         ArgumentNullException.ThrowIfNull(checksum);
@@ -88,17 +121,22 @@ internal sealed class CSharpPrepassSymbolArtifactCache
                 return false;
             }
 
-            var clonedSymbols = new List<SymbolRecord>(symbols.Count);
-            foreach (var symbol in symbols)
+            var artifactSymbols = ownedSymbols;
+            if (artifactSymbols == null)
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                clonedSymbols.Add(PostExtractionHookMutationMaterializer.CloneSymbol(symbol));
+                artifactSymbols = new List<SymbolRecord>(symbols.Count);
+                foreach (var symbol in symbols)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    artifactSymbols.Add(
+                        PostExtractionHookMutationMaterializer.CloneSymbol(symbol));
+                }
             }
 
             var artifact = new CSharpPrepassSymbolArtifact(
                 normalizedPath,
                 checksum,
-                clonedSymbols);
+                artifactSymbols);
             if (!_artifacts.TryAdd(normalizedPath, artifact))
                 return false;
 
