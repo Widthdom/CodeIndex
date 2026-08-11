@@ -186,7 +186,7 @@ public partial class DbContext : IDisposable
             "csharp_base_identifiers_json",
             (string? signature) =>
                 JsonSerializer.Serialize(
-                    DbWriter.ParseCSharpBaseIdentifiers(signature),
+                    CSharpBaseListParser.Parse(signature, CSharpBaseListProjection.HeadIdentifier),
                     CliJsonSerializerContext.Default.ListString));
         connection.CreateFunction(
             "csharp_base_name_folded",

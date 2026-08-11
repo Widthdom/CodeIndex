@@ -267,7 +267,10 @@ public partial class DbReader
         if (lastDot > 0)
             namespacePrefix = containingTypeName[..lastDot];
 
-        foreach (var baseTypeReference in ParseCSharpBaseTypeReferences(signature))
+        var baseTypeReferences = CSharpBaseListParser.Parse(
+            signature,
+            CSharpBaseListProjection.TypeReference);
+        foreach (var baseTypeReference in baseTypeReferences)
         {
             var normalizedBase = NormalizeCSharpBaseTypeReference(baseTypeReference);
             if (string.IsNullOrWhiteSpace(normalizedBase))
@@ -312,7 +315,9 @@ public partial class DbReader
         if (containingTypeScope.Kind is not ("class" or "struct" or "interface"))
             return [];
 
-        var baseTypeReferences = ParseCSharpBaseTypeReferences(containingTypeScope.Signature);
+        var baseTypeReferences = CSharpBaseListParser.Parse(
+            containingTypeScope.Signature,
+            CSharpBaseListProjection.TypeReference);
         if (baseTypeReferences.Count == 0)
             return [];
 
@@ -743,7 +748,9 @@ public partial class DbReader
         if (!string.Equals(containingTypeScope.Kind, "class", StringComparison.Ordinal))
             return null;
 
-        var baseTypeReference = ParseCSharpBaseTypeReference(containingTypeScope.Signature);
+        var baseTypeReference = CSharpBaseListParser.Parse(
+            containingTypeScope.Signature,
+            CSharpBaseListProjection.TypeReference).FirstOrDefault();
         if (string.IsNullOrWhiteSpace(baseTypeReference))
             return null;
 
@@ -822,125 +829,6 @@ public partial class DbReader
             return CombineDbQualifiedName(resolvedActiveNamespace, shortName);
 
         return normalizedReference;
-    }
-
-    private static string? ParseCSharpBaseTypeReference(string? signature)
-    {
-        var references = ParseCSharpBaseTypeReferences(signature);
-        return references.Count == 0 ? null : references[0];
-    }
-
-    private static List<string> ParseCSharpBaseTypeReferences(string? signature)
-    {
-        if (string.IsNullOrWhiteSpace(signature))
-            return [];
-
-        var text = signature.TrimEnd();
-        if (text.EndsWith("{", StringComparison.Ordinal))
-            text = text[..^1].TrimEnd();
-
-        var colonIndex = FindCSharpBaseListColonIndex(text);
-        if (colonIndex < 0)
-            return [];
-
-        var baseList = text[(colonIndex + 1)..];
-        var whereIndex = baseList.IndexOf(" where ", StringComparison.Ordinal);
-        if (whereIndex >= 0)
-            baseList = baseList[..whereIndex];
-
-        var entries = new List<string>();
-        foreach (var entry in EnumerateCSharpBaseListEntries(baseList))
-        {
-            var trimmed = entry.Trim();
-            if (trimmed.Length > 0)
-                entries.Add(trimmed);
-        }
-
-        return entries;
-    }
-
-    private static int FindCSharpBaseListColonIndex(string signature)
-    {
-        var angleDepth = 0;
-        var parenDepth = 0;
-        var squareDepth = 0;
-        for (var i = 0; i < signature.Length; i++)
-        {
-            switch (signature[i])
-            {
-                case '<':
-                    angleDepth++;
-                    break;
-                case '>':
-                    if (angleDepth > 0)
-                        angleDepth--;
-                    break;
-                case '(':
-                    parenDepth++;
-                    break;
-                case ')':
-                    if (parenDepth > 0)
-                        parenDepth--;
-                    break;
-                case '[':
-                    squareDepth++;
-                    break;
-                case ']':
-                    if (squareDepth > 0)
-                        squareDepth--;
-                    break;
-                case ':':
-                    if (angleDepth == 0 && parenDepth == 0 && squareDepth == 0)
-                        return i;
-                    break;
-            }
-        }
-
-        return -1;
-    }
-
-    private static IEnumerable<string> EnumerateCSharpBaseListEntries(string baseList)
-    {
-        var angleDepth = 0;
-        var parenDepth = 0;
-        var squareDepth = 0;
-        var start = 0;
-        for (var i = 0; i < baseList.Length; i++)
-        {
-            switch (baseList[i])
-            {
-                case '<':
-                    angleDepth++;
-                    break;
-                case '>':
-                    if (angleDepth > 0)
-                        angleDepth--;
-                    break;
-                case '(':
-                    parenDepth++;
-                    break;
-                case ')':
-                    if (parenDepth > 0)
-                        parenDepth--;
-                    break;
-                case '[':
-                    squareDepth++;
-                    break;
-                case ']':
-                    if (squareDepth > 0)
-                        squareDepth--;
-                    break;
-                case ',':
-                    if (angleDepth == 0 && parenDepth == 0 && squareDepth == 0)
-                    {
-                        yield return baseList[start..i];
-                        start = i + 1;
-                    }
-                    break;
-            }
-        }
-
-        yield return baseList[start..];
     }
 
     private static string NormalizeCSharpBaseTypeReference(string typeReference)
