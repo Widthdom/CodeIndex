@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using CodeIndex.Database;
 using CodeIndex.Indexer;
+using CodeIndex.Indexer.Extensibility;
 
 namespace CodeIndex.Cli;
 
@@ -25,6 +26,14 @@ public static partial class IndexCommandRunner
         internal required int Purged { get; init; }
         internal required bool ScanHadErrors { get; init; }
         internal required bool StartedWithNoIndexedFiles { get; init; }
+        internal DbWriter.AuthoritativeFreshFoldRowsClaim? AuthoritativeFreshFoldRowsClaim
+        {
+            get;
+            init;
+        }
+        internal required ExtractorPluginRegistry.FoldProducerReadinessSnapshot
+            FreshFoldProducerSnapshot
+        { get; init; }
         internal required bool HasCSharpFilesAfter { get; init; }
         internal required bool CSharpSourceEvidenceComplete { get; init; }
         internal required bool CSharpSourceEvidenceForStamp { get; init; }
@@ -202,10 +211,23 @@ public static partial class IndexCommandRunner
                 && writer.SymbolExtractorVersionsMatchCurrent(skippedSymbolExtractorLanguageSet);
             if (context.Skipped == 0 || canRestampExistingFoldTrust)
             {
+                // Re-check the mutable process/workspace registry at the consumption boundary.
+                // A producer registered after extraction began must fail closed too.
+                // mutable registry を消費直前にも再確認し、途中登録された producer も拒否する。
+                var currentFoldProducerSnapshot =
+                    ExtractorPluginRegistry.CaptureFoldProducerReadinessSnapshot(
+                        context.ProjectRoot);
+                if (!currentFoldProducerSnapshot.UsesOnlyBuiltInProducers
+                    || currentFoldProducerSnapshot.MutationGeneration
+                        != context.FreshFoldProducerSnapshot.MutationGeneration)
+                {
+                    context.AuthoritativeFreshFoldRowsClaim?.Invalidate();
+                }
                 var foldStampResult = writer.MarkFoldReadyWithResult(
                     stampCurrentSymbolExtractorVersions: context.Skipped == 0,
                     symbolExtractorLanguagesToStamp:
-                        context.Skipped == 0 ? context.IndexedSymbolExtractorLanguages : null);
+                        context.Skipped == 0 ? context.IndexedSymbolExtractorLanguages : null,
+                    authoritativeFreshRowsClaim: context.AuthoritativeFreshFoldRowsClaim);
                 foldReadyAfter = foldStampResult == FoldReadyStampResult.Ready;
                 if (foldStampResult == FoldReadyStampResult.MissingBackfill)
                 {

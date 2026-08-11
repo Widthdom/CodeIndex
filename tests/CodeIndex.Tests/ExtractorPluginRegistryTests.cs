@@ -556,6 +556,77 @@ public class ExtractorPluginRegistryTests
     }
 
     [Fact]
+    public void CSharpWorkspacePrepass_ReusesLoadedPatternConfigSnapshot()
+    {
+        var projectRoot = TestProjectHelper.CreateExecutableExtensionTestProject(
+            "extractor_registry_csharp_prepass_snapshot");
+        lock (TestConsoleLock.Gate)
+        {
+            var pluginDirectory = Path.Combine(projectRoot, "plugins");
+            var pluginPath = Path.Combine(pluginDirectory, "invalid.dll");
+            var pluginStageCount = 0;
+            try
+            {
+                Directory.CreateDirectory(pluginDirectory);
+                File.WriteAllText(pluginPath, "invalid plugin assembly");
+                var sourceDirectory = Path.Combine(projectRoot, "src");
+                Directory.CreateDirectory(sourceDirectory);
+                var targets = new List<CodeIndex.Indexer.CSharpStaticInterfacePrepass.FileTarget>();
+                for (var index = 0; index < 8; index++)
+                {
+                    var sourcePath = Path.Combine(sourceDirectory, $"Static{index}.cs");
+                    File.WriteAllText(
+                        sourcePath,
+                        $"public static class Static{index} {{ public const int Value = {index}; }}");
+                    targets.Add(CodeIndex.Indexer.CSharpStaticInterfacePrepass.FileTarget.Create(
+                        projectRoot,
+                        sourcePath,
+                        "csharp"));
+                }
+
+                ExtractorPluginRegistry.ReloadForTests();
+                ExtractorPluginRegistry.UserPluginDirectoryForTesting = pluginDirectory;
+                ExecutableExtensionBoundary.StagedForTesting = (source, _) =>
+                {
+                    if (string.Equals(source, pluginPath, StringComparison.Ordinal))
+                        pluginStageCount++;
+                };
+                ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(projectRoot);
+                Assert.Equal(1, pluginStageCount);
+
+                var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+                using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+                var writer = new DbWriter(db.Connection);
+                var indexer = new CodeIndex.Indexer.FileIndexer(projectRoot, ignoreCase: false);
+
+                var workspace = CodeIndex.Indexer.CSharpStaticInterfacePrepass.BuildWorkspaceSymbols(
+                    writer,
+                    indexer,
+                    targets,
+                    includeExistingSymbols: false,
+                    parallelism: 4,
+                    patternConfigsAlreadyLoaded: true);
+
+                Assert.True(workspace.SourceContractEvidenceComplete);
+                Assert.Equal(1, pluginStageCount);
+
+                CodeIndex.Indexer.CSharpStaticInterfacePrepass.BuildWorkspaceSymbols(
+                    writer,
+                    indexer,
+                    [targets[0]],
+                    includeExistingSymbols: false);
+                Assert.Equal(2, pluginStageCount);
+            }
+            finally
+            {
+                ExecutableExtensionBoundary.StagedForTesting = null;
+                ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
     public void LoadPlugin_KillsTimedOutAndCrashedConstructorWorkers_Issue4598()
     {
         lock (TestConsoleLock.Gate)
@@ -1019,6 +1090,7 @@ public class ExtractorPluginRegistryTests
 
                 Assert.Equal("projectdsl", extensions[".projecttoy"]);
                 Assert.False(extensions.ContainsKey(".cwdtoy"));
+                Assert.False(ExtractorPluginRegistry.UsesOnlyBuiltInFoldProducers(projectRoot));
             }
             finally
             {
@@ -1026,6 +1098,45 @@ public class ExtractorPluginRegistryTests
                 ExtractorPluginRegistry.ResetForTests();
                 TestProjectHelper.DeleteDirectory(projectRoot);
                 TestProjectHelper.DeleteDirectory(cwdRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void FoldProducerReadinessSnapshot_DiagnosticAndMissingReloadDoNotAdvanceGeneration()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject(
+            "extractor_registry_fold_generation_diagnostics");
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                var initial =
+                    ExtractorPluginRegistry.CaptureFoldProducerReadinessSnapshot(projectRoot);
+
+                ExtractorPluginRegistry.ReloadPatternConfigsForProjectRoot(
+                    projectRoot,
+                    directoryExists: static (_, _) => false);
+                var afterMissing =
+                    ExtractorPluginRegistry.CaptureFoldProducerReadinessSnapshot(projectRoot);
+                Assert.True(afterMissing.UsesOnlyBuiltInProducers);
+                Assert.Equal(initial.MutationGeneration, afterMissing.MutationGeneration);
+
+                WritePatternConfig(
+                    projectRoot,
+                    "broken.yaml",
+                    "language: \"broken\"\nextensions:\n  - extension: \".broken\"\n");
+                ExtractorPluginRegistry.ReloadPatternConfigsForProjectRoot(projectRoot);
+                var afterDiagnostic =
+                    ExtractorPluginRegistry.CaptureFoldProducerReadinessSnapshot(projectRoot);
+                Assert.True(afterDiagnostic.UsesOnlyBuiltInProducers);
+                Assert.Equal(initial.MutationGeneration, afterDiagnostic.MutationGeneration);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.DeleteDirectory(projectRoot);
             }
         }
     }
@@ -1067,6 +1178,40 @@ public class ExtractorPluginRegistryTests
             {
                 ExtractorPluginRegistry.ResetForTests();
                 TestProjectHelper.DeleteDirectory(parentRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void LoadPatternConfigsForPath_DefaultCallerDiscoversSidecarAddedAfterEarlierLookup()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_dynamic_pattern_sidecar");
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                var sourceDirectory = Path.Combine(projectRoot, "src", "nested");
+                var filePath = Path.Combine(sourceDirectory, "sample.dynamicpattern");
+                Directory.CreateDirectory(sourceDirectory);
+                ExtractorPluginRegistry.ResetForTests();
+                ExtractorPluginRegistry.UserPatternDirectoryOverrideForTests =
+                    Path.Combine(projectRoot, "missing-user-patterns");
+
+                ExtractorPluginRegistry.LoadPatternConfigsForPath(filePath, projectRoot);
+                Assert.False(ExtractorPluginRegistry.TryGetSymbolExtractor("dynamicpatterndsl", projectRoot, out _));
+
+                WritePatternConfig(
+                    sourceDirectory,
+                    "dynamic.yaml",
+                    "language: \"dynamicpatterndsl\"\nextensions:\n  - extension: \".dynamicpattern\"\npatterns:\n  - kind: \"class\"\n    regex: \"^dynamic (?<name>\\\\w+)\"\n");
+                ExtractorPluginRegistry.LoadPatternConfigsForPath(filePath, projectRoot);
+
+                Assert.True(ExtractorPluginRegistry.TryGetSymbolExtractor("dynamicpatterndsl", projectRoot, out _));
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                TestProjectHelper.DeleteDirectory(projectRoot);
             }
         }
     }

@@ -46,6 +46,7 @@ public static partial class IndexCommandRunner
         internal required Func<bool> GetDeferCSharpMutationsForIncompleteScan { get; init; }
         internal required Func<bool> GetFtsMutated { get; init; }
         internal required Func<CSharpStaticInterfaceWorkspaceSymbols> GetCSharpWorkspace { get; init; }
+        internal required Func<CSharpPrepassSymbolArtifactCache?> GetCSharpPrepassSymbolArtifacts { get; init; }
         internal required Func<Dictionary<string, CSharpStaticInterfacePrepass.FileStatSnapshot>?> GetCSharpWorkspaceFileSnapshots { get; init; }
         internal required Action<string> DeferCSharpMutationsForLoadedSnapshotDrift { get; init; }
         internal required Func<string?, string, bool> TargetRequiresJavaScriptTypeScriptRefresh { get; init; }
@@ -180,6 +181,8 @@ public static partial class IndexCommandRunner
                 DeferCSharpMutationsForIncompleteScan =
                     context.GetDeferCSharpMutationsForIncompleteScan(),
                 CSharpWorkspace = context.GetCSharpWorkspace(),
+                CSharpPrepassSymbolArtifacts =
+                    context.GetCSharpPrepassSymbolArtifacts(),
                 PostExtractionHooks = context.PostExtractionHooks,
                 SymbolExtractionWorker = context.SymbolExtractionWorker,
                 CancellationToken = context.CancellationToken,

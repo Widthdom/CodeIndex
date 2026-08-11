@@ -25,7 +25,9 @@ internal static class CSharpStaticInterfacePrepass
         IReadOnlyList<long>? excludedExistingFileIds = null,
         Func<string, bool>? isExistingSymbolPathExcluded = null,
         bool loadExistingSymbolsOnlyForPendingQualifiedMemberAccess = false,
-        CancellationToken cancellationToken = default)
+        bool patternConfigsAlreadyLoaded = false,
+        CancellationToken cancellationToken = default,
+        CSharpPrepassSymbolArtifactCache? symbolArtifactCache = null)
     {
         var targetCount = fileTargets.TryGetNonEnumeratedCount(out var count) ? count : 0;
         var candidates = new List<FileTarget>(targetCount);
@@ -79,6 +81,12 @@ internal static class CSharpStaticInterfacePrepass
         }
 
         var extractedByCandidate = new List<SymbolRecord>?[candidates.Count];
+        var artifactChecksums = symbolArtifactCache == null
+            ? null
+            : new string?[candidates.Count];
+        var artifactHadRegexTimeouts = symbolArtifactCache == null
+            ? null
+            : new bool[candidates.Count];
         var sourceEvidenceComplete = 1;
         var hasPendingQualifiedMemberAccessCandidate = 0;
         string? firstIncompleteSourcePath = null;
@@ -96,12 +104,29 @@ internal static class CSharpStaticInterfacePrepass
                 reportCandidateFile?.Invoke(candidateIndex, target.DisplayRelativePath);
                 try
                 {
-                    var content = indexer.LoadCSharpStaticInterfaceCandidateContentForPrepass(
-                        target.FilePath,
-                        target.RelativePath,
-                        includeQualifiedMemberAccessCandidate:
-                            loadExistingSymbolsOnlyForPendingQualifiedMemberAccess,
-                        cancellationToken);
+                    string? content;
+                    string? checksum = null;
+                    if (symbolArtifactCache == null)
+                    {
+                        content = indexer.LoadCSharpStaticInterfaceCandidateContentForPrepass(
+                            target.FilePath,
+                            target.RelativePath,
+                            includeQualifiedMemberAccessCandidate:
+                                loadExistingSymbolsOnlyForPendingQualifiedMemberAccess,
+                            cancellationToken);
+                    }
+                    else
+                    {
+                        var loaded = indexer
+                            .LoadCSharpStaticInterfaceCandidateContentWithChecksumForPrepass(
+                                target.FilePath,
+                                target.RelativePath,
+                                includeQualifiedMemberAccessCandidate:
+                                    loadExistingSymbolsOnlyForPendingQualifiedMemberAccess,
+                                cancellationToken);
+                        content = loaded?.Content;
+                        checksum = loaded?.Checksum;
+                    }
                     if (content is not null)
                     {
                         if (content.AsSpan().IndexOf('.') >= 0)
@@ -113,13 +138,39 @@ internal static class CSharpStaticInterfacePrepass
 
                         if (MayContainCSharpWorkspaceReferenceTargets(content))
                         {
-                            extractedByCandidate[candidateIndex] =
-                                SymbolExtractor.Extract(
-                                    0,
+                            var extractionFilePath = symbolArtifactCache == null
+                                ? target.IndexPath
+                                : target.FilePath;
+                            var extractionProjectRoot = symbolArtifactCache == null
+                                ? null
+                                : indexer.ProjectRootForExtraction;
+                            using var regexTimeouts = symbolArtifactCache == null
+                                ? null
+                                : BoundedRegex.CaptureTimeouts(
                                     "csharp",
-                                    content,
-                                    target.IndexPath,
-                                    cancellationToken: cancellationToken);
+                                    "symbol_extraction");
+                            extractedByCandidate[candidateIndex] =
+                                patternConfigsAlreadyLoaded
+                                    ? SymbolExtractor.ExtractWithPatternConfigsLoaded(
+                                        0,
+                                        "csharp",
+                                        content,
+                                        extractionFilePath,
+                                        extractionProjectRoot,
+                                        cancellationToken: cancellationToken)
+                                    : SymbolExtractor.Extract(
+                                        0,
+                                        "csharp",
+                                        content,
+                                        extractionFilePath,
+                                        extractionProjectRoot,
+                                        cancellationToken: cancellationToken);
+                            if (regexTimeouts != null)
+                            {
+                                artifactChecksums![candidateIndex] = checksum;
+                                artifactHadRegexTimeouts![candidateIndex] =
+                                    regexTimeouts.HasTimeouts;
+                            }
                         }
                     }
                 }
@@ -154,8 +205,9 @@ internal static class CSharpStaticInterfacePrepass
             pendingSymbolCount += extracted?.Count ?? 0;
 
         var pendingSymbols = new List<SymbolRecord>(pendingSymbolCount);
-        foreach (var extracted in extractedByCandidate)
+        for (var candidateIndex = 0; candidateIndex < extractedByCandidate.Length; candidateIndex++)
         {
+            var extracted = extractedByCandidate[candidateIndex];
             if (extracted != null)
                 pendingSymbols.AddRange(extracted);
         }
@@ -184,14 +236,45 @@ internal static class CSharpStaticInterfacePrepass
         IReadOnlyList<string> incompletePaths = firstIncompleteSourcePath == null
             ? []
             : [firstIncompleteSourcePath];
+        var isSourceEvidenceComplete = sourceEvidenceComplete != 0;
+        var staticInterfaceMemberLookups =
+            ReferenceExtractor.BuildCSharpStaticInterfaceMemberLookups(symbols);
+        var qualifiedPatternLookups =
+            ReferenceExtractor.BuildCSharpQualifiedPatternLookups(symbols);
+        // Materialize every immutable workspace lookup before transferring the raw
+        // per-file lists. The main pass may mutate owned symbols after take, while
+        // reference extraction must continue to observe this prepass snapshot.
+        // raw list の所有権移譲前に lookup を確定し、main pass の mutation から
+        // prepass snapshot を分離する。
+        if (symbolArtifactCache != null)
+        {
+            for (var candidateIndex = 0;
+                 candidateIndex < extractedByCandidate.Length;
+                 candidateIndex++)
+            {
+                var extracted = extractedByCandidate[candidateIndex];
+                var checksum = artifactChecksums![candidateIndex];
+                if (extracted == null || checksum == null)
+                    continue;
+
+                symbolArtifactCache.TryAdmitOwned(
+                    candidates[candidateIndex].IndexPath,
+                    checksum,
+                    extracted,
+                    artifactHadRegexTimeouts![candidateIndex],
+                    cancellationToken);
+            }
+        }
+        IReadOnlyList<SymbolRecord> referenceFallbackSymbols =
+            symbolArtifactCache == null ? symbols : [];
         return new CSharpStaticInterfaceWorkspaceSymbols(
-            symbols,
+            referenceFallbackSymbols,
             hasStaticInterfaceContracts,
-            ReferenceExtractor.BuildCSharpStaticInterfaceMemberLookups(symbols),
+            staticInterfaceMemberLookups,
             hasSourceStaticInterfaceContracts,
-            sourceEvidenceComplete != 0,
+            isSourceEvidenceComplete,
             incompletePaths,
-            ReferenceExtractor.BuildCSharpQualifiedPatternLookups(symbols),
+            qualifiedPatternLookups,
             requiresMemberReadReferenceRefresh);
     }
 
@@ -216,7 +299,9 @@ internal static class CSharpStaticInterfacePrepass
             parallelism: 1,
             excludedExistingFileIds: null,
             loadExistingSymbolsOnlyForPendingQualifiedMemberAccess: false,
-            cancellationToken: cancellationToken);
+            patternConfigsAlreadyLoaded: false,
+            cancellationToken: cancellationToken,
+            symbolArtifactCache: null);
     }
 
     internal static bool HasCSharpStaticInterfaceContractSymbol(IEnumerable<SymbolRecord> symbols)

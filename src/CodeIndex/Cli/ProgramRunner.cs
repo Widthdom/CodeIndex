@@ -129,10 +129,11 @@ internal static partial class ProgramRunner
     {
         if (args.Length > 0 && StringComparer.Ordinal.Equals(args[0], SymbolExtractionWorker.CommandName))
         {
+            using var symbolWorkerInput = Console.OpenStandardInput();
             using var symbolWorkerOutput = Console.OpenStandardOutput();
             _ = SymbolExtractionWorker.TryRunCommand(
                 args,
-                Console.In,
+                symbolWorkerInput,
                 symbolWorkerOutput,
                 Console.Error,
                 out var symbolWorkerExitCode,

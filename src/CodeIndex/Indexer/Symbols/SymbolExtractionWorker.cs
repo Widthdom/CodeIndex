@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using CodeIndex.Cli;
@@ -387,6 +388,138 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
     }
 }
 
+internal sealed class WorkerPatternConfigRootSnapshot(string projectRoot)
+{
+    private readonly HashSet<string> inspectedOrdinal = new(StringComparer.Ordinal);
+    private readonly HashSet<string> inspectedIgnoreCase = new(StringComparer.OrdinalIgnoreCase);
+
+    internal string ProjectRoot { get; } = projectRoot;
+    internal long LastAccessSequence { get; set; }
+    internal int RetainedDirectoryCount => inspectedOrdinal.Count + inspectedIgnoreCase.Count;
+
+    internal bool Contains(string normalizedPatternDirectory, bool ignoreCase)
+        => (ignoreCase ? inspectedIgnoreCase : inspectedOrdinal).Contains(normalizedPatternDirectory);
+
+    internal bool Add(string normalizedPatternDirectory, bool ignoreCase)
+        => (ignoreCase ? inspectedIgnoreCase : inspectedOrdinal).Add(normalizedPatternDirectory);
+}
+
+internal sealed class WorkerPatternConfigDiscoveryCache
+{
+    internal const int DefaultMaxRootSnapshots = ExtractorPluginRegistry.MaxRetainedWorkspaceSnapshots;
+    internal const int DefaultMaxDirectoriesPerRoot = 4096;
+    internal const int DefaultMaxDirectoriesPerWorker = 8192;
+
+    private readonly int maxRootSnapshots;
+    private readonly int maxDirectoriesPerRoot;
+    private readonly int maxDirectoriesPerWorker;
+    private readonly List<WorkerPatternConfigRootSnapshot> roots = [];
+    private long accessSequence;
+
+    internal WorkerPatternConfigDiscoveryCache(
+        int maxRootSnapshots = DefaultMaxRootSnapshots,
+        int maxDirectoriesPerRoot = DefaultMaxDirectoriesPerRoot,
+        int maxDirectoriesPerWorker = DefaultMaxDirectoriesPerWorker)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxRootSnapshots, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxDirectoriesPerRoot, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxDirectoriesPerWorker, 1);
+        this.maxRootSnapshots = maxRootSnapshots;
+        this.maxDirectoriesPerRoot = maxDirectoriesPerRoot;
+        this.maxDirectoriesPerWorker = maxDirectoriesPerWorker;
+    }
+
+    internal int RootCount => roots.Count;
+    internal int RetainedDirectoryCount { get; private set; }
+
+    internal bool TryGetRoot(string projectRoot, out WorkerPatternConfigRootSnapshot snapshot)
+    {
+        var normalizedRoot = PathCasing.NormalizeBoundaryPath(projectRoot);
+        foreach (var candidate in roots)
+        {
+            if (!PathCasing.PathsEqual(candidate.ProjectRoot, normalizedRoot))
+                continue;
+
+            Touch(candidate);
+            snapshot = candidate;
+            return true;
+        }
+
+        snapshot = null!;
+        return false;
+    }
+
+    internal WorkerPatternConfigRootSnapshot AddReloadedRoot(string projectRoot)
+    {
+        var normalizedRoot = PathCasing.NormalizeBoundaryPath(projectRoot);
+        if (TryGetRoot(normalizedRoot, out var existing))
+            return existing;
+
+        if (roots.Count >= maxRootSnapshots)
+        {
+            var evicted = roots.MinBy(candidate => candidate.LastAccessSequence)!;
+            roots.Remove(evicted);
+            RetainedDirectoryCount -= evicted.RetainedDirectoryCount;
+        }
+
+        var snapshot = new WorkerPatternConfigRootSnapshot(normalizedRoot);
+        Touch(snapshot);
+        roots.Add(snapshot);
+        return snapshot;
+    }
+
+    internal bool ShouldInspectPatternDirectory(
+        WorkerPatternConfigRootSnapshot root,
+        string patternDirectory)
+    {
+        var normalizedDirectory = PathCasing.NormalizeBoundaryPath(patternDirectory);
+        var ignoreCase = PathCasing.IsIgnoreCase(GetPatternDirectoryCaseReference(normalizedDirectory));
+        return !root.Contains(normalizedDirectory, ignoreCase);
+    }
+
+    internal void RecordInspectedPatternDirectory(
+        WorkerPatternConfigRootSnapshot root,
+        string patternDirectory)
+    {
+        var normalizedDirectory = PathCasing.NormalizeBoundaryPath(patternDirectory);
+        var ignoreCase = PathCasing.IsIgnoreCase(GetPatternDirectoryCaseReference(normalizedDirectory));
+        if (root.Contains(normalizedDirectory, ignoreCase))
+            return;
+
+        // Retain existing entries when saturated. New directories continue through
+        // uncached discovery so a bounded cache never causes a config to be skipped.
+        if (root.RetainedDirectoryCount >= maxDirectoriesPerRoot
+            || RetainedDirectoryCount >= maxDirectoriesPerWorker)
+        {
+            return;
+        }
+
+        if (root.Add(normalizedDirectory, ignoreCase))
+            RetainedDirectoryCount++;
+    }
+
+    internal void Reset()
+    {
+        roots.Clear();
+        RetainedDirectoryCount = 0;
+        accessSequence = 0;
+    }
+
+    private void Touch(WorkerPatternConfigRootSnapshot root)
+        => root.LastAccessSequence = ++accessSequence;
+
+    private static string GetPatternDirectoryCaseReference(string normalizedPatternDirectory)
+    {
+        // The registry has not performed its reparse-point checks when the cache
+        // predicate runs. Probe the owning source directory, not an untrusted
+        // .cdidx/patterns link target, while retaining the full lexical cache key.
+        var cdidxDirectory = Path.GetDirectoryName(normalizedPatternDirectory);
+        return string.IsNullOrEmpty(cdidxDirectory)
+            ? normalizedPatternDirectory
+            : Path.GetDirectoryName(cdidxDirectory) ?? normalizedPatternDirectory;
+    }
+}
+
 internal static class SymbolExtractionWorker
 {
     internal const string CommandName = "__cdidx-symbol-extraction";
@@ -395,8 +528,8 @@ internal static class SymbolExtractionWorker
     private const string TestDelayMillisecondsOption = "--test-delay-ms";
     private const string TestConsoleStdoutOption = "--test-console-stdout";
     private const int CapturedConsoleMaxChars = 32 * 1024;
-    private static readonly object PatternConfigProjectRootsGate = new();
-    private static readonly List<string> LoadedPatternConfigProjectRoots = [];
+    private static readonly object PatternConfigDiscoveryGate = new();
+    private static WorkerPatternConfigDiscoveryCache patternConfigDiscoveryCache = new();
 
     internal static string FormatExecutionFailure(Exception ex)
         => SafeDiagnosticFormatter.FormatExceptionCategoryWithOrigin("worker_execution_failed", ex);
@@ -404,6 +537,7 @@ internal static class SymbolExtractionWorker
         WorkerProtocolJsonValidator.CreateSerializerOptions(SymbolExtractionWorkerJsonContext.Default.Options);
     internal static int? DelayMillisecondsForTesting { get; set; }
     internal static string? ConsoleStdoutForTesting { get; set; }
+    internal static Func<WorkerPatternConfigDiscoveryCache>? PatternConfigDiscoveryCacheFactoryForTesting { get; set; }
 
     internal static bool TryRunCommand(
         string[] args,
@@ -423,7 +557,7 @@ internal static class SymbolExtractionWorker
 
         exitCode = RunCommand(
             args,
-            input,
+            (maxCharacters, maxUtf8Bytes, _) => ReadTextRequestFrame(input, maxCharacters, maxUtf8Bytes),
             response => WriteResponse(output, response),
             error,
             maxProtocolLineCharacters,
@@ -434,7 +568,7 @@ internal static class SymbolExtractionWorker
 
     internal static bool TryRunCommand(
         string[] args,
-        TextReader input,
+        Stream input,
         Stream output,
         TextWriter error,
         out int exitCode,
@@ -450,7 +584,11 @@ internal static class SymbolExtractionWorker
 
         exitCode = RunCommand(
             args,
-            input,
+            (maxCharacters, maxUtf8Bytes, token) => ReadUtf8RequestFrame(
+                input,
+                maxCharacters,
+                maxUtf8Bytes,
+                token),
             response => WriteResponse(output, response),
             error,
             maxProtocolLineCharacters,
@@ -536,7 +674,7 @@ internal static class SymbolExtractionWorker
 
     private static int RunCommand(
         string[] args,
-        TextReader input,
+        ReadRequestFrame readRequestFrame,
         Action<WorkerResponse> writeResponse,
         TextWriter error,
         int maxProtocolLineCharacters,
@@ -554,7 +692,7 @@ internal static class SymbolExtractionWorker
             return 2;
         }
 
-        ResetPatternConfigProjectRootsForWorker();
+        ResetPatternConfigDiscoveryForWorker();
         maxProtocolLineCharacters = workerOptions.MaxProtocolLineCharacters;
         maxProtocolLineUtf8Bytes = workerOptions.MaxProtocolLineUtf8Bytes;
 
@@ -565,10 +703,13 @@ internal static class SymbolExtractionWorker
                 cancellationToken.ThrowIfCancellationRequested();
                 WorkerResponse response;
                 WorkerRequest request;
-                string? requestJson;
+                WorkerRequestFrame? requestFrame;
                 try
                 {
-                    requestJson = BoundedLineReader.ReadLine(input, maxProtocolLineCharacters, maxProtocolLineUtf8Bytes);
+                    requestFrame = readRequestFrame(
+                        maxProtocolLineCharacters,
+                        maxProtocolLineUtf8Bytes,
+                        cancellationToken);
                 }
                 catch (BoundedLineLengthException ex)
                 {
@@ -577,10 +718,14 @@ internal static class SymbolExtractionWorker
                     return 1;
                 }
 
-                if (requestJson is null)
+                if (requestFrame is null)
                     break;
 
-                if (!WorkerProtocolJsonValidator.TryValidate(requestJson, maxProtocolLineCharacters, out var validationError))
+                if (!TryValidateRequestFrame(
+                        requestFrame.Value,
+                        maxProtocolLineCharacters,
+                        maxProtocolLineUtf8Bytes,
+                        out var validationError))
                 {
                     response = new WorkerResponse(null, validationError, null);
                     writeResponse(response);
@@ -589,7 +734,7 @@ internal static class SymbolExtractionWorker
 
                 try
                 {
-                    request = BoundedJson.Deserialize<WorkerRequest>(requestJson, maxProtocolLineUtf8Bytes, JsonOptions)
+                    request = DeserializeRequestFrame(requestFrame.Value, maxProtocolLineUtf8Bytes)
                         ?? throw new InvalidOperationException("worker request was empty.");
                 }
                 catch (Exception ex)
@@ -628,6 +773,75 @@ internal static class SymbolExtractionWorker
         }
     }
 
+    private static WorkerRequestFrame? ReadTextRequestFrame(
+        TextReader input,
+        int maxProtocolLineCharacters,
+        int maxProtocolLineUtf8Bytes)
+    {
+        var requestJson = BoundedLineReader.ReadLine(
+            input,
+            maxProtocolLineCharacters,
+            maxProtocolLineUtf8Bytes);
+        return requestJson is null
+            ? null
+            : WorkerRequestFrame.FromText(requestJson);
+    }
+
+    private static WorkerRequestFrame? ReadUtf8RequestFrame(
+        Stream input,
+        int maxProtocolLineCharacters,
+        int maxProtocolLineUtf8Bytes,
+        CancellationToken cancellationToken)
+    {
+        var requestUtf8 = BoundedLineReader.ReadUtf8LineAsync(
+                input,
+                maxProtocolLineUtf8Bytes,
+                cancellationToken)
+            .GetAwaiter()
+            .GetResult();
+        if (requestUtf8 is null)
+            return null;
+
+        var utf8ByteCount = requestUtf8.Value.Length;
+        if (utf8ByteCount > maxProtocolLineCharacters)
+        {
+            var characterCount = Encoding.UTF8.GetCharCount(requestUtf8.Value.Span);
+            if (characterCount > maxProtocolLineCharacters)
+            {
+                throw new BoundedLineLengthException(
+                    characterCount,
+                    utf8ByteCount,
+                    maxProtocolLineCharacters,
+                    maxProtocolLineUtf8Bytes);
+            }
+        }
+
+        return WorkerRequestFrame.FromUtf8(requestUtf8.Value);
+    }
+
+    private static bool TryValidateRequestFrame(
+        WorkerRequestFrame requestFrame,
+        int maxProtocolLineCharacters,
+        int maxProtocolLineUtf8Bytes,
+        out string validationError)
+        => requestFrame.IsUtf8
+            ? WorkerProtocolJsonValidator.TryValidate(
+                requestFrame.Utf8Json,
+                maxProtocolLineCharacters,
+                maxProtocolLineUtf8Bytes,
+                out validationError)
+            : WorkerProtocolJsonValidator.TryValidate(
+                requestFrame.Json!,
+                maxProtocolLineCharacters,
+                out validationError);
+
+    private static WorkerRequest? DeserializeRequestFrame(
+        WorkerRequestFrame requestFrame,
+        int maxProtocolLineUtf8Bytes)
+        => requestFrame.IsUtf8
+            ? BoundedJson.Deserialize<WorkerRequest>(requestFrame.Utf8Json.Span, maxProtocolLineUtf8Bytes, JsonOptions)
+            : BoundedJson.Deserialize<WorkerRequest>(requestFrame.Json!, maxProtocolLineUtf8Bytes, JsonOptions);
+
     private static void WriteResponse(TextWriter output, WorkerResponse response)
     {
         output.WriteLine(JsonSerializer.Serialize(response, JsonOptions));
@@ -639,6 +853,23 @@ internal static class SymbolExtractionWorker
         JsonSerializer.Serialize(output, response, JsonOptions);
         output.WriteByte((byte)'\n');
         output.Flush();
+    }
+
+    private delegate WorkerRequestFrame? ReadRequestFrame(
+        int maxProtocolLineCharacters,
+        int maxProtocolLineUtf8Bytes,
+        CancellationToken cancellationToken);
+
+    private readonly record struct WorkerRequestFrame(
+        string? Json,
+        ReadOnlyMemory<byte> Utf8Json,
+        bool IsUtf8)
+    {
+        internal static WorkerRequestFrame FromText(string json)
+            => new(json, ReadOnlyMemory<byte>.Empty, IsUtf8: false);
+
+        internal static WorkerRequestFrame FromUtf8(ReadOnlyMemory<byte> utf8Json)
+            => new(null, utf8Json, IsUtf8: true);
     }
 
     private static WorkerResponse InvokeInsideWorker(WorkerRequest request, WorkerOptions options, CancellationToken cancellationToken)
@@ -724,23 +955,13 @@ internal static class SymbolExtractionWorker
         if (string.IsNullOrWhiteSpace(projectRoot))
             return false;
 
-        var fullRoot = Path.GetFullPath(projectRoot);
-        lock (PatternConfigProjectRootsGate)
+        var fullRoot = PathCasing.NormalizeBoundaryPath(projectRoot);
+        lock (PatternConfigDiscoveryGate)
         {
-            var rootAlreadyLoaded = false;
-            foreach (var loadedRoot in LoadedPatternConfigProjectRoots)
-            {
-                if (PathCasing.PathsEqual(loadedRoot, fullRoot))
-                {
-                    rootAlreadyLoaded = true;
-                    break;
-                }
-            }
-
-            if (!rootAlreadyLoaded)
+            if (!patternConfigDiscoveryCache.TryGetRoot(fullRoot, out var rootSnapshot))
             {
                 ExtractorPluginRegistry.ReloadPatternConfigsForProjectRoot(fullRoot);
-                LoadedPatternConfigProjectRoots.Add(fullRoot);
+                rootSnapshot = patternConfigDiscoveryCache.AddReloadedRoot(fullRoot);
             }
 
             if (!string.IsNullOrWhiteSpace(filePath))
@@ -748,17 +969,29 @@ internal static class SymbolExtractionWorker
                 var fullPath = Path.IsPathRooted(filePath)
                     ? Path.GetFullPath(filePath)
                     : Path.GetFullPath(Path.Combine(fullRoot, filePath));
-                ExtractorPluginRegistry.LoadPatternConfigsForPath(fullPath, fullRoot, includeWorkspaceRoot: false);
+                ExtractorPluginRegistry.LoadPatternConfigsForPath(
+                    fullPath,
+                    fullRoot,
+                    includeWorkspaceRoot: false,
+                    includeUserDirectory: false,
+                    shouldInspectWorkspacePatternDirectory: patternDirectory =>
+                        patternConfigDiscoveryCache.ShouldInspectPatternDirectory(rootSnapshot, patternDirectory),
+                    workspacePatternDirectoryInspected: patternDirectory =>
+                        patternConfigDiscoveryCache.RecordInspectedPatternDirectory(rootSnapshot, patternDirectory));
             }
 
             return true;
         }
     }
 
-    private static void ResetPatternConfigProjectRootsForWorker()
+    private static void ResetPatternConfigDiscoveryForWorker()
     {
-        lock (PatternConfigProjectRootsGate)
-            LoadedPatternConfigProjectRoots.Clear();
+        lock (PatternConfigDiscoveryGate)
+        {
+            patternConfigDiscoveryCache = PatternConfigDiscoveryCacheFactoryForTesting?.Invoke()
+                ?? new WorkerPatternConfigDiscoveryCache();
+            patternConfigDiscoveryCache.Reset();
+        }
     }
 
     private static void AddTestingArguments(ProcessStartInfo startInfo)

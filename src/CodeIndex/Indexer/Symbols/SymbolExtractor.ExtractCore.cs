@@ -20,7 +20,10 @@ public static partial class SymbolExtractor
         string? projectRoot = null,
         bool patternConfigsAlreadyLoaded = false,
         CancellationToken cancellationToken = default,
-        int? maxSymbols = null)
+        int? maxSymbols = null,
+        bool applyRequiredLiteralFileGate = true,
+        bool applyRequiredLiteralMatchInputGate = true,
+        RequiredLiteralGateCounts? requiredLiteralGateCounts = null)
     {
         var originalLang = lang;
         if (TryPrepareSymbolExtraction(
@@ -102,7 +105,23 @@ public static partial class SymbolExtractor
         if (patterns == null || lang == null)
             return [];
 
-        var scanInputs = new PatternScanInputs(lang, filePath, lines);
+        var applicablePatterns = SelectApplicablePatterns(
+            patterns,
+            content,
+            applyRequiredLiteralFileGate);
+        if (requiredLiteralGateCounts != null)
+        {
+            requiredLiteralGateCounts.PatternCount = patterns.Count;
+            requiredLiteralGateCounts.ApplicablePatternCount = applicablePatterns.Count;
+        }
+
+        var scanInputs = new PatternScanInputs(
+            lang,
+            filePath,
+            lines,
+            applicablePatterns,
+            applyRequiredLiteralMatchInputGate,
+            requiredLiteralGateCounts);
         var pythonModulePrefix = scanInputs.PythonModulePrefix;
         var structuralLines = scanInputs.StructuralLines;
         var scientificBodyScannerLines = scanInputs.ScientificBodyScannerLines;
@@ -177,7 +196,7 @@ public static partial class SymbolExtractor
                 bool? deferCSharpEventAtPatternStart = null;
                 bool? deferCSharpDelegateAtPatternStart = null;
                 bool? recoverableCSharpPatternAtPatternStart = null;
-                foreach (var pattern in patterns)
+                foreach (var pattern in applicablePatterns)
                 {
                     if (prologClauseContinuationLines?[i] == true
                         && prologContinuationResumeOffset < 0
@@ -214,11 +233,45 @@ public static partial class SymbolExtractor
                     while (lineOffset >= 0 && lineOffset < patternMatchLine.Length)
                     {
                         var javaLeadingAnnotationOffset = 0;
-                        var match = lang is "java" or "kotlin"
-                            ? (TryMatchJavaDeclarationSegment(pattern.Regex, patternMatchLine[lineOffset..], lang == "kotlin", out var javaMatch, out javaLeadingAnnotationOffset)
-                                ? javaMatch
-                                : pattern.Regex.Match(patternMatchLine[lineOffset..]))
-                            : pattern.Regex.Match(patternMatchLine[lineOffset..]);
+                        Match match;
+                        if (lang is "java" or "kotlin")
+                        {
+                            var javaPatternMatched = TryMatchJavaDeclarationPatternSegment(
+                                pattern,
+                                patternMatchLine,
+                                lineOffset,
+                                lang == "kotlin",
+                                applyRequiredLiteralMatchInputGate,
+                                requiredLiteralGateCounts,
+                                out match,
+                                out javaLeadingAnnotationOffset,
+                                out var initialJavaInputAttempted);
+                            if (!javaPatternMatched
+                                && initialJavaInputAttempted
+                                && ShouldAttemptPatternRegex(
+                                    pattern,
+                                    patternMatchLine.AsSpan(lineOffset),
+                                    applyRequiredLiteralMatchInputGate,
+                                    requiredLiteralGateCounts))
+                            {
+                                // Preserve the existing failed-helper fallback attempt. This is
+                                // intentionally gated again because it is a distinct regex call.
+                                match = pattern.Regex.Match(patternMatchLine[lineOffset..]);
+                            }
+                        }
+                        else if (ShouldAttemptPatternRegex(
+                                     pattern,
+                                     patternMatchLine.AsSpan(lineOffset),
+                                     applyRequiredLiteralMatchInputGate,
+                                     requiredLiteralGateCounts))
+                        {
+                            match = pattern.Regex.Match(patternMatchLine[lineOffset..]);
+                        }
+                        else
+                        {
+                            match = Match.Empty;
+                        }
+
                         if (!match.Success
                             && lang == "csharp"
                             && pattern.Kind == "function"
@@ -247,6 +300,15 @@ public static partial class SymbolExtractor
                                 foreach (var candidatePrefix in EnumerateCSharpWrappedModifierCandidates(wrappedInfo.Value.Prefix))
                                 {
                                     var wrappedMatchLine = candidatePrefix + " " + patternMatchLine.TrimStart();
+                                    if (!ShouldAttemptPatternRegex(
+                                            pattern,
+                                            wrappedMatchLine.AsSpan(),
+                                            applyRequiredLiteralMatchInputGate,
+                                            requiredLiteralGateCounts))
+                                    {
+                                        continue;
+                                    }
+
                                     var wrappedMatch = pattern.Regex.Match(wrappedMatchLine);
                                     if (wrappedMatch.Success)
                                     {
@@ -314,14 +376,22 @@ public static partial class SymbolExtractor
                                     && pattern.BodyStyle == BodyStyle.None
                                     && !(lineOffset != patternStartOffset
                                         ? TryMatchAnyRecoverableCSharpPattern(
-                                            matchLine[lineOffset..],
+                                            matchLine,
+                                            lineOffset,
                                             insideEnumBody: false,
-                                            attributeParenDepth: 0)
+                                            attributeParenDepth: 0,
+                                            applicablePatterns,
+                                            applyRequiredLiteralMatchInputGate,
+                                            requiredLiteralGateCounts)
                                         : recoverableCSharpPatternAtPatternStart ??=
                                             TryMatchAnyRecoverableCSharpPattern(
-                                                matchLine[lineOffset..],
+                                                matchLine,
+                                                lineOffset,
                                                 insideEnumBody: false,
-                                                attributeParenDepth: 0))))
+                                                attributeParenDepth: 0,
+                                                applicablePatterns,
+                                                applyRequiredLiteralMatchInputGate,
+                                                requiredLiteralGateCounts))))
                             {
                                 lineOffset = FindNextSameLineBraceStatementStart(matchLine, lineOffset + 1, lang);
                                 continue;
@@ -837,9 +907,11 @@ public static partial class SymbolExtractor
                                     cssScannerLines,
                                     i,
                                     openingBraceIndex,
-                                    patterns,
+                                    applicablePatterns,
                                     symbols,
-                                    cssSeenSymbols);
+                                    cssSeenSymbols,
+                                    applyRequiredLiteralMatchInputGate,
+                                    requiredLiteralGateCounts);
                             }
                         }
 
@@ -1263,7 +1335,7 @@ public static partial class SymbolExtractor
                     cssScannerLine,
                     cssScannerLines!,
                     i,
-                    patterns,
+                    applicablePatterns,
                     symbols,
                     cssSeenSymbols);
             }
@@ -1285,7 +1357,10 @@ public static partial class SymbolExtractor
                 GetJavaScriptTypeScriptSanitizedLines,
                 csharpMatchLines,
                 pythonModulePrefix,
-                prologMultilineHeads);
+                prologMultilineHeads,
+                applicablePatterns,
+                applyRequiredLiteralMatchInputGate,
+                requiredLiteralGateCounts);
         }
         if (lang == "csharp")
         {
@@ -1305,6 +1380,66 @@ public static partial class SymbolExtractor
             getCSharpLineStartStates,
             pendingRecordPrimaryComponents);
         return symbols;
+    }
+
+    private static IReadOnlyList<SymbolPattern> SelectApplicablePatterns(
+        IReadOnlyList<SymbolPattern> patterns,
+        string content,
+        bool applyRequiredLiteralGate)
+    {
+        if (!applyRequiredLiteralGate)
+            return patterns;
+
+        // A content-wide Ordinal check can only remove a pattern when a match is impossible.
+        // Preserve the original order, return the original list when nothing is skipped, and pass
+        // this same applicable set to every supplemental recovery scan.
+        // content 全体の Ordinal 判定で match 不可能な pattern だけを除外する。元の順序を保ち、
+        // skip がなければ元 list を返し、補助 recovery scan にも同じ applicable set を渡す。
+        List<SymbolPattern>? applicablePatterns = null;
+        for (var patternIndex = 0; patternIndex < patterns.Count; patternIndex++)
+        {
+            var pattern = patterns[patternIndex];
+            if (pattern.RequiredLiteral is { } requiredLiteral
+                && !content.Contains(requiredLiteral, StringComparison.Ordinal))
+            {
+                if (applicablePatterns == null)
+                {
+                    applicablePatterns = new List<SymbolPattern>(patterns.Count - 1);
+                    for (var prefixIndex = 0; prefixIndex < patternIndex; prefixIndex++)
+                        applicablePatterns.Add(patterns[prefixIndex]);
+                }
+
+                continue;
+            }
+
+            applicablePatterns?.Add(pattern);
+        }
+
+        return applicablePatterns ?? patterns;
+    }
+
+    private static bool ShouldAttemptPatternRegex(
+        SymbolPattern pattern,
+        ReadOnlySpan<char> matchInput,
+        bool applyRequiredLiteralMatchInputGate,
+        RequiredLiteralGateCounts? requiredLiteralGateCounts)
+    {
+        // This second-stage proof must inspect the exact transformed input for one regex call.
+        // Callers treat false as a failed match and must still run language-specific recovery.
+        // 第2段の proof は1回の regex call に渡す変換済み input そのものを調べる。
+        // false は match failure と同様に扱い、言語固有 recovery は引き続き実行する。
+        if (applyRequiredLiteralMatchInputGate
+            && pattern.RequiredLiteral is { } requiredLiteral
+            && matchInput.IndexOf(requiredLiteral.AsSpan(), StringComparison.Ordinal) < 0)
+        {
+            if (requiredLiteralGateCounts != null)
+                requiredLiteralGateCounts.MatchInputLiteralSkipCount++;
+            return false;
+        }
+
+        if (requiredLiteralGateCounts != null)
+            requiredLiteralGateCounts.RegexAttemptCount++;
+        return true;
     }
 
     private static readonly Regex PrologOpenClauseRegex = new(

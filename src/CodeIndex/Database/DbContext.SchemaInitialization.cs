@@ -112,8 +112,8 @@ public partial class DbContext : IDisposable
         UNIQUE(file_id, line, context)
     )");
 
-        var symbolKindCheck = SymbolKindCatalog.ToSqlCheckInList(SymbolKindCatalog.SymbolKinds);
-        var referenceKindCheck = SymbolKindCatalog.ToSqlCheckInList(SymbolKindCatalog.ReferenceKinds);
+        var symbolKindCheck = SymbolKindCatalog.PersistedSymbolKindSqlCheckInList;
+        var referenceKindCheck = SymbolKindCatalog.PersistedReferenceKindSqlCheckInList;
 
         // Symbols table / シンボルテーブル
         Execute(@"
@@ -372,7 +372,7 @@ public partial class DbContext : IDisposable
 
     private void EnforceRequiredFileIdConstraints()
     {
-        var symbolKindCheck = SymbolKindCatalog.ToSqlCheckInList(SymbolKindCatalog.SymbolKinds);
+        var symbolKindCheck = SymbolKindCatalog.PersistedSymbolKindSqlCheckInList;
         var legacyAlterTable = ExecuteScalar("PRAGMA legacy_alter_table");
         RunWithForeignKeysDisabledForMigration(
             "EnforceRequiredFileIdConstraints",
@@ -461,8 +461,8 @@ public partial class DbContext : IDisposable
             return;
         }
 
-        var symbolKindCheck = SymbolKindCatalog.ToSqlCheckInList(SymbolKindCatalog.SymbolKinds);
-        var referenceKindCheck = SymbolKindCatalog.ToSqlCheckInList(SymbolKindCatalog.ReferenceKinds);
+        var symbolKindCheck = SymbolKindCatalog.PersistedSymbolKindSqlCheckInList;
+        var referenceKindCheck = SymbolKindCatalog.PersistedReferenceKindSqlCheckInList;
         const string referenceLinesCreateSql =
             """
             CREATE TABLE reference_lines (
@@ -525,8 +525,8 @@ public partial class DbContext : IDisposable
         if (SymbolReferencesReferenceLineDeletesSetNull())
             return;
 
-        var symbolKindCheck = SymbolKindCatalog.ToSqlCheckInList(SymbolKindCatalog.SymbolKinds);
-        var referenceKindCheck = SymbolKindCatalog.ToSqlCheckInList(SymbolKindCatalog.ReferenceKinds);
+        var symbolKindCheck = SymbolKindCatalog.PersistedSymbolKindSqlCheckInList;
+        var referenceKindCheck = SymbolKindCatalog.PersistedReferenceKindSqlCheckInList;
         var symbolReferencesCreateSql =
             $"""
             CREATE TABLE symbol_references (
@@ -601,8 +601,8 @@ public partial class DbContext : IDisposable
         if (ReferenceLinesHasContextUniqueKey())
             return;
 
-        var symbolKindCheck = SymbolKindCatalog.ToSqlCheckInList(SymbolKindCatalog.SymbolKinds);
-        var referenceKindCheck = SymbolKindCatalog.ToSqlCheckInList(SymbolKindCatalog.ReferenceKinds);
+        var symbolKindCheck = SymbolKindCatalog.PersistedSymbolKindSqlCheckInList;
+        var referenceKindCheck = SymbolKindCatalog.PersistedReferenceKindSqlCheckInList;
         const string referenceLinesCreateSql =
             """
             CREATE TABLE reference_lines (
@@ -696,8 +696,8 @@ public partial class DbContext : IDisposable
 
     private void EnsureKindCheckConstraintsCurrent()
     {
-        var symbolKindCheck = SymbolKindCatalog.ToSqlCheckInList(SymbolKindCatalog.SymbolKinds);
-        var referenceKindCheck = SymbolKindCatalog.ToSqlCheckInList(SymbolKindCatalog.ReferenceKinds);
+        var symbolKindCheck = SymbolKindCatalog.PersistedSymbolKindSqlCheckInList;
+        var referenceKindCheck = SymbolKindCatalog.PersistedReferenceKindSqlCheckInList;
         var symbolsCreateSql =
             $"""
             CREATE TABLE symbols (
@@ -761,13 +761,13 @@ public partial class DbContext : IDisposable
         var rebuilt = false;
         RunWithForeignKeysDisabledForMigration("EnsureKindCheckConstraintsCurrent", () =>
         {
-            if (!TableCheckContainsAll("symbols", SymbolKindCatalog.SymbolKinds))
+            if (!TableCheckContainsAll("symbols", SymbolKindCatalog.PersistedSymbolKinds))
             {
                 RebuildTableWithCurrentKindChecks("symbols", "_symbols_kind_check", symbolsCreateSql, symbolsColumns);
                 rebuilt = true;
             }
 
-            if (!TableCheckContainsAll("symbol_references", SymbolKindCatalog.SymbolKinds.Concat(SymbolKindCatalog.ReferenceKinds)))
+            if (!TableCheckContainsAll("symbol_references", SymbolKindCatalog.PersistedSymbolKinds.Concat(SymbolKindCatalog.PersistedReferenceKinds)))
             {
                 RebuildTableWithCurrentKindChecks("symbol_references", "_symbol_references_kind_check", symbolReferencesCreateSql, symbolReferencesColumns);
                 rebuilt = true;

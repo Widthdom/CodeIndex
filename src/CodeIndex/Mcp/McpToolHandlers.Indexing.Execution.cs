@@ -163,7 +163,8 @@ public partial class McpServer
             || !typeScriptAugmentationVersionMatchesCurrent;
         var typeScriptAugmentationReadyCleared = !typeScriptAugmentationVersionMatchesCurrent;
         var ftsMutated = false;
-        var startedWithNoIndexedFiles = rebuild || !writer.HasAnyIndexedFiles();
+        var startedWithNoIndexedFilesBeforeRebuild = !writer.HasAnyIndexedFiles();
+        var startedWithNoIndexedFiles = rebuild || startedWithNoIndexedFilesBeforeRebuild;
         if (rebuild || startedWithNoIndexedFiles)
             indexSnapshot.CSharpStaticInterfaceSourceEvidence = null;
         var requiresConservativeCSharpSourceRefresh = !rebuild
@@ -326,6 +327,16 @@ public partial class McpServer
         // Load current reference-language support before the deferred mutation phase.
         // deferred mutation phase の前に現在の reference-language support を読み込む。
         ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(projectPath);
+        var freshFoldProducerSnapshot =
+            ExtractorPluginRegistry.CaptureFoldProducerReadinessSnapshot(projectPath);
+        var authoritativeFreshFoldRowsClaim = startedWithNoIndexedFilesBeforeRebuild
+            && !rebuild
+            && freshFoldProducerSnapshot.UsesOnlyBuiltInProducers
+            ? writer.TryClaimAuthoritativeFreshFoldRows(requestToken)
+            : null;
+        var csharpPrepassSymbolArtifacts = CSharpPrepassSymbolArtifactCache
+            .CreateForFreshBuiltInExtraction(
+                startedWithNoIndexedFilesBeforeRebuild && !rebuild);
         var purgedRefs = 0;
 
         // Scan and index / スキャン・インデックス
@@ -715,7 +726,9 @@ public partial class McpServer
                     parallelism: 1,
                     excludedExistingFileIds: staleFilePurgePlan.FileIds,
                     isExistingSymbolPathExcluded: IsExistingCSharpSymbolPathNowNonCSharp,
-                    cancellationToken: requestToken));
+                    patternConfigsAlreadyLoaded: true,
+                    cancellationToken: requestToken,
+                    symbolArtifactCache: csharpPrepassSymbolArtifacts));
             forceFullCSharpRefreshFromInvalidatedNoOp =
                 indexSnapshot.CSharpStaticInterfaceSourceEvidence == true
                 || csharpWorkspace.HasStaticInterfaceContracts
@@ -723,6 +736,8 @@ public partial class McpServer
         }
         if (!csharpWorkspace.SourceContractEvidenceComplete)
         {
+            csharpPrepassSymbolArtifacts?.Clear();
+            csharpPrepassSymbolArtifacts = null;
             incompleteCSharpPrepassPaths = csharpWorkspace.IncompleteSourcePaths ?? [];
             deferCSharpMutationsForIncompleteScan = true;
             staleFilePurgePlan = FilePurgePlan.Empty;
@@ -802,6 +817,8 @@ public partial class McpServer
 
         void DeferCSharpMutationsForLoadedSnapshotDrift(string path)
         {
+            csharpPrepassSymbolArtifacts?.Clear();
+            csharpPrepassSymbolArtifacts = null;
             deferCSharpMutationsForIncompleteScan = true;
             preservePriorPositiveCSharpSourceNoOp = false;
             csharpSourceEvidenceForStamp = false;
@@ -1036,6 +1053,7 @@ public partial class McpServer
                         parallelism: 1,
                         excludedExistingFileIds: staleFilePurgePlan.FileIds,
                         isExistingSymbolPathExcluded: IsExistingCSharpSymbolPathNowNonCSharp,
+                        patternConfigsAlreadyLoaded: true,
                         cancellationToken: requestToken));
                 preservePriorPositiveCSharpSourceNoOp = false;
                 if (!csharpWorkspace.SourceContractEvidenceComplete)
@@ -1221,6 +1239,8 @@ public partial class McpServer
             }
             if (!stableFiles)
             {
+                csharpPrepassSymbolArtifacts?.Clear();
+                csharpPrepassSymbolArtifacts = null;
                 var driftPath = FormatCSharpWorkspaceSnapshotPath(changedFilePath);
                 incompleteCSharpPrepassPaths = [driftPath];
                 deferCSharpMutationsForIncompleteScan = true;
@@ -1286,7 +1306,9 @@ public partial class McpServer
             ReferenceSecondaryIndexBulkLoadGuard.StartRecoverable(
                 writer,
                 enabled: useFtsBulkLoad,
-                requestToken);
+                requestToken,
+                refreshPlannerStatisticsBeforeCandidatePopulation:
+                    startedWithNoIndexedFilesBeforeRebuild && !rebuild);
 
         if (staleFilePurgePlan.Count > 0)
         {
@@ -1509,8 +1531,23 @@ public partial class McpServer
                 }
                 List<SymbolRecord> symbols;
                 FileIssue? symbolRegexTimeoutIssue;
-                using (var regexTimeouts = BoundedRegex.CaptureTimeouts(record.Lang, "symbol_extraction"))
+                if (string.Equals(record.Lang, "csharp", StringComparison.Ordinal)
+                    && record.Checksum is { } checksum
+                    && csharpPrepassSymbolArtifacts?.TryTake(
+                        record.Path,
+                        checksum,
+                        out var symbolArtifact) == true)
                 {
+                    symbols = symbolArtifact.Symbols;
+                    foreach (var symbol in symbols)
+                        symbol.FileId = fileId;
+                    symbolRegexTimeoutIssue = null;
+                }
+                else
+                {
+                    using var regexTimeouts = BoundedRegex.CaptureTimeouts(
+                        record.Lang,
+                        "symbol_extraction");
                     symbols = SymbolExtractor.ExtractNormalized(
                         fileId,
                         record.Lang,
@@ -1521,7 +1558,10 @@ public partial class McpServer
                         requestToken,
                         loaded.ConflictMarkerLine,
                         patternConfigsAlreadyLoaded: true);
-                    symbolRegexTimeoutIssue = IndexCommandRunner.BuildRegexTimeoutIssue(record.Path, regexTimeouts);
+                    symbolRegexTimeoutIssue =
+                        IndexCommandRunner.BuildRegexTimeoutIssue(
+                            record.Path,
+                            regexTimeouts);
                 }
                 var familyScopeKey = indexer.GetFamilyScopeKey(filePath, record.Lang);
                 SymbolExtractor.ApplyFamilyScope(symbols, familyScopeKey, record.Lang);
@@ -1764,6 +1804,9 @@ public partial class McpServer
             processed++;
             await EmitProgressNotificationAsync(progressToken, processed, files.Count).ConfigureAwait(false);
         }
+
+        csharpPrepassSymbolArtifacts?.Clear();
+        csharpPrepassSymbolArtifacts = null;
 
         var referenceIdentityReadyForMutualRecursionRefresh =
             !deferCSharpMutationsForIncompleteScan && mutualRecursionRefreshNeeded
@@ -2077,13 +2120,23 @@ public partial class McpServer
             var canRestampExistingFoldTrust = foldVersionMatchesCurrent && foldFingerprintMatchesCurrent;
             if (skipped == 0 || canRestampExistingFoldTrust)
             {
+                var currentFoldProducerSnapshot =
+                    ExtractorPluginRegistry.CaptureFoldProducerReadinessSnapshot(projectPath);
+                if (!currentFoldProducerSnapshot.UsesOnlyBuiltInProducers
+                    || currentFoldProducerSnapshot.MutationGeneration
+                        != freshFoldProducerSnapshot.MutationGeneration
+                    || postExtractionHooks.ValueIfCreated?.HasHooks == true)
+                {
+                    authoritativeFreshFoldRowsClaim?.Invalidate();
+                }
                 // The stamp transaction performs the only row verification for the common
                 // current-metadata path and reports whether NULL or stale values blocked it.
                 // current metadata 経路の row 検証は stamp transaction 内の一度だけにまとめ、
                 // NULL と stale value のどちらが妨げたかも保持する。
                 var foldStampResult = writer.MarkFoldReadyWithResult(
                     stampCurrentSymbolExtractorVersions: skipped == 0,
-                    symbolExtractorLanguagesToStamp: skipped == 0 ? indexedSymbolExtractorLanguages : null);
+                    symbolExtractorLanguagesToStamp: skipped == 0 ? indexedSymbolExtractorLanguages : null,
+                    authoritativeFreshRowsClaim: authoritativeFreshFoldRowsClaim);
                 foldReadyAfter = foldStampResult == FoldReadyStampResult.Ready;
                 if (foldStampResult == FoldReadyStampResult.MissingBackfill)
                     foldReadyReason = DegradationReasonCodes.MissingFoldBackfill;

@@ -579,8 +579,11 @@ public partial class IndexCommandRunnerTests
                 "public class 顧客 { }\n",
                 Path.Combine(projectRoot, "顧客.cs"),
                 projectRoot);
-            using var input = new StringReader(
-                JsonSerializer.Serialize(request, SymbolExtractionWorker.JsonOptions) + "\n");
+            var requestUtf8 = JsonSerializer.SerializeToUtf8Bytes(request, SymbolExtractionWorker.JsonOptions);
+            using var input = new MemoryStream();
+            input.Write(requestUtf8);
+            input.WriteByte((byte)'\n');
+            input.Position = 0;
             using var output = new MemoryStream();
             using var error = new StringWriter();
 
@@ -702,6 +705,523 @@ public partial class IndexCommandRunnerTests
             finally
             {
                 ExtractorPluginRegistry.ResetForTests();
+                DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void SymbolExtractionWorker_CachesUserRootAndAncestorPatternDiscoveryForRun()
+    {
+        var projectRoot = CreateTempProject();
+        var userRoot = CreateTempProject();
+        lock (TestConsoleLock.Gate)
+        {
+            WorkerPatternConfigDiscoveryCache? cache = null;
+            var inspected = new Dictionary<string, int>(StringComparer.Ordinal);
+            try
+            {
+                var userPatternDirectory = Path.Combine(userRoot, ".cdidx", "patterns");
+                var firstDirectory = Path.Combine(projectRoot, "src", "shared", "first");
+                var secondDirectory = Path.Combine(projectRoot, "src", "shared", "second");
+                Directory.CreateDirectory(firstDirectory);
+                Directory.CreateDirectory(secondDirectory);
+                WriteSymbolWorkerPatternConfig(
+                    userRoot,
+                    "user.yaml",
+                    "language: \"workeruserdsl\"\nextensions:\n  - extension: \".workeruser\"\npatterns:\n  - kind: \"class\"\n    regex: \"^user (?<name>\\\\w+)\"\n");
+                WriteSymbolWorkerPatternConfig(
+                    projectRoot,
+                    "root.yaml",
+                    "language: \"workerrootdsl\"\nextensions:\n  - extension: \".workerroot\"\npatterns:\n  - kind: \"class\"\n    regex: \"^root (?<name>\\\\w+)\"\n");
+                ExtractorPluginRegistry.ResetForTests();
+                ExtractorPluginRegistry.UserPatternDirectoryOverrideForTests = userPatternDirectory;
+                ExtractorPluginRegistry.InspectPatternDirectoryForTesting = path =>
+                {
+                    var normalized = PathCasing.NormalizeBoundaryPath(path);
+                    inspected[normalized] = inspected.GetValueOrDefault(normalized) + 1;
+                };
+                SymbolExtractionWorker.PatternConfigDiscoveryCacheFactoryForTesting = () =>
+                    cache = new WorkerPatternConfigDiscoveryCache();
+
+                var responses = RunSymbolWorkerRequestsInProcess(
+                    CreateSymbolWorkerRequest(projectRoot, Path.Combine(firstDirectory, "one.cs")),
+                    CreateSymbolWorkerRequest(projectRoot, Path.Combine(secondDirectory, "two.cs")),
+                    CreateSymbolWorkerRequest(projectRoot, Path.Combine(firstDirectory, "three.cs")));
+
+                Assert.All(responses, response => Assert.Null(response.WorkerError));
+                Assert.NotNull(cache);
+                Assert.Equal(1, cache.RootCount);
+                Assert.Equal(4, cache.RetainedDirectoryCount);
+                Assert.Equal(1, inspected[PathCasing.NormalizeBoundaryPath(userPatternDirectory)]);
+                Assert.Equal(
+                    1,
+                    inspected[PathCasing.NormalizeBoundaryPath(Path.Combine(projectRoot, ".cdidx"))]);
+                Assert.Equal(
+                    1,
+                    inspected[PathCasing.NormalizeBoundaryPath(Path.Combine(projectRoot, ".cdidx", "patterns"))]);
+            }
+            finally
+            {
+                SymbolExtractionWorker.PatternConfigDiscoveryCacheFactoryForTesting = null;
+                ExtractorPluginRegistry.ResetForTests();
+                DeleteDirectory(projectRoot);
+                DeleteDirectory(userRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void SymbolExtractionWorker_MissingNestedSidecarRemainsAbsentUntilNewWorkerSnapshot()
+    {
+        var projectRoot = CreateTempProject();
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                var sourceDirectory = Path.Combine(projectRoot, "src", "nested");
+                var filePath = Path.Combine(sourceDirectory, "sample.laternested");
+                Directory.CreateDirectory(sourceDirectory);
+                ExtractorPluginRegistry.ResetForTests();
+
+                using (var worker = new SymbolExtractionWorkerClient())
+                {
+                    var beforeConfig = worker.Invoke(
+                        0,
+                        "laternesteddsl",
+                        "entity Before",
+                        filePath,
+                        projectRoot,
+                        contentIsNormalized: true,
+                        hasOversizeLine: false,
+                        conflictMarkerLine: null,
+                        TimeSpan.FromSeconds(5));
+                    Assert.True(beforeConfig.Success, beforeConfig.WorkerError);
+                    Assert.Empty(beforeConfig.Symbols!);
+
+                    WriteSymbolWorkerPatternConfig(
+                        sourceDirectory,
+                        "later.yaml",
+                        "language: \"laternesteddsl\"\nextensions:\n  - extension: \".laternested\"\npatterns:\n  - kind: \"class\"\n    regex: \"^entity (?<name>\\\\w+)\"\n");
+
+                    var sameSnapshot = worker.Invoke(
+                        0,
+                        "laternesteddsl",
+                        "entity SameSnapshot",
+                        filePath,
+                        projectRoot,
+                        contentIsNormalized: true,
+                        hasOversizeLine: false,
+                        conflictMarkerLine: null,
+                        TimeSpan.FromSeconds(5));
+                    Assert.True(sameSnapshot.Success, sameSnapshot.WorkerError);
+                    Assert.Empty(sameSnapshot.Symbols!);
+                }
+
+                using var nextWorker = new SymbolExtractionWorkerClient();
+                var nextSnapshot = nextWorker.Invoke(
+                    0,
+                    "laternesteddsl",
+                    "entity NextSnapshot",
+                    filePath,
+                    projectRoot,
+                    contentIsNormalized: true,
+                    hasOversizeLine: false,
+                    conflictMarkerLine: null,
+                    TimeSpan.FromSeconds(5));
+                Assert.True(nextSnapshot.Success, nextSnapshot.WorkerError);
+                Assert.Equal("NextSnapshot", Assert.Single(nextSnapshot.Symbols!).Name);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void SymbolExtractionWorker_NewRunCommandResetsPatternDiscoverySnapshot()
+    {
+        var projectRoot = CreateTempProject();
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                var sourceDirectory = Path.Combine(projectRoot, "src", "run-reset");
+                var filePath = Path.Combine(sourceDirectory, "sample.runreset");
+                Directory.CreateDirectory(sourceDirectory);
+                ExtractorPluginRegistry.ResetForTests();
+                ExtractorPluginRegistry.UserPatternDirectoryOverrideForTests =
+                    Path.Combine(projectRoot, "missing-user-patterns");
+
+                var beforeConfig = Assert.Single(RunSymbolWorkerRequestsInProcess(
+                    CreateSymbolWorkerRequest(
+                        projectRoot,
+                        filePath,
+                        "runresetdsl",
+                        "reset Before")));
+                Assert.Null(beforeConfig.WorkerError);
+                Assert.Empty(beforeConfig.Symbols!);
+
+                WriteSymbolWorkerPatternConfig(
+                    sourceDirectory,
+                    "run-reset.yaml",
+                    "language: \"runresetdsl\"\nextensions:\n  - extension: \".runreset\"\npatterns:\n  - kind: \"class\"\n    regex: \"^reset (?<name>\\\\w+)\"\n");
+
+                var nextRun = Assert.Single(RunSymbolWorkerRequestsInProcess(
+                    CreateSymbolWorkerRequest(
+                        projectRoot,
+                        filePath,
+                        "runresetdsl",
+                        "reset NextRun")));
+                Assert.Null(nextRun.WorkerError);
+                Assert.Equal("NextRun", Assert.Single(nextRun.Symbols!).Name);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void SymbolExtractionWorker_CachesKnownPatternDiscoveryFailureForRun()
+    {
+        var projectRoot = CreateTempProject();
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                var sourceDirectory = Path.Combine(projectRoot, "src", "known-failure");
+                WriteSymbolWorkerPatternConfig(
+                    sourceDirectory,
+                    "known.yaml",
+                    "language: \"knownfailuredsl\"\nextensions:\n  - extension: \".knownfailure\"\npatterns:\n  - kind: \"class\"\n    regex: \"^known (?<name>\\\\w+)\"\n");
+                var patternDirectory = PathCasing.NormalizeBoundaryPath(
+                    Path.Combine(sourceDirectory, ".cdidx", "patterns"));
+                var yamlAttempts = 0;
+                ExtractorPluginRegistry.ResetForTests();
+                ExtractorPluginRegistry.UserPatternDirectoryOverrideForTests =
+                    Path.Combine(projectRoot, "missing-user-patterns");
+                ExtractorPluginRegistry.EnumeratePatternFilesForTesting = (directory, searchPattern) =>
+                {
+                    if (PathCasing.PathsEqual(patternDirectory, PathCasing.NormalizeBoundaryPath(directory))
+                        && string.Equals(searchPattern, "*.yaml", StringComparison.Ordinal))
+                    {
+                        yamlAttempts++;
+                        throw new IOException("simulated known pattern discovery failure");
+                    }
+
+                    return Directory.EnumerateFiles(directory, searchPattern, SearchOption.TopDirectoryOnly);
+                };
+
+                var responses = RunSymbolWorkerRequestsInProcess(
+                    CreateSymbolWorkerRequest(
+                        projectRoot,
+                        Path.Combine(sourceDirectory, "first.knownfailure"),
+                        "knownfailuredsl",
+                        "known First"),
+                    CreateSymbolWorkerRequest(
+                        projectRoot,
+                        Path.Combine(sourceDirectory, "second.knownfailure"),
+                        "knownfailuredsl",
+                        "known Second"));
+
+                Assert.Equal(1, yamlAttempts);
+                Assert.Contains("pattern directory", responses[0].CapturedStderr, StringComparison.OrdinalIgnoreCase);
+                Assert.Equal(string.Empty, responses[1].CapturedStderr);
+                Assert.Empty(responses[0].Symbols!);
+                Assert.Empty(responses[1].Symbols!);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void SymbolExtractionWorker_CachesRejectedSymlinkPatternDirectoryForRun()
+    {
+        var projectRoot = CreateTempProject();
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                var sourceDirectory = Path.Combine(projectRoot, "src", "unsafe");
+                var externalPatternDirectory = Path.Combine(projectRoot, "external-patterns");
+                Directory.CreateDirectory(sourceDirectory);
+                Directory.CreateDirectory(externalPatternDirectory);
+                var cdidxDirectory = Path.Combine(sourceDirectory, ".cdidx");
+                Directory.CreateDirectory(cdidxDirectory);
+                var patternDirectory = Path.Combine(cdidxDirectory, "patterns");
+                try
+                {
+                    Directory.CreateSymbolicLink(patternDirectory, externalPatternDirectory);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+                {
+                    return;
+                }
+
+                var normalizedPatternDirectory = PathCasing.NormalizeBoundaryPath(patternDirectory);
+                var patternInspections = 0;
+                ExtractorPluginRegistry.ResetForTests();
+                ExtractorPluginRegistry.UserPatternDirectoryOverrideForTests =
+                    Path.Combine(projectRoot, "missing-user-patterns");
+                ExtractorPluginRegistry.InspectPatternDirectoryForTesting = path =>
+                {
+                    if (PathCasing.PathsEqual(
+                            normalizedPatternDirectory,
+                            PathCasing.NormalizeBoundaryPath(path)))
+                    {
+                        patternInspections++;
+                    }
+                };
+
+                var responses = RunSymbolWorkerRequestsInProcess(
+                    CreateSymbolWorkerRequest(projectRoot, Path.Combine(sourceDirectory, "first.cs")),
+                    CreateSymbolWorkerRequest(projectRoot, Path.Combine(sourceDirectory, "second.cs")));
+
+                Assert.Equal(1, patternInspections);
+                Assert.Contains("symbolic links", responses[0].CapturedStderr, StringComparison.Ordinal);
+                Assert.Equal(string.Empty, responses[1].CapturedStderr);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void SymbolExtractionWorker_RetriesUnexpectedPatternDiscoveryFailure()
+    {
+        var projectRoot = CreateTempProject();
+        lock (TestConsoleLock.Gate)
+        {
+            try
+            {
+                var sourceDirectory = Path.Combine(projectRoot, "src", "unexpected-failure");
+                WriteSymbolWorkerPatternConfig(
+                    sourceDirectory,
+                    "retry.yaml",
+                    "language: \"retryworkerdsl\"\nextensions:\n  - extension: \".retryworker\"\npatterns:\n  - kind: \"class\"\n    regex: \"^retry (?<name>\\\\w+)\"\n");
+                var patternDirectory = PathCasing.NormalizeBoundaryPath(
+                    Path.Combine(sourceDirectory, ".cdidx", "patterns"));
+                var yamlAttempts = 0;
+                ExtractorPluginRegistry.ResetForTests();
+                ExtractorPluginRegistry.UserPatternDirectoryOverrideForTests =
+                    Path.Combine(projectRoot, "missing-user-patterns");
+                ExtractorPluginRegistry.EnumeratePatternFilesForTesting = (directory, searchPattern) =>
+                {
+                    if (PathCasing.PathsEqual(patternDirectory, PathCasing.NormalizeBoundaryPath(directory))
+                        && string.Equals(searchPattern, "*.yaml", StringComparison.Ordinal)
+                        && ++yamlAttempts == 1)
+                    {
+                        throw new InvalidOperationException("simulated unexpected pattern discovery failure");
+                    }
+
+                    return Directory.EnumerateFiles(directory, searchPattern, SearchOption.TopDirectoryOnly);
+                };
+
+                var responses = RunSymbolWorkerRequestsInProcess(
+                    CreateSymbolWorkerRequest(
+                        projectRoot,
+                        Path.Combine(sourceDirectory, "first.retryworker"),
+                        "retryworkerdsl",
+                        "retry First"),
+                    CreateSymbolWorkerRequest(
+                        projectRoot,
+                        Path.Combine(sourceDirectory, "second.retryworker"),
+                        "retryworkerdsl",
+                        "retry Second"));
+
+                Assert.NotNull(responses[0].WorkerError);
+                Assert.Null(responses[1].WorkerError);
+                Assert.Equal(2, yamlAttempts);
+                Assert.Equal("Second", Assert.Single(responses[1].Symbols!).Name);
+            }
+            finally
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void SymbolExtractionWorker_SaturatedPatternCacheFallsBackToUncachedDiscovery()
+    {
+        var projectRoot = CreateTempProject();
+        lock (TestConsoleLock.Gate)
+        {
+            WorkerPatternConfigDiscoveryCache? cache = null;
+            try
+            {
+                var firstDirectory = Path.Combine(projectRoot, "src", "first");
+                var overflowDirectory = Path.Combine(projectRoot, "src", "overflow");
+                Directory.CreateDirectory(firstDirectory);
+                WriteSymbolWorkerPatternConfig(
+                    overflowDirectory,
+                    "overflow.yaml",
+                    "language: \"overflowworkerdsl\"\nextensions:\n  - extension: \".overflowworker\"\npatterns:\n  - kind: \"class\"\n    regex: \"^overflow (?<name>\\\\w+)\"\n");
+                var overflowPatternDirectory = PathCasing.NormalizeBoundaryPath(
+                    Path.Combine(overflowDirectory, ".cdidx", "patterns"));
+                var overflowYamlEnumerations = 0;
+                ExtractorPluginRegistry.ResetForTests();
+                ExtractorPluginRegistry.UserPatternDirectoryOverrideForTests =
+                    Path.Combine(projectRoot, "missing-user-patterns");
+                ExtractorPluginRegistry.EnumeratePatternFilesForTesting = (directory, searchPattern) =>
+                {
+                    if (PathCasing.PathsEqual(
+                            overflowPatternDirectory,
+                            PathCasing.NormalizeBoundaryPath(directory))
+                        && string.Equals(searchPattern, "*.yaml", StringComparison.Ordinal))
+                    {
+                        overflowYamlEnumerations++;
+                    }
+
+                    return Directory.EnumerateFiles(directory, searchPattern, SearchOption.TopDirectoryOnly);
+                };
+                SymbolExtractionWorker.PatternConfigDiscoveryCacheFactoryForTesting = () =>
+                    cache = new WorkerPatternConfigDiscoveryCache(
+                        maxRootSnapshots: 1,
+                        maxDirectoriesPerRoot: 1,
+                        maxDirectoriesPerWorker: 1);
+
+                var responses = RunSymbolWorkerRequestsInProcess(
+                    CreateSymbolWorkerRequest(projectRoot, Path.Combine(firstDirectory, "first.cs")),
+                    CreateSymbolWorkerRequest(
+                        projectRoot,
+                        Path.Combine(overflowDirectory, "first.overflowworker"),
+                        "overflowworkerdsl",
+                        "overflow First"),
+                    CreateSymbolWorkerRequest(
+                        projectRoot,
+                        Path.Combine(overflowDirectory, "second.overflowworker"),
+                        "overflowworkerdsl",
+                        "overflow Second"));
+
+                Assert.All(responses, response => Assert.Null(response.WorkerError));
+                Assert.Equal("First", Assert.Single(responses[1].Symbols!).Name);
+                Assert.Equal("Second", Assert.Single(responses[2].Symbols!).Name);
+                Assert.Equal(2, overflowYamlEnumerations);
+                Assert.NotNull(cache);
+                Assert.Equal(1, cache.RetainedDirectoryCount);
+            }
+            finally
+            {
+                SymbolExtractionWorker.PatternConfigDiscoveryCacheFactoryForTesting = null;
+                ExtractorPluginRegistry.ResetForTests();
+                DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void WorkerPatternConfigDiscoveryCache_UsesFilesystemCasingAndBoundedRootLru()
+    {
+        var projectRoot = CreateTempProject();
+        lock (PathCasingTestLock.Gate)
+        {
+            var previousProbe = PathCasing.IgnoreCaseProbeForTesting;
+            try
+            {
+                PathCasing.ResetCacheForTests();
+                PathCasing.IgnoreCaseProbeForTesting = _ => true;
+                var cache = new WorkerPatternConfigDiscoveryCache(
+                    maxRootSnapshots: 2,
+                    maxDirectoriesPerRoot: 1,
+                    maxDirectoriesPerWorker: 2);
+                var rootAPath = Path.Combine(projectRoot, "root-a");
+                var rootBPath = Path.Combine(projectRoot, "root-b");
+                var rootCPath = Path.Combine(projectRoot, "root-c");
+                var rootA = cache.AddReloadedRoot(rootAPath);
+                var upperDirectory = Path.Combine(rootAPath, "Src", ".cdidx", "patterns");
+                var lowerDirectory = Path.Combine(rootAPath, "src", ".cdidx", "patterns");
+                Assert.True(cache.ShouldInspectPatternDirectory(rootA, upperDirectory));
+                cache.RecordInspectedPatternDirectory(rootA, upperDirectory);
+                Assert.False(cache.ShouldInspectPatternDirectory(rootA, lowerDirectory));
+
+                var overflowDirectory = Path.Combine(rootAPath, "other", ".cdidx", "patterns");
+                Assert.True(cache.ShouldInspectPatternDirectory(rootA, overflowDirectory));
+                cache.RecordInspectedPatternDirectory(rootA, overflowDirectory);
+                Assert.True(cache.ShouldInspectPatternDirectory(rootA, overflowDirectory));
+
+                _ = cache.AddReloadedRoot(rootBPath);
+                Assert.True(cache.TryGetRoot(rootAPath, out _));
+                _ = cache.AddReloadedRoot(rootCPath);
+                Assert.True(cache.TryGetRoot(rootAPath, out _));
+                Assert.False(cache.TryGetRoot(rootBPath, out _));
+                Assert.True(cache.TryGetRoot(rootCPath, out _));
+                Assert.Equal(2, cache.RootCount);
+
+                PathCasing.ResetCacheForTests();
+                PathCasing.IgnoreCaseProbeForTesting = _ => false;
+                var sensitiveCache = new WorkerPatternConfigDiscoveryCache();
+                var sensitiveRoot = sensitiveCache.AddReloadedRoot(rootAPath);
+                sensitiveCache.RecordInspectedPatternDirectory(sensitiveRoot, upperDirectory);
+                Assert.True(sensitiveCache.ShouldInspectPatternDirectory(sensitiveRoot, lowerDirectory));
+            }
+            finally
+            {
+                PathCasing.IgnoreCaseProbeForTesting = previousProbe;
+                PathCasing.ResetCacheForTests();
+                DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
+    public void WorkerPatternConfigDiscoveryCache_DoesNotProbeSymlinkedPatternTargetForCasing()
+    {
+        var projectRoot = CreateTempProject();
+        lock (PathCasingTestLock.Gate)
+        {
+            var previousProbe = PathCasing.IgnoreCaseProbeForTesting;
+            try
+            {
+                var sourceDirectory = Path.Combine(projectRoot, "src", "unsafe-case-probe");
+                var cdidxDirectory = Path.Combine(sourceDirectory, ".cdidx");
+                var externalPatternDirectory = Path.Combine(projectRoot, "external-patterns");
+                Directory.CreateDirectory(cdidxDirectory);
+                Directory.CreateDirectory(externalPatternDirectory);
+                var patternDirectory = Path.Combine(cdidxDirectory, "patterns");
+                try
+                {
+                    Directory.CreateSymbolicLink(patternDirectory, externalPatternDirectory);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+                {
+                    return;
+                }
+
+                var probedAnchors = new List<string>();
+                PathCasing.ResetCacheForTests();
+                PathCasing.IgnoreCaseProbeForTesting = anchor =>
+                {
+                    probedAnchors.Add(PathCasing.NormalizeBoundaryPath(anchor));
+                    return false;
+                };
+                var cache = new WorkerPatternConfigDiscoveryCache();
+                var root = cache.AddReloadedRoot(projectRoot);
+
+                Assert.True(cache.ShouldInspectPatternDirectory(root, patternDirectory));
+                cache.RecordInspectedPatternDirectory(root, patternDirectory);
+
+                Assert.Contains(PathCasing.NormalizeBoundaryPath(sourceDirectory), probedAnchors);
+                Assert.DoesNotContain(PathCasing.NormalizeBoundaryPath(patternDirectory), probedAnchors);
+                Assert.DoesNotContain(PathCasing.NormalizeBoundaryPath(externalPatternDirectory), probedAnchors);
+            }
+            finally
+            {
+                PathCasing.IgnoreCaseProbeForTesting = previousProbe;
+                PathCasing.ResetCacheForTests();
                 DeleteDirectory(projectRoot);
             }
         }
@@ -2402,6 +2922,7 @@ public sealed class Caller
         var rebuiltTypeScriptAugmentation = false;
         var refreshCount = 0;
         var foldBackfillVerifications = 0;
+        var foldValueVerifications = 0;
         var languagePresenceChecks = 0;
         var indexedLanguageReads = 0;
         var statReuseLookups = 0;
@@ -2419,6 +2940,7 @@ public sealed class Caller
                 previousRefreshHook?.Invoke();
             };
             DbWriter.FoldBackfillVerificationForTesting = () => foldBackfillVerifications++;
+            DbWriter.FoldValueVerificationForTesting = () => foldValueVerifications++;
             DbWriter.LanguagePresenceCheckForTesting = _ => languagePresenceChecks++;
             DbWriter.IndexedLanguagesReadForTesting = () => indexedLanguageReads++;
             DbWriter.ReusableUnchangedFileLookupForTesting = _ => reusableLookups++;
@@ -2432,6 +2954,7 @@ public sealed class Caller
             Assert.False(rebuiltTypeScriptAugmentation);
             Assert.Equal(1, refreshCount);
             Assert.Equal(1, foldBackfillVerifications);
+            Assert.Equal(0, foldValueVerifications);
             Assert.Equal(0, languagePresenceChecks);
             Assert.Equal(0, indexedLanguageReads);
             Assert.Equal(0, statReuseLookups);
@@ -2440,6 +2963,7 @@ public sealed class Caller
             Assert.Equal(2, json.GetProperty("summary").GetProperty("files_total").GetInt64());
 
             refreshCount = 0;
+            foldValueVerifications = 0;
             var (rebuildExitCode, rebuildJson) = RunAndCaptureJson([
                 projectRoot,
                 "--db",
@@ -2452,6 +2976,7 @@ public sealed class Caller
             Assert.Equal("success", rebuildJson.GetProperty("status").GetString());
             Assert.False(rebuiltTypeScriptAugmentation);
             Assert.Equal(1, refreshCount);
+            Assert.Equal(1, foldValueVerifications);
             using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
             Assert.Equal(
                 DbContext.TypeScriptAugmentationVersion.ToString(CultureInfo.InvariantCulture),
@@ -2462,6 +2987,7 @@ public sealed class Caller
             IndexCommandRunner.FullScanTypeScriptAugmentationRebuildForTesting = null;
             DbWriter.MutualRecursionRefreshForTesting = previousRefreshHook;
             DbWriter.FoldBackfillVerificationForTesting = null;
+            DbWriter.FoldValueVerificationForTesting = null;
             DbWriter.LanguagePresenceCheckForTesting = null;
             DbWriter.IndexedLanguagesReadForTesting = null;
             DbWriter.ReusableUnchangedFileLookupForTesting = null;
@@ -9881,6 +10407,49 @@ public sealed class Caller
 
     private static void WriteSymbolWorkerPatternConfig(string projectRoot, string content)
         => WriteSymbolWorkerPatternConfig(projectRoot, "toydsl.yaml", content);
+
+    private static SymbolExtractionWorker.WorkerRequest CreateSymbolWorkerRequest(
+        string projectRoot,
+        string filePath,
+        string lang = "csharp",
+        string content = "class WorkerCacheSample { }")
+        => new(
+            0,
+            lang,
+            content,
+            filePath,
+            projectRoot,
+            ContentIsNormalized: true,
+            HasOversizeLine: false,
+            ConflictMarkerLine: null);
+
+    private static List<SymbolExtractionWorker.WorkerResponse> RunSymbolWorkerRequestsInProcess(
+        params SymbolExtractionWorker.WorkerRequest[] requests)
+    {
+        var frames = string.Join(
+            '\n',
+            requests.Select(request => JsonSerializer.Serialize(request, SymbolExtractionWorker.JsonOptions)));
+        using var input = new StringReader(frames + "\n");
+        using var output = new StringWriter(CultureInfo.InvariantCulture);
+        using var error = new StringWriter(CultureInfo.InvariantCulture);
+
+        var handled = SymbolExtractionWorker.TryRunCommand(
+            [SymbolExtractionWorker.CommandName],
+            input,
+            output,
+            error,
+            out var exitCode);
+
+        Assert.True(handled);
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, error.ToString());
+        return output.ToString()
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => JsonSerializer.Deserialize<SymbolExtractionWorker.WorkerResponse>(
+                line,
+                SymbolExtractionWorker.JsonOptions)!)
+            .ToList();
+    }
 
     private static void WriteSymbolWorkerPatternConfig(string projectRoot, string fileName, string content)
     {

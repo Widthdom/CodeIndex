@@ -1122,6 +1122,10 @@ public partial class IndexCommandRunnerTests
     public void Run_FullScan_IncludeSymbolKindKeepsOnlyMatchingSymbols()
     {
         var projectRoot = CreateTempProject();
+        var previousArtifactHook =
+            CSharpPrepassSymbolArtifactCache.EventForTesting;
+        var artifactEvents =
+            new ConcurrentQueue<CSharpPrepassSymbolArtifactCacheEvent>();
         try
         {
             File.WriteAllText(Path.Combine(projectRoot, "app.py"), """
@@ -1131,20 +1135,69 @@ public partial class IndexCommandRunnerTests
                 def helper():
                     return App()
                 """);
+            const string csharpRelativePath = "Cafe\u0301.cs";
+            var csharpIndexPath = FileIndexer.NormalizeIndexPath(csharpRelativePath);
+            var csharpPath = Path.Combine(projectRoot, csharpRelativePath);
+            const string csharpSource = """
+                namespace Demo;
+                file partial class Fixture
+                {
+                    public static int RemovedByFilter() => 1;
+                }
+                """;
+            File.WriteAllText(csharpPath, csharpSource);
+            var indexer = new FileIndexer(projectRoot, ignoreCase: false);
+            var expectedCSharpSymbols = SymbolExtractor.Extract(
+                0,
+                "csharp",
+                csharpSource,
+                csharpPath,
+                projectRoot);
+            SymbolExtractor.ApplyFamilyScope(
+                expectedCSharpSymbols,
+                indexer.GetFamilyScopeKey(csharpPath, "csharp"),
+                "csharp");
+            var expectedFamilyKey = Assert.Single(
+                expectedCSharpSymbols,
+                symbol => symbol.Kind == "class"
+                          && symbol.Name == "Fixture").FamilyKey;
+            CSharpPrepassSymbolArtifactCache.EventForTesting =
+                artifactEvents.Enqueue;
 
-            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--include-symbol-kind", "class", "--json"]);
+            var (exitCode, json) = RunAndCaptureJson(
+                [projectRoot, "--include-symbol-kind", "class", "--parallelism", "1", "--json"]);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal("success", json.GetProperty("status").GetString());
             Assert.True(json.GetProperty("summary").GetProperty("symbols_dropped_by_kind_filter").GetInt32() > 0);
+            Assert.Contains(
+                artifactEvents,
+                item => item.Phase == "taken"
+                        && item.Path == csharpIndexPath);
 
-            var counts = ReadSymbolKindCounts(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var counts = ReadSymbolKindCounts(dbPath);
             Assert.True(counts.GetValueOrDefault("class") > 0);
             Assert.DoesNotContain(counts.Keys, kind => !string.Equals(kind, "class", StringComparison.OrdinalIgnoreCase));
+            using var connection = OpenNonPoolingConnection(dbPath);
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT family_key
+                FROM symbols
+                WHERE file_id = (SELECT id FROM files WHERE path = $path)
+                  AND kind = 'class'
+                  AND name = 'Fixture'
+                """;
+            command.Parameters.AddWithValue("$path", csharpIndexPath);
+            Assert.Equal(expectedFamilyKey, command.ExecuteScalar());
         }
         finally
         {
+            CSharpPrepassSymbolArtifactCache.EventForTesting =
+                previousArtifactHook;
             DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
         }
     }
 
@@ -1903,6 +1956,126 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FreshBuiltInSpecialFoldIdentitiesMatchFullValidator()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_fresh_special_fold_identities");
+        var foldValueVerifications = 0;
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "guide.md"),
+                "# Café Guide\n\n## Shared Heading\n\n## Shared Heading\n\n[again](#shared-heading-1)\n");
+            File.WriteAllText(
+                Path.Combine(projectRoot, "service.cs"),
+                "public interface IFoo { void Run(); }\n"
+                + "public class Service : IFoo { void IFoo.Run() { } }\n");
+            File.WriteAllText(
+                Path.Combine(projectRoot, "style.nim"),
+                "proc My_Proc*() = discard\nproc call*() = myProc()\n");
+            File.WriteAllText(
+                Path.Combine(projectRoot, "worker.ts"),
+                "interface Worker { runTask(): void; }\n"
+                + "class Impl implements Worker { runTask(): void {} }\n");
+            File.WriteAllText(
+                Path.Combine(projectRoot, "unicode.py"),
+                "def Straße():\n    return 1\n");
+            DbWriter.FoldValueVerificationForTesting = () => foldValueVerifications++;
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(0, foldValueVerifications);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            var writer = new DbWriter(db.Connection);
+            Assert.True(writer.AllFoldedColumnValuesMatchCurrentFold());
+            Assert.Equal(1, foldValueVerifications);
+            Assert.Equal(
+                DbContext.FoldReadyFlag,
+                db.GetUserVersion() & DbContext.FoldReadyFlag);
+        }
+        finally
+        {
+            DbWriter.FoldValueVerificationForTesting = null;
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FreshFoldClaim_TransientCustomProducerHistoryFailsClosed()
+    {
+        lock (TestConsoleLock.Gate)
+        {
+            var projectRoot = TestProjectHelper.CreateTempProject(
+                "cdidx_fresh_fold_transient_custom_producer");
+            var foldValueVerifications = 0;
+            var reloaded = 0;
+            ExtractorPluginRegistry.FoldProducerReadinessSnapshot? customSnapshot = null;
+            ExtractorPluginRegistry.FoldProducerReadinessSnapshot? restoredSnapshot = null;
+            try
+            {
+                ExtractorPluginRegistry.ResetForTests();
+                File.WriteAllText(
+                    Path.Combine(projectRoot, "app.py"),
+                    "def Straße():\n    return 1\n");
+                var initialSnapshot =
+                    ExtractorPluginRegistry.CaptureFoldProducerReadinessSnapshot(projectRoot);
+                Assert.True(initialSnapshot.UsesOnlyBuiltInProducers);
+
+                DbWriter.FoldValueVerificationForTesting = () => foldValueVerifications++;
+                IndexCommandRunner.FullScanInputSnapshotBarrierForTesting = phase =>
+                {
+                    if (!string.Equals(phase, "before_readiness", StringComparison.Ordinal)
+                        || Interlocked.Exchange(ref reloaded, 1) != 0)
+                    {
+                        return;
+                    }
+
+                    var patternsDirectory = Path.Combine(projectRoot, ".cdidx", "patterns");
+                    Directory.CreateDirectory(patternsDirectory);
+                    var patternPath = Path.Combine(patternsDirectory, "transient.yaml");
+                    File.WriteAllText(
+                        patternPath,
+                        "language: \"transientdsl\"\n"
+                        + "extensions:\n  - extension: \".transient\"\n"
+                        + "patterns:\n  - kind: \"class\"\n"
+                        + "    regex: \"^entity (?<name>\\\\w+)\"\n");
+                    ExtractorPluginRegistry.ReloadPatternConfigsForProjectRoot(projectRoot);
+                    customSnapshot =
+                        ExtractorPluginRegistry.CaptureFoldProducerReadinessSnapshot(projectRoot);
+
+                    File.Delete(patternPath);
+                    Directory.Delete(patternsDirectory);
+                    ExtractorPluginRegistry.ReloadPatternConfigsForProjectRoot(projectRoot);
+                    restoredSnapshot =
+                        ExtractorPluginRegistry.CaptureFoldProducerReadinessSnapshot(projectRoot);
+                };
+
+                var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal("success", json.GetProperty("status").GetString());
+                Assert.Equal(1, reloaded);
+                Assert.False(customSnapshot!.Value.UsesOnlyBuiltInProducers);
+                Assert.True(restoredSnapshot!.Value.UsesOnlyBuiltInProducers);
+                Assert.NotEqual(
+                    initialSnapshot.MutationGeneration,
+                    restoredSnapshot.Value.MutationGeneration);
+                Assert.Equal(1, foldValueVerifications);
+            }
+            finally
+            {
+                IndexCommandRunner.FullScanInputSnapshotBarrierForTesting = null;
+                DbWriter.FoldValueVerificationForTesting = null;
+                ExtractorPluginRegistry.ResetForTests();
+                DeleteDirectory(projectRoot);
+            }
+        }
+    }
+
+    [Fact]
     public void Run_FullScanAfterHeadChange_WithPostExtractionHooksKeepsSequentialReferences()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_head_changed_hooks_sequential");
@@ -1910,6 +2083,8 @@ public partial class IndexCommandRunnerTests
             "cdidx_head_changed_hook_extensions_sequential");
         bool? parallelized = null;
         var originalHooksDir = Environment.GetEnvironmentVariable("CDIDX_HOOKS_DIR");
+        var previousFoldValueVerification = DbWriter.FoldValueVerificationForTesting;
+        var foldValueVerifications = 0;
         try
         {
             var hooksDir = Path.Combine(extensionProject.Root, "hooks");
@@ -1920,6 +2095,11 @@ public partial class IndexCommandRunnerTests
                 hookAssemblyPath,
                 Path.Combine(hooksDir, Path.GetFileName(hookAssemblyPath)));
             Environment.SetEnvironmentVariable("CDIDX_HOOKS_DIR", hooksDir);
+            DbWriter.FoldValueVerificationForTesting = () =>
+            {
+                foldValueVerifications++;
+                previousFoldValueVerification?.Invoke();
+            };
 
             RunGit(projectRoot, "init");
             File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App { public void Run() { } }\n");
@@ -1932,6 +2112,8 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(
                 initialStatus == "partial" ? CommandExitCodes.PartialResult : CommandExitCodes.Success,
                 initialExitCode);
+            Assert.Equal(initialStatus == "success" ? 1 : 0, foldValueVerifications);
+            DbWriter.FoldValueVerificationForTesting = previousFoldValueVerification;
 
             File.AppendAllText(Path.Combine(projectRoot, "app.cs"), "public class Next { public void Run() { } }\n");
             RunGit(projectRoot, "add", "app.cs");
@@ -1951,6 +2133,7 @@ public partial class IndexCommandRunnerTests
         finally
         {
             Environment.SetEnvironmentVariable("CDIDX_HOOKS_DIR", originalHooksDir);
+            DbWriter.FoldValueVerificationForTesting = previousFoldValueVerification;
             IndexCommandRunner.FullScanExtractionSchedulingForTesting = null;
             SqliteConnection.ClearAllPools();
             GC.Collect();
@@ -2131,11 +2314,17 @@ public partial class IndexCommandRunnerTests
         var previousLookupHook = ReferenceExtractor.CSharpStaticInterfaceMemberLookupsBuiltForTesting;
         var previousPrepassHook = IndexCommandRunner.FullScanCSharpPrepassForTesting;
         var previousContentLoadHook = IndexCommandRunner.FullScanFileContentLoadForTesting;
+        var previousArtifactHook =
+            CSharpPrepassSymbolArtifactCache.EventForTesting;
+        var artifactEvents =
+            new ConcurrentQueue<CSharpPrepassSymbolArtifactCacheEvent>();
         var matchingLookupBuilds = 0;
         var noOpPrepassCount = 0;
         var noOpContentLoadCount = 0;
         try
         {
+            CSharpPrepassSymbolArtifactCache.EventForTesting =
+                artifactEvents.Enqueue;
             ReferenceExtractor.CSharpStaticInterfaceMemberLookupsBuiltForTesting = symbols =>
             {
                 if (symbols.Any(symbol =>
@@ -2171,6 +2360,16 @@ public partial class IndexCommandRunnerTests
                 [projectRoot, "--parallelism", "4", "--json", "--quiet"],
                 _jsonOptions);
             Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(
+                implementationFileCount + 1,
+                artifactEvents.Count(item => item.Phase == "admitted"));
+            Assert.Equal(
+                implementationFileCount + 1,
+                artifactEvents.Count(item => item.Phase == "taken"));
+            Assert.Contains(
+                artifactEvents,
+                item => item.Phase == "cleared");
+            artifactEvents.Clear();
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             InstallCSharpEvidenceWriteAudit(dbPath);
 
@@ -2182,6 +2381,7 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, noOpExitCode);
             Assert.Equal(0, noOpPrepassCount);
             Assert.Equal(0, noOpContentLoadCount);
+            Assert.Empty(artifactEvents);
             Assert.Equal(0L, CountCSharpEvidenceWrites(dbPath));
 
             using var conn = OpenNonPoolingConnection(dbPath);
@@ -2243,6 +2443,160 @@ public partial class IndexCommandRunnerTests
             ReferenceExtractor.CSharpStaticInterfaceMemberLookupsBuiltForTesting = previousLookupHook;
             IndexCommandRunner.FullScanCSharpPrepassForTesting = previousPrepassHook;
             IndexCommandRunner.FullScanFileContentLoadForTesting = previousContentLoadHook;
+            CSharpPrepassSymbolArtifactCache.EventForTesting =
+                previousArtifactHook;
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Fact]
+    public void Run_FreshFullScan_CSharpPrepassArtifactChecksumMismatchFallsBackToAuthoritativeMainRead()
+    {
+        var projectRoot = CreateTempProject();
+        var sourcePath = Path.Combine(projectRoot, "Fixture.cs");
+        const string originalSource =
+            "public class Fixture { public static int Alpha() => 1; }\n";
+        const string mutatedSource =
+            "public class Fixture { public static int Bravo() => 1; }\n";
+        Assert.Equal(
+            Encoding.UTF8.GetByteCount(originalSource),
+            Encoding.UTF8.GetByteCount(mutatedSource));
+        File.WriteAllText(sourcePath, originalSource);
+        var originalModified = File.GetLastWriteTimeUtc(sourcePath);
+        var previousContentLoadHook =
+            IndexCommandRunner.FullScanFileContentLoadForTesting;
+        var previousArtifactHook =
+            CSharpPrepassSymbolArtifactCache.EventForTesting;
+        var artifactEvents =
+            new ConcurrentQueue<CSharpPrepassSymbolArtifactCacheEvent>();
+        var mutated = 0;
+        try
+        {
+            CSharpPrepassSymbolArtifactCache.EventForTesting =
+                artifactEvents.Enqueue;
+            IndexCommandRunner.FullScanFileContentLoadForTesting = path =>
+            {
+                if (path != "Fixture.cs"
+                    || Interlocked.Exchange(ref mutated, 1) != 0)
+                {
+                    return;
+                }
+
+                File.WriteAllText(sourcePath, mutatedSource);
+                File.SetLastWriteTimeUtc(sourcePath, originalModified);
+            };
+
+            var exitCode = IndexCommandRunner.Run(
+                [projectRoot, "--parallelism", "2", "--json", "--quiet"],
+                _jsonOptions);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(1, Volatile.Read(ref mutated));
+            Assert.Contains(
+                artifactEvents,
+                item => item.Phase == "admitted"
+                        && item.Path == "Fixture.cs");
+            Assert.Contains(
+                artifactEvents,
+                item => item.Phase == "checksum_mismatch"
+                        && item.Path == "Fixture.cs");
+            Assert.DoesNotContain(
+                artifactEvents,
+                item => item.Phase == "taken"
+                        && item.Path == "Fixture.cs");
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using var connection = OpenNonPoolingConnection(dbPath);
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT name
+                FROM symbols
+                WHERE file_id = (SELECT id FROM files WHERE path = 'Fixture.cs')
+                """;
+            using var reader = command.ExecuteReader();
+            var names = new List<string>();
+            while (reader.Read())
+                names.Add(reader.GetString(0));
+            Assert.Contains("Bravo", names);
+            Assert.DoesNotContain("Alpha", names);
+        }
+        finally
+        {
+            IndexCommandRunner.FullScanFileContentLoadForTesting =
+                previousContentLoadHook;
+            CSharpPrepassSymbolArtifactCache.EventForTesting =
+                previousArtifactHook;
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Theory]
+    [InlineData("rebuild")]
+    [InlineData("symbols-only")]
+    [InlineData("stall-seam")]
+    public void Run_CSharpPrepassArtifactReuse_IsDisabledOutsideFreshFullIndex(
+        string mode)
+    {
+        var projectRoot = CreateTempProject();
+        var sourcePath = Path.Combine(projectRoot, "Fixture.cs");
+        File.WriteAllText(
+            sourcePath,
+            "public class Fixture { public static int Run() => 1; }\n");
+        var previousArtifactHook =
+            CSharpPrepassSymbolArtifactCache.EventForTesting;
+        var previousStallTimeout =
+            IndexCommandRunner.IndexExtractionStallTimeoutForTesting;
+        var artifactEvents =
+            new ConcurrentQueue<CSharpPrepassSymbolArtifactCacheEvent>();
+        try
+        {
+            CSharpPrepassSymbolArtifactCache.EventForTesting =
+                artifactEvents.Enqueue;
+            if (mode == "stall-seam")
+            {
+                IndexCommandRunner.IndexExtractionStallTimeoutForTesting =
+                    () => TimeSpan.FromMinutes(1);
+            }
+            var args = new List<string>
+            {
+                projectRoot,
+                "--json",
+                "--quiet",
+            };
+            if (mode == "rebuild")
+            {
+                args.Add("--rebuild");
+                args.Add("--yes");
+            }
+            else if (mode == "symbols-only")
+                args.Add("--symbols-only");
+
+            var exitCode = IndexCommandRunner.Run(args.ToArray(), _jsonOptions);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.DoesNotContain(
+                artifactEvents,
+                item => item.Phase is "admitted" or "taken");
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            using var connection = OpenNonPoolingConnection(dbPath);
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT COUNT(*)
+                FROM symbols
+                WHERE name = 'Fixture'
+                """;
+            Assert.Equal(1L, command.ExecuteScalar());
+        }
+        finally
+        {
+            CSharpPrepassSymbolArtifactCache.EventForTesting =
+                previousArtifactHook;
+            IndexCommandRunner.IndexExtractionStallTimeoutForTesting =
+                previousStallTimeout;
             DeleteDirectory(projectRoot);
             SqliteConnection.ClearAllPools();
         }
@@ -2846,6 +3200,94 @@ public partial class IndexCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(["before_write", "before_readiness"], phases);
+        }
+        finally
+        {
+            IndexCommandRunner.FullScanInputSnapshotBarrierForTesting = previousBarrierHook;
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Fact]
+    public void Run_FreshFullScan_ExternalPreTransactionWriteFallsBackToFullResolution()
+    {
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        var previousBarrierHook = IndexCommandRunner.FullScanInputSnapshotBarrierForTesting;
+        var injected = 0;
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.py"), "def run():\n    return 1\n");
+            IndexCommandRunner.FullScanInputSnapshotBarrierForTesting = phase =>
+            {
+                previousBarrierHook?.Invoke(phase);
+                if (!string.Equals(phase, "before_write", StringComparison.Ordinal)
+                    || Interlocked.Exchange(ref injected, 1) != 0)
+                {
+                    return;
+                }
+
+                using var externalDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+                externalDb.InitializeSchema();
+                var externalWriter = new DbWriter(externalDb.Connection);
+                var fileId = externalWriter.UpsertFile(new FileRecord
+                {
+                    Path = "external/concurrent.py",
+                    Lang = "python",
+                    Size = 20,
+                    Lines = 1,
+                    Checksum = "external-concurrent",
+                    Modified = new DateTime(2026, 8, 11, 0, 0, 0, DateTimeKind.Utc),
+                });
+                externalWriter.InsertReferences(
+                    [
+                        new ReferenceRecord
+                        {
+                            FileId = fileId,
+                            SymbolName = "NoCandidate",
+                            ReferenceKind = "call",
+                            Line = 1,
+                            Column = 1,
+                            Context = "NoCandidate()",
+                            ContainerKind = "function",
+                            ContainerName = "external",
+                            IsSelfReference = true,
+                            IsMutualRecursion = true,
+                        },
+                    ],
+                    refreshMutualRecursionFlags: false);
+            };
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json", "--quiet"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(1, injected);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            using var command = db.Connection.CreateCommand();
+            command.CommandText =
+                """
+                SELECT r.resolution_state,
+                       r.resolution_candidate_count,
+                       r.target_symbol_id,
+                       r.target_symbol_key,
+                       r.is_self_reference,
+                       r.is_mutual_recursion
+                FROM symbol_references AS r
+                JOIN files AS f ON f.id = r.file_id
+                WHERE f.path = 'external/concurrent.py'
+                  AND r.symbol_name = 'NoCandidate'
+                """;
+            using var reader = command.ExecuteReader();
+            Assert.True(reader.Read());
+            Assert.Equal("unresolved", reader.GetString(0));
+            Assert.Equal(0, reader.GetInt32(1));
+            Assert.True(reader.IsDBNull(2));
+            Assert.True(reader.IsDBNull(3));
+            Assert.Equal(0, reader.GetInt32(4));
+            Assert.Equal(0, reader.GetInt32(5));
+            Assert.False(reader.Read());
         }
         finally
         {

@@ -21,6 +21,12 @@ public static partial class IndexCommandRunner
 
     private const int PartialIndexFileErrorLimit = 50;
 
+    internal static bool ShouldUseFreshReferenceResolutionDefaults(
+        bool startedWithNoIndexedFiles,
+        bool rebuild,
+        bool symbolsOnly)
+        => startedWithNoIndexedFiles && !rebuild && !symbolsOnly;
+
 
 
 
@@ -175,6 +181,10 @@ public static partial class IndexCommandRunner
         if (!options.Json && !options.Quiet)
             purgeCts = ConsoleUi.StartSpinner("Cleaning up stale entries...", spinnerFrames);
         var startedWithNoIndexedFiles = !writer.HasAnyIndexedFiles();
+        var useFreshReferenceResolutionDefaults = ShouldUseFreshReferenceResolutionDefaults(
+            startedWithNoIndexedFiles,
+            options.Rebuild,
+            options.SymbolsOnly);
         var priorCSharpStaticInterfaceSourceEvidence = options.Rebuild || startedWithNoIndexedFiles
             ? null
             : writer.GetCSharpStaticInterfaceSourceEvidence();
@@ -225,6 +235,13 @@ public static partial class IndexCommandRunner
 
         ThrowIfFullScanCancelled(0, files.Count);
         ExtractorPluginRegistry.LoadPatternConfigsForProjectRoot(projectRoot);
+        var freshFoldProducerSnapshot =
+            ExtractorPluginRegistry.CaptureFoldProducerReadinessSnapshot(projectRoot);
+        var authoritativeFreshFoldRowsClaim = !options.Rebuild
+            && startedWithNoIndexedFiles
+            && freshFoldProducerSnapshot.UsesOnlyBuiltInProducers
+            ? writer.TryClaimAuthoritativeFreshFoldRows(cancellationToken)
+            : null;
         var purgedRefs = 0;
 
         int processed = 0, skipped = 0, warnings = warningList.Count, errors = errorList.Count;
@@ -435,6 +452,8 @@ public static partial class IndexCommandRunner
         var csharpWorkspaceFileSnapshots =
             csharpPreflight.CSharpWorkspaceFileSnapshots;
         var csharpWorkspace = csharpPreflight.CSharpWorkspace;
+        var csharpPrepassSymbolArtifacts =
+            csharpPreflight.CSharpPrepassSymbolArtifacts;
         var forceFullCSharpRefreshFromInvalidatedNoOp =
             csharpPreflight.ForceFullCSharpRefreshFromInvalidatedNoOp;
         var preservePriorPositiveCSharpSourceNoOp =
@@ -446,6 +465,8 @@ public static partial class IndexCommandRunner
 
         void DeferCSharpMutationsForLoadedSnapshotDrift(string path)
         {
+            csharpPrepassSymbolArtifacts?.Clear();
+            csharpPrepassSymbolArtifacts = null;
             path = FormatCSharpWorkspaceSnapshotPath(projectRoot, path);
             deferCSharpMutationsForIncompleteScan = true;
             preservePriorPositiveCSharpSourceNoOp = false;
@@ -749,6 +770,8 @@ public static partial class IndexCommandRunner
                     cancellationToken);
             if (!stableFiles)
             {
+                csharpPrepassSymbolArtifacts?.Clear();
+                csharpPrepassSymbolArtifacts = null;
                 var driftPath = FormatCSharpWorkspaceSnapshotPath(projectRoot, changedFilePath);
                 var incompleteWorkspace = new CSharpStaticInterfaceWorkspaceSymbols(
                     [],
@@ -817,10 +840,21 @@ public static partial class IndexCommandRunner
         if (options.Rebuild)
             db.RepairIncompleteBatchReadiness();
         using var referenceGraphRefresh = writer.BeginReferenceGraphRefreshScope(
-            options.Rebuild || !writer.HasAnyIndexedFiles());
+            forceFullRefresh: options.Rebuild || startedWithNoIndexedFiles,
+            useFreshReferenceResolutionDefaults: useFreshReferenceResolutionDefaults);
         using var hotspotAggregateRefresh = writer.BeginDeferredHotspotReferenceAggregateRefresh(
             deferSecondaryIndexes: !options.SymbolsOnly && useFtsBulkLoad);
         using var fullScanTxn = writer.BeginTransaction(cancellationToken, "full scan write phase");
+        if (referenceGraphRefresh.FreshReferenceResolutionDefaultsPending
+            && !writer.CanUseFreshReferenceResolutionDefaultsInCurrentTransaction(cancellationToken))
+        {
+            // Another connection committed after the early empty-DB observation. All file,
+            // symbol, and reference writes below remain in the authoritative full refresh, but
+            // existing candidate-free references must be normalized by the ordinary full SQL.
+            // 早期のempty-DB確認後に別connectionがcommitした。以降のfile/symbol/reference writeは
+            // authoritative full refreshのまま維持し、既存candidate-free referenceは通常のfull SQLで正規化する。
+            referenceGraphRefresh.DisableFreshReferenceResolutionDefaults();
+        }
         fullScanWritePhaseStarted = true;
         writer.SetMeta(
             DbContext.WorkspaceVerificationPendingPathsCompleteMetaKey,
@@ -857,7 +891,9 @@ public static partial class IndexCommandRunner
             ReferenceSecondaryIndexBulkLoadGuard.StartTransactional(
                 writer,
                 enabled: !options.SymbolsOnly && useFtsBulkLoad,
-                cancellationToken);
+                cancellationToken,
+                refreshPlannerStatisticsBeforeCandidatePopulation:
+                    useFreshReferenceResolutionDefaults);
         using var ftsBulkLoad = FtsBulkLoadTriggerGuard.Start(writer, useFtsBulkLoad);
 
         if (staleFilePurgePlan.Count > 0)
@@ -923,6 +959,7 @@ public static partial class IndexCommandRunner
                 FilesCount = files.Count,
                 ForceExtractorRefresh = forceExtractorRefresh,
                 StartedWithNoIndexedFiles = startedWithNoIndexedFiles,
+                AuthoritativeFreshFoldRowsClaim = authoritativeFreshFoldRowsClaim,
                 PriorSymbolsOnlyGraphOmitted =
                     priorSymbolsOnlyGraphOmitted,
                 SymbolKindFilterMatchesPrior =
@@ -955,6 +992,8 @@ public static partial class IndexCommandRunner
                     () => deferCSharpMutationsForIncompleteScan,
                 GetFtsMutated = () => ftsMutated,
                 GetCSharpWorkspace = () => csharpWorkspace,
+                GetCSharpPrepassSymbolArtifacts =
+                    () => csharpPrepassSymbolArtifacts,
                 GetCSharpWorkspaceFileSnapshots =
                     () => csharpWorkspaceFileSnapshots,
                 DeferCSharpMutationsForLoadedSnapshotDrift =
@@ -1292,6 +1331,8 @@ public static partial class IndexCommandRunner
             Purged = purged,
             ScanHadErrors = scanHadErrors,
             StartedWithNoIndexedFiles = startedWithNoIndexedFiles,
+            AuthoritativeFreshFoldRowsClaim = authoritativeFreshFoldRowsClaim,
+            FreshFoldProducerSnapshot = freshFoldProducerSnapshot,
             HasCSharpFilesAfter = hasCSharpFilesAfter,
             CSharpSourceEvidenceComplete = csharpSourceEvidenceComplete,
             CSharpSourceEvidenceForStamp = csharpSourceEvidenceForStamp,

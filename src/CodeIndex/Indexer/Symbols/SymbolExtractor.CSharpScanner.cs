@@ -447,7 +447,10 @@ public static partial class SymbolExtractor
         ref bool inLeadingAttributeBlock,
         ref int attributeBracketDepth,
         ref int attributeParenDepth,
-        bool insideEnumBody)
+        bool insideEnumBody,
+        IReadOnlyList<SymbolPattern> applicablePatterns,
+        bool applyRequiredLiteralMatchInputGate,
+        RequiredLiteralGateCounts? requiredLiteralGateCounts)
     {
         var index = 0;
         while (index < line.Length && char.IsWhiteSpace(line[index]))
@@ -459,7 +462,14 @@ public static partial class SymbolExtractor
         if (!inLeadingAttributeBlock && line[index] != '[')
             return line;
 
-        if (inLeadingAttributeBlock && ShouldRecoverFromIncompleteLeadingCSharpAttribute(line, index, insideEnumBody, attributeParenDepth))
+        if (inLeadingAttributeBlock && ShouldRecoverFromIncompleteLeadingCSharpAttribute(
+                line,
+                index,
+                insideEnumBody,
+                attributeParenDepth,
+                applicablePatterns,
+                applyRequiredLiteralMatchInputGate,
+                requiredLiteralGateCounts))
         {
             inLeadingAttributeBlock = false;
             attributeBracketDepth = 0;
@@ -528,31 +538,59 @@ public static partial class SymbolExtractor
         string line,
         int firstNonWhitespaceIndex,
         bool insideEnumBody,
-        int attributeParenDepth)
+        int attributeParenDepth,
+        IReadOnlyList<SymbolPattern> applicablePatterns,
+        bool applyRequiredLiteralMatchInputGate,
+        RequiredLiteralGateCounts? requiredLiteralGateCounts)
     {
         if (firstNonWhitespaceIndex >= line.Length || line[firstNonWhitespaceIndex] == '[')
             return false;
 
-        return TryMatchAnyRecoverableCSharpPattern(line, insideEnumBody, attributeParenDepth);
+        return TryMatchAnyRecoverableCSharpPattern(
+            line,
+            0,
+            insideEnumBody,
+            attributeParenDepth,
+            applicablePatterns,
+            applyRequiredLiteralMatchInputGate,
+            requiredLiteralGateCounts);
     }
 
-    private static bool TryMatchAnyRecoverableCSharpPattern(string line, bool insideEnumBody, int attributeParenDepth)
+    private static bool TryMatchAnyRecoverableCSharpPattern(
+        string line,
+        int lineOffset,
+        bool insideEnumBody,
+        int attributeParenDepth,
+        IReadOnlyList<SymbolPattern> applicablePatterns,
+        bool applyRequiredLiteralMatchInputGate,
+        RequiredLiteralGateCounts? requiredLiteralGateCounts)
     {
-        if (PatternCache.TryGetValue("csharp", out var patterns))
+        var matchInputSpan = line.AsSpan(lineOffset);
+        string? matchInput = null;
+        foreach (var pattern in applicablePatterns)
         {
-            foreach (var pattern in patterns)
-            {
-                if (ReferenceEquals(pattern.Regex, CSharpEnumMemberRegex))
-                    continue;
+            if (ReferenceEquals(pattern.Regex, CSharpEnumMemberRegex))
+                continue;
 
-                if (pattern.Regex.IsMatch(line))
-                    return true;
+            if (!ShouldAttemptPatternRegex(
+                    pattern,
+                    matchInputSpan,
+                    applyRequiredLiteralMatchInputGate,
+                    requiredLiteralGateCounts))
+            {
+                continue;
             }
+
+            matchInput ??= lineOffset == 0 ? line : line[lineOffset..];
+            if (pattern.Regex.IsMatch(matchInput))
+                return true;
         }
 
-        return insideEnumBody
-            && attributeParenDepth == 0
-            && CSharpEnumMemberNameRegex.IsMatch(line);
+        if (!insideEnumBody || attributeParenDepth != 0)
+            return false;
+
+        matchInput ??= lineOffset == 0 ? line : line[lineOffset..];
+        return CSharpEnumMemberNameRegex.IsMatch(matchInput);
     }
 
     /// <summary>
@@ -3590,10 +3628,12 @@ public static partial class SymbolExtractor
         && getCSharpSwitchExpressionLines?.Invoke() is { } csharpSwitchExpressionLines
         && csharpSwitchExpressionLines[lineIndex];
 
-    private static string[] BuildCSharpMatchLines(string[] structuralLines)
-        => BuildCSharpMatchLines(structuralLines, out _);
-
-    private static string[] BuildCSharpMatchLines(string[] structuralLines, out int[]?[] collapsedToRaw)
+    private static string[] BuildCSharpMatchLines(
+        string[] structuralLines,
+        IReadOnlyList<SymbolPattern> applicablePatterns,
+        bool applyRequiredLiteralMatchInputGate,
+        RequiredLiteralGateCounts? requiredLiteralGateCounts,
+        out int[]?[] collapsedToRaw)
     {
         var matchLines = new string[structuralLines.Length];
         collapsedToRaw = new int[]?[structuralLines.Length];
@@ -3613,7 +3653,10 @@ public static partial class SymbolExtractor
                     ref inLeadingAttributeBlock,
                     ref attributeBracketDepth,
                     ref attributeParenDepth,
-                    activeEnumBodyDepth > 0),
+                    activeEnumBodyDepth > 0,
+                    applicablePatterns,
+                    applyRequiredLiteralMatchInputGate,
+                    requiredLiteralGateCounts),
                 out var lineCollapsedToRaw);
             collapsedToRaw[lineIndex] = lineCollapsedToRaw;
 

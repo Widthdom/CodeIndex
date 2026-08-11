@@ -13,7 +13,8 @@ public partial class DbWriter
         int StatementRows,
         int BoundParameterCount,
         int MaterializedReferenceCount,
-        int MaterializedReferenceLineCount);
+        int MaterializedReferenceLineCount,
+        bool UsesFreshResolutionDefaults);
 
     internal static Action<ReferenceInsertBindingWork>? ReferenceInsertBindingWorkForTesting
     {
@@ -21,7 +22,9 @@ public partial class DbWriter
         set => ScopedReferenceInsertBindingWorkForTesting.Value = value;
     }
 
-    private static string BuildReferenceInsertSql(int rowCount)
+    private static string BuildReferenceInsertSql(
+        int rowCount,
+        bool useFreshReferenceResolutionDefaults)
     {
         var sql = CreateBatchSqlBuilder(rowCount, estimatedCharsPerRow: 256);
         sql.Append(@"
@@ -29,7 +32,10 @@ public partial class DbWriter
                     file_id, symbol_name, reference_kind, line, column_number, span_length,
                     context, reference_line_id, container_kind, container_name,
                     symbol_name_folded, container_name_folded, is_self_reference,
-                    is_mutual_recursion, target_qualifier
+                    is_mutual_recursion, target_qualifier");
+        if (useFreshReferenceResolutionDefaults)
+            sql.Append(", resolution_state, resolution_candidate_count");
+        sql.Append(@"
                 )
                 VALUES ");
         var parameterIndex = 0;
@@ -37,14 +43,18 @@ public partial class DbWriter
         {
             if (row > 0)
                 sql.Append(", ");
-            AppendReferenceInsertParameterTuple(sql, ref parameterIndex);
+            AppendReferenceInsertParameterTuple(
+                sql,
+                ref parameterIndex,
+                useFreshReferenceResolutionDefaults);
         }
         return sql.ToString();
     }
 
     private static void AppendReferenceInsertParameterTuple(
         StringBuilder sql,
-        ref int parameterIndex)
+        ref int parameterIndex,
+        bool useFreshReferenceResolutionDefaults)
     {
         sql.Append('(');
         for (var column = 0; column < 15; column++)
@@ -56,6 +66,8 @@ public partial class DbWriter
             else
                 sql.Append("@p").Append(parameterIndex++);
         }
+        if (useFreshReferenceResolutionDefaults)
+            sql.Append(", 'unresolved', 0");
         sql.Append(')');
     }
 

@@ -23,6 +23,11 @@ public static partial class IndexCommandRunner
         internal required int FilesCount { get; init; }
         internal required bool ForceExtractorRefresh { get; init; }
         internal required bool StartedWithNoIndexedFiles { get; init; }
+        internal DbWriter.AuthoritativeFreshFoldRowsClaim? AuthoritativeFreshFoldRowsClaim
+        {
+            get;
+            init;
+        }
         internal required bool PriorSymbolsOnlyGraphOmitted { get; init; }
         internal required bool SymbolKindFilterMatchesPrior { get; init; }
         internal required bool CSharpIndexedProjectRootCompatible
@@ -68,6 +73,9 @@ public static partial class IndexCommandRunner
         internal required Func<bool> GetFtsMutated { get; init; }
         internal required Func<CSharpStaticInterfaceWorkspaceSymbols>
             GetCSharpWorkspace
+        { get; init; }
+        internal required Func<CSharpPrepassSymbolArtifactCache?>
+            GetCSharpPrepassSymbolArtifacts
         { get; init; }
         internal required Func<Dictionary<string,
             CSharpStaticInterfacePrepass.FileStatSnapshot>?>
@@ -126,6 +134,7 @@ public static partial class IndexCommandRunner
     {
         if (context.ExtractionWorkItemCount == 0)
         {
+            context.GetCSharpPrepassSymbolArtifacts()?.Clear();
             FullScanExtractionSchedulingForTesting?.Invoke(false, null);
             return new FullScanExtractionPipelineResult(null, null);
         }
@@ -134,6 +143,8 @@ public static partial class IndexCommandRunner
             context.Options.MaxFileSizeBytes,
             maxSymbolCount: context.Options.MaxSymbolsPerFile + 1,
             maxReferenceCount: context.Options.MaxReferencesPerFile + 1);
+        if (postExtractionHooks.HasHooks)
+            context.AuthoritativeFreshFoldRowsClaim?.Invalidate();
         var scheduling = ResolveFullScanExtractionScheduling(
             context,
             postExtractionHooks);
@@ -154,6 +165,7 @@ public static partial class IndexCommandRunner
         }
         finally
         {
+            context.GetCSharpPrepassSymbolArtifacts()?.Clear();
             context.SetCurrentJsonIndexFile(null);
             context.FullScanProgress.StopJsonHeartbeat();
             postExtractionHooks.Dispose();
@@ -326,6 +338,8 @@ public static partial class IndexCommandRunner
                 ParallelizeExtraction = parallelizeExtraction,
                 ExtractionTailSchedule = extractionTailSchedule,
                 CSharpWorkspace = context.GetCSharpWorkspace(),
+                CSharpPrepassSymbolArtifacts =
+                    context.GetCSharpPrepassSymbolArtifacts(),
                 CSharpWorkspaceFileSnapshots =
                     context.GetCSharpWorkspaceFileSnapshots(),
                 PostExtractionHooks = postExtractionHooks,
@@ -437,6 +451,8 @@ public static partial class IndexCommandRunner
                 context.GetDeferCSharpMutationsForIncompleteScan,
             GetFtsMutated = context.GetFtsMutated,
             GetCSharpWorkspace = context.GetCSharpWorkspace,
+            GetCSharpPrepassSymbolArtifacts =
+                context.GetCSharpPrepassSymbolArtifacts,
             GetCSharpWorkspaceFileSnapshots =
                 context.GetCSharpWorkspaceFileSnapshots,
             DeferCSharpMutationsForLoadedSnapshotDrift =

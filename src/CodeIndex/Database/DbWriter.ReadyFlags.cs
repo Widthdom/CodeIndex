@@ -46,7 +46,8 @@ public partial class DbWriter
 
     internal FoldReadyStampResult MarkFoldReadyWithResult(
         bool stampCurrentSymbolExtractorVersions = false,
-        IReadOnlyCollection<string>? symbolExtractorLanguagesToStamp = null)
+        IReadOnlyCollection<string>? symbolExtractorLanguagesToStamp = null,
+        AuthoritativeFreshFoldRowsClaim? authoritativeFreshRowsClaim = null)
     {
         var gateLease = EnterTransactionGate();
         try
@@ -59,7 +60,14 @@ public partial class DbWriter
                 if (stampCurrentSymbolExtractorVersions)
                     StampSymbolExtractorVersions(symbolExtractorLanguagesToStamp);
 
-                var validationResult = ValidateFoldRowsForReadyStamp();
+                // A fresh-run claim skips only the expensive value-by-value re-fold. The
+                // cheap NULL check below always remains authoritative, and the claim is
+                // consumed once even when that check fails.
+                // fresh-run claim が省略するのは高コストな全行 re-fold だけであり、NULL
+                // 検証は常に実行する。NULL 検証失敗時も claim は一回で消費する。
+                var verifyCurrentFoldValues =
+                    !TryConsumeAuthoritativeFreshFoldRowsClaim(authoritativeFreshRowsClaim);
+                var validationResult = ValidateFoldRowsForReadyStamp(verifyCurrentFoldValues);
                 if (validationResult != FoldReadyStampResult.Ready)
                 {
                     if (ownTransaction)
@@ -99,7 +107,7 @@ public partial class DbWriter
         }
     }
 
-    private FoldReadyStampResult ValidateFoldRowsForReadyStamp()
+    private FoldReadyStampResult ValidateFoldRowsForReadyStamp(bool verifyCurrentFoldValues = true)
     {
         if (!AllFoldedColumnsBackfilledCore(
                 requireCurrentSymbolExtractorVersions: false,
@@ -108,7 +116,7 @@ public partial class DbWriter
             return FoldReadyStampResult.MissingBackfill;
         }
 
-        return AllFoldedColumnValuesMatchCurrentFold()
+        return !verifyCurrentFoldValues || AllFoldedColumnValuesMatchCurrentFold()
             ? FoldReadyStampResult.Ready
             : FoldReadyStampResult.NonCurrentFoldValues;
     }

@@ -8,6 +8,7 @@ public static partial class ExtractorPluginRegistry
     private sealed class PatternWorkspaceState(string? workspaceRoot, bool includeUserConfiguration = true)
     {
         private ExtractorWorkspaceSnapshot snapshot = ExtractorWorkspaceSnapshot.Empty;
+        private bool active = workspaceRoot is null;
 
         internal object Gate { get; } = new();
         internal string? WorkspaceRoot { get; } = workspaceRoot;
@@ -31,6 +32,11 @@ public static partial class ExtractorPluginRegistry
         internal long LastAccessSequence { get; set; }
         internal long ReloadSequence { get; set; }
         internal long WorkspaceGeneration { get; set; }
+        internal bool Active
+        {
+            get => Volatile.Read(ref active);
+            set => Volatile.Write(ref active, value);
+        }
 
         internal ExtractorWorkspaceSnapshot GetSnapshot()
             => Volatile.Read(ref snapshot);
@@ -67,20 +73,24 @@ public static partial class ExtractorPluginRegistry
             SetPatternExtensions("user");
             SetLanguageExtensions(extensions, user.SymbolExtractors.Values.Select(extractor => (extractor.Language, extractor.FileExtensions)));
             SetLanguageExtensions(extensions, user.ReferenceExtractors.Values.Select(extractor => (extractor.Language, extractor.FileExtensions)));
-            Volatile.Write(
-                ref snapshot,
-                new ExtractorWorkspaceSnapshot(
-                    new ReadOnlyDictionary<string, ISymbolExtractor>(symbolExtractors),
-                    new ReadOnlyDictionary<string, IReferenceExtractor>(referenceExtractors),
-                    new ReadOnlyDictionary<string, string>(extensions),
-                    Configs.ToArray(),
-                    Diagnostics.ToArray(),
-                    ConfigCount,
-                    SkippedFileCount,
-                    DiagnosticTotalCount,
-                    RuleCount,
-                    PluginAssemblyCount,
-                    0));
+            var nextSnapshot = new ExtractorWorkspaceSnapshot(
+                new ReadOnlyDictionary<string, ISymbolExtractor>(symbolExtractors),
+                new ReadOnlyDictionary<string, IReferenceExtractor>(referenceExtractors),
+                new ReadOnlyDictionary<string, string>(extensions),
+                Configs.ToArray(),
+                Diagnostics.ToArray(),
+                ConfigCount,
+                SkippedFileCount,
+                DiagnosticTotalCount,
+                RuleCount,
+                PluginAssemblyCount,
+                0);
+            if (Active
+                && !AcceptedFoldProducerSnapshotsEqual(GetSnapshot(), nextSnapshot))
+            {
+                AdvanceAcceptedFoldProducerMutationGeneration();
+            }
+            Volatile.Write(ref snapshot, nextSnapshot);
 
             void CopyPatternExtractors(string source, Dictionary<string, ISymbolExtractor> target)
             {
@@ -110,6 +120,7 @@ public static partial class ExtractorPluginRegistry
             lock (Gate)
             {
                 Retired = false;
+                Active = WorkspaceRoot is null;
                 ClearState();
                 PublishSnapshot();
             }
@@ -119,6 +130,7 @@ public static partial class ExtractorPluginRegistry
         {
             lock (Gate)
             {
+                Active = false;
                 Retired = true;
                 ClearState();
                 Volatile.Write(ref snapshot, ExtractorWorkspaceSnapshot.Empty);
@@ -189,6 +201,7 @@ public static partial class ExtractorPluginRegistry
     private static long workspaceAccessSequence;
     private static long workspaceReloadSequence;
     private static long workspaceGeneration;
+    private static long acceptedFoldProducerMutationGeneration;
 
     private static PatternWorkspaceState CreatePatternWorkspace(
         string workspaceRoot,
@@ -256,13 +269,21 @@ public static partial class ExtractorPluginRegistry
                 return false;
             }
 
+            var previousSnapshot = index >= 0
+                ? PatternWorkspaces[index].GetSnapshot()
+                : GetFallbackPatternSnapshot(state.IncludeUserConfiguration);
+            if (!AcceptedFoldProducerSnapshotsEqual(previousSnapshot, state.GetSnapshot()))
+                AdvanceAcceptedFoldProducerMutationGeneration();
+
             if (index >= 0)
             {
                 replaced = PatternWorkspaces[index];
+                replaced.Active = false;
                 PatternWorkspaces[index] = state;
             }
             else
                 PatternWorkspaces.Add(state);
+            state.Active = true;
 
             TouchPatternWorkspace(state);
             evicted = TrimPatternWorkspaces(state);
@@ -298,6 +319,10 @@ public static partial class ExtractorPluginRegistry
             }
 
             state = CreatePatternWorkspace(workspaceRoot);
+            var previousSnapshot = GetFallbackPatternSnapshot(includeUserConfiguration: true);
+            if (!AcceptedFoldProducerSnapshotsEqual(previousSnapshot, state.GetSnapshot()))
+                AdvanceAcceptedFoldProducerMutationGeneration();
+            state.Active = true;
             PatternWorkspaces.Add(state);
             TouchPatternWorkspace(state);
             evicted = TrimPatternWorkspaces(state);
@@ -373,6 +398,13 @@ public static partial class ExtractorPluginRegistry
             .Where(state => !ReferenceEquals(state, retainedState))
             .OrderBy(state => state.LastAccessSequence)
             .First();
+        if (!AcceptedFoldProducerSnapshotsEqual(
+                evicted.GetSnapshot(),
+                GetFallbackPatternSnapshot(evicted.IncludeUserConfiguration)))
+        {
+            AdvanceAcceptedFoldProducerMutationGeneration();
+        }
+        evicted.Active = false;
         PatternWorkspaces.Remove(evicted);
         return evicted;
     }
@@ -392,6 +424,16 @@ public static partial class ExtractorPluginRegistry
                 .Concat(PendingPatternWorkspaces)
                 .Distinct()
                 .ToArray();
+            if (workspaces.Any(workspace =>
+                    workspace.Active
+                    && !AcceptedFoldProducerSnapshotsEqual(
+                        workspace.GetSnapshot(),
+                        GetFallbackPatternSnapshot(workspace.IncludeUserConfiguration))))
+            {
+                AdvanceAcceptedFoldProducerMutationGeneration();
+            }
+            foreach (var workspace in workspaces)
+                workspace.Active = false;
             PatternWorkspaces.Clear();
             PendingPatternWorkspaces.Clear();
             workspaceAccessSequence = 0;
@@ -413,6 +455,43 @@ public static partial class ExtractorPluginRegistry
                 new ReadOnlyDictionary<string, ISymbolExtractor>(new Dictionary<string, ISymbolExtractor>(SymbolExtractors, StringComparer.Ordinal)),
                 new ReadOnlyDictionary<string, IReferenceExtractor>(new Dictionary<string, IReferenceExtractor>(ReferenceExtractors, StringComparer.Ordinal))));
     }
+
+    private static ExtractorWorkspaceSnapshot GetFallbackPatternSnapshot(
+        bool includeUserConfiguration)
+        => includeUserConfiguration
+            ? DefaultPatternWorkspace.GetSnapshot()
+            : ExtractorWorkspaceSnapshot.Empty;
+
+    private static bool AcceptedFoldProducerSnapshotsEqual(
+        ExtractorWorkspaceSnapshot left,
+        ExtractorWorkspaceSnapshot right)
+        => left.ConfigCount == right.ConfigCount
+            && left.PluginAssemblyCount == right.PluginAssemblyCount
+            && ExtractorMapsEqual(left.SymbolExtractors, right.SymbolExtractors)
+            && ExtractorMapsEqual(left.ReferenceExtractors, right.ReferenceExtractors);
+
+    private static bool ExtractorMapsEqual<TExtractor>(
+        IReadOnlyDictionary<string, TExtractor> left,
+        IReadOnlyDictionary<string, TExtractor> right)
+        where TExtractor : class
+    {
+        if (left.Count != right.Count)
+            return false;
+
+        foreach (var (language, extractor) in left)
+        {
+            if (!right.TryGetValue(language, out var other)
+                || !ReferenceEquals(extractor, other))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static long AdvanceAcceptedFoldProducerMutationGeneration()
+        => Interlocked.Increment(ref acceptedFoldProducerMutationGeneration);
 
     private static void SetLanguageExtensions(
         Dictionary<string, string> target,

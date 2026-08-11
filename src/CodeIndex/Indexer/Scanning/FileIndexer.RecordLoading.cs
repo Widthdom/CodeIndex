@@ -4,6 +4,8 @@ namespace CodeIndex.Indexer;
 
 public partial class FileIndexer
 {
+    internal string ProjectRootForExtraction => _projectRoot;
+
     /// <summary>
     /// Build a FileRecord and return file content (avoids reading the file twice).
     /// FileRecordを構築しファイル内容も返す（二重読み込み防止）。
@@ -126,6 +128,33 @@ public partial class FileIndexer
         string relativePath,
         bool includeQualifiedMemberAccessCandidate,
         CancellationToken cancellationToken = default)
+        => LoadCSharpStaticInterfaceCandidateContentForPrepassCore(
+            absolutePath,
+            relativePath,
+            includeQualifiedMemberAccessCandidate,
+            includeChecksum: false,
+            cancellationToken)?.Content;
+
+    internal FileContentLoader.CSharpPrepassCandidateContent?
+        LoadCSharpStaticInterfaceCandidateContentWithChecksumForPrepass(
+            string absolutePath,
+            string relativePath,
+            bool includeQualifiedMemberAccessCandidate,
+            CancellationToken cancellationToken = default)
+        => LoadCSharpStaticInterfaceCandidateContentForPrepassCore(
+            absolutePath,
+            relativePath,
+            includeQualifiedMemberAccessCandidate,
+            includeChecksum: true,
+            cancellationToken);
+
+    private FileContentLoader.CSharpPrepassCandidateContent?
+        LoadCSharpStaticInterfaceCandidateContentForPrepassCore(
+            string absolutePath,
+            string relativePath,
+            bool includeQualifiedMemberAccessCandidate,
+            bool includeChecksum,
+            CancellationToken cancellationToken)
     {
         var normalizedRelativePath = NormalizeIndexPath(relativePath);
         for (var attempt = 0; ; attempt++)
@@ -145,6 +174,7 @@ public partial class FileIndexer
                 relativePath,
                 retryOnMutation: attempt == 0,
                 includeQualifiedMemberAccessCandidate,
+                includeChecksum,
                 cancellationToken);
             if (!requiresRetry)
                 return content;

@@ -282,6 +282,21 @@ array, short files skip impossible FTS-token tracking, and high-ratio invalid
 UTF-8 decode replacements retain only the aggregate count used by
 `non_utf8_likely` rather than a line number for every damaged line.
 
+Isolated symbol extraction uses one byte-oriented newline protocol for every
+language. The parent still serializes each request once with
+`JsonSerializer.SerializeToUtf8Bytes`, writes those bytes followed by LF, and
+reads the bounded UTF-8 response frame. The child opens standard input as a raw
+stream, reads it with `BoundedLineReader.ReadUtf8LineAsync`, validates the byte
+payload, and deserializes directly from that span; the `TextReader` overload is
+diagnostic-only. Do not reintroduce a `Console.In` / decoded-string copy in the
+production path. Preserve the negotiated frame/byte bound, JSON depth/property/
+string bounds, CRLF stripping (including buffer boundaries), an unterminated
+final frame, stable EOF, and cancellation of a pending read. Invalid UTF-8 and
+malformed JSON must keep returning the sanitized exception category without
+echoing request content or secrets. This contract is shared by every language
+request routed through the symbol worker, including built-in and custom-pattern
+configurations.
+
 Parallel full scans use shared dynamic work claiming for the main extraction
 body. To keep a large file near the input tail from starting only in the final
 worker wave, they probe at most the last `min(4 * workers, 64)` work items and
@@ -337,9 +352,16 @@ materialization and resolution, and the file and reference-line maintenance inde
 remain available during the load, while identity and resolution finalization
 continues without query indexes. The
 guard forces any active dirty graph scope onto its full-refresh plan before the
-indexes disappear. Immediately before mutual-recursion evaluation, its graph
+indexes disappear. While that force-full plan is known, do not populate the
+dirty-file/name/reference TEMP scope: fresh indexes and rebuilds never consume
+it, and per-batch tracking otherwise adds avoidable set materialization across
+every language. Immediately before mutual-recursion evaluation, its graph
 transaction restores only the unresolved-folded, legacy NOCASE, and resolved
 reverse-edge indexes; the remaining query indexes return after the mutual update.
+The full mutual-recursion update materializes one desired flag per call-like or
+non-canonical row before applying changes. Keep the correlated reverse-edge
+expression single-evaluation: repeating it in both `SET` and `WHERE` causes
+fresh large graphs to perform the same random B-tree probes twice.
 When a TypeScript augmentation rebuild owns the sole graph pass, restore every
 ordinary graph/query index before readiness, then drop the reverse candidate-symbol
 lookup immediately before augmentation candidate population and keep it deferred
@@ -399,9 +421,37 @@ is still compared with a fresh filesystem size and UTC modification time, and
 language extractor versions, extraction caps, stale issue metadata, and generated
 code suppression must all remain part of the snapshot eligibility contract. Do
 not replace this snapshot with per-file database probes in either CLI or MCP.
+CLI full scans, scoped updates, and MCP indexing also load the workspace pattern
+configuration once before this prepass. Their C# candidate extraction must reuse
+that loaded snapshot instead of refreshing default plugins for every candidate;
+direct prepass callers retain the discovery-enabled default unless they explicitly
+prove the snapshot is already loaded.
 Rows with missing or invalid legacy stat values are excluded so normal checksum
 reuse or reindexing can repair them, and CLI/MCP cancellation must interrupt the
 snapshot query as well as the later extraction pipeline.
+
+Only a first-time full index that started with no indexed files may reuse raw
+built-in C# symbol artifacts from the static-interface prepass. The CLI excludes
+rebuilds and symbols-only runs; MCP evaluates the same empty-database condition
+before any rebuild mutation. The cache never owns source text or bytes: the main
+pass still performs its authoritative content read and hook, stat-snapshot and
+TOCTOU validation, and checksum calculation. It consumes a normalized-path
+artifact once only after that checksum matches. Generic cache admission keeps
+deep-clone isolation for direct callers. The fresh-index production path instead
+materializes both workspace lookup snapshots first, then transfers ownership of
+each admitted per-file symbol list and releases the redundant workspace-symbol
+fallback list. Main-pass mutation therefore remains isolated from the lookup
+snapshots without retaining duplicate `SymbolRecord` objects. Artifact-producing
+extraction receives the main pass's absolute file path and project root so
+file-local family identities stay identical. File ID assignment, family scope,
+source observation, post-extraction hooks,
+kind filtering, caps, line validation, persistence, reference extraction, and
+bounded-regex issue reporting remain on the normal main-pass path. Incomplete
+prepasses, extraction-stall test seams, checksum drift, regex timeouts, and cache
+admission limits fall back to ordinary extraction. A timed-out prepass result is
+partial and must not make that transient result authoritative. Keep admission
+bounded to 4,096 files, 131,072 symbols, and an estimated 32 MiB, and clear all
+unconsumed artifacts before reference-graph work begins.
 
 Authoritative full scans collect the C#, VB, F#, and MSBuild project-marker
 fingerprints during the shared source-directory enumeration. The same pass also
@@ -1009,6 +1059,15 @@ Do not add mutable static caches, shared `StringBuilder` instances, reused `Matc
 
 `symbols.kind`, `symbols.container_kind`, and `symbol_references.container_kind` use the public symbol kind taxonomy below. New extractors must register new kind values in `SymbolKindCatalog` before writing them so schema checks, writer validation, CLI filters, and downstream JSON consumers stay aligned.
 
+The ordered `SymbolKinds` and `ReferenceKinds` arrays remain public compatibility
+snapshots; callers must treat their elements as immutable after type initialization.
+A private canonical ordered taxonomy is the sole source for immutable Ordinal writer
+lookups, SQLite schema checks and migrations, and ctags filters. This keeps those
+internal contracts aligned even if legacy consumer code accidentally replaces an
+element in a public array. Add new values in the catalog source and update the
+exhaustive catalog, schema-parity, and public-mutation isolation tests; do not mutate
+the public arrays at runtime.
+
 | Kind | Current producers / meaning | Graph behavior |
 |---|---|---|
 | `accessor` | Accessor declarations when extracted separately from their owning property | Search/filter symbol |
@@ -1261,6 +1320,8 @@ Operators can override the defaults with environment variables:
 
 After a successful `cdidx index` run, the writer refreshes SQLite planner statistics so large repositories do not rely on default selectivity estimates for `search`, `references`, `callers`, and related joins. A brand-new index database runs full `ANALYZE` once after the initial population; later successful index runs use SQLite's lighter `PRAGMA optimize`. This maintenance is best-effort and never changes the schema contract.
 
+Truly empty-database bulk loads also perform a separate, targeted planner-statistics refresh immediately before reference-candidate population. An enabled reference-secondary-index bulk-load guard runs `ANALYZE main.files`, `ANALYZE main.symbols`, and `ANALYZE main.symbol_references` exactly once after dropping the candidate reverse index and before preparing the identity-resolution SQL; the TypeScript-deferred path has already restored its ordinary graph/query indexes at this point, while the direct graph path proceeds without that extra restoration phase. The CLI enables this only when it started with no indexed files and is neither rebuilding nor symbols-only; MCP captures the same pre-rebuild empty state explicitly. Existing-database runs, updates, rebuilds, symbols-only runs, and disabled guards retain the prior behavior. Cancellation aborts the indexing operation, while a non-cancellation SQLite failure rolls back the nested statistics savepoint and continues graph construction with the previous planner state. This pre-graph phase has a dedicated testing hook and is independent of final planner maintenance.
+
 ### MCP request correlation
 
 Each JSON-RPC MCP request gets a server-generated `correlation_id` in addition to the client-controlled JSON-RPC `id`. Successful MCP responses include it under `result._meta.correlation_id`, and error responses include it in `error.data.correlation_id` or tool-error `result.structuredContent.correlation_id`. The serialized JSON-RPC id is echoed as `request_id` in the same metadata when one exists. `batch_query` assigns child correlation IDs to each slot by suffixing the parent value with `.1`, `.2`, and so on.
@@ -1501,14 +1562,54 @@ The persisted reference-identity contract is versioned for this rule, so indexes
 the compatibility filter are treated as non-authoritative until a normal index refresh rebuilds
 their candidates.
 
-Reference finalization computes candidate count, minimum symbol ID, distinct target-family
-count, and stable target key in one correlated aggregate per reference. Keep these four
-resolution fields on the row-value assignment path; separate scalar subqueries multiply the
-candidate-index and symbol/file lookup work on large graphs. The language/name families that
+Existing-index, rebuild, and retained-graph finalization paths compute candidate count, minimum
+symbol ID, distinct target-family count, and stable target key in one correlated aggregate per
+reference. Keep these four resolution fields on the row-value assignment path; separate scalar
+subqueries multiply the candidate-index and symbol/file lookup work on large graphs. The
+language/name families that
 are globally unique are aggregated once into the connection-local
 `temp.reference_unique_symbol_families` table and reused by non-C#, C#, and C# attribute
 fallbacks. Create that temp table in a separate prepared command before preparing the refresh;
 SQLite resolves referenced tables while preparing every statement in a command batch.
+
+A true empty-database ordinary CLI full scan (not `--rebuild` or `--symbols-only`) opts into a
+separate fresh-resolution contract. Reference inserts persist canonical provisional values
+(`unresolved`, candidate count zero, and zero self/mutual flags) without adding bind parameters.
+The early empty observation is advisory: immediately after the authoritative outer write
+transaction begins, the CLI rechecks `files`, `symbols`, and `symbol_references` in that
+transaction. If another connection committed any row during the pre-write gap, the graph scope
+disables fresh insert defaults before the first persisted row and finalization uses the ordinary
+full-resolution SQL, including candidate-free references.
+Finalization scans `symbol_reference_candidates` once into materialized per-reference facts and
+updates only candidate-bearing references by primary key; candidate-free references retain their
+provisional values, and the self flag is derived in that same sparse update. The opt-in remains
+pending after a failed graph transaction and clears only after the graph commit. Existing-index
+updates, rebuilds, retained-graph rebuilds, and MCP indexing keep the established path. In
+particular, MCP can durably commit per-file batches before graph finalization, so it must retain
+its existing retry semantics until a separately designed recovery contract can cover that state.
+
+Fold readiness has a narrower authoritative-fresh optimization shared by ordinary CLI and MCP
+full indexing. Before the first write, `DbWriter` may issue an opaque, one-shot claim only from a
+`BEGIN IMMEDIATE` snapshot in which `files`, `symbols`, and `symbol_references` are all empty. The
+claim is bound to its writer/connection and captured `PRAGMA data_version`; only that writer may
+consume it once, and an intervening commit from another connection invalidates it. When the
+built-in extractor pipeline completes successfully, finalization may use the claim to omit the
+allocation-heavy read and re-fold of every persisted symbol/reference value, but it still runs
+the SQL NULL-completeness check before stamping FoldReady.
+The raw `BEGIN IMMEDIATE` helper deliberately performs its post-success cancellation check only
+after the caller has recorded rollback ownership. Cancellation at that boundary therefore rolls
+back the raw transaction before releasing the writer gate, leaving a warm CLI/MCP connection
+usable by the next request.
+The run also captures the registry's monotonic accepted-producer mutation generation. Any
+generation change invalidates the claim even if a transient custom producer was later removed and
+the final registry is built-in-only again; staged workspace replacement commits participate in
+that history, while diagnostic-only publication and unchanged missing-directory discovery do not.
+
+This shortcut is deliberately fail-closed. Rebuilds, updates, legacy or existing indexes, public
+`DbWriter` readiness APIs, custom plugins or pattern configurations, post-extraction hooks, incorrectly
+owned or reused claims, and any externally committed database change use the established full
+value validation. The shortcut changes neither the folded values produced during insertion nor
+the readiness transaction and rollback semantics.
 
 For C# explicit-interface members, `symbols.name` remains the short display/discovery alias,
 while `symbols.name_folded` stores the normalized interface qualifier plus terminal method
@@ -1830,6 +1931,23 @@ Extractor strategy by language surface:
 | TOML / repository metadata | TOML tables and keys, EditorConfig sections and keys, Git/Docker ignore rules, Git attribute rules/attributes, and `.rules` blocks/keys are emitted as bounded structural symbols. References are limited to repository-local paths or globs; remote URLs, absolute filesystem paths, and parent traversal are suppressed. |
 | Windows application manifests | Manifest element paths, assembly identities, execution levels, and supported-OS values remain structural symbols. Dependent assembly identities emit `dependency` references, while local `file`, `codeBase`, and probing paths emit `project_reference` edges. |
 | XML / NuGet.config | Generic XML emits bounded element and attribute paths. NuGet.config additionally promotes package sources, source mappings, signature validation mode, trusted signer names, certificate fingerprints, and `allowUntrustedRoot` values to semantic `property` symbols with `nuget.*` subkinds. |
+
+Before the line-oriented regex loop, built-in case-sensitive patterns may opt into an explicit
+`RequiredLiteral` Tier A gate. The literal must contain at least two characters and be an Ordinal
+substring of every successful regex path. If it is absent from the normalized file content, that
+pattern is skipped without changing the order of the remaining patterns. `IgnoreCase` patterns,
+one-character literals, optional or alternative paths without a shared literal, project custom
+patterns, and plugins are deliberately excluded. Supplemental scans that consult the pattern list,
+including C# incomplete-attribute recovery and C++ same-line member recovery, must consume the same
+ordered applicable set. Immediately before each regex call, the same Ordinal proof is applied to the
+exact input presented to that call, after transformations such as C# property-header merging, Fortran
+continuation joining, Java/Kotlin annotation stripping, C# wrapped-modifier synthesis, C++ same-line
+segmentation, or CSS selector-brace reconstruction. A miss behaves like a failed regex attempt rather
+than terminating language-specific recovery: notably, a C# static-constructor pattern rejected on the
+bare identifier line must still try each synthesized `static ...` wrapper. The content-wide check may
+retain a pattern because its literal appears in a comment, string, annotation, or another declaration;
+the exact-input check then recovers that lost optimization without changing matches. Patterns without
+`RequiredLiteral`, including custom and plugin patterns, still run unchanged.
 
 JavaScript and TypeScript export/reference details:
 
@@ -3610,18 +3728,28 @@ Downstream users can add lightweight language support without rebuilding
 | Sidecar size | 64 KiB per file |
 | Rules per sidecar | 128 |
 | Configured rules | 128 per immutable workspace snapshot |
+| Worker project-root snapshots | 32 per persistent symbol worker |
+| Worker pattern-directory snapshots | 4,096 per root and 8,192 per worker; overflow uses live discovery |
 | Regex match timeout | 100 ms |
 | Timed-out rule cooldown | At most one minute in the owning workspace snapshot |
 
 - Sidecars must be regular files inside non-symlink pattern directories.
 - Each sidecar is parsed, compiled, and checked against `SymbolKindCatalog`
   before its path, rules, or budget are committed.
-- Rejected content is fingerprinted to suppress duplicate diagnostics. Content
-  or metadata changes and recovery from a transient read failure trigger a retry
-  without restarting the process.
+- Rejected content is fingerprinted to suppress duplicate diagnostics. On paths
+  that perform another discovery or explicit refresh, content or metadata changes
+  and recovery from a transient read failure trigger a retry without restarting
+  the process.
 - Workspace discovery requires an explicit trust root and never probes above
   it. Nested sidecars inside that boundary are loaded for the current file by
   the bounded extraction worker.
+- A persistent symbol-worker command treats pattern discovery as a project-root
+  snapshot. Root reload reads user and workspace-root configs once; each nested
+  pattern directory's first result, including missing, unsafe, and known discovery
+  failures, remains fixed for the run. Sidecars added or repaired afterward become
+  visible on the next worker command, while unexpected exceptions remain retryable.
+  A saturated directory cache falls back to uncached discovery and never skips a
+  config merely to preserve the memory bound.
 - Path identity follows the active filesystem's case-sensitivity, so
   case-distinct sidecars remain distinct on case-sensitive volumes.
 - `status --json` reports accepted files in `extractors.pattern_configs[]`,
@@ -4008,6 +4136,18 @@ content 再走査を避けます。normalized facts を持たない caller 用�
 短い file は発生し得ない FTS token 追跡を省き、高比率の invalid UTF-8 decode replacement は
 破損行ごとの番号ではなく `non_utf8_likely` に必要な集約件数だけを保持します。
 
+isolated symbol extraction は全言語で1つの byte-oriented newline protocol を共有します。
+parent は各 request を引き続き `JsonSerializer.SerializeToUtf8Bytes` で1回だけ serialize し、
+その byte 列と LF を書き込み、上限付き UTF-8 response frame を読みます。child は標準入力を
+raw stream として開き、`BoundedLineReader.ReadUtf8LineAsync` で読み取り、byte payload を検証して
+その span から直接 deserialize します。`TextReader` overload は診断専用です。本番経路へ
+`Console.In` や decoded string の copy を戻さないでください。negotiated frame / byte 上限、
+JSON の depth / property / string 上限、buffer 境界をまたぐ場合を含む CRLF の除去、終端改行の
+ない最後の frame、安定した EOF、pending read の cancellation を維持します。不正 UTF-8 と
+malformed JSON は request content や secret を反射せず、sanitization 済みの exception category
+だけを返してください。この契約は built-in / custom pattern configuration を含め、symbol worker
+へ routing されるすべての language request で共有されます。
+
 parallel full scan は extraction 本体を共有dynamic claimで配分します。入力末尾の大きなfileが
 最後のworker waveまで開始されないことを防ぐため、末尾の
 `min(4 * workers, 64)` work itemだけをprobeし、size取得済みかつ上限内のfileを大きい順に
@@ -4054,7 +4194,9 @@ reverse lookup は raw persistence 中は維持し、実際の graph refresh が
 再構築しません。reference scope の materialization / resolution に使う candidate primary key は
 維持します。load 中も file と reference-line の保守用 index は残し、identity / resolution
 finalization 中は query index を遅延したままにします。guard は index を外す前に active な dirty graph scope を full refresh へ
-昇格します。mutual-recursion 評価の直前に、その graph transaction 内で unresolved-folded、
+昇格します。この force-full plan が確定している間は dirty file / name / reference の TEMP scope を
+投入しないでください。fresh index と rebuild はその scope を参照せず、追跡すると全言語の batch ごとに
+不要な set materialization が発生します。mutual-recursion 評価の直前に、その graph transaction 内で unresolved-folded、
 legacy NOCASE、resolved reverse-edge の3本だけを復元し、残りの query index は mutual update
 後に戻します。TypeScript augmentation rebuild が唯一の graph pass を担当する場合は、readiness
 前に通常の graph / query index を復元し、augmentation の candidate 構築直前にだけ
@@ -4089,6 +4231,10 @@ unchanged、または sparse mutation の target 集合では全 index を維持
 してください。identity / resolution 中は query-only 集合を遅延したままにし、mutual recursion の
 直前に reverse-edge 用3本を復元して、その update 後に残りを戻してください。小規模 scoped
 update は固定的な再構築 cost が更新時間を支配しないよう、全 index を維持します。
+full mutual-recursion update は、call-like または非canonicalな row ごとに望ましい flag を
+1回 materialize してから変更を適用します。相関 reverse-edge 式を `SET` と `WHERE` の
+両方で評価すると、巨大な fresh graph で同じランダム B-tree probe が二重になるため、
+single-evaluation の契約を維持してください。
 
 C# の reference-graph finalization は、reference arity、invocation arity、member receiver、
 definition arity、constructor arity、value-type の fact を、対象 row ごとに TEMP table へ1回だけ
@@ -4107,6 +4253,27 @@ generated-code suppression も snapshot eligibility contract に含めます。C
 この snapshot を file ごとの database probe に戻さないでください。旧 DB の欠損または不正な
 stat 値を持つ row は除外して通常の checksum reuse / 再 index で修復し、CLI/MCP の cancellation は
 後続の extraction pipeline だけでなく snapshot query も中断できる状態を保ってください。
+CLI full scan、scoped update、MCP indexing は、この prepass より前に workspace pattern config も
+1回だけ読み込みます。C# candidate extraction は candidate ごとに default plugin を refresh せず、
+その読込済み snapshot を再利用してください。直接 prepass を呼ぶ側は、snapshot 読込済みを明示的に
+保証しない限り、従来どおり discovery 有効の既定経路を維持します。
+
+static-interface prepass の raw built-in C# symbol artifact を再利用できるのは、indexed file が
+0件の状態から開始した初回 full index だけです。CLI は rebuild と symbols-only を除外し、MCP は
+rebuild mutation より前の空 database 条件を使います。cache は source text / byte を保持せず、main
+pass は引き続き authoritative な content read と hook、stat snapshot / TOCTOU 検証、checksum 計算を
+実行します。正規化 path の artifact は checksum 一致後に1回だけ取り出します。汎用 cache admission は
+direct caller 向けの deep-clone isolation を維持します。fresh-index の production 経路では、先に2種類の
+workspace lookup snapshot を materialize し、その後で admit した file ごとの symbol list の所有権を
+cache へ移し、重複する workspace-symbol fallback list を解放します。これにより main-pass mutation と
+lookup snapshot の分離を保ったまま、重複する `SymbolRecord` object を保持しません。artifact を生成する
+extraction には main pass と同じ absolute file path / project root を渡し、file-local family identity を
+一致させてください。FileId、family scope、source observation、post-extraction hook、kind filter、cap、line 検証、
+persistence、reference extraction、bounded-regex issue は通常の main-pass 経路で処理してください。
+不完全な prepass、extraction-stall test seam、checksum drift、regex timeout、cache 上限では通常
+extraction へ fallback します。timeout した prepass 結果は partial であり、一過性の結果を
+authoritative にしてはいけません。admission は 4,096 file、131,072 symbol、推定 32 MiB に制限し、未消費
+artifact は reference graph 開始前にすべて clear してください。
 
 authoritative な full scan は、共有 source-directory enumeration 中に C#、VB、F#、
 MSBuild の project-marker fingerprint を収集します。同じ pass で budget 非依存の
@@ -4633,6 +4800,13 @@ regression には、scope rule の focused correctness test と、ユーザー�
 書き込み前に `SymbolKindCatalog` へ登録し、schema check、writer validation、CLI
 filter、downstream JSON consumer が同じ値を理解できるようにしてください。
 
+順序付きの `SymbolKinds` / `ReferenceKinds` array は公開互換 snapshot として維持し、caller は
+型初期化後の要素を immutable として扱います。private な canonical 順序付き taxonomy だけを、
+immutable な Ordinal writer lookup、SQLite schema check / migration、ctags filter の source にします。
+そのため legacy consumer が公開 array の要素を誤って置換しても、内部契約は同期したままです。
+値を追加する場合は catalog source を変更し、catalog 全件、schema parity、公開 mutation 隔離の
+test も更新してください。公開 array を実行時に変更してはいけません。
+
 | Kind | 現在の producer / 意味 | Graph behavior |
 |---|---|---|
 | `accessor` | owning property から別 symbol として抽出される accessor declaration | Search/filter symbol |
@@ -4911,6 +5085,8 @@ operator は environment variable で既定値を上書きできる。
 
 `cdidx index` が成功すると、writer は SQLite planner statistics を更新し、大規模 repository で `search`、`references`、`callers` などの join が default selectivity estimate に依存しないようにする。新規 index database は初回 population 後に full `ANALYZE` を一度実行し、それ以降の成功した index run では軽量な `PRAGMA optimize` を使う。この maintenance は best-effort であり、schema contract は変更しない。
 
+真に空の database からの bulk load では、reference candidate の構築直前にも独立した対象限定の planner-statistics refresh を実行する。有効な reference-secondary-index bulk-load guard は candidate reverse index の drop 後、identity-resolution SQL の prepare 前に `ANALYZE main.files`、`ANALYZE main.symbols`、`ANALYZE main.symbol_references` を正確に1回実行する。TypeScript に委譲する経路ではこの時点までに通常の graph / query index が復元済みであり、direct graph 経路では追加の復元 phase を挟まずに進む。CLI は indexed file が0件の状態から開始し、rebuild でも symbols-only でもない場合だけ有効化する。MCP も rebuild 前の空状態を明示的に保持して同じ条件を適用する。既存 database、update、rebuild、symbols-only、guard 無効時は従来どおりである。cancellation は indexing 全体へ伝播し、cancellation 以外の SQLite failure は nested statistics savepoint だけを rollback して、従来の planner state で graph 構築を続ける。この pre-graph phase は専用 testing hook を持ち、最終 planner maintenance とは独立している。
+
 ### MCP リクエスト相関
 
 各 JSON-RPC MCP request には、client-controlled な JSON-RPC `id` に加えて、server-generated な `correlation_id` を付与する。成功 response は `result._meta.correlation_id`、error response は `error.data.correlation_id` または tool-error の `result.structuredContent.correlation_id` に含める。serialized JSON-RPC id がある場合は同じ metadata に `request_id` として echo する。`batch_query` は parent value に `.1`、`.2` のような suffix を付けて slot ごとの child correlation ID を割り当てる。
@@ -5166,14 +5342,53 @@ Java の reference resolution は変更しません。
 この規則は persisted reference-identity contract の version 対象であり、compatibility filter 導入前に
 作成された index は、通常の index 更新で candidate を再構築するまで非 authoritative として扱います。
 
-reference finalization は、candidate count、最小 symbol ID、distinct target-family count、安定 target
-key を reference ごとに1回の correlated aggregate で計算します。この4つの resolution field は
-row-value assignment のまま維持してください。scalar subquery を分けると、大規模 graph で
-candidate index と symbol/file lookup が重複します。global に一意な language/name family は
+既存index、rebuild、retained graph の reference finalization は、candidate count、最小 symbol ID、
+distinct target-family count、安定 target key を reference ごとに1回の correlated aggregate で
+計算します。この4つの resolution field は row-value assignment のまま維持してください。
+scalar subquery を分けると、大規模 graph で candidate index と symbol/file lookup が重複します。
+global に一意な language/name family は
 connection-local な `temp.reference_unique_symbol_families` table へ1回だけ集約し、non-C#、C#、
 C# attribute fallback で共有します。この temp table は refresh command を prepare する前に別の
 prepared command で作成してください。SQLite は command batch の全statementをprepareする時点で
 参照tableを解決します。
+
+真に空のdatabaseから始める通常のCLI full scan（`--rebuild` と `--symbols-only` を除く）だけは、
+fresh resolution専用の契約をopt-inします。reference insertはbind parameterを増やさず、
+`unresolved`、candidate count 0、self/mutual flag 0というcanonicalな暫定値を永続化します。
+早期のempty確認はadvisoryです。authoritativeなouter write transaction開始直後に、CLIは同じ
+transaction内で`files`、`symbols`、`symbol_references`を再確認します。write前のgapで別connectionが
+1行でもcommitしていた場合は、最初のrowを永続化する前にgraph scopeのfresh insert defaultを無効化し、
+candidateを持たないreferenceも含めて通常のfull-resolution SQLでfinalizeします。
+finalizationは`symbol_reference_candidates`をreferenceごとのmaterialized factsへ1回走査し、
+candidateを持つreferenceだけをprimary keyで更新します。candidateを持たないreferenceは暫定値を
+維持し、self flagも同じsparse update内で導出します。このopt-inはgraph transaction失敗後も
+pendingのまま残り、graph commit後にだけ解除します。既存indexのupdate、rebuild、retained graph
+rebuild、MCP indexingは従来経路を維持します。特にMCPはgraph finalization前にfile batchをdurable
+commitできるため、その状態を扱う独立したrecovery契約が設計されるまでは既存の再試行semanticsを
+変更してはいけません。
+
+fold readiness には、通常の CLI / MCP full indexing が共有する、より限定的な authoritative-fresh
+最適化があります。最初の書き込み前に、`DbWriter` は `files`、`symbols`、
+`symbol_references` がすべて空である同一の `BEGIN IMMEDIATE` snapshot からのみ、opaque で
+一回限りの claim を発行できます。claim は writer / connection と取得時の
+`PRAGMA data_version` に束縛され、同じ writer が一度だけ consume できます。stamp 決定前に
+別 connection が commit した場合は無効になります。built-in extractor pipeline が正常完了した
+場合、finalization は claim を使って、永続化済みの全 symbol / reference value を読み出して
+再 fold する allocation-heavy な処理を省けますが、FoldReady を stamp する前の SQL による
+NULL completeness check は引き続き実行します。
+raw `BEGIN IMMEDIATE` helperは、成功後のcancellation checkを、callerがrollback ownershipを記録した
+後にだけ行います。その境界でcancelされてもwriter gateを解放する前にraw transactionをrollbackし、
+warmなCLI / MCP connectionを次のrequestで引き続き利用できます。
+run は registry の accepted-producer mutation generation も取得します。一時的な custom producer
+が後で削除され、最終 registry が再び built-in-only になっていても、generation が変化していれば
+claim を無効化します。staged workspace replacement の commit もこの履歴に含めますが、
+diagnostic-only publication と状態が変わらない missing-directory discovery は generation を進めません。
+
+この shortcut は意図的に fail closed です。rebuild、update、legacy または既存 index、public な
+`DbWriter` readiness API、custom plugin / pattern config、post-extraction hook、owner が異なるか
+再利用された claim、外部 connection が commit した database では、従来の full value validation
+を使います。shortcut は insert 時に生成する folded value も、readiness transaction / rollback の
+semantics も変更しません。
 
 C# の明示的 interface member では、`symbols.name` は短い表示用 / discovery alias のままにし、
 `symbols.name_folded` に正規化した interface qualifier と末尾 method の generic arity を
@@ -5490,6 +5705,22 @@ LIMIT 20;
 | TOML / repository metadata | TOML の table / key、EditorConfig の section / key、Git / Docker ignore rule、Git attribute の rule / attribute、`.rules` の block / key を上限付き structural symbol として出力します。reference は repository-local な path / glob に限定し、remote URL、絶対 filesystem path、親 directory traversal は抑止します。 |
 | Windows application manifest | manifest element path、assembly identity、execution level、supported OS value を structural symbol として維持します。依存 assembly identity は `dependency` reference、local な `file` / `codeBase` / probing path は `project_reference` edge を出力します。 |
 | XML / NuGet.config | 汎用 XML は上限付きの element / attribute path を出力します。NuGet.config ではさらに package source、source mapping、署名検証モード、trusted signer 名、証明書 fingerprint、`allowUntrustedRoot` の値を `nuget.*` subkind 付きの semantic `property` symbol にします。 |
+
+行指向の正規表現 loop に入る前に、built-in の case-sensitive pattern は明示的な
+`RequiredLiteral` Tier A gate を opt-in できます。literal は2文字以上で、正規表現の全成功経路に
+Ordinal の substring として必ず現れなければなりません。正規化済み file content に存在しない
+場合だけその pattern を skip し、残る pattern の順序は変えません。`IgnoreCase` pattern、1文字の
+literal、共通 literal を持たない optional / alternative path、project の custom pattern、plugin は
+意図的に対象外です。C# の不完全 attribute recovery や C++ の same-line member recovery を含め、
+pattern list を参照する補助 scan は同じ順序の applicable set を使わなければなりません。comment や
+string 内に literal があるため pattern を残すことはあります。各 regex call の直前には、C# property
+header の結合、Fortran continuation の連結、Java / Kotlin annotation の除去、C# wrapped modifier の
+合成、C++ same-line segment、CSS selector の brace 再構成などを反映した、実際に regex へ渡す input
+そのものに同じ Ordinal 判定を適用します。miss は言語固有 recovery を終了せず、regex failure と同様に
+扱います。特に C# static constructor の bare identifier 行が gate miss しても、合成した各 `static ...`
+wrapper は引き続き試さなければなりません。comment、string、annotation、別 declaration にだけ literal
+がある場合は exact-input 判定が失われた最適化を回収し、match は変えません。custom / plugin pattern を
+含む `RequiredLiteral` のない pattern は従来どおり実行します。
 
 JavaScript / TypeScript の export / reference 詳細:
 
@@ -6704,16 +6935,25 @@ cleared range を証明するテストが必要です。Bounded accumulation pat
 | sidecar size | 1 file あたり 64 KiB |
 | sidecar 内の rule | 128 件 |
 | configured rule | immutable workspace snapshot ごとに 128 件 |
+| worker の project-root snapshot | persistent symbol worker ごとに 32 件 |
+| worker の pattern-directory snapshot | root ごとに 4,096 件、worker ごとに 8,192 件。超過分は live discovery |
 | regex match timeout | 100 ms |
 | timeout rule の cooldown | 所有する workspace snapshot 内で最大 1 分 |
 
 - sidecar は symlink ではない pattern directory 配下の通常 file に限定します。
 - 各 sidecar は path・rule・budget を commit する前に parse / compile し、
   `SymbolKindCatalog` に対して kind を検証します。
-- 拒否された内容は fingerprint で重複診断を抑制します。内容や metadata の変更、
-  一時的な read failure からの回復後は、process を再起動せず再試行します。
+- 拒否された内容は fingerprint で重複診断を抑制します。再度 discovery または明示的
+  refresh を行う経路では、内容や metadata の変更、一時的な read failure からの回復後に
+  process を再起動せず再試行します。
 - workspace 探索には明示的な trust root が必要で、それより上は探索しません。
   境界内の nested sidecar は対象 file の上限付き extraction worker で読み込みます。
+- persistent symbol-worker command は pattern discovery を project-root snapshot として扱います。
+  root reload は user / workspace-root config を1回だけ読み込み、missing、unsafe、既知の
+  discovery failure を含む各 nested pattern directory の初回結果を run 中は固定します。
+  その後に追加または修復された sidecar は次の worker command で可視になり、想定外例外は
+  引き続き再試行します。directory cache が飽和した場合は uncached discovery に fallback し、
+  memory 上限を守るために config を skip することはありません。
 - path identity は実際の filesystem の case-sensitivity に従うため、case-sensitive
   volume では大小文字だけが異なる sidecar も別々に扱います。
 - `status --json` の `extractors.pattern_configs[]` は、受理済み file の

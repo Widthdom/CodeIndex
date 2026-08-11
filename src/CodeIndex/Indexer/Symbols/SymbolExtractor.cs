@@ -340,6 +340,51 @@ public static partial class SymbolExtractor
             patternConfigsAlreadyLoaded: false,
             cancellationToken: cancellationToken);
 
+    private sealed class RequiredLiteralGateCounts
+    {
+        public int PatternCount { get; set; }
+        public int ApplicablePatternCount { get; set; }
+        public int RegexAttemptCount { get; set; }
+        public int MatchInputLiteralSkipCount { get; set; }
+    }
+
+    internal static List<SymbolRecord> ExtractForRequiredLiteralGateTesting(
+        long fileId,
+        string lang,
+        string content,
+        bool applyRequiredLiteralFileGate,
+        bool applyRequiredLiteralMatchInputGate,
+        out int patternCount,
+        out int applicablePatternCount,
+        out int regexAttemptCount,
+        out int matchInputLiteralSkipCount,
+        string? filePath = null,
+        string? projectRoot = null,
+        CancellationToken cancellationToken = default)
+    {
+        var counts = new RequiredLiteralGateCounts();
+        var symbols = ExtractCore(
+            fileId,
+            lang,
+            content,
+            contentIsNormalized: false,
+            hasOversizeLine: null,
+            conflictMarkerLine: null,
+            filePath,
+            projectRoot,
+            patternConfigsAlreadyLoaded: false,
+            cancellationToken: cancellationToken,
+            maxSymbols: null,
+            applyRequiredLiteralFileGate: applyRequiredLiteralFileGate,
+            applyRequiredLiteralMatchInputGate: applyRequiredLiteralMatchInputGate,
+            requiredLiteralGateCounts: counts);
+        patternCount = counts.PatternCount;
+        applicablePatternCount = counts.ApplicablePatternCount;
+        regexAttemptCount = counts.RegexAttemptCount;
+        matchInputLiteralSkipCount = counts.MatchInputLiteralSkipCount;
+        return symbols;
+    }
+
     internal static bool TryExtractBounded(
         long fileId,
         string? lang,

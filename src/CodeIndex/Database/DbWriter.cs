@@ -49,6 +49,8 @@ public partial class DbWriter
     private static readonly AsyncLocal<Action<DbWriterBatchStatement>?> ScopedBatchStatementExecutingForTesting = new();
     private static readonly AsyncLocal<Action<SqliteConnection, string>?>
         ScopedReferenceSecondaryIndexBulkLoadStateForTesting = new();
+    private static readonly AsyncLocal<Action<SqliteConnection, string>?>
+        ScopedFreshBulkLoadPlannerStatisticsStateForTesting = new();
     internal static Action<string>? LanguagePresenceCheckForTesting
     {
         get => ScopedLanguagePresenceCheckForTesting.Value;
@@ -139,6 +141,12 @@ public partial class DbWriter
         set => ScopedReferenceSecondaryIndexBulkLoadStateForTesting.Value = value;
     }
 
+    internal static Action<SqliteConnection, string>? FreshBulkLoadPlannerStatisticsStateForTesting
+    {
+        get => ScopedFreshBulkLoadPlannerStatisticsStateForTesting.Value;
+        set => ScopedFreshBulkLoadPlannerStatisticsStateForTesting.Value = value;
+    }
+
     // Transaction ownership (#4154): the semaphore is held for the outermost writer
     // transaction lifetime. Same-stack nested calls from the owning thread and
     // AsyncLocal token skip the semaphore and become SAVEPOINTs; other flows wait even
@@ -155,7 +163,8 @@ public partial class DbWriter
     private const int TypeScriptModuleSyntaxFallbackMaxLines = 16384;
     private static readonly ConcurrentDictionary<int, string> ChunkInsertSqlCache = new();
     private static readonly ConcurrentDictionary<int, string> SymbolInsertSqlCache = new();
-    private static readonly ConcurrentDictionary<int, string> ReferenceInsertSqlCache = new();
+    private static readonly ConcurrentDictionary<(int Rows, bool FreshResolutionDefaults), string>
+        ReferenceInsertSqlCache = new();
     private static readonly ConcurrentDictionary<int, string> ReferenceLineUpsertSqlCache = new();
     private static readonly ConcurrentDictionary<int, string> ReferenceLineLookupSqlCache = new();
     private static readonly ConcurrentDictionary<int, string> ReferenceLineInsertSqlCache = new();

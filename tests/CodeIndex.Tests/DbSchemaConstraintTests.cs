@@ -5,6 +5,7 @@ using System.Text.RegularExpressions;
 
 namespace CodeIndex.Tests;
 
+[Collection("SQLite pool sensitive")]
 public class DbSchemaConstraintTests
 {
     [Theory]
@@ -88,6 +89,53 @@ public class DbSchemaConstraintTests
         }
         finally
         {
+            TestProjectHelper.DeleteDirectory(dbDir);
+        }
+    }
+
+    [Fact]
+    public void InitializeSchema_PublicTaxonomyMutationCannotSplitCanonicalContracts()
+    {
+        var canonicalSymbolKinds = SymbolKindCatalog.PersistedSymbolKinds.ToArray();
+        var canonicalReferenceKinds = SymbolKindCatalog.PersistedReferenceKinds.ToArray();
+        var originalPublicSymbolKinds = SymbolKindCatalog.SymbolKinds.ToArray();
+        var originalPublicReferenceKinds = SymbolKindCatalog.ReferenceKinds.ToArray();
+        const string mutatedSymbolKind = "mutated_public_symbol_kind";
+        const string mutatedReferenceKind = "mutated_public_reference_kind";
+        var dbDir = TestProjectHelper.CreateTempProject("codeindex_schema_public_taxonomy_mutation");
+        var dbPath = Path.Combine(dbDir, "codeindex.db");
+
+        try
+        {
+            SymbolKindCatalog.SymbolKinds[0] = mutatedSymbolKind;
+            SymbolKindCatalog.ReferenceKinds[0] = mutatedReferenceKind;
+
+            Assert.Equal(mutatedSymbolKind, SymbolKindCatalog.SymbolKinds[0]);
+            Assert.Equal(mutatedReferenceKind, SymbolKindCatalog.ReferenceKinds[0]);
+            Assert.True(SymbolKindCatalog.IsValidSymbolKind(canonicalSymbolKinds[0]));
+            Assert.True(SymbolKindCatalog.IsValidReferenceKind(canonicalReferenceKinds[0]));
+            Assert.False(SymbolKindCatalog.IsValidSymbolKind(mutatedSymbolKind));
+            Assert.False(SymbolKindCatalog.IsValidReferenceKind(mutatedReferenceKind));
+
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+                db.InitializeSchema();
+
+            using var conn = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString);
+            conn.Open();
+            var symbolsSql = ReadCreateSql(conn, "symbols");
+            var referencesSql = ReadCreateSql(conn, "symbol_references");
+
+            AssertSameSet(canonicalSymbolKinds, ExtractCheckValues(symbolsSql, "kind"));
+            AssertSameSet(canonicalSymbolKinds, ExtractCheckValues(symbolsSql, "container_kind"));
+            AssertSameSet(canonicalReferenceKinds, ExtractCheckValues(referencesSql, "reference_kind"));
+            AssertSameSet(canonicalSymbolKinds, ExtractCheckValues(referencesSql, "container_kind"));
+            Assert.DoesNotContain(mutatedSymbolKind, symbolsSql, StringComparison.Ordinal);
+            Assert.DoesNotContain(mutatedReferenceKind, referencesSql, StringComparison.Ordinal);
+        }
+        finally
+        {
+            originalPublicSymbolKinds.CopyTo(SymbolKindCatalog.SymbolKinds, 0);
+            originalPublicReferenceKinds.CopyTo(SymbolKindCatalog.ReferenceKinds, 0);
             TestProjectHelper.DeleteDirectory(dbDir);
         }
     }

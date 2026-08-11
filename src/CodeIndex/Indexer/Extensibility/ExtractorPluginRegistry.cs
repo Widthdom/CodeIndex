@@ -52,6 +52,10 @@ public static partial class ExtractorPluginRegistry
     private static bool suppressDefaultPluginDiscoveryForTesting;
     private static readonly AsyncLocal<bool> AuthorizedConfigurationScope = new();
 
+    internal readonly record struct FoldProducerReadinessSnapshot(
+        bool UsesOnlyBuiltInProducers,
+        long MutationGeneration);
+
     internal static IDisposable BeginAuthorizedConfigurationScope()
     {
         var previous = AuthorizedConfigurationScope.Value;
@@ -196,6 +200,10 @@ public static partial class ExtractorPluginRegistry
         var language = NormalizePluginLanguage(extractor.Language);
         lock (Gate)
         {
+            var changed = !SymbolExtractors.TryGetValue(language, out var previous)
+                || !ReferenceEquals(previous, extractor);
+            if (changed)
+                AdvanceAcceptedFoldProducerMutationGeneration();
             SymbolExtractors[language] = extractor;
             PublishUserExtractorSnapshot();
         }
@@ -209,6 +217,10 @@ public static partial class ExtractorPluginRegistry
         var language = NormalizePluginLanguage(extractor.Language);
         lock (Gate)
         {
+            var changed = !ReferenceExtractors.TryGetValue(language, out var previous)
+                || !ReferenceEquals(previous, extractor);
+            if (changed)
+                AdvanceAcceptedFoldProducerMutationGeneration();
             ReferenceExtractors[language] = extractor;
             PublishUserExtractorSnapshot();
         }
@@ -220,6 +232,12 @@ public static partial class ExtractorPluginRegistry
     {
         lock (Gate)
         {
+            if (SymbolExtractors.Count > 0
+                || ReferenceExtractors.Count > 0
+                || pluginAssemblyCount > 0)
+            {
+                AdvanceAcceptedFoldProducerMutationGeneration();
+            }
             SymbolExtractors.Clear();
             ReferenceExtractors.Clear();
             PublishUserExtractorSnapshot();
@@ -250,6 +268,12 @@ public static partial class ExtractorPluginRegistry
     {
         lock (Gate)
         {
+            if (SymbolExtractors.Count > 0
+                || ReferenceExtractors.Count > 0
+                || pluginAssemblyCount > 0)
+            {
+                AdvanceAcceptedFoldProducerMutationGeneration();
+            }
             SymbolExtractors.Clear();
             ReferenceExtractors.Clear();
             PublishUserExtractorSnapshot();
@@ -385,6 +409,41 @@ public static partial class ExtractorPluginRegistry
         LoadWorkspacePlugins(state, fullRoot);
         LoadPatternConfigsForProjectRoot(state, fullRoot);
     }
+
+    /// <summary>
+    /// Captures a stable view of both current fold-row producer ownership and its monotonic
+    /// mutation history. Diagnostic-only publications do not advance the generation.
+    /// 現在の fold-row producer ownership と単調増加する変更履歴を同じ安定 snapshot で返す。
+    /// diagnostic-only publication では generation を進めない。
+    /// </summary>
+    internal static FoldProducerReadinessSnapshot CaptureFoldProducerReadinessSnapshot(
+        string? workspaceRoot)
+    {
+        EnsurePluginsLoaded();
+        while (true)
+        {
+            var generationBefore = Volatile.Read(ref acceptedFoldProducerMutationGeneration);
+            var patternSnapshot = GetPatternSnapshot(workspaceRoot);
+            int globalPluginAssemblyCount;
+            lock (Gate)
+                globalPluginAssemblyCount = pluginAssemblyCount;
+            var generationAfter = Volatile.Read(ref acceptedFoldProducerMutationGeneration);
+            if (generationBefore != generationAfter)
+                continue;
+
+            return new FoldProducerReadinessSnapshot(
+                UsesOnlyBuiltInProducers:
+                    globalPluginAssemblyCount == 0
+                    && patternSnapshot.PluginAssemblyCount == 0
+                    && patternSnapshot.ConfigCount == 0
+                    && patternSnapshot.SymbolExtractors.Count == 0
+                    && patternSnapshot.ReferenceExtractors.Count == 0,
+                MutationGeneration: generationAfter);
+        }
+    }
+
+    internal static bool UsesOnlyBuiltInFoldProducers(string? workspaceRoot)
+        => CaptureFoldProducerReadinessSnapshot(workspaceRoot).UsesOnlyBuiltInProducers;
 
     internal static void ReloadPatternConfigsForProjectRoot(
         string? projectRoot,
@@ -585,7 +644,10 @@ public static partial class ExtractorPluginRegistry
         bool includeWorkspaceRoot = true,
         Func<string, Stream>? openFile = null,
         Func<string, bool, bool>? directoryExists = null,
-        Action<string, ReadOnlyMemory<byte>?, long?>? observeInput = null)
+        Action<string, ReadOnlyMemory<byte>?, long?>? observeInput = null,
+        bool includeUserDirectory = true,
+        Func<string, bool>? shouldInspectWorkspacePatternDirectory = null,
+        Action<string>? workspacePatternDirectoryInspected = null)
     {
         EnsurePluginsLoaded();
         if (string.IsNullOrWhiteSpace(path) || string.IsNullOrWhiteSpace(workspaceRoot))
@@ -600,25 +662,39 @@ public static partial class ExtractorPluginRegistry
             return;
 
         var state = GetOrCreatePatternWorkspace(fullRoot);
-        foreach (var patternPath in EnumerateUserPatternConfigPaths(
-                     state,
-                     directoryExists,
-                     observeInput))
-            TryLoadPatternConfig(state, patternPath, "user", openFile, observeInput);
+        if (includeUserDirectory)
+        {
+            foreach (var patternPath in EnumerateUserPatternConfigPaths(
+                         state,
+                         directoryExists,
+                         observeInput))
+            {
+                TryLoadPatternConfig(state, patternPath, "user", openFile, observeInput);
+            }
+        }
 
         while (PathCasing.IsFullPathEqualOrParent(fullRoot, directory))
         {
             if (!includeWorkspaceRoot && PathCasing.PathsEqual(directory, fullRoot))
                 break;
 
-            foreach (var patternPath in EnumeratePatternConfigPaths(
-                         state,
-                         directory,
-                         includeUserDirectory: false,
-                         directoryExists,
-                         observeInput))
+            var patternDirectory = Path.Combine(directory, ".cdidx", "patterns");
+            if (shouldInspectWorkspacePatternDirectory?.Invoke(patternDirectory) != false)
             {
-                TryLoadPatternConfig(state, patternPath, "workspace", openFile, observeInput);
+                foreach (var patternPath in EnumeratePatternConfigPaths(
+                             state,
+                             directory,
+                             includeUserDirectory: false,
+                             directoryExists,
+                             observeInput))
+                {
+                    TryLoadPatternConfig(state, patternPath, "workspace", openFile, observeInput);
+                }
+
+                // Complete only after the existing discovery/diagnostic path returns.
+                // Expected missing, unsafe, and enumeration-failure outcomes therefore
+                // become snapshot entries, while unexpected exceptions remain retryable.
+                workspacePatternDirectoryInspected?.Invoke(patternDirectory);
             }
 
             if (PathCasing.PathsEqual(directory, fullRoot))

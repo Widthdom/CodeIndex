@@ -198,11 +198,22 @@ public class DatabaseTests : IDisposable
     public void MutualRecursionLookups_UsePartialUnresolvedIndexInFullAndScopedPlans()
     {
         const string indexName = "idx_symbol_refs_unresolved_mutual_folded";
+        var fullSql = DbWriter.RefreshMutualRecursionFlagsSqlForTesting;
+        Assert.Contains("AS MATERIALIZED", fullSql, StringComparison.Ordinal);
+        Assert.Equal(
+            1,
+            CountOccurrences(fullSql, "INDEXED BY idx_symbol_refs_resolved_source_target_kind"));
+        Assert.Equal(
+            1,
+            CountOccurrences(fullSql, "INDEXED BY idx_symbol_refs_unresolved_mutual_folded"));
+        Assert.Equal(
+            1,
+            CountOccurrences(fullSql, "INDEXED BY idx_symbol_refs_container_nocase_kind"));
         AssertUsesPartialIndex(
             "full",
             ReadQueryPlanDetails(
                 _db.Connection,
-                DbWriter.RefreshMutualRecursionFlagsSqlForTesting));
+                fullSql));
 
         using var scope = _writer.BeginReferenceGraphRefreshScope();
         var scopedLookups = DbWriter.ScopedUnresolvedMutualLookupStatementsForTesting;
@@ -220,6 +231,19 @@ public class DatabaseTests : IDisposable
                 detail.Equals("SCAN reverse", StringComparison.OrdinalIgnoreCase)
                 || detail.StartsWith("SCAN reverse ", StringComparison.OrdinalIgnoreCase)),
                 $"Unexpected reverse scan in {scopeName} plan:{Environment.NewLine}{string.Join(Environment.NewLine, plan)}");
+        }
+
+        static int CountOccurrences(string value, string search)
+        {
+            var count = 0;
+            for (var start = 0; ;)
+            {
+                var found = value.IndexOf(search, start, StringComparison.Ordinal);
+                if (found < 0)
+                    return count;
+                count++;
+                start = found + search.Length;
+            }
         }
     }
 
@@ -1155,6 +1179,75 @@ public class DatabaseTests : IDisposable
         {
             DbWriter.ReferenceGraphRowCountForTesting = previousCountHook;
             DbWriter.ReferenceGraphRefreshScopeForTesting = previousStatsHook;
+        }
+    }
+
+    [Fact]
+    public void ReferenceGraphDirtyScope_ForcedFullRefreshSkipsUnusedDirtyTracking()
+    {
+        DbWriter.ReferenceGraphRefreshScopeStats? observed = null;
+        var previousHook = DbWriter.ReferenceGraphRefreshScopeForTesting;
+        try
+        {
+            DbWriter.ReferenceGraphRefreshScopeForTesting = stats => observed = stats;
+            using var scope = _writer.BeginReferenceGraphRefreshScope(forceFullRefresh: true);
+            long fileId;
+            using (var transaction = _writer.BeginTransaction())
+            {
+                fileId = _writer.UpsertFile(new FileRecord
+                {
+                    Path = "src/forced-full.py",
+                    Lang = "python",
+                    Size = 100,
+                    Lines = 1,
+                    Modified = new DateTime(2025, 1, 2, 0, 0, 0, DateTimeKind.Utc),
+                    Checksum = "forced-full-replacement",
+                });
+                _writer.InsertSymbols([
+                    new SymbolRecord
+                    {
+                        FileId = fileId,
+                        Kind = "function",
+                        Name = "After",
+                        Line = 1,
+                    },
+                ]);
+                _writer.InsertReferences([
+                    new ReferenceRecord
+                    {
+                        FileId = fileId,
+                        SymbolName = "After",
+                        ReferenceKind = "call",
+                        Line = 1,
+                        Column = 1,
+                        Context = "After()",
+                    },
+                ], refreshMutualRecursionFlags: false);
+                transaction.Commit();
+            }
+
+            Assert.Equal(0, ExecuteScalarLong(
+                "SELECT COUNT(*) FROM temp.reference_graph_dirty_files"));
+            Assert.Equal(0, ExecuteScalarLong(
+                "SELECT COUNT(*) FROM temp.reference_graph_dirty_names"));
+            Assert.Equal(0, ExecuteScalarLong(
+                "SELECT COUNT(*) FROM temp.reference_graph_removed_references"));
+            Assert.Equal(0, ExecuteScalarLong(
+                "SELECT COUNT(*) FROM temp.reference_graph_dirty_references"));
+
+            _writer.RefreshMutualRecursionFlags();
+
+            Assert.NotNull(observed);
+            Assert.True(observed!.UsedFullRefresh);
+            Assert.Equal(0, observed.DirtyFileCount);
+            Assert.Equal(0, observed.DirtyNameCount);
+            Assert.Equal(1, observed.DirtyReferenceCount);
+            Assert.Equal(1, observed.TotalReferenceCount);
+            Assert.Equal("resolved", ReadReferenceResolutionState(fileId));
+        }
+        finally
+        {
+            DbWriter.ReferenceGraphRefreshScopeForTesting = previousHook;
         }
     }
 
@@ -2868,6 +2961,70 @@ public class DatabaseTests : IDisposable
         ]));
 
         Assert.Contains("Unknown symbol kind", ex.Message);
+    }
+
+    [Fact]
+    public void InsertSymbols_UnknownContainerKind_ThrowsBeforePersisting()
+    {
+        var ex = Assert.Throws<ArgumentException>(() => _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = 1,
+                Kind = "class",
+                Name = "Run",
+                Line = 1,
+                ContainerKind = "metohd",
+            },
+        ]));
+
+        Assert.Equal("symbol", ex.ParamName);
+        Assert.Contains("Unknown symbol container kind 'metohd'", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void InsertReferences_UnknownKind_ThrowsBeforePersisting()
+    {
+        var fileId = UpsertTestFile("src/unknown-reference-kind.cs", "unknown-reference-kind");
+        var ex = Assert.Throws<ArgumentException>(() => _writer.InsertReferences(
+        [
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "Run",
+                ReferenceKind = "cal",
+                Line = 1,
+                Column = 1,
+                Context = "Run();",
+            },
+        ], refreshMutualRecursionFlags: false));
+
+        Assert.Equal("reference", ex.ParamName);
+        Assert.Contains("Unknown reference kind 'cal'", ex.Message, StringComparison.Ordinal);
+        Assert.Equal(0, _writer.GetCounts().references);
+    }
+
+    [Fact]
+    public void InsertReferences_UnknownContainerKind_ThrowsBeforePersisting()
+    {
+        var fileId = UpsertTestFile("src/unknown-reference-container.cs", "unknown-reference-container");
+        var ex = Assert.Throws<ArgumentException>(() => _writer.InsertReferences(
+        [
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "Run",
+                ReferenceKind = "call",
+                Line = 1,
+                Column = 1,
+                Context = "Run();",
+                ContainerKind = "metohd",
+            },
+        ], refreshMutualRecursionFlags: false));
+
+        Assert.Equal("reference", ex.ParamName);
+        Assert.Contains("Unknown reference container kind 'metohd'", ex.Message, StringComparison.Ordinal);
+        Assert.Equal(0, _writer.GetCounts().references);
     }
 
     [Fact]
@@ -10501,6 +10658,249 @@ public class DatabaseTests : IDisposable
         Assert.True(stamped);
         Assert.Equal(FoldReadyStampResult.Ready, _writer.MarkFoldReadyWithResult());
         Assert.Equal(DbContext.FoldReadyFlag, _db.GetUserVersion() & DbContext.FoldReadyFlag);
+    }
+
+    [Fact]
+    public void MarkFoldReady_AuthoritativeFreshClaimSkipsValueVerificationOnceForOwnerWrites()
+    {
+        var claim = _writer.TryClaimAuthoritativeFreshFoldRows();
+        Assert.NotNull(claim);
+
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/fresh.py",
+            Lang = "python",
+            Size = 30,
+            Lines = 3,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertSymbols([
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "Straße",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 1,
+            },
+        ]);
+
+        var nullChecks = 0;
+        var valueChecks = 0;
+        try
+        {
+            DbWriter.FoldBackfillVerificationForTesting = () => nullChecks++;
+            DbWriter.FoldValueVerificationForTesting = () => valueChecks++;
+
+            Assert.Equal(
+                FoldReadyStampResult.Ready,
+                _writer.MarkFoldReadyWithResult(authoritativeFreshRowsClaim: claim));
+            Assert.Equal(1, nullChecks);
+            Assert.Equal(0, valueChecks);
+
+            Assert.Equal(
+                FoldReadyStampResult.Ready,
+                _writer.MarkFoldReadyWithResult(authoritativeFreshRowsClaim: claim));
+            Assert.Equal(2, nullChecks);
+            Assert.Equal(1, valueChecks);
+            Assert.Null(_writer.TryClaimAuthoritativeFreshFoldRows());
+        }
+        finally
+        {
+            DbWriter.FoldBackfillVerificationForTesting = null;
+            DbWriter.FoldValueVerificationForTesting = null;
+        }
+    }
+
+    [Fact]
+    public void MarkFoldReady_AuthoritativeFreshClaimStillRejectsNullFoldValues()
+    {
+        var claim = _writer.TryClaimAuthoritativeFreshFoldRows();
+        Assert.NotNull(claim);
+
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/fresh_null.py",
+            Lang = "python",
+            Size = 30,
+            Lines = 3,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertSymbols([
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "Straße",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 1,
+            },
+        ]);
+        using (var command = _db.Connection.CreateCommand())
+        {
+            command.CommandText = "UPDATE symbols SET name_folded = NULL";
+            Assert.Equal(1, command.ExecuteNonQuery());
+        }
+
+        var nullChecks = 0;
+        var valueChecks = 0;
+        try
+        {
+            DbWriter.FoldBackfillVerificationForTesting = () => nullChecks++;
+            DbWriter.FoldValueVerificationForTesting = () => valueChecks++;
+
+            Assert.Equal(
+                FoldReadyStampResult.MissingBackfill,
+                _writer.MarkFoldReadyWithResult(authoritativeFreshRowsClaim: claim));
+            Assert.Equal(1, nullChecks);
+            Assert.Equal(0, valueChecks);
+            Assert.Equal(0, _db.GetUserVersion() & DbContext.FoldReadyFlag);
+        }
+        finally
+        {
+            DbWriter.FoldBackfillVerificationForTesting = null;
+            DbWriter.FoldValueVerificationForTesting = null;
+        }
+    }
+
+    [Fact]
+    public void MarkFoldReady_AuthoritativeFreshClaimFailsClosedAfterExternalCommit()
+    {
+        var claim = _writer.TryClaimAuthoritativeFreshFoldRows();
+        Assert.NotNull(claim);
+
+        using (var externalDb = new DbContext(DbOpenIntent.WriteIndex, _dbPath))
+        {
+            externalDb.InitializeSchema();
+            var externalWriter = new DbWriter(externalDb.Connection);
+            var fileId = externalWriter.UpsertFile(new FileRecord
+            {
+                Path = "src/external.py",
+                Lang = "python",
+                Size = 30,
+                Lines = 3,
+                Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+            });
+            externalWriter.InsertSymbols([
+                new SymbolRecord
+                {
+                    FileId = fileId,
+                    Kind = "function",
+                    Name = "Straße",
+                    Line = 1,
+                    StartLine = 1,
+                    EndLine = 1,
+                },
+            ]);
+            using var corrupt = externalDb.Connection.CreateCommand();
+            corrupt.CommandText = "UPDATE symbols SET name_folded = 'not-current'";
+            Assert.Equal(1, corrupt.ExecuteNonQuery());
+        }
+
+        var valueChecks = 0;
+        try
+        {
+            DbWriter.FoldValueVerificationForTesting = () => valueChecks++;
+
+            Assert.Equal(
+                FoldReadyStampResult.NonCurrentFoldValues,
+                _writer.MarkFoldReadyWithResult(authoritativeFreshRowsClaim: claim));
+            Assert.Equal(1, valueChecks);
+            Assert.Equal(0, _db.GetUserVersion() & DbContext.FoldReadyFlag);
+        }
+        finally
+        {
+            DbWriter.FoldValueVerificationForTesting = null;
+        }
+    }
+
+    [Fact]
+    public void MarkFoldReady_AuthoritativeFreshClaimFailsClosedForDifferentWriter()
+    {
+        var claim = _writer.TryClaimAuthoritativeFreshFoldRows();
+        Assert.NotNull(claim);
+
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "src/wrong_owner.py",
+            Lang = "python",
+            Size = 30,
+            Lines = 3,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertSymbols([
+            new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = "Straße",
+                Line = 1,
+                StartLine = 1,
+                EndLine = 1,
+            },
+        ]);
+        using (var corrupt = _db.Connection.CreateCommand())
+        {
+            corrupt.CommandText = "UPDATE symbols SET name_folded = 'not-current'";
+            Assert.Equal(1, corrupt.ExecuteNonQuery());
+        }
+
+        var otherWriter = new DbWriter(_db.Connection);
+        var valueChecks = 0;
+        try
+        {
+            DbWriter.FoldValueVerificationForTesting = () => valueChecks++;
+
+            Assert.Equal(
+                FoldReadyStampResult.NonCurrentFoldValues,
+                otherWriter.MarkFoldReadyWithResult(authoritativeFreshRowsClaim: claim));
+            Assert.Equal(1, valueChecks);
+            Assert.Equal(0, _db.GetUserVersion() & DbContext.FoldReadyFlag);
+        }
+        finally
+        {
+            DbWriter.FoldValueVerificationForTesting = null;
+        }
+    }
+
+    [Fact]
+    public void TryClaimAuthoritativeFreshFoldRows_PreCancelledRequestLeavesWriterUsable()
+    {
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        Assert.Throws<OperationCanceledException>(() =>
+            _writer.TryClaimAuthoritativeFreshFoldRows(cancellation.Token));
+        Assert.NotNull(_writer.TryClaimAuthoritativeFreshFoldRows());
+    }
+
+    [Fact]
+    public void TryClaimAuthoritativeFreshFoldRows_CancelAfterBeginRollsBackAndLeavesWriterUsable()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var previousHook = DbWriter.FreshFoldBeginImmediateCompletedForTesting;
+        try
+        {
+            DbWriter.FreshFoldBeginImmediateCompletedForTesting = () =>
+            {
+                previousHook?.Invoke();
+                cancellation.Cancel();
+            };
+
+            Assert.Throws<OperationCanceledException>(() =>
+                _writer.TryClaimAuthoritativeFreshFoldRows(cancellation.Token));
+            Assert.True(cancellation.IsCancellationRequested);
+        }
+        finally
+        {
+            DbWriter.FreshFoldBeginImmediateCompletedForTesting = previousHook;
+        }
+
+        using (var nextTransaction = _writer.BeginTransaction())
+            nextTransaction.Commit();
+        Assert.NotNull(_writer.TryClaimAuthoritativeFreshFoldRows());
     }
 
     [Fact]

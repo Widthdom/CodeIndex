@@ -58,14 +58,18 @@ public partial class IndexCommandRunnerTests
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_reference_index_bulk_load");
         var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
         var previousStateHook = DbWriter.ReferenceSecondaryIndexBulkLoadStateForTesting;
+        var previousStatisticsHook = DbWriter.FreshBulkLoadPlannerStatisticsStateForTesting;
         var previousStatementHook = DbWriter.BatchStatementExecutingForTesting;
         var previousGraphHook = DbWriter.MutualRecursionRefreshForTesting;
         var previousScopeHook = DbWriter.ReferenceGraphRefreshScopeForTesting;
         var previousHotspotHook = DbWriter.HotspotAggregateRefreshStatementExecutingForTesting;
         var snapshots = new ConcurrentQueue<ReferenceIndexStageSnapshot>();
         var scopeSnapshots = new ConcurrentQueue<DbWriter.ReferenceGraphRefreshScopeStats>();
+        var lifecycle = new ConcurrentQueue<string>();
+        var statisticsPhases = new ConcurrentQueue<string>();
         SqliteConnection? activeConnection = null;
         string[]? hotspotIndexNamesDuringRefresh = null;
+        ProvisionalReferenceRows? provisionalRowsAtIdentityStart = null;
         var missingConnectionObservations = 0;
         var refreshCount = 0;
         try
@@ -81,7 +85,16 @@ public partial class IndexCommandRunnerTests
             {
                 Volatile.Write(ref activeConnection, connection);
                 snapshots.Enqueue(CaptureReferenceIndexSnapshot(phase, connection));
+                lifecycle.Enqueue(phase);
+                if (string.Equals(phase, "identity_started", StringComparison.Ordinal))
+                    provisionalRowsAtIdentityStart = CaptureProvisionalReferenceRows(connection);
                 previousStateHook?.Invoke(connection, phase);
+            };
+            DbWriter.FreshBulkLoadPlannerStatisticsStateForTesting = (connection, phase) =>
+            {
+                statisticsPhases.Enqueue(phase);
+                lifecycle.Enqueue(phase);
+                previousStatisticsHook?.Invoke(connection, phase);
             };
             DbWriter.BatchStatementExecutingForTesting = statement =>
             {
@@ -143,6 +156,16 @@ public partial class IndexCommandRunnerTests
                 captured
                     .Where(snapshot => snapshot.Stage != "insert_references")
                     .Select(snapshot => snapshot.Stage));
+            Assert.Equal(
+                rebuild
+                    ? []
+                    : ["post_load_statistics_started", "post_load_statistics_completed"],
+                statisticsPhases);
+            Assert.Equal(
+                rebuild
+                    ? ["dropped", "deferred_graph_prepared", "candidate_deferred", "identity_started", "graph_required_restored", "mutual_started", "readiness_completed", "restored", "full_scan_committed"]
+                    : ["dropped", "deferred_graph_prepared", "candidate_deferred", "post_load_statistics_started", "post_load_statistics_completed", "identity_started", "graph_required_restored", "mutual_started", "readiness_completed", "restored", "full_scan_committed"],
+                lifecycle);
 
             var requiredNames = GetRequiredReferenceIndexNames();
             var initialBulkNames = GetInitialBulkPersistenceReferenceIndexNames();
@@ -177,15 +200,88 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(1, refreshCount);
             var scope = Assert.Single(scopeSnapshots);
             Assert.True(scope.UsedFullRefresh);
+            var provisionalRows = Assert.IsType<ProvisionalReferenceRows>(provisionalRowsAtIdentityStart);
+            Assert.True(provisionalRows.Total > 0);
+            Assert.Equal(provisionalRows.Total, provisionalRows.ZeroCandidateCount);
+            Assert.Equal(provisionalRows.Total, provisionalRows.NullTargetCount);
+            Assert.Equal(provisionalRows.Total, provisionalRows.NullTargetKeyCount);
+            Assert.Equal(provisionalRows.Total, provisionalRows.ZeroSelfCount);
+            Assert.Equal(provisionalRows.Total, provisionalRows.ZeroMutualCount);
+            if (rebuild)
+            {
+                Assert.Equal(provisionalRows.Total, provisionalRows.NullResolutionStateCount);
+                Assert.Equal(0, provisionalRows.UnresolvedResolutionStateCount);
+            }
+            else
+            {
+                Assert.Equal(0, provisionalRows.NullResolutionStateCount);
+                Assert.Equal(provisionalRows.Total, provisionalRows.UnresolvedResolutionStateCount);
+            }
             Assert.Equal(2, CountMutualRecursionReferences(dbPath));
         }
         finally
         {
             DbWriter.ReferenceSecondaryIndexBulkLoadStateForTesting = previousStateHook;
+            DbWriter.FreshBulkLoadPlannerStatisticsStateForTesting = previousStatisticsHook;
             DbWriter.BatchStatementExecutingForTesting = previousStatementHook;
             DbWriter.MutualRecursionRefreshForTesting = previousGraphHook;
             DbWriter.ReferenceGraphRefreshScopeForTesting = previousScopeHook;
             DbWriter.HotspotAggregateRefreshStatementExecutingForTesting = previousHotspotHook;
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FreshFullScan_DirectGraphRefreshesPostLoadPlannerStatistics()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_reference_index_direct_graph_statistics");
+        var previousStateHook = DbWriter.ReferenceSecondaryIndexBulkLoadStateForTesting;
+        var previousStatisticsHook = DbWriter.FreshBulkLoadPlannerStatisticsStateForTesting;
+        var previousGraphHook = DbWriter.MutualRecursionRefreshForTesting;
+        var previousAugmentationGroupingHook = DbWriter.TypeScriptAugmentationGroupingForTesting;
+        var lifecycle = new ConcurrentQueue<string>();
+        var graphRefreshCount = 0;
+        var augmentationGroupingCount = 0;
+        try
+        {
+            WriteDirectReferenceIndexCycleFixture(projectRoot);
+            DbWriter.ReferenceSecondaryIndexBulkLoadStateForTesting = (connection, phase) =>
+            {
+                lifecycle.Enqueue(phase);
+                previousStateHook?.Invoke(connection, phase);
+            };
+            DbWriter.FreshBulkLoadPlannerStatisticsStateForTesting = (connection, phase) =>
+            {
+                lifecycle.Enqueue(phase);
+                previousStatisticsHook?.Invoke(connection, phase);
+            };
+            DbWriter.MutualRecursionRefreshForTesting = () =>
+            {
+                Interlocked.Increment(ref graphRefreshCount);
+                previousGraphHook?.Invoke();
+            };
+            DbWriter.TypeScriptAugmentationGroupingForTesting = stats =>
+            {
+                Interlocked.Increment(ref augmentationGroupingCount);
+                previousAugmentationGroupingHook?.Invoke(stats);
+            };
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json", "--quiet"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(1, graphRefreshCount);
+            Assert.Equal(0, augmentationGroupingCount);
+            Assert.Equal(
+                ["dropped", "candidate_deferred", "post_load_statistics_started", "post_load_statistics_completed", "identity_started", "graph_required_restored", "mutual_started", "restored"],
+                lifecycle);
+        }
+        finally
+        {
+            DbWriter.ReferenceSecondaryIndexBulkLoadStateForTesting = previousStateHook;
+            DbWriter.FreshBulkLoadPlannerStatisticsStateForTesting = previousStatisticsHook;
+            DbWriter.MutualRecursionRefreshForTesting = previousGraphHook;
+            DbWriter.TypeScriptAugmentationGroupingForTesting = previousAugmentationGroupingHook;
             DeleteDirectory(projectRoot);
         }
     }
@@ -754,6 +850,34 @@ public partial class IndexCommandRunnerTests
         return new ReferenceIndexStageSnapshot(stage, names);
     }
 
+    private static ProvisionalReferenceRows CaptureProvisionalReferenceRows(
+        SqliteConnection connection)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT COUNT(*),
+                   SUM(CASE WHEN resolution_state IS NULL THEN 1 ELSE 0 END),
+                   SUM(CASE WHEN resolution_state = 'unresolved' THEN 1 ELSE 0 END),
+                   SUM(CASE WHEN resolution_candidate_count = 0 THEN 1 ELSE 0 END),
+                   SUM(CASE WHEN target_symbol_id IS NULL THEN 1 ELSE 0 END),
+                   SUM(CASE WHEN target_symbol_key IS NULL THEN 1 ELSE 0 END),
+                   SUM(CASE WHEN is_self_reference = 0 THEN 1 ELSE 0 END),
+                   SUM(CASE WHEN is_mutual_recursion = 0 THEN 1 ELSE 0 END)
+            FROM symbol_references
+            """;
+        using var reader = command.ExecuteReader();
+        Assert.True(reader.Read());
+        return new ProvisionalReferenceRows(
+            reader.GetInt64(0),
+            reader.GetInt64(1),
+            reader.GetInt64(2),
+            reader.GetInt64(3),
+            reader.GetInt64(4),
+            reader.GetInt64(5),
+            reader.GetInt64(6),
+            reader.GetInt64(7));
+    }
+
     private static string? ReadCommittedTypeScriptAugmentationVersion(string dbPath)
     {
         using var connection = new SqliteConnection(
@@ -841,12 +965,7 @@ public partial class IndexCommandRunnerTests
 
     private static void WriteReferenceIndexCycleFixture(string projectRoot)
     {
-        File.WriteAllText(
-            Path.Combine(projectRoot, "cycle_a.cs"),
-            "public static class BulkCycleA { public static void CallA() { CallB(); } }\n");
-        File.WriteAllText(
-            Path.Combine(projectRoot, "cycle_b.cs"),
-            "public static class BulkCycleB { public static void CallB() { CallA(); } }\n");
+        WriteDirectReferenceIndexCycleFixture(projectRoot);
         for (var index = 0;
              index < IndexCommandRunner.UpdateReferenceSecondaryIndexBulkLoadMinimumTargetCount;
              index++)
@@ -856,6 +975,16 @@ public partial class IndexCommandRunnerTests
                 $"export function bulkTarget{index:D2}(): number {{ return {index}; }}\n"
                 + $"export function bulkCaller{index:D2}(): number {{ return bulkTarget{index:D2}(); }}\n");
         }
+    }
+
+    private static void WriteDirectReferenceIndexCycleFixture(string projectRoot)
+    {
+        File.WriteAllText(
+            Path.Combine(projectRoot, "cycle_a.cs"),
+            "public static class BulkCycleA { public static void CallA() { CallB(); } }\n");
+        File.WriteAllText(
+            Path.Combine(projectRoot, "cycle_b.cs"),
+            "public static class BulkCycleB { public static void CallB() { CallA(); } }\n");
     }
 
     private static string[] WriteHighCardinalityTypeScriptReferenceFixture(string projectRoot)
@@ -877,4 +1006,14 @@ public partial class IndexCommandRunnerTests
     }
 
     private sealed record ReferenceIndexStageSnapshot(string Stage, string[] Names);
+
+    private sealed record ProvisionalReferenceRows(
+        long Total,
+        long NullResolutionStateCount,
+        long UnresolvedResolutionStateCount,
+        long ZeroCandidateCount,
+        long NullTargetCount,
+        long NullTargetKeyCount,
+        long ZeroSelfCount,
+        long ZeroMutualCount);
 }
