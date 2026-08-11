@@ -9,17 +9,28 @@ namespace CodeIndex.Tests;
 public partial class ReleaseWorkflowTests
 {
     [Fact]
-    public void ReleaseWorkflow_ScopesNativeValidationToNet8TestProject()
+    public void ReleaseWorkflow_RunsFullSuiteOnceAndSmokesEachNativeArtifact()
     {
         var workflow = ReadReleaseWorkflow();
 
         AssertContainsAll(
             workflow,
-            "- name: Set up .NET SDKs\n        if: ${{ !matrix.cross_compile }}",
-            "- name: Set up cross-compile .NET SDK\n        if: matrix.cross_compile",
+            "rid: linux-x64\n            cross_compile: false\n            run_tests: true",
+            "rid: linux-arm64\n            cross_compile: true\n            run_tests: false",
+            "rid: win-x64\n            cross_compile: false\n            run_tests: false",
+            "rid: win-arm64\n            cross_compile: true\n            run_tests: false",
+            "rid: osx-arm64\n            cross_compile: false\n            run_tests: false",
+            "- name: Set up .NET SDKs\n        if: matrix.run_tests",
+            "- name: Set up publish-only .NET SDK\n        if: ${{ !matrix.run_tests }}",
             "dotnet-version: 9.0.301",
-            "- name: Build tests\n        if: ${{ !matrix.cross_compile }}\n        run: dotnet build tests/CodeIndex.Tests/CodeIndex.Tests.csproj --configuration Release --framework net8.0 --no-restore",
-            "- name: Test net8\n        if: ${{ !matrix.cross_compile }}\n        run: dotnet test tests/CodeIndex.Tests/CodeIndex.Tests.csproj --configuration Release --framework net8.0 --no-build --no-restore --nologo");
+            "- name: Build tests\n        if: matrix.run_tests\n        run: dotnet build tests/CodeIndex.Tests/CodeIndex.Tests.csproj --configuration Release --framework net8.0 --no-restore",
+            "- name: Test net8\n        if: matrix.run_tests\n        run: dotnet test tests/CodeIndex.Tests/CodeIndex.Tests.csproj --configuration Release --framework net8.0 --no-build --no-restore --nologo",
+            "- name: Smoke-test native release artifact (Linux/macOS)\n        if: runner.os != 'Windows' && !matrix.cross_compile",
+            "./publish/cdidx \"$smoke_root\" --db \"$smoke_root/.cdidx/codeindex.db\" --json",
+            "./publish/cdidx status --db \"$smoke_root/.cdidx/codeindex.db\" --json",
+            "- name: Smoke-test native release artifact (Windows)\n        if: runner.os == 'Windows' && !matrix.cross_compile",
+            "& .\\publish\\cdidx.exe $smokeRoot --db (Join-Path $smokeRoot '.cdidx\\codeindex.db') --json",
+            "& .\\publish\\cdidx.exe status --db (Join-Path $smokeRoot '.cdidx\\codeindex.db') --json");
         AssertDoesNotContainAny(
             workflow,
             "dotnet build CodeIndex.sln --configuration Release --no-restore",

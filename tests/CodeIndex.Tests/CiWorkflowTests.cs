@@ -247,14 +247,9 @@ public class CiWorkflowTests
             "        if: runner.os == 'Windows'\n" +
             "        shell: pwsh\n" +
             "        run: ./.github/scripts/configure-windows-test-host.ps1 -Workspace \"${{ github.workspace }}\"";
-        const string expectedReleaseStep =
-            "- name: Configure Windows test host\n" +
-            "        if: runner.os == 'Windows' && !matrix.cross_compile\n" +
-            "        shell: pwsh\n" +
-            "        run: ./.github/scripts/configure-windows-test-host.ps1 -Workspace \"${{ github.workspace }}\"";
 
         AssertContainsAll(dotnetWorkflow, expectedDotnetStep);
-        AssertContainsAll(releaseWorkflow, expectedReleaseStep);
+        AssertDoesNotContainAny(releaseWorkflow, "Configure Windows test host");
         AssertDoesNotContainAny(dotnetWorkflow, "Add-MpPreference", "Get-MpPreference");
         AssertDoesNotContainAny(releaseWorkflow, "Add-MpPreference", "Get-MpPreference");
         AssertContainsAll(
