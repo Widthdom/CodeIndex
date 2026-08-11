@@ -845,6 +845,16 @@ public static partial class IndexCommandRunner
         using var hotspotAggregateRefresh = writer.BeginDeferredHotspotReferenceAggregateRefresh(
             deferSecondaryIndexes: !options.SymbolsOnly && useFtsBulkLoad);
         using var fullScanTxn = writer.BeginTransaction(cancellationToken, "full scan write phase");
+        if (referenceGraphRefresh.FreshReferenceResolutionDefaultsPending
+            && !writer.CanUseFreshReferenceResolutionDefaultsInCurrentTransaction(cancellationToken))
+        {
+            // Another connection committed after the early empty-DB observation. All file,
+            // symbol, and reference writes below remain in the authoritative full refresh, but
+            // existing candidate-free references must be normalized by the ordinary full SQL.
+            // 早期のempty-DB確認後に別connectionがcommitした。以降のfile/symbol/reference writeは
+            // authoritative full refreshのまま維持し、既存candidate-free referenceは通常のfull SQLで正規化する。
+            referenceGraphRefresh.DisableFreshReferenceResolutionDefaults();
+        }
         fullScanWritePhaseStarted = true;
         writer.SetMeta(
             DbContext.WorkspaceVerificationPendingPathsCompleteMetaKey,

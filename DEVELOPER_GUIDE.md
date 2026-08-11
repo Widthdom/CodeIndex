@@ -1575,6 +1575,11 @@ SQLite resolves referenced tables while preparing every statement in a command b
 A true empty-database ordinary CLI full scan (not `--rebuild` or `--symbols-only`) opts into a
 separate fresh-resolution contract. Reference inserts persist canonical provisional values
 (`unresolved`, candidate count zero, and zero self/mutual flags) without adding bind parameters.
+The early empty observation is advisory: immediately after the authoritative outer write
+transaction begins, the CLI rechecks `files`, `symbols`, and `symbol_references` in that
+transaction. If another connection committed any row during the pre-write gap, the graph scope
+disables fresh insert defaults before the first persisted row and finalization uses the ordinary
+full-resolution SQL, including candidate-free references.
 Finalization scans `symbol_reference_candidates` once into materialized per-reference facts and
 updates only candidate-bearing references by primary key; candidate-free references retain their
 provisional values, and the self flag is derived in that same sparse update. The opt-in remains
@@ -1591,6 +1596,10 @@ consume it once, and an intervening commit from another connection invalidates i
 built-in extractor pipeline completes successfully, finalization may use the claim to omit the
 allocation-heavy read and re-fold of every persisted symbol/reference value, but it still runs
 the SQL NULL-completeness check before stamping FoldReady.
+The raw `BEGIN IMMEDIATE` helper deliberately performs its post-success cancellation check only
+after the caller has recorded rollback ownership. Cancellation at that boundary therefore rolls
+back the raw transaction before releasing the writer gate, leaving a warm CLI/MCP connection
+usable by the next request.
 The run also captures the registry's monotonic accepted-producer mutation generation. Any
 generation change invalidates the claim even if a transient custom producer was later removed and
 the final registry is built-in-only again; staged workspace replacement commits participate in
@@ -5346,6 +5355,10 @@ prepared command で作成してください。SQLite は command batch の全st
 真に空のdatabaseから始める通常のCLI full scan（`--rebuild` と `--symbols-only` を除く）だけは、
 fresh resolution専用の契約をopt-inします。reference insertはbind parameterを増やさず、
 `unresolved`、candidate count 0、self/mutual flag 0というcanonicalな暫定値を永続化します。
+早期のempty確認はadvisoryです。authoritativeなouter write transaction開始直後に、CLIは同じ
+transaction内で`files`、`symbols`、`symbol_references`を再確認します。write前のgapで別connectionが
+1行でもcommitしていた場合は、最初のrowを永続化する前にgraph scopeのfresh insert defaultを無効化し、
+candidateを持たないreferenceも含めて通常のfull-resolution SQLでfinalizeします。
 finalizationは`symbol_reference_candidates`をreferenceごとのmaterialized factsへ1回走査し、
 candidateを持つreferenceだけをprimary keyで更新します。candidateを持たないreferenceは暫定値を
 維持し、self flagも同じsparse update内で導出します。このopt-inはgraph transaction失敗後も
@@ -5363,6 +5376,9 @@ fold readiness には、通常の CLI / MCP full indexing が共有する、よ�
 場合、finalization は claim を使って、永続化済みの全 symbol / reference value を読み出して
 再 fold する allocation-heavy な処理を省けますが、FoldReady を stamp する前の SQL による
 NULL completeness check は引き続き実行します。
+raw `BEGIN IMMEDIATE` helperは、成功後のcancellation checkを、callerがrollback ownershipを記録した
+後にだけ行います。その境界でcancelされてもwriter gateを解放する前にraw transactionをrollbackし、
+warmなCLI / MCP connectionを次のrequestで引き続き利用できます。
 run は registry の accepted-producer mutation generation も取得します。一時的な custom producer
 が後で削除され、最終 registry が再び built-in-only になっていても、generation が変化していれば
 claim を無効化します。staged workspace replacement の commit もこの履歴に含めますが、

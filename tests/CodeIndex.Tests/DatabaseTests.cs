@@ -10877,6 +10877,33 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void TryClaimAuthoritativeFreshFoldRows_CancelAfterBeginRollsBackAndLeavesWriterUsable()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var previousHook = DbWriter.FreshFoldBeginImmediateCompletedForTesting;
+        try
+        {
+            DbWriter.FreshFoldBeginImmediateCompletedForTesting = () =>
+            {
+                previousHook?.Invoke();
+                cancellation.Cancel();
+            };
+
+            Assert.Throws<OperationCanceledException>(() =>
+                _writer.TryClaimAuthoritativeFreshFoldRows(cancellation.Token));
+            Assert.True(cancellation.IsCancellationRequested);
+        }
+        finally
+        {
+            DbWriter.FreshFoldBeginImmediateCompletedForTesting = previousHook;
+        }
+
+        using (var nextTransaction = _writer.BeginTransaction())
+            nextTransaction.Commit();
+        Assert.NotNull(_writer.TryClaimAuthoritativeFreshFoldRows());
+    }
+
+    [Fact]
     public void MarkFoldReady_LeavesFoldReadyUnsetWhenNullFoldedRowExists()
     {
         // Reproduces issue #1535: a concurrent writer inserting a NULL-folded row between

@@ -853,6 +853,9 @@ public partial class DbWriter
 
         internal void RequireFullRefresh() => _forceFullRefresh = true;
 
+        internal void DisableFreshReferenceResolutionDefaults()
+            => _freshReferenceResolutionDefaultsPending = false;
+
         internal void MarkRefreshCompleted()
         {
             _forceFullRefresh = false;

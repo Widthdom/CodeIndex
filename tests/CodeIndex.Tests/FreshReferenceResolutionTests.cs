@@ -58,6 +58,20 @@ public sealed class FreshReferenceResolutionTests : IDisposable
     }
 
     [Fact]
+    public void FreshDefaultsRevalidation_RequiresTransactionAndRejectsPersistedRows()
+    {
+        Assert.Throws<InvalidOperationException>(() =>
+            _writer.CanUseFreshReferenceResolutionDefaultsInCurrentTransaction());
+
+        using var transaction = _writer.BeginTransaction();
+        Assert.True(_writer.CanUseFreshReferenceResolutionDefaultsInCurrentTransaction());
+
+        InsertFile("src/concurrent.py", "python");
+
+        Assert.False(_writer.CanUseFreshReferenceResolutionDefaultsInCurrentTransaction());
+    }
+
+    [Fact]
     public void InsertReferences_FreshDefaultsKeepParameterShapeAndUseSeparateCachedSql()
     {
         var fileId = InsertFile("src/provisional.py", "python");

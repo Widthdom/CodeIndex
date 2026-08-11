@@ -3210,6 +3210,94 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FreshFullScan_ExternalPreTransactionWriteFallsBackToFullResolution()
+    {
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        var previousBarrierHook = IndexCommandRunner.FullScanInputSnapshotBarrierForTesting;
+        var injected = 0;
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.py"), "def run():\n    return 1\n");
+            IndexCommandRunner.FullScanInputSnapshotBarrierForTesting = phase =>
+            {
+                previousBarrierHook?.Invoke(phase);
+                if (!string.Equals(phase, "before_write", StringComparison.Ordinal)
+                    || Interlocked.Exchange(ref injected, 1) != 0)
+                {
+                    return;
+                }
+
+                using var externalDb = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+                externalDb.InitializeSchema();
+                var externalWriter = new DbWriter(externalDb.Connection);
+                var fileId = externalWriter.UpsertFile(new FileRecord
+                {
+                    Path = "external/concurrent.py",
+                    Lang = "python",
+                    Size = 20,
+                    Lines = 1,
+                    Checksum = "external-concurrent",
+                    Modified = new DateTime(2026, 8, 11, 0, 0, 0, DateTimeKind.Utc),
+                });
+                externalWriter.InsertReferences(
+                    [
+                        new ReferenceRecord
+                        {
+                            FileId = fileId,
+                            SymbolName = "NoCandidate",
+                            ReferenceKind = "call",
+                            Line = 1,
+                            Column = 1,
+                            Context = "NoCandidate()",
+                            ContainerKind = "function",
+                            ContainerName = "external",
+                            IsSelfReference = true,
+                            IsMutualRecursion = true,
+                        },
+                    ],
+                    refreshMutualRecursionFlags: false);
+            };
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json", "--quiet"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(1, injected);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            using var command = db.Connection.CreateCommand();
+            command.CommandText =
+                """
+                SELECT r.resolution_state,
+                       r.resolution_candidate_count,
+                       r.target_symbol_id,
+                       r.target_symbol_key,
+                       r.is_self_reference,
+                       r.is_mutual_recursion
+                FROM symbol_references AS r
+                JOIN files AS f ON f.id = r.file_id
+                WHERE f.path = 'external/concurrent.py'
+                  AND r.symbol_name = 'NoCandidate'
+                """;
+            using var reader = command.ExecuteReader();
+            Assert.True(reader.Read());
+            Assert.Equal("unresolved", reader.GetString(0));
+            Assert.Equal(0, reader.GetInt32(1));
+            Assert.True(reader.IsDBNull(2));
+            Assert.True(reader.IsDBNull(3));
+            Assert.Equal(0, reader.GetInt32(4));
+            Assert.Equal(0, reader.GetInt32(5));
+            Assert.False(reader.Read());
+        }
+        finally
+        {
+            IndexCommandRunner.FullScanInputSnapshotBarrierForTesting = previousBarrierHook;
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Fact]
     public void Run_FullScan_FreshSnapshotAbortRetainsDiscoveredLanguageFailuresWithoutRows()
     {
         var projectRoot = CreateTempProject();
