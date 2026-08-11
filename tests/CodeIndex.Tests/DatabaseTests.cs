@@ -2964,6 +2964,70 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void InsertSymbols_UnknownContainerKind_ThrowsBeforePersisting()
+    {
+        var ex = Assert.Throws<ArgumentException>(() => _writer.InsertSymbols(
+        [
+            new SymbolRecord
+            {
+                FileId = 1,
+                Kind = "class",
+                Name = "Run",
+                Line = 1,
+                ContainerKind = "metohd",
+            },
+        ]));
+
+        Assert.Equal("symbol", ex.ParamName);
+        Assert.Contains("Unknown symbol container kind 'metohd'", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void InsertReferences_UnknownKind_ThrowsBeforePersisting()
+    {
+        var fileId = UpsertTestFile("src/unknown-reference-kind.cs", "unknown-reference-kind");
+        var ex = Assert.Throws<ArgumentException>(() => _writer.InsertReferences(
+        [
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "Run",
+                ReferenceKind = "cal",
+                Line = 1,
+                Column = 1,
+                Context = "Run();",
+            },
+        ], refreshMutualRecursionFlags: false));
+
+        Assert.Equal("reference", ex.ParamName);
+        Assert.Contains("Unknown reference kind 'cal'", ex.Message, StringComparison.Ordinal);
+        Assert.Equal(0, _writer.GetCounts().references);
+    }
+
+    [Fact]
+    public void InsertReferences_UnknownContainerKind_ThrowsBeforePersisting()
+    {
+        var fileId = UpsertTestFile("src/unknown-reference-container.cs", "unknown-reference-container");
+        var ex = Assert.Throws<ArgumentException>(() => _writer.InsertReferences(
+        [
+            new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "Run",
+                ReferenceKind = "call",
+                Line = 1,
+                Column = 1,
+                Context = "Run();",
+                ContainerKind = "metohd",
+            },
+        ], refreshMutualRecursionFlags: false));
+
+        Assert.Equal("reference", ex.ParamName);
+        Assert.Contains("Unknown reference container kind 'metohd'", ex.Message, StringComparison.Ordinal);
+        Assert.Equal(0, _writer.GetCounts().references);
+    }
+
+    [Fact]
     public void InsertChunks_CancelledBeforeBatch_ThrowsOperationCanceled_Issue3738()
     {
         var fileId = UpsertTestFile("src/cancel-chunk.cs", checksum: "cancel-chunk");

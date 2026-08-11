@@ -1059,6 +1059,13 @@ Do not add mutable static caches, shared `StringBuilder` instances, reused `Matc
 
 `symbols.kind`, `symbols.container_kind`, and `symbol_references.container_kind` use the public symbol kind taxonomy below. New extractors must register new kind values in `SymbolKindCatalog` before writing them so schema checks, writer validation, CLI filters, and downstream JSON consumers stay aligned.
 
+The ordered `SymbolKinds` and `ReferenceKinds` arrays are process-static schema and
+enumeration contracts; treat their elements as immutable after type initialization.
+`IsValidSymbolKind` and `IsValidReferenceKind` use immutable Ordinal lookup sets so
+per-row writer validation stays constant-time across every indexed language. Add new
+values in the catalog source and update the exhaustive catalog and schema-parity tests;
+do not mutate the public arrays at runtime.
+
 | Kind | Current producers / meaning | Graph behavior |
 |---|---|---|
 | `accessor` | Accessor declarations when extracted separately from their owning property | Search/filter symbol |
@@ -4781,6 +4788,12 @@ regression には、scope rule の focused correctness test と、ユーザー�
 以下の公開 symbol kind taxonomy に従います。新しい extractor が kind 値を追加する場合は、
 書き込み前に `SymbolKindCatalog` へ登録し、schema check、writer validation、CLI
 filter、downstream JSON consumer が同じ値を理解できるようにしてください。
+
+順序付きの `SymbolKinds` / `ReferenceKinds` array は process-static な schema・列挙契約であり、
+型初期化後は要素を immutable として扱います。`IsValidSymbolKind` と
+`IsValidReferenceKind` は immutable な Ordinal lookup set を使い、全インデックス対象言語の
+行ごとの writer validation を定数時間に保ちます。値を追加する場合は catalog source を変更し、
+catalog 全件と schema parity の test も更新してください。公開 array を実行時に変更してはいけません。
 
 | Kind | 現在の producer / 意味 | Graph behavior |
 |---|---|---|
