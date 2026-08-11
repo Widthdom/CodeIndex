@@ -1,4 +1,5 @@
 using System.Text.Json;
+using CodeIndex.Database;
 
 namespace CodeIndex.Tests;
 
@@ -30,6 +31,52 @@ internal static class QueryCommandTestSupport
             .Select(static line => JsonDocument.Parse(line))
             .Where(document => !IsJsonStreamDoneSentinel(document.RootElement))
             .ToList();
+
+    internal static string CreateHotspotFamilyFixtureDb(string projectRoot, bool markHotspotFamilyReady)
+    {
+        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/Api.Part1.cs",
+            "csharp",
+            """
+            public partial class Api
+            {
+                public void Run() { }
+            }
+            """);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/Api.Part2.cs",
+            "csharp",
+            """
+            public partial class Api
+            {
+                public void Run(int value) { }
+            }
+            """);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/Caller.cs",
+            "csharp",
+            """
+            public class Caller
+            {
+                public void Call(Api api)
+                {
+                    api.Run();
+                    api.Run(1);
+                }
+            }
+            """);
+
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+        var writer = new DbWriter(db.Connection);
+        writer.MarkGraphReady();
+        if (markHotspotFamilyReady)
+            writer.MarkHotspotFamilyReady("csharp", "fixture-fingerprint");
+        return dbPath;
+    }
 
     private static bool IsJsonStreamDoneSentinel(JsonElement element)
         => element.ValueKind == JsonValueKind.Object

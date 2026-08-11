@@ -7,6 +7,7 @@ using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Indexer.Hooks;
 using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
+using static CodeIndex.Tests.QueryCommandTestSupport;
 
 namespace CodeIndex.Tests;
 

@@ -5,6 +5,7 @@ using CodeIndex.Database;
 using CodeIndex.Diagnostics;
 using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
+using static CodeIndex.Tests.QueryCommandTestSupport;
 
 namespace CodeIndex.Tests;
 

@@ -3,10 +3,11 @@ using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
+using static CodeIndex.Tests.QueryCommandTestSupport;
 
 namespace CodeIndex.Tests;
 
-public partial class QueryCommandRunnerTests
+public sealed class QueryCommandRunnerStatusReadinessTests
 {
     [Fact]
     public void RunStatus_Json_ReportsHotspotFamilyReadinessDegradationRebuild_2959()
@@ -17,7 +18,7 @@ public partial class QueryCommandRunnerTests
             var dbPath = CreateHotspotFamilyFixtureDb(projectRoot, markHotspotFamilyReady: false);
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
                 ["--db", dbPath, "--json"],
-                _jsonOptions));
+                JsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);
@@ -40,7 +41,7 @@ public partial class QueryCommandRunnerTests
     {
         var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
             ["--explain", "hotspot_family_ready"],
-            _jsonOptions));
+            JsonOptions));
 
         Assert.Equal(CommandExitCodes.Success, exitCode);
         Assert.Equal(string.Empty, stderr);
