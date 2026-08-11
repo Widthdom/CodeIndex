@@ -11,12 +11,38 @@ internal sealed partial class FileContentLoader
     private static readonly UnicodeEncoding Utf16BeBomEncoding = new(bigEndian: true, byteOrderMark: true, throwOnInvalidBytes: false);
     private static readonly UnicodeEncoding Utf16BeNoBomEncoding = new(bigEndian: true, byteOrderMark: false, throwOnInvalidBytes: false);
 
-    private (string Content, string? Warning, FileContentInspection Inspection, bool HadInvalidUtf8Replacement) DecodeIndexableContent(
+    private readonly record struct DecodedFileContent(
+        string Content,
+        string? Warning,
+        FileContentInspection Inspection,
+        bool HadInvalidUtf8Replacement);
+
+    private readonly record struct ContentDecodePreparation(
+        bool IsUtf16Encoded,
+        bool Utf16BigEndian,
+        bool HasUtf16Bom,
+        bool RawByteContentInspected,
+        FileContentInspection Inspection);
+
+    private DecodedFileContent DecodeIndexableContent(
         byte[] bytes,
         string relativePath,
         bool inspectRawByteContent = true)
     {
-        var isUtf16Encoded = TryDetectUtf16Encoding(bytes, allowHeuristic: true, out var utf16BigEndian, out var hasUtf16Bom);
+        var preparation = PrepareContentDecode(bytes, inspectRawByteContent);
+        ThrowIfBinaryContent(bytes, relativePath, preparation);
+        return DecodePreparedContent(bytes, relativePath, preparation);
+    }
+
+    private static ContentDecodePreparation PrepareContentDecode(
+        byte[] bytes,
+        bool inspectRawByteContent)
+    {
+        var isUtf16Encoded = TryDetectUtf16Encoding(
+            bytes,
+            allowHeuristic: true,
+            out var utf16BigEndian,
+            out var hasUtf16Bom);
         var rawByteContentInspected = !isUtf16Encoded && inspectRawByteContent;
         var rawByteContent = rawByteContentInspected
             ? RawByteContentInspection.Inspect(bytes)
@@ -28,36 +54,70 @@ internal sealed partial class FileContentLoader
             HasUtf16Bom: hasUtf16Bom,
             RawByteContent: rawByteContent);
 
-        if (!isUtf16Encoded && TryFindIndexBlockingNullByte(
-            bytes,
-            rawByteContent,
+        return new ContentDecodePreparation(
+            isUtf16Encoded,
+            utf16BigEndian,
+            hasUtf16Bom,
             rawByteContentInspected,
-            out var nullByteOffset))
-            throw new FileIndexer.BinaryFileSkippedException(
-                relativePath,
-                nullByteOffset,
-                $"{relativePath}: binary file skipped because it contains NULL byte at byte offset {nullByteOffset}");
+            inspection);
+    }
 
-        if (isUtf16Encoded)
+    private static void ThrowIfBinaryContent(
+        byte[] bytes,
+        string relativePath,
+        ContentDecodePreparation preparation)
+    {
+        if (preparation.IsUtf16Encoded
+            || !TryFindIndexBlockingNullByte(
+            bytes,
+            preparation.Inspection.RawByteContent,
+            preparation.RawByteContentInspected,
+            out var nullByteOffset))
         {
-            var content = GetUtf16Encoding(utf16BigEndian, hasUtf16Bom).GetString(bytes);
-            var warning = hasUtf16Bom
+            return;
+        }
+
+        throw new FileIndexer.BinaryFileSkippedException(
+            relativePath,
+            nullByteOffset,
+            $"{relativePath}: binary file skipped because it contains NULL byte at byte offset {nullByteOffset}");
+    }
+
+    private static DecodedFileContent DecodePreparedContent(
+        byte[] bytes,
+        string relativePath,
+        ContentDecodePreparation preparation)
+    {
+        if (preparation.IsUtf16Encoded)
+        {
+            var content = GetUtf16Encoding(
+                preparation.Utf16BigEndian,
+                preparation.HasUtf16Bom).GetString(bytes);
+            var warning = preparation.HasUtf16Bom
                 ? null
-                : $"{relativePath}: decoded as {(utf16BigEndian ? "UTF-16BE" : "UTF-16LE")} without BOM by NUL-byte heuristic";
-            return (content, warning, inspection, HadInvalidUtf8Replacement: false);
+                : $"{relativePath}: decoded as {(preparation.Utf16BigEndian ? "UTF-16BE" : "UTF-16LE")} without BOM by NUL-byte heuristic";
+            return new DecodedFileContent(
+                content,
+                warning,
+                preparation.Inspection,
+                HadInvalidUtf8Replacement: false);
         }
 
         try
         {
-            return (StrictUtf8Encoding.GetString(bytes), null, inspection, HadInvalidUtf8Replacement: false);
+            return new DecodedFileContent(
+                StrictUtf8Encoding.GetString(bytes),
+                null,
+                preparation.Inspection,
+                HadInvalidUtf8Replacement: false);
         }
         catch (DecoderFallbackException)
         {
             var content = LenientUtf8Encoding.GetString(bytes);
-            return (
+            return new DecodedFileContent(
                 content,
                 $"{relativePath}: contains invalid UTF-8 bytes (replaced with U+FFFD)",
-                inspection,
+                preparation.Inspection,
                 HadInvalidUtf8Replacement: true);
         }
     }

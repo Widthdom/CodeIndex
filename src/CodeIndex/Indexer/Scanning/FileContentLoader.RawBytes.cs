@@ -8,7 +8,12 @@ internal sealed partial class FileContentLoader
 
     internal delegate bool RawByteChunkPredicate(ReadOnlySpan<byte> bytes);
 
-    private (byte[] Bytes, long SizeBytes, DateTime ModifiedUtc) ReadRawBytesWithSizeLimit(
+    private readonly record struct RawFileSnapshot(
+        byte[] Bytes,
+        long SizeBytes,
+        DateTime ModifiedUtc);
+
+    private RawFileSnapshot ReadRawBytesWithSizeLimit(
         string absolutePath,
         string normalizedRelativePath,
         CancellationToken cancellationToken)
@@ -37,12 +42,9 @@ internal sealed partial class FileContentLoader
             {
                 modifiedBeforeRead = File.GetLastWriteTimeUtc(stream.SafeFileHandle);
                 var initialLength = stream.Length;
-                if (initialLength > maxFileSizeBytes)
-                    throw new FileIndexer.FileTooLargeSkippedException(
-                        normalizedRelativePath,
-                        initialLength,
-                        maxFileSizeBytes,
-                        BuildFileTooLargeMessage(initialLength, grewDuringRead: false));
+                ThrowIfInitialLengthExceedsMaxFileSize(
+                    normalizedRelativePath,
+                    initialLength);
 
                 (bytes, sizeBytes) = ReadStreamBytesWithKnownInitialLength(
                     stream,
@@ -56,7 +58,7 @@ internal sealed partial class FileContentLoader
                 break;
         }
 
-        return (bytes, sizeBytes, modifiedUtc);
+        return new RawFileSnapshot(bytes, sizeBytes, modifiedUtc);
     }
 
     internal bool RawByteChunksMayMatch(
@@ -76,12 +78,9 @@ internal sealed partial class FileContentLoader
             {
                 modifiedBeforeRead = File.GetLastWriteTimeUtc(stream.SafeFileHandle);
                 var initialLength = stream.Length;
-                if (initialLength > maxFileSizeBytes)
-                    throw new FileIndexer.FileTooLargeSkippedException(
-                        normalizedRelativePath,
-                        initialLength,
-                        maxFileSizeBytes,
-                        BuildFileTooLargeMessage(initialLength, grewDuringRead: false));
+                ThrowIfInitialLengthExceedsMaxFileSize(
+                    normalizedRelativePath,
+                    initialLength);
 
                 matched = RawByteChunksMayMatch(
                     stream,
@@ -321,6 +320,20 @@ internal sealed partial class FileContentLoader
             total,
             maxFileSizeBytes,
             BuildFileTooLargeMessage(total, grewDuringRead: true));
+    }
+
+    private void ThrowIfInitialLengthExceedsMaxFileSize(
+        string normalizedRelativePath,
+        long initialLength)
+    {
+        if (initialLength <= maxFileSizeBytes)
+            return;
+
+        throw new FileIndexer.FileTooLargeSkippedException(
+            normalizedRelativePath,
+            initialLength,
+            maxFileSizeBytes,
+            BuildFileTooLargeMessage(initialLength, grewDuringRead: false));
     }
 
     private static int GetReadLengthWithinLimit(long total, long maxBytes, int bufferLength)
