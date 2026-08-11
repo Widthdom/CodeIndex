@@ -1,9 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using CodeIndex.Indexer;
 using Microsoft.Data.Sqlite;
-using Regex = CodeIndex.Indexer.BoundedRegex;
 
 namespace CodeIndex.Database;
 
@@ -12,33 +10,11 @@ public partial class DbReader
     private const string GenericSymbolRankNamePenaltySqlLiteral = "0.01";
     private const string GenericSymbolRankNamesSql = "('add','all','any','append','appendline','average','build','call','combine','contains','convert','count','create','distinct','equal','equals','execute','exists','file','files','first','firstordefault','get','getboolean','getbyte','getbytes','getchar','getchars','getdatetime','getdecimal','getdouble','getfieldvalue','getfloat','getguid','getint16','getint32','getint64','getordinal','getstring','gettemppath','getvalue','getvalues','groupby','handle','id','invoke','isdbnull','key','kind','last','lastordefault','length','line','list','load','name','orderby','orderbydescending','parse','path','process','read','resolve','run','set','single','singleordefault','skip','start','stop','sum','take','text','thenby','thenbydescending','tolist','tostring','tryparse','type','update','value','values','write')";
 
-    private sealed class NormalizedSymbolSearchQueryList : List<string>
-    {
-        public NormalizedSymbolSearchQueryList(IEnumerable<string> queries)
-            : base(queries)
-        {
-        }
-    }
-
-    private static IReadOnlyList<string>? NormalizeSymbolSearchQueries(IReadOnlyList<string>? queries, string? lang, bool exact)
-    {
-        if (queries == null)
-            return null;
-        if (queries is NormalizedSymbolSearchQueryList)
-            return queries;
-
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        var normalized = new List<string>();
-        foreach (var query in queries)
-        {
-            var value = NormalizeSymbolSearchQueryForSymbolSearch(query, lang, exact) ?? query ?? string.Empty;
-            if (value.Length == 0 || !seen.Add(value))
-                continue;
-            normalized.Add(value);
-        }
-
-        return new NormalizedSymbolSearchQueryList(normalized);
-    }
+    private static IReadOnlyList<string>? NormalizeSymbolSearchQueries(
+        IReadOnlyList<string>? queries,
+        string? lang,
+        bool exact)
+        => SymbolSearchQueryNormalizer.NormalizeQueries(queries, lang, exact);
 
     /// <summary>
     /// Escape LIKE wildcards (%, _) in user input to prevent unintended pattern matching.
@@ -84,7 +60,7 @@ public partial class DbReader
         return SearchSymbols(
             normalizedQuery == null
                 ? null
-                : new NormalizedSymbolSearchQueryList([normalizedQuery]),
+                : SymbolSearchQueryNormalizer.MarkNormalized([normalizedQuery]),
             limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact,
             visibilityFilters, excludeVisibilityFilters, sortMode, startLine, endLine,
             groupPartials, offset);
@@ -96,7 +72,7 @@ public partial class DbReader
         return CountSearchSymbols(
             normalizedQuery == null
                 ? null
-                : new NormalizedSymbolSearchQueryList([normalizedQuery]),
+                : SymbolSearchQueryNormalizer.MarkNormalized([normalizedQuery]),
             limit, kind, lang, pathPatterns, excludePathPatterns, excludeTests, since, exact,
             visibilityFilters, excludeVisibilityFilters);
     }
@@ -110,7 +86,7 @@ public partial class DbReader
         foreach (var query in validQueries)
         {
             if (CountSearchSymbols(
-                    new NormalizedSymbolSearchQueryList([query]),
+                    SymbolSearchQueryNormalizer.MarkNormalized([query]),
                     1,
                     kind,
                     lang,
@@ -1193,268 +1169,18 @@ public partial class DbReader
     }
 
     private static string? NormalizeSymbolSearchQuery(string? query, string? lang, bool exact = false)
-    {
-        if (!string.IsNullOrWhiteSpace(lang) && string.Equals(lang, "rust", StringComparison.OrdinalIgnoreCase))
-            return NormalizeRustSymbolSearchQuery(query, exact);
-
-        if (!string.IsNullOrWhiteSpace(lang) && string.Equals(lang, "javascript", StringComparison.OrdinalIgnoreCase))
-            return NormalizeJavaScriptSymbolSearchQuery(query);
-
-        // Terraform dotted prefixes (var.X / local.X / module.X / data.TYPE.X) are stored as bare names in
-        // the references and symbols tables. Strip the prefix so queries pasted from HCL still resolve.
-        // Terraform の dotted prefix（var.X / local.X / module.X / data.TYPE.X）は参照/シンボルの bare 名で格納されるため、
-        // HCL からそのまま貼り付けたクエリでも解決できるよう prefix を取り除く。
-        var terraformNormalized = NormalizeTerraformDottedQuery(query, lang);
-        if (terraformNormalized != null)
-            return terraformNormalized;
-
-        return NormalizeCSharpVerbatimQuery(query, lang);
-    }
-
-    private static readonly Regex TerraformVarLocalModuleQueryRegex = new(
-        @"^(?:var|local|module)\.(?<name>[A-Za-z_]\w*)(?:\..*)?$",
-        RegexOptions.Compiled);
-
-    private static readonly Regex TerraformDataQueryRegex = new(
-        @"^data\.[A-Za-z_]\w*\.(?<name>[A-Za-z_]\w*)(?:\..*)?$",
-        RegexOptions.Compiled);
-
-    private static string? NormalizeTerraformDottedQuery(string? query, string? lang)
-    {
-        if (!string.IsNullOrWhiteSpace(lang)
-            && !string.Equals(lang, "terraform", StringComparison.OrdinalIgnoreCase))
-        {
-            return null;
-        }
-
-        if (string.IsNullOrWhiteSpace(query))
-            return null;
-
-        var trimmed = query.Trim();
-        if (trimmed.Length == 0)
-            return null;
-
-        var simpleMatch = TerraformVarLocalModuleQueryRegex.Match(trimmed);
-        if (simpleMatch.Success)
-            return simpleMatch.Groups["name"].Value;
-
-        var dataMatch = TerraformDataQueryRegex.Match(trimmed);
-        if (dataMatch.Success)
-            return dataMatch.Groups["name"].Value;
-
-        return null;
-    }
+        => SymbolSearchQueryNormalizer.Normalize(query, lang, exact);
 
     private static string? ComputeSwiftBacktickAlias(string? query, string? lang)
-    {
-        if (!string.Equals(lang, "swift", StringComparison.OrdinalIgnoreCase) || string.IsNullOrWhiteSpace(query))
-            return null;
-
-        var trimmed = query.Trim();
-        if (trimmed.Length == 0)
-            return null;
-
-        if (trimmed.IndexOfAny(['`', ':', '/', '<', '>', '(', ')', '[', ']', ' ']) >= 0)
-            return null;
-
-        var lastDot = trimmed.LastIndexOf('.');
-        if (lastDot < 0)
-            return $"`{trimmed}`";
-
-        if (lastDot == 0 || lastDot == trimmed.Length - 1)
-            return null;
-
-        var prefix = trimmed[..(lastDot + 1)];
-        var leaf = trimmed[(lastDot + 1)..];
-        if (leaf.IndexOf('.') >= 0)
-            return null;
-
-        return $"{prefix}`{leaf}`";
-    }
-
-    private static string? NormalizeJavaScriptSymbolSearchQuery(string? query)
-    {
-        if (query == null)
-            return null;
-
-        var trimmed = query.Trim();
-        if (trimmed.Length == 0)
-            return null;
-
-        var commonJsPrefixLength = 0;
-        if (trimmed.StartsWith("module.exports", StringComparison.Ordinal))
-        {
-            var nextIndex = "module.exports".Length;
-            if (trimmed.Length > nextIndex && trimmed[nextIndex] is '.' or '[')
-                commonJsPrefixLength = nextIndex;
-        }
-        else if (trimmed.StartsWith("exports", StringComparison.Ordinal))
-        {
-            var nextIndex = "exports".Length;
-            if (trimmed.Length > nextIndex && trimmed[nextIndex] is '.' or '[')
-                commonJsPrefixLength = nextIndex;
-        }
-
-        if (commonJsPrefixLength == 0)
-            return trimmed;
-
-        trimmed = trimmed[commonJsPrefixLength..];
-        if (trimmed.Length == 0)
-            return null;
-
-        trimmed = trimmed.TrimStart();
-        if (trimmed.StartsWith(".", StringComparison.Ordinal))
-            trimmed = trimmed[1..].TrimStart();
-
-        var bracketLeaf = NormalizeJavaScriptBracketLeaf(trimmed);
-        if (bracketLeaf != null)
-            return bracketLeaf;
-
-        var leafIndex = trimmed.LastIndexOf('.');
-        if (leafIndex >= 0)
-            trimmed = trimmed[(leafIndex + 1)..];
-
-        bracketLeaf = NormalizeJavaScriptBracketLeaf(trimmed);
-        if (bracketLeaf != null)
-            return bracketLeaf;
-
-        return trimmed.Length == 0 ? null : trimmed;
-    }
-
-    private static string? NormalizeJavaScriptBracketLeaf(string query)
-    {
-        var trimmed = query.Trim();
-        if (trimmed.Length < 3 || trimmed[0] != '[' || trimmed[^1] != ']')
-            return null;
-
-        var inner = trimmed[1..^1].Trim();
-        if (inner.Length < 2)
-            return null;
-
-        var quote = inner[0];
-        if (quote is not '\'' and not '"')
-            return null;
-
-        if (inner[^1] != quote)
-            return null;
-
-        var leaf = inner[1..^1].Trim();
-        return leaf.Length == 0 ? null : leaf;
-    }
-
-    private static string? NormalizeRustSymbolSearchQuery(string? query, bool exact = false)
-    {
-        if (query == null)
-            return null;
-
-        var trimmed = query.Trim();
-        if (trimmed.Length == 0)
-            return null;
-
-        var macroQuery = trimmed;
-        var isMacroQuery = macroQuery.EndsWith("!", StringComparison.Ordinal);
-        if (isMacroQuery)
-            macroQuery = macroQuery[..^1].TrimEnd();
-
-        if (macroQuery.Length == 0)
-            return null;
-
-        if (exact && isMacroQuery && macroQuery.Contains("::", StringComparison.Ordinal))
-            return NormalizeRustQualifiedMacroQuery(macroQuery);
-
-        var leafIndex = macroQuery.LastIndexOf("::", StringComparison.Ordinal);
-        if (leafIndex >= 0)
-            macroQuery = macroQuery[(leafIndex + 2)..].Trim();
-
-        if (macroQuery.StartsWith("r#", StringComparison.Ordinal))
-            macroQuery = macroQuery[2..];
-
-        return macroQuery.Length == 0 ? null : macroQuery;
-    }
-
-    private static string? NormalizeRustQualifiedMacroQuery(string query)
-    {
-        var segments = query
-            .Split("::", StringSplitOptions.None)
-            .Select(segment => segment.Trim())
-            .Where(segment => segment.Length > 0)
-            .Select(segment => segment.StartsWith("r#", StringComparison.Ordinal) ? segment[2..] : segment)
-            .ToList();
-
-        return segments.Count == 0 ? null : string.Join("::", segments);
-    }
+        => SymbolSearchQueryNormalizer.ComputeSwiftBacktickAlias(query, lang);
 
     private static bool ShouldPreserveRustQualifiedExactQuery(string? query, string? lang, bool exact)
-    {
-        return exact
-            && !string.IsNullOrWhiteSpace(lang)
-            && string.Equals(lang, "rust", StringComparison.OrdinalIgnoreCase)
-            && !string.IsNullOrWhiteSpace(query)
-            && query.Contains("::", StringComparison.Ordinal);
-    }
+        => SymbolSearchQueryNormalizer.ShouldPreserveRustQualifiedExactQuery(query, lang, exact);
 
     private static string? NormalizeSymbolSearchQueryForSymbolSearch(string? query, string? lang, bool exact)
-    {
-        if (ShouldPreserveRustQualifiedExactQuery(query, lang, exact))
-            return query?.Trim();
-        if (exact
-            && !string.IsNullOrWhiteSpace(query)
-            && SqlNameResolver.HasQualifier(query))
-        {
-            if (string.Equals(
-                    NormalizeQueryLanguage(lang),
-                    "csharp",
-                    StringComparison.Ordinal))
-            {
-                return CSharpSymbolNameNormalizer.NormalizeExplicitInterfaceQueryDisplayName(query);
-            }
-
-            // Without a language filter the query must retain its original spelling for
-            // non-C# exact matching. C#-specific display and identity aliases are supplied
-            // through their own SQL parameters.
-            // 言語フィルターがない場合、C# 以外の完全一致を保つため query の元表記を
-            // 維持する。C# 専用の表示名・identity alias は個別の SQL parameter で渡す。
-            if (string.IsNullOrWhiteSpace(lang))
-            {
-                var terraformNormalized = NormalizeTerraformDottedQuery(query, lang);
-                if (terraformNormalized != null)
-                    return terraformNormalized;
-                return query.Trim();
-            }
-        }
-
-        return NormalizeSymbolSearchQuery(query, lang, exact) ?? query;
-    }
+        => SymbolSearchQueryNormalizer.NormalizeForSymbolSearch(query, lang, exact);
 
     private static (string? QualifiedPath, string? ContainerPath, string? LeafName) NormalizeRustQualifiedExactQueryParts(string query)
-    {
-        var trimmed = query.Trim();
-        if (trimmed.Length == 0)
-            return (null, null, null);
-
-        if (trimmed.EndsWith("!", StringComparison.Ordinal))
-            trimmed = trimmed[..^1].TrimEnd();
-
-        var normalized = NormalizeRustQualifiedMacroQuery(trimmed);
-        if (string.IsNullOrWhiteSpace(normalized))
-            return (null, null, null);
-
-        normalized = normalized.Replace("::", ".");
-        while (normalized.StartsWith("crate.", StringComparison.Ordinal)
-            || normalized.StartsWith("self.", StringComparison.Ordinal)
-            || normalized.StartsWith("super.", StringComparison.Ordinal))
-        {
-            var dotIndex = normalized.IndexOf('.');
-            if (dotIndex < 0 || dotIndex == normalized.Length - 1)
-                break;
-
-            normalized = normalized[(dotIndex + 1)..];
-        }
-        var lastDot = normalized.LastIndexOf('.');
-        if (lastDot < 0)
-            return (normalized, string.Empty, normalized);
-
-        return (normalized, normalized[..lastDot], normalized[(lastDot + 1)..]);
-    }
+        => SymbolSearchQueryNormalizer.NormalizeRustQualifiedExactQueryParts(query);
 
 }
