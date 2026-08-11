@@ -4,6 +4,7 @@ using CodeIndex.Database;
 using CodeIndex.Indexer;
 using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
+using static CodeIndex.Tests.QueryCommandTestSupport;
 
 namespace CodeIndex.Tests;
 
@@ -28,12 +29,12 @@ public partial class QueryCommandRunnerTests
 
         var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
             [projectRoot, "--db", dbPath, "--json", "--quiet"],
-            _jsonOptions));
+            JsonOptions));
         Assert.Equal(CommandExitCodes.Success, indexExitCode);
         Assert.Equal(string.Empty, indexStderr);
 
         (int ExitCode, string Stdout, string Stderr) RunValidate(params string[] args)
-            => CaptureConsole(() => QueryCommandRunner.RunValidate(["--db", dbPath, .. args], _jsonOptions));
+            => CaptureConsole(() => QueryCommandRunner.RunValidate(["--db", dbPath, .. args], JsonOptions));
 
         // Both pagination aliases cap returned rows without changing the command contract (#2992).
         var (limitExitCode, limitStdout, limitStderr) = RunValidate("--json", "--limit", "1");
@@ -125,6 +126,12 @@ public partial class QueryCommandRunnerTests
         Assert.Equal("bom", excludeIssues[0].GetProperty("kind").GetString());
     }
 
+    private static void WriteUtf8BomFile(string projectRoot, string relativePath, string content)
+        => TestProjectHelper.WriteBinaryFile(projectRoot, relativePath, [0xEF, 0xBB, 0xBF, .. System.Text.Encoding.UTF8.GetBytes(content)]);
+}
+
+public class QueryCommandRunnerValidationContractTests
+{
     [Theory]
     [InlineData("--limit")]
     [InlineData("--top")]
@@ -132,7 +139,7 @@ public partial class QueryCommandRunnerTests
     {
         var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunValidate(
             [flag, "nope"],
-            _jsonOptions));
+            JsonOptions));
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
         Assert.Contains("requires an integer between 1 and 10000", stderr);
@@ -147,7 +154,7 @@ public partial class QueryCommandRunnerTests
     {
         var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunValidate(
             ["--severity", "invalid", "--json"],
-            _jsonOptions));
+            JsonOptions));
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
         Assert.Equal(string.Empty, stderr);
@@ -176,6 +183,4 @@ public partial class QueryCommandRunnerTests
         Assert.Contains(csharpIssues, issue => issue.Kind == "bom");
     }
 
-    private static void WriteUtf8BomFile(string projectRoot, string relativePath, string content)
-        => TestProjectHelper.WriteBinaryFile(projectRoot, relativePath, [0xEF, 0xBB, 0xBF, .. System.Text.Encoding.UTF8.GetBytes(content)]);
 }
