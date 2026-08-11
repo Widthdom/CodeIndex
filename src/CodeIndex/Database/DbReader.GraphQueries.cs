@@ -86,205 +86,30 @@ public partial class DbReader
             return new List<CallerResult>();
         lang = NormalizeQueryLanguage(lang);
         query = NormalizeSymbolSearchQuery(query, lang, exact) ?? query ?? string.Empty;
-        if (!_hasReferencesTable) return new List<CallerResult>();
-        using var cmd = _conn.CreateCommand();
-        var referenceLineJoin = ReferenceLineJoinSql("r");
-        var contextSql = ReferenceContextSql("r");
-        var selfReferenceSql = _referenceColumns.Contains("is_self_reference") ? "r.is_self_reference" : "0";
-        var mutualRecursionSql = _referenceColumns.Contains("is_mutual_recursion") ? "r.is_mutual_recursion" : "0";
-        var callerContainerPredicate = BuildCallerContainerPredicate("f", "r");
-        var supportedLangPredicate = BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang");
+        if (!_hasReferencesTable)
+            return new List<CallerResult>();
 
-        var groupedReferenceKindSql = rawKinds
-            ? GetGroupedCallerReferenceKindSql("r.reference_kind")
-            : GetGroupedCallerLogicalReferenceKindSql("r.reference_kind");
-        var groupedReferenceKindGroupSql = rawKinds
-            ? GetRawReferenceKindSql("r.reference_kind")
-            : GetLogicalReferenceKindSql("r.reference_kind");
-        var sql = @"
-            WITH logical_references AS (
-                SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name,
-                       " + groupedReferenceKindSql + @" AS reference_kind,
-                       r.reference_kind AS raw_reference_kind,
-                       " + groupedReferenceKindGroupSql + @" AS count_reference_kind,
-                       COUNT(*) AS reference_count,
-                       " + ReferenceWeightedScoreSql("r.reference_kind") + @" AS weighted_score,
-                       (CAST(r.line AS INTEGER) * 4294967296 + r.column_number) AS location_key,
-                       MAX(" + selfReferenceSql + @") AS is_self_reference,
-                       MAX(" + mutualRecursionSql + @") AS is_mutual_recursion
-                FROM symbol_references r
-                JOIN files f ON r.file_id = f.id" + referenceLineJoin + @"
-                WHERE " + callerContainerPredicate + @"
-                  AND " + GetCallableReferenceKindPredicateSql("r.reference_kind", referenceKind, "f.lang", includeMemberReads) + @"
-                  AND " + supportedLangPredicate;
-        if (targetSymbolId != null && HasTable("symbol_reference_candidates"))
-        {
-            // Candidate membership alone is not an edge: an ambiguous reference can list
-            // several possible targets. Only authoritative resolution states may contribute
-            // callers to a candidate-specific inspect bundle.
-            // candidate membership だけでは edge ではない。ambiguous reference は複数の
-            // 候補を持ち得るため、candidate 別 inspect bundle の callers には authoritative
-            // な resolution state だけを採用する。
-            sql += _referenceColumns.Contains("resolution_state")
-                ? " AND r.resolution_state IN ('resolved', 'resolved_group')"
-                : " AND 1 = 0";
-            sql += @"
-                AND EXISTS (
-                    SELECT 1
-                    FROM symbol_reference_candidates AS identity_candidate
-                    WHERE identity_candidate.reference_id = r.id
-                      AND identity_candidate.symbol_id = @targetSymbolId
-                )";
-        }
-        if (excludeSelfReferences)
-            sql += $" AND {selfReferenceSql} = 0";
-        var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query);
-        var allowCSharpQualifiedContextMatch = SqlNameResolver.HasQualifier(query)
-            && !HasQualifiedSymbolDefinition(query, lang, pathPatterns, excludePathPatterns, excludeTests);
-        var allowQualifiedLeafFallback = HasSingleQualifiedSymbolDefinition(query, lang, pathPatterns, excludePathPatterns, excludeTests);
-        var useSqlQualifiedContextMatch = SqlNameResolver.HasQualifier(query);
-        var cssScssVariableAlias = ComputeCssScssVariableAlias(query);
-        var cssScssVariableAliasScope = cssScssVariableAlias != null
-            ? " AND f.lang = 'css'"
-            : string.Empty;
-        if (useSqlQualifiedContextMatch && exact && _foldReady)
-        {
-            var qualifiedContextSql = BuildQualifiedContextMatchSql(contextSql, "r.column_number", folded: true, like: false);
-            var csharpQualifiedContextSql = BuildCSharpQualifiedContextFallbackSql(qualifiedContextSql);
-            var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.symbol_name", "r.symbol_name_folded", folded: true);
-            sql += $" AND (((f.lang = 'sql') AND {qualifiedContextSql}) OR ((f.lang != 'sql') AND {BuildPersistedFoldedNameMatchSql("r.symbol_name_folded", "@query")}) OR {csharpQualifiedContextSql} OR {qualifiedLeafFallbackSql})";
-        }
-        else if (useSqlQualifiedContextMatch && exact)
-        {
-            var qualifiedContextSql = BuildQualifiedContextMatchSql(contextSql, "r.column_number", folded: false, like: false);
-            var csharpQualifiedContextSql = BuildCSharpQualifiedContextFallbackSql(qualifiedContextSql);
-            var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.symbol_name", "r.symbol_name_folded", folded: false);
-            sql += $" AND (((f.lang = 'sql') AND {qualifiedContextSql}) OR ((f.lang != 'sql') AND r.symbol_name = @query COLLATE NOCASE) OR {csharpQualifiedContextSql} OR {qualifiedLeafFallbackSql})";
-        }
-        else if (useSqlQualifiedContextMatch && _foldReady)
-        {
-            var qualifiedContextSql = BuildQualifiedContextMatchSql(contextSql, "r.column_number", folded: true, like: true);
-            var csharpQualifiedContextSql = BuildCSharpQualifiedContextFallbackSql(qualifiedContextSql);
-            var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.symbol_name", "r.symbol_name_folded", folded: true);
-            sql += $" AND (((f.lang = 'sql') AND {qualifiedContextSql}) OR ((f.lang != 'sql') AND r.symbol_name LIKE @query ESCAPE '\\') OR {csharpQualifiedContextSql} OR {qualifiedLeafFallbackSql})";
-        }
-        else if (useSqlQualifiedContextMatch)
-        {
-            var qualifiedContextSql = BuildQualifiedContextMatchSql(contextSql, "r.column_number", folded: false, like: true);
-            var csharpQualifiedContextSql = BuildCSharpQualifiedContextFallbackSql(qualifiedContextSql);
-            var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.symbol_name", "r.symbol_name_folded", folded: false);
-            sql += $" AND (((f.lang = 'sql') AND {qualifiedContextSql}) OR ((f.lang != 'sql') AND r.symbol_name LIKE @query ESCAPE '\\') OR {csharpQualifiedContextSql} OR {qualifiedLeafFallbackSql})";
-        }
-        else if (exact && _foldReady)
-            sql += allowSqlLeafFallback
-                ? cssScssVariableAlias != null
-                    ? $" AND ({BuildPersistedFoldedNameMatchSql("r.symbol_name_folded", "@query")} OR (r.symbol_name_folded = @queryCssScssVariableAlias{cssScssVariableAliasScope}) OR (f.lang = 'sql' AND r.symbol_name_folded = @aliasQueryLeafFolded))"
-                    : $" AND ({BuildPersistedFoldedNameMatchSql("r.symbol_name_folded", "@query")} OR (f.lang = 'sql' AND r.symbol_name_folded = @aliasQueryLeafFolded))"
-                : $" AND {BuildPersistedFoldedNameMatchSql("r.symbol_name_folded", "@query")}";
-        else if (exact)
-            sql += allowSqlLeafFallback
-                ? cssScssVariableAlias != null
-                    ? $" AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = @queryCssScssVariableAlias COLLATE NOCASE{cssScssVariableAliasScope}) OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))"
-                    : " AND (r.symbol_name = @query COLLATE NOCASE OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))"
-                : " AND r.symbol_name = @query COLLATE NOCASE";
-        else
-            sql += cssScssVariableAlias != null
-                ? $" AND (r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = @queryCssScssVariableAlias COLLATE NOCASE{cssScssVariableAliasScope}) OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))"
-                : " AND (r.symbol_name LIKE @query ESCAPE '\\' OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))";
-        if (lang != null)
-        {
-            sql += IncludeAmbiguousMSourceForIdentityTarget(lang, targetSymbolId)
-                ? " AND (f.lang = @lang OR f.lang = 'ambiguous_m')"
-                : " AND f.lang = @lang";
-        }
-        sql += BuildCSharpBareMemberReferenceFilter(
+        var request = CreateGraphReferenceQueryRequest(
             query,
+            limit,
             lang,
-            "f",
-            "r",
-            includeQualifiedCommonCalls);
-        AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
-        sql += @"
-            GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, " + groupedReferenceKindGroupSql + @", r.reference_kind
-            )
-            SELECT path, lang, " + BuildCallerKindProjectionSql("r") + @" AS container_kind, " + BuildCallerNameProjectionSql("r") + @" AS container_name, symbol_name,
-                   " + (rawKinds ? GetGroupedCallerReferenceKindSql("r.reference_kind") : GetPreferredLogicalReferenceKindSql("r.reference_kind")) + @" AS reference_kind,
-                   (MIN(location_key) / 4294967296) AS first_line,
-                   (MIN(location_key) % 4294967296) AS first_column,
-                   SUM(r.reference_count) AS reference_count,
-                   GROUP_CONCAT(DISTINCT r.reference_kind) AS reference_kinds,
-                   GROUP_CONCAT(r.count_reference_kind || ':' || r.reference_count) AS reference_kind_counts,
-                   SUM(r.weighted_score) AS weighted_score,
-                   MAX(r.is_self_reference) AS is_self_reference,
-                   MAX(r.is_mutual_recursion) AS is_mutual_recursion
-            FROM logical_references r
-            GROUP BY path, lang, container_kind, container_name, symbol_name";
-        sql += $" ORDER BY {BuildReferenceRankOrderSql(rankMode, "r.symbol_name")} LIMIT @limit OFFSET @offset";
-
-        cmd.CommandText = sql;
-        string callersQueryParam;
-        if (!exact)
-            callersQueryParam = $"%{EscapeLikeQuery(query)}%";
-        else if (_foldReady)
-            callersQueryParam = FoldNameForLanguage(query, lang);
-        else
-            callersQueryParam = query;
-        if (exact && _foldReady)
-            AddPersistedFoldedNameQueryParameters(cmd, "@query", query, lang);
-        else
-            SqliteCommandPolicy.Add(cmd, "@query", callersQueryParam);
-        SqliteCommandPolicy.Add(cmd, "@aliasQuery", query);
-        AddQualifiedGraphQueryParameters(cmd, query, allowQualifiedLeafFallback, allowCSharpQualifiedContextMatch);
-        SqliteCommandPolicy.Add(cmd, "@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
-        if (cssScssVariableAlias != null)
-        {
-            var aliasParam = exact && _foldReady
-                ? NameFold.Fold(cssScssVariableAlias) ?? cssScssVariableAlias
-                : cssScssVariableAlias;
-            SqliteCommandPolicy.Add(cmd, "@queryCssScssVariableAlias", aliasParam);
-        }
-        SqliteCommandPolicy.Add(cmd, "@rawQuery", query);
-        SqliteCommandPolicy.Add(cmd, "@rankingQuery", query.Trim());
-        if (RequiresReferenceKindParameter(referenceKind))
-            SqliteCommandPolicy.Add(cmd, "@referenceKind", referenceKind);
-        if (lang != null)
-            SqliteCommandPolicy.Add(cmd, "@lang", NormalizeQueryLanguage(lang));
-        if (targetSymbolId != null && HasTable("symbol_reference_candidates"))
-            SqliteCommandPolicy.Add(cmd, "@targetSymbolId", targetSymbolId.Value);
-        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
-        SqliteCommandPolicy.Add(cmd, "@limit", limit);
-        SqliteCommandPolicy.Add(cmd, "@offset", Math.Max(0, offset));
-
-        var results = new List<CallerResult>();
-        using var reader = cmd.ExecuteTrackedReader();
-        while (reader.TrackedRead())
-        {
-            var primaryKind = reader.GetString(5);
-            var kindAggregate = TruncateReferenceKindAggregate(GetNullableString(reader, 9), out var kindsTruncated);
-            var countAggregate = TruncateReferenceKindAggregate(GetNullableString(reader, 10), out var countsTruncated);
-            var kinds = ParseDistinctReferenceKinds(kindAggregate, primaryKind);
-            var counts = ParseReferenceKindCounts(countAggregate, primaryKind, reader.GetInt32(8));
-            results.Add(new CallerResult
-            {
-                Path = reader.GetString(0),
-                Lang = GetNullableString(reader, 1),
-                CallerKind = GetNullableString(reader, 2),
-                CallerName = GetNullableString(reader, 3),
-                CalleeName = reader.GetString(4),
-                ReferenceKind = primaryKind,
-                ReferenceKinds = kinds,
-                HasMixedReferenceKinds = kinds.Count > 1,
-                ReferenceKindCounts = counts,
-                AggregateTruncated = kindsTruncated || countsTruncated,
-                ReferenceWeightScore = reader.GetDouble(11),
-                FirstLine = reader.GetInt32(6),
-                FirstColumn = reader.GetInt32(7),
-                ReferenceCount = reader.GetInt32(8),
-                HasSelfReference = reader.GetInt32(12) != 0,
-                HasMutualRecursion = reader.GetInt32(13) != 0,
-            });
-        }
-        return results;
+            referenceKind,
+            pathPatterns,
+            excludePathPatterns,
+            excludeTests,
+            exact,
+            rawKinds,
+            includeQualifiedCommonCalls,
+            includeMemberReads,
+            identitySymbolId: targetSymbolId,
+            excludeSelfReferences,
+            offset);
+        var plan = BuildGraphReferenceQueryPlan(
+            CallerGraphReferenceDirection,
+            request,
+            GraphReferenceQueryShape.List,
+            rankMode);
+        return ExecuteGraphReferenceList(plan, ProjectCallerResult);
     }
 
     public int CountCallers(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, bool rawKinds = false, bool includeQualifiedCommonCalls = false, bool includeMemberReads = false)
@@ -293,115 +118,26 @@ public partial class DbReader
             return 0;
         lang = NormalizeQueryLanguage(lang);
         query = NormalizeSymbolSearchQuery(query, lang, exact) ?? query ?? string.Empty;
-        if (!_hasReferencesTable) return 0;
-        using var cmd = _conn.CreateCommand();
-        var referenceLineJoin = ReferenceLineJoinSql("r");
-        var contextSql = ReferenceContextSql("r");
-        var groupedSql = @"
-            SELECT path, lang, container_kind, container_name, symbol_name
-            FROM (
-                SELECT f.path AS path, f.lang AS lang, r.container_kind AS container_kind,
-                       r.container_name AS container_name, r.symbol_name AS symbol_name
-            FROM symbol_references r
-            JOIN files f ON r.file_id = f.id" + referenceLineJoin + @"
-            WHERE " + BuildCallerContainerPredicate("f", "r");
-        groupedSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
+        if (!_hasReferencesTable)
+            return 0;
 
-        groupedSql += $" AND {GetCallableReferenceKindPredicateSql("r.reference_kind", referenceKind, "f.lang", includeMemberReads)}";
-        var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query);
-        var allowCSharpQualifiedContextMatch = SqlNameResolver.HasQualifier(query)
-            && !HasQualifiedSymbolDefinition(query, lang, pathPatterns, excludePathPatterns, excludeTests);
-        var allowQualifiedLeafFallback = HasSingleQualifiedSymbolDefinition(query, lang, pathPatterns, excludePathPatterns, excludeTests);
-        var useSqlQualifiedContextMatch = SqlNameResolver.HasQualifier(query);
-        var cssScssVariableAlias = ComputeCssScssVariableAlias(query);
-        var cssScssVariableAliasScope = cssScssVariableAlias != null
-            ? " AND f.lang = 'css'"
-            : string.Empty;
-        if (useSqlQualifiedContextMatch && exact && _foldReady)
-        {
-            var qualifiedContextSql = BuildQualifiedContextMatchSql(contextSql, "r.column_number", folded: true, like: false);
-            var csharpQualifiedContextSql = BuildCSharpQualifiedContextFallbackSql(qualifiedContextSql);
-            var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.symbol_name", "r.symbol_name_folded", folded: true);
-            groupedSql += $" AND (((f.lang = 'sql') AND {qualifiedContextSql}) OR ((f.lang != 'sql') AND {BuildPersistedFoldedNameMatchSql("r.symbol_name_folded", "@query")}) OR {csharpQualifiedContextSql} OR {qualifiedLeafFallbackSql})";
-        }
-        else if (useSqlQualifiedContextMatch && exact)
-        {
-            var qualifiedContextSql = BuildQualifiedContextMatchSql(contextSql, "r.column_number", folded: false, like: false);
-            var csharpQualifiedContextSql = BuildCSharpQualifiedContextFallbackSql(qualifiedContextSql);
-            var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.symbol_name", "r.symbol_name_folded", folded: false);
-            groupedSql += $" AND (((f.lang = 'sql') AND {qualifiedContextSql}) OR ((f.lang != 'sql') AND r.symbol_name = @query COLLATE NOCASE) OR {csharpQualifiedContextSql} OR {qualifiedLeafFallbackSql})";
-        }
-        else if (useSqlQualifiedContextMatch && _foldReady)
-        {
-            var qualifiedContextSql = BuildQualifiedContextMatchSql(contextSql, "r.column_number", folded: true, like: true);
-            var csharpQualifiedContextSql = BuildCSharpQualifiedContextFallbackSql(qualifiedContextSql);
-            var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.symbol_name", "r.symbol_name_folded", folded: true);
-            groupedSql += $" AND (((f.lang = 'sql') AND {qualifiedContextSql}) OR ((f.lang != 'sql') AND r.symbol_name LIKE @query ESCAPE '\\') OR {csharpQualifiedContextSql} OR {qualifiedLeafFallbackSql})";
-        }
-        else if (useSqlQualifiedContextMatch)
-        {
-            var qualifiedContextSql = BuildQualifiedContextMatchSql(contextSql, "r.column_number", folded: false, like: true);
-            var csharpQualifiedContextSql = BuildCSharpQualifiedContextFallbackSql(qualifiedContextSql);
-            var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.symbol_name", "r.symbol_name_folded", folded: false);
-            groupedSql += $" AND (((f.lang = 'sql') AND {qualifiedContextSql}) OR ((f.lang != 'sql') AND r.symbol_name LIKE @query ESCAPE '\\') OR {csharpQualifiedContextSql} OR {qualifiedLeafFallbackSql})";
-        }
-        else if (exact && _foldReady)
-            groupedSql += allowSqlLeafFallback
-                ? cssScssVariableAlias != null
-                    ? $" AND ({BuildPersistedFoldedNameMatchSql("r.symbol_name_folded", "@query")} OR (r.symbol_name_folded = @queryCssScssVariableAlias{cssScssVariableAliasScope}) OR (f.lang = 'sql' AND r.symbol_name_folded = @aliasQueryLeafFolded))"
-                    : $" AND ({BuildPersistedFoldedNameMatchSql("r.symbol_name_folded", "@query")} OR (f.lang = 'sql' AND r.symbol_name_folded = @aliasQueryLeafFolded))"
-                : $" AND {BuildPersistedFoldedNameMatchSql("r.symbol_name_folded", "@query")}";
-        else if (exact)
-            groupedSql += allowSqlLeafFallback
-                ? cssScssVariableAlias != null
-                    ? $" AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = @queryCssScssVariableAlias COLLATE NOCASE{cssScssVariableAliasScope}) OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))"
-                    : " AND (r.symbol_name = @query COLLATE NOCASE OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))"
-                : " AND r.symbol_name = @query COLLATE NOCASE";
-        else
-            groupedSql += cssScssVariableAlias != null
-                ? $" AND (r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = @queryCssScssVariableAlias COLLATE NOCASE{cssScssVariableAliasScope}) OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))"
-                : " AND (r.symbol_name LIKE @query ESCAPE '\\' OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))";
-        if (lang != null)
-            groupedSql += " AND f.lang = @lang";
-        groupedSql += BuildCSharpBareMemberReferenceFilter(
+        var request = CreateGraphReferenceQueryRequest(
             query,
+            limit,
             lang,
-            "f",
-            "r",
-            includeQualifiedCommonCalls);
-        AppendPathFilters(ref groupedSql, pathPatterns, excludePathPatterns, excludeTests);
-        groupedSql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, {(rawKinds ? GetRawReferenceKindSql("r.reference_kind") : GetLogicalReferenceKindSql("r.reference_kind"))}";
-        groupedSql += " ) grouped_call_sites GROUP BY path, lang, container_kind, container_name, symbol_name LIMIT @limit";
-
-        cmd.CommandText = $"SELECT COUNT(*) FROM ({groupedSql})";
-        var value = !exact
-            ? $"%{EscapeLikeQuery(query)}%"
-            : _foldReady
-                ? FoldNameForLanguage(query, lang)
-                : query;
-        if (exact && _foldReady)
-            AddPersistedFoldedNameQueryParameters(cmd, "@query", query, lang);
-        else
-            SqliteCommandPolicy.Add(cmd, "@query", value);
-        SqliteCommandPolicy.Add(cmd, "@aliasQuery", query);
-        AddQualifiedGraphQueryParameters(cmd, query, allowQualifiedLeafFallback, allowCSharpQualifiedContextMatch);
-        SqliteCommandPolicy.Add(cmd, "@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
-        if (cssScssVariableAlias != null)
-        {
-            var aliasParam = exact && _foldReady
-                ? NameFold.Fold(cssScssVariableAlias) ?? cssScssVariableAlias
-                : cssScssVariableAlias;
-            SqliteCommandPolicy.Add(cmd, "@queryCssScssVariableAlias", aliasParam);
-        }
-        if (RequiresReferenceKindParameter(referenceKind))
-            SqliteCommandPolicy.Add(cmd, "@referenceKind", referenceKind);
-        if (lang != null)
-            SqliteCommandPolicy.Add(cmd, "@lang", NormalizeQueryLanguage(lang));
-        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
-        SqliteCommandPolicy.Add(cmd, "@limit", limit);
-
-        var raw = cmd.ExecuteScalar();
-        return raw is long l ? (int)l : Convert.ToInt32(raw);
+            referenceKind,
+            pathPatterns,
+            excludePathPatterns,
+            excludeTests,
+            exact,
+            rawKinds,
+            includeQualifiedCommonCalls,
+            includeMemberReads);
+        var plan = BuildGraphReferenceQueryPlan(
+            CallerGraphReferenceDirection,
+            request,
+            GraphReferenceQueryShape.LimitedCount);
+        return ExecuteGraphReferenceLimitedCount(plan);
     }
 
     public QueryCountResult CountCallersTotal(string query, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, bool rawKinds = false, bool includeQualifiedCommonCalls = false, bool includeMemberReads = false)
@@ -434,131 +170,24 @@ public partial class DbReader
         if (!_hasReferencesTable)
             return new QueryCountResult(0, 0);
 
-        using var cmd = _conn.CreateCommand();
-        var referenceLineJoin = ReferenceLineJoinSql("r");
-        var contextSql = ReferenceContextSql("r");
-        var cssScssVariableAlias = ComputeCssScssVariableAlias(query);
-        var cssScssVariableAliasScope = cssScssVariableAlias != null
-            ? " AND f.lang = 'css'"
-            : string.Empty;
-        var groupedSql = @"
-            SELECT path, lang
-            FROM (
-                SELECT f.path AS path, f.lang AS lang, r.container_kind AS container_kind,
-                       r.container_name AS container_name, r.symbol_name AS symbol_name
-                FROM symbol_references r
-                JOIN files f ON r.file_id = f.id" + referenceLineJoin + @"
-                WHERE " + BuildCallerContainerPredicate("f", "r");
-        groupedSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
-
-        groupedSql += $" AND {GetCallableReferenceKindPredicateSql("r.reference_kind", referenceKind, "f.lang", includeMemberReads)}";
-        if (targetSymbolId != null && HasTable("symbol_reference_candidates"))
-        {
-            groupedSql += _referenceColumns.Contains("resolution_state")
-                ? " AND r.resolution_state IN ('resolved', 'resolved_group')"
-                : " AND 1 = 0";
-            groupedSql += @"
-                AND EXISTS (
-                    SELECT 1
-                    FROM symbol_reference_candidates AS identity_candidate
-                    WHERE identity_candidate.reference_id = r.id
-                      AND identity_candidate.symbol_id = @targetSymbolId
-                )";
-        }
-        var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query);
-        var allowCSharpQualifiedContextMatch = SqlNameResolver.HasQualifier(query)
-            && !HasQualifiedSymbolDefinition(query, lang, pathPatterns, excludePathPatterns, excludeTests);
-        var allowQualifiedLeafFallback = HasSingleQualifiedSymbolDefinition(query, lang, pathPatterns, excludePathPatterns, excludeTests);
-        var useSqlQualifiedContextMatch = SqlNameResolver.HasQualifier(query);
-        if (useSqlQualifiedContextMatch && exact && _foldReady)
-        {
-            var qualifiedContextSql = BuildQualifiedContextMatchSql(contextSql, "r.column_number", folded: true, like: false);
-            var csharpQualifiedContextSql = BuildCSharpQualifiedContextFallbackSql(qualifiedContextSql);
-            var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.symbol_name", "r.symbol_name_folded", folded: true);
-            groupedSql += $" AND (((f.lang = 'sql') AND {qualifiedContextSql}) OR ((f.lang != 'sql') AND {BuildPersistedFoldedNameMatchSql("r.symbol_name_folded", "@query")}) OR {csharpQualifiedContextSql} OR {qualifiedLeafFallbackSql})";
-        }
-        else if (useSqlQualifiedContextMatch && exact)
-        {
-            var qualifiedContextSql = BuildQualifiedContextMatchSql(contextSql, "r.column_number", folded: false, like: false);
-            var csharpQualifiedContextSql = BuildCSharpQualifiedContextFallbackSql(qualifiedContextSql);
-            var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.symbol_name", "r.symbol_name_folded", folded: false);
-            groupedSql += $" AND (((f.lang = 'sql') AND {qualifiedContextSql}) OR ((f.lang != 'sql') AND r.symbol_name = @query COLLATE NOCASE) OR {csharpQualifiedContextSql} OR {qualifiedLeafFallbackSql})";
-        }
-        else if (useSqlQualifiedContextMatch && _foldReady)
-        {
-            var qualifiedContextSql = BuildQualifiedContextMatchSql(contextSql, "r.column_number", folded: true, like: true);
-            var csharpQualifiedContextSql = BuildCSharpQualifiedContextFallbackSql(qualifiedContextSql);
-            var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.symbol_name", "r.symbol_name_folded", folded: true);
-            groupedSql += $" AND (((f.lang = 'sql') AND {qualifiedContextSql}) OR ((f.lang != 'sql') AND r.symbol_name LIKE @query ESCAPE '\\') OR {csharpQualifiedContextSql} OR {qualifiedLeafFallbackSql})";
-        }
-        else if (useSqlQualifiedContextMatch)
-        {
-            var qualifiedContextSql = BuildQualifiedContextMatchSql(contextSql, "r.column_number", folded: false, like: true);
-            var csharpQualifiedContextSql = BuildCSharpQualifiedContextFallbackSql(qualifiedContextSql);
-            var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.symbol_name", "r.symbol_name_folded", folded: false);
-            groupedSql += $" AND (((f.lang = 'sql') AND {qualifiedContextSql}) OR ((f.lang != 'sql') AND r.symbol_name LIKE @query ESCAPE '\\') OR {csharpQualifiedContextSql} OR {qualifiedLeafFallbackSql})";
-        }
-        else if (exact && _foldReady)
-            groupedSql += allowSqlLeafFallback
-                ? cssScssVariableAlias != null
-                    ? $" AND ({BuildPersistedFoldedNameMatchSql("r.symbol_name_folded", "@query")} OR (r.symbol_name_folded = @queryCssScssVariableAlias{cssScssVariableAliasScope}) OR (f.lang = 'sql' AND r.symbol_name_folded = @aliasQueryLeafFolded))"
-                    : $" AND ({BuildPersistedFoldedNameMatchSql("r.symbol_name_folded", "@query")} OR (f.lang = 'sql' AND r.symbol_name_folded = @aliasQueryLeafFolded))"
-                : $" AND {BuildPersistedFoldedNameMatchSql("r.symbol_name_folded", "@query")}";
-        else if (exact)
-            groupedSql += allowSqlLeafFallback
-                ? cssScssVariableAlias != null
-                    ? $" AND (r.symbol_name = @query COLLATE NOCASE OR (r.symbol_name = @queryCssScssVariableAlias COLLATE NOCASE{cssScssVariableAliasScope}) OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))"
-                    : " AND (r.symbol_name = @query COLLATE NOCASE OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))"
-                : " AND r.symbol_name = @query COLLATE NOCASE";
-        else
-            groupedSql += cssScssVariableAlias != null
-                ? $" AND (r.symbol_name LIKE @query ESCAPE '\\' OR (r.symbol_name = @queryCssScssVariableAlias COLLATE NOCASE{cssScssVariableAliasScope}) OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))"
-                : " AND (r.symbol_name LIKE @query ESCAPE '\\' OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@aliasQuery) COLLATE NOCASE))";
-        if (lang != null)
-        {
-            groupedSql += IncludeAmbiguousMSourceForIdentityTarget(lang, targetSymbolId)
-                ? " AND (f.lang = @lang OR f.lang = 'ambiguous_m')"
-                : " AND f.lang = @lang";
-        }
-        groupedSql += BuildCSharpBareMemberReferenceFilter(
+        var request = CreateGraphReferenceQueryRequest(
             query,
+            limit: 0,
             lang,
-            "f",
-            "r",
-            includeQualifiedCommonCalls);
-        AppendPathFilters(ref groupedSql, pathPatterns, excludePathPatterns, excludeTests);
-        groupedSql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, {(rawKinds ? GetRawReferenceKindSql("r.reference_kind") : GetLogicalReferenceKindSql("r.reference_kind"))}";
-        groupedSql += " ) grouped_call_sites GROUP BY path, lang, container_kind, container_name, symbol_name";
-
-        cmd.CommandText = $"SELECT COUNT(*), COUNT(DISTINCT path), MAX(CASE WHEN lang = 'sql' THEN 1 ELSE 0 END) FROM ({groupedSql})";
-        var value = !exact
-            ? $"%{EscapeLikeQuery(query)}%"
-            : _foldReady
-              ? FoldNameForLanguage(query, lang)
-                : query;
-        if (exact && _foldReady)
-            AddPersistedFoldedNameQueryParameters(cmd, "@query", query, lang);
-        else
-            SqliteCommandPolicy.Add(cmd, "@query", value);
-        SqliteCommandPolicy.Add(cmd, "@aliasQuery", query);
-        AddQualifiedGraphQueryParameters(cmd, query, allowQualifiedLeafFallback, allowCSharpQualifiedContextMatch);
-        SqliteCommandPolicy.Add(cmd, "@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
-        if (cssScssVariableAlias != null)
-        {
-            var aliasParam = exact && _foldReady
-                ? NameFold.Fold(cssScssVariableAlias) ?? cssScssVariableAlias
-                : cssScssVariableAlias;
-            SqliteCommandPolicy.Add(cmd, "@queryCssScssVariableAlias", aliasParam);
-        }
-        if (RequiresReferenceKindParameter(referenceKind))
-            SqliteCommandPolicy.Add(cmd, "@referenceKind", referenceKind);
-        if (lang != null)
-            SqliteCommandPolicy.Add(cmd, "@lang", NormalizeQueryLanguage(lang));
-        if (targetSymbolId != null)
-            SqliteCommandPolicy.Add(cmd, "@targetSymbolId", targetSymbolId.Value);
-        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
-
-        return ExecuteCountSummary(cmd);
+            referenceKind,
+            pathPatterns,
+            excludePathPatterns,
+            excludeTests,
+            exact,
+            rawKinds,
+            includeQualifiedCommonCalls,
+            includeMemberReads,
+            identitySymbolId: targetSymbolId);
+        var plan = BuildGraphReferenceQueryPlan(
+            CallerGraphReferenceDirection,
+            request,
+            GraphReferenceQueryShape.TotalCount);
+        return ExecuteGraphReferenceTotalCount(plan);
     }
 
     /// <summary>
@@ -596,177 +225,29 @@ public partial class DbReader
             return new List<CalleeResult>();
         lang = NormalizeQueryLanguage(lang);
         query = NormalizeSymbolSearchQuery(query, lang, exact) ?? query ?? string.Empty;
-        if (!_hasReferencesTable) return new List<CalleeResult>();
-        using var cmd = _conn.CreateCommand();
+        if (!_hasReferencesTable)
+            return new List<CalleeResult>();
 
-        var preferredCalleeKindSql = rawKinds
-            ? GetPreferredReferenceKindSql("r.reference_kind")
-            : GetPreferredLogicalReferenceKindSql("r.reference_kind");
-        var calleeGroupKindSql = rawKinds
-            ? GetRawReferenceKindSql("r.reference_kind")
-            : GetLogicalReferenceKindSql("r.reference_kind");
-        var referenceSpanLengthSql = _referenceColumns.Contains("span_length")
-            ? "r.span_length"
-            : "NULL";
-        var sql = $@"
-            WITH logical_references AS (
-                SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name,
-                       {preferredCalleeKindSql} AS reference_kind,
-                       r.reference_kind AS raw_reference_kind,
-                       {calleeGroupKindSql} AS count_reference_kind,
-                       COUNT(*) AS reference_count,
-                       {ReferenceWeightedScoreSql("r.reference_kind")} AS weighted_score,
-                       r.line,
-                       r.column_number,
-                       {referenceSpanLengthSql} AS span_length
-                FROM symbol_references r
-                JOIN files f ON r.file_id = f.id
-                WHERE r.container_name IS NOT NULL
-                  AND {GetCallableReferenceKindPredicateSql("r.reference_kind", referenceKind, "f.lang", includeMemberReads)}
-                  AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
-        if (sourceSymbolId != null && _referenceColumns.Contains("source_symbol_id"))
-            sql += " AND r.source_symbol_id = @sourceSymbolId";
-        var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query);
-        var allowQualifiedLeafFallback = HasSingleQualifiedSymbolDefinition(query, lang, pathPatterns, excludePathPatterns, excludeTests);
-        var useSqlQualifiedContainerMatch = SqlNameResolver.HasQualifier(query);
-        var cssScssVariableAlias = ComputeCssScssVariableAlias(query);
-        var cssScssVariableAliasScope = cssScssVariableAlias != null
-            ? " AND f.lang = 'css'"
-            : string.Empty;
-        if (exact && useSqlQualifiedContainerMatch && _foldReady)
-        {
-            var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.container_name", "r.container_name_folded", folded: true);
-            sql += $" AND (((f.lang = 'sql') AND sql_segment_count(r.container_name) = @aliasQuerySegmentCount AND sql_normalize_name_folded(r.container_name) = @aliasQueryNormalizedFolded) OR ((f.lang != 'sql') AND {BuildPersistedFoldedNameMatchSql("r.container_name_folded", "@query")}) OR {qualifiedLeafFallbackSql})";
-        }
-        else if (exact && useSqlQualifiedContainerMatch)
-        {
-            var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.container_name", "r.container_name_folded", folded: false);
-            sql += $" AND (((f.lang = 'sql') AND sql_segment_count(r.container_name) = @aliasQuerySegmentCount AND sql_normalize_name(r.container_name) = @aliasQueryNormalized COLLATE NOCASE) OR ((f.lang != 'sql') AND r.container_name = @query COLLATE NOCASE) OR {qualifiedLeafFallbackSql})";
-        }
-        else if (useSqlQualifiedContainerMatch && _foldReady)
-        {
-            var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.container_name", "r.container_name_folded", folded: true);
-            sql += $" AND (r.container_name LIKE @query ESCAPE '\\' OR {qualifiedLeafFallbackSql})";
-        }
-        else if (useSqlQualifiedContainerMatch)
-        {
-            var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.container_name", "r.container_name_folded", folded: false);
-            sql += $" AND (r.container_name LIKE @query ESCAPE '\\' OR {qualifiedLeafFallbackSql})";
-        }
-        else if (exact && _foldReady)
-            sql += allowSqlLeafFallback
-                ? cssScssVariableAlias != null
-                    ? $" AND ({BuildPersistedFoldedNameMatchSql("r.container_name_folded", "@query")} OR (r.container_name_folded = @queryCssScssVariableAlias{cssScssVariableAliasScope}) OR (f.lang = 'sql' AND sql_leaf_name_folded(r.container_name) = @aliasQueryLeafFolded))"
-                    : $" AND ({BuildPersistedFoldedNameMatchSql("r.container_name_folded", "@query")} OR (f.lang = 'sql' AND sql_leaf_name_folded(r.container_name) = @aliasQueryLeafFolded))"
-                : $" AND {BuildPersistedFoldedNameMatchSql("r.container_name_folded", "@query")}";
-        else if (exact)
-            sql += allowSqlLeafFallback
-                ? cssScssVariableAlias != null
-                    ? $" AND (r.container_name = @query COLLATE NOCASE OR (r.container_name = @queryCssScssVariableAlias COLLATE NOCASE{cssScssVariableAliasScope}) OR (f.lang = 'sql' AND sql_leaf_name(r.container_name) = @aliasQuery COLLATE NOCASE))"
-                    : " AND (r.container_name = @query COLLATE NOCASE OR (f.lang = 'sql' AND sql_leaf_name(r.container_name) = @aliasQuery COLLATE NOCASE))"
-                : " AND r.container_name = @query COLLATE NOCASE";
-        else
-            sql += cssScssVariableAlias != null
-                ? $" AND (r.container_name LIKE @query ESCAPE '\\' OR (r.container_name = @queryCssScssVariableAlias COLLATE NOCASE{cssScssVariableAliasScope}) OR (f.lang = 'sql' AND sql_leaf_name(r.container_name) = @aliasQuery COLLATE NOCASE))"
-                : " AND (r.container_name LIKE @query ESCAPE '\\' OR (f.lang = 'sql' AND sql_leaf_name(r.container_name) = @aliasQuery COLLATE NOCASE))";
-        if (lang != null)
-            sql += " AND f.lang = @lang";
-        if (!includeQualifiedCommonCalls)
-            sql += BuildCSharpQualifiedCommonCallNoiseFilter("f", "r");
-        AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
-        sql += $@"
-                GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, {referenceSpanLengthSql}, r.reference_kind
-            ),
-            ranked_call_sites AS (
-                SELECT logical_references.*,
-                       ROW_NUMBER() OVER (
-                           PARTITION BY path, lang, container_kind, container_name, symbol_name, reference_kind
-                           ORDER BY CASE WHEN column_number IS NULL THEN 1 ELSE 0 END,
-                                    line,
-                                    column_number,
-                                    COALESCE(span_length, 0)
-                       ) AS location_rank
-                FROM logical_references
-            )
-            SELECT path, lang, container_kind, container_name, symbol_name,
-                   reference_kind,
-                   MAX(CASE WHEN location_rank = 1 THEN line END) AS first_line,
-                   MAX(CASE WHEN location_rank = 1 THEN column_number END) AS first_column,
-                   MAX(CASE WHEN location_rank = 1 THEN span_length END) AS first_length,
-                   SUM(r.reference_count) AS reference_count,
-                   GROUP_CONCAT(DISTINCT reference_kind) AS reference_kinds,
-                   GROUP_CONCAT(r.count_reference_kind || ':' || r.reference_count) AS reference_kind_counts,
-                   SUM(r.weighted_score) AS weighted_score
-            FROM ranked_call_sites r
-            GROUP BY path, lang, container_kind, container_name, symbol_name, reference_kind";
-        sql += $" ORDER BY {BuildReferenceRankOrderSql(rankMode, "r.container_name")} LIMIT @limit OFFSET @offset";
-
-        cmd.CommandText = sql;
-        string calleesQueryParam;
-        if (!exact)
-            calleesQueryParam = $"%{EscapeLikeQuery(query)}%";
-        else if (_foldReady)
-            calleesQueryParam = FoldNameForLanguage(query, lang);
-        else
-            calleesQueryParam = query;
-        if (exact && _foldReady)
-            AddPersistedFoldedNameQueryParameters(cmd, "@query", query, lang);
-        else
-            SqliteCommandPolicy.Add(cmd, "@query", calleesQueryParam);
-        SqliteCommandPolicy.Add(cmd, "@aliasQuery", query);
-        SqliteCommandPolicy.Add(cmd, "@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
-        SqliteCommandPolicy.Add(cmd, "@aliasQueryNormalized", SqlNameResolver.NormalizeQualifiedName(query));
-        SqliteCommandPolicy.Add(cmd, "@aliasQueryNormalizedFolded", NameFold.Fold(SqlNameResolver.NormalizeQualifiedName(query)) ?? SqlNameResolver.NormalizeQualifiedName(query));
-        SqliteCommandPolicy.Add(cmd, "@aliasQuerySegmentCount", SqlNameResolver.GetSegmentCount(query));
-        if (cssScssVariableAlias != null)
-        {
-            var aliasParam = exact && _foldReady
-                ? NameFold.Fold(cssScssVariableAlias) ?? cssScssVariableAlias
-                : cssScssVariableAlias;
-            SqliteCommandPolicy.Add(cmd, "@queryCssScssVariableAlias", aliasParam);
-        }
-        SqliteCommandPolicy.Add(cmd, "@rawQuery", query);
-        SqliteCommandPolicy.Add(cmd, "@rankingQuery", query.Trim());
-        AddQualifiedGraphQueryParameters(cmd, query, allowQualifiedLeafFallback);
-        if (RequiresReferenceKindParameter(referenceKind))
-            SqliteCommandPolicy.Add(cmd, "@referenceKind", referenceKind);
-        if (lang != null)
-            SqliteCommandPolicy.Add(cmd, "@lang", lang);
-        if (sourceSymbolId != null && _referenceColumns.Contains("source_symbol_id"))
-            SqliteCommandPolicy.Add(cmd, "@sourceSymbolId", sourceSymbolId.Value);
-        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
-        SqliteCommandPolicy.Add(cmd, "@limit", limit);
-        SqliteCommandPolicy.Add(cmd, "@offset", Math.Max(0, offset));
-
-        var results = new List<CalleeResult>();
-        using var reader = cmd.ExecuteTrackedReader();
-        while (reader.TrackedRead())
-        {
-            var primaryKind = reader.GetString(5);
-            var kindAggregate = TruncateReferenceKindAggregate(GetNullableString(reader, 10), out var kindsTruncated);
-            var countAggregate = TruncateReferenceKindAggregate(GetNullableString(reader, 11), out var countsTruncated);
-            var kinds = ParseDistinctReferenceKinds(kindAggregate, primaryKind);
-            var counts = ParseReferenceKindCounts(countAggregate, primaryKind, reader.GetInt32(9));
-            results.Add(new CalleeResult
-            {
-                Path = reader.GetString(0),
-                Lang = GetNullableString(reader, 1),
-                CallerKind = GetNullableString(reader, 2),
-                CallerName = GetNullableString(reader, 3),
-                CalleeName = reader.GetString(4),
-                ReferenceKind = primaryKind,
-                ReferenceKinds = kinds,
-                HasMixedReferenceKinds = kinds.Count > 1,
-                ReferenceKindCounts = counts,
-                AggregateTruncated = kindsTruncated || countsTruncated,
-                ReferenceWeightScore = reader.GetDouble(12),
-                FirstLine = reader.GetInt32(6),
-                FirstColumn = GetNullableInt32(reader, 7),
-                FirstLength = GetNullableInt32(reader, 8),
-                ReferenceCount = reader.GetInt32(9),
-            });
-        }
-        return results;
+        var request = CreateGraphReferenceQueryRequest(
+            query,
+            limit,
+            lang,
+            referenceKind,
+            pathPatterns,
+            excludePathPatterns,
+            excludeTests,
+            exact,
+            rawKinds,
+            includeQualifiedCommonCalls,
+            includeMemberReads,
+            identitySymbolId: sourceSymbolId,
+            offset: offset);
+        var plan = BuildGraphReferenceQueryPlan(
+            CalleeGraphReferenceDirection,
+            request,
+            GraphReferenceQueryShape.List,
+            rankMode);
+        return ExecuteGraphReferenceList(plan, ProjectCalleeResult);
     }
 
     public int CountCallees(string query, int limit = 20, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, bool rawKinds = false, bool includeQualifiedCommonCalls = false, bool includeMemberReads = false)
@@ -775,103 +256,26 @@ public partial class DbReader
             return 0;
         lang = NormalizeQueryLanguage(lang);
         query = NormalizeSymbolSearchQuery(query, lang, exact) ?? query ?? string.Empty;
-        if (!_hasReferencesTable) return 0;
-        using var cmd = _conn.CreateCommand();
-        var groupedSql = @"
-            SELECT path, lang, container_kind, container_name, symbol_name, reference_kind
-            FROM (
-                SELECT f.path AS path, f.lang AS lang, r.container_kind AS container_kind,
-                       r.container_name AS container_name, r.symbol_name AS symbol_name,
-                       " + (rawKinds ? GetPreferredReferenceKindSql("r.reference_kind") : GetPreferredLogicalReferenceKindSql("r.reference_kind")) + @" AS reference_kind
-            FROM symbol_references r
-            JOIN files f ON r.file_id = f.id
-            WHERE r.container_name IS NOT NULL";
-        groupedSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
+        if (!_hasReferencesTable)
+            return 0;
 
-        groupedSql += $" AND {GetCallableReferenceKindPredicateSql("r.reference_kind", referenceKind, "f.lang", includeMemberReads)}";
-        var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query);
-        var allowQualifiedLeafFallback = HasSingleQualifiedSymbolDefinition(query, lang, pathPatterns, excludePathPatterns, excludeTests);
-        var useSqlQualifiedContainerMatch = SqlNameResolver.HasQualifier(query);
-        var cssScssVariableAlias = ComputeCssScssVariableAlias(query);
-        var cssScssVariableAliasScope = cssScssVariableAlias != null
-            ? " AND f.lang = 'css'"
-            : string.Empty;
-        if (exact && useSqlQualifiedContainerMatch && _foldReady)
-        {
-            var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.container_name", "r.container_name_folded", folded: true);
-            groupedSql += $" AND (((f.lang = 'sql') AND sql_segment_count(r.container_name) = @aliasQuerySegmentCount AND sql_normalize_name_folded(r.container_name) = @aliasQueryNormalizedFolded) OR ((f.lang != 'sql') AND {BuildPersistedFoldedNameMatchSql("r.container_name_folded", "@query")}) OR {qualifiedLeafFallbackSql})";
-        }
-        else if (exact && useSqlQualifiedContainerMatch)
-        {
-            var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.container_name", "r.container_name_folded", folded: false);
-            groupedSql += $" AND (((f.lang = 'sql') AND sql_segment_count(r.container_name) = @aliasQuerySegmentCount AND sql_normalize_name(r.container_name) = @aliasQueryNormalized COLLATE NOCASE) OR ((f.lang != 'sql') AND r.container_name = @query COLLATE NOCASE) OR {qualifiedLeafFallbackSql})";
-        }
-        else if (useSqlQualifiedContainerMatch && _foldReady)
-        {
-            var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.container_name", "r.container_name_folded", folded: true);
-            groupedSql += $" AND (r.container_name LIKE @query ESCAPE '\\' OR {qualifiedLeafFallbackSql})";
-        }
-        else if (useSqlQualifiedContainerMatch)
-        {
-            var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.container_name", "r.container_name_folded", folded: false);
-            groupedSql += $" AND (r.container_name LIKE @query ESCAPE '\\' OR {qualifiedLeafFallbackSql})";
-        }
-        else if (exact && _foldReady)
-            groupedSql += allowSqlLeafFallback
-                ? cssScssVariableAlias != null
-                    ? $" AND ({BuildPersistedFoldedNameMatchSql("r.container_name_folded", "@query")} OR (r.container_name_folded = @queryCssScssVariableAlias{cssScssVariableAliasScope}) OR (f.lang = 'sql' AND sql_leaf_name_folded(r.container_name) = @aliasQueryLeafFolded))"
-                    : $" AND ({BuildPersistedFoldedNameMatchSql("r.container_name_folded", "@query")} OR (f.lang = 'sql' AND sql_leaf_name_folded(r.container_name) = @aliasQueryLeafFolded))"
-                : $" AND {BuildPersistedFoldedNameMatchSql("r.container_name_folded", "@query")}";
-        else if (exact)
-            groupedSql += allowSqlLeafFallback
-                ? cssScssVariableAlias != null
-                    ? $" AND (r.container_name = @query COLLATE NOCASE OR (r.container_name = @queryCssScssVariableAlias COLLATE NOCASE{cssScssVariableAliasScope}) OR (f.lang = 'sql' AND sql_leaf_name(r.container_name) = @aliasQuery COLLATE NOCASE))"
-                    : " AND (r.container_name = @query COLLATE NOCASE OR (f.lang = 'sql' AND sql_leaf_name(r.container_name) = @aliasQuery COLLATE NOCASE))"
-                : " AND r.container_name = @query COLLATE NOCASE";
-        else
-            groupedSql += cssScssVariableAlias != null
-                ? $" AND (r.container_name LIKE @query ESCAPE '\\' OR (r.container_name = @queryCssScssVariableAlias COLLATE NOCASE{cssScssVariableAliasScope}) OR (f.lang = 'sql' AND sql_leaf_name(r.container_name) = @aliasQuery COLLATE NOCASE))"
-                : " AND (r.container_name LIKE @query ESCAPE '\\' OR (f.lang = 'sql' AND sql_leaf_name(r.container_name) = @aliasQuery COLLATE NOCASE))";
-        if (lang != null)
-            groupedSql += " AND f.lang = @lang";
-        if (!includeQualifiedCommonCalls)
-            groupedSql += BuildCSharpQualifiedCommonCallNoiseFilter("f", "r");
-        AppendPathFilters(ref groupedSql, pathPatterns, excludePathPatterns, excludeTests);
-        groupedSql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, {(rawKinds ? GetRawReferenceKindSql("r.reference_kind") : GetLogicalReferenceKindSql("r.reference_kind"))}";
-        groupedSql += " ) grouped_call_sites GROUP BY path, lang, container_kind, container_name, symbol_name, reference_kind LIMIT @limit";
-
-        cmd.CommandText = $"SELECT COUNT(*) FROM ({groupedSql})";
-        var value = !exact
-            ? $"%{EscapeLikeQuery(query)}%"
-            : _foldReady
-                ? FoldNameForLanguage(query, lang)
-                : query;
-        if (exact && _foldReady)
-            AddPersistedFoldedNameQueryParameters(cmd, "@query", query, lang);
-        else
-            SqliteCommandPolicy.Add(cmd, "@query", value);
-        SqliteCommandPolicy.Add(cmd, "@aliasQuery", query);
-        SqliteCommandPolicy.Add(cmd, "@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
-        SqliteCommandPolicy.Add(cmd, "@aliasQueryNormalized", SqlNameResolver.NormalizeQualifiedName(query));
-        SqliteCommandPolicy.Add(cmd, "@aliasQueryNormalizedFolded", NameFold.Fold(SqlNameResolver.NormalizeQualifiedName(query)) ?? SqlNameResolver.NormalizeQualifiedName(query));
-        SqliteCommandPolicy.Add(cmd, "@aliasQuerySegmentCount", SqlNameResolver.GetSegmentCount(query));
-        AddQualifiedGraphQueryParameters(cmd, query, allowQualifiedLeafFallback);
-        if (cssScssVariableAlias != null)
-        {
-            var aliasParam = exact && _foldReady
-                ? NameFold.Fold(cssScssVariableAlias) ?? cssScssVariableAlias
-                : cssScssVariableAlias;
-            SqliteCommandPolicy.Add(cmd, "@queryCssScssVariableAlias", aliasParam);
-        }
-        if (RequiresReferenceKindParameter(referenceKind))
-            SqliteCommandPolicy.Add(cmd, "@referenceKind", referenceKind);
-        if (lang != null)
-            SqliteCommandPolicy.Add(cmd, "@lang", lang);
-        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
-        SqliteCommandPolicy.Add(cmd, "@limit", limit);
-
-        var raw = cmd.ExecuteScalar();
-        return raw is long l ? (int)l : Convert.ToInt32(raw);
+        var request = CreateGraphReferenceQueryRequest(
+            query,
+            limit,
+            lang,
+            referenceKind,
+            pathPatterns,
+            excludePathPatterns,
+            excludeTests,
+            exact,
+            rawKinds,
+            includeQualifiedCommonCalls,
+            includeMemberReads);
+        var plan = BuildGraphReferenceQueryPlan(
+            CalleeGraphReferenceDirection,
+            request,
+            GraphReferenceQueryShape.LimitedCount);
+        return ExecuteGraphReferenceLimitedCount(plan);
     }
 
     public QueryCountResult CountCalleesTotal(string query, string? lang = null, string? referenceKind = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, bool exact = false, bool rawKinds = false, bool includeQualifiedCommonCalls = false, bool includeMemberReads = false)
@@ -905,168 +309,24 @@ public partial class DbReader
         if (!_hasReferencesTable)
             return new QueryCountResult(0, 0);
 
-        using var cmd = _conn.CreateCommand();
-        var groupedSql = @"
-            SELECT path, lang
-            FROM (
-                SELECT f.path AS path, f.lang AS lang, r.container_kind AS container_kind,
-                       r.container_name AS container_name, r.symbol_name AS symbol_name,
-                       " + (rawKinds ? GetPreferredReferenceKindSql("r.reference_kind") : GetPreferredLogicalReferenceKindSql("r.reference_kind")) + @" AS reference_kind
-                FROM symbol_references r
-                JOIN files f ON r.file_id = f.id
-                WHERE r.container_name IS NOT NULL";
-        groupedSql += $" AND {BuildGraphSupportedLanguagePredicate(cmd, "f", "graphLang")}";
-
-        groupedSql += $" AND {GetCallableReferenceKindPredicateSql("r.reference_kind", referenceKind, "f.lang", includeMemberReads)}";
-        if (sourceSymbolId != null && _referenceColumns.Contains("source_symbol_id"))
-            groupedSql += " AND r.source_symbol_id = @sourceSymbolId";
-        var allowSqlLeafFallback = AllowSqlLeafFallbackForQuery(query);
-        var allowQualifiedLeafFallback = HasSingleQualifiedSymbolDefinition(query, lang, pathPatterns, excludePathPatterns, excludeTests);
-        var useSqlQualifiedContainerMatch = SqlNameResolver.HasQualifier(query);
-        var cssScssVariableAlias = ComputeCssScssVariableAlias(query);
-        var cssScssVariableAliasScope = cssScssVariableAlias != null
-            ? " AND f.lang = 'css'"
-            : string.Empty;
-        if (exact && useSqlQualifiedContainerMatch && _foldReady)
-        {
-            var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.container_name", "r.container_name_folded", folded: true);
-            groupedSql += $" AND (((f.lang = 'sql') AND sql_segment_count(r.container_name) = @aliasQuerySegmentCount AND sql_normalize_name_folded(r.container_name) = @aliasQueryNormalizedFolded) OR ((f.lang != 'sql') AND {BuildPersistedFoldedNameMatchSql("r.container_name_folded", "@query")}) OR {qualifiedLeafFallbackSql})";
-        }
-        else if (exact && useSqlQualifiedContainerMatch)
-        {
-            var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.container_name", "r.container_name_folded", folded: false);
-            groupedSql += $" AND (((f.lang = 'sql') AND sql_segment_count(r.container_name) = @aliasQuerySegmentCount AND sql_normalize_name(r.container_name) = @aliasQueryNormalized COLLATE NOCASE) OR ((f.lang != 'sql') AND r.container_name = @query COLLATE NOCASE) OR {qualifiedLeafFallbackSql})";
-        }
-        else if (useSqlQualifiedContainerMatch && _foldReady)
-        {
-            var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.container_name", "r.container_name_folded", folded: true);
-            groupedSql += $" AND (r.container_name LIKE @query ESCAPE '\\' OR {qualifiedLeafFallbackSql})";
-        }
-        else if (useSqlQualifiedContainerMatch)
-        {
-            var qualifiedLeafFallbackSql = BuildQualifiedLeafFallbackSql("r.container_name", "r.container_name_folded", folded: false);
-            groupedSql += $" AND (r.container_name LIKE @query ESCAPE '\\' OR {qualifiedLeafFallbackSql})";
-        }
-        else if (exact && _foldReady)
-            groupedSql += allowSqlLeafFallback
-                ? cssScssVariableAlias != null
-                    ? $" AND ({BuildPersistedFoldedNameMatchSql("r.container_name_folded", "@query")} OR (r.container_name_folded = @queryCssScssVariableAlias{cssScssVariableAliasScope}) OR (f.lang = 'sql' AND sql_leaf_name_folded(r.container_name) = @aliasQueryLeafFolded))"
-                    : $" AND ({BuildPersistedFoldedNameMatchSql("r.container_name_folded", "@query")} OR (f.lang = 'sql' AND sql_leaf_name_folded(r.container_name) = @aliasQueryLeafFolded))"
-                : $" AND {BuildPersistedFoldedNameMatchSql("r.container_name_folded", "@query")}";
-        else if (exact)
-            groupedSql += allowSqlLeafFallback
-                ? cssScssVariableAlias != null
-                    ? $" AND (r.container_name = @query COLLATE NOCASE OR (r.container_name = @queryCssScssVariableAlias COLLATE NOCASE{cssScssVariableAliasScope}) OR (f.lang = 'sql' AND sql_leaf_name(r.container_name) = @aliasQuery COLLATE NOCASE))"
-                    : " AND (r.container_name = @query COLLATE NOCASE OR (f.lang = 'sql' AND sql_leaf_name(r.container_name) = @aliasQuery COLLATE NOCASE))"
-                : " AND r.container_name = @query COLLATE NOCASE";
-        else
-            groupedSql += cssScssVariableAlias != null
-                ? $" AND (r.container_name LIKE @query ESCAPE '\\' OR (r.container_name = @queryCssScssVariableAlias COLLATE NOCASE{cssScssVariableAliasScope}) OR (f.lang = 'sql' AND sql_leaf_name(r.container_name) = @aliasQuery COLLATE NOCASE))"
-                : " AND (r.container_name LIKE @query ESCAPE '\\' OR (f.lang = 'sql' AND sql_leaf_name(r.container_name) = @aliasQuery COLLATE NOCASE))";
-        if (lang != null)
-            groupedSql += " AND f.lang = @lang";
-        if (!includeQualifiedCommonCalls)
-            groupedSql += BuildCSharpQualifiedCommonCallNoiseFilter("f", "r");
-        AppendPathFilters(ref groupedSql, pathPatterns, excludePathPatterns, excludeTests);
-        groupedSql += $" GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, {(rawKinds ? GetRawReferenceKindSql("r.reference_kind") : GetLogicalReferenceKindSql("r.reference_kind"))}";
-        groupedSql += " ) grouped_call_sites GROUP BY path, lang, container_kind, container_name, symbol_name, reference_kind";
-
-        cmd.CommandText = $"SELECT COUNT(*), COUNT(DISTINCT path), MAX(CASE WHEN lang = 'sql' THEN 1 ELSE 0 END) FROM ({groupedSql})";
-        var value = !exact
-            ? $"%{EscapeLikeQuery(query)}%"
-            : _foldReady
-                ? FoldNameForLanguage(query, lang)
-                : query;
-        if (exact && _foldReady)
-            AddPersistedFoldedNameQueryParameters(cmd, "@query", query, lang);
-        else
-            SqliteCommandPolicy.Add(cmd, "@query", value);
-        SqliteCommandPolicy.Add(cmd, "@aliasQuery", query);
-        SqliteCommandPolicy.Add(cmd, "@aliasQueryLeafFolded", NameFold.Fold(SqlNameResolver.GetLeafName(query)) ?? SqlNameResolver.GetLeafName(query));
-        SqliteCommandPolicy.Add(cmd, "@aliasQueryNormalized", SqlNameResolver.NormalizeQualifiedName(query));
-        SqliteCommandPolicy.Add(cmd, "@aliasQueryNormalizedFolded", NameFold.Fold(SqlNameResolver.NormalizeQualifiedName(query)) ?? SqlNameResolver.NormalizeQualifiedName(query));
-        SqliteCommandPolicy.Add(cmd, "@aliasQuerySegmentCount", SqlNameResolver.GetSegmentCount(query));
-        AddQualifiedGraphQueryParameters(cmd, query, allowQualifiedLeafFallback);
-        if (cssScssVariableAlias != null)
-        {
-            var aliasParam = exact && _foldReady
-                ? NameFold.Fold(cssScssVariableAlias) ?? cssScssVariableAlias
-                : cssScssVariableAlias;
-            SqliteCommandPolicy.Add(cmd, "@queryCssScssVariableAlias", aliasParam);
-        }
-        if (RequiresReferenceKindParameter(referenceKind))
-            SqliteCommandPolicy.Add(cmd, "@referenceKind", referenceKind);
-        if (lang != null)
-            SqliteCommandPolicy.Add(cmd, "@lang", lang);
-        if (sourceSymbolId != null)
-            SqliteCommandPolicy.Add(cmd, "@sourceSymbolId", sourceSymbolId.Value);
-        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
-
-        return ExecuteCountSummary(cmd);
-    }
-
-    private static string ReferenceWeightedScoreSql(string columnSql) => $@"
-        SUM(CASE {columnSql}
-            WHEN 'instantiate' THEN 3.0
-            WHEN 'generic_type_argument' THEN 0.5
-            WHEN 'call' THEN 1.0
-            WHEN 'subscribe' THEN 0.1
-            WHEN 'unsubscribe' THEN 0.1
-            WHEN 'razor_event_binding' THEN 0.1
-            ELSE 0.0
-        END)";
-
-    private static string BuildReferenceRankOrderSql(
-        ReferenceRankMode rankMode,
-        string queriedNameSql)
-        => string.Join(
-            ", ",
-            ReferenceRankRecipes.Get(rankMode).Select(dimension => dimension switch
-            {
-                ReferenceRankDimension.ReferenceWeightScoreDescending => "weighted_score DESC",
-                ReferenceRankDimension.ReferenceCountDescending => "reference_count DESC",
-                ReferenceRankDimension.ReferenceKindPriorityAscending =>
-                    "CASE reference_kind WHEN 'instantiate' THEN 0 WHEN 'call' THEN 1 WHEN 'generic_type_argument' THEN 2 WHEN 'subscribe' THEN 3 ELSE 4 END",
-                ReferenceRankDimension.ExactCaseMatchDescending =>
-                    $"CASE WHEN {queriedNameSql} = @rawQuery THEN 0 ELSE 1 END",
-                ReferenceRankDimension.ExactNameMatchDescending =>
-                    $"CASE WHEN lower({queriedNameSql}) = lower(@rankingQuery) THEN 0 ELSE 1 END",
-                ReferenceRankDimension.PathCategoryAscending => GetPathBucketOrderSql("r.path"),
-                ReferenceRankDimension.PathAscending => "r.path",
-                ReferenceRankDimension.FirstLineAscending => "first_line",
-                ReferenceRankDimension.FirstColumnAscending => "first_column",
-                ReferenceRankDimension.LanguageAscending => "r.lang",
-                ReferenceRankDimension.ContainerKindAscending => "r.container_kind",
-                ReferenceRankDimension.ContainerNameAscending => "r.container_name",
-                ReferenceRankDimension.SymbolNameAscending => "r.symbol_name",
-                ReferenceRankDimension.ReferenceKindAscending => "reference_kind",
-                _ => throw new ArgumentOutOfRangeException(nameof(dimension), dimension, null),
-            }));
-
-    private static IReadOnlyDictionary<string, int> ParseReferenceKindCounts(string? aggregate, string primaryKind, int fallbackCount)
-    {
-        var counts = new Dictionary<string, int>(StringComparer.Ordinal);
-        counts["call"] = 0;
-        counts["instantiate"] = 0;
-        counts["subscribe"] = 0;
-        if (!string.IsNullOrWhiteSpace(aggregate))
-        {
-            foreach (var entry in aggregate.Split(','))
-            {
-                var separator = entry.LastIndexOf(':');
-                if (separator <= 0 || separator == entry.Length - 1)
-                    continue;
-                var kind = entry[..separator].Trim();
-                if (kind.Length == 0 || !int.TryParse(entry[(separator + 1)..], out var count))
-                    continue;
-                counts[kind] = counts.TryGetValue(kind, out var existing)
-                    ? existing + count
-                    : count;
-            }
-        }
-        if (counts.Count == 0 && !string.IsNullOrEmpty(primaryKind))
-            counts[primaryKind] = fallbackCount;
-        return counts;
+        var request = CreateGraphReferenceQueryRequest(
+            query,
+            limit: 0,
+            lang,
+            referenceKind,
+            pathPatterns,
+            excludePathPatterns,
+            excludeTests,
+            exact,
+            rawKinds,
+            includeQualifiedCommonCalls,
+            includeMemberReads,
+            identitySymbolId: sourceSymbolId);
+        var plan = BuildGraphReferenceQueryPlan(
+            CalleeGraphReferenceDirection,
+            request,
+            GraphReferenceQueryShape.TotalCount);
+        return ExecuteGraphReferenceTotalCount(plan);
     }
 
     /// <summary>
