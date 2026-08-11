@@ -34,12 +34,17 @@ public sealed class SymbolExtractionWorkerUtf8ProtocolTests
             using var output = new MemoryStream();
             using var error = new StringWriter();
 
-            var handled = SymbolExtractionWorker.TryRunCommand(
-                [SymbolExtractionWorker.CommandName],
-                input,
-                output,
-                error,
-                out var exitCode);
+            bool handled;
+            int exitCode;
+            lock (TestConsoleLock.Gate)
+            {
+                handled = SymbolExtractionWorker.TryRunCommand(
+                    [SymbolExtractionWorker.CommandName],
+                    input,
+                    output,
+                    error,
+                    out exitCode);
+            }
 
             Assert.True(handled);
             Assert.Equal(CommandExitCodes.Success, exitCode);
@@ -76,12 +81,17 @@ public sealed class SymbolExtractionWorkerUtf8ProtocolTests
         using var output = new MemoryStream();
         using var error = new StringWriter();
 
-        var handled = SymbolExtractionWorker.TryRunCommand(
-            [SymbolExtractionWorker.CommandName],
-            input,
-            output,
-            error,
-            out var exitCode);
+        bool handled;
+        int exitCode;
+        lock (TestConsoleLock.Gate)
+        {
+            handled = SymbolExtractionWorker.TryRunCommand(
+                [SymbolExtractionWorker.CommandName],
+                input,
+                output,
+                error,
+                out exitCode);
+        }
 
         Assert.True(handled);
         Assert.Equal(CommandExitCodes.Success, exitCode);
@@ -107,14 +117,19 @@ public sealed class SymbolExtractionWorkerUtf8ProtocolTests
         using var output = new MemoryStream();
         using var error = new StringWriter();
 
-        var handled = SymbolExtractionWorker.TryRunCommand(
-            [SymbolExtractionWorker.CommandName],
-            input,
-            output,
-            error,
-            out var exitCode,
-            maxProtocolLineCharacters: 5,
-            maxProtocolLineUtf8Bytes: 5);
+        bool handled;
+        int exitCode;
+        lock (TestConsoleLock.Gate)
+        {
+            handled = SymbolExtractionWorker.TryRunCommand(
+                [SymbolExtractionWorker.CommandName],
+                input,
+                output,
+                error,
+                out exitCode,
+                maxProtocolLineCharacters: 5,
+                maxProtocolLineUtf8Bytes: 5);
+        }
 
         Assert.True(handled);
         Assert.Equal(1, exitCode);
@@ -174,13 +189,18 @@ public sealed class SymbolExtractionWorkerUtf8ProtocolTests
         using var output = new MemoryStream();
         using var error = new StringWriter();
 
-        var handled = SymbolExtractionWorker.TryRunCommand(
-            [SymbolExtractionWorker.CommandName],
-            input,
-            output,
-            error,
-            out var exitCode,
-            cancellationToken: cts.Token);
+        bool handled;
+        int exitCode;
+        lock (TestConsoleLock.Gate)
+        {
+            handled = SymbolExtractionWorker.TryRunCommand(
+                [SymbolExtractionWorker.CommandName],
+                input,
+                output,
+                error,
+                out exitCode,
+                cancellationToken: cts.Token);
+        }
 
         Assert.True(handled);
         Assert.True(input.ReadStarted);
