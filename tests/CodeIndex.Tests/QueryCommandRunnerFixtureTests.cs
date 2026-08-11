@@ -1,8 +1,9 @@
 using CodeIndex.Cli;
+using static CodeIndex.Tests.QueryCommandTestSupport;
 
 namespace CodeIndex.Tests;
 
-public partial class QueryCommandRunnerTests
+public sealed class QueryCommandRunnerFixtureTests
 {
     [Fact]
     public void RunSearch_ExcludeFixturesKeepsProductionFilesWithTestSubstringNames_Issue3450()
@@ -16,7 +17,7 @@ public partial class QueryCommandRunnerTests
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 ["ProdFixtureNeedle", "--db", dbPath, "--exact-substring", "--json=array", "--exclude-fixtures"],
-                _jsonOptions));
+                JsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);

@@ -1,9 +1,10 @@
 using System.Text.Json;
 using CodeIndex.Cli;
+using static CodeIndex.Tests.QueryCommandTestSupport;
 
 namespace CodeIndex.Tests;
 
-public partial class QueryCommandRunnerTests
+public sealed class QueryCommandRunnerSearchGuardIssue4349Tests
 {
     [Fact]
     public void RunSearch_CountJsonGuardFiltersUseSearchResultUnitsAndExposeContext_Issue4349()
@@ -108,7 +109,7 @@ public partial class QueryCommandRunnerTests
 
     private JsonDocument RunSearchCountJson(params string[] args)
     {
-        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(args, _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(args, JsonOptions));
 
         Assert.Equal(CommandExitCodes.Success, exitCode);
         Assert.Equal(string.Empty, stderr);
