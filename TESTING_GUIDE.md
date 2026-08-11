@@ -72,6 +72,7 @@ Use the full suite by default. Use targeted filters only while iterating locally
 - Release workflow tests use `--no-build --no-restore` after the solution's locked restore and Release build so each runtime lane does not reevaluate dependencies.
 - Curated release-note generation caches the changelog tool lock file, performs one conditional locked restore, and runs the tool with `--no-restore`.
 - Keep package audit, primary-lane build/lint, publish, and build artifact upload keyed to the matrix `primary_lane` value. Key coverage collection and coverage artifact upload to `collect_coverage` so both complementary Ubuntu `net8.0` shards contribute coverage without duplicating primary validation; define both values once in explicit matrix entries instead of recomputing or excluding combinations in later steps.
+- CI matrix contract tests build each expected lane through one shared lane assertion. Keep OS/framework/SDK/coverage/shard/filter values explicit at the call sites instead of copying the full YAML block for every lane.
 - Workflow path filters do not repeat individual Markdown files already covered by `**.md`; keep equivalent push and pull-request filters aligned. Build/Test and CodeQL also ignore license text paths owned by the focused license-policy workflow.
 - Test workflows group pull-request runs by workflow and pull request, use a unique run ID otherwise, and cancel only superseded pull-request runs so push, schedule, and manual runs remain independent.
 - TRX telemetry summarization reuses the Release telemetry tool already built through the test project's direct reference and must not restore or build it again after the test step.
@@ -1107,6 +1108,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - release workflow の test も solution の locked restore と Release build 後に `--no-build --no-restore` を使い、runtime lane ごとの dependency 再評価を避けてください。
 - curated release-note生成はchangelog toolのlock fileをcacheし、conditional locked restoreを1回行ってからtoolを`--no-restore`で実行してください。
 - package audit、primary-lane build/lint、publish、build artifact upload は matrix の `primary_lane` 値に揃えてください。coverage の収集と coverage artifact upload は `collect_coverage` に揃え、補完的な Ubuntu `net8.0` shard の両方で coverage を取りつつ primary 検証は重複させません。両方の値は明示的な matrix entry で一度だけ定義し、後続 step で再計算したり exclude したりしません。
+- CI matrix の contract test は、期待する各 lane を1つの共有 lane assertion で組み立てます。lane ごとに YAML block 全体を複製せず、OS/framework/SDK/coverage/shard/filter の値は call site に明示してください。
 - workflow path filter では `**.md` がすでに対象とする個別 Markdown file を重複して列挙せず、同等の push / pull-request filter を同期させます。Build/Test と CodeQL は focused license-policy workflow が所有する license text path も無視します。
 - test workflow は pull-request run を workflow と pull request ごとに group 化し、それ以外は一意な run ID を使ってください。古い pull-request run だけを cancel し、push、schedule、manual run は独立させます。
 - TRX telemetry summary は test project の direct reference 経由で build 済みの Release telemetry tool を再利用し、test step 後に restore/build を繰り返さないでください。
