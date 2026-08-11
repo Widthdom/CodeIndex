@@ -20,7 +20,9 @@ public static partial class SymbolExtractor
         string? projectRoot = null,
         bool patternConfigsAlreadyLoaded = false,
         CancellationToken cancellationToken = default,
-        int? maxSymbols = null)
+        int? maxSymbols = null,
+        bool applyRequiredLiteralGate = true,
+        RequiredLiteralGateCounts? requiredLiteralGateCounts = null)
     {
         var originalLang = lang;
         if (TryPrepareSymbolExtraction(
@@ -102,7 +104,17 @@ public static partial class SymbolExtractor
         if (patterns == null || lang == null)
             return [];
 
-        var scanInputs = new PatternScanInputs(lang, filePath, lines);
+        var applicablePatterns = SelectApplicablePatterns(
+            patterns,
+            content,
+            applyRequiredLiteralGate);
+        if (requiredLiteralGateCounts != null)
+        {
+            requiredLiteralGateCounts.PatternCount = patterns.Count;
+            requiredLiteralGateCounts.ApplicablePatternCount = applicablePatterns.Count;
+        }
+
+        var scanInputs = new PatternScanInputs(lang, filePath, lines, applicablePatterns);
         var pythonModulePrefix = scanInputs.PythonModulePrefix;
         var structuralLines = scanInputs.StructuralLines;
         var scientificBodyScannerLines = scanInputs.ScientificBodyScannerLines;
@@ -177,7 +189,7 @@ public static partial class SymbolExtractor
                 bool? deferCSharpEventAtPatternStart = null;
                 bool? deferCSharpDelegateAtPatternStart = null;
                 bool? recoverableCSharpPatternAtPatternStart = null;
-                foreach (var pattern in patterns)
+                foreach (var pattern in applicablePatterns)
                 {
                     if (prologClauseContinuationLines?[i] == true
                         && prologContinuationResumeOffset < 0
@@ -316,12 +328,14 @@ public static partial class SymbolExtractor
                                         ? TryMatchAnyRecoverableCSharpPattern(
                                             matchLine[lineOffset..],
                                             insideEnumBody: false,
-                                            attributeParenDepth: 0)
+                                            attributeParenDepth: 0,
+                                            applicablePatterns)
                                         : recoverableCSharpPatternAtPatternStart ??=
                                             TryMatchAnyRecoverableCSharpPattern(
                                                 matchLine[lineOffset..],
                                                 insideEnumBody: false,
-                                                attributeParenDepth: 0))))
+                                                attributeParenDepth: 0,
+                                                applicablePatterns))))
                             {
                                 lineOffset = FindNextSameLineBraceStatementStart(matchLine, lineOffset + 1, lang);
                                 continue;
@@ -837,7 +851,7 @@ public static partial class SymbolExtractor
                                     cssScannerLines,
                                     i,
                                     openingBraceIndex,
-                                    patterns,
+                                    applicablePatterns,
                                     symbols,
                                     cssSeenSymbols);
                             }
@@ -1263,7 +1277,7 @@ public static partial class SymbolExtractor
                     cssScannerLine,
                     cssScannerLines!,
                     i,
-                    patterns,
+                    applicablePatterns,
                     symbols,
                     cssSeenSymbols);
             }
@@ -1285,7 +1299,8 @@ public static partial class SymbolExtractor
                 GetJavaScriptTypeScriptSanitizedLines,
                 csharpMatchLines,
                 pythonModulePrefix,
-                prologMultilineHeads);
+                prologMultilineHeads,
+                applicablePatterns);
         }
         if (lang == "csharp")
         {
@@ -1305,6 +1320,42 @@ public static partial class SymbolExtractor
             getCSharpLineStartStates,
             pendingRecordPrimaryComponents);
         return symbols;
+    }
+
+    private static IReadOnlyList<SymbolPattern> SelectApplicablePatterns(
+        IReadOnlyList<SymbolPattern> patterns,
+        string content,
+        bool applyRequiredLiteralGate)
+    {
+        if (!applyRequiredLiteralGate)
+            return patterns;
+
+        // A content-wide Ordinal check can only remove a pattern when a match is impossible.
+        // Preserve the original order, return the original list when nothing is skipped, and pass
+        // this same applicable set to every supplemental recovery scan.
+        // content 全体の Ordinal 判定で match 不可能な pattern だけを除外する。元の順序を保ち、
+        // skip がなければ元 list を返し、補助 recovery scan にも同じ applicable set を渡す。
+        List<SymbolPattern>? applicablePatterns = null;
+        for (var patternIndex = 0; patternIndex < patterns.Count; patternIndex++)
+        {
+            var pattern = patterns[patternIndex];
+            if (pattern.RequiredLiteral is { } requiredLiteral
+                && !content.Contains(requiredLiteral, StringComparison.Ordinal))
+            {
+                if (applicablePatterns == null)
+                {
+                    applicablePatterns = new List<SymbolPattern>(patterns.Count - 1);
+                    for (var prefixIndex = 0; prefixIndex < patternIndex; prefixIndex++)
+                        applicablePatterns.Add(patterns[prefixIndex]);
+                }
+
+                continue;
+            }
+
+            applicablePatterns?.Add(pattern);
+        }
+
+        return applicablePatterns ?? patterns;
     }
 
     private static readonly Regex PrologOpenClauseRegex = new(

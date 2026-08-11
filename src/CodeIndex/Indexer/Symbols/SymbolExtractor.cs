@@ -340,6 +340,43 @@ public static partial class SymbolExtractor
             patternConfigsAlreadyLoaded: false,
             cancellationToken: cancellationToken);
 
+    private sealed class RequiredLiteralGateCounts
+    {
+        public int PatternCount { get; set; }
+        public int ApplicablePatternCount { get; set; }
+    }
+
+    internal static List<SymbolRecord> ExtractForRequiredLiteralGateTesting(
+        long fileId,
+        string lang,
+        string content,
+        bool applyRequiredLiteralGate,
+        out int patternCount,
+        out int applicablePatternCount,
+        string? filePath = null,
+        string? projectRoot = null,
+        CancellationToken cancellationToken = default)
+    {
+        var counts = new RequiredLiteralGateCounts();
+        var symbols = ExtractCore(
+            fileId,
+            lang,
+            content,
+            contentIsNormalized: false,
+            hasOversizeLine: null,
+            conflictMarkerLine: null,
+            filePath,
+            projectRoot,
+            patternConfigsAlreadyLoaded: false,
+            cancellationToken: cancellationToken,
+            maxSymbols: null,
+            applyRequiredLiteralGate: applyRequiredLiteralGate,
+            requiredLiteralGateCounts: counts);
+        patternCount = counts.PatternCount;
+        applicablePatternCount = counts.ApplicablePatternCount;
+        return symbols;
+    }
+
     internal static bool TryExtractBounded(
         long fileId,
         string? lang,

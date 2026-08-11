@@ -1880,6 +1880,16 @@ Extractor strategy by language surface:
 | Windows application manifests | Manifest element paths, assembly identities, execution levels, and supported-OS values remain structural symbols. Dependent assembly identities emit `dependency` references, while local `file`, `codeBase`, and probing paths emit `project_reference` edges. |
 | XML / NuGet.config | Generic XML emits bounded element and attribute paths. NuGet.config additionally promotes package sources, source mappings, signature validation mode, trusted signer names, certificate fingerprints, and `allowUntrustedRoot` values to semantic `property` symbols with `nuget.*` subkinds. |
 
+Before the line-oriented regex loop, built-in case-sensitive patterns may opt into an explicit
+`RequiredLiteral` Tier A gate. The literal must contain at least two characters and be an Ordinal
+substring of every successful regex path. If it is absent from the normalized file content, that
+pattern is skipped without changing the order of the remaining patterns. `IgnoreCase` patterns,
+one-character literals, optional or alternative paths without a shared literal, project custom
+patterns, and plugins are deliberately excluded. Supplemental scans that consult the pattern list,
+including C# incomplete-attribute recovery and C++ same-line member recovery, must consume the same
+ordered applicable set. The content-wide check may retain a pattern because its literal appears in a
+comment or string; that only reduces the optimization and cannot suppress a real match.
+
 JavaScript and TypeScript export/reference details:
 
 | Area | Behavior |
@@ -5590,6 +5600,16 @@ LIMIT 20;
 | TOML / repository metadata | TOML の table / key、EditorConfig の section / key、Git / Docker ignore rule、Git attribute の rule / attribute、`.rules` の block / key を上限付き structural symbol として出力します。reference は repository-local な path / glob に限定し、remote URL、絶対 filesystem path、親 directory traversal は抑止します。 |
 | Windows application manifest | manifest element path、assembly identity、execution level、supported OS value を structural symbol として維持します。依存 assembly identity は `dependency` reference、local な `file` / `codeBase` / probing path は `project_reference` edge を出力します。 |
 | XML / NuGet.config | 汎用 XML は上限付きの element / attribute path を出力します。NuGet.config ではさらに package source、source mapping、署名検証モード、trusted signer 名、証明書 fingerprint、`allowUntrustedRoot` の値を `nuget.*` subkind 付きの semantic `property` symbol にします。 |
+
+行指向の正規表現 loop に入る前に、built-in の case-sensitive pattern は明示的な
+`RequiredLiteral` Tier A gate を opt-in できます。literal は2文字以上で、正規表現の全成功経路に
+Ordinal の substring として必ず現れなければなりません。正規化済み file content に存在しない
+場合だけその pattern を skip し、残る pattern の順序は変えません。`IgnoreCase` pattern、1文字の
+literal、共通 literal を持たない optional / alternative path、project の custom pattern、plugin は
+意図的に対象外です。C# の不完全 attribute recovery や C++ の same-line member recovery を含め、
+pattern list を参照する補助 scan は同じ順序の applicable set を使わなければなりません。comment や
+string 内に literal があるため pattern を残すことはありますが、その場合は最適化量が減るだけで、
+本物の match を抑止しません。
 
 JavaScript / TypeScript の export / reference 詳細:
 

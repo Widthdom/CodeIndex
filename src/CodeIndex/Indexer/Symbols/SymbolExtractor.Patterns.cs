@@ -373,12 +373,19 @@ public static partial class SymbolExtractor
         SqlProcBody,
     }
 
+    // RequiredLiteral is an explicit Tier A opt-in for built-in, case-sensitive patterns only.
+    // It must be an Ordinal substring of every successful regex path and contain at least two
+    // characters. IgnoreCase, custom/plugin, one-character, and path-optional literals stay null.
+    // RequiredLiteral は built-in の case-sensitive pattern だけが明示的に opt-in する Tier A
+    // metadata。全成功経路に Ordinal で必ず現れる2文字以上の substring に限定し、IgnoreCase、
+    // custom/plugin、1文字、optional path の literal には設定しない。
     private sealed record SymbolPattern(
         string Kind,
         Regex Regex,
         BodyStyle BodyStyle,
         string? VisibilityGroup = null,
-        string? ReturnTypeGroup = null);
+        string? ReturnTypeGroup = null,
+        string? RequiredLiteral = null);
 
     private enum CssContextKind
     {
@@ -700,38 +707,38 @@ public static partial class SymbolExtractor
     {
         ["python"] =
         [
-            new("function", new Regex(@"^\s*(?:async\s+)?def\s+(?<name>\w+)\s*(?:\[[^\]]*\])?\s*(?:\(|\[)", RegexOptions.Compiled), BodyStyle.Indent),
-            new("lambda",   new Regex(@"^\s*(?<name>\w+)\s*=\s*lambda\b", RegexOptions.Compiled), BodyStyle.None),
-            new("class",    new Regex(@"^\s*class\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Indent),
+            new("function", new Regex(@"^\s*(?:async\s+)?def\s+(?<name>\w+)\s*(?:\[[^\]]*\])?\s*(?:\(|\[)", RegexOptions.Compiled), BodyStyle.Indent, RequiredLiteral: "def"),
+            new("lambda",   new Regex(@"^\s*(?<name>\w+)\s*=\s*lambda\b", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "lambda"),
+            new("class",    new Regex(@"^\s*class\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Indent, RequiredLiteral: "class"),
             new("class",    new Regex(@"^\s*(?<name>\w+)\s*=\s*(?:(?:typing|collections)\.)?(?:NamedTuple|namedtuple)\s*\(", RegexOptions.Compiled), BodyStyle.None),
-            new("class",    new Regex(@"^\s*(?<name>\w+)\s*=\s*(?:dataclasses\.)?make_dataclass\s*\(", RegexOptions.Compiled), BodyStyle.None),
-            new("class",    new Regex(@"^\s*(?<name>\w+)\s*=\s*(?:(?:typing|typing_extensions)\.)?TypedDict\s*\(", RegexOptions.Compiled), BodyStyle.None),
+            new("class",    new Regex(@"^\s*(?<name>\w+)\s*=\s*(?:dataclasses\.)?make_dataclass\s*\(", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "make_dataclass"),
+            new("class",    new Regex(@"^\s*(?<name>\w+)\s*=\s*(?:(?:typing|typing_extensions)\.)?TypedDict\s*\(", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "TypedDict"),
             new("class",    new Regex(@"^\s*(?<name>\w+)\s*=\s*(?:enum\.)?(?:Enum|IntEnum|Flag|IntFlag|StrEnum)\s*\(", RegexOptions.Compiled), BodyStyle.None),
-            new("class",    new Regex(@"^\s*(?<name>\w+)\s*=\s*(?:pydantic\.)?create_model\s*\(", RegexOptions.Compiled), BodyStyle.None),
-            new("typealias", new Regex(@"^\s*type\s+(?<name>\w+)\s*(?:\[[^\]]*\])?\s*=", RegexOptions.Compiled), BodyStyle.None),
-            new("typealias", new Regex(@"^\s*(?<name>\w+)\s*:\s*(?:(?:typing|typing_extensions)\.)?TypeAlias\s*=", RegexOptions.Compiled), BodyStyle.None),
-            new("typealias", new Regex(@"^\s*(?<name>\w+)\s*=\s*(?:(?:typing|typing_extensions)\.)?NewType\s*\(", RegexOptions.Compiled), BodyStyle.None),
+            new("class",    new Regex(@"^\s*(?<name>\w+)\s*=\s*(?:pydantic\.)?create_model\s*\(", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "create_model"),
+            new("typealias", new Regex(@"^\s*type\s+(?<name>\w+)\s*(?:\[[^\]]*\])?\s*=", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "type"),
+            new("typealias", new Regex(@"^\s*(?<name>\w+)\s*:\s*(?:(?:typing|typing_extensions)\.)?TypeAlias\s*=", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "TypeAlias"),
+            new("typealias", new Regex(@"^\s*(?<name>\w+)\s*=\s*(?:(?:typing|typing_extensions)\.)?NewType\s*\(", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "NewType"),
             new("type_parameter", new Regex(@"^\s*(?<name>\w+)\s*=\s*(?:(?:typing|typing_extensions)\.)?(?:TypeVar|ParamSpec|TypeVarTuple)\s*\(", RegexOptions.Compiled), BodyStyle.None),
-            new("property", new Regex(@"^\s*(?<name>\w+)\s*:\s*(?:(?:typing|typing_extensions)\.)?Final(?:\[[^\]]+\])?\s*=", RegexOptions.Compiled), BodyStyle.None),
-            new("import",   new Regex(@"^\s*(?:from\s+(?<name>(?:\.+[\w.]*|[\w.]+))\s+import\b|import\s+(?<name>[\w.]+))", RegexOptions.Compiled), BodyStyle.None),
-            new("import",   new Regex(@"^\s*(?:[_\p{L}]\w*\s*=\s*)?(?:importlib\.import_module|importlib\.util\.find_spec|__import__)\s*\(\s*['""](?<name>[^'""]+)['""]", RegexOptions.Compiled), BodyStyle.None),
+            new("property", new Regex(@"^\s*(?<name>\w+)\s*:\s*(?:(?:typing|typing_extensions)\.)?Final(?:\[[^\]]+\])?\s*=", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "Final"),
+            new("import",   new Regex(@"^\s*(?:from\s+(?<name>(?:\.+[\w.]*|[\w.]+))\s+import\b|import\s+(?<name>[\w.]+))", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "import"),
+            new("import",   new Regex(@"^\s*(?:[_\p{L}]\w*\s*=\s*)?(?:importlib\.import_module|importlib\.util\.find_spec|__import__)\s*\(\s*['""](?<name>[^'""]+)['""]", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "import"),
         ],
         ["cython"] =
         [
-            new("import", new Regex(@"^\s*from\s+(?<name>" + CythonDottedIdentifierPattern + @")\s+cimport\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
-            new("import", new Regex(@"^\s*cimport\s+(?<name>" + CythonDottedIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
-            new("import", new Regex(@"^\s*import\s+(?<name>" + CythonDottedIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
-            new("import", new Regex(@"^\s*include\s+(?:'(?<name>[^']+)'|""(?<name>[^""]+)"")", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
-            new("import", new Regex(@"^\s*cdef\s+extern\s+from\s+(?:'(?<name>[^']+)'|""(?<name>[^""]+)"")", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
-            new("class", new Regex(@"^\s*cdef\s+class\s+(?<name>" + CythonIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Indent),
-            new("class", new Regex(@"^\s*class\s+(?<name>" + CythonIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Indent),
-            new("struct", new Regex(@"^\s*(?:ctypedef\s+)?cdef\s+struct\s+(?<name>" + CythonIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Indent),
-            new("enum", new Regex(@"^\s*(?:ctypedef\s+)?cdef\s+enum\s+(?<name>" + CythonIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Indent),
-            new("typealias", new Regex(@"^\s*ctypedef\s+(?!(?:struct|enum|union)\b)(?<returnType>.+?)\s+(?<name>" + CythonIdentifierPattern + @")\s*$", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, ReturnTypeGroup: "returnType"),
-            new("function", new Regex(@"^\s*(?:cdef|cpdef)\s+(?!(?:class|struct|enum|extern)\b)" + CythonDeclarationPrefixPattern + @"(?:(?<returnType>[\w.<>*,\[\]\s]+?)\s+)?(?<name>" + CythonIdentifierPattern + @")\s*(?:\[[^\]]+\]\s*)?\(", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Indent, ReturnTypeGroup: "returnType"),
-            new("function", new Regex(@"^\s*(?:async\s+)?def\s+(?<name>" + CythonIdentifierPattern + @")\s*(?:\[[^\]]*\])?\s*(?:\(|\[)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Indent),
+            new("import", new Regex(@"^\s*from\s+(?<name>" + CythonDottedIdentifierPattern + @")\s+cimport\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "cimport"),
+            new("import", new Regex(@"^\s*cimport\s+(?<name>" + CythonDottedIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "cimport"),
+            new("import", new Regex(@"^\s*import\s+(?<name>" + CythonDottedIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "import"),
+            new("import", new Regex(@"^\s*include\s+(?:'(?<name>[^']+)'|""(?<name>[^""]+)"")", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "include"),
+            new("import", new Regex(@"^\s*cdef\s+extern\s+from\s+(?:'(?<name>[^']+)'|""(?<name>[^""]+)"")", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "extern"),
+            new("class", new Regex(@"^\s*cdef\s+class\s+(?<name>" + CythonIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Indent, RequiredLiteral: "class"),
+            new("class", new Regex(@"^\s*class\s+(?<name>" + CythonIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Indent, RequiredLiteral: "class"),
+            new("struct", new Regex(@"^\s*(?:ctypedef\s+)?cdef\s+struct\s+(?<name>" + CythonIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Indent, RequiredLiteral: "struct"),
+            new("enum", new Regex(@"^\s*(?:ctypedef\s+)?cdef\s+enum\s+(?<name>" + CythonIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Indent, RequiredLiteral: "enum"),
+            new("typealias", new Regex(@"^\s*ctypedef\s+(?!(?:struct|enum|union)\b)(?<returnType>.+?)\s+(?<name>" + CythonIdentifierPattern + @")\s*$", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, ReturnTypeGroup: "returnType", RequiredLiteral: "ctypedef"),
+            new("function", new Regex(@"^\s*(?:cdef|cpdef)\s+(?!(?:class|struct|enum|extern)\b)" + CythonDeclarationPrefixPattern + @"(?:(?<returnType>[\w.<>*,\[\]\s]+?)\s+)?(?<name>" + CythonIdentifierPattern + @")\s*(?:\[[^\]]+\]\s*)?\(", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Indent, ReturnTypeGroup: "returnType", RequiredLiteral: "def"),
+            new("function", new Regex(@"^\s*(?:async\s+)?def\s+(?<name>" + CythonIdentifierPattern + @")\s*(?:\[[^\]]*\])?\s*(?:\(|\[)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Indent, RequiredLiteral: "def"),
             new("function", new Regex(@"^\s*" + CythonNativeReturnTypePattern + @"(?<name>" + CythonIdentifierPattern + @")\s*\(", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, ReturnTypeGroup: "returnType"),
-            new("property", new Regex(@"^\s*cdef\s+(?!(?:class|struct|enum|extern)\b)" + CythonDeclarationPrefixPattern + @"(?<returnType>.+?)\s+(?<name>" + CythonIdentifierPattern + @")\s*(?::|=|$)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, ReturnTypeGroup: "returnType"),
+            new("property", new Regex(@"^\s*cdef\s+(?!(?:class|struct|enum|extern)\b)" + CythonDeclarationPrefixPattern + @"(?<returnType>.+?)\s+(?<name>" + CythonIdentifierPattern + @")\s*(?::|=|$)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, ReturnTypeGroup: "returnType", RequiredLiteral: "cdef"),
         ],
         ["cobol"] =
         [
@@ -746,11 +753,11 @@ public static partial class SymbolExtractor
         [
             // Include optional `*` between `function` and name for generator functions (e.g. `function* gen()`, `async function* asyncGen()`)
             // `function` と名前の間に任意の `*` を許容し、ジェネレータ関数 (`function* gen()`, `async function* asyncGen()`) にも対応
-            new("function", new Regex(@"^\s*(?<visibility>export)\s+(?<name>default)\s+(?<async>async\s+)?function(?:\s+|\s*(?<generator>\*)\s*)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+(?:default\s+)?)?(?<async>async\s+)?function(?:\s+|\s*(?<generator>\*)\s*)(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("lambda", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>\w+)\s*=\s*(?:async\s+)?(?:\([^)]*\)|[^=])\s*=>", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("lambda", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>\w+)\s*(?::\s*.+?)?\s*=\s*(?<async>async\s+)?function\s*(?<generator>\*)?\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>\w+)\s*(?::\s*.+?)?\s*=\s*(?<async>async\s+)?function(?:\s+|\s*(?<generator>\*)\s*)\w+\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("function", new Regex(@"^\s*(?<visibility>export)\s+(?<name>default)\s+(?<async>async\s+)?function(?:\s+|\s*(?<generator>\*)\s*)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "function"),
+            new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+(?:default\s+)?)?(?<async>async\s+)?function(?:\s+|\s*(?<generator>\*)\s*)(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "function"),
+            new("lambda", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>\w+)\s*=\s*(?:async\s+)?(?:\([^)]*\)|[^=])\s*=>", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "=>"),
+            new("lambda", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>\w+)\s*(?::\s*.+?)?\s*=\s*(?<async>async\s+)?function\s*(?<generator>\*)?\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "function"),
+            new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>\w+)\s*(?::\s*.+?)?\s*=\s*(?<async>async\s+)?function(?:\s+|\s*(?<generator>\*)\s*)\w+\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "function"),
             // HOC-wrapped / call-result component bindings such as
             // `const Wrapped = React.memo(...)`, `const Box = React.forwardRef(...)`,
             // `const Connected = connect(...)(Component)`, `const Styled = styled.div`...``,
@@ -813,20 +820,20 @@ public static partial class SymbolExtractor
             // stopAfterFirstPatternMatch が立ち、こちらで上書きされないようにする。
             // Closes #240.
             new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>[A-Z]\w*)\s*=\s*(?:React\.(?:memo|forwardRef|lazy)\s*\(|styled[.(`]|connect\s*\(|memo\s*\(|forwardRef\s*\(|lazy\s*\(|observer\s*\(|with[A-Z]\w*\s*\()", RegexOptions.Compiled), BodyStyle.None, "visibility"),
-            new("class",    new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:default\s+)?class\s+(?<name>(?!extends\b)\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("import",   new Regex(@"^\s*import\s+(?<name>.+?)\s+from\s+", RegexOptions.Compiled), BodyStyle.None),
+            new("class",    new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:default\s+)?class\s+(?<name>(?!extends\b)\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "class"),
+            new("import",   new Regex(@"^\s*import\s+(?<name>.+?)\s+from\s+", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "import"),
         ],
         ["typescript"] =
         [
             // Include optional `*` between `function` and name for generator functions (e.g. `function* gen()`, `async function* asyncGen()`)
             // `function` と名前の間に任意の `*` を許容し、ジェネレータ関数 (`function* gen()`, `async function* asyncGen()`) にも対応
-            new("function", new Regex(@"^\s*(?<visibility>export)\s+(?<name>default)\s+(?<async>async\s+)?function(?:\s+|\s*(?<generator>\*)\s*)" + TypeScriptOptionalTypeParameterListPattern + @"\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+(?:default\s+)?)?(?:declare\s+)?(?<async>async\s+)?function(?:\s+|\s*(?<generator>\*)\s*)(?<name>\w+)\s*[\(<]", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("import", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:declare\s+)?type\s+(?<name>\w+)" + TypeScriptOptionalTypeParameterListPattern + @"\s*=", RegexOptions.Compiled), BodyStyle.None, "visibility"),
-            new("property", new Regex(@"^\s*(?:(?<visibility>export)\s+)?declare\s+(?:const|let|var)\s+(?<name>\w+)(?::\s*[^;=]+)?\s*;", RegexOptions.Compiled), BodyStyle.None, "visibility"),
-            new("lambda", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>\w+)\s*(?::\s*.+?)?\s*=\s*(?:async\s+)?(?:\([^)]*\)|[^=])\s*=>", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("lambda", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>\w+)\s*(?::\s*.+?)?\s*=\s*(?<async>async\s+)?function\s*(?<generator>\*)?\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>\w+)\s*(?::\s*.+?)?\s*=\s*(?<async>async\s+)?function(?:\s+|\s*(?<generator>\*)\s*)\w+\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("function", new Regex(@"^\s*(?<visibility>export)\s+(?<name>default)\s+(?<async>async\s+)?function(?:\s+|\s*(?<generator>\*)\s*)" + TypeScriptOptionalTypeParameterListPattern + @"\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "function"),
+            new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+(?:default\s+)?)?(?:declare\s+)?(?<async>async\s+)?function(?:\s+|\s*(?<generator>\*)\s*)(?<name>\w+)\s*[\(<]", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "function"),
+            new("import", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:declare\s+)?type\s+(?<name>\w+)" + TypeScriptOptionalTypeParameterListPattern + @"\s*=", RegexOptions.Compiled), BodyStyle.None, "visibility", RequiredLiteral: "type"),
+            new("property", new Regex(@"^\s*(?:(?<visibility>export)\s+)?declare\s+(?:const|let|var)\s+(?<name>\w+)(?::\s*[^;=]+)?\s*;", RegexOptions.Compiled), BodyStyle.None, "visibility", RequiredLiteral: "declare"),
+            new("lambda", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>\w+)\s*(?::\s*.+?)?\s*=\s*(?:async\s+)?(?:\([^)]*\)|[^=])\s*=>", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "=>"),
+            new("lambda", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>\w+)\s*(?::\s*.+?)?\s*=\s*(?<async>async\s+)?function\s*(?<generator>\*)?\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "function"),
+            new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>\w+)\s*(?::\s*.+?)?\s*=\s*(?<async>async\s+)?function(?:\s+|\s*(?<generator>\*)\s*)\w+\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "function"),
             // HOC-wrapped / call-result component bindings — same narrow HOC-prefix set
             // as the JavaScript row above, extended with an optional TypeScript generic
             // type-argument token between the HOC call name and its `(` via the shared
@@ -880,17 +887,17 @@ public static partial class SymbolExtractor
             // Closes #240.
             new("function", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:const|let|var)\s+(?<name>[A-Z]\w*)\s*(?::\s*.+?)?\s*=\s*(?:React\.(?:memo|forwardRef|lazy)\s*" + TypeScriptOptionalHocTypeArgsPattern + @"\(|styled[.(`]|connect\s*" + TypeScriptOptionalHocTypeArgsPattern + @"\(|memo\s*" + TypeScriptOptionalHocTypeArgsPattern + @"\(|forwardRef\s*" + TypeScriptOptionalHocTypeArgsPattern + @"\(|lazy\s*" + TypeScriptOptionalHocTypeArgsPattern + @"\(|observer\s*" + TypeScriptOptionalHocTypeArgsPattern + @"\(|with[A-Z]\w*\s*" + TypeScriptOptionalHocTypeArgsPattern + @"\()", RegexOptions.Compiled), BodyStyle.None, "visibility"),
               // Abstract class, declare class / 抽象クラス、declare クラス
-              new("class",    new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:default\s+)?(?:(?:abstract|declare)\s+)*class\s+(?<name>(?!(?:extends|implements)\b)\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+              new("class",    new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:default\s+)?(?:(?:abstract|declare)\s+)*class\s+(?<name>(?!(?:extends|implements)\b)\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "class"),
               // UMD namespace export / UMD 名前空間エクスポート
-              new("namespace", new Regex($@"^\s*export\s+as\s+namespace\s+(?<name>{JavaScriptTypeScriptIdentifierPattern})", RegexOptions.Compiled), BodyStyle.None),
+              new("namespace", new Regex($@"^\s*export\s+as\s+namespace\s+(?<name>{JavaScriptTypeScriptIdentifierPattern})", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "namespace"),
               // namespace/module — supports both identifier (namespace Foo) and quoted ambient (declare module 'express')
               // 名前空間・モジュール — 識別子形式と引用符付きアンビエント形式の両方に対応
               new("namespace", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:declare\s+)?(?:namespace|module)\s+['""](?<name>[^'""]+)['""]", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
               new("namespace", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:declare\s+)?(?:namespace|module)\s+(?<name>[\w.]+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-              new("interface", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:declare\s+)?interface\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-              new("import", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:declare\s+)?type\s+(?<name>\w+)(?:\s*<[^=]+>)?", RegexOptions.Compiled), BodyStyle.None, "visibility"),
-            new("enum",     new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:declare\s+)?(?:const\s+)?enum\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("import",   new Regex(@"^\s*import\s+(?<name>.+?)\s+from\s+", RegexOptions.Compiled), BodyStyle.None),
+              new("interface", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:declare\s+)?interface\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "interface"),
+              new("import", new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:declare\s+)?type\s+(?<name>\w+)(?:\s*<[^=]+>)?", RegexOptions.Compiled), BodyStyle.None, "visibility", RequiredLiteral: "type"),
+            new("enum",     new Regex(@"^\s*(?:(?<visibility>export)\s+)?(?:declare\s+)?(?:const\s+)?enum\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "enum"),
+            new("import",   new Regex(@"^\s*import\s+(?<name>.+?)\s+from\s+", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "import"),
         ],
         ["csharp"] =
         [
@@ -900,11 +907,11 @@ public static partial class SymbolExtractor
             // verbatim / Unicode escape 識別子の各セグメントを `CSharpNamespacePattern` /
             // `CSharpIdentifierPattern` 経由で受け入れ、`CSharpSymbolNameNormalizer` で
             // canonical 化する。
-            new("namespace", new Regex($@"^\s*namespace\s+(?<name>{CSharpNamespacePattern})\s*;", RegexOptions.Compiled), BodyStyle.None),  // file-scoped namespace (C# 10+)
-            new("namespace", new Regex($@"^\s*namespace\s+(?<name>{CSharpNamespacePattern})", RegexOptions.Compiled), BodyStyle.Brace),  // block-scoped namespace
+            new("namespace", new Regex($@"^\s*namespace\s+(?<name>{CSharpNamespacePattern})\s*;", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "namespace"),  // file-scoped namespace (C# 10+)
+            new("namespace", new Regex($@"^\s*namespace\s+(?<name>{CSharpNamespacePattern})", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "namespace"),  // block-scoped namespace
             // extern alias (must precede using directives per C# spec) — captures assembly-alias reconciliation
             // extern alias — C# 仕様上 using より前に置かれるファイル先頭宣言。アセンブリエイリアス用
-            new("import",    new Regex($@"^\s*extern\s+alias\s+(?<name>{CSharpIdentifierPattern})\s*;", RegexOptions.Compiled), BodyStyle.None),
+            new("import",    new Regex($@"^\s*extern\s+alias\s+(?<name>{CSharpIdentifierPattern})\s*;", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "extern"),
             // using alias (using X = Y;) — must come before general using to capture alias name.
             // Verbatim alias identifiers like `using @AliasAttr = A.BaseAttr;` still surface as an
             // `import` row via `CSharpIdentifierPattern`; the DbWriter-side normalizer strips the
@@ -912,8 +919,8 @@ public static partial class SymbolExtractor
             // using エイリアス — 一般 using より前に配置しエイリアス名を取得。verbatim 識別子
             // (`using @AliasAttr = A.BaseAttr;`) も `CSharpIdentifierPattern` 経由で import 行として
             // 拾える。
-            new("import",    new Regex($@"^\s*(?:global\s+)?using\s+(?<name>{CSharpIdentifierPattern})\s*=\s*[^;]+;", RegexOptions.Compiled), BodyStyle.None),
-            new("import",    new Regex(@"^\s*(?:global\s+)?using\s+(?:static\s+)?(?<name>[^;=]+);", RegexOptions.Compiled), BodyStyle.None),
+            new("import",    new Regex($@"^\s*(?:global\s+)?using\s+(?<name>{CSharpIdentifierPattern})\s*=\s*[^;]+;", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "using"),
+            new("import",    new Regex(@"^\s*(?:global\s+)?using\s+(?:static\s+)?(?<name>[^;=]+);", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "using"),
             // Const field — must come before class/method patterns to avoid misclassification.
             // Modifier order is free: visibility may appear anywhere in the modifier sequence,
             // so `new public const` and `public new const` are both captured. Closes #355.
@@ -932,7 +939,7 @@ public static partial class SymbolExtractor
             // 取りこぼさない。従来の手書き文字クラスには `(` / `)` / `\s` が無く、
             // `public const (int, int) Pair = (1, 2);` は returnType 群で失敗し、以降のどの行にも
             // マッチしなかった。Closes #346.
-            new("function",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:new|static)\s+)*const\s+(?<returnType>{CSharpTypePattern})\s+(?<name>{CSharpIdentifierPattern})\s*=", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
+            new("function",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:new|static)\s+)*const\s+(?<returnType>{CSharpTypePattern})\s+(?<name>{CSharpIdentifierPattern})\s*=", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType", RequiredLiteral: "const"),
             // Static readonly field / static readonly フィールド
             // Modifier order is free: `static` and `readonly` may appear in any order, and `new`
             // (member hiding) may appear anywhere in the modifier sequence. Visibility is also
@@ -955,7 +962,7 @@ public static partial class SymbolExtractor
               + $@"(?=(?:(?:{CSharpVisibilityPattern}|new|static|readonly)\s+)*readonly\s+)"
               + $@"(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:new|static|readonly)\s+)+"
               + $@"(?<returnType>{CSharpTypePattern})\s+(?<name>{CSharpIdentifierPattern})\s*[=;]",
-                RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
+                RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType", RequiredLiteral: "readonly"),
             // Plain field (instance, readonly, volatile, plain static, etc.). It keeps the
             // internal `property` tag used by scanner gating and normalizes public output to
             // `field`. Must come AFTER the `const` and `static readonly` patterns (which take priority
@@ -991,16 +998,16 @@ public static partial class SymbolExtractor
             // `new public interface` for nested types). Closes #355.
             // インターフェース — visibility 省略可。修飾子順序は自由
             // （例: `partial public interface`、`file interface`、ネスト型向けの `new public interface`）。Closes #355.
-            new("interface", new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:partial|unsafe|file|new)\s+)*interface\s+(?<name>{CSharpIdentifierPattern})", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("interface", new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:partial|unsafe|file|new)\s+)*interface\s+(?<name>{CSharpIdentifierPattern})", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "interface"),
             // Enum — visibility optional / enum — visibility 省略可
-            new("enum",      CSharpEnumDeclarationRegex, BodyStyle.Brace, "visibility"),
+            new("enum",      CSharpEnumDeclarationRegex, BodyStyle.Brace, "visibility", RequiredLiteral: "enum"),
             // Struct (including record struct, ref struct, readonly struct) — visibility optional;
             // modifier order is free, so visibility may appear anywhere in the modifier sequence
             // (e.g. `readonly public struct`, `ref public struct`). Closes #355.
             // 構造体（record struct, ref struct, readonly struct を含む）— visibility 省略可。
             // 修飾子順序は自由で、visibility は任意位置に置いてよい（例: `readonly public struct`、
             // `ref public struct`）。Closes #355.
-            new("struct",    new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|partial|readonly|file|new|ref|unsafe)\s+)*(?:record\s+)?struct\s+(?<name>{CSharpIdentifierPattern})", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("struct",    new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|partial|readonly|file|new|ref|unsafe)\s+)*(?:record\s+)?struct\s+(?<name>{CSharpIdentifierPattern})", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "struct"),
             // Class (including record, record class) — visibility optional (defaults to internal
             // for top-level); modifier order is free, so visibility may appear anywhere in the
             // modifier sequence (e.g. `abstract public class`, `sealed public class`). Closes #355.
@@ -1025,7 +1032,7 @@ public static partial class SymbolExtractor
               + $@"(?=(?:(?:{CSharpVisibilityPattern}|static|abstract|virtual|sealed|override|new|unsafe|extern)\s+)*static\s+)"
               + $@"(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|abstract|virtual|sealed|override|new|unsafe|extern)\s+)+"
               + @"(?<name>(?:implicit|explicit)\s+operator\s+.+?)\s*\(",
-                RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+                RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "operator"),
             // Operator overload (+ - * / == != < > etc.) — must come before method pattern.
             // Visibility may appear before or after `static`. Closes #355.
             // Modifier slot also accepts `abstract|virtual|sealed|override|new` so C# 11
@@ -1043,7 +1050,7 @@ public static partial class SymbolExtractor
               + $@"(?=(?:(?:{CSharpVisibilityPattern}|static|abstract|virtual|sealed|override|new|unsafe|extern)\s+)*static\s+)"
               + $@"(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|abstract|virtual|sealed|override|new|unsafe|extern)\s+)+"
               + @".+?\s+(?<name>operator\s+(?:checked\s+)?\S+)\s*\(",
-                RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+                RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "operator"),
             // Method with return type — visibility optional for explicit interface impl and nested members.
             // Negative lookahead excludes call-site lines (await/return/throw/yield/var/typeof/sizeof/nameof/default/if/for/while/switch/catch/lock/using)
             // and ternary continuation branches (`? Foo(...)` / `: Foo(...)`) that would otherwise resemble returnType + name.
@@ -1066,9 +1073,9 @@ public static partial class SymbolExtractor
             // コンストラクタ初期化子 (`: base(...)` / `: this(...)`) が phantom `function base` / `function this`
             // として漏れないよう二重化する。Closes #331.
             // 注意: `new` は除外しない。`new void Hidden()` は C# のメンバー隠蔽宣言として有効。
-            new("function",  new Regex($@"^\s*(?!\[\s*(?:assembly|module|type|return|param|field|property|event|method)\s*:)(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|sealed|partial|readonly|unsafe|extern|virtual|override|abstract|new|file|ref(?:\s+readonly)?)\s+)*async\s+(?<returnType>(?=[\w@?.<>\[\],:\s]*IAsync(?:Enumerable|Enumerator)\b){CSharpTypePattern})\s+(?!(?:base|this)\b)(?<name>{CSharpIdentifierPattern})\s*{CSharpMethodTypeParameterListPattern}\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
+            new("function",  new Regex($@"^\s*(?!\[\s*(?:assembly|module|type|return|param|field|property|event|method)\s*:)(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|sealed|partial|readonly|unsafe|extern|virtual|override|abstract|new|file|ref(?:\s+readonly)?)\s+)*async\s+(?<returnType>(?=[\w@?.<>\[\],:\s]*IAsync(?:Enumerable|Enumerator)\b){CSharpTypePattern})\s+(?!(?:base|this)\b)(?<name>{CSharpIdentifierPattern})\s*{CSharpMethodTypeParameterListPattern}\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType", RequiredLiteral: "IAsync"),
             new("function",  new Regex($@"^\s*(?!\[\s*(?:assembly|module|type|return|param|field|property|event|method)\s*:)(?![?:])(?!(?:await|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|using|case|else|when|break|continue|goto|from|where|select|orderby|group|join|let|into|on|equals|ascending|descending|by)\b)(?!\s*(?:(?:{CSharpVisibilityPattern}|static|sealed|partial|readonly|unsafe|extern|virtual|override|abstract|async|new|file|ref(?:\s+readonly)?)\s+)*delegate\b(?!\s*\*))(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|sealed|partial|readonly|unsafe|extern|virtual|override|abstract|async|new|file|ref(?:\s+readonly)?)\s+)*(?!{CSharpNonTypeKeywordPattern})(?<returnType>{CSharpTypePattern})\s+(?!(?:base|this)\b)(?<name>{CSharpIdentifierPattern})\s*{CSharpMethodTypeParameterListPattern}\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
-            new("lambda",    new Regex($@"^\s*(?:var|{CSharpTypePattern})\s+(?<name>{CSharpIdentifierPattern})\s*=\s*(?:async\s+)?(?:\([^)]*\)|{CSharpIdentifierPattern})\s*=>", RegexOptions.Compiled), BodyStyle.None),
+            new("lambda",    new Regex($@"^\s*(?:var|{CSharpTypePattern})\s+(?<name>{CSharpIdentifierPattern})\s*=\s*(?:async\s+)?(?:\([^)]*\)|{CSharpIdentifierPattern})\s*=>", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "=>"),
             // Constructor (no return type, name followed by parenthesis) — needs visibility.
             // `unsafe` / `extern` can appear before or after visibility, and C# 14 partial
             // constructors place `partial` after visibility, so declarations like
@@ -1127,7 +1134,7 @@ public static partial class SymbolExtractor
             // 戻り値型を省略した partial method 宣言。旧来の partial method 構文では
             // accessibility を省略し、戻り値型は `void` とみなされる。`public partial Widget();`
             // は constructor のまま扱うため、この行は constructor 行の後ろに置く。
-            new("function",  new Regex($@"^\s*(?:(?:static|sealed|readonly|unsafe|extern|virtual|override|abstract|async|new|file|ref(?:\s+readonly)?)\s+)*(?<returnType>partial)\s+(?<name>{CSharpIdentifierPattern})\s*{CSharpMethodTypeParameterListPattern}\(", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
+            new("function",  new Regex($@"^\s*(?:(?:static|sealed|readonly|unsafe|extern|virtual|override|abstract|async|new|file|ref(?:\s+readonly)?)\s+)*(?<returnType>partial)\s+(?<name>{CSharpIdentifierPattern})\s*{CSharpMethodTypeParameterListPattern}\(", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType", RequiredLiteral: "partial"),
             // Static constructor / 静的コンストラクタ
             // Keep this ahead of the property rows so same-line compact bodies such as
             // `class C { static C() { } public int P { get; set; } }` emit the static ctor
@@ -1139,7 +1146,7 @@ public static partial class SymbolExtractor
             // pattern scan を打ち切る前に static ctor を先に拾う必要があるため、property 行より前に置く。
             // この形は「戻り値型なし・引数なし・`static` 前後の任意 `unsafe`」に限定されるため、
             // 通常メソッドとは重ならない。Closes #478.
-            new("function",  new Regex($@"^\s*(?:unsafe\s+)?static\s+(?:unsafe\s+)?(?<name>{CSharpIdentifierPattern})\s*\(\s*\)\s*\{{?", RegexOptions.Compiled), BodyStyle.Brace),
+            new("function",  new Regex($@"^\s*(?:unsafe\s+)?static\s+(?:unsafe\s+)?(?<name>{CSharpIdentifierPattern})\s*\(\s*\)\s*\{{?", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "static"),
             // Property with get/set/init — visibility optional
             // Reject statement keywords (return/throw/switch/...) as the return type so that
             // multi-line statement fragments merged by BuildCSharpPropertyMatchLine — e.g.
@@ -1162,12 +1169,12 @@ public static partial class SymbolExtractor
             // ReferenceExtractor.FindInnermostContainer が accessor 内呼び出しを外側
             // クラスではなく property に帰属させるために必要。
             // Closes #233.
-            new("property",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|virtual|override|abstract|sealed|new|required|partial|readonly|unsafe|extern|ref(?:\s+readonly)?)\s+)*(?!(?:class|struct|interface|enum|record|namespace|delegate|event|const|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await)\b)(?<returnType>{CSharpTypePattern})\s+(?<name>{CSharpIdentifierPattern})\s*=>\s*", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
+            new("property",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|virtual|override|abstract|sealed|new|required|partial|readonly|unsafe|extern|ref(?:\s+readonly)?)\s+)*(?!(?:class|struct|interface|enum|record|namespace|delegate|event|const|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await)\b)(?<returnType>{CSharpTypePattern})\s+(?<name>{CSharpIdentifierPattern})\s*=>\s*", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType", RequiredLiteral: "=>"),
             // Delegate — visibility optional; modifier order is free. Accepts `static` / `unsafe` /
             // `file` (file-scoped delegate) / `new` (nested delegate hiding). Closes #355.
             // デリゲート — visibility 省略可。修飾子順序は自由。`static` / `unsafe` /
             // `file`（file スコープ delegate）/ `new`（ネスト delegate の隠蔽）を受け付ける。Closes #355.
-            new("delegate",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|unsafe|file|new)\s+)*delegate\s+(?<returnType>{CSharpTypePattern})\s+(?<name>{CSharpIdentifierPattern})\s*[\(<]", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
+            new("delegate",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|unsafe|file|new)\s+)*delegate\s+(?<returnType>{CSharpTypePattern})\s+(?<name>{CSharpIdentifierPattern})\s*[\(<]", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType", RequiredLiteral: "delegate"),
             // Event — visibility optional; modifier order is free. Accepts `static` / `unsafe` /
             // `extern` plus inheritance modifiers (`virtual` / `override` / `abstract` / `sealed` / `new`)
             // which are all legal on event declarations per the C# spec. `partial` is also legal on
@@ -1179,7 +1186,7 @@ public static partial class SymbolExtractor
             // も受け付ける。event には `partial` も合法 (C# 14 field-like partial event、およびアクセサ
             // ベースの partial member 拡張) なので、ここでも受け付けないと `partial event` 宣言が
             // symbols / definition / outline から無言で欠落する。Closes #350.
-            new("event",     new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|unsafe|extern|virtual|override|abstract|sealed|new|partial)\s+)*event\s+(?<returnType>{CSharpTypePattern})\s+(?<name>{CSharpIdentifierPattern})\s*(?:[;=]|\{{)", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
+            new("event",     new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|unsafe|extern|virtual|override|abstract|sealed|new|partial)\s+)*event\s+(?<returnType>{CSharpTypePattern})\s+(?<name>{CSharpIdentifierPattern})\s*(?:[;=]|\{{)", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType", RequiredLiteral: "event"),
             // Explicit interface event implementation (e.g. event EventHandler IFoo.Changed)
             // must capture the trailing member name rather than dropping the declaration or
             // inventing the qualifier as the event name. BodyStyle.Brace lets accessor blocks
@@ -1188,7 +1195,7 @@ public static partial class SymbolExtractor
             // qualifier 側ではなく末尾のメンバー名を event 名として捕捉しなければならない。
             // BodyStyle.Brace を使い、同一行/次行どちらの accessor block も通常の brace-range
             // 経路で扱う。
-            new("event",     new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|unsafe|extern|virtual|override|abstract|sealed|new|partial)\s+)*event\s+(?<returnType>{CSharpTypePattern})\s+(?<explicitInterface>{CSharpExplicitInterfaceQualifierPattern})\s*\.\s*(?<name>{CSharpIdentifierPattern})\b", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
+            new("event",     new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|unsafe|extern|virtual|override|abstract|sealed|new|partial)\s+)*event\s+(?<returnType>{CSharpTypePattern})\s+(?<explicitInterface>{CSharpExplicitInterfaceQualifierPattern})\s*\.\s*(?<name>{CSharpIdentifierPattern})\b", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType", RequiredLiteral: "event"),
             // Explicit interface implementation (e.g. void IDisposable.Dispose())
             // Requires a valid return type (not a statement keyword) and interface name before the dot.
             // Reject named-argument labels only when they are followed by a qualified call site,
@@ -1233,12 +1240,12 @@ public static partial class SymbolExtractor
             new("property",  new Regex($@"^\s*(?![?:])(?!(?:class|struct|interface|enum|record|namespace|delegate|event|const|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await)\b)(?:(?<refModifier>ref(?:\s+readonly)?)\s+)?(?<returnType>{CSharpTypePattern})\s+(?<explicitInterface>{CSharpExplicitInterfaceQualifierPattern})\s*\.\s*(?<name>{CSharpIdentifierPattern})\s*\{{", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
             // Explicit interface property implementation (expression body), e.g. string IThing.Name => "x";
             // 明示的インターフェースプロパティ実装（式本体）。例: string IThing.Name => "x";
-            new("property",  new Regex($@"^\s*(?![?:])(?!(?:class|struct|interface|enum|record|namespace|delegate|event|const|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await)\b)(?:(?<refModifier>ref(?:\s+readonly)?)\s+)?(?<returnType>{CSharpTypePattern})\s+(?<explicitInterface>{CSharpExplicitInterfaceQualifierPattern})\s*\.\s*(?<name>{CSharpIdentifierPattern})\s*=>\s*", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
+            new("property",  new Regex($@"^\s*(?![?:])(?!(?:class|struct|interface|enum|record|namespace|delegate|event|const|using|return|throw|yield|var|typeof|sizeof|nameof|default|if|for|foreach|while|switch|catch|lock|case|else|when|break|continue|goto|await)\b)(?:(?<refModifier>ref(?:\s+readonly)?)\s+)?(?<returnType>{CSharpTypePattern})\s+(?<explicitInterface>{CSharpExplicitInterfaceQualifierPattern})\s*\.\s*(?<name>{CSharpIdentifierPattern})\s*=>\s*", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType", RequiredLiteral: "=>"),
             // Explicit interface indexer implementation. The display name stays `Item`, while
             // the captured qualifier becomes part of the persisted exact-query identity.
             // 明示的インターフェース indexer 実装。表示名は `Item` のままにし、捕捉した
             // qualifier は永続化する完全一致 query identity に含める。
-            new("function",  new Regex($@"^\s*(?![?:])(?:(?<refModifier>ref(?:\s+readonly)?)\s+)?(?<returnType>{CSharpTypePattern})\s+(?<explicitInterface>{CSharpExplicitInterfaceQualifierPattern})\s*\.\s*(?<name>this)\s*\[", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
+            new("function",  new Regex($@"^\s*(?![?:])(?:(?<refModifier>ref(?:\s+readonly)?)\s+)?(?<returnType>{CSharpTypePattern})\s+(?<explicitInterface>{CSharpExplicitInterfaceQualifierPattern})\s*\.\s*(?<name>this)\s*\[", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType", RequiredLiteral: "this"),
             // Indexer (this[...]) — `partial` is legal on indexers since C# 13 (extended partial
             // member support), so accept it alongside the other modifiers. Otherwise every
             // `partial` indexer declaration would be silently dropped from symbols / definition /
@@ -1246,7 +1253,7 @@ public static partial class SymbolExtractor
             // インデクサ (this[...]) — C# 13 で indexer に対しても `partial` が使える (partial
             // member 拡張) ため、他の修飾子と並べて受け付ける。そうしないと `partial` indexer 宣言
             // が symbols / definition / outline から無言で欠落する。Closes #350.
-            new("function",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|virtual|override|abstract|sealed|new|readonly|unsafe|extern|partial|ref(?:\s+readonly)?)\s+)*(?<returnType>{CSharpTypePattern})\s+(?<name>this)\s*\[", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
+            new("function",  new Regex($@"^\s*(?:(?<visibility>{CSharpVisibilityPattern})\s+|(?:static|virtual|override|abstract|sealed|new|readonly|unsafe|extern|partial|ref(?:\s+readonly)?)\s+)*(?<returnType>{CSharpTypePattern})\s+(?<name>this)\s*\[", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType", RequiredLiteral: "this"),
             // Finalizer (destructor) / ファイナライザ（デストラクタ）
             new("function",  new Regex($@"^\s*~(?<name>{CSharpIdentifierPattern})\s*\(\s*\)", RegexOptions.Compiled), BodyStyle.Brace),
             // Enum member (e.g. Red, Green = 1,) — requires 4+ spaces indent, name only,
@@ -1255,23 +1262,23 @@ public static partial class SymbolExtractor
             // 数値/16進/識別子の値指定はオプション。文字列/オブジェクト代入にはマッチしない。
             new("enum",      CSharpEnumMemberRegex, BodyStyle.None),
             // #region for navigation / ナビゲーション用 #region
-            new("namespace", new Regex(@"^\s*#region\s+(?<name>.+)$", RegexOptions.Compiled), BodyStyle.None),
+            new("namespace", new Regex(@"^\s*#region\s+(?<name>.+)$", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "#region"),
         ],
         ["go"] =
         [
-            new("namespace", new Regex(@"^\s*package\s+(?<name>[A-Za-z_]\w*)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
-            new("function", new Regex(@"^func\s+(?:\([^)]+\)\s+)?(?<name>\w+)(?:\[[^\]\r\n]+\])?\s*[\(\[]", RegexOptions.Compiled), BodyStyle.Brace),
-            new("lambda",   new Regex(@"^\s*(?<name>\w+)\s*(?::=|=)\s*func\s*\(", RegexOptions.Compiled), BodyStyle.Brace),
-            new("struct",   new Regex(@"^type\s+(?<name>\w+)(?:\[[^\]]+\])?\s+struct\b", RegexOptions.Compiled), BodyStyle.Brace),
-            new("protocol", new Regex(@"^type\s+(?<name>\w+)(?:\[[^\]]+\])?\s+interface\b", RegexOptions.Compiled), BodyStyle.Brace),
+            new("namespace", new Regex(@"^\s*package\s+(?<name>[A-Za-z_]\w*)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "package"),
+            new("function", new Regex(@"^func\s+(?:\([^)]+\)\s+)?(?<name>\w+)(?:\[[^\]\r\n]+\])?\s*[\(\[]", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "func"),
+            new("lambda",   new Regex(@"^\s*(?<name>\w+)\s*(?::=|=)\s*func\s*\(", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "func"),
+            new("struct",   new Regex(@"^type\s+(?<name>\w+)(?:\[[^\]]+\])?\s+struct\b", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "struct"),
+            new("protocol", new Regex(@"^type\s+(?<name>\w+)(?:\[[^\]]+\])?\s+interface\b", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "interface"),
             // Type alias (type Name = OtherType or type Name OtherType) / 型エイリアス
-            new("import",   new Regex(@"^type\s+(?<name>\w+)(?:\[[^\]]+\])?\s+[=\w]", RegexOptions.Compiled), BodyStyle.None),
+            new("import",   new Regex(@"^type\s+(?<name>\w+)(?:\[[^\]]+\])?\s+[=\w]", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "type"),
             // Top-level const declarations / トップレベル const 宣言
-            new("property", new Regex(@"^const\s+(?<name>\w+)(?:\s+\w[\w.*\[\]]*)?\s*=", RegexOptions.Compiled), BodyStyle.None),
+            new("property", new Regex(@"^const\s+(?<name>\w+)(?:\s+\w[\w.*\[\]]*)?\s*=", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "const"),
             // Const declaration inside const block / const ブロック内の定数宣言
             new("property", new Regex(@"^\s+(?<name>[A-Z]\w*)\s*=\s*", RegexOptions.Compiled), BodyStyle.None),
             // Package-level var / パッケージレベル変数
-            new("property", new Regex(@"^var\s+(?<name>\w+)\s", RegexOptions.Compiled), BodyStyle.None),
+            new("property", new Regex(@"^var\s+(?<name>\w+)\s", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "var"),
         ],
         ["fortran"] =
         [
@@ -1317,51 +1324,51 @@ public static partial class SymbolExtractor
         ["rust"] =
         [
             // macro_rules! / マクロ定義
-            new("function", new Regex(@"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?macro_rules!\s+(?<name>(?:r#)?\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("function", new Regex(@"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?macro_rules!\s+(?<name>(?:r#)?\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "macro_rules!"),
             // const/static items / 定数・静的変数
             new("function", new Regex(@"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?(?:const|static)\s+(?<name>(?:r#)?\w+)\s*:", RegexOptions.Compiled), BodyStyle.None, "visibility"),
             // fn with expanded modifiers: async, const, unsafe, default, extern (ABI optional) /
             // 拡張修飾子: async, const, unsafe, default, extern（ABI は省略可）
-            new("function", new Regex(@"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?(?:(?:async|const|unsafe|default|extern(?:\s+""[^""]+"")?)\s+)*fn\s+(?<name>(?:r#)?\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("class",    new Regex(@"\b(?<name>unsafe)\s*\{", RegexOptions.Compiled), BodyStyle.Brace),
+            new("function", new Regex(@"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?(?:(?:async|const|unsafe|default|extern(?:\s+""[^""]+"")?)\s+)*fn\s+(?<name>(?:r#)?\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "fn"),
+            new("class",    new Regex(@"\b(?<name>unsafe)\s*\{", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "unsafe"),
             new("struct",   new Regex(@"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?(?:struct|union)\s+(?<name>(?:r#)?\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("enum",     new Regex(@"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?enum\s+(?<name>(?:r#)?\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("enum",     new Regex(@"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?enum\s+(?<name>(?:r#)?\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "enum"),
             // Enum variants / `Red`, `Ok(T)`, `Circle { radius: f64 }`, `Point`
             new("property", new Regex(@"^\s{4,}(?<name>[A-Z][A-Za-z0-9_]*)\s*(?:\([^()\r\n]*\)|\{[^{}\r\n]*\})?\s*,?\s*$", RegexOptions.Compiled), BodyStyle.None),
-            new("protocol", new Regex(@"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?trait\s+(?<name>(?:r#)?\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("protocol", new Regex(@"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?trait\s+(?<name>(?:r#)?\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "trait"),
             // impl Trait for Type / `unsafe impl Trait for Type` should attach to the type being extended.
             // `impl Trait for Type` / `unsafe impl Trait for Type` は、拡張先の型に紐づける。
-            new("class",    new Regex(@"^\s*(?:unsafe\s+)?impl(?:<[^>]+>)?\s+.+?\s+for\s+(?:(?:r#)?\w+::)*(?<name>(?:r#)?\w+)", RegexOptions.Compiled), BodyStyle.Brace),
-            new("class",    new Regex(@"^\s*(?:unsafe\s+)?impl(?:<[^>]+>)?\s+(?:(?:r#)?\w+::)*(?<name>(?:r#)?\w+)(?!\s+for\b)", RegexOptions.Compiled), BodyStyle.Brace),
+            new("class",    new Regex(@"^\s*(?:unsafe\s+)?impl(?:<[^>]+>)?\s+.+?\s+for\s+(?:(?:r#)?\w+::)*(?<name>(?:r#)?\w+)", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "impl"),
+            new("class",    new Regex(@"^\s*(?:unsafe\s+)?impl(?:<[^>]+>)?\s+(?:(?:r#)?\w+::)*(?<name>(?:r#)?\w+)(?!\s+for\b)", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "impl"),
             // file module declarations and inline modules / ファイルモジュール宣言とインラインモジュール
-            new("file_module", new Regex(@"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?mod\s+(?<name>(?:r#)?\w+)\s*;", RegexOptions.Compiled), BodyStyle.None, "visibility"),
-            new("namespace", new Regex(@"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?mod\s+(?<name>(?:r#)?\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("file_module", new Regex(@"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?mod\s+(?<name>(?:r#)?\w+)\s*;", RegexOptions.Compiled), BodyStyle.None, "visibility", RequiredLiteral: "mod"),
+            new("namespace", new Regex(@"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?mod\s+(?<name>(?:r#)?\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "mod"),
             // Trait associated type defaults / trait 関連型のデフォルト
-            new("property", new Regex(@"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?type\s+(?<name>(?:r#)?\w+)(?:\s*<[^=>]+>)?(?:\s*:\s*[^=;]+)?\s*=\s*(?<returnType>[^;]+)", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
+            new("property", new Regex(@"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?type\s+(?<name>(?:r#)?\w+)(?:\s*<[^=>]+>)?(?:\s*:\s*[^=;]+)?\s*=\s*(?<returnType>[^;]+)", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType", RequiredLiteral: "type"),
             // type alias / 型エイリアス
-            new("import",   new Regex(@"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?type\s+(?<name>(?:r#)?\w+)(?:\s*<[^=]+>)?", RegexOptions.Compiled), BodyStyle.None, "visibility"),
-            new("import",   new Regex(@"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?use\s+(?<name>.+);", RegexOptions.Compiled), BodyStyle.None, "visibility"),
+            new("import",   new Regex(@"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?type\s+(?<name>(?:r#)?\w+)(?:\s*<[^=]+>)?", RegexOptions.Compiled), BodyStyle.None, "visibility", RequiredLiteral: "type"),
+            new("import",   new Regex(@"^\s*(?:(?<visibility>pub(?:\([^)]*\))?)\s+)?use\s+(?<name>.+);", RegexOptions.Compiled), BodyStyle.None, "visibility", RequiredLiteral: "use"),
         ],
         ["java"] =
         [
             // Package declaration / package 宣言
-            new("namespace", new Regex($@"^\s*package\s+(?<name>{JavaQualifiedIdentifierPattern})\s*;", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("namespace", new Regex($@"^\s*package\s+(?<name>{JavaQualifiedIdentifierPattern})\s*;", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "package"),
             // Module declaration (Java 9+ module-info.java) / モジュール宣言（Java 9+ の module-info.java）
-            new("namespace", new Regex($@"^\s*(?:open\s+)?module\s+(?<name>{JavaQualifiedIdentifierPattern})\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
+            new("namespace", new Regex($@"^\s*(?:open\s+)?module\s+(?<name>{JavaQualifiedIdentifierPattern})\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, RequiredLiteral: "module"),
             // Annotation type (@interface) / アノテーション型
-            new("class",    new Regex($@"^\s*(?<visibility>public|private|protected)?\s*@interface\s+(?<name>{JavaIdentifierPattern})", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, "visibility"),
+            new("class",    new Regex($@"^\s*(?<visibility>public|private|protected)?\s*@interface\s+(?<name>{JavaIdentifierPattern})", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, "visibility", RequiredLiteral: "@interface"),
             // record (Java 16+) — must come before general class pattern / record は一般クラスパターンの前に配置
-            new("class",    new Regex($@"^\s*(?<visibility>public|private|protected)?\s*(?:(?:static|final|abstract|sealed|non-sealed|strictfp)\s+)*record\s+(?<name>{JavaIdentifierPattern})", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, "visibility"),
+            new("class",    new Regex($@"^\s*(?<visibility>public|private|protected)?\s*(?:(?:static|final|abstract|sealed|non-sealed|strictfp)\s+)*record\s+(?<name>{JavaIdentifierPattern})", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, "visibility", RequiredLiteral: "record"),
             // Interface / インターフェース
-            new("interface", new Regex($@"^\s*(?<visibility>public|private|protected)?\s*(?:(?:static|abstract|sealed|non-sealed|strictfp)\s+)*interface\s+(?<name>{JavaIdentifierPattern})", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, "visibility"),
+            new("interface", new Regex($@"^\s*(?<visibility>public|private|protected)?\s*(?:(?:static|abstract|sealed|non-sealed|strictfp)\s+)*interface\s+(?<name>{JavaIdentifierPattern})", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, "visibility", RequiredLiteral: "interface"),
             // Enum / enum
-            new("enum",     new Regex($@"^\s*(?<visibility>public|private|protected)?\s*(?:(?:static|strictfp)\s+)*enum\s+(?<name>{JavaIdentifierPattern})", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, "visibility"),
+            new("enum",     new Regex($@"^\s*(?<visibility>public|private|protected)?\s*(?:(?:static|strictfp)\s+)*enum\s+(?<name>{JavaIdentifierPattern})", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, "visibility", RequiredLiteral: "enum"),
             // Class — with extended modifiers (final, sealed, static, abstract, strictfp)
             // クラス — 拡張修飾子対応（final, sealed, static, abstract, strictfp）
-            new("class",    new Regex($@"^\s*(?<visibility>public|private|protected)?\s*(?:(?:static|final|abstract|sealed|non-sealed|strictfp)\s+)*class\s+(?<name>{JavaIdentifierPattern})", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, "visibility"),
+            new("class",    new Regex($@"^\s*(?<visibility>public|private|protected)?\s*(?:(?:static|final|abstract|sealed|non-sealed|strictfp)\s+)*class\s+(?<name>{JavaIdentifierPattern})", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, "visibility", RequiredLiteral: "class"),
             // Static final field (Java equivalent of C# const) — order-flexible and annotation-friendly.
             // static final フィールド — 語順柔軟かつアノテーション併用にも対応。
-            new("function", new Regex($@"^\s*(?:@\w+(?:\([^)]*\))?\s+)*(?<visibility>public|private|protected)?\s*(?=(?:(?:static|final|transient|volatile)\s+)*static\b)(?=(?:(?:static|final|transient|volatile)\s+)*final\b)(?:(?:static|final|transient|volatile)\s+)*(?<returnType>{JavaReturnTypePattern})\s+(?<name>[A-Z_]\w*)\s*=", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, "visibility", "returnType"),
+            new("function", new Regex($@"^\s*(?:@\w+(?:\([^)]*\))?\s+)*(?<visibility>public|private|protected)?\s*(?=(?:(?:static|final|transient|volatile)\s+)*static\b)(?=(?:(?:static|final|transient|volatile)\s+)*final\b)(?:(?:static|final|transient|volatile)\s+)*(?<returnType>{JavaReturnTypePattern})\s+(?<name>[A-Z_]\w*)\s*=", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, "visibility", "returnType", RequiredLiteral: "static"),
             // Method with return type — expanded modifiers (default, native, synchronized, final)
             // 戻り値型付きメソッド — 拡張修飾子対応（default, native, synchronized, final）
             new("function", new Regex($@"^\s*(?!(?:return|throw|new|if|for|while|switch|do|case|else|try|catch|finally|synchronized|break|continue|yield|assert)\b)(?:@\w+(?:\([^)]*\))?\s+)*(?<visibility>public|private|protected)?\s*(?:(?:static|abstract|synchronized|final|default|native|strictfp)\s+)*(?!(?:record)\b){JavaMethodTypeParameterPattern}(?<returnType>{JavaReturnTypePattern})\s+(?<name>{JavaIdentifierPattern})\s*\(", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, "visibility", "returnType"),
@@ -1371,100 +1378,100 @@ public static partial class SymbolExtractor
             // enum メンバーは ExtractJavaEnumMembers の body-scoped scanner で抽出する。
             // 任意のインデントスタイル（タブ、2スペース、4スペース）に対応しつつ、enum 本体外の
             // メンバー風の行（例: クラス本体内の `\tRED();` メソッド呼び出し）を誤検出しない。
-            new("import",   new Regex(@"^\s*import\s+(?<name>.+);", RegexOptions.Compiled), BodyStyle.None),
+            new("import",   new Regex(@"^\s*import\s+(?<name>.+);", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "import"),
         ],
         ["kotlin"] =
         [
             // Companion object / コンパニオンオブジェクト
-            new("class",    new Regex($@"^\s*companion\s+object(?:\s+(?<name>{KotlinIdentifierPattern}))?", RegexOptions.Compiled), BodyStyle.Brace),
+            new("class",    new Regex($@"^\s*companion\s+object(?:\s+(?<name>{KotlinIdentifierPattern}))?", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "companion"),
             // Interface / インターフェース
             // Kotlin fun interface / Kotlin の fun interface も interface として扱う。
-            new("interface", new Regex($@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:sealed|expect|actual)\s+)*(?:fun\s+)?interface\s+(?<name>{KotlinIdentifierPattern})", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("interface", new Regex($@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:sealed|expect|actual)\s+)*(?:fun\s+)?interface\s+(?<name>{KotlinIdentifierPattern})", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "interface"),
             // Enum class / enum クラス
-            new("enum",     new Regex($@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:expect|actual)\s+)*enum\s+class\s+(?<name>{KotlinIdentifierPattern})", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("enum",     new Regex($@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:expect|actual)\s+)*enum\s+class\s+(?<name>{KotlinIdentifierPattern})", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "enum"),
             // Class/object with expanded modifiers: data, sealed, value, inline, inner, annotation, expect, actual
             // クラス/オブジェクト — 拡張修飾子対応: data, sealed, value, inline, inner, annotation, expect, actual
             new("class",    new Regex($@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:abstract|data|sealed|open|inner|value|inline|annotation|expect|actual)\s+)*(?:class|object)\s+(?<name>{KotlinIdentifierPattern})", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Function / 関数 (including extension, secondary constructor, override, and abstract forms)
             // 関数 — 拡張・セカンダリコンストラクタ・override・abstract 形を含む
-            new("function", new Regex($@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:suspend|inline|infix|operator|tailrec|external|expect|actual|abstract|override|open|final)\s+)*fun\s+(?:<[^>]+>\s+)?(?:{KotlinIdentifierPattern}(?:<[^>]+>)?\.)?(?<name>{KotlinIdentifierPattern})\s*[\(<](?:.*?\))?(?::\s*(?<returnType>[^ {{=]+))?", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType"),
+            new("function", new Regex($@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:suspend|inline|infix|operator|tailrec|external|expect|actual|abstract|override|open|final)\s+)*fun\s+(?:<[^>]+>\s+)?(?:{KotlinIdentifierPattern}(?:<[^>]+>)?\.)?(?<name>{KotlinIdentifierPattern})\s*[\(<](?:.*?\))?(?::\s*(?<returnType>[^ {{=]+))?", RegexOptions.Compiled), BodyStyle.Brace, "visibility", "returnType", RequiredLiteral: "fun"),
             // Secondary constructor / セカンダリコンストラクタ
-            new("function", new Regex(@"^\s*(?<visibility>public|private|protected|internal)?\s*constructor\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("function", new Regex(@"^\s*(?<visibility>public|private|protected|internal)?\s*constructor\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "constructor"),
             // Enum entry / enum エントリ
             new("property", new Regex($@"^\s{{2,}}(?<name>(?:[A-Z][A-Z0-9_]*|`[^`\r\n]+`))\s*(?:\((?<returnType>[^)]*)\))?\s*(?:,|\{{|;)?\s*$", RegexOptions.Compiled), BodyStyle.Brace, "returnType"),
             // Top-level val/var property / トップレベルプロパティ
             new("property", new Regex($@"^\s*(?<visibility>public|private|protected|internal)?\s*(?:(?:const|lateinit|override)\s+)?(?:val|var)\s+(?<name>{KotlinIdentifierPattern})\s*[=:]", RegexOptions.Compiled), BodyStyle.None, "visibility"),
             // Type alias / 型エイリアス
-            new("import",   new Regex($@"^\s*(?<visibility>public|private|protected|internal)?\s*typealias\s+(?<name>{KotlinIdentifierPattern})(?:\s*<[^=]+>)?\s*=", RegexOptions.Compiled), BodyStyle.None, "visibility"),
-            new("import",   new Regex(@"^\s*import\s+(?<name>.+)", RegexOptions.Compiled), BodyStyle.None),
+            new("import",   new Regex($@"^\s*(?<visibility>public|private|protected|internal)?\s*typealias\s+(?<name>{KotlinIdentifierPattern})(?:\s*<[^=]+>)?\s*=", RegexOptions.Compiled), BodyStyle.None, "visibility", RequiredLiteral: "typealias"),
+            new("import",   new Regex(@"^\s*import\s+(?<name>.+)", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "import"),
         ],
         ["ruby"] =
         [
             // attr_accessor/attr_reader/attr_writer as property declarations / プロパティ宣言
-            new("property", new Regex(@"^\s*attr_(?:accessor|reader|writer)\s+:(?<name>\w+)", RegexOptions.Compiled), BodyStyle.None),
+            new("property", new Regex(@"^\s*attr_(?:accessor|reader|writer)\s+:(?<name>\w+)", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "attr_"),
             // alias_method / alias — capture the introduced method name for navigation
-            new("function", new Regex(@"^\s*alias_method\b\s+:?(?<name>\w+[?!=]?)\s*,\s*:?\w+[?!=]?", RegexOptions.Compiled), BodyStyle.None),
-            new("function", new Regex(@"^\s*alias\b\s+:?(?<name>\w+[?!=]?)\s+:?\w+[?!=]?", RegexOptions.Compiled), BodyStyle.None),
+            new("function", new Regex(@"^\s*alias_method\b\s+:?(?<name>\w+[?!=]?)\s*,\s*:?\w+[?!=]?", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "alias_method"),
+            new("function", new Regex(@"^\s*alias\b\s+:?(?<name>\w+[?!=]?)\s+:?\w+[?!=]?", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "alias"),
             // scope/has_many/belongs_to (Rails DSL) — extracted as function for navigation
             new("function", new Regex(@"^\s*(?:scope|has_many|has_one|belongs_to)\s+:(?<name>\w+)", RegexOptions.Compiled), BodyStyle.None),
-            new("property", new Regex(@"^\s*enum\s+:(?<name>\w+)", RegexOptions.Compiled), BodyStyle.None),
-            new("property", new Regex(@"^\s*attribute\s+:(?<name>\w+)", RegexOptions.Compiled), BodyStyle.None),
-            new("property", new Regex(@"^\s*store_accessor\s+:\w+\s*,\s*:(?<name>\w+)", RegexOptions.Compiled), BodyStyle.None),
-            new("namespace", new Regex(@"^\s*namespace\s+:(?<name>\w+)\b.*\bdo\b", RegexOptions.Compiled), BodyStyle.RubyEnd),
-            new("function", new Regex(@"^\s*factory\s+:(?<name>\w+)\b.*\bdo\b", RegexOptions.Compiled), BodyStyle.RubyEnd),
-            new("function", new Regex(@"^\s*shared_examples(?:_for)?\s+(?<quote>['""])(?<name>[^'""]+)\k<quote>\s*do\b", RegexOptions.Compiled), BodyStyle.RubyEnd),
-            new("property", new Regex(@"^\s*subject\s*\(\s*:(?<name>\w+)\s*\)\s*do\b", RegexOptions.Compiled), BodyStyle.RubyEnd),
-            new("property", new Regex(@"^\s*let!?\s*\(\s*:(?<name>\w+)\s*\)\s*do\b", RegexOptions.Compiled), BodyStyle.RubyEnd),
-            new("function", new Regex(@"^\s*task\s+(?::(?<name>\w+)|(?<name>\w+)\s*:)", RegexOptions.Compiled), BodyStyle.None),
-            new("class",    new Regex(@"^\s*(?<name>[A-Z][A-Za-z0-9_]*)\s*=\s*Class\.new\b.*\bdo\b", RegexOptions.Compiled), BodyStyle.RubyEnd),
-            new("class",    new Regex(@"^\s*(?<name>[A-Z][A-Za-z0-9_]*)\s*=\s*Struct\.new\b.*\bdo\b", RegexOptions.Compiled), BodyStyle.RubyEnd),
+            new("property", new Regex(@"^\s*enum\s+:(?<name>\w+)", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "enum"),
+            new("property", new Regex(@"^\s*attribute\s+:(?<name>\w+)", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "attribute"),
+            new("property", new Regex(@"^\s*store_accessor\s+:\w+\s*,\s*:(?<name>\w+)", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "store_accessor"),
+            new("namespace", new Regex(@"^\s*namespace\s+:(?<name>\w+)\b.*\bdo\b", RegexOptions.Compiled), BodyStyle.RubyEnd, RequiredLiteral: "namespace"),
+            new("function", new Regex(@"^\s*factory\s+:(?<name>\w+)\b.*\bdo\b", RegexOptions.Compiled), BodyStyle.RubyEnd, RequiredLiteral: "factory"),
+            new("function", new Regex(@"^\s*shared_examples(?:_for)?\s+(?<quote>['""])(?<name>[^'""]+)\k<quote>\s*do\b", RegexOptions.Compiled), BodyStyle.RubyEnd, RequiredLiteral: "shared_examples"),
+            new("property", new Regex(@"^\s*subject\s*\(\s*:(?<name>\w+)\s*\)\s*do\b", RegexOptions.Compiled), BodyStyle.RubyEnd, RequiredLiteral: "subject"),
+            new("property", new Regex(@"^\s*let!?\s*\(\s*:(?<name>\w+)\s*\)\s*do\b", RegexOptions.Compiled), BodyStyle.RubyEnd, RequiredLiteral: "let"),
+            new("function", new Regex(@"^\s*task\s+(?::(?<name>\w+)|(?<name>\w+)\s*:)", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "task"),
+            new("class",    new Regex(@"^\s*(?<name>[A-Z][A-Za-z0-9_]*)\s*=\s*Class\.new\b.*\bdo\b", RegexOptions.Compiled), BodyStyle.RubyEnd, RequiredLiteral: "Class.new"),
+            new("class",    new Regex(@"^\s*(?<name>[A-Z][A-Za-z0-9_]*)\s*=\s*Struct\.new\b.*\bdo\b", RegexOptions.Compiled), BodyStyle.RubyEnd, RequiredLiteral: "Struct.new"),
             new("property", new Regex(@"^\s*(?<name>[A-Z][A-Za-z0-9_]*)\s*=", RegexOptions.Compiled), BodyStyle.None),
-            new("function", new Regex(@"^\s*(?:(?:private|protected|public)\s+)?def\s+(?:(?:self|[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*)\.)?(?<name>\[\]=?|\*\*|<<|>>|<=>|===|==|!=|!~|=~|<=|>=|[+\-*/%&|^~<>]=?|[+\-]@|!)", RegexOptions.Compiled), BodyStyle.RubyEnd),
-            new("function", new Regex(@"^\s*(?:(?:private|protected|public)\s+)?def\s+(?:(?:self|[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*)\.)?(?<name>\w+[?!=]?)", RegexOptions.Compiled), BodyStyle.RubyEnd),
-            new("class",    new Regex(@"^\s*class\s+(?<name>[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*)", RegexOptions.Compiled), BodyStyle.RubyEnd),
-            new("class",    new Regex(@"^\s*module\s+(?<name>[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*)", RegexOptions.Compiled), BodyStyle.RubyEnd),
-            new("import",   new Regex(@"^\s*require(?:_relative)?\s+(?<name>.+)", RegexOptions.Compiled), BodyStyle.None),
+            new("function", new Regex(@"^\s*(?:(?:private|protected|public)\s+)?def\s+(?:(?:self|[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*)\.)?(?<name>\[\]=?|\*\*|<<|>>|<=>|===|==|!=|!~|=~|<=|>=|[+\-*/%&|^~<>]=?|[+\-]@|!)", RegexOptions.Compiled), BodyStyle.RubyEnd, RequiredLiteral: "def"),
+            new("function", new Regex(@"^\s*(?:(?:private|protected|public)\s+)?def\s+(?:(?:self|[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*)\.)?(?<name>\w+[?!=]?)", RegexOptions.Compiled), BodyStyle.RubyEnd, RequiredLiteral: "def"),
+            new("class",    new Regex(@"^\s*class\s+(?<name>[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*)", RegexOptions.Compiled), BodyStyle.RubyEnd, RequiredLiteral: "class"),
+            new("class",    new Regex(@"^\s*module\s+(?<name>[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*)", RegexOptions.Compiled), BodyStyle.RubyEnd, RequiredLiteral: "module"),
+            new("import",   new Regex(@"^\s*require(?:_relative)?\s+(?<name>.+)", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "require"),
         ],
         ["crystal"] =
         [
-            new("namespace", new Regex(@"^\s*module\s+(?<name>[A-Z]\w*(?:::[A-Z]\w*)*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.RubyEnd),
-            new("class",    new Regex(@"^\s*(?:abstract\s+)?class\s+(?<name>[A-Z]\w*(?:::[A-Z]\w*)*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.RubyEnd),
-            new("struct",   new Regex(@"^\s*struct\s+(?<name>[A-Z]\w*(?:::[A-Z]\w*)*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.RubyEnd),
-            new("enum",     new Regex(@"^\s*enum\s+(?<name>[A-Z]\w*(?:::[A-Z]\w*)*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.RubyEnd),
-            new("function", new Regex(@"^\s*(?:(?:private|protected)\s+)*abstract\s+def\s+(?:self\.)?(?<name>[A-Za-z_]\w*[?!=]?)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
-            new("function", new Regex(@"^\s*(?:private\s+|protected\s+)?def\s+(?:self\.)?(?<name>[A-Za-z_]\w*[?!=]?)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.RubyEnd),
-            new("function", new Regex(@"^\s*macro\s+(?<name>[A-Za-z_]\w*[?!=]?)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.RubyEnd),
-            new("typealias", new Regex(@"^\s*alias\s+(?<name>[A-Z]\w*)\s*=", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
-            new("import",   new Regex(@"^\s*require\s+(?<name>.+)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("namespace", new Regex(@"^\s*module\s+(?<name>[A-Z]\w*(?:::[A-Z]\w*)*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.RubyEnd, RequiredLiteral: "module"),
+            new("class",    new Regex(@"^\s*(?:abstract\s+)?class\s+(?<name>[A-Z]\w*(?:::[A-Z]\w*)*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.RubyEnd, RequiredLiteral: "class"),
+            new("struct",   new Regex(@"^\s*struct\s+(?<name>[A-Z]\w*(?:::[A-Z]\w*)*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.RubyEnd, RequiredLiteral: "struct"),
+            new("enum",     new Regex(@"^\s*enum\s+(?<name>[A-Z]\w*(?:::[A-Z]\w*)*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.RubyEnd, RequiredLiteral: "enum"),
+            new("function", new Regex(@"^\s*(?:(?:private|protected)\s+)*abstract\s+def\s+(?:self\.)?(?<name>[A-Za-z_]\w*[?!=]?)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "abstract"),
+            new("function", new Regex(@"^\s*(?:private\s+|protected\s+)?def\s+(?:self\.)?(?<name>[A-Za-z_]\w*[?!=]?)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.RubyEnd, RequiredLiteral: "def"),
+            new("function", new Regex(@"^\s*macro\s+(?<name>[A-Za-z_]\w*[?!=]?)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.RubyEnd, RequiredLiteral: "macro"),
+            new("typealias", new Regex(@"^\s*alias\s+(?<name>[A-Z]\w*)\s*=", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "alias"),
+            new("import",   new Regex(@"^\s*require\s+(?<name>.+)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "require"),
         ],
         ["groovy"] =
         [
-            new("namespace", new Regex(@"^\s*package\s+(?<name>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("namespace", new Regex(@"^\s*package\s+(?<name>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "package"),
             new("interface", new Regex(@"^\s*(?:(?:public|private|protected|static|abstract)\s+)*(?:interface|trait)\s+(?<name>[A-Za-z_]\w*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
-            new("enum",     new Regex(@"^\s*(?:(?:public|private|protected|static)\s+)*enum\s+(?<name>[A-Za-z_]\w*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
-            new("class",    new Regex(@"^\s*(?:(?:public|private|protected|static|abstract|final)\s+)*class\s+(?<name>[A-Za-z_]\w*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
+            new("enum",     new Regex(@"^\s*(?:(?:public|private|protected|static)\s+)*enum\s+(?<name>[A-Za-z_]\w*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, RequiredLiteral: "enum"),
+            new("class",    new Regex(@"^\s*(?:(?:public|private|protected|static|abstract|final)\s+)*class\s+(?<name>[A-Za-z_]\w*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, RequiredLiteral: "class"),
             new("function", new Regex(@"^\s*(?:@[A-Za-z_$][\w.$]*(?:\s*\([^)\r\n]*\))?\s+)*(?!(?:if|for|while|switch|catch|return|throw|new)\b)(?:(?:public|private|protected|static|final|abstract|synchronized|native|strictfp)\s+)*(?:<[^(){}\r\n]+>\s+)?(?<returnType>def|void|boolean|byte|char|short|int|long|float|double|BigDecimal|BigInteger|String|[A-Za-z_$][\w.$]*(?:\s*<[^(){}\r\n]+>)?(?:\s*\[\])*)\s+(?<name>[A-Za-z_]\w*)\s*\(", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
             new("lambda",   new Regex(@"^\s*(?:def\s+)?(?<name>[A-Za-z_]\w*)\s*=\s*\{", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
-            new("import",   new Regex(@"^\s*import\s+(?:static\s+)?(?<name>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*(?:\.\*)?)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("import",   new Regex(@"^\s*import\s+(?:static\s+)?(?<name>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*(?:\.\*)?)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "import"),
         ],
         ["julia"] =
         [
-            new("namespace", new Regex(@"^\s*(?:baremodule|module)\s+(?<name>[A-Za-z_]\w*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.ScientificEnd),
-            new("struct",   new Regex(@"^\s*(?:mutable\s+)?struct\s+(?<name>[A-Za-z_]\w*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.ScientificEnd),
-            new("type",     new Regex(@"^\s*(?:abstract|primitive)\s+type\s+(?<name>[A-Za-z_]\w*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.ScientificEnd),
-            new("function", new Regex(@"^\s*function\s+(?<name>" + JuliaQualifiedCallableIdentifierPattern + @")\s*(?:\(|\{)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.ScientificEnd),
-            new("function", new Regex(@"^\s*macro\s+(?<name>[A-Za-z_]\w*)\s*(?:\(|$)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.ScientificEnd),
+            new("namespace", new Regex(@"^\s*(?:baremodule|module)\s+(?<name>[A-Za-z_]\w*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.ScientificEnd, RequiredLiteral: "module"),
+            new("struct",   new Regex(@"^\s*(?:mutable\s+)?struct\s+(?<name>[A-Za-z_]\w*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.ScientificEnd, RequiredLiteral: "struct"),
+            new("type",     new Regex(@"^\s*(?:abstract|primitive)\s+type\s+(?<name>[A-Za-z_]\w*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.ScientificEnd, RequiredLiteral: "type"),
+            new("function", new Regex(@"^\s*function\s+(?<name>" + JuliaQualifiedCallableIdentifierPattern + @")\s*(?:\(|\{)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.ScientificEnd, RequiredLiteral: "function"),
+            new("function", new Regex(@"^\s*macro\s+(?<name>[A-Za-z_]\w*)\s*(?:\(|$)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.ScientificEnd, RequiredLiteral: "macro"),
             new("function", new Regex(@"^\s*(?<name>" + JuliaQualifiedCallableIdentifierPattern + @")\s*\([^)\r\n]*\)\s*(?:where\s*(?:\{[^}\r\n]*\}|[A-Za-z_]\w*)\s*)?=", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.JuliaShortFunction),
-            new("property", new Regex(@"^\s*const\s+(?<name>[A-Z_]\w*)\s*=", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("property", new Regex(@"^\s*const\s+(?<name>[A-Z_]\w*)\s*=", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "const"),
             new("import",   new Regex(@"^\s*(?:using|import)\s+(?<name>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
         ],
         ["tcl"] =
         [
-            new("namespace", new Regex(@"^\s*namespace\s+eval\s+(?<name>[A-Za-z_:][\w:.-]*)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
-            new("class",    new Regex(@"^\s*oo::class\s+create\s+(?<name>[A-Za-z_:][\w:.-]*)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
-            new("function", new Regex(@"^\s*proc\s+(?<name>[A-Za-z_:][\w:.-]*)\s+", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("namespace", new Regex(@"^\s*namespace\s+eval\s+(?<name>[A-Za-z_:][\w:.-]*)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "namespace"),
+            new("class",    new Regex(@"^\s*oo::class\s+create\s+(?<name>[A-Za-z_:][\w:.-]*)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "oo::class"),
+            new("function", new Regex(@"^\s*proc\s+(?<name>[A-Za-z_:][\w:.-]*)\s+", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "proc"),
             new("property", new Regex(@"^\s*(?:variable|set)\s+(?<name>[A-Za-z_:][\w:.-]*)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
-            new("import",   new Regex(@"^\s*package\s+(?:require|provide)\s+(?<name>[A-Za-z_:][\w:.-]*)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("import",   new Regex(@"^\s*package\s+(?:require|provide)\s+(?<name>[A-Za-z_:][\w:.-]*)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "package"),
         ],
         ["ada"] =
         [
@@ -1476,143 +1483,143 @@ public static partial class SymbolExtractor
         ],
         ["d"] =
         [
-            new("namespace", new Regex(@"^\s*module\s+(?<name>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s*;", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
-            new("interface", new Regex(@"^\s*(?:(?:public|private|protected|package|static|abstract|extern)\s+)*interface\s+(?<name>[A-Za-z_]\w*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
-            new("class",     new Regex(@"^\s*(?:(?:public|private|protected|package|static|abstract|final|extern)\s+)*class\s+(?<name>[A-Za-z_]\w*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
-            new("struct",    new Regex(@"^\s*(?:(?:public|private|protected|package|static|extern)\s+)*struct\s+(?<name>[A-Za-z_]\w*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
-            new("union",     new Regex(@"^\s*(?:(?:public|private|protected|package|static|extern)\s+)*union\s+(?<name>[A-Za-z_]\w*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
-            new("enum",      new Regex(@"^\s*(?:(?:public|private|protected|package|static)\s+)*enum\s+(?<name>[A-Za-z_]\w*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
+            new("namespace", new Regex(@"^\s*module\s+(?<name>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s*;", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "module"),
+            new("interface", new Regex(@"^\s*(?:(?:public|private|protected|package|static|abstract|extern)\s+)*interface\s+(?<name>[A-Za-z_]\w*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, RequiredLiteral: "interface"),
+            new("class",     new Regex(@"^\s*(?:(?:public|private|protected|package|static|abstract|final|extern)\s+)*class\s+(?<name>[A-Za-z_]\w*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, RequiredLiteral: "class"),
+            new("struct",    new Regex(@"^\s*(?:(?:public|private|protected|package|static|extern)\s+)*struct\s+(?<name>[A-Za-z_]\w*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, RequiredLiteral: "struct"),
+            new("union",     new Regex(@"^\s*(?:(?:public|private|protected|package|static|extern)\s+)*union\s+(?<name>[A-Za-z_]\w*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, RequiredLiteral: "union"),
+            new("enum",      new Regex(@"^\s*(?:(?:public|private|protected|package|static)\s+)*enum\s+(?<name>[A-Za-z_]\w*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, RequiredLiteral: "enum"),
             new("typealias", new Regex(@"^\s*(?:alias|typedef)\s+(?<name>[A-Za-z_]\w*)\s*=", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
             new("function",  new Regex(@"^\s*(?!(?:if|for|while|switch|catch|return|throw|new|assert|version|debug)\b)(?:(?:public|private|protected|package|static|extern|export|final|abstract|override|synchronized|pure|nothrow|@safe|@trusted|@system)\s+)*(?<returnType>(?:auto|void|bool|byte|ubyte|short|ushort|int|uint|long|ulong|cent|ucent|float|double|real|char|wchar|dchar|string|[A-Za-z_][\w.]*)(?:\s*[*\[\]])*)\s+(?<name>[A-Za-z_]\w*)\s*\(", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
-            new("import",    new Regex(@"^\s*import\s+(?<name>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("import",    new Regex(@"^\s*import\s+(?<name>[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "import"),
         ],
         ["nim"] =
         [
-            new("type",      new Regex(@"^\s*type\s+(?<name>[A-Za-z_]\w*)\*?\s*=\s*(?:ref\s+)?(?:object|enum|tuple|distinct)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Indent),
+            new("type",      new Regex(@"^\s*type\s+(?<name>[A-Za-z_]\w*)\*?\s*=\s*(?:ref\s+)?(?:object|enum|tuple|distinct)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Indent, RequiredLiteral: "type"),
             new("type",      new Regex(@"^\s+(?<name>[A-Za-z_]\w*)\*?\s*=\s*(?:ref\s+)?(?:object|enum|tuple|distinct)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Indent),
             new("function",  new Regex(@"^\s*(?:proc|func|method|iterator|template|macro|converter)\s+(?<name>`[^`\r\n]+`|[A-Za-z_]\w*)\*?", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Indent),
             new("property",  new Regex(@"^\s*(?:const|let|var)\s+(?<name>[A-Za-z_]\w*)\*?\s*(?::|=)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
             new("import",    new Regex(@"^\s*(?:import|include)\s+(?<name>[A-Za-z_][\w./]*(?:\s*,\s*[A-Za-z_][\w./]*)*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
-            new("import",    new Regex(@"^\s*from\s+(?<name>[A-Za-z_][\w./]*)\s+import\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("import",    new Regex(@"^\s*from\s+(?<name>[A-Za-z_][\w./]*)\s+import\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "import"),
         ],
         ["perl"] =
         [
             // Perl package declarations / Perl の package 宣言
-            new("namespace", new Regex(@"^\s*package\s+(?<name>" + PerlQualifiedIdentifierPattern + @")\b(?:\s+v?[\d._]+)?\s*\{", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
-            new("namespace", new Regex(@"^\s*package\s+(?<name>" + PerlQualifiedIdentifierPattern + @")\b(?:\s+v?[\d._]+)?\s*;", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("namespace", new Regex(@"^\s*package\s+(?<name>" + PerlQualifiedIdentifierPattern + @")\b(?:\s+v?[\d._]+)?\s*\{", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, RequiredLiteral: "package"),
+            new("namespace", new Regex(@"^\s*package\s+(?<name>" + PerlQualifiedIdentifierPattern + @")\b(?:\s+v?[\d._]+)?\s*;", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "package"),
             // Perl class feature declarations / Perl class feature の宣言
-            new("class", new Regex(@"^\s*class\s+(?<name>" + PerlQualifiedIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
-            new("interface", new Regex(@"^\s*role\s+(?<name>" + PerlQualifiedIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
+            new("class", new Regex(@"^\s*class\s+(?<name>" + PerlQualifiedIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, RequiredLiteral: "class"),
+            new("interface", new Regex(@"^\s*role\s+(?<name>" + PerlQualifiedIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, RequiredLiteral: "role"),
             // Perl constants are compile-time subroutines, so expose them as functions for navigation.
             // Perl constant はコンパイル時 subroutine なので、ナビゲーション用に function として出す。
-            new("function", new Regex(@"^\s*use\s+constant\s+(?<name>" + PerlIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("function", new Regex(@"^\s*use\s+constant\s+(?<name>" + PerlIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "constant"),
             // Perl module imports / Perl の module import
-            new("import", new Regex(@"^\s*use\s+(?<name>" + PerlQualifiedIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
-            new("import", new Regex(@"^\s*require\s+(?<name>" + PerlQualifiedIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("import", new Regex(@"^\s*use\s+(?<name>" + PerlQualifiedIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "use"),
+            new("import", new Regex(@"^\s*require\s+(?<name>" + PerlQualifiedIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "require"),
             // Moose/Moo attributes / Moose/Moo の属性
-            new("property", new Regex(@"^\s*has\s+(?<quote>['""]?)\+?(?<name>" + PerlIdentifierPattern + @")\k<quote>\s*=>", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("property", new Regex(@"^\s*has\s+(?<quote>['""]?)\+?(?<name>" + PerlIdentifierPattern + @")\k<quote>\s*=>", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "has"),
             // Package variables / package 変数
-            new("property", new Regex(@"^\s*our\s+[$@%](?<name>" + PerlIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("property", new Regex(@"^\s*our\s+[$@%](?<name>" + PerlIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "our"),
             // Perl class feature fields / Perl class feature の field
-            new("property", new Regex(@"^\s*field\s+[$@%](?<name>" + PerlIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("property", new Regex(@"^\s*field\s+[$@%](?<name>" + PerlIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "field"),
             // Perl subroutines / Perl の subroutine
-            new("function", new Regex(@"^\s*(?:(?:my|state)\s+)?sub\s+(?<name>" + PerlQualifiedIdentifierPattern + @")\b(?:\s*:[^{;]+)?", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
+            new("function", new Regex(@"^\s*(?:(?:my|state)\s+)?sub\s+(?<name>" + PerlQualifiedIdentifierPattern + @")\b(?:\s*:[^{;]+)?", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, RequiredLiteral: "sub"),
             new("function", new Regex(@"^\s*(?:method|fun)\s+(?<name>" + PerlIdentifierPattern + @")\b(?:\s*:[^{;]+)?", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
         ],
         ["matlab"] =
         [
-            new("class", new Regex(@"^\s*classdef\s*(?:\([^)]*\)\s*)?(?<name>[A-Za-z]\w*)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.ScientificEnd),
-            new("function", new Regex(@"^\s*function\s+(?:(?:\[[^\]]+\]|[A-Za-z]\w*)\s*=\s*)?(?<name>[A-Za-z]\w*)\s*(?:\(|$)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.ScientificEnd),
-            new("import", new Regex(@"^\s*import\s+(?<name>[A-Za-z]\w*(?:\.[A-Za-z*]\w*)*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("class", new Regex(@"^\s*classdef\s*(?:\([^)]*\)\s*)?(?<name>[A-Za-z]\w*)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.ScientificEnd, RequiredLiteral: "classdef"),
+            new("function", new Regex(@"^\s*function\s+(?:(?:\[[^\]]+\]|[A-Za-z]\w*)\s*=\s*)?(?<name>[A-Za-z]\w*)\s*(?:\(|$)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.ScientificEnd, RequiredLiteral: "function"),
+            new("import", new Regex(@"^\s*import\s+(?<name>[A-Za-z]\w*(?:\.[A-Za-z*]\w*)*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "import"),
         ],
         ["prolog"] =
         [
-            new("namespace", new Regex(@"^\s*:-\s*module\s*\(\s*(?<name>[a-z][A-Za-z0-9_]*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
-            new("import", new Regex(@"^\s*:-\s*use_module\s*\(\s*(?<name>[a-z][A-Za-z0-9_]*(?:\([^)]*\))?)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("namespace", new Regex(@"^\s*:-\s*module\s*\(\s*(?<name>[a-z][A-Za-z0-9_]*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "module"),
+            new("import", new Regex(@"^\s*:-\s*use_module\s*\(\s*(?<name>[a-z][A-Za-z0-9_]*(?:\([^)]*\))?)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "use_module"),
             new("function", new Regex(@"^\s*(?<name>[a-z][A-Za-z0-9_]*)\s*(?:\([^\r\n]*\))?\s*(?::-|-->|\.(?=\s*(?:$|:-|[a-z][A-Za-z0-9_]*\s*\(\s*$|[a-z][A-Za-z0-9_]*(?:\s*\([^)]*\))?\s*(?::-|-->|\.))))", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
         ],
         ["ambiguous_pl"] =
         [
             // Keep ambiguous .pl files structured without choosing Perl or Prolog prematurely.
             // .pl の判定が曖昧でも Perl / Prolog のどちらかへ早計に固定せず、構造を保持する。
-            new("namespace", new Regex(@"^\s*package\s+(?<name>" + PerlQualifiedIdentifierPattern + @")\b(?:\s+v?[\d._]+)?\s*\{", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
-            new("namespace", new Regex(@"^\s*package\s+(?<name>" + PerlQualifiedIdentifierPattern + @")\b(?:\s+v?[\d._]+)?\s*;", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
-            new("class", new Regex(@"^\s*class\s+(?<name>" + PerlQualifiedIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
-            new("interface", new Regex(@"^\s*role\s+(?<name>" + PerlQualifiedIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
-            new("function", new Regex(@"^\s*use\s+constant\s+(?<name>" + PerlIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
-            new("import", new Regex(@"^\s*use\s+(?<name>" + PerlQualifiedIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
-            new("import", new Regex(@"^\s*require\s+(?<name>" + PerlQualifiedIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
-            new("property", new Regex(@"^\s*our\s+[$@%](?<name>" + PerlIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
-            new("function", new Regex(@"^\s*(?:(?:my|state)\s+)?sub\s+(?<name>" + PerlQualifiedIdentifierPattern + @")\b(?:\s*:[^{;]+)?", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
+            new("namespace", new Regex(@"^\s*package\s+(?<name>" + PerlQualifiedIdentifierPattern + @")\b(?:\s+v?[\d._]+)?\s*\{", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, RequiredLiteral: "package"),
+            new("namespace", new Regex(@"^\s*package\s+(?<name>" + PerlQualifiedIdentifierPattern + @")\b(?:\s+v?[\d._]+)?\s*;", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "package"),
+            new("class", new Regex(@"^\s*class\s+(?<name>" + PerlQualifiedIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, RequiredLiteral: "class"),
+            new("interface", new Regex(@"^\s*role\s+(?<name>" + PerlQualifiedIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, RequiredLiteral: "role"),
+            new("function", new Regex(@"^\s*use\s+constant\s+(?<name>" + PerlIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "constant"),
+            new("import", new Regex(@"^\s*use\s+(?<name>" + PerlQualifiedIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "use"),
+            new("import", new Regex(@"^\s*require\s+(?<name>" + PerlQualifiedIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "require"),
+            new("property", new Regex(@"^\s*our\s+[$@%](?<name>" + PerlIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "our"),
+            new("function", new Regex(@"^\s*(?:(?:my|state)\s+)?sub\s+(?<name>" + PerlQualifiedIdentifierPattern + @")\b(?:\s*:[^{;]+)?", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, RequiredLiteral: "sub"),
             new("function", new Regex(@"^\s*(?:method|fun)\s+(?<name>" + PerlIdentifierPattern + @")\b(?:\s*:[^{;]+)?", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
-            new("namespace", new Regex(@"^\s*:-\s*module\s*\(\s*(?<name>[a-z][A-Za-z0-9_]*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
-            new("import", new Regex(@"^\s*:-\s*use_module\s*\(\s*(?<name>[a-z][A-Za-z0-9_]*(?:\([^)]*\))?)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("namespace", new Regex(@"^\s*:-\s*module\s*\(\s*(?<name>[a-z][A-Za-z0-9_]*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "module"),
+            new("import", new Regex(@"^\s*:-\s*use_module\s*\(\s*(?<name>[a-z][A-Za-z0-9_]*(?:\([^)]*\))?)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "use_module"),
             new("function", new Regex(@"^\s*(?<name>[a-z][A-Za-z0-9_]*)\s*(?:\([^\r\n]*\))?\s*(?::-|-->|\.(?=\s*(?:$|:-|[a-z][A-Za-z0-9_]*\s*\(\s*$|[a-z][A-Za-z0-9_]*(?:\s*\([^)]*\))?\s*(?::-|-->|\.))))", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
         ],
         ["c"] =
         [
             new("function", new Regex(CFunctionStartBlacklistPattern + CFunctionReturnTypePattern + CFunctionNameBlacklistPattern + @"(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
             // #define macros / #define マクロ
-            new("function", new Regex(@"^\s*#\s*define\s+(?<name>[A-Za-z_]\w*)\(", RegexOptions.Compiled), BodyStyle.None),
-            new("function", new Regex(@"^\s*#\s*define\s+(?<name>[A-Za-z_]\w*)(?=\s|$)", RegexOptions.Compiled), BodyStyle.None),
-            new("struct",   new Regex(@"^\s*typedef\s+struct\s+(?:\w+\s*)?(?:\*+\s*)?(?<name>\w+)\s*;", RegexOptions.Compiled), BodyStyle.None),
-            new("struct",   new Regex(@"^\s*(?:typedef\s+)?struct\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
-            new("union",    new Regex(@"^\s*typedef\s+union\s+(?:\w+\s*)?(?:\*+\s*)?(?<name>\w+)\s*;", RegexOptions.Compiled), BodyStyle.None),
-            new("union",    new Regex(@"^\s*(?:typedef\s+)?union\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
-            new("enum",     new Regex(@"^\s*typedef\s+enum\s+(?:\w+\s+)?(?<name>\w+)\s*;", RegexOptions.Compiled), BodyStyle.None),
-            new("enum",     new Regex(@"^\s*(?:typedef\s+)?enum\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
+            new("function", new Regex(@"^\s*#\s*define\s+(?<name>[A-Za-z_]\w*)\(", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "define"),
+            new("function", new Regex(@"^\s*#\s*define\s+(?<name>[A-Za-z_]\w*)(?=\s|$)", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "define"),
+            new("struct",   new Regex(@"^\s*typedef\s+struct\s+(?:\w+\s*)?(?:\*+\s*)?(?<name>\w+)\s*;", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "struct"),
+            new("struct",   new Regex(@"^\s*(?:typedef\s+)?struct\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "struct"),
+            new("union",    new Regex(@"^\s*typedef\s+union\s+(?:\w+\s*)?(?:\*+\s*)?(?<name>\w+)\s*;", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "union"),
+            new("union",    new Regex(@"^\s*(?:typedef\s+)?union\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "union"),
+            new("enum",     new Regex(@"^\s*typedef\s+enum\s+(?:\w+\s+)?(?<name>\w+)\s*;", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "enum"),
+            new("enum",     new Regex(@"^\s*(?:typedef\s+)?enum\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "enum"),
             new("import",   new Regex(@"^\s*#\s*(?:include(?:_next)?|import)\s+(?:<(?<name>[^>]+)>|""(?<name>[^""]+)""|(?<name>[^\s]+))", RegexOptions.Compiled), BodyStyle.None),
         ],
         ["cpp"] =
         [
-            new("namespace", new Regex(CppFunctionStartBlacklistPattern + @"(?:export\s+)?module\s+(?<name>[\w.]+(?::[\w.]+)?)\b", RegexOptions.Compiled), BodyStyle.None),
-            new("import", new Regex(CppFunctionStartBlacklistPattern + @"(?:export\s+)?import\s+(?:<(?<name>[^>\r\n]+)>|""(?<name>[^""\r\n]+)""|(?<name>:?[A-Za-z_]\w*(?:[.:][A-Za-z_]\w*)*))\s*;", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
-            new("namespace", new Regex(CppFunctionStartBlacklistPattern + @"inline\s+namespace\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
-            new("interface", new Regex(CppFunctionStartBlacklistPattern + CppTemplatePrefixPattern + @"(?:export\s+)?concept\s+(?<name>\w+)\b", RegexOptions.Compiled), BodyStyle.None),
-            new("specialization", new Regex(CppFunctionStartBlacklistPattern + @"\s*template\s*<[^>]*>\s*(?:class|struct|union)\s+(?<name>(?:[A-Za-z_]\w*::)*[A-Za-z_]\w*)\s*<[^;{}]+>", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
-            new("specialization", new Regex(CppFunctionStartBlacklistPattern + @"\s*template\s*<>\s*" + CppAttributePrefixPattern + @"(?:extern\s+""(?:C|C\+\+)""\s*)?" + CppAttributePrefixPattern + @"(?:(?<returnType>(?:(?:" + CppFunctionReturnTypeAtomPattern + @")[\s*&]+)+))?(?:(?:[\w:<>]+\s*::\s*)+)?" + CFunctionNameBlacklistPattern + @"(?<name>~?\w+|operator(?:\s*\(\)|\s*\[\]|\s*[^\s(]+(?:\s+[^\s(]+)?))\s*<[^>\r\n]+>\s*\(", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
+            new("namespace", new Regex(CppFunctionStartBlacklistPattern + @"(?:export\s+)?module\s+(?<name>[\w.]+(?::[\w.]+)?)\b", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "module"),
+            new("import", new Regex(CppFunctionStartBlacklistPattern + @"(?:export\s+)?import\s+(?:<(?<name>[^>\r\n]+)>|""(?<name>[^""\r\n]+)""|(?<name>:?[A-Za-z_]\w*(?:[.:][A-Za-z_]\w*)*))\s*;", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "import"),
+            new("namespace", new Regex(CppFunctionStartBlacklistPattern + @"inline\s+namespace\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "namespace"),
+            new("interface", new Regex(CppFunctionStartBlacklistPattern + CppTemplatePrefixPattern + @"(?:export\s+)?concept\s+(?<name>\w+)\b", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "concept"),
+            new("specialization", new Regex(CppFunctionStartBlacklistPattern + @"\s*template\s*<[^>]*>\s*(?:class|struct|union)\s+(?<name>(?:[A-Za-z_]\w*::)*[A-Za-z_]\w*)\s*<[^;{}]+>", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, RequiredLiteral: "template"),
+            new("specialization", new Regex(CppFunctionStartBlacklistPattern + @"\s*template\s*<>\s*" + CppAttributePrefixPattern + @"(?:extern\s+""(?:C|C\+\+)""\s*)?" + CppAttributePrefixPattern + @"(?:(?<returnType>(?:(?:" + CppFunctionReturnTypeAtomPattern + @")[\s*&]+)+))?(?:(?:[\w:<>]+\s*::\s*)+)?" + CFunctionNameBlacklistPattern + @"(?<name>~?\w+|operator(?:\s*\(\)|\s*\[\]|\s*[^\s(]+(?:\s+[^\s(]+)?))\s*<[^>\r\n]+>\s*\(", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, ReturnTypeGroup: "returnType", RequiredLiteral: "template"),
             new("function", new Regex(CppFunctionStartBlacklistPattern + CppTemplatePrefixPattern + CppAttributePrefixPattern + @"(?:extern\s+""(?:C|C\+\+)""\s*)?" + CppAttributePrefixPattern + @"(?:(?<returnType>(?:(?:" + CppFunctionReturnTypeAtomPattern + @")[\s*&]+)+))?(?:(?:[\w:<>]+\s*::\s*)+)?" + CFunctionNameBlacklistPattern + @"(?<name>~?\w+|operator(?:\s*\(\)|\s*\[\]|\s*[^\s(]+(?:\s+[^\s(]+)?))(?:\s*<[^>]+>)?\s*\(", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
             // Type alias / 型エイリアス
-            new("import", new Regex(CppFunctionStartBlacklistPattern + @"using\s+enum\s+(?<name>(?:[A-Za-z_]\w*::)*[A-Za-z_]\w*)\s*;", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
-            new("import", new Regex(CppFunctionStartBlacklistPattern + @"template\s*<[^>]+>\s*(?:export\s+)?using\s+(?<name>\w+)\s*=", RegexOptions.Compiled), BodyStyle.None),
-            new("import", new Regex(CppFunctionStartBlacklistPattern + CppTemplatePrefixPattern + @"(?:export\s+)?using\s+(?<name>\w+)\s*=", RegexOptions.Compiled), BodyStyle.None),
-            new("import", new Regex(CppFunctionStartBlacklistPattern + @"template\s*<[^>]+>\s*(?:export\s+)?using\s+(?<name>\w+)\s*=", RegexOptions.Compiled), BodyStyle.Brace),
-            new("import", new Regex(CppFunctionStartBlacklistPattern + CppTemplatePrefixPattern + @"(?:export\s+)?using\s+(?<name>\w+)\s*=", RegexOptions.Compiled), BodyStyle.Brace),
-            new("import", new Regex(@"^\s*typedef\s+(?![^;]*\().*\b(?<name>\w+)\s*;", RegexOptions.Compiled), BodyStyle.None),
-            new("import", new Regex(@"^\s*typedef\s+(?![^;]*\().*\b(?<name>\w+)\s*;", RegexOptions.Compiled), BodyStyle.Brace),
+            new("import", new Regex(CppFunctionStartBlacklistPattern + @"using\s+enum\s+(?<name>(?:[A-Za-z_]\w*::)*[A-Za-z_]\w*)\s*;", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "using"),
+            new("import", new Regex(CppFunctionStartBlacklistPattern + @"template\s*<[^>]+>\s*(?:export\s+)?using\s+(?<name>\w+)\s*=", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "using"),
+            new("import", new Regex(CppFunctionStartBlacklistPattern + CppTemplatePrefixPattern + @"(?:export\s+)?using\s+(?<name>\w+)\s*=", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "using"),
+            new("import", new Regex(CppFunctionStartBlacklistPattern + @"template\s*<[^>]+>\s*(?:export\s+)?using\s+(?<name>\w+)\s*=", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "using"),
+            new("import", new Regex(CppFunctionStartBlacklistPattern + CppTemplatePrefixPattern + @"(?:export\s+)?using\s+(?<name>\w+)\s*=", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "using"),
+            new("import", new Regex(@"^\s*typedef\s+(?![^;]*\().*\b(?<name>\w+)\s*;", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "typedef"),
+            new("import", new Regex(@"^\s*typedef\s+(?![^;]*\().*\b(?<name>\w+)\s*;", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "typedef"),
             // #define macros / #define マクロ
-            new("function", new Regex(@"^\s*#\s*define\s+(?<name>[A-Za-z_]\w*)\(", RegexOptions.Compiled), BodyStyle.None),
-            new("function", new Regex(@"^\s*#\s*define\s+(?<name>[A-Za-z_]\w*)(?=\s|$)", RegexOptions.Compiled), BodyStyle.None),
-            new("property", new Regex(@"^(?:export\s+)?(?:(?:inline|static)\s+)*constexpr\s+(?<returnType>(?:[\w:<>~]+(?:\s*[*&])?\s+)+)(?<name>(?:[A-Z_]\w*|k[A-Z]\w*))\s*=", RegexOptions.Compiled), BodyStyle.None, ReturnTypeGroup: "returnType"),
-            new("property", new Regex(CppFunctionStartBlacklistPattern + CppTemplatePrefixPattern + @"(?<returnType>(?:[\w:<>~]+[\s*&]+)+)(?:(?:[\w:<>]+\s*::\s*)+)(?<name>\w+)\s*=\s*[^;]+;", RegexOptions.Compiled), BodyStyle.None, ReturnTypeGroup: "returnType"),
-            new("class",    new Regex(CppFunctionStartBlacklistPattern + @"\s*(?:export\s+)?" + CppTemplatePrefixPattern + @"class\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
-            new("struct",   new Regex(CppFunctionStartBlacklistPattern + @"\s*(?:export\s+)?" + CppTemplatePrefixPattern + @"struct\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
-            new("union",    new Regex(CppFunctionStartBlacklistPattern + @"\s*(?:export\s+)?" + CppTemplatePrefixPattern + @"union\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
-            new("namespace", new Regex(@"^\s*(?:export\s+)?namespace\s+(?!\w+\s*=)(?<name>\w+(?:::\w+)*)", RegexOptions.Compiled), BodyStyle.Brace),
-            new("enum",     new Regex(@"^\s*(?:export\s+)?(?:typedef\s+)?enum\s+(?:class\s+)?(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
+            new("function", new Regex(@"^\s*#\s*define\s+(?<name>[A-Za-z_]\w*)\(", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "define"),
+            new("function", new Regex(@"^\s*#\s*define\s+(?<name>[A-Za-z_]\w*)(?=\s|$)", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "define"),
+            new("property", new Regex(@"^(?:export\s+)?(?:(?:inline|static)\s+)*constexpr\s+(?<returnType>(?:[\w:<>~]+(?:\s*[*&])?\s+)+)(?<name>(?:[A-Z_]\w*|k[A-Z]\w*))\s*=", RegexOptions.Compiled), BodyStyle.None, ReturnTypeGroup: "returnType", RequiredLiteral: "constexpr"),
+            new("property", new Regex(CppFunctionStartBlacklistPattern + CppTemplatePrefixPattern + @"(?<returnType>(?:[\w:<>~]+[\s*&]+)+)(?:(?:[\w:<>]+\s*::\s*)+)(?<name>\w+)\s*=\s*[^;]+;", RegexOptions.Compiled), BodyStyle.None, ReturnTypeGroup: "returnType", RequiredLiteral: "::"),
+            new("class",    new Regex(CppFunctionStartBlacklistPattern + @"\s*(?:export\s+)?" + CppTemplatePrefixPattern + @"class\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "class"),
+            new("struct",   new Regex(CppFunctionStartBlacklistPattern + @"\s*(?:export\s+)?" + CppTemplatePrefixPattern + @"struct\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "struct"),
+            new("union",    new Regex(CppFunctionStartBlacklistPattern + @"\s*(?:export\s+)?" + CppTemplatePrefixPattern + @"union\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "union"),
+            new("namespace", new Regex(@"^\s*(?:export\s+)?namespace\s+(?!\w+\s*=)(?<name>\w+(?:::\w+)*)", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "namespace"),
+            new("enum",     new Regex(@"^\s*(?:export\s+)?(?:typedef\s+)?enum\s+(?:class\s+)?(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "enum"),
             new("import",   new Regex(@"^\s*#\s*(?:include|import)\s+(?:<(?<name>[^>]+)>|""(?<name>[^""]+)""|(?<name>[^\s]+))", RegexOptions.Compiled), BodyStyle.None),
         ],
         ["php"] =
         [
             // Variable-bound closures / 変数に束縛されたクロージャ
-            new("function", new Regex(@"^\s*\$(?<name>\w+)\s*=\s*(?:static\s+)?function\s*\(", RegexOptions.Compiled), BodyStyle.Brace),
-            new("function", new Regex(@"^\s*\$(?<name>\w+)\s*=\s*(?:static\s+)?fn\s*\(", RegexOptions.Compiled), BodyStyle.None),
+            new("function", new Regex(@"^\s*\$(?<name>\w+)\s*=\s*(?:static\s+)?function\s*\(", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "function"),
+            new("function", new Regex(@"^\s*\$(?<name>\w+)\s*=\s*(?:static\s+)?fn\s*\(", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "fn"),
             // Const declaration / 定数宣言
             new("function", new Regex(@"^\s*define\s*\(\s*['""](?<name>[A-Za-z_]\w*)['""]\s*,", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
-            new("function", new Regex(@"^\s*(?:(?<visibility>public|private|protected)\s+)?const\s+(?<returnType>\??[A-Za-z_\\][\w\\]*(?:\s*[|&]\s*\??[A-Za-z_\\][\w\\]*)*)\s+(?<name>\w+)\s*=", RegexOptions.Compiled), BodyStyle.None, "visibility", ReturnTypeGroup: "returnType"),
-            new("function", new Regex(@"^\s*(?:(?<visibility>public|private|protected)\s+)?const\s+(?<name>\w+)\s*=", RegexOptions.Compiled), BodyStyle.None, "visibility"),
+            new("function", new Regex(@"^\s*(?:(?<visibility>public|private|protected)\s+)?const\s+(?<returnType>\??[A-Za-z_\\][\w\\]*(?:\s*[|&]\s*\??[A-Za-z_\\][\w\\]*)*)\s+(?<name>\w+)\s*=", RegexOptions.Compiled), BodyStyle.None, "visibility", ReturnTypeGroup: "returnType", RequiredLiteral: "const"),
+            new("function", new Regex(@"^\s*(?:(?<visibility>public|private|protected)\s+)?const\s+(?<name>\w+)\s*=", RegexOptions.Compiled), BodyStyle.None, "visibility", RequiredLiteral: "const"),
             // Class property declarations / クラスプロパティ宣言
             new("property", new Regex(@"^\s*(?:(?<visibility>public|private|protected|var)\s+)(?:(?:static|readonly)\s+)*(?:(?<returnType>\??[A-Za-z_\\][\w\\]*(?:\s*[|&]\s*\??[A-Za-z_\\][\w\\]*)*)\s+)?\$(?<name>\w+)\b", RegexOptions.Compiled), BodyStyle.None, "visibility", ReturnTypeGroup: "returnType"),
-            new("function", new Regex(@"^\s*(?:(?:(?<visibility>public|private|protected)|static|abstract|final)\s+)*function\s+(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("function", new Regex(@"^\s*(?:(?:(?<visibility>public|private|protected)|static|abstract|final)\s+)*function\s+(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "function"),
             // Class with expanded modifiers: abstract, final, readonly (PHP 8.2+)
             // 拡張修飾子対応: abstract, final, readonly (PHP 8.2+)
-            new("class",    new Regex(@"^\s*(?:(?:abstract|final|readonly)\s+)*class\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
-            new("interface", new Regex(@"^\s*interface\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
-            new("trait", new Regex(@"^\s*trait\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
-            new("enum",     new Regex(@"^\s*enum\s+(?<name>\w+)(?:\s*:\s*(?<returnType>[A-Za-z_\\][\w\\]*))?", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
-            new("property", new Regex(@"^\s*case\s+(?<name>\w+)(?:\s*=\s*(?<returnType>[^;]+?))?\s*;", RegexOptions.Compiled), BodyStyle.None, ReturnTypeGroup: "returnType"),
+            new("class",    new Regex(@"^\s*(?:(?:abstract|final|readonly)\s+)*class\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "class"),
+            new("interface", new Regex(@"^\s*interface\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "interface"),
+            new("trait", new Regex(@"^\s*trait\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "trait"),
+            new("enum",     new Regex(@"^\s*enum\s+(?<name>\w+)(?:\s*:\s*(?<returnType>[A-Za-z_\\][\w\\]*))?", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "returnType", RequiredLiteral: "enum"),
+            new("property", new Regex(@"^\s*case\s+(?<name>\w+)(?:\s*=\s*(?<returnType>[^;]+?))?\s*;", RegexOptions.Compiled), BodyStyle.None, ReturnTypeGroup: "returnType", RequiredLiteral: "case"),
             // Namespace / 名前空間
-            new("namespace", new Regex(@"^\s*namespace\s+(?<name>[\w\\]+)", RegexOptions.Compiled), BodyStyle.Brace),
+            new("namespace", new Regex(@"^\s*namespace\s+(?<name>[\w\\]+)", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "namespace"),
         ],
         ["swift"] =
         [
@@ -1620,17 +1627,17 @@ public static partial class SymbolExtractor
             // wrapped in backticks (e.g. `func `repeat`() {}`).
             // Swift の関数名は通常識別子に加えて、バッククォートでエスケープした識別子
             // （例: `func `repeat`() {}`）も取りうる。
-            new("function", new Regex(@"^\s*" + SwiftAttributePattern + @"(?<visibility>public|private|internal|open|fileprivate|package)?\s*" + SwiftAttributePattern + @"(?:(?:static|class|nonisolated|mutating|nonmutating|prefix|infix|postfix)\s+)*(?:override\s+)?func\s+(?<name>`[^`]+`|\w+|[~!%^&*+\-=|/?<>.]+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("function", new Regex(@"^\s*" + SwiftAttributePattern + @"(?<visibility>public|private|internal|open|fileprivate|package)?\s*" + SwiftAttributePattern + @"(?:(?:required|convenience|nonisolated|mutating|nonmutating|override)\s+)*(?<name>init)(?:\?)?\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("function", new Regex(@"^\s*" + SwiftAttributePattern + @"(?<visibility>public|private|internal|open|fileprivate|package)?\s*" + SwiftAttributePattern + @"(?:(?:nonisolated)\s+)*(?<name>deinit)\s*(?:\{|$)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("function", new Regex(@"^\s*" + SwiftAttributePattern + @"(?<visibility>public|private|internal|open|fileprivate|package)?\s*" + SwiftAttributePattern + @"(?:(?:static|class|nonisolated|mutating|nonmutating|override)\s+)*(?<name>subscript)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("struct",    new Regex(@"^\s*" + SwiftAttributePattern + @"(?<visibility>public|private|internal|open|fileprivate|package)?\s*" + SwiftAttributePattern + @"(?:(?:final)\s+)*struct\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("enum",      new Regex(@"^\s*" + SwiftAttributePattern + @"(?<visibility>public|private|internal|open|fileprivate|package)?\s*" + SwiftAttributePattern + @"(?:indirect\s+)?enum\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("property",  new Regex(@"^\s*" + SwiftAttributePattern + @"(?<visibility>public|private|internal|open|fileprivate|package)?\s*" + SwiftAttributePattern + @"(?:indirect\s+)?case\s+(?<name>\w+)(?<caseTail>(?:\s*(?:\([^:\r\n]*\))?(?:\s*=\s*(?<returnType>(?:""(?:\\.|[^""\\])*""|[^,\r\n])+))?\s*(?:,\s*\w+(?:\s*\([^:\r\n]*\))?(?:\s*=\s*(?:""(?:\\.|[^""\\])*""|[^,\r\n])+)?)*)\s*)$", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType"),
-            new("property",  new Regex(@"^\s*" + SwiftAttributePattern + @"(?<visibility>public|private|internal|open|fileprivate|package)?\s*" + SwiftAttributePattern + @"(?:indirect\s+)?case\s+(?<name>\w+)(?:\s*\([^)]*\))?(?:\s*=\s*(?<returnType>.+?))?\s*$", RegexOptions.Compiled), BodyStyle.None, "visibility", ReturnTypeGroup: "returnType"),
-            new("protocol", new Regex(@"^\s*" + SwiftAttributePattern + @"(?<visibility>public|private|internal|open|fileprivate|package)?\s*" + SwiftAttributePattern + @"protocol\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("associatedtype", new Regex(@"^\s*" + SwiftAttributePattern + @"(?<visibility>public|private|internal|open|fileprivate|package)?\s*" + SwiftAttributePattern + @"associatedtype\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.None, "visibility"),
-            new("typealias", new Regex(@"^\s*" + SwiftAttributePattern + @"(?<visibility>public|private|internal|open|fileprivate|package)?\s*" + SwiftAttributePattern + @"typealias\s+(?<name>\w+)(?:\s*<[^=]+>)?\s*=", RegexOptions.Compiled), BodyStyle.None, "visibility"),
+            new("function", new Regex(@"^\s*" + SwiftAttributePattern + @"(?<visibility>public|private|internal|open|fileprivate|package)?\s*" + SwiftAttributePattern + @"(?:(?:static|class|nonisolated|mutating|nonmutating|prefix|infix|postfix)\s+)*(?:override\s+)?func\s+(?<name>`[^`]+`|\w+|[~!%^&*+\-=|/?<>.]+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "func"),
+            new("function", new Regex(@"^\s*" + SwiftAttributePattern + @"(?<visibility>public|private|internal|open|fileprivate|package)?\s*" + SwiftAttributePattern + @"(?:(?:required|convenience|nonisolated|mutating|nonmutating|override)\s+)*(?<name>init)(?:\?)?\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "init"),
+            new("function", new Regex(@"^\s*" + SwiftAttributePattern + @"(?<visibility>public|private|internal|open|fileprivate|package)?\s*" + SwiftAttributePattern + @"(?:(?:nonisolated)\s+)*(?<name>deinit)\s*(?:\{|$)", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "deinit"),
+            new("function", new Regex(@"^\s*" + SwiftAttributePattern + @"(?<visibility>public|private|internal|open|fileprivate|package)?\s*" + SwiftAttributePattern + @"(?:(?:static|class|nonisolated|mutating|nonmutating|override)\s+)*(?<name>subscript)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "subscript"),
+            new("struct",    new Regex(@"^\s*" + SwiftAttributePattern + @"(?<visibility>public|private|internal|open|fileprivate|package)?\s*" + SwiftAttributePattern + @"(?:(?:final)\s+)*struct\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "struct"),
+            new("enum",      new Regex(@"^\s*" + SwiftAttributePattern + @"(?<visibility>public|private|internal|open|fileprivate|package)?\s*" + SwiftAttributePattern + @"(?:indirect\s+)?enum\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "enum"),
+            new("property",  new Regex(@"^\s*" + SwiftAttributePattern + @"(?<visibility>public|private|internal|open|fileprivate|package)?\s*" + SwiftAttributePattern + @"(?:indirect\s+)?case\s+(?<name>\w+)(?<caseTail>(?:\s*(?:\([^:\r\n]*\))?(?:\s*=\s*(?<returnType>(?:""(?:\\.|[^""\\])*""|[^,\r\n])+))?\s*(?:,\s*\w+(?:\s*\([^:\r\n]*\))?(?:\s*=\s*(?:""(?:\\.|[^""\\])*""|[^,\r\n])+)?)*)\s*)$", RegexOptions.Compiled), BodyStyle.None, "visibility", "returnType", RequiredLiteral: "case"),
+            new("property",  new Regex(@"^\s*" + SwiftAttributePattern + @"(?<visibility>public|private|internal|open|fileprivate|package)?\s*" + SwiftAttributePattern + @"(?:indirect\s+)?case\s+(?<name>\w+)(?:\s*\([^)]*\))?(?:\s*=\s*(?<returnType>.+?))?\s*$", RegexOptions.Compiled), BodyStyle.None, "visibility", ReturnTypeGroup: "returnType", RequiredLiteral: "case"),
+            new("protocol", new Regex(@"^\s*" + SwiftAttributePattern + @"(?<visibility>public|private|internal|open|fileprivate|package)?\s*" + SwiftAttributePattern + @"protocol\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "protocol"),
+            new("associatedtype", new Regex(@"^\s*" + SwiftAttributePattern + @"(?<visibility>public|private|internal|open|fileprivate|package)?\s*" + SwiftAttributePattern + @"associatedtype\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.None, "visibility", RequiredLiteral: "associatedtype"),
+            new("typealias", new Regex(@"^\s*" + SwiftAttributePattern + @"(?<visibility>public|private|internal|open|fileprivate|package)?\s*" + SwiftAttributePattern + @"typealias\s+(?<name>\w+)(?:\s*<[^=]+>)?\s*=", RegexOptions.Compiled), BodyStyle.None, "visibility", RequiredLiteral: "typealias"),
             new("property", new Regex(@"^\s*" + SwiftAttributePattern + @"(?<visibility>(?:public|private|internal|open|fileprivate|package)(?:\s*\(\s*set\s*\))?)?\s*" + SwiftAttributePattern + @"(?:(?:lazy|weak|unowned|final|static|class|nonisolated)\s+)*(?:let|var)\s+(?<name>`[^`]+`|\w+)(?=\s*(?:[:=]|$))", RegexOptions.Compiled), BodyStyle.None, "visibility"),
             // Extension declarations are important search anchors in Swift-heavy codebases.
             // A dedicated parser keeps nested generic targets searchable even when the
@@ -1638,65 +1645,65 @@ public static partial class SymbolExtractor
             // extension 宣言は Swift コード検索における重要なアンカー。
             // 専用パーサにより、protocol conformance や `where` 句が付く場合でも
             // ネストした generic target を検索対象として維持する。
-            new("class",    new Regex(@"^\s*" + SwiftAttributePattern + @"(?<visibility>public|private|internal|open|fileprivate|package)?\s*" + SwiftAttributePattern + @"(?:(?:final)\s+)?extension\s+(?<name>[^\r\n{]+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("class",    new Regex(@"^\s*" + SwiftAttributePattern + @"(?<visibility>public|private|internal|open|fileprivate|package)?\s*" + SwiftAttributePattern + @"(?:(?:final)\s+)?extension\s+(?<name>[^\r\n{]+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "extension"),
             // actor (Swift 5.5+) / アクター
             new("class",    new Regex(@"^\s*" + SwiftAttributePattern + @"(?<visibility>public|private|internal|open|fileprivate|package)?\s*" + SwiftAttributePattern + @"(?:(?:final|distributed)\s+)*(?:class|actor)\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
             // Type alias / 型エイリアス: backtick-escaped names and generic/where clauses.
-            new("typealias", new Regex(@"^\s*" + SwiftAttributePattern + @"(?<visibility>public|private|internal|open|fileprivate|package)?\s*" + SwiftAttributePattern + @"typealias\s+(?<name>`[^`]+`|\w+)(?=\s*(?:<|=|where\b|$))", RegexOptions.Compiled), BodyStyle.None, "visibility"),
-            new("function", new Regex(@"^\s*" + SwiftAttributePattern + @"(?<visibility>public|private|internal|open|fileprivate|package)?\s*" + SwiftAttributePattern + @"macro\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.None, "visibility"),
-            new("interface", new Regex(@"^\s*" + SwiftAttributePattern + @"(?<visibility>public|private|internal|open|fileprivate|package)?\s*" + SwiftAttributePattern + @"precedencegroup\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("function", new Regex(@"^\s*" + SwiftAttributePattern + @"(?<visibility>public|private|internal|open|fileprivate|package)?\s*" + SwiftAttributePattern + @"(?:prefix|infix|postfix)\s+operator\s+(?<name>\S+)", RegexOptions.Compiled), BodyStyle.None, "visibility"),
-            new("import",   new Regex(@"^\s*" + SwiftAttributePattern + @"(?:(?:public|private|internal|open|fileprivate|package)\s+)?import\s+(?<name>.+)", RegexOptions.Compiled), BodyStyle.None),
+            new("typealias", new Regex(@"^\s*" + SwiftAttributePattern + @"(?<visibility>public|private|internal|open|fileprivate|package)?\s*" + SwiftAttributePattern + @"typealias\s+(?<name>`[^`]+`|\w+)(?=\s*(?:<|=|where\b|$))", RegexOptions.Compiled), BodyStyle.None, "visibility", RequiredLiteral: "typealias"),
+            new("function", new Regex(@"^\s*" + SwiftAttributePattern + @"(?<visibility>public|private|internal|open|fileprivate|package)?\s*" + SwiftAttributePattern + @"macro\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.None, "visibility", RequiredLiteral: "macro"),
+            new("interface", new Regex(@"^\s*" + SwiftAttributePattern + @"(?<visibility>public|private|internal|open|fileprivate|package)?\s*" + SwiftAttributePattern + @"precedencegroup\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "precedencegroup"),
+            new("function", new Regex(@"^\s*" + SwiftAttributePattern + @"(?<visibility>public|private|internal|open|fileprivate|package)?\s*" + SwiftAttributePattern + @"(?:prefix|infix|postfix)\s+operator\s+(?<name>\S+)", RegexOptions.Compiled), BodyStyle.None, "visibility", RequiredLiteral: "operator"),
+            new("import",   new Regex(@"^\s*" + SwiftAttributePattern + @"(?:(?:public|private|internal|open|fileprivate|package)\s+)?import\s+(?<name>.+)", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "import"),
         ],
         ["objc"] =
         [
-            new("class",    new Regex(@"^\s*@interface\s+(?<name>\w+)\b", RegexOptions.Compiled), BodyStyle.Brace),
-            new("class",    new Regex(@"^\s*@implementation\s+(?<name>\w+)\b", RegexOptions.Compiled), BodyStyle.Brace),
-            new("class",    new Regex(@"^\s*@(?:interface|implementation)\s+(?<name>\w+\s*\(\s*[^)]+?\s*\))\b", RegexOptions.Compiled), BodyStyle.Brace),
-            new("interface", new Regex(@"^\s*@protocol\s+(?<name>\w+)\b", RegexOptions.Compiled), BodyStyle.Brace),
+            new("class",    new Regex(@"^\s*@interface\s+(?<name>\w+)\b", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "@interface"),
+            new("class",    new Regex(@"^\s*@implementation\s+(?<name>\w+)\b", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "@implementation"),
+            new("class",    new Regex(@"^\s*@(?:interface|implementation)\s+(?<name>\w+\s*\(\s*[^)]+?\s*\))\b", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "@i"),
+            new("interface", new Regex(@"^\s*@protocol\s+(?<name>\w+)\b", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "@protocol"),
             // Apple enum macros / Apple の enum マクロ
-            new("enum",     new Regex(@"^\s*typedef\s+(?:NS_(?:CLOSED_)?ENUM|NS_EXTENSIBLE_ENUM)\s*\([^,]+,\s*(?<name>\w+)\s*\)", RegexOptions.Compiled), BodyStyle.Brace),
-            new("enum",     new Regex(@"^\s*typedef\s+NS_OPTIONS\s*\([^,]+,\s*(?<name>\w+)\s*\)", RegexOptions.Compiled), BodyStyle.Brace),
-            new("enum",     new Regex(@"^\s*typedef\s+NS_ERROR_ENUM\s*\([^,]+,\s*(?<name>\w+)\s*\)", RegexOptions.Compiled), BodyStyle.Brace),
-            new("enum",     new Regex(@"^\s*typedef\s+(?:CF_ENUM|CF_OPTIONS)\s*\([^,]+,\s*(?<name>\w+)\s*\)", RegexOptions.Compiled), BodyStyle.Brace),
-            new("property", new Regex(@"^\s*@property\b(?:\s*\([^)]*\))?.*?(?<name>\w+)\s*;", RegexOptions.Compiled), BodyStyle.None),
+            new("enum",     new Regex(@"^\s*typedef\s+(?:NS_(?:CLOSED_)?ENUM|NS_EXTENSIBLE_ENUM)\s*\([^,]+,\s*(?<name>\w+)\s*\)", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "NS_"),
+            new("enum",     new Regex(@"^\s*typedef\s+NS_OPTIONS\s*\([^,]+,\s*(?<name>\w+)\s*\)", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "NS_OPTIONS"),
+            new("enum",     new Regex(@"^\s*typedef\s+NS_ERROR_ENUM\s*\([^,]+,\s*(?<name>\w+)\s*\)", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "NS_ERROR_ENUM"),
+            new("enum",     new Regex(@"^\s*typedef\s+(?:CF_ENUM|CF_OPTIONS)\s*\([^,]+,\s*(?<name>\w+)\s*\)", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "CF_"),
+            new("property", new Regex(@"^\s*@property\b(?:\s*\([^)]*\))?.*?(?<name>\w+)\s*;", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "@property"),
             new("function", new Regex(@"^\s*[+-]\s*\([^)]*\)\s*(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
             new("import",   new Regex(@"^\s*#(?:import|include)\s+[<""](?<name>[^"">]+)[>""]", RegexOptions.Compiled), BodyStyle.None),
         ],
         ["fsharp"] =
         [
-            new("function", new Regex(@"^\s*let!?\s+(?:(?:rec|mutable|inline|private|internal|public)\s+)*(?<name>(?:``[^`]+``|\w+))(?:\s+(?:\w+|\())?", RegexOptions.Compiled), BodyStyle.None),
-            new("function", new Regex(@"^\s*use!?\s+(?<name>(?:``[^`]+``|\w+))\s*(?:=|:)", RegexOptions.Compiled), BodyStyle.None),
-            new("function", new Regex(@"^\s*and\s+(?<name>(?:``[^`]+``|\w+))\s+(?:``[^`]+``|\w+|\()", RegexOptions.Compiled), BodyStyle.None),
-            new("struct", new Regex(@"^\s*type\s+(?:(?:rec|private|internal|public)\s+)?(?<name>(?:``[^`]+``|\w+))(?:\s*<[^>]+>)?\s*=\s*\{", RegexOptions.Compiled), BodyStyle.Brace),
-            new("interface", new Regex(@"^\s*type\s+(?:(?:rec|private|internal|public)\s+)?(?<name>(?:``[^`]+``|\w+))(?:\s*<[^>]+>)?\s*=\s*interface\b", RegexOptions.Compiled), BodyStyle.None),
-            new("struct", new Regex(@"^\s*type\s+(?:(?:rec|private|internal|public)\s+)?(?<name>(?:``[^`]+``|\w+))(?:\s*<[^>]+>)?\s*=\s*struct\b", RegexOptions.Compiled), BodyStyle.None),
-            new("delegate", new Regex(@"^\s*type\s+(?:(?:rec|private|internal|public)\s+)?(?<name>(?:``[^`]+``|\w+))(?:\s*<[^>]+>)?\s*=\s*delegate\b", RegexOptions.Compiled), BodyStyle.None),
-            new("class", new Regex(@"^\s*type\s+(?:(?:rec|private|internal|public)\s+)?(?<name>(?:``[^`]+``|\w+))(?:\s*<[^=]+?>)?(?:\s+when\b[^=]+)?\s*=\s*class\b", RegexOptions.Compiled), BodyStyle.None),
+            new("function", new Regex(@"^\s*let!?\s+(?:(?:rec|mutable|inline|private|internal|public)\s+)*(?<name>(?:``[^`]+``|\w+))(?:\s+(?:\w+|\())?", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "let"),
+            new("function", new Regex(@"^\s*use!?\s+(?<name>(?:``[^`]+``|\w+))\s*(?:=|:)", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "use"),
+            new("function", new Regex(@"^\s*and\s+(?<name>(?:``[^`]+``|\w+))\s+(?:``[^`]+``|\w+|\()", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "and"),
+            new("struct", new Regex(@"^\s*type\s+(?:(?:rec|private|internal|public)\s+)?(?<name>(?:``[^`]+``|\w+))(?:\s*<[^>]+>)?\s*=\s*\{", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "type"),
+            new("interface", new Regex(@"^\s*type\s+(?:(?:rec|private|internal|public)\s+)?(?<name>(?:``[^`]+``|\w+))(?:\s*<[^>]+>)?\s*=\s*interface\b", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "type"),
+            new("struct", new Regex(@"^\s*type\s+(?:(?:rec|private|internal|public)\s+)?(?<name>(?:``[^`]+``|\w+))(?:\s*<[^>]+>)?\s*=\s*struct\b", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "type"),
+            new("delegate", new Regex(@"^\s*type\s+(?:(?:rec|private|internal|public)\s+)?(?<name>(?:``[^`]+``|\w+))(?:\s*<[^>]+>)?\s*=\s*delegate\b", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "type"),
+            new("class", new Regex(@"^\s*type\s+(?:(?:rec|private|internal|public)\s+)?(?<name>(?:``[^`]+``|\w+))(?:\s*<[^=]+?>)?(?:\s+when\b[^=]+)?\s*=\s*class\b", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "type"),
             // Generic abbreviations such as `type Result<'T> = Choice<'T, string>` should not be
             // mistaken for union cases just because the right-hand side starts with a capitalized
             // type name.
             // `type Result<'T> = Choice<'T, string>` のような generic abbreviation は、
             // 右辺が大文字始まりの型名でも union case と誤認しない。
-            new("typealias", new Regex(@"^\s*type\s+(?:(?:rec|private|internal|public)\s+)?(?<name>(?:``[^`]+``|\w+))\s*<[^=]+?>\s*(?:when\b[^=]+)?\s*=\s*(?![^\r\n]*\|)(?!(?:class|delegate|interface|struct|enum|exception)\b)(?!\{)(?!\|)(?!\()", RegexOptions.Compiled), BodyStyle.None),
-            new("enum", new Regex(@"^\s*type\s+(?:(?:rec|private|internal|public)\s+)?(?<name>(?:``[^`]+``|\w+))(?:\s*<[^>]+>)?\s*=\s*(?:\|?\s*[A-Z][\w']*\b(?:\s*\|[^=].*)?)", RegexOptions.Compiled), BodyStyle.Brace),
+            new("typealias", new Regex(@"^\s*type\s+(?:(?:rec|private|internal|public)\s+)?(?<name>(?:``[^`]+``|\w+))\s*<[^=]+?>\s*(?:when\b[^=]+)?\s*=\s*(?![^\r\n]*\|)(?!(?:class|delegate|interface|struct|enum|exception)\b)(?!\{)(?!\|)(?!\()", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "type"),
+            new("enum", new Regex(@"^\s*type\s+(?:(?:rec|private|internal|public)\s+)?(?<name>(?:``[^`]+``|\w+))(?:\s*<[^>]+>)?\s*=\s*(?:\|?\s*[A-Z][\w']*\b(?:\s*\|[^=].*)?)", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "type"),
             // Simple aliases without generic parameters stay searchable as `typealias`.
             // generic 引数なしの単純な alias も `typealias` として検索可能にする。
-            new("typealias", new Regex(@"^\s*type\s+(?:(?:rec|private|internal|public)\s+)?(?<name>(?:``[^`]+``|\w+))\s*=\s*(?![^\r\n]*\|)(?!(?:class|delegate|interface|struct|enum|exception)\b)(?!\{)(?!\|)(?!\()", RegexOptions.Compiled), BodyStyle.None),
-            new("class",    new Regex(@"^\s*type\s+(?:(?:rec|private|internal|public)\s+)?(?<name>(?:``[^`]+``|\w+))(?:\s*<[^>]+>)?(?:\s+when\b[^=]+)?\s*(?:\([^)]*\))\s*=", RegexOptions.Compiled), BodyStyle.None),
-            new("struct",   new Regex(@"^\s*type\s+(?:(?:rec|private|internal|public)\s+)?(?<name>(?:``[^`]+``|\w+))\s*=\s*\{", RegexOptions.Compiled), BodyStyle.None),
-            new("enum",     new Regex(@"^\s*type\s+(?:(?:rec|private|internal|public)\s+)?(?<name>(?:``[^`]+``|\w+))\s*=\s*(?:\|\s*)?\w+(?:\s*\|\s*\w+)+", RegexOptions.Compiled), BodyStyle.None),
-            new("exception", new Regex(@"^\s*exception\s+(?:(?:private|internal)\s+)?(?<name>(?:``[^`]+``|\w+))", RegexOptions.Compiled), BodyStyle.None),
-            new("import",   new Regex(@"^\s*type\s+(?:(?:rec|private|internal|public)\s+)?(?<name>(?:``[^`]+``|\w+))\s*=\s*(?!\{)(?!\|)(?!class\b)(?!delegate\b)(?!struct\b)(?!interface\b)(?!enum\b).+", RegexOptions.Compiled), BodyStyle.None),
-            new("namespace", new Regex(@"^\s*namespace\s+(?:(?:rec|global)\s+)*(?<name>[\w.]+)", RegexOptions.Compiled), BodyStyle.None),
-            new("import",   new Regex(@"^\s*module\s+(?:(?:(?:private|internal)\s+|rec\s+))*(?:``[^`]+``|[\w.]+)\s*=\s*(?<name>(?:``[^`]+``|[\w.]+))", RegexOptions.Compiled), BodyStyle.None),
-            new("namespace", new Regex(@"^\s*module\s+(?:(?:(?:private|internal)\s+|rec\s+))*(?<name>(?:``[^`]+``|[\w.]+))", RegexOptions.Compiled), BodyStyle.None),
-            new("function", new Regex(@"^\s*(?:(?<visibility>private|internal|public)\s+)?override\s+(?:(?:this|_|\w+)\.)?(?<name>(?:``[^`]+``|\w+))\s*(?:\(|=|:)", RegexOptions.Compiled), BodyStyle.None, "visibility"),
-            new("function", new Regex(@"^\s*(?:(?<visibility>private|internal|public)\s+)?abstract\s+(?!member\b)(?<name>(?:``[^`]+``|\w+))\s*:", RegexOptions.Compiled), BodyStyle.None, "visibility"),
-            new("property", new Regex(@"^\s*(?:(?<visibility>private|internal|public)\s+)?(?:static\s+)?val\s+(?:mutable\s+)?(?<name>(?:``[^`]+``|\w+))\s*:", RegexOptions.Compiled), BodyStyle.None, "visibility"),
-            new("property", new Regex(@"^\s*(?:(?<visibility>private|internal|public)\s+)?(?:(?:static|abstract|override|default)\s+)*member\s+(?:(?:private|internal)\s+)?val\s+(?<name>(?:``[^`]+``|\w+))(?=\s|\(|=|:|$)", RegexOptions.Compiled), BodyStyle.None, "visibility"),
-            new("function", new Regex(@"^\s*(?:(?<visibility>private|internal|public)\s+)?(?:(?:static|abstract|override|default)\s+)*member\s+(?:(?:private|internal)\s+)?(?:(?:inline)\s+)?(?:(?:this|_|\w+)\.)?(?!val\b)(?<name>(?:``[^`]+``|\w+))(?=\s|\(|=|:|$)", RegexOptions.Compiled), BodyStyle.None, "visibility"),
-            new("import",   new Regex(@"^\s*open\s+(?:type\s+)?(?<name>(?:``[^`]+``|[\w.]+))", RegexOptions.Compiled), BodyStyle.None),
+            new("typealias", new Regex(@"^\s*type\s+(?:(?:rec|private|internal|public)\s+)?(?<name>(?:``[^`]+``|\w+))\s*=\s*(?![^\r\n]*\|)(?!(?:class|delegate|interface|struct|enum|exception)\b)(?!\{)(?!\|)(?!\()", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "type"),
+            new("class",    new Regex(@"^\s*type\s+(?:(?:rec|private|internal|public)\s+)?(?<name>(?:``[^`]+``|\w+))(?:\s*<[^>]+>)?(?:\s+when\b[^=]+)?\s*(?:\([^)]*\))\s*=", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "type"),
+            new("struct",   new Regex(@"^\s*type\s+(?:(?:rec|private|internal|public)\s+)?(?<name>(?:``[^`]+``|\w+))\s*=\s*\{", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "type"),
+            new("enum",     new Regex(@"^\s*type\s+(?:(?:rec|private|internal|public)\s+)?(?<name>(?:``[^`]+``|\w+))\s*=\s*(?:\|\s*)?\w+(?:\s*\|\s*\w+)+", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "type"),
+            new("exception", new Regex(@"^\s*exception\s+(?:(?:private|internal)\s+)?(?<name>(?:``[^`]+``|\w+))", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "exception"),
+            new("import",   new Regex(@"^\s*type\s+(?:(?:rec|private|internal|public)\s+)?(?<name>(?:``[^`]+``|\w+))\s*=\s*(?!\{)(?!\|)(?!class\b)(?!delegate\b)(?!struct\b)(?!interface\b)(?!enum\b).+", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "type"),
+            new("namespace", new Regex(@"^\s*namespace\s+(?:(?:rec|global)\s+)*(?<name>[\w.]+)", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "namespace"),
+            new("import",   new Regex(@"^\s*module\s+(?:(?:(?:private|internal)\s+|rec\s+))*(?:``[^`]+``|[\w.]+)\s*=\s*(?<name>(?:``[^`]+``|[\w.]+))", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "module"),
+            new("namespace", new Regex(@"^\s*module\s+(?:(?:(?:private|internal)\s+|rec\s+))*(?<name>(?:``[^`]+``|[\w.]+))", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "module"),
+            new("function", new Regex(@"^\s*(?:(?<visibility>private|internal|public)\s+)?override\s+(?:(?:this|_|\w+)\.)?(?<name>(?:``[^`]+``|\w+))\s*(?:\(|=|:)", RegexOptions.Compiled), BodyStyle.None, "visibility", RequiredLiteral: "override"),
+            new("function", new Regex(@"^\s*(?:(?<visibility>private|internal|public)\s+)?abstract\s+(?!member\b)(?<name>(?:``[^`]+``|\w+))\s*:", RegexOptions.Compiled), BodyStyle.None, "visibility", RequiredLiteral: "abstract"),
+            new("property", new Regex(@"^\s*(?:(?<visibility>private|internal|public)\s+)?(?:static\s+)?val\s+(?:mutable\s+)?(?<name>(?:``[^`]+``|\w+))\s*:", RegexOptions.Compiled), BodyStyle.None, "visibility", RequiredLiteral: "val"),
+            new("property", new Regex(@"^\s*(?:(?<visibility>private|internal|public)\s+)?(?:(?:static|abstract|override|default)\s+)*member\s+(?:(?:private|internal)\s+)?val\s+(?<name>(?:``[^`]+``|\w+))(?=\s|\(|=|:|$)", RegexOptions.Compiled), BodyStyle.None, "visibility", RequiredLiteral: "member"),
+            new("function", new Regex(@"^\s*(?:(?<visibility>private|internal|public)\s+)?(?:(?:static|abstract|override|default)\s+)*member\s+(?:(?:private|internal)\s+)?(?:(?:inline)\s+)?(?:(?:this|_|\w+)\.)?(?!val\b)(?<name>(?:``[^`]+``|\w+))(?=\s|\(|=|:|$)", RegexOptions.Compiled), BodyStyle.None, "visibility", RequiredLiteral: "member"),
+            new("import",   new Regex(@"^\s*open\s+(?:type\s+)?(?<name>(?:``[^`]+``|[\w.]+))", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "open"),
         ],
         ["vb"] =
         [
@@ -1718,113 +1725,113 @@ public static partial class SymbolExtractor
         ],
         ["scala"] =
         [
-            new("implicit", new Regex(@"^\s*(?<visibility>private|protected)?\s*implicit\s+(?:override\s+)?(?:def|val|var|class)\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("given", new Regex(@"^\s*(?<visibility>private|protected)?\s*given\s+(?:(?<name>\w+)\s*(?::|as)|(?<name>[A-Z]\w*)\b)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("function", new Regex(@"^\s*(?<visibility>private|protected)?\s*(?:override\s+)?def\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("interface", new Regex(@"^\s*(?<visibility>private|protected)?\s*(?:sealed\s+)?trait\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("enum",     new Regex(@"^\s*(?<visibility>private|protected)?\s*enum\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("class",    new Regex(@"^\s*(?<visibility>private|protected)?\s*(?:abstract\s+|sealed\s+|final\s+)?(?:case\s+)?class\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("object",   new Regex(@"^\s*(?<visibility>private|protected)?\s*(?:sealed\s+|final\s+)?(?:case\s+)?object\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("import",   new Regex(@"^\s*type\s+(?<name>\w+)\s*=", RegexOptions.Compiled), BodyStyle.None),
-            new("import",   new Regex(@"^\s*import\s+(?<name>.+)", RegexOptions.Compiled), BodyStyle.None),
+            new("implicit", new Regex(@"^\s*(?<visibility>private|protected)?\s*implicit\s+(?:override\s+)?(?:def|val|var|class)\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "implicit"),
+            new("given", new Regex(@"^\s*(?<visibility>private|protected)?\s*given\s+(?:(?<name>\w+)\s*(?::|as)|(?<name>[A-Z]\w*)\b)", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "given"),
+            new("function", new Regex(@"^\s*(?<visibility>private|protected)?\s*(?:override\s+)?def\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "def"),
+            new("interface", new Regex(@"^\s*(?<visibility>private|protected)?\s*(?:sealed\s+)?trait\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "trait"),
+            new("enum",     new Regex(@"^\s*(?<visibility>private|protected)?\s*enum\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "enum"),
+            new("class",    new Regex(@"^\s*(?<visibility>private|protected)?\s*(?:abstract\s+|sealed\s+|final\s+)?(?:case\s+)?class\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "class"),
+            new("object",   new Regex(@"^\s*(?<visibility>private|protected)?\s*(?:sealed\s+|final\s+)?(?:case\s+)?object\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "object"),
+            new("import",   new Regex(@"^\s*type\s+(?<name>\w+)\s*=", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "type"),
+            new("import",   new Regex(@"^\s*import\s+(?<name>.+)", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "import"),
         ],
         ["haskell"] =
         [
-            new("function", new Regex(@"^(?:>\s+|\s*)(?<name>[a-z_]\w*)\s+::", RegexOptions.Compiled), BodyStyle.None),
-            new("interface", new Regex(@"^\s*class\s+(?<name>[A-Z]\w*)", RegexOptions.Compiled), BodyStyle.None),
+            new("function", new Regex(@"^(?:>\s+|\s*)(?<name>[a-z_]\w*)\s+::", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "::"),
+            new("interface", new Regex(@"^\s*class\s+(?<name>[A-Z]\w*)", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "class"),
             new("class",    new Regex(@"^\s*(?:data|newtype|type)\s+(?<name>[A-Z]\w*)", RegexOptions.Compiled), BodyStyle.None),
-            new("import",   new Regex(@"^\s*import\s+(?:qualified\s+)?(?<name>[\w.]+)", RegexOptions.Compiled), BodyStyle.None),
+            new("import",   new Regex(@"^\s*import\s+(?:qualified\s+)?(?<name>[\w.]+)", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "import"),
         ],
         ["r"] =
         [
-            new("function", new Regex(@"^\s*`(?<name>[^`]+)`\s*<<?-\s*(?:function\s*\(|\\\s*\()", RegexOptions.Compiled), BodyStyle.Brace),
-            new("function", new Regex(@"^\s*(?<name>[\w.]+)\s*<<?-\s*(?:function\s*\(|\\\s*\()", RegexOptions.Compiled), BodyStyle.Brace),
+            new("function", new Regex(@"^\s*`(?<name>[^`]+)`\s*<<?-\s*(?:function\s*\(|\\\s*\()", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "<-"),
+            new("function", new Regex(@"^\s*(?<name>[\w.]+)\s*<<?-\s*(?:function\s*\(|\\\s*\()", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "<-"),
             new("function", new Regex(@"^\s*`(?<name>[^`]+)`\s*=\s*(?:function\s*\(|\\\s*\()", RegexOptions.Compiled), BodyStyle.Brace),
             new("function", new Regex(@"^\s*(?<name>[\w.]+)\s*=\s*(?:function\s*\(|\\\s*\()", RegexOptions.Compiled), BodyStyle.Brace),
-            new("function", new Regex(@"^\s*assign\s*\(\s*(?:x\s*=\s*)?['""](?<name>[^'""]+)['""]\s*,\s*(?:value\s*=\s*)?(?:function\s*\(|\\\s*\()", RegexOptions.Compiled), BodyStyle.Brace),
-            new("function", new Regex(@"^\s*(?:function\s*\(|\\\s*\()[^\r\n#]*(?:->>|->)\s*`(?<name>[^`]+)`", RegexOptions.Compiled), BodyStyle.Brace),
-            new("function", new Regex(@"^\s*(?:function\s*\(|\\\s*\()[^\r\n#]*(?:->>|->)\s*(?<name>[\w.]+)", RegexOptions.Compiled), BodyStyle.Brace),
-            new("function", new Regex(@"^\s*(?:(?:[\w.]+)::)?test_that\s*\(\s*['""](?<name>[^'""]+)['""]", RegexOptions.Compiled), BodyStyle.Brace),
+            new("function", new Regex(@"^\s*assign\s*\(\s*(?:x\s*=\s*)?['""](?<name>[^'""]+)['""]\s*,\s*(?:value\s*=\s*)?(?:function\s*\(|\\\s*\()", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "assign"),
+            new("function", new Regex(@"^\s*(?:function\s*\(|\\\s*\()[^\r\n#]*(?:->>|->)\s*`(?<name>[^`]+)`", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "->"),
+            new("function", new Regex(@"^\s*(?:function\s*\(|\\\s*\()[^\r\n#]*(?:->>|->)\s*(?<name>[\w.]+)", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "->"),
+            new("function", new Regex(@"^\s*(?:(?:[\w.]+)::)?test_that\s*\(\s*['""](?<name>[^'""]+)['""]", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "test_that"),
             new("function", new Regex(@"^\s*(?:(?:[\w.]+)::)?(?:describe|it)\s*\(\s*['""](?<name>[^'""]+)['""]", RegexOptions.Compiled), BodyStyle.Brace),
-            new("function", new Regex(@"^\s*output\$(?<name>[\w.]+)\s*<<?-\s*render\w+\s*\(", RegexOptions.Compiled), BodyStyle.Brace),
-            new("function", new Regex(@"^\s*output\s*\[\s*\[\s*['""](?<name>[^'""]+)['""]\s*\]\s*\]\s*<<?-\s*render\w+\s*\(", RegexOptions.Compiled), BodyStyle.Brace),
+            new("function", new Regex(@"^\s*output\$(?<name>[\w.]+)\s*<<?-\s*render\w+\s*\(", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "output$"),
+            new("function", new Regex(@"^\s*output\s*\[\s*\[\s*['""](?<name>[^'""]+)['""]\s*\]\s*\]\s*<<?-\s*render\w+\s*\(", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "output"),
             new("function", new Regex(@"^\s*`(?<name>[^`]+)`\s*(?:<<?-|=)\s*(?:reactive|eventReactive|observe|observeEvent)\s*\(", RegexOptions.Compiled), BodyStyle.Brace),
             new("function", new Regex(@"^\s*(?<name>[\w.]+)\s*(?:<<?-|=)\s*(?:reactive|eventReactive|observe|observeEvent)\s*\(", RegexOptions.Compiled), BodyStyle.Brace),
-            new("class",    new Regex(@"^\s*(?:(?:[\w.]+)::)?(?:setClass|setRefClass|setClassUnion|setOldClass|R6Class)\s*\(\s*(?:(?:Class|classes|className|classname|name)\s*=\s*)?(?:['""](?<name>[^'""]+)['""]|(?<name>[\w.]+))", RegexOptions.Compiled), BodyStyle.None),
-            new("class",    new Regex(@"^\s*(?:(?:[\w.]+)::)?setIs\s*\(.*?\b(?:class2|to)\s*=\s*(?:['""](?<name>[^'""]+)['""]|(?<name>[\w.]+))", RegexOptions.Compiled), BodyStyle.None),
-            new("class",    new Regex(@"^\s*inherit\s*=\s*(?:c\(\s*)?(?:['""](?<name>[^'""]+)['""]|(?<name>[A-Z][\w.]*))", RegexOptions.Compiled), BodyStyle.None),
-            new("function", new Regex(@"^\s*(?:(?:[\w.]+)::)?setValidity\s*\(\s*(?:(?:Class|class|classes|name)\s*=\s*)?(?:['""](?<name>[^'""]+)['""]|(?<name>[\w.]+))", RegexOptions.Compiled), BodyStyle.None),
-            new("function", new Regex(@"^\s*(?:(?:[\w.]+)::)?(?:setGeneric|setGroupGeneric)\s*\(\s*(?:(?:f|generic|name)\s*=\s*)?['""](?<name>[^'""]+)['""]", RegexOptions.Compiled), BodyStyle.None),
-            new("function", new Regex(@"^\s*(?:(?:[\w.]+)::)?setMethod\s*\(\s*(?:(?:f|generic|name)\s*=\s*)?(?:['""](?<name>[^'""]+)['""]|(?<name>[\w.]+))\s*,", RegexOptions.Compiled), BodyStyle.None),
-            new("function", new Regex(@"^\s*(?<visibility>public|private|active)\s*=\s*list\(\s*(?<name>[\w.]+)\s*=\s*function\s*\(", RegexOptions.Compiled), BodyStyle.None, "visibility"),
-            new("import",   new Regex(@"^\s*(?:(?:[\w.]+)::)?(?:library|require)\s*\(\s*help\s*=\s*(?:['""](?<name>[^'""]+)['""]|(?<name>[\w.]+))", RegexOptions.Compiled), BodyStyle.None),
+            new("class",    new Regex(@"^\s*(?:(?:[\w.]+)::)?(?:setClass|setRefClass|setClassUnion|setOldClass|R6Class)\s*\(\s*(?:(?:Class|classes|className|classname|name)\s*=\s*)?(?:['""](?<name>[^'""]+)['""]|(?<name>[\w.]+))", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "Class"),
+            new("class",    new Regex(@"^\s*(?:(?:[\w.]+)::)?setIs\s*\(.*?\b(?:class2|to)\s*=\s*(?:['""](?<name>[^'""]+)['""]|(?<name>[\w.]+))", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "setIs"),
+            new("class",    new Regex(@"^\s*inherit\s*=\s*(?:c\(\s*)?(?:['""](?<name>[^'""]+)['""]|(?<name>[A-Z][\w.]*))", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "inherit"),
+            new("function", new Regex(@"^\s*(?:(?:[\w.]+)::)?setValidity\s*\(\s*(?:(?:Class|class|classes|name)\s*=\s*)?(?:['""](?<name>[^'""]+)['""]|(?<name>[\w.]+))", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "setValidity"),
+            new("function", new Regex(@"^\s*(?:(?:[\w.]+)::)?(?:setGeneric|setGroupGeneric)\s*\(\s*(?:(?:f|generic|name)\s*=\s*)?['""](?<name>[^'""]+)['""]", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "Generic"),
+            new("function", new Regex(@"^\s*(?:(?:[\w.]+)::)?setMethod\s*\(\s*(?:(?:f|generic|name)\s*=\s*)?(?:['""](?<name>[^'""]+)['""]|(?<name>[\w.]+))\s*,", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "setMethod"),
+            new("function", new Regex(@"^\s*(?<visibility>public|private|active)\s*=\s*list\(\s*(?<name>[\w.]+)\s*=\s*function\s*\(", RegexOptions.Compiled), BodyStyle.None, "visibility", RequiredLiteral: "function"),
+            new("import",   new Regex(@"^\s*(?:(?:[\w.]+)::)?(?:library|require)\s*\(\s*help\s*=\s*(?:['""](?<name>[^'""]+)['""]|(?<name>[\w.]+))", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "help"),
             new("import",   new Regex(@"^\s*(?:(?:[\w.]+)::)?(?:library|require|requireNamespace)\s*\(\s*(?:(?:package|pkg)\s*=\s*)?(?:['""](?<name>[^'""]+)['""]|(?<name>[\w.]+))", RegexOptions.Compiled), BodyStyle.None),
-            new("import",   new Regex(@"^\s*(?:(?:[\w.]+)::)?(?:source|sys\.source)\s*\(\s*(?:file\s*=\s*)?['""](?<name>[^'""]+)['""]", RegexOptions.Compiled), BodyStyle.None),
+            new("import",   new Regex(@"^\s*(?:(?:[\w.]+)::)?(?:source|sys\.source)\s*\(\s*(?:file\s*=\s*)?['""](?<name>[^'""]+)['""]", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "source"),
         ],
         ["lua"] =
         [
-            new("function", new Regex(@"^\s*(?:local\s+)?function\s+(?<name>[\w.:]+)\s*\(", RegexOptions.Compiled), BodyStyle.ElixirEnd),
-            new("function", new Regex(@"^\s*local\s+(?<name>[\w]+)\s*=\s*function\s*\(", RegexOptions.Compiled), BodyStyle.ElixirEnd),
-            new("function", new Regex(@"^\s*(?<name>[\w]+(?:[.:][\w]+)+)\s*=\s*function\s*\(", RegexOptions.Compiled), BodyStyle.ElixirEnd),
-            new("import",   new Regex(@"^\s*(?:local\s+\w+\s*=\s*)?require\s*\(?['""](?<name>[^'""]+)['""]", RegexOptions.Compiled), BodyStyle.None),
+            new("function", new Regex(@"^\s*(?:local\s+)?function\s+(?<name>[\w.:]+)\s*\(", RegexOptions.Compiled), BodyStyle.ElixirEnd, RequiredLiteral: "function"),
+            new("function", new Regex(@"^\s*local\s+(?<name>[\w]+)\s*=\s*function\s*\(", RegexOptions.Compiled), BodyStyle.ElixirEnd, RequiredLiteral: "function"),
+            new("function", new Regex(@"^\s*(?<name>[\w]+(?:[.:][\w]+)+)\s*=\s*function\s*\(", RegexOptions.Compiled), BodyStyle.ElixirEnd, RequiredLiteral: "function"),
+            new("import",   new Regex(@"^\s*(?:local\s+\w+\s*=\s*)?require\s*\(?['""](?<name>[^'""]+)['""]", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "require"),
         ],
         ["elixir"] =
         [
-            new("function", new Regex(@"^\s*(?:def|defp|defmacro|defguardp?)\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.ElixirEnd),
-            new("class",    new Regex(@"^\s*defmodule\s+(?<name>[\w.]+)", RegexOptions.Compiled), BodyStyle.ElixirEnd),
-            new("interface", new Regex(@"^\s*defprotocol\s+(?<name>[\w.]+)", RegexOptions.Compiled), BodyStyle.ElixirEnd),
-            new("protocol_impl", new Regex(@"^\s*defimpl\s+(?<name>[\w.]+(?:\s*,\s*for:\s*(?:\[[^\]]+\]|[\w.{}]+))?)", RegexOptions.Compiled), BodyStyle.ElixirEnd),
+            new("function", new Regex(@"^\s*(?:def|defp|defmacro|defguardp?)\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.ElixirEnd, RequiredLiteral: "def"),
+            new("class",    new Regex(@"^\s*defmodule\s+(?<name>[\w.]+)", RegexOptions.Compiled), BodyStyle.ElixirEnd, RequiredLiteral: "defmodule"),
+            new("interface", new Regex(@"^\s*defprotocol\s+(?<name>[\w.]+)", RegexOptions.Compiled), BodyStyle.ElixirEnd, RequiredLiteral: "defprotocol"),
+            new("protocol_impl", new Regex(@"^\s*defimpl\s+(?<name>[\w.]+(?:\s*,\s*for:\s*(?:\[[^\]]+\]|[\w.{}]+))?)", RegexOptions.Compiled), BodyStyle.ElixirEnd, RequiredLiteral: "defimpl"),
             new("import",   new Regex(@"^\s*(?:import|alias|use|require)\s+(?<name>[\w.]+)", RegexOptions.Compiled), BodyStyle.None),
         ],
         ["clojure"] =
         [
             // Clojure forms are parenthesized, so use conservative line anchors.
             // Clojure の form は括弧ベースなので、保守的な行アンカーだけを拾う。
-            new("namespace", new Regex(@"^\s*\(\s*ns\s+(?<name>[^\s\)\[\{]+)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
-            new("class",    new Regex(@"^\s*\(\s*(?:defrecord|deftype)\s+(?<name>[^\s\)\[\{]+)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
-            new("protocol", new Regex(@"^\s*\(\s*defprotocol\s+(?<name>[^\s\)\[\{]+)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
-            new("function", new Regex(@"^\s*\(\s*(?:defn-?|defmacro|defmulti|defmethod)\s+(?<name>[^\s\)\[\{]+)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
-            new("property", new Regex(@"^\s*\(\s*(?:def|defonce)\s+(?<name>[^\s\)\[\{]+)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("namespace", new Regex(@"^\s*\(\s*ns\s+(?<name>[^\s\)\[\{]+)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "ns"),
+            new("class",    new Regex(@"^\s*\(\s*(?:defrecord|deftype)\s+(?<name>[^\s\)\[\{]+)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "def"),
+            new("protocol", new Regex(@"^\s*\(\s*defprotocol\s+(?<name>[^\s\)\[\{]+)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "def"),
+            new("function", new Regex(@"^\s*\(\s*(?:defn-?|defmacro|defmulti|defmethod)\s+(?<name>[^\s\)\[\{]+)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "def"),
+            new("property", new Regex(@"^\s*\(\s*(?:def|defonce)\s+(?<name>[^\s\)\[\{]+)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "def"),
         ],
         ["erlang"] =
         [
-            new("namespace", new Regex(@"^\s*-module\s*\(\s*(?<name>[a-z][\w@]*|'[^'\r\n]+')\s*\)\s*\.", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
-            new("struct",   new Regex(@"^\s*-record\s*\(\s*(?<name>[a-z][\w@]*|'[^'\r\n]+')\s*,", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("namespace", new Regex(@"^\s*-module\s*\(\s*(?<name>[a-z][\w@]*|'[^'\r\n]+')\s*\)\s*\.", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "-module"),
+            new("struct",   new Regex(@"^\s*-record\s*\(\s*(?<name>[a-z][\w@]*|'[^'\r\n]+')\s*,", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "-record"),
             new("type",     new Regex(@"^\s*-(?:type|opaque)\s+(?<name>[a-z][\w@]*|'[^'\r\n]+')\s*(?:\(|::)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
-            new("function", new Regex(@"^\s*(?<name>[a-z][\w@]*|'[^'\r\n]+')\s*\([^)\r\n]*\)\s*(?:when\b[^-\r\n]*)?->", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("function", new Regex(@"^\s*(?<name>[a-z][\w@]*|'[^'\r\n]+')\s*\([^)\r\n]*\)\s*(?:when\b[^-\r\n]*)?->", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "->"),
             new("import",   new Regex(@"^\s*-(?:import|include(?:_lib)?)\s*\(\s*(?<name>[^)\r\n]+)\)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
         ],
         ["ocaml"] =
         [
-            new("namespace", new Regex(@"^\s*module\s+(?:type\s+)?(?<name>[A-Z][A-Za-z0-9_']*)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
-            new("class",    new Regex(@"^\s*class(?:\s+type)?\s+(?<name>[A-Za-z_][A-Za-z0-9_']*)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
-            new("type",     new Regex(@"^\s*type\s+(?:nonrec\s+)?(?:'[\w]+\s+)*(?<name>[A-Za-z_][A-Za-z0-9_']*)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
-            new("function", new Regex(@"^\s*let\s+(?:rec\s+)?(?<name>[A-Za-z_][A-Za-z0-9_']*)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
-            new("function", new Regex(@"^\s*val\s+(?<name>[A-Za-z_][A-Za-z0-9_']*)\s*:", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
-            new("import",   new Regex(@"^\s*open\s+(?<name>[A-Z][\w.']*)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("namespace", new Regex(@"^\s*module\s+(?:type\s+)?(?<name>[A-Z][A-Za-z0-9_']*)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "module"),
+            new("class",    new Regex(@"^\s*class(?:\s+type)?\s+(?<name>[A-Za-z_][A-Za-z0-9_']*)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "class"),
+            new("type",     new Regex(@"^\s*type\s+(?:nonrec\s+)?(?:'[\w]+\s+)*(?<name>[A-Za-z_][A-Za-z0-9_']*)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "type"),
+            new("function", new Regex(@"^\s*let\s+(?:rec\s+)?(?<name>[A-Za-z_][A-Za-z0-9_']*)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "let"),
+            new("function", new Regex(@"^\s*val\s+(?<name>[A-Za-z_][A-Za-z0-9_']*)\s*:", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "val"),
+            new("import",   new Regex(@"^\s*open\s+(?<name>[A-Z][\w.']*)\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "open"),
         ],
         ["raku"] =
         [
             new("namespace", new Regex(@"^\s*(?:unit\s+)?(?:module|package)\s+(?<name>[\w:.-]+)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
-            new("interface", new Regex(@"^\s*(?:unit\s+)?role\s+(?<name>[\w:.-]+)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.RubyEnd),
+            new("interface", new Regex(@"^\s*(?:unit\s+)?role\s+(?<name>[\w:.-]+)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.RubyEnd, RequiredLiteral: "role"),
             new("class",    new Regex(@"^\s*(?:unit\s+)?(?:class|grammar)\s+(?<name>[\w:.-]+)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.RubyEnd),
-            new("enum",     new Regex(@"^\s*enum\s+(?<name>[\w:.-]+)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("enum",     new Regex(@"^\s*enum\s+(?<name>[\w:.-]+)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "enum"),
             new("function", new Regex(@"^\s*(?:(?:my|our|multi|proto|only)\s+)*(?:sub|method|submethod|macro)\s+(?<name>[\w:!?.-]+)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.RubyEnd),
             new("property", new Regex(@"^\s*(?:(?:my|our|state|constant)\s+)*(?<name>[$@%&]\w[\w-]*)\s*=", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
         ],
         ["dart"] =
         [
             new("function", new Regex(@"^\s*(?!return\b|await\b|const\b|new\b|throw\b|yield\b|if\b|else\b|for\b|while\b|switch\b|case\b|catch\b|do\b|try\b|finally\b|class\b|enum\b|mixin\b|extension\b|typedef\b|library\b|part\b|import\b|export\b)(?:(?:static|abstract|override|external)\s+)*(?<rt>\w[\w<>,\s\?]*?)\s+(?<name>(?!if\b|else\b|for\b|while\b|switch\b|case\b|class\b|enum\b|mixin\b|extension\b|typedef\b|library\b|part\b|import\b|export\b|abstract\b|void\b|var\b|final\b|late\b|const\b|new\b|return\b|throw\b|yield\b|await\b|extends\b|implements\b|with\b|on\b|is\b|as\b|in\b|of\b|super\b|this\b)\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, ReturnTypeGroup: "rt"),
-            new("function", new Regex(@"^\s*factory\s+(?<name>[A-Z_]\w*(?:\.\w+)?)\s*\(", RegexOptions.Compiled), BodyStyle.None),
-            new("function", new Regex(@"^\s*const\s+(?<name>[A-Z_]\w*(?:\.\w+)?)\s*\((?=[^)]*(?:\bthis\b|\bsuper\b))", RegexOptions.Compiled), BodyStyle.None),
-            new("function", DartBareConstConstructorRegex, BodyStyle.None),
+            new("function", new Regex(@"^\s*factory\s+(?<name>[A-Z_]\w*(?:\.\w+)?)\s*\(", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "factory"),
+            new("function", new Regex(@"^\s*const\s+(?<name>[A-Z_]\w*(?:\.\w+)?)\s*\((?=[^)]*(?:\bthis\b|\bsuper\b))", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "const"),
+            new("function", DartBareConstConstructorRegex, BodyStyle.None, RequiredLiteral: "const"),
             new("function", new Regex(@"^\s*(?<name>[A-Z_]\w*(?:\.\w+)?)\s*\(", RegexOptions.Compiled), BodyStyle.None),
-            new("class",    new Regex(@"^\s*typedef\s+(?<name>\w+)(?:<[^>]*>)?\s*=", RegexOptions.Compiled), BodyStyle.None),
-            new("class",    new Regex(@"^\s*typedef\s+(?:[\w<>,\[\]\?\.\s]+\s+)+(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.None),
-            new("enum",     new Regex(@"^\s*enum\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
+            new("class",    new Regex(@"^\s*typedef\s+(?<name>\w+)(?:<[^>]*>)?\s*=", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "typedef"),
+            new("class",    new Regex(@"^\s*typedef\s+(?:[\w<>,\[\]\?\.\s]+\s+)+(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "typedef"),
+            new("enum",     new Regex(@"^\s*enum\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "enum"),
             new("class",    new Regex(@"^\s*(?:abstract\s+)?(?:class|mixin)\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
-            new("class",    new Regex(@"^\s*extension\s+(?<name>\w+)\s+on\s+", RegexOptions.Compiled), BodyStyle.Brace),
-            new("import",   new Regex(@"^\s*import\s+'(?<name>[^']+)'", RegexOptions.Compiled), BodyStyle.None),
+            new("class",    new Regex(@"^\s*extension\s+(?<name>\w+)\s+on\s+", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "extension"),
+            new("import",   new Regex(@"^\s*import\s+'(?<name>[^']+)'", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "import"),
         ],
         ["pascal"] =
         [
@@ -1839,21 +1846,21 @@ public static partial class SymbolExtractor
         ],
         ["smalltalk"] =
         [
-            new("class",    new Regex(@"^\s*(?:[A-Za-z_]\w*)\s+subclass:\s*#(?<name>[A-Za-z_]\w*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("class",    new Regex(@"^\s*(?:[A-Za-z_]\w*)\s+subclass:\s*#(?<name>[A-Za-z_]\w*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "subclass:"),
             new("class",    new Regex(@"^\s*(?:Class\s+named:|Object\s+subclass:)\s*#(?<name>[A-Za-z_]\w*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
-            new("function", new Regex(@"^\s*(?:[A-Za-z_]\w*)(?:\s+class)?\s*>>\s*(?<name>[A-Za-z_]\w*:?(?:\s+[A-Za-z_]\w+\s+[A-Za-z_]\w*:)*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.SmalltalkMethod),
+            new("function", new Regex(@"^\s*(?:[A-Za-z_]\w*)(?:\s+class)?\s*>>\s*(?<name>[A-Za-z_]\w*:?(?:\s+[A-Za-z_]\w+\s+[A-Za-z_]\w*:)*)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.SmalltalkMethod, RequiredLiteral: ">>"),
         ],
         ["graphql"] =
         [
-            new("interface", new Regex(@"^\s*interface\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
-            new("enum",     new Regex(@"^\s*enum\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
+            new("interface", new Regex(@"^\s*interface\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "interface"),
+            new("enum",     new Regex(@"^\s*enum\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "enum"),
             new("class",    new Regex(@"^\s*(?:type|union|scalar|input)\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
             new("function", new Regex(@"^\s*(?:query|mutation|subscription)\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
-            new("function", new Regex(@"^\s*fragment\s+(?<name>\w+)\s+on\s+\w+", RegexOptions.Compiled), BodyStyle.Brace),
-            new("function", new Regex(@"^\s*directive\s+@(?<name>\w+)", RegexOptions.Compiled), BodyStyle.None),
-            new("class",    new Regex(@"^\s*extend\s+(?:type|interface|input|enum)\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
-            new("class",    new Regex(@"^\s*extend\s+(?:union|scalar)\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.None),
-            new("class",    new Regex(@"^\s*schema\s*\{", RegexOptions.Compiled), BodyStyle.Brace),
+            new("function", new Regex(@"^\s*fragment\s+(?<name>\w+)\s+on\s+\w+", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "fragment"),
+            new("function", new Regex(@"^\s*directive\s+@(?<name>\w+)", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "directive"),
+            new("class",    new Regex(@"^\s*extend\s+(?:type|interface|input|enum)\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "extend"),
+            new("class",    new Regex(@"^\s*extend\s+(?:union|scalar)\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "extend"),
+            new("class",    new Regex(@"^\s*schema\s*\{", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "schema"),
         ],
         ["gradle"] =
         [
@@ -1863,7 +1870,7 @@ public static partial class SymbolExtractor
         ["makefile"] =
         [
             new("property", new Regex(@"^(?<name>[\w.-]+)\s*(?::=|::=|=|\?=|\+=)", RegexOptions.Compiled), BodyStyle.None),  // Makefile variable assignments / Makefile変数代入
-            new("rule", new Regex(@"^(?<name>\.PHONY)\s*:(?!=|:=)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),  // Makefile special-target metadata / Makefile特殊ターゲットメタデータ
+            new("rule", new Regex(@"^(?<name>\.PHONY)\s*:(?!=|:=)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: ".PHONY"),  // Makefile special-target metadata / Makefile特殊ターゲットメタデータ
             new("function", new Regex(@"^(?!\.PHONY\s*:)(?<name>[\w.%-]+)\s*:(?!=|:=)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),  // Makefile targets / Makefileターゲット
         ],
         ["cmake"] =
@@ -1896,39 +1903,39 @@ public static partial class SymbolExtractor
         ],
         ["protobuf"] =
         [
-            new("class",    new Regex(@"^\s*message\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
-            new("enum",     new Regex(@"^\s*enum\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
-            new("namespace", new Regex(@"^\s*package\s+(?<name>[\w.]+)\s*;", RegexOptions.Compiled), BodyStyle.None),
-            new("class",    new Regex(@"^\s*oneof\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
-            new("class",    new Regex(@"^\s*extend\s+(?<name>[\w.]+)", RegexOptions.Compiled), BodyStyle.Brace),
-            new("class",    new Regex(@"^\s*service\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
-            new("function", new Regex(@"^\s*rpc\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.None),
-            new("import",   new Regex(@"^\s*import\s+""(?<name>[^""]+)"";", RegexOptions.Compiled), BodyStyle.None),
+            new("class",    new Regex(@"^\s*message\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "message"),
+            new("enum",     new Regex(@"^\s*enum\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "enum"),
+            new("namespace", new Regex(@"^\s*package\s+(?<name>[\w.]+)\s*;", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "package"),
+            new("class",    new Regex(@"^\s*oneof\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "oneof"),
+            new("class",    new Regex(@"^\s*extend\s+(?<name>[\w.]+)", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "extend"),
+            new("class",    new Regex(@"^\s*service\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "service"),
+            new("function", new Regex(@"^\s*rpc\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "rpc"),
+            new("import",   new Regex(@"^\s*import\s+""(?<name>[^""]+)"";", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "import"),
         ],
         ["verilog"] =
         [
             new("module", new Regex(@"^\s*(?:module|macromodule|primitive)\s+(?<name>" + HdlIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
-            new("function", new Regex(@"^\s*function\s+(?:automatic\s+|static\s+)?(?:(?<returnType>[\w$:\[\]\s]+?)\s+)?(?<name>" + HdlIdentifierPattern + @")\s*(?:\(|;)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, ReturnTypeGroup: "returnType"),
-            new("function", new Regex(@"^\s*task\s+(?:automatic\s+|static\s+)?(?<name>" + HdlIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
-            new("property", new Regex(@"^\s*(?:parameter|localparam)\s+(?:type\s+)?" + HdlDeclaratorPrefixPattern + @"(?<name>" + HdlIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("function", new Regex(@"^\s*function\s+(?:automatic\s+|static\s+)?(?:(?<returnType>[\w$:\[\]\s]+?)\s+)?(?<name>" + HdlIdentifierPattern + @")\s*(?:\(|;)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, ReturnTypeGroup: "returnType", RequiredLiteral: "function"),
+            new("function", new Regex(@"^\s*task\s+(?:automatic\s+|static\s+)?(?<name>" + HdlIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "task"),
+            new("property", new Regex(@"^\s*(?:parameter|localparam)\s+(?:type\s+)?" + HdlDeclaratorPrefixPattern + @"(?<name>" + HdlIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "param"),
             new("property", new Regex(@"^\s*(?:input|output|inout|wire|reg|logic)\s+" + HdlDeclaratorPrefixPattern + @"(?<name>" + HdlIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
-            new("import", new Regex(@"^\s*`include\s+""(?<name>[^""]+)""", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("import", new Regex(@"^\s*`include\s+""(?<name>[^""]+)""", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "`include"),
         ],
         ["systemverilog"] =
         [
             new("module", new Regex(@"^\s*(?:module|macromodule|primitive|program)\s+(?<name>" + HdlIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
-            new("interface", new Regex(@"^\s*interface\s+(?<name>" + HdlIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
-            new("package", new Regex(@"^\s*package\s+(?<name>" + HdlIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
-            new("class", new Regex(@"^\s*(?:virtual\s+)?class\s+(?<name>" + HdlIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
-            new("enum", new Regex(@"^\s*typedef\s+enum\b[^\r\n]*\s+(?<name>" + HdlIdentifierPattern + @")\s*;", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
-            new("struct", new Regex(@"^\s*typedef\s+struct\b[^\r\n]*\s+(?<name>" + HdlIdentifierPattern + @")\s*;", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
-            new("typealias", new Regex(@"^\s*typedef\s+(?!(?:enum|struct|union)\b)[^\r\n]*\s+(?<name>" + HdlIdentifierPattern + @")\s*;", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
-            new("function", new Regex(@"^\s*function\s+(?:automatic\s+|static\s+|virtual\s+)?(?:(?<returnType>[\w$:\[\]\s]+?)\s+)?(?<name>" + HdlIdentifierPattern + @")\s*(?:\(|;)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, ReturnTypeGroup: "returnType"),
-            new("function", new Regex(@"^\s*task\s+(?:automatic\s+|static\s+|virtual\s+)?(?<name>" + HdlIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
-            new("property", new Regex(@"^\s*(?:parameter|localparam)\s+(?:type\s+)?" + HdlDeclaratorPrefixPattern + @"(?<name>" + HdlIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("interface", new Regex(@"^\s*interface\s+(?<name>" + HdlIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "interface"),
+            new("package", new Regex(@"^\s*package\s+(?<name>" + HdlIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "package"),
+            new("class", new Regex(@"^\s*(?:virtual\s+)?class\s+(?<name>" + HdlIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "class"),
+            new("enum", new Regex(@"^\s*typedef\s+enum\b[^\r\n]*\s+(?<name>" + HdlIdentifierPattern + @")\s*;", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "enum"),
+            new("struct", new Regex(@"^\s*typedef\s+struct\b[^\r\n]*\s+(?<name>" + HdlIdentifierPattern + @")\s*;", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "struct"),
+            new("typealias", new Regex(@"^\s*typedef\s+(?!(?:enum|struct|union)\b)[^\r\n]*\s+(?<name>" + HdlIdentifierPattern + @")\s*;", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "typedef"),
+            new("function", new Regex(@"^\s*function\s+(?:automatic\s+|static\s+|virtual\s+)?(?:(?<returnType>[\w$:\[\]\s]+?)\s+)?(?<name>" + HdlIdentifierPattern + @")\s*(?:\(|;)", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, ReturnTypeGroup: "returnType", RequiredLiteral: "function"),
+            new("function", new Regex(@"^\s*task\s+(?:automatic\s+|static\s+|virtual\s+)?(?<name>" + HdlIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "task"),
+            new("property", new Regex(@"^\s*(?:parameter|localparam)\s+(?:type\s+)?" + HdlDeclaratorPrefixPattern + @"(?<name>" + HdlIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "param"),
             new("property", new Regex(@"^\s*(?:input|output|inout|wire|reg|logic|rand|randc)\s+" + HdlDeclaratorPrefixPattern + @"(?<name>" + HdlIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
-            new("import", new Regex(@"^\s*import\s+(?<name>" + HdlIdentifierPattern + @"(?:::(?:" + HdlIdentifierPattern + @"|\*))?)\s*;", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
-            new("import", new Regex(@"^\s*`include\s+""(?<name>[^""]+)""", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("import", new Regex(@"^\s*import\s+(?<name>" + HdlIdentifierPattern + @"(?:::(?:" + HdlIdentifierPattern + @"|\*))?)\s*;", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "import"),
+            new("import", new Regex(@"^\s*`include\s+""(?<name>[^""]+)""", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "`include"),
         ],
         ["vhdl"] =
         [
@@ -1948,40 +1955,40 @@ public static partial class SymbolExtractor
         ],
         ["glsl"] =
         [
-            new("struct", new Regex(@"^\s*struct\s+(?<name>" + ShaderIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
+            new("struct", new Regex(@"^\s*struct\s+(?<name>" + ShaderIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, RequiredLiteral: "struct"),
             new("property", new Regex(@"^\s*" + ShaderAttributePrefixPattern + @"(?:uniform|buffer)\s+(?:(?<returnType>" + ShaderTypePattern + @")\s+)?(?<name>" + ShaderIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
             new("property", new Regex(@"^\s*" + ShaderAttributePrefixPattern + @"(?:in|out|attribute|varying)\s+(?<returnType>" + ShaderTypePattern + @")\s+(?<name>" + ShaderIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, ReturnTypeGroup: "returnType"),
             new("function", new Regex(ShaderFunctionStartBlacklistPattern + @"\s*" + ShaderAttributePrefixPattern + @"(?<returnType>" + ShaderTypePattern + @")\s+(?<name>" + ShaderIdentifierPattern + @")\s*\(", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
         ],
         ["hlsl"] =
         [
-            new("struct", new Regex(@"^\s*struct\s+(?<name>" + ShaderIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
-            new("property", new Regex(@"^\s*(?:cbuffer|tbuffer)\s+(?<name>" + ShaderIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
+            new("struct", new Regex(@"^\s*struct\s+(?<name>" + ShaderIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, RequiredLiteral: "struct"),
+            new("property", new Regex(@"^\s*(?:cbuffer|tbuffer)\s+(?<name>" + ShaderIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, RequiredLiteral: "buffer"),
             new("property", new Regex(@"^\s*(?:globallycoherent\s+)?(?:RW)?(?:Texture\w*|Buffer|StructuredBuffer|RWStructuredBuffer|ByteAddressBuffer|RWByteAddressBuffer|Sampler\w*)\s*(?:<[^>\r\n]+>)?\s+(?<name>" + ShaderIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
             new("property", new Regex(@"^\s*(?:groupshared|static|uniform)\s+(?<returnType>" + ShaderTypePattern + @")\s+(?<name>" + ShaderIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, ReturnTypeGroup: "returnType"),
             new("function", new Regex(ShaderFunctionStartBlacklistPattern + @"\s*" + ShaderAttributePrefixPattern + @"(?<returnType>" + ShaderTypePattern + @")\s+(?<name>" + ShaderIdentifierPattern + @")\s*\(", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
         ],
         ["metal"] =
         [
-            new("struct", new Regex(@"^\s*struct\s+(?<name>" + ShaderIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
+            new("struct", new Regex(@"^\s*struct\s+(?<name>" + ShaderIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, RequiredLiteral: "struct"),
             new("property", new Regex(@"^\s*(?:constant|device|threadgroup)\s+(?<returnType>" + ShaderTypePattern + @")\s+(?<name>" + ShaderIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, ReturnTypeGroup: "returnType"),
             new("function", new Regex(ShaderFunctionStartBlacklistPattern + @"\s*(?:kernel|vertex|fragment)\s+(?<returnType>" + ShaderTypePattern + @")\s+(?<name>" + ShaderIdentifierPattern + @")\s*\(", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
             new("function", new Regex(ShaderFunctionStartBlacklistPattern + @"\s*(?<returnType>" + ShaderTypePattern + @")\s+(?<name>" + ShaderIdentifierPattern + @")\s*\(", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, ReturnTypeGroup: "returnType"),
         ],
         ["wgsl"] =
         [
-            new("struct", new Regex(@"^\s*struct\s+(?<name>" + ShaderIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
-            new("typealias", new Regex(@"^\s*alias\s+(?<name>" + ShaderIdentifierPattern + @")\s*=", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
+            new("struct", new Regex(@"^\s*struct\s+(?<name>" + ShaderIdentifierPattern + @")\b", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, RequiredLiteral: "struct"),
+            new("typealias", new Regex(@"^\s*alias\s+(?<name>" + ShaderIdentifierPattern + @")\s*=", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None, RequiredLiteral: "alias"),
             new("property", new Regex(@"^\s*(?:@\w+(?:\([^)]*\))?\s*)*(?:var(?:<[^>\r\n]+>)?|let|const|override)\s+(?<name>" + ShaderIdentifierPattern + @")\s*:", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.None),
-            new("function", new Regex(@"^\s*(?:@\w+(?:\([^)]*\))?\s*)*fn\s+(?<name>" + ShaderIdentifierPattern + @")\s*\(", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace),
+            new("function", new Regex(@"^\s*(?:@\w+(?:\([^)]*\))?\s*)*fn\s+(?<name>" + ShaderIdentifierPattern + @")\s*\(", RegexOptions.Compiled | RegexOptions.CultureInvariant), BodyStyle.Brace, RequiredLiteral: "fn"),
         ],
         ["shell"] =
         [
             // Bash/Zsh function declarations / Bash/Zsh 関数宣言
             new("function", new Regex(@"^\s*(?:function\s+)?(?<name>\w+)\s*\(\s*\)\s*\{?", RegexOptions.Compiled), BodyStyle.Brace),
-            new("function", new Regex(@"^\s*function\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace),
+            new("function", new Regex(@"^\s*function\s+(?<name>\w+)", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "function"),
             // Alias definitions / エイリアス定義
-            new("alias", new Regex(@"^\s*alias(?:\s+-[^\s=]+)*\s+(?<name>[A-Za-z_][A-Za-z0-9_-]*)\s*=", RegexOptions.Compiled), BodyStyle.None),
+            new("alias", new Regex(@"^\s*alias(?:\s+-[^\s=]+)*\s+(?<name>[A-Za-z_][A-Za-z0-9_-]*)\s*=", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "alias"),
         ],
         ["sql"] =
         [
@@ -2078,16 +2085,16 @@ public static partial class SymbolExtractor
         [
             // Terraform resource/data: capture the logical name (second quoted token), not the type
             // Terraform resource/data: 型ではなく論理名（第2引用トークン）をキャプチャ
-            new("class",    new Regex(@"^\s*resource\s+""[^""]+""\s+""(?<name>[^""]+)""", RegexOptions.Compiled), BodyStyle.Brace),
-            new("class",    new Regex(@"^\s*data\s+""[^""]+""\s+""(?<name>[^""]+)""", RegexOptions.Compiled), BodyStyle.Brace),
-            new("class",    new Regex(@"^\s*module\s+""(?<name>[^""]+)""", RegexOptions.Compiled), BodyStyle.Brace),
-            new("class",    new Regex(@"^\s*provider\s+""(?<name>[^""]+)""", RegexOptions.Compiled), BodyStyle.Brace),
-            new("class",    new Regex(@"^\s*(?<name>terraform)\s*\{", RegexOptions.Compiled), BodyStyle.Brace),
+            new("class",    new Regex(@"^\s*resource\s+""[^""]+""\s+""(?<name>[^""]+)""", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "resource"),
+            new("class",    new Regex(@"^\s*data\s+""[^""]+""\s+""(?<name>[^""]+)""", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "data"),
+            new("class",    new Regex(@"^\s*module\s+""(?<name>[^""]+)""", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "module"),
+            new("class",    new Regex(@"^\s*provider\s+""(?<name>[^""]+)""", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "provider"),
+            new("class",    new Regex(@"^\s*(?<name>terraform)\s*\{", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "terraform"),
             new("class",    new Regex(@"^\s*(?<name>import|moved|removed)\s*\{", RegexOptions.Compiled), BodyStyle.Brace),
-            new("class",    new Regex(@"^\s*check\s+""(?<name>[^""]+)""", RegexOptions.Compiled), BodyStyle.Brace),
-            new("function", new Regex(@"^\s*variable\s+""(?<name>[^""]+)""", RegexOptions.Compiled), BodyStyle.Brace),
-            new("function", new Regex(@"^\s*output\s+""(?<name>[^""]+)""", RegexOptions.Compiled), BodyStyle.Brace),
-            new("function", new Regex(@"^\s*(?<name>locals)\s*\{", RegexOptions.Compiled), BodyStyle.Brace),
+            new("class",    new Regex(@"^\s*check\s+""(?<name>[^""]+)""", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "check"),
+            new("function", new Regex(@"^\s*variable\s+""(?<name>[^""]+)""", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "variable"),
+            new("function", new Regex(@"^\s*output\s+""(?<name>[^""]+)""", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "output"),
+            new("function", new Regex(@"^\s*(?<name>locals)\s*\{", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "locals"),
         ],
         ["css"] =
         [
@@ -2096,11 +2103,11 @@ public static partial class SymbolExtractor
             // @counter-style / カウンタースタイル
             new("function", new Regex(@"^\s*@counter-style\s+(?<name>[\w-]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.Brace),
             // @function (SCSS) / 関数
-            new("function", new Regex(@"^\s*@function\s+(?<name>[\w-]+)", RegexOptions.Compiled), BodyStyle.Brace),
+            new("function", new Regex(@"^\s*@function\s+(?<name>[\w-]+)", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "@function"),
             // @mixin (SCSS) / ミックスイン
-            new("function", new Regex(@"^\s*@mixin\s+(?<name>[\w-]+)", RegexOptions.Compiled), BodyStyle.Brace),
+            new("function", new Regex(@"^\s*@mixin\s+(?<name>[\w-]+)", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "@mixin"),
             // @keyframes / キーフレーム
-            new("function", new Regex(@"^\s*@keyframes\s+(?<name>[\w-]+)", RegexOptions.Compiled), BodyStyle.Brace),
+            new("function", new Regex(@"^\s*@keyframes\s+(?<name>[\w-]+)", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "@keyframes"),
             // @font-face / フォントフェイス
             new("function", new Regex(@"^\s*@font-face\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.Brace),
             // @property / カスタムプロパティ登録
@@ -2114,7 +2121,7 @@ public static partial class SymbolExtractor
             // Grouping at-rules / grouping at-rule
             new("namespace", new Regex(@"^\s*@(?<name>layer|container|supports|media)\b[^{]*\{", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.Brace),
             // :root selector / :root セレクタ
-            new("class",    new Regex(@"^\s*(?<name>:root)\s*[,{]", RegexOptions.Compiled), BodyStyle.Brace),
+            new("class",    new Regex(@"^\s*(?<name>:root)\s*[,{]", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: ":root"),
             // Standalone attribute selector / 単独属性セレクタ
             new("class",    new Regex(@"^\s*(?<name>\[[^\]]+\](?:(?:::?[\w-]+)|(?:\[[^\]]+\]))*)\s*[,{]", RegexOptions.Compiled), BodyStyle.Brace),
             // Pseudo-class / pseudo-element / attribute selectors / 疑似クラス・疑似要素・属性セレクタ
@@ -2126,7 +2133,7 @@ public static partial class SymbolExtractor
             // Native CSS nesting selectors / ネイティブ CSS nesting セレクタ
             new("property", new Regex(@"^\s*&(?:(?::(?<name>[\w-]+))|(?:\s*(?:[>+~]\s*)?(?:\.|#)?(?<name>[\w-]+)))(?:(?:::?[\w-]+)|(?:\[[^\]]+\]))*\s*[,{]", RegexOptions.Compiled), BodyStyle.Brace),
             // CSS custom property declaration / CSS カスタムプロパティ宣言
-            new("property", new Regex(@"^\s*(?<name>--[\w-]+)\s*:", RegexOptions.Compiled), BodyStyle.None),
+            new("property", new Regex(@"^\s*(?<name>--[\w-]+)\s*:", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "--"),
             // SCSS $variable declaration / SCSS 変数宣言
             new("property", new Regex(@"^\$(?<name>[\w-]+)\s*:", RegexOptions.Compiled), BodyStyle.None),
             // SCSS placeholder selector / SCSS プレースホルダーセレクタ
@@ -2138,7 +2145,7 @@ public static partial class SymbolExtractor
             // Sass インデント構文は波括弧を持たないため、行単位のアンカーとして扱う。
             new("import",   new Regex(@"^\s*@(?:import|use|forward)\s+(?<name>.+?)(?:\s*!default)?\s*$", RegexOptions.Compiled), BodyStyle.None),
             new("function", new Regex(@"^\s*(?:@mixin\s+|=)(?<name>[\w-]+)", RegexOptions.Compiled), BodyStyle.None),
-            new("function", new Regex(@"^\s*@function\s+(?<name>[\w-]+)", RegexOptions.Compiled), BodyStyle.None),
+            new("function", new Regex(@"^\s*@function\s+(?<name>[\w-]+)", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "@function"),
             new("function", new Regex(@"^\s*@keyframes\s+(?<name>[\w-]+)", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), BodyStyle.None),
             new("property", new Regex(@"^\s*\$(?<name>[\w-]+)\s*:", RegexOptions.Compiled), BodyStyle.None),
             new("class",    new Regex(@"^\s*(?<name>[.#%][\w-]+)(?=[\s\.,:>+~\[]|$)", RegexOptions.Compiled), BodyStyle.None),
@@ -2247,19 +2254,71 @@ public static partial class SymbolExtractor
         ["zig"] =
         [
             // Public and private function declarations / 公開・非公開の関数宣言
-            new("function", new Regex(@"^\s*(?:(?<visibility>pub)\s+)?(?:inline\s+)?fn\s+(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("function", new Regex(@"^\s*(?:(?<visibility>pub)\s+)?(?:inline\s+)?fn\s+(?<name>\w+)\s*\(", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "fn"),
             // Struct/union/enum defined via const / const による struct/union/enum 定義
-            new("struct",   new Regex(@"^\s*(?:(?<visibility>pub)\s+)?const\s+(?<name>\w+)\s*=\s*(?:extern\s+|packed\s+)?struct\b", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("enum",     new Regex(@"^\s*(?:(?<visibility>pub)\s+)?const\s+(?<name>\w+)\s*=\s*(?:extern\s+)?enum\b", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
-            new("class",    new Regex(@"^\s*(?:(?<visibility>pub)\s+)?const\s+(?<name>\w+)\s*=\s*(?:extern\s+|packed\s+)?union\b", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("struct",   new Regex(@"^\s*(?:(?<visibility>pub)\s+)?const\s+(?<name>\w+)\s*=\s*(?:extern\s+|packed\s+)?struct\b", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "struct"),
+            new("enum",     new Regex(@"^\s*(?:(?<visibility>pub)\s+)?const\s+(?<name>\w+)\s*=\s*(?:extern\s+)?enum\b", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "enum"),
+            new("class",    new Regex(@"^\s*(?:(?<visibility>pub)\s+)?const\s+(?<name>\w+)\s*=\s*(?:extern\s+|packed\s+)?union\b", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "union"),
             // Error set / エラーセット
-            new("class",    new Regex(@"^\s*(?:(?<visibility>pub)\s+)?const\s+(?<name>\w+)\s*=\s*error\b", RegexOptions.Compiled), BodyStyle.Brace, "visibility"),
+            new("class",    new Regex(@"^\s*(?:(?<visibility>pub)\s+)?const\s+(?<name>\w+)\s*=\s*error\b", RegexOptions.Compiled), BodyStyle.Brace, "visibility", RequiredLiteral: "error"),
             // Test declarations / テスト宣言
-            new("function", new Regex(@"^\s*test\s+""(?<name>[^""]+)""", RegexOptions.Compiled), BodyStyle.Brace),
+            new("function", new Regex(@"^\s*test\s+""(?<name>[^""]+)""", RegexOptions.Compiled), BodyStyle.Brace, RequiredLiteral: "test"),
             // @import / インポート
-            new("import",   new Regex(@"^\s*(?:(?:pub)\s+)?const\s+\w+\s*=\s*@import\s*\(\s*""(?<name>[^""]+)""", RegexOptions.Compiled), BodyStyle.None),
+            new("import",   new Regex(@"^\s*(?:(?:pub)\s+)?const\s+\w+\s*=\s*@import\s*\(\s*""(?<name>[^""]+)""", RegexOptions.Compiled), BodyStyle.None, RequiredLiteral: "@import"),
         ],
     };
+
+    static SymbolExtractor()
+    {
+        foreach (var (language, patterns) in PatternCache)
+        {
+            foreach (var pattern in patterns)
+                ValidateRequiredLiteralGate(language, pattern.Kind, pattern.Regex.Options, pattern.RequiredLiteral);
+        }
+    }
+
+    private static void ValidateRequiredLiteralGate(
+        string language,
+        string kind,
+        RegexOptions regexOptions,
+        string? requiredLiteral)
+    {
+        if (requiredLiteral is null)
+            return;
+
+        if (requiredLiteral.Length < 2)
+        {
+            throw new InvalidOperationException(
+                $"Required literal gates must contain at least two characters ({language}/{kind}).");
+        }
+
+        if ((regexOptions & RegexOptions.IgnoreCase) != 0)
+        {
+            throw new InvalidOperationException(
+                $"Required literal gates are not valid for case-insensitive patterns ({language}/{kind}).");
+        }
+    }
+
+    internal static void ValidateRequiredLiteralGateForTesting(
+        RegexOptions regexOptions,
+        string? requiredLiteral) =>
+        ValidateRequiredLiteralGate("test", "test", regexOptions, requiredLiteral);
+
+    internal static IReadOnlyList<(string Language, string Kind, string Literal, RegexOptions Options)>
+        GetRequiredLiteralGateMetadataForTesting()
+    {
+        var metadata = new List<(string Language, string Kind, string Literal, RegexOptions Options)>();
+        foreach (var (language, patterns) in PatternCache)
+        {
+            foreach (var pattern in patterns)
+            {
+                if (pattern.RequiredLiteral is { } literal)
+                    metadata.Add((language, pattern.Kind, literal, pattern.Regex.Options));
+            }
+        }
+
+        return metadata;
+    }
 
     private static readonly string[] BuiltInSymbolLanguages = PatternCache.Keys.ToArray();
 }

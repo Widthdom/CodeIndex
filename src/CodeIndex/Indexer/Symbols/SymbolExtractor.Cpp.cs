@@ -17,7 +17,11 @@ public static partial class SymbolExtractor
         CppSameLineClassKey ClassKey,
         string MemberName);
 
-    private static void ExtractCppSameLineClassBodyMembers(long fileId, string[] lines, List<SymbolRecord> symbols)
+    private static void ExtractCppSameLineClassBodyMembers(
+        long fileId,
+        string[] lines,
+        IReadOnlyList<SymbolPattern> applicablePatterns,
+        List<SymbolRecord> symbols)
     {
         var classSymbols = BuildCppSameLineClassSymbolSnapshot(symbols);
         if (classSymbols is null)
@@ -46,7 +50,15 @@ public static partial class SymbolExtractor
                 classSymbol.Kind,
                 classSymbol.Name);
             foreach (var segment in EnumerateTrimmedCppSegments(body))
-                TryAddCppSameLineClassMemberSymbol(fileId, classSymbol, classKey, segment, lineIndex + 1, symbols, ref existingMembers);
+                TryAddCppSameLineClassMemberSymbol(
+                    fileId,
+                    classSymbol,
+                    classKey,
+                    segment,
+                    lineIndex + 1,
+                    applicablePatterns,
+                    symbols,
+                    ref existingMembers);
         }
     }
 
@@ -134,10 +146,11 @@ public static partial class SymbolExtractor
         CppSameLineClassKey classKey,
         string segment,
         int lineNumber,
+        IReadOnlyList<SymbolPattern> applicablePatterns,
         List<SymbolRecord> symbols,
         ref HashSet<CppSameLineClassMemberIdentity>? existingMembers)
     {
-        foreach (var pattern in PatternCache["cpp"])
+        foreach (var pattern in applicablePatterns)
         {
             if (pattern.Kind != "function")
                 continue;
