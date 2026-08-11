@@ -1,8 +1,9 @@
 using CodeIndex.Cli;
+using static CodeIndex.Tests.QueryCommandTestSupport;
 
 namespace CodeIndex.Tests;
 
-public partial class QueryCommandRunnerTests
+public sealed class QueryCommandRunnerPathFilterTests
 {
     [Fact]
     public void RunFiles_PositionalGlobUsesPathFilterSemantics_Issue4565()
@@ -27,7 +28,7 @@ public partial class QueryCommandRunnerTests
             {
                 var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFiles(
                     ["--db", dbPath, "--json", testCase.Pattern, "--limit", "20"],
-                    _jsonOptions));
+                    JsonOptions));
 
                 var paths = ParseJsonLines(stdout)
                     .Select(document => document.RootElement.TryGetProperty("path", out var path) ? path.GetString() : null)
@@ -79,7 +80,7 @@ public partial class QueryCommandRunnerTests
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFiles(
                 ["--db", dbPath, "--json", "--path", pathFilter, "--limit", "20"],
-                _jsonOptions));
+                JsonOptions));
 
             using var document = ParseJsonOutput(stdout);
             Assert.Equal(CommandExitCodes.Success, exitCode);
@@ -112,7 +113,7 @@ public partial class QueryCommandRunnerTests
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
                 ["--db", dbPath, "--json", "--path", "tools", "--limit", "20"],
-                _jsonOptions));
+                JsonOptions));
 
             var rows = ParseJsonLines(stdout).Select(document => document.RootElement).ToList();
             var paths = rows.Select(row => row.GetProperty("path").GetString()).ToHashSet(StringComparer.Ordinal);
