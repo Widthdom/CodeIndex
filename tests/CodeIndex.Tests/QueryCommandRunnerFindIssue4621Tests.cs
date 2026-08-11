@@ -41,29 +41,6 @@ public sealed class QueryCommandRunnerFindIssue4621Tests
     }
 
     [Fact]
-    public void RunBatch_FindAcceptsContextAndPreservesSymmetricWindow_Issue4621()
-    {
-        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_batch_find_context_4621");
-        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
-        TestProjectHelper.InsertIndexedFile(
-            dbPath,
-            "src/context.cs",
-            "csharp",
-            "line1\nline2\nIssue4621BatchNeedle\nline4\nline5\n");
-        var input = "[\"find\",\"Issue4621BatchNeedle\",\"--path\",\"src/context.cs\",\"--context\",\"1\",\"--json\"]\n";
-
-        var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
-            input,
-            () => QueryCommandRunner.RunBatch(["--db", dbPath], JsonOptions));
-
-        Assert.Equal(CommandExitCodes.Success, exitCode);
-        Assert.Equal(string.Empty, stderr);
-        using var document = JsonDocument.Parse(stdout.Trim().Split('\n')[0]);
-        Assert.Equal(2, document.RootElement.GetProperty("start_line").GetInt32());
-        Assert.Equal(4, document.RootElement.GetProperty("end_line").GetInt32());
-    }
-
-    [Fact]
     public void RunFind_OptionShapedLiteralQueryDoesNotEnableContext_Issue4621()
     {
         using var project = TestProjectHelper.CreateTempProjectScope("cdidx_find_literal_context_4621");
@@ -125,5 +102,32 @@ public sealed class QueryCommandRunnerFindIssue4621Tests
         Assert.Contains("--context", ConsoleCompletionRenderer.GetCompletionScript("zsh"), StringComparison.Ordinal);
         Assert.Contains("-l context", ConsoleCompletionRenderer.GetCompletionScript("fish"), StringComparison.Ordinal);
         Assert.Contains("--context", ConsoleCompletionRenderer.GetCompletionScript("powershell"), StringComparison.Ordinal);
+    }
+}
+
+[Collection("Console sensitive")]
+public sealed class QueryCommandRunnerFindBatchIssue4621Tests
+{
+    [Fact]
+    public void RunBatch_FindAcceptsContextAndPreservesSymmetricWindow_Issue4621()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_batch_find_context_4621");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        TestProjectHelper.InsertIndexedFile(
+            dbPath,
+            "src/context.cs",
+            "csharp",
+            "line1\nline2\nIssue4621BatchNeedle\nline4\nline5\n");
+        var input = "[\"find\",\"Issue4621BatchNeedle\",\"--path\",\"src/context.cs\",\"--context\",\"1\",\"--json\"]\n";
+
+        var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
+            input,
+            () => QueryCommandRunner.RunBatch(["--db", dbPath], JsonOptions));
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = JsonDocument.Parse(stdout.Trim().Split('\n')[0]);
+        Assert.Equal(2, document.RootElement.GetProperty("start_line").GetInt32());
+        Assert.Equal(4, document.RootElement.GetProperty("end_line").GetInt32());
     }
 }

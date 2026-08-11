@@ -3,6 +3,7 @@ using static CodeIndex.Tests.QueryCommandTestSupport;
 
 namespace CodeIndex.Tests;
 
+[Collection("Console sensitive")]
 public class QueryCommandRunnerBatchParsingTests
 {
     [Fact]
