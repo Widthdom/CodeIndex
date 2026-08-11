@@ -1,8 +1,9 @@
 using CodeIndex.Cli;
+using static CodeIndex.Tests.QueryCommandTestSupport;
 
 namespace CodeIndex.Tests;
 
-public partial class QueryCommandRunnerTests
+public sealed class QueryCommandRunnerIssue4831Tests
 {
     [Fact]
     public void RunSymbols_CSharpExactNameRejectsDeclarationContinuationPhantoms_Issue4831()
@@ -19,7 +20,7 @@ public partial class QueryCommandRunnerTests
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
                 [projectRoot, "--json", "--quiet"],
-                _jsonOptions));
+                JsonOptions));
             var (definitionExitCode, definitionStdout, definitionStderr) = CaptureConsole(
                 () => QueryCommandRunner.RunSymbols(
                     [
@@ -29,15 +30,15 @@ public partial class QueryCommandRunnerTests
                         "--exact-name",
                         "--lang", "csharp",
                     ],
-                    _jsonOptions));
+                    JsonOptions));
             var (outExitCode, outStdout, outStderr) = CaptureConsole(
                 () => QueryCommandRunner.RunSymbols(
                     ["out", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
-                    _jsonOptions));
+                    JsonOptions));
             var (paramsExitCode, paramsStdout, paramsStderr) = CaptureConsole(
                 () => QueryCommandRunner.RunSymbols(
                     ["params", "--db", dbPath, "--json", "--exact-name", "--lang", "csharp"],
-                    _jsonOptions));
+                    JsonOptions));
 
             var definitionRows = ParseJsonLines(definitionStdout);
 

@@ -1,10 +1,11 @@
 using CodeIndex.Cli;
 using CodeIndex.Indexer;
 using Microsoft.Data.Sqlite;
+using static CodeIndex.Tests.QueryCommandTestSupport;
 
 namespace CodeIndex.Tests;
 
-public partial class QueryCommandRunnerTests
+public sealed class QueryCommandRunnerIssue4833Tests
 {
     [Fact]
     public void CSharpNamedArgumentLabels_DoNotCreateExactReferencesOrDependencies_Issue4833()
@@ -91,7 +92,7 @@ public partial class QueryCommandRunnerTests
 
             var (indexExitCode, _, indexStderr) = CaptureConsole(() => IndexCommandRunner.Run(
                 [projectRoot, "--json", "--quiet"],
-                _jsonOptions));
+                JsonOptions));
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
 
             Assert.Equal(CommandExitCodes.Success, indexExitCode);
@@ -107,7 +108,7 @@ public partial class QueryCommandRunnerTests
                         "--kind", "type_reference",
                         "--lang", "csharp",
                     ],
-                    _jsonOptions));
+                    JsonOptions));
             using var labelDocument = ParseJsonOutput(labelStdout);
 
             Assert.Equal(CommandExitCodes.Success, labelExitCode);
@@ -125,7 +126,7 @@ public partial class QueryCommandRunnerTests
                         "--kind", "type_reference",
                         "--lang", "csharp",
                     ],
-                    _jsonOptions));
+                    JsonOptions));
             using var payloadDocument = ParseJsonOutput(payloadStdout);
             var payloadReference = payloadDocument.RootElement;
 
@@ -185,7 +186,7 @@ public partial class QueryCommandRunnerTests
             var (depsExitCode, depsStdout, depsStderr) = CaptureConsole(
                 () => QueryCommandRunner.RunDeps(
                     ["--db", dbPath, "--json", "--lang", "csharp", "--limit", "100"],
-                    _jsonOptions));
+                    JsonOptions));
             using var depsDocument = ParseJsonOutput(depsStdout);
             var dependencyEdges = depsDocument.RootElement.GetProperty("edges").EnumerateArray().ToArray();
 

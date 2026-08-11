@@ -1,10 +1,11 @@
 using System.Text;
 using System.Text.Json;
 using CodeIndex.Cli;
+using static CodeIndex.Tests.QueryCommandTestSupport;
 
 namespace CodeIndex.Tests;
 
-public partial class QueryCommandRunnerTests
+public class QueryCommandRunnerAuditSarifIssue4903Tests
 {
     [Fact]
     public void RunSearch_RecipeSarifMaxJsonBytesUsesExactUtf8BudgetAndWholeResults_Issue4903()
@@ -42,7 +43,7 @@ public partial class QueryCommandRunnerTests
                 "--limit", "20",
             ];
             var (unboundedExitCode, unboundedStdout, unboundedStderr) = CaptureConsole(
-                () => QueryCommandRunner.RunSearch(args, _jsonOptions));
+                () => QueryCommandRunner.RunSearch(args, JsonOptions));
             var exactBudget = Encoding.UTF8.GetByteCount(unboundedStdout);
 
             Assert.Equal(CommandExitCodes.Success, unboundedExitCode);
@@ -51,7 +52,7 @@ public partial class QueryCommandRunnerTests
 
             var exactArgs = args.Concat(["--max-json-bytes", exactBudget.ToString()]).ToArray();
             var (exactExitCode, exactStdout, exactStderr) = CaptureConsole(
-                () => QueryCommandRunner.RunSearch(exactArgs, _jsonOptions));
+                () => QueryCommandRunner.RunSearch(exactArgs, JsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, exactExitCode);
             Assert.Equal(string.Empty, exactStderr);
@@ -61,7 +62,7 @@ public partial class QueryCommandRunnerTests
             var boundedBudget = exactBudget - 1;
             var boundedArgs = args.Concat(["--max-json-bytes", boundedBudget.ToString()]).ToArray();
             var (boundedExitCode, boundedStdout, boundedStderr) = CaptureConsole(
-                () => QueryCommandRunner.RunSearch(boundedArgs, _jsonOptions));
+                () => QueryCommandRunner.RunSearch(boundedArgs, JsonOptions));
 
             Assert.Equal(CommandExitCodes.PartialResult, boundedExitCode);
             Assert.Equal(string.Empty, boundedStderr);
@@ -114,7 +115,7 @@ public partial class QueryCommandRunnerTests
 
             var allowPartialArgs = boundedArgs.Concat(["--allow-partial"]).ToArray();
             var (allowedExitCode, allowedStdout, allowedStderr) = CaptureConsole(
-                () => QueryCommandRunner.RunSearch(allowPartialArgs, _jsonOptions));
+                () => QueryCommandRunner.RunSearch(allowPartialArgs, JsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, allowedExitCode);
             Assert.Equal(string.Empty, allowedStderr);
@@ -157,7 +158,7 @@ public partial class QueryCommandRunnerTests
             ];
 
             var (exitCode, stdout, stderr) = CaptureConsole(
-                () => QueryCommandRunner.RunSearch(args, _jsonOptions));
+                () => QueryCommandRunner.RunSearch(args, JsonOptions));
 
             Assert.Equal(CommandExitCodes.PartialResult, exitCode);
             Assert.Equal(string.Empty, stderr);
@@ -196,7 +197,7 @@ public partial class QueryCommandRunnerTests
                 .Append("1")
                 .ToArray();
             var (tooSmallExitCode, tooSmallStdout, tooSmallStderr) = CaptureConsole(
-                () => QueryCommandRunner.RunSearch(tooSmallArgs, _jsonOptions));
+                () => QueryCommandRunner.RunSearch(tooSmallArgs, JsonOptions));
 
             Assert.Equal(CommandExitCodes.UsageError, tooSmallExitCode);
             Assert.Equal(string.Empty, tooSmallStdout);
@@ -259,7 +260,7 @@ public partial class QueryCommandRunnerTests
                 "--limit", "2",
             ];
             var (firstPageExitCode, firstPageStdout, firstPageStderr) = CaptureConsole(
-                () => QueryCommandRunner.RunSearch(firstPageArgs, _jsonOptions));
+                () => QueryCommandRunner.RunSearch(firstPageArgs, JsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, firstPageExitCode);
             Assert.Equal(string.Empty, firstPageStderr);
@@ -273,7 +274,7 @@ public partial class QueryCommandRunnerTests
 
             var secondPageArgs = firstPageArgs.Concat(["--cursor", activeCursor!]).ToArray();
             var (secondPageExitCode, secondPageStdout, secondPageStderr) = CaptureConsole(
-                () => QueryCommandRunner.RunSearch(secondPageArgs, _jsonOptions));
+                () => QueryCommandRunner.RunSearch(secondPageArgs, JsonOptions));
             Assert.Equal(CommandExitCodes.Success, secondPageExitCode);
             Assert.Equal(string.Empty, secondPageStderr);
             var boundedBudget = Encoding.UTF8.GetByteCount(secondPageStdout) - 1;
@@ -282,7 +283,7 @@ public partial class QueryCommandRunnerTests
                 .Concat(["--max-json-bytes", boundedBudget.ToString()])
                 .ToArray();
             var (boundedExitCode, boundedStdout, boundedStderr) = CaptureConsole(
-                () => QueryCommandRunner.RunSearch(boundedArgs, _jsonOptions));
+                () => QueryCommandRunner.RunSearch(boundedArgs, JsonOptions));
 
             Assert.Equal(CommandExitCodes.PartialResult, boundedExitCode);
             Assert.Equal(string.Empty, boundedStderr);
@@ -325,7 +326,7 @@ public partial class QueryCommandRunnerTests
                 "--limit", "10",
             ];
             var (unboundedExitCode, unboundedStdout, unboundedStderr) = CaptureConsole(
-                () => QueryCommandRunner.RunSearch(args, _jsonOptions));
+                () => QueryCommandRunner.RunSearch(args, JsonOptions));
             var exactBudget = Encoding.UTF8.GetByteCount(unboundedStdout);
 
             Assert.Equal(CommandExitCodes.Success, unboundedExitCode);
@@ -335,7 +336,7 @@ public partial class QueryCommandRunnerTests
             var (exactExitCode, exactStdout, exactStderr) = CaptureConsole(
                 () => QueryCommandRunner.RunSearch(
                     args.Concat(["--max-json-bytes", exactBudget.ToString()]).ToArray(),
-                    _jsonOptions));
+                    JsonOptions));
             Assert.Equal(CommandExitCodes.Success, exactExitCode);
             Assert.Equal(string.Empty, exactStderr);
             Assert.Equal(unboundedStdout, exactStdout);
@@ -343,7 +344,7 @@ public partial class QueryCommandRunnerTests
             var (underExitCode, underStdout, underStderr) = CaptureConsole(
                 () => QueryCommandRunner.RunSearch(
                     args.Concat(["--max-json-bytes", (exactBudget - 1).ToString()]).ToArray(),
-                    _jsonOptions));
+                    JsonOptions));
             Assert.Equal(CommandExitCodes.UsageError, underExitCode);
             Assert.Equal(string.Empty, underStdout);
             Assert.Contains(
@@ -383,7 +384,7 @@ public partial class QueryCommandRunnerTests
             var (exitCode, stdout, stderr) = CaptureConsole(
                 () => QueryCommandRunner.RunSearch(
                     ["Needle", "--db", dbPath, "--format", "sarif", "--max-json-bytes", "4000"],
-                    _jsonOptions));
+                    JsonOptions));
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
             Assert.Equal(string.Empty, stdout);

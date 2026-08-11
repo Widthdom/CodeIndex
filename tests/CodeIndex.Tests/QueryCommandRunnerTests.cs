@@ -7,6 +7,7 @@ using CodeIndex.Indexer;
 using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
+using static CodeIndex.Tests.QueryCommandTestSupport;
 
 namespace CodeIndex.Tests;
 
@@ -9156,52 +9157,6 @@ public partial class QueryCommandRunnerTests
                     })
                     .ToArray());
         }
-    }
-
-    private static string CreateHotspotFamilyFixtureDb(string projectRoot, bool markHotspotFamilyReady)
-    {
-        var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-        TestProjectHelper.InsertIndexedFile(
-            dbPath,
-            "src/Api.Part1.cs",
-            "csharp",
-            """
-            public partial class Api
-            {
-                public void Run() { }
-            }
-            """);
-        TestProjectHelper.InsertIndexedFile(
-            dbPath,
-            "src/Api.Part2.cs",
-            "csharp",
-            """
-            public partial class Api
-            {
-                public void Run(int value) { }
-            }
-            """);
-        TestProjectHelper.InsertIndexedFile(
-            dbPath,
-            "src/Caller.cs",
-            "csharp",
-            """
-            public class Caller
-            {
-                public void Call(Api api)
-                {
-                    api.Run();
-                    api.Run(1);
-                }
-            }
-            """);
-
-        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
-        var writer = new DbWriter(db.Connection);
-        writer.MarkGraphReady();
-        if (markHotspotFamilyReady)
-            writer.MarkHotspotFamilyReady("csharp", "fixture-fingerprint");
-        return dbPath;
     }
 
     private static string CreateLegacyDbWithoutIndexedAt(string projectRoot)

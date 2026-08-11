@@ -1,9 +1,10 @@
 using System.Text.Json;
 using CodeIndex.Cli;
+using static CodeIndex.Tests.QueryCommandTestSupport;
 
 namespace CodeIndex.Tests;
 
-public partial class QueryCommandRunnerTests
+public sealed class QueryCommandRunnerJsonErrorIssue4564Tests
 {
     [Fact]
     public void JsonValidationAndLookupFailures_EmitVersionedErrorEnvelope_Issue4564()
@@ -24,37 +25,37 @@ public partial class QueryCommandRunnerTests
                     "search validation",
                     CommandExitCodes.UsageError,
                     CommandErrorCodes.UsageError,
-                    () => QueryCommandRunner.RunSearch(["--json"], _jsonOptions)),
+                    () => QueryCommandRunner.RunSearch(["--json"], JsonOptions)),
                 (
                     "find validation",
                     CommandExitCodes.UsageError,
                     CommandErrorCodes.UsageError,
-                    () => QueryCommandRunner.RunFind(["--json"], _jsonOptions)),
+                    () => QueryCommandRunner.RunFind(["--json"], JsonOptions)),
                 (
                     "status mode validation",
                     CommandExitCodes.UsageError,
                     CommandErrorCodes.UsageError,
-                    () => QueryCommandRunner.RunStatus(["--config", "--check", "--json"], _jsonOptions)),
+                    () => QueryCommandRunner.RunStatus(["--config", "--check", "--json"], JsonOptions)),
                 (
                     "goto not found",
                     CommandExitCodes.NotFound,
                     CommandErrorCodes.QueryNotFound,
-                    () => QueryCommandRunner.RunGoto(["__NOT_FOUND_9fb0__", "--db", dbPath, "--json"], _jsonOptions)),
+                    () => QueryCommandRunner.RunGoto(["__NOT_FOUND_9fb0__", "--db", dbPath, "--json"], JsonOptions)),
                 (
                     "excerpt file not found",
                     CommandExitCodes.NotFound,
                     CommandErrorCodes.FileNotFound,
-                    () => QueryCommandRunner.RunExcerpt(["NOPE.md", "--start", "1", "--db", dbPath, "--json"], _jsonOptions)),
+                    () => QueryCommandRunner.RunExcerpt(["NOPE.md", "--start", "1", "--db", dbPath, "--json"], JsonOptions)),
                 (
                     "excerpt line out of range",
                     CommandExitCodes.InvalidArgument,
                     CommandErrorCodes.LineOutOfRange,
-                    () => QueryCommandRunner.RunExcerpt(["src/Sample.cs", "--start", "99", "--db", dbPath, "--json"], _jsonOptions)),
+                    () => QueryCommandRunner.RunExcerpt(["src/Sample.cs", "--start", "99", "--db", dbPath, "--json"], JsonOptions)),
                 (
                     "excerpt non-positive line",
                     CommandExitCodes.InvalidArgument,
                     CommandErrorCodes.LineOutOfRange,
-                    () => QueryCommandRunner.RunExcerpt(["src/Sample.cs", "--start", "0", "--db", dbPath, "--json"], _jsonOptions)),
+                    () => QueryCommandRunner.RunExcerpt(["src/Sample.cs", "--start", "0", "--db", dbPath, "--json"], JsonOptions)),
             };
 
             foreach (var testCase in cases)

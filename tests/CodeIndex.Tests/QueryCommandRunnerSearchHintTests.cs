@@ -1,9 +1,10 @@
 using System.Text.Json;
 using CodeIndex.Cli;
+using static CodeIndex.Tests.QueryCommandTestSupport;
 
 namespace CodeIndex.Tests;
 
-public partial class QueryCommandRunnerTests
+public class QueryCommandRunnerSearchHintTests
 {
     [Fact]
     public void RunSearch_ExactSubstringJsonOutputsLiteralHighlightMetadata()
@@ -20,7 +21,7 @@ public partial class QueryCommandRunnerTests
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 ["CommandText = $", "--db", dbPath, "--json", "--exact-substring", "--snippet-lines", "2"],
-                _jsonOptions));
+                JsonOptions));
 
             using var document = ParseJsonOutput(stdout);
             var root = document.RootElement;
@@ -67,7 +68,7 @@ public partial class QueryCommandRunnerTests
             {
                 var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                     testCase.Args,
-                    _jsonOptions));
+                    JsonOptions));
 
                 Assert.Equal(CommandExitCodes.UsageError, exitCode);
                 if (testCase.Json)
@@ -113,7 +114,7 @@ public partial class QueryCommandRunnerTests
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 ["CommandText", "--db", dbPath, "--json", "--fts", "--snippet-lines", "3", "--max-line-width", "80"],
-                _jsonOptions));
+                JsonOptions));
 
             using var document = ParseJsonOutput(stdout);
             var root = document.RootElement;
@@ -148,7 +149,7 @@ public partial class QueryCommandRunnerTests
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 ["CommandText = $", "--db", dbPath, "--limit", "1"],
-                _jsonOptions));
+                JsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Contains("src/sql.cs", stdout);
@@ -177,7 +178,7 @@ public partial class QueryCommandRunnerTests
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 ["CommandText = $", "--db", dbPath, "--json", "--limit", "1"],
-                _jsonOptions));
+                JsonOptions));
 
             using var document = ParseJsonOutput(stdout);
             var hint = document.RootElement.GetProperty("exact_substring_hint");
@@ -217,7 +218,7 @@ public partial class QueryCommandRunnerTests
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 ["ToArray()", "--db", dbPath, "--json=array", "--limit", "2"],
-                _jsonOptions));
+                JsonOptions));
 
             using var document = ParseJsonOutput(stdout);
             var rows = document.RootElement.EnumerateArray().ToArray();
@@ -255,7 +256,7 @@ public partial class QueryCommandRunnerTests
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 ["throw;", "--db", dbPath, "--json=array"],
-                _jsonOptions));
+                JsonOptions));
 
             using var document = ParseJsonOutput(stdout);
 

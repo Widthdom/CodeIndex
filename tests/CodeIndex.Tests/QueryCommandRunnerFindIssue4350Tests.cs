@@ -1,8 +1,9 @@
 using CodeIndex.Cli;
+using static CodeIndex.Tests.QueryCommandTestSupport;
 
 namespace CodeIndex.Tests;
 
-public partial class QueryCommandRunnerTests
+public sealed class QueryCommandRunnerFindIssue4350Tests
 {
     [Fact]
     public void RunFind_AllScopeLineScanLimitControlsCountJson_Issue4350()
@@ -15,7 +16,7 @@ public partial class QueryCommandRunnerTests
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
                 ["alpha", "--db", dbPath, "--all", "--json", "--count", "--line-scan-limit", "1"],
-                _jsonOptions));
+                JsonOptions));
 
             using var document = ParseJsonOutput(stdout);
             var json = document.RootElement;
@@ -47,7 +48,7 @@ public partial class QueryCommandRunnerTests
     {
         var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
             ["needle", "--all", "--line-scan-limit", value],
-            _jsonOptions));
+            JsonOptions));
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
         Assert.Contains("--line-scan-limit", stderr);
@@ -58,7 +59,7 @@ public partial class QueryCommandRunnerTests
     {
         var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
             ["needle", "--path", "src/app.txt", "--line-scan-limit", "1000"],
-            _jsonOptions));
+            JsonOptions));
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
         Assert.Contains("--line-scan-limit is only supported with find --all", stderr);
@@ -72,7 +73,7 @@ public partial class QueryCommandRunnerTests
     {
         var (exitCode, _, stderr) = CaptureConsole(() => QueryCommandRunner.RunFind(
             ["needle", "--path", "src/app.txt", "--format", "compact", flag, value],
-            _jsonOptions));
+            JsonOptions));
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
         Assert.Contains("find --format compact does not include snippets", stderr);

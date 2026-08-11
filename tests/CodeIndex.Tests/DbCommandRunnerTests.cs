@@ -9,72 +9,8 @@ namespace CodeIndex.Tests;
 /// Tests for `cdidx db` maintenance commands.
 /// `cdidx db` 保守コマンドのテスト。
 /// </summary>
-[Collection("SQLite pool sensitive")]
-public class DbCommandRunnerTests
+public class DbCommandRunnerParseTests
 {
-    private readonly JsonSerializerOptions _jsonOptions = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
-    };
-
-    public static IEnumerable<object[]> DirectSqliteModeArgs()
-    {
-        yield return new object[] { new[] { "--integrity-check" } };
-        yield return new object[] { new[] { "integrity" } };
-        yield return new object[] { new[] { "schema" } };
-        yield return new object[] { new[] { "prune", "--dry-run" } };
-    }
-
-    private static void InitializeEmptyDb(string dbPath)
-    {
-        using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
-            db.InitializeSchema();
-        ReleaseSqlitePools();
-    }
-
-    private static void InitializeDbWithOrphans(string dbPath)
-    {
-        using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
-            db.InitializeSchema();
-        SeedOrphans(dbPath);
-        ReleaseSqlitePools();
-    }
-
-    private static void ReleaseSqlitePools()
-        => SqliteConnection.ClearAllPools();
-
-    private static void DeleteDbFile(string dbPath)
-    {
-        ReleaseSqlitePools();
-        TestProjectHelper.DeleteFile(dbPath);
-    }
-
-    private static void DeleteWorkDirectory(string root)
-    {
-        ReleaseSqlitePools();
-        TestProjectHelper.DeleteDirectory(root);
-    }
-
-    private static void CreateUnixFifo(string path)
-    {
-        var startInfo = new System.Diagnostics.ProcessStartInfo
-        {
-            FileName = "mkfifo",
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-        startInfo.ArgumentList.Add(path);
-
-        using var process = System.Diagnostics.Process.Start(startInfo)
-            ?? throw new InvalidOperationException("Failed to start mkfifo / mkfifo の起動に失敗");
-        var stderr = process.StandardError.ReadToEnd();
-        process.WaitForExit();
-        if (process.ExitCode != 0)
-            throw new InvalidOperationException($"mkfifo failed: {stderr.Trim()}");
-    }
-
     [Fact]
     public void ParseArgs_IntegrityCheckFlagSetsFlag()
     {
@@ -255,6 +191,73 @@ public class DbCommandRunnerTests
         Assert.True(options.RestoreBackupsDryRun);
         Assert.Equal(3, options.RestoreBackupsKeep);
         Assert.Null(options.ParseError);
+    }
+}
+
+[Collection("SQLite pool sensitive")]
+public class DbCommandRunnerTests
+{
+    private readonly JsonSerializerOptions _jsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+    };
+
+    public static IEnumerable<object[]> DirectSqliteModeArgs()
+    {
+        yield return new object[] { new[] { "--integrity-check" } };
+        yield return new object[] { new[] { "integrity" } };
+        yield return new object[] { new[] { "schema" } };
+        yield return new object[] { new[] { "prune", "--dry-run" } };
+    }
+
+    private static void InitializeEmptyDb(string dbPath)
+    {
+        using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            db.InitializeSchema();
+        ReleaseSqlitePools();
+    }
+
+    private static void InitializeDbWithOrphans(string dbPath)
+    {
+        using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            db.InitializeSchema();
+        SeedOrphans(dbPath);
+        ReleaseSqlitePools();
+    }
+
+    private static void ReleaseSqlitePools()
+        => SqliteConnection.ClearAllPools();
+
+    private static void DeleteDbFile(string dbPath)
+    {
+        ReleaseSqlitePools();
+        TestProjectHelper.DeleteFile(dbPath);
+    }
+
+    private static void DeleteWorkDirectory(string root)
+    {
+        ReleaseSqlitePools();
+        TestProjectHelper.DeleteDirectory(root);
+    }
+
+    private static void CreateUnixFifo(string path)
+    {
+        var startInfo = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = "mkfifo",
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        startInfo.ArgumentList.Add(path);
+
+        using var process = System.Diagnostics.Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Failed to start mkfifo / mkfifo の起動に失敗");
+        var stderr = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        if (process.ExitCode != 0)
+            throw new InvalidOperationException($"mkfifo failed: {stderr.Trim()}");
     }
 
     [Fact]

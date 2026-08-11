@@ -1,9 +1,10 @@
 using System.Text.Json;
 using CodeIndex.Cli;
+using static CodeIndex.Tests.QueryCommandTestSupport;
 
 namespace CodeIndex.Tests;
 
-public partial class QueryCommandRunnerTests
+public class QueryCommandRunnerSearchIssue4906Tests
 {
     [Theory]
     [InlineData("Widget.*", "--regex")]
@@ -15,7 +16,7 @@ public partial class QueryCommandRunnerTests
         var (exitCode, stdout, stderr) = CaptureConsole(() =>
             ProgramRunner.Run(
                 ["search", query, scanFlag],
-                _jsonOptions,
+                JsonOptions,
                 "1.0.0-test"));
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
@@ -52,7 +53,7 @@ public partial class QueryCommandRunnerTests
                     "--max-line-width", "120",
                     "--json",
                 ],
-                _jsonOptions,
+                JsonOptions,
                 "1.0.0-test"));
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
@@ -104,7 +105,7 @@ public partial class QueryCommandRunnerTests
         var (exitCode, stdout, stderr) = CaptureConsole(() =>
             ProgramRunner.Run(
                 ["search", "TODO", "--regex", "--path", "src/**", "--format", "csv"],
-                _jsonOptions,
+                JsonOptions,
                 "1.0.0-test"));
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
@@ -119,7 +120,7 @@ public partial class QueryCommandRunnerTests
         var (exitCode, stdout, stderr) = CaptureConsole(() =>
             ProgramRunner.Run(
                 ["search", "TODO", "--regex", "--format", "count"],
-                _jsonOptions,
+                JsonOptions,
                 "1.0.0-test"));
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
@@ -155,7 +156,7 @@ public partial class QueryCommandRunnerTests
         foreach (var testCase in cases)
         {
             var (exitCode, stdout, stderr) = CaptureConsole(() =>
-                ProgramRunner.Run(testCase.Args, _jsonOptions, "1.0.0-test"));
+                ProgramRunner.Run(testCase.Args, JsonOptions, "1.0.0-test"));
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
             Assert.Equal(string.Empty, stderr);
@@ -179,7 +180,7 @@ public partial class QueryCommandRunnerTests
         foreach (var args in consumedOptionCases)
         {
             var (exitCode, stdout, stderr) = CaptureConsole(() =>
-                ProgramRunner.Run(args, _jsonOptions, "1.0.0-test"));
+                ProgramRunner.Run(args, JsonOptions, "1.0.0-test"));
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
             Assert.Equal(string.Empty, stderr);
@@ -227,7 +228,7 @@ public partial class QueryCommandRunnerTests
         foreach (var testCase in cases)
         {
             var (exitCode, stdout, stderr) = CaptureConsole(() =>
-                ProgramRunner.Run(testCase.Args, _jsonOptions, "1.0.0-test"));
+                ProgramRunner.Run(testCase.Args, JsonOptions, "1.0.0-test"));
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
             Assert.Equal(string.Empty, stderr);
@@ -259,7 +260,7 @@ public partial class QueryCommandRunnerTests
                     "search", "TODO", "--regex", "--path", "src/**",
                     "--format", "compact", "--snippet-lines", "3",
                 ],
-                _jsonOptions,
+                JsonOptions,
                 "1.0.0-test"));
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
@@ -284,7 +285,7 @@ public partial class QueryCommandRunnerTests
                     "search", "TODO", "--regex", "--path", "src/**",
                     "--json", "--max-json-bytes", "200",
                 ],
-                _jsonOptions,
+                JsonOptions,
                 "1.0.0-test"));
 
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
@@ -322,7 +323,7 @@ public partial class QueryCommandRunnerTests
         foreach (var testCase in cases)
         {
             var (exitCode, stdout, stderr) = CaptureConsole(() =>
-                ProgramRunner.Run(testCase.Args, _jsonOptions, "1.0.0-test"));
+                ProgramRunner.Run(testCase.Args, JsonOptions, "1.0.0-test"));
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
             Assert.Equal(string.Empty, stderr);

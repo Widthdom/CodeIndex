@@ -1,8 +1,9 @@
 using CodeIndex.Cli;
+using static CodeIndex.Tests.QueryCommandTestSupport;
 
 namespace CodeIndex.Tests;
 
-public partial class QueryCommandRunnerTests
+public sealed class QueryCommandRunnerIssue4830Tests
 {
     [Fact]
     public void RunSymbols_CSharpStaticLambdaCorpusHasNoPhantomDeclarations_Issue4830()
@@ -35,7 +36,7 @@ public partial class QueryCommandRunnerTests
 
         var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSymbols(
             ["--db", dbPath, "--json", "--lang", "csharp"],
-            _jsonOptions));
+            JsonOptions));
         var rows = ParseJsonLines(stdout);
         var symbols = rows
             .Select(row => (

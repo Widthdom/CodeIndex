@@ -22,77 +22,57 @@ public class CiWorkflowTests
             "--results-directory\", $resultsDirectory");
         AssertContainsAll(
             workflow,
-            "include:\n" +
-            "          - os: ubuntu-24.04\n" +
-            "            test-framework: net8.0\n" +
-            "            sdk-versions: |\n" +
-            "              8.0.413\n" +
-            "              9.0.301\n" +
-            "            sdk-label: 8.0.413 9.0.301\n" +
-            "            primary_lane: true\n" +
-            "            collect_coverage: true\n" +
-            "            test-shard: index-command\n" +
-            "            test-filter: FullyQualifiedName~CodeIndex.Tests.IndexCommandRunnerTests\n" +
-            "          - os: ubuntu-24.04\n" +
-            "            test-framework: net8.0\n" +
-            "            sdk-versions: |\n" +
-            "              8.0.413\n" +
-            "              9.0.301\n" +
-            "            sdk-label: 8.0.413 9.0.301\n" +
-            "            primary_lane: false\n" +
-            "            collect_coverage: true\n" +
-            "            test-shard: remaining\n" +
-            "            test-filter: FullyQualifiedName!~CodeIndex.Tests.IndexCommandRunnerTests\n" +
-            "          - os: ubuntu-24.04\n" +
-            "            test-framework: net9.0\n" +
-            "            sdk-versions: 9.0.301\n" +
-            "            sdk-label: 9.0.301\n" +
-            "            primary_lane: false\n" +
-            "            collect_coverage: false\n" +
-            "            test-shard: full\n" +
-            "            test-filter: ''\n" +
-            "          - os: windows-2022\n" +
-            "            test-framework: net8.0\n" +
-            "            sdk-versions: |\n" +
-            "              8.0.413\n" +
-            "              9.0.301\n" +
-            "            sdk-label: 8.0.413 9.0.301\n" +
-            "            primary_lane: false\n" +
-            "            collect_coverage: false\n" +
-            "            test-shard: index-command\n" +
-            "            test-filter: FullyQualifiedName~CodeIndex.Tests.IndexCommandRunnerTests\n" +
-            "          - os: windows-2022\n" +
-            "            test-framework: net8.0\n" +
-            "            sdk-versions: |\n" +
-            "              8.0.413\n" +
-            "              9.0.301\n" +
-            "            sdk-label: 8.0.413 9.0.301\n" +
-            "            primary_lane: false\n" +
-            "            collect_coverage: false\n" +
-            "            test-shard: remaining\n" +
-            "            test-filter: FullyQualifiedName!~CodeIndex.Tests.IndexCommandRunnerTests\n" +
-            "          - os: macos-14\n" +
-            "            test-framework: net8.0\n" +
-            "            sdk-versions: |\n" +
-            "              8.0.413\n" +
-            "              9.0.301\n" +
-            "            sdk-label: 8.0.413 9.0.301\n" +
-            "            primary_lane: false\n" +
-            "            collect_coverage: false\n" +
-            "            test-shard: index-command\n" +
-            "            test-filter: FullyQualifiedName~CodeIndex.Tests.IndexCommandRunnerTests\n" +
-            "          - os: macos-14\n" +
-            "            test-framework: net8.0\n" +
-            "            sdk-versions: |\n" +
-            "              8.0.413\n" +
-            "              9.0.301\n" +
-            "            sdk-label: 8.0.413 9.0.301\n" +
-            "            primary_lane: false\n" +
-            "            collect_coverage: false\n" +
-            "            test-shard: remaining\n" +
-            "            test-filter: FullyQualifiedName!~CodeIndex.Tests.IndexCommandRunnerTests",
+            "include:",
             "- name: Set up .NET SDK\n        id: setup-dotnet\n        continue-on-error: true\n        uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5.3.0\n        with:\n          dotnet-version: ${{ matrix.sdk-versions }}",
             "- name: Retry .NET SDK setup\n        if: steps.setup-dotnet.outcome == 'failure'\n        uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5.3.0\n        with:\n          dotnet-version: ${{ matrix.sdk-versions }}");
+        AssertWorkflowLane(
+            workflow,
+            "ubuntu-24.04",
+            "net8.0",
+            ["8.0.413", "9.0.301"],
+            primaryLane: true,
+            collectCoverage: true,
+            testShard: "index-command",
+            testFilter: "FullyQualifiedName~CodeIndex.Tests.IndexCommandRunnerTests");
+        AssertWorkflowLane(
+            workflow,
+            "ubuntu-24.04",
+            "net8.0",
+            ["8.0.413", "9.0.301"],
+            primaryLane: false,
+            collectCoverage: true,
+            testShard: "remaining",
+            testFilter: "FullyQualifiedName!~CodeIndex.Tests.IndexCommandRunnerTests");
+        AssertWorkflowLane(
+            workflow,
+            "ubuntu-24.04",
+            "net9.0",
+            ["9.0.301"],
+            primaryLane: false,
+            collectCoverage: false,
+            testShard: "full",
+            testFilter: "''");
+        foreach (var os in new[] { "windows-2022", "macos-14" })
+        {
+            AssertWorkflowLane(
+                workflow,
+                os,
+                "net8.0",
+                ["8.0.413", "9.0.301"],
+                primaryLane: false,
+                collectCoverage: false,
+                testShard: "index-command",
+                testFilter: "FullyQualifiedName~CodeIndex.Tests.IndexCommandRunnerTests");
+            AssertWorkflowLane(
+                workflow,
+                os,
+                "net8.0",
+                ["8.0.413", "9.0.301"],
+                primaryLane: false,
+                collectCoverage: false,
+                testShard: "remaining",
+                testFilter: "FullyQualifiedName!~CodeIndex.Tests.IndexCommandRunnerTests");
+        }
         AssertDoesNotContainAny(
             workflow,
             "function Invoke-TestRun");
@@ -267,14 +247,9 @@ public class CiWorkflowTests
             "        if: runner.os == 'Windows'\n" +
             "        shell: pwsh\n" +
             "        run: ./.github/scripts/configure-windows-test-host.ps1 -Workspace \"${{ github.workspace }}\"";
-        const string expectedReleaseStep =
-            "- name: Configure Windows test host\n" +
-            "        if: runner.os == 'Windows' && !matrix.cross_compile\n" +
-            "        shell: pwsh\n" +
-            "        run: ./.github/scripts/configure-windows-test-host.ps1 -Workspace \"${{ github.workspace }}\"";
 
         AssertContainsAll(dotnetWorkflow, expectedDotnetStep);
-        AssertContainsAll(releaseWorkflow, expectedReleaseStep);
+        AssertDoesNotContainAny(releaseWorkflow, "Configure Windows test host");
         AssertDoesNotContainAny(dotnetWorkflow, "Add-MpPreference", "Get-MpPreference");
         AssertDoesNotContainAny(releaseWorkflow, "Add-MpPreference", "Get-MpPreference");
         AssertContainsAll(
@@ -554,6 +529,40 @@ public class CiWorkflowTests
     {
         foreach (var expected in expectedValues)
             Assert.Contains(expected, text);
+    }
+
+    private static void AssertWorkflowLane(
+        string workflow,
+        string os,
+        string framework,
+        string[] sdkVersions,
+        bool primaryLane,
+        bool collectCoverage,
+        string testShard,
+        string testFilter)
+    {
+        var lines = new List<string>
+        {
+            $"          - os: {os}",
+            $"            test-framework: {framework}",
+        };
+        if (sdkVersions.Length == 1)
+        {
+            lines.Add($"            sdk-versions: {sdkVersions[0]}");
+        }
+        else
+        {
+            lines.Add("            sdk-versions: |");
+            lines.AddRange(sdkVersions.Select(static version => $"              {version}"));
+        }
+
+        lines.Add($"            sdk-label: {string.Join(' ', sdkVersions)}");
+        lines.Add($"            primary_lane: {primaryLane.ToString().ToLowerInvariant()}");
+        lines.Add($"            collect_coverage: {collectCoverage.ToString().ToLowerInvariant()}");
+        lines.Add($"            test-shard: {testShard}");
+        lines.Add($"            test-filter: {testFilter}");
+
+        Assert.Contains(string.Join('\n', lines), workflow);
     }
 
     private static void AssertContainsAll(string text, StringComparison comparisonType, params string[] expectedValues)

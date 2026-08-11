@@ -1,8 +1,10 @@
 using CodeIndex.Cli;
+using static CodeIndex.Tests.QueryCommandTestSupport;
 
 namespace CodeIndex.Tests;
 
-public partial class QueryCommandRunnerTests
+[Collection("Console sensitive")]
+public class QueryCommandRunnerBatchParsingTests
 {
     [Fact]
     public void RunBatch_AcceptsStructuredCommandsAndValidatesTheirShape_Issue4723()
@@ -19,7 +21,7 @@ public partial class QueryCommandRunnerTests
 
         var (exitCode, stdout, stderr) = CaptureConsoleWithInput(
             input,
-            () => QueryCommandRunner.RunBatch(["--db", dbPath, "--json-summary"], _jsonOptions));
+            () => QueryCommandRunner.RunBatch(["--db", dbPath, "--json-summary"], JsonOptions));
         var lines = ParseJsonLines(stdout);
         try
         {
@@ -76,7 +78,7 @@ public partial class QueryCommandRunnerTests
                     "--max-input-lines", "2",
                     "--max-output-chars=8192",
                 ],
-                _jsonOptions));
+                JsonOptions));
         var lines = ParseJsonLines(stdout);
         try
         {
@@ -95,22 +97,22 @@ public partial class QueryCommandRunnerTests
 
         var (invalidExitCode, _, invalidStderr) = CaptureConsole(() => QueryCommandRunner.RunBatch(
             ["--db", dbPath, "--json-summary", "--parallel", (QueryCommandRunner.BatchMaxParallelism + 1).ToString()],
-            _jsonOptions));
+            JsonOptions));
         Assert.Equal(CommandExitCodes.UsageError, invalidExitCode);
         Assert.Contains($"from 1 to {QueryCommandRunner.BatchMaxParallelism}", invalidStderr);
 
         var (parallelWithoutSummaryExitCode, _, parallelWithoutSummaryStderr) = CaptureConsole(
-            () => QueryCommandRunner.RunBatch(["--db", dbPath, "--parallel", "2"], _jsonOptions));
+            () => QueryCommandRunner.RunBatch(["--db", dbPath, "--parallel", "2"], JsonOptions));
         Assert.Equal(CommandExitCodes.UsageError, parallelWithoutSummaryExitCode);
         Assert.Contains("--parallel requires --json-summary", parallelWithoutSummaryStderr);
 
         var (defaultParallelWithoutSummaryExitCode, _, defaultParallelWithoutSummaryStderr) = CaptureConsole(
-            () => QueryCommandRunner.RunBatch(["--db", dbPath, "--parallel", "1"], _jsonOptions));
+            () => QueryCommandRunner.RunBatch(["--db", dbPath, "--parallel", "1"], JsonOptions));
         Assert.Equal(CommandExitCodes.UsageError, defaultParallelWithoutSummaryExitCode);
         Assert.Contains("--parallel requires --json-summary", defaultParallelWithoutSummaryStderr);
 
         var (outputWithoutSummaryExitCode, _, outputWithoutSummaryStderr) = CaptureConsole(
-            () => QueryCommandRunner.RunBatch(["--db", dbPath, "--max-output-chars", "8192"], _jsonOptions));
+            () => QueryCommandRunner.RunBatch(["--db", dbPath, "--max-output-chars", "8192"], JsonOptions));
         Assert.Equal(CommandExitCodes.UsageError, outputWithoutSummaryExitCode);
         Assert.Contains("--max-output-chars requires --json-summary", outputWithoutSummaryStderr);
 
@@ -120,7 +122,7 @@ public partial class QueryCommandRunnerTests
                     "--db", dbPath,
                     "--max-output-chars", QueryCommandRunner.BatchDefaultTotalOutputChars.ToString(),
                 ],
-                _jsonOptions));
+                JsonOptions));
         Assert.Equal(CommandExitCodes.UsageError, defaultOutputWithoutSummaryExitCode);
         Assert.Contains("--max-output-chars requires --json-summary", defaultOutputWithoutSummaryStderr);
 
@@ -131,7 +133,7 @@ public partial class QueryCommandRunnerTests
                     "--json-summary",
                     "--max-input-lines", (QueryCommandRunner.BatchMaxInputLines + 1).ToString(),
                 ],
-                _jsonOptions));
+                JsonOptions));
         Assert.Equal(CommandExitCodes.UsageError, inputAboveMaximumExitCode);
         Assert.Contains($"from 1 to {QueryCommandRunner.BatchMaxInputLines}", inputAboveMaximumStderr);
 
@@ -142,13 +144,16 @@ public partial class QueryCommandRunnerTests
                     "--json-summary",
                     "--max-output-chars", (QueryCommandRunner.BatchMaxTotalOutputChars + 1).ToString(),
                 ],
-                _jsonOptions));
+                JsonOptions));
         Assert.Equal(CommandExitCodes.UsageError, outputAboveMaximumExitCode);
         Assert.Contains(
             $"from {QueryCommandRunner.BatchMinTotalOutputChars} to {QueryCommandRunner.BatchMaxTotalOutputChars}",
             outputAboveMaximumStderr);
     }
+}
 
+public partial class QueryCommandRunnerTests
+{
     [Fact]
     public void RunBatch_ParallelReadsOverlapButEmitInInputOrderAndIsolateFailures_Issue4723()
     {
@@ -178,7 +183,7 @@ public partial class QueryCommandRunnerTests
                 input,
                 () => QueryCommandRunner.RunBatch(
                     ["--db", dbPath, "--json-summary", "--parallel", "3"],
-                    _jsonOptions));
+                    JsonOptions));
             var lines = ParseJsonLines(batchStdout);
             try
             {
@@ -234,7 +239,7 @@ public partial class QueryCommandRunnerTests
                 using var capture = ConsoleCapture.Start(stdout, stderr, input);
                 return QueryCommandRunner.RunBatch(
                     ["--db", dbPath, "--json-summary", "--parallel", "2"],
-                    _jsonOptions,
+                    JsonOptions,
                     cancellationToken: cancellation.Token);
             });
             input.WriteLine("""{"command":"languages","args":["--format","count"]}""");
@@ -296,7 +301,7 @@ public partial class QueryCommandRunnerTests
             input,
             () => QueryCommandRunner.RunBatch(
                 ["--db", dbPath, "--json-summary", "--parallel", "2"],
-                _jsonOptions));
+                JsonOptions));
         var lines = ParseJsonLines(stdout);
         try
         {
@@ -331,7 +336,7 @@ public partial class QueryCommandRunnerTests
                 """{"command":"recipes","args":["--json"]}""" + "\n",
                 () => QueryCommandRunner.RunBatch(
                     ["--db", dbPath, "--json-summary", "--parallel", "2"],
-                    _jsonOptions,
+                    JsonOptions,
                     cancellationToken: cancellation.Token));
             Assert.True(cancellation.IsCancellationRequested);
             Assert.Equal(CommandExitCodes.CancelledBySignal, exitCode);

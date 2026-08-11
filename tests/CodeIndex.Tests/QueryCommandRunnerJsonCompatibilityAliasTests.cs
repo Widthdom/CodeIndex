@@ -1,9 +1,10 @@
 using System.Text.Json;
 using CodeIndex.Cli;
+using static CodeIndex.Tests.QueryCommandTestSupport;
 
 namespace CodeIndex.Tests;
 
-public partial class QueryCommandRunnerTests
+public sealed class QueryCommandRunnerJsonCompatibilityAliasTests
 {
     [Fact]
     public void QueryFindCountJsonResult_DeprecatedAliasHasLifecycleRegistryAndStillSerializes_Issue4182()
@@ -77,7 +78,7 @@ public partial class QueryCommandRunnerTests
 
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 ["JsonCompatibilityAliasLifecycle", "--db", dbPath, "--source-only", "--origin", "code", "--json=array", "--limit", "10"],
-                _jsonOptions));
+                JsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal(string.Empty, stderr);

@@ -137,8 +137,8 @@ public class PackagesLockTests
             StringComparison.Ordinal);
         Assert.DoesNotContain("Cache Stryker tool and NuGet packages", mutationWorkflow, StringComparison.Ordinal);
         Assert.Contains(
-            "- name: Cache native NuGet packages\n" +
-            "        if: ${{ !matrix.cross_compile }}",
+            "- name: Cache test-lane NuGet packages\n" +
+            "        if: matrix.run_tests",
             releaseWorkflow,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -146,12 +146,12 @@ public class PackagesLockTests
             releaseWorkflow,
             StringComparison.Ordinal);
         Assert.Contains(
-            "- name: Cache cross-compile NuGet packages\n" +
-            "        if: matrix.cross_compile",
+            "- name: Cache publish-only NuGet packages\n" +
+            "        if: ${{ !matrix.run_tests }}",
             releaseWorkflow,
             StringComparison.Ordinal);
         Assert.Contains(
-            "key: ${{ runner.os }}-release-cross-nuget-${{ hashFiles('src/CodeIndex/packages.lock.json') }}",
+            "key: ${{ runner.os }}-release-publish-nuget-${{ hashFiles('src/CodeIndex/packages.lock.json') }}",
             releaseWorkflow,
             StringComparison.Ordinal);
         Assert.Contains(
