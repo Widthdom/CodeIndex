@@ -21,7 +21,9 @@ public static partial class SymbolExtractor
         long fileId,
         string[] lines,
         IReadOnlyList<SymbolPattern> applicablePatterns,
-        List<SymbolRecord> symbols)
+        List<SymbolRecord> symbols,
+        bool applyRequiredLiteralMatchInputGate,
+        RequiredLiteralGateCounts? requiredLiteralGateCounts)
     {
         var classSymbols = BuildCppSameLineClassSymbolSnapshot(symbols);
         if (classSymbols is null)
@@ -58,6 +60,8 @@ public static partial class SymbolExtractor
                     lineIndex + 1,
                     applicablePatterns,
                     symbols,
+                    applyRequiredLiteralMatchInputGate,
+                    requiredLiteralGateCounts,
                     ref existingMembers);
         }
     }
@@ -148,12 +152,23 @@ public static partial class SymbolExtractor
         int lineNumber,
         IReadOnlyList<SymbolPattern> applicablePatterns,
         List<SymbolRecord> symbols,
+        bool applyRequiredLiteralMatchInputGate,
+        RequiredLiteralGateCounts? requiredLiteralGateCounts,
         ref HashSet<CppSameLineClassMemberIdentity>? existingMembers)
     {
         foreach (var pattern in applicablePatterns)
         {
             if (pattern.Kind != "function")
                 continue;
+
+            if (!ShouldAttemptPatternRegex(
+                    pattern,
+                    segment.AsSpan(),
+                    applyRequiredLiteralMatchInputGate,
+                    requiredLiteralGateCounts))
+            {
+                continue;
+            }
 
             var match = pattern.Regex.Match(segment);
             if (!match.Success)

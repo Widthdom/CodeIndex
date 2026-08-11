@@ -1284,6 +1284,55 @@ public static partial class SymbolExtractor
         return true;
     }
 
+    private static bool TryMatchJavaDeclarationPatternSegment(
+        SymbolPattern pattern,
+        string matchLine,
+        int segmentOffset,
+        bool allowKotlinUseSiteTargets,
+        bool applyRequiredLiteralMatchInputGate,
+        RequiredLiteralGateCounts? requiredLiteralGateCounts,
+        out Match match,
+        out int leadingAnnotationOffset,
+        out bool initialInputAttempted)
+    {
+        var segmentSpan = matchLine.AsSpan(segmentOffset);
+        initialInputAttempted = ShouldAttemptPatternRegex(
+            pattern,
+            segmentSpan,
+            applyRequiredLiteralMatchInputGate,
+            requiredLiteralGateCounts);
+        leadingAnnotationOffset = 0;
+        if (!initialInputAttempted)
+        {
+            match = Match.Empty;
+            return false;
+        }
+
+        var segment = segmentOffset == 0 ? matchLine : matchLine[segmentOffset..];
+        match = pattern.Regex.Match(segment);
+        if (match.Success)
+            return true;
+
+        var skippedOffset = SkipLeadingJavaAnnotations(segment, allowKotlinUseSiteTargets);
+        if (skippedOffset <= 0 || skippedOffset >= segment.Length
+            || !ShouldAttemptPatternRegex(
+                pattern,
+                segment.AsSpan(skippedOffset),
+                applyRequiredLiteralMatchInputGate,
+                requiredLiteralGateCounts))
+        {
+            return false;
+        }
+
+        var strippedMatch = pattern.Regex.Match(segment[skippedOffset..]);
+        if (!strippedMatch.Success)
+            return false;
+
+        match = strippedMatch;
+        leadingAnnotationOffset = skippedOffset;
+        return true;
+    }
+
     private static bool TryMatchJavaDeclarationSegment(
         Regex regex,
         string segment,

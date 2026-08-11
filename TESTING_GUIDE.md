@@ -435,8 +435,14 @@ Candidate-ordered parallel-index recovery tests must prove that the fatal result
   all 29 readable `SymbolRecord` fields in emitted order, exercises representative positive fixtures
   across Python, JavaScript, TypeScript, Go, Rust, Java, C/C++, Swift, F#, Scala, Terraform, Protobuf,
   and Zig, and verifies literal absence for every annotated language. Keep the IgnoreCase and short-
-  literal fail-fast checks, C# incomplete-attribute recovery, and C++ same-line recovery in the same
-  bounded suite. Do not add current-worktree paths, `.cdidx` databases, allocation/wall-clock
+  literal fail-fast checks in the same bounded suite. Its seam holds the file-level gate on while
+  switching only the exact-input gate off/on, counts actual pattern-regex calls and exact-input literal
+  skips, and compares complete ordered output. A bounded mixed-input fixture must prove at least a 30%
+  attempt reduction without a wall-clock assertion. Pin C# merged properties
+  and wrapped static constructors, Fortran continuations, Java/Kotlin annotation stripping, C#
+  incomplete-attribute recovery, C++ same-line members, and CSS reconstructed selector segments; an
+  initial bare static-constructor input gate miss must still reach wrapped-modifier recovery. Do not add
+  current-worktree paths, `.cdidx` databases, allocation/wall-clock
   assertions, or repository-wide extraction to this test; measure cold-index performance externally
   and pair it with natural-key database parity.
 - `PerformanceTests.CSharpStaticInterfaceLookup_UnrelatedInterfacesStayWithinAllocationBudget` builds 20,000 unrelated generic interfaces around one contract and keeps lookup allocation below 64 KiB. Discover contract containers before parsing generic declarations, while the paired `ReferenceExtractorTests` case preserves declaration/member ordering, partial-interface last-write behavior, and contract member order.
@@ -1460,7 +1466,13 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
   含む `SymbolRecord` の readable field 29個すべて、Python、JavaScript、TypeScript、Go、Rust、
   Java、C/C++、Swift、F#、Scala、Terraform、Protobuf、Zig の代表的な positive fixture、注釈済み
   全言語での literal 不在を検証します。同じ bounded suite に IgnoreCase / 短い literal の
-  fail-fast、C# の不完全 attribute recovery、C++ の same-line recovery を維持してください。
+  fail-fast を維持してください。seam は file-level gate を有効なまま exact-input gate だけを off / on
+  し、実際の pattern-regex call 数と exact-input literal skip 数を記録して、順序を含む完全な output を
+  比較します。bounded mixed-input fixture では wall-clock assertion を使わず、attempt が30%以上減る
+  ことを検証してください。C# の merged property / wrapped static
+  constructor、Fortran continuation、Java / Kotlin annotation 除去、C# の不完全 attribute recovery、
+  C++ same-line member、CSS の再構成済み selector segment を固定し、bare static-constructor input の
+  初回 gate miss 後も wrapped-modifier recovery へ進むことを検証してください。
   current worktree path、`.cdidx` database、allocation / wall-clock assertion、repository 全体の
   extraction をこの test に追加してはいけません。cold-index performance は外部で測定し、database
   の natural-key parity と対にしてください。

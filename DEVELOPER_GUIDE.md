@@ -1902,8 +1902,15 @@ pattern is skipped without changing the order of the remaining patterns. `Ignore
 one-character literals, optional or alternative paths without a shared literal, project custom
 patterns, and plugins are deliberately excluded. Supplemental scans that consult the pattern list,
 including C# incomplete-attribute recovery and C++ same-line member recovery, must consume the same
-ordered applicable set. The content-wide check may retain a pattern because its literal appears in a
-comment or string; that only reduces the optimization and cannot suppress a real match.
+ordered applicable set. Immediately before each regex call, the same Ordinal proof is applied to the
+exact input presented to that call, after transformations such as C# property-header merging, Fortran
+continuation joining, Java/Kotlin annotation stripping, C# wrapped-modifier synthesis, C++ same-line
+segmentation, or CSS selector-brace reconstruction. A miss behaves like a failed regex attempt rather
+than terminating language-specific recovery: notably, a C# static-constructor pattern rejected on the
+bare identifier line must still try each synthesized `static ...` wrapper. The content-wide check may
+retain a pattern because its literal appears in a comment, string, annotation, or another declaration;
+the exact-input check then recovers that lost optimization without changing matches. Patterns without
+`RequiredLiteral`, including custom and plugin patterns, still run unchanged.
 
 JavaScript and TypeScript export/reference details:
 
@@ -5635,8 +5642,14 @@ Ordinal の substring として必ず現れなければなりません。正規�
 literal、共通 literal を持たない optional / alternative path、project の custom pattern、plugin は
 意図的に対象外です。C# の不完全 attribute recovery や C++ の same-line member recovery を含め、
 pattern list を参照する補助 scan は同じ順序の applicable set を使わなければなりません。comment や
-string 内に literal があるため pattern を残すことはありますが、その場合は最適化量が減るだけで、
-本物の match を抑止しません。
+string 内に literal があるため pattern を残すことはあります。各 regex call の直前には、C# property
+header の結合、Fortran continuation の連結、Java / Kotlin annotation の除去、C# wrapped modifier の
+合成、C++ same-line segment、CSS selector の brace 再構成などを反映した、実際に regex へ渡す input
+そのものに同じ Ordinal 判定を適用します。miss は言語固有 recovery を終了せず、regex failure と同様に
+扱います。特に C# static constructor の bare identifier 行が gate miss しても、合成した各 `static ...`
+wrapper は引き続き試さなければなりません。comment、string、annotation、別 declaration にだけ literal
+がある場合は exact-input 判定が失われた最適化を回収し、match は変えません。custom / plugin pattern を
+含む `RequiredLiteral` のない pattern は従来どおり実行します。
 
 JavaScript / TypeScript の export / reference 詳細:
 

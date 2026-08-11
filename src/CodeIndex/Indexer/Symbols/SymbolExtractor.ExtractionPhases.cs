@@ -23,7 +23,9 @@ public static partial class SymbolExtractor
             string lang,
             string? filePath,
             string[] lines,
-            IReadOnlyList<SymbolPattern> applicablePatterns)
+            IReadOnlyList<SymbolPattern> applicablePatterns,
+            bool applyRequiredLiteralMatchInputGate,
+            RequiredLiteralGateCounts? requiredLiteralGateCounts)
         {
             _lang = lang;
             _lines = lines;
@@ -76,7 +78,12 @@ public static partial class SymbolExtractor
 
             int[]?[] csharpMatchColumnToRaw = null!;
             CSharpMatchLines = lang == "csharp"
-                ? BuildCSharpMatchLines(lines, applicablePatterns, out csharpMatchColumnToRaw)
+                ? BuildCSharpMatchLines(
+                    lines,
+                    applicablePatterns,
+                    applyRequiredLiteralMatchInputGate,
+                    requiredLiteralGateCounts,
+                    out csharpMatchColumnToRaw)
                 : null;
             CSharpMatchColumnToRaw = csharpMatchColumnToRaw;
             GetCSharpLineStartStates = lang == "csharp"
@@ -651,7 +658,9 @@ public static partial class SymbolExtractor
         string[]? csharpMatchLines,
         string? pythonModulePrefix,
         Dictionary<int, PrologMultilineHead>? prologMultilineHeads,
-        IReadOnlyList<SymbolPattern> applicablePatterns)
+        IReadOnlyList<SymbolPattern> applicablePatterns,
+        bool applyRequiredLiteralMatchInputGate,
+        RequiredLiteralGateCounts? requiredLiteralGateCounts)
     {
         if (lang == "javascript")
             ExtractJavaScriptBareMethods(fileId, lines, symbols, getPrivateScopeColumns!, getJavaScriptTypeScriptSanitizedLines);
@@ -682,7 +691,13 @@ public static partial class SymbolExtractor
             ExtractGoGroupedDeclarations(fileId, lines, symbols, extractionState);
         if (lang == "cpp")
         {
-            ExtractCppSameLineClassBodyMembers(fileId, lines, applicablePatterns, symbols);
+            ExtractCppSameLineClassBodyMembers(
+                fileId,
+                lines,
+                applicablePatterns,
+                symbols,
+                applyRequiredLiteralMatchInputGate,
+                requiredLiteralGateCounts);
             ExtractCppBalancedCallableSymbols(fileId, lines, structuralLines, symbols, extractionState);
             ExtractCppFriendDeclarationSymbols(fileId, lines, symbols, extractionState);
         }

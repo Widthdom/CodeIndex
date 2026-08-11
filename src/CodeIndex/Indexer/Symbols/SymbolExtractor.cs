@@ -344,15 +344,20 @@ public static partial class SymbolExtractor
     {
         public int PatternCount { get; set; }
         public int ApplicablePatternCount { get; set; }
+        public int RegexAttemptCount { get; set; }
+        public int MatchInputLiteralSkipCount { get; set; }
     }
 
     internal static List<SymbolRecord> ExtractForRequiredLiteralGateTesting(
         long fileId,
         string lang,
         string content,
-        bool applyRequiredLiteralGate,
+        bool applyRequiredLiteralFileGate,
+        bool applyRequiredLiteralMatchInputGate,
         out int patternCount,
         out int applicablePatternCount,
+        out int regexAttemptCount,
+        out int matchInputLiteralSkipCount,
         string? filePath = null,
         string? projectRoot = null,
         CancellationToken cancellationToken = default)
@@ -370,10 +375,13 @@ public static partial class SymbolExtractor
             patternConfigsAlreadyLoaded: false,
             cancellationToken: cancellationToken,
             maxSymbols: null,
-            applyRequiredLiteralGate: applyRequiredLiteralGate,
+            applyRequiredLiteralFileGate: applyRequiredLiteralFileGate,
+            applyRequiredLiteralMatchInputGate: applyRequiredLiteralMatchInputGate,
             requiredLiteralGateCounts: counts);
         patternCount = counts.PatternCount;
         applicablePatternCount = counts.ApplicablePatternCount;
+        regexAttemptCount = counts.RegexAttemptCount;
+        matchInputLiteralSkipCount = counts.MatchInputLiteralSkipCount;
         return symbols;
     }
 

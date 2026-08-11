@@ -7,6 +7,12 @@ namespace CodeIndex.Tests;
 
 public sealed class SymbolExtractorRequiredLiteralGateTests
 {
+    private readonly record struct GateMetrics(
+        int PatternCount,
+        int ApplicablePatternCount,
+        int RegexAttemptCount,
+        int MatchInputLiteralSkipCount);
+
     private static readonly PropertyInfo[] SymbolProperties = typeof(SymbolRecord)
         .GetProperties(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
         .Where(property => property.CanRead && property.GetIndexParameters().Length == 0)
@@ -87,6 +93,68 @@ public sealed class SymbolExtractorRequiredLiteralGateTests
         },
     };
 
+    public static TheoryData<string, string, string, string, bool> TransformedInputFixtures => new()
+    {
+        {
+            "csharp",
+            """
+            internal class Cache
+            {
+                static
+                Cache() { }
+            }
+            """,
+            "function",
+            "Cache",
+            true
+        },
+        {
+            "csharp",
+            """
+            internal class Box
+            {
+                public int Value
+                    => 42;
+            }
+            """,
+            "property",
+            "Value",
+            true
+        },
+        {
+            "fortran",
+            """
+            subroutine &
+              & Run()
+            end subroutine Run
+            """,
+            "function",
+            "Run",
+            false
+        },
+        {
+            "java",
+            "@classMarker public interface Annotated {}\n",
+            "interface",
+            "Annotated",
+            true
+        },
+        {
+            "kotlin",
+            "@file:funMarker public interface Annotated {}\n",
+            "interface",
+            "Annotated",
+            false
+        },
+        {
+            "css",
+            ":root, .theme { color: red; }\n",
+            "class",
+            ".theme",
+            true
+        },
+    };
+
     [Fact]
     public void RequiredLiteralMetadata_UsesOnlyAuditedCaseSensitiveTierAValues()
     {
@@ -124,13 +192,23 @@ public sealed class SymbolExtractorRequiredLiteralGateTests
         string content,
         string expectedSymbolName)
     {
-        var baseline = Extract(language, content, applyRequiredLiteralGate: false, out var patternCount, out _);
-        var gated = Extract(language, content, applyRequiredLiteralGate: true, out _, out var applicablePatternCount);
+        var baseline = Extract(
+            language,
+            content,
+            applyRequiredLiteralFileGate: false,
+            applyRequiredLiteralMatchInputGate: false,
+            out var baselineMetrics);
+        var gated = Extract(
+            language,
+            content,
+            applyRequiredLiteralFileGate: true,
+            applyRequiredLiteralMatchInputGate: true,
+            out var gatedMetrics);
 
         AssertSymbolsEqual(baseline, gated, language);
         Assert.Contains(gated, symbol => symbol.Name == expectedSymbolName);
         Assert.True(
-            applicablePatternCount < patternCount,
+            gatedMetrics.ApplicablePatternCount < baselineMetrics.PatternCount,
             $"{language} fixture did not skip any impossible patterns.");
     }
 
@@ -145,18 +223,28 @@ public sealed class SymbolExtractorRequiredLiteralGateTests
         foreach (var language in languages)
         {
             const string content = "Ω １２３ ＣＬＡＳＳ ＦＵＮＣＴＩＯＮ\n";
-            var baseline = Extract(language, content, applyRequiredLiteralGate: false, out var patternCount, out _);
-            var gated = Extract(language, content, applyRequiredLiteralGate: true, out _, out var applicablePatternCount);
+            var baseline = Extract(
+                language,
+                content,
+                applyRequiredLiteralFileGate: false,
+                applyRequiredLiteralMatchInputGate: false,
+                out var baselineMetrics);
+            var gated = Extract(
+                language,
+                content,
+                applyRequiredLiteralFileGate: true,
+                applyRequiredLiteralMatchInputGate: true,
+                out var gatedMetrics);
 
             AssertSymbolsEqual(baseline, gated, language);
             Assert.True(
-                applicablePatternCount < patternCount,
+                gatedMetrics.ApplicablePatternCount < baselineMetrics.PatternCount,
                 $"{language} did not skip an absent Ordinal required literal.");
         }
     }
 
     [Fact]
-    public void Extract_CSharp_RequiredLiteralGatePreservesAdversarialOutput()
+    public void Extract_CSharp_RequiredLiteralMatchInputGatePreservesAdversarialOutput()
     {
         const string content = """
             // namespace interface enum struct operator event delegate partial readonly extern using
@@ -172,59 +260,183 @@ public sealed class SymbolExtractorRequiredLiteralGateTests
             }
             """;
 
-        var baseline = Extract("csharp", content, applyRequiredLiteralGate: false, out var patternCount, out _);
-        var gated = Extract("csharp", content, applyRequiredLiteralGate: true, out _, out var applicablePatternCount);
+        var baseline = Extract(
+            "csharp",
+            content,
+            applyRequiredLiteralFileGate: true,
+            applyRequiredLiteralMatchInputGate: false,
+            out var baselineMetrics);
+        var gated = Extract(
+            "csharp",
+            content,
+            applyRequiredLiteralFileGate: true,
+            applyRequiredLiteralMatchInputGate: true,
+            out var gatedMetrics);
 
         AssertSymbolsEqual(baseline, gated);
         Assert.Contains(gated, symbol => symbol.Kind == "class" && symbol.Name == "Ωmega");
-        Assert.True(applicablePatternCount < patternCount);
+        Assert.Equal(baselineMetrics.ApplicablePatternCount, gatedMetrics.ApplicablePatternCount);
+        Assert.Equal(0, baselineMetrics.MatchInputLiteralSkipCount);
+        Assert.True(gatedMetrics.MatchInputLiteralSkipCount > 0);
+        Assert.True(gatedMetrics.RegexAttemptCount < baselineMetrics.RegexAttemptCount);
+    }
+
+    [Theory]
+    [MemberData(nameof(TransformedInputFixtures))]
+    public void Extract_RequiredLiteralMatchInputGatePreservesTransformedAndSupplementalInputs(
+        string language,
+        string content,
+        string expectedKind,
+        string expectedName,
+        bool expectMatchInputLiteralSkip)
+    {
+        var baseline = Extract(
+            language,
+            content,
+            applyRequiredLiteralFileGate: true,
+            applyRequiredLiteralMatchInputGate: false,
+            out var baselineMetrics);
+        var gated = Extract(
+            language,
+            content,
+            applyRequiredLiteralFileGate: true,
+            applyRequiredLiteralMatchInputGate: true,
+            out var gatedMetrics);
+
+        AssertSymbolsEqual(baseline, gated, language);
+        Assert.Contains(gated, symbol => symbol.Kind == expectedKind && symbol.Name == expectedName);
+        Assert.Equal(baselineMetrics.ApplicablePatternCount, gatedMetrics.ApplicablePatternCount);
+        Assert.Equal(0, baselineMetrics.MatchInputLiteralSkipCount);
+        Assert.Equal(expectMatchInputLiteralSkip, gatedMetrics.MatchInputLiteralSkipCount > 0);
+        if (expectMatchInputLiteralSkip)
+        {
+            Assert.True(
+                gatedMetrics.RegexAttemptCount < baselineMetrics.RegexAttemptCount,
+                $"{language} exact-input gate did not reduce regex attempts.");
+        }
+        else
+        {
+            Assert.Equal(baselineMetrics.RegexAttemptCount, gatedMetrics.RegexAttemptCount);
+        }
     }
 
     [Fact]
     public void Extract_CSharpIncompleteAttributeRecovery_UsesApplicablePatterns()
     {
         const string content = """
-            [Broken(
+            [operatorMarker(
             public class Recovered
             {
             }
             """;
 
-        var baseline = Extract("csharp", content, applyRequiredLiteralGate: false, out _, out _);
-        var gated = Extract("csharp", content, applyRequiredLiteralGate: true, out var patternCount, out var applicablePatternCount);
+        var baseline = Extract(
+            "csharp",
+            content,
+            applyRequiredLiteralFileGate: true,
+            applyRequiredLiteralMatchInputGate: false,
+            out var baselineMetrics);
+        var gated = Extract(
+            "csharp",
+            content,
+            applyRequiredLiteralFileGate: true,
+            applyRequiredLiteralMatchInputGate: true,
+            out var gatedMetrics);
 
         AssertSymbolsEqual(baseline, gated);
         Assert.Contains(gated, symbol => symbol.Kind == "class" && symbol.Name == "Recovered");
-        Assert.True(applicablePatternCount < patternCount);
+        Assert.Equal(baselineMetrics.ApplicablePatternCount, gatedMetrics.ApplicablePatternCount);
+        Assert.Equal(0, baselineMetrics.MatchInputLiteralSkipCount);
+        Assert.True(gatedMetrics.MatchInputLiteralSkipCount > 0);
+        Assert.True(gatedMetrics.RegexAttemptCount < baselineMetrics.RegexAttemptCount);
     }
 
     [Fact]
     public void Extract_CppSameLineRecovery_UsesApplicablePatterns()
     {
-        const string content = "class Box { public: int Run(); };";
+        const string content = "class Box { public: int Run(); };\n// operator\n";
 
-        var baseline = Extract("cpp", content, applyRequiredLiteralGate: false, out _, out _);
-        var gated = Extract("cpp", content, applyRequiredLiteralGate: true, out var patternCount, out var applicablePatternCount);
+        var baseline = Extract(
+            "cpp",
+            content,
+            applyRequiredLiteralFileGate: true,
+            applyRequiredLiteralMatchInputGate: false,
+            out var baselineMetrics);
+        var gated = Extract(
+            "cpp",
+            content,
+            applyRequiredLiteralFileGate: true,
+            applyRequiredLiteralMatchInputGate: true,
+            out var gatedMetrics);
 
         AssertSymbolsEqual(baseline, gated);
         Assert.Contains(gated, symbol => symbol.Kind == "class" && symbol.Name == "Box");
         Assert.Contains(gated, symbol => symbol.Kind == "function" && symbol.Name == "Run");
-        Assert.True(applicablePatternCount < patternCount);
+        Assert.Equal(baselineMetrics.ApplicablePatternCount, gatedMetrics.ApplicablePatternCount);
+        Assert.Equal(0, baselineMetrics.MatchInputLiteralSkipCount);
+        Assert.True(gatedMetrics.MatchInputLiteralSkipCount > 0);
+        Assert.True(gatedMetrics.RegexAttemptCount < baselineMetrics.RegexAttemptCount);
+    }
+
+    [Fact]
+    public void Extract_RequiredLiteralMatchInputGateReducesRegexAttemptsAtLeastThirtyPercent()
+    {
+        var requiredLiterals = SymbolExtractor.GetRequiredLiteralGateMetadataForTesting()
+            .Where(entry => entry.Language == "csharp")
+            .Select(entry => entry.Literal)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(literal => literal, StringComparer.Ordinal);
+        var content = "// " + string.Join(" ", requiredLiterals) + "\n"
+            + string.Join("\n", Enumerable.Range(0, 64).Select(index => $"unrelated_token_{index};"));
+
+        var baseline = Extract(
+            "csharp",
+            content,
+            applyRequiredLiteralFileGate: true,
+            applyRequiredLiteralMatchInputGate: false,
+            out var baselineMetrics);
+        var gated = Extract(
+            "csharp",
+            content,
+            applyRequiredLiteralFileGate: true,
+            applyRequiredLiteralMatchInputGate: true,
+            out var gatedMetrics);
+
+        AssertSymbolsEqual(baseline, gated);
+        Assert.Equal(baselineMetrics.PatternCount, baselineMetrics.ApplicablePatternCount);
+        Assert.Equal(baselineMetrics.ApplicablePatternCount, gatedMetrics.ApplicablePatternCount);
+        Assert.Equal(0, baselineMetrics.MatchInputLiteralSkipCount);
+        Assert.True(gatedMetrics.MatchInputLiteralSkipCount > 0);
+        Assert.True(
+            (long)gatedMetrics.RegexAttemptCount * 10 <= (long)baselineMetrics.RegexAttemptCount * 7,
+            $"Exact-input gate reduced attempts from {baselineMetrics.RegexAttemptCount} "
+            + $"to {gatedMetrics.RegexAttemptCount}, less than the required 30% reduction.");
     }
 
     private static List<SymbolRecord> Extract(
         string language,
         string content,
-        bool applyRequiredLiteralGate,
-        out int patternCount,
-        out int applicablePatternCount) =>
-        SymbolExtractor.ExtractForRequiredLiteralGateTesting(
+        bool applyRequiredLiteralFileGate,
+        bool applyRequiredLiteralMatchInputGate,
+        out GateMetrics metrics)
+    {
+        var symbols = SymbolExtractor.ExtractForRequiredLiteralGateTesting(
             1,
             language,
             content,
-            applyRequiredLiteralGate,
-            out patternCount,
-            out applicablePatternCount);
+            applyRequiredLiteralFileGate,
+            applyRequiredLiteralMatchInputGate,
+            out var patternCount,
+            out var applicablePatternCount,
+            out var regexAttemptCount,
+            out var matchInputLiteralSkipCount);
+        metrics = new GateMetrics(
+            patternCount,
+            applicablePatternCount,
+            regexAttemptCount,
+            matchInputLiteralSkipCount);
+        return symbols;
+    }
 
     private static void AssertSymbolsEqual(
         IReadOnlyList<SymbolRecord> expected,

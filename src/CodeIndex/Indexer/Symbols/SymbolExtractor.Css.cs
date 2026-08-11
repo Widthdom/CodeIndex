@@ -89,7 +89,9 @@ public static partial class SymbolExtractor
         int openingBraceIndex,
         IReadOnlyList<SymbolPattern> patterns,
         List<SymbolRecord> symbols,
-        HashSet<SymbolLineIdentity>? cssSeenSymbols)
+        HashSet<SymbolLineIdentity>? cssSeenSymbols,
+        bool applyRequiredLiteralMatchInputGate,
+        RequiredLiteralGateCounts? requiredLiteralGateCounts)
     {
         if (string.IsNullOrWhiteSpace(maskedSegment))
             return;
@@ -99,6 +101,15 @@ public static partial class SymbolExtractor
         {
             if (pattern.BodyStyle != BodyStyle.Brace)
                 continue;
+
+            if (!ShouldAttemptPatternRegex(
+                    pattern,
+                    matchLine.AsSpan(),
+                    applyRequiredLiteralMatchInputGate,
+                    requiredLiteralGateCounts))
+            {
+                continue;
+            }
 
             var match = pattern.Regex.Match(matchLine);
             if (!match.Success)
@@ -141,7 +152,9 @@ public static partial class SymbolExtractor
         int openingBraceIndex,
         IReadOnlyList<SymbolPattern> patterns,
         List<SymbolRecord> symbols,
-        HashSet<SymbolLineIdentity>? cssSeenSymbols)
+        HashSet<SymbolLineIdentity>? cssSeenSymbols,
+        bool applyRequiredLiteralMatchInputGate,
+        RequiredLiteralGateCounts? requiredLiteralGateCounts)
     {
         foreach (var (rawPart, maskedPart) in EnumerateCssCommaSeparatedSegments(rawSegment, maskedSegment))
         {
@@ -154,7 +167,9 @@ public static partial class SymbolExtractor
                 openingBraceIndex,
                 patterns,
                 symbols,
-                cssSeenSymbols);
+                cssSeenSymbols,
+                applyRequiredLiteralMatchInputGate,
+                requiredLiteralGateCounts);
         }
     }
 
