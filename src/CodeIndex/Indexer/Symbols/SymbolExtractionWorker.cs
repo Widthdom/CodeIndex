@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using CodeIndex.Cli;
@@ -556,7 +557,7 @@ internal static class SymbolExtractionWorker
 
         exitCode = RunCommand(
             args,
-            input,
+            (maxCharacters, maxUtf8Bytes, _) => ReadTextRequestFrame(input, maxCharacters, maxUtf8Bytes),
             response => WriteResponse(output, response),
             error,
             maxProtocolLineCharacters,
@@ -567,7 +568,7 @@ internal static class SymbolExtractionWorker
 
     internal static bool TryRunCommand(
         string[] args,
-        TextReader input,
+        Stream input,
         Stream output,
         TextWriter error,
         out int exitCode,
@@ -583,7 +584,11 @@ internal static class SymbolExtractionWorker
 
         exitCode = RunCommand(
             args,
-            input,
+            (maxCharacters, maxUtf8Bytes, token) => ReadUtf8RequestFrame(
+                input,
+                maxCharacters,
+                maxUtf8Bytes,
+                token),
             response => WriteResponse(output, response),
             error,
             maxProtocolLineCharacters,
@@ -669,7 +674,7 @@ internal static class SymbolExtractionWorker
 
     private static int RunCommand(
         string[] args,
-        TextReader input,
+        ReadRequestFrame readRequestFrame,
         Action<WorkerResponse> writeResponse,
         TextWriter error,
         int maxProtocolLineCharacters,
@@ -698,10 +703,13 @@ internal static class SymbolExtractionWorker
                 cancellationToken.ThrowIfCancellationRequested();
                 WorkerResponse response;
                 WorkerRequest request;
-                string? requestJson;
+                WorkerRequestFrame? requestFrame;
                 try
                 {
-                    requestJson = BoundedLineReader.ReadLine(input, maxProtocolLineCharacters, maxProtocolLineUtf8Bytes);
+                    requestFrame = readRequestFrame(
+                        maxProtocolLineCharacters,
+                        maxProtocolLineUtf8Bytes,
+                        cancellationToken);
                 }
                 catch (BoundedLineLengthException ex)
                 {
@@ -710,10 +718,14 @@ internal static class SymbolExtractionWorker
                     return 1;
                 }
 
-                if (requestJson is null)
+                if (requestFrame is null)
                     break;
 
-                if (!WorkerProtocolJsonValidator.TryValidate(requestJson, maxProtocolLineCharacters, out var validationError))
+                if (!TryValidateRequestFrame(
+                        requestFrame.Value,
+                        maxProtocolLineCharacters,
+                        maxProtocolLineUtf8Bytes,
+                        out var validationError))
                 {
                     response = new WorkerResponse(null, validationError, null);
                     writeResponse(response);
@@ -722,7 +734,7 @@ internal static class SymbolExtractionWorker
 
                 try
                 {
-                    request = BoundedJson.Deserialize<WorkerRequest>(requestJson, maxProtocolLineUtf8Bytes, JsonOptions)
+                    request = DeserializeRequestFrame(requestFrame.Value, maxProtocolLineUtf8Bytes)
                         ?? throw new InvalidOperationException("worker request was empty.");
                 }
                 catch (Exception ex)
@@ -761,6 +773,75 @@ internal static class SymbolExtractionWorker
         }
     }
 
+    private static WorkerRequestFrame? ReadTextRequestFrame(
+        TextReader input,
+        int maxProtocolLineCharacters,
+        int maxProtocolLineUtf8Bytes)
+    {
+        var requestJson = BoundedLineReader.ReadLine(
+            input,
+            maxProtocolLineCharacters,
+            maxProtocolLineUtf8Bytes);
+        return requestJson is null
+            ? null
+            : WorkerRequestFrame.FromText(requestJson);
+    }
+
+    private static WorkerRequestFrame? ReadUtf8RequestFrame(
+        Stream input,
+        int maxProtocolLineCharacters,
+        int maxProtocolLineUtf8Bytes,
+        CancellationToken cancellationToken)
+    {
+        var requestUtf8 = BoundedLineReader.ReadUtf8LineAsync(
+                input,
+                maxProtocolLineUtf8Bytes,
+                cancellationToken)
+            .GetAwaiter()
+            .GetResult();
+        if (requestUtf8 is null)
+            return null;
+
+        var utf8ByteCount = requestUtf8.Value.Length;
+        if (utf8ByteCount > maxProtocolLineCharacters)
+        {
+            var characterCount = Encoding.UTF8.GetCharCount(requestUtf8.Value.Span);
+            if (characterCount > maxProtocolLineCharacters)
+            {
+                throw new BoundedLineLengthException(
+                    characterCount,
+                    utf8ByteCount,
+                    maxProtocolLineCharacters,
+                    maxProtocolLineUtf8Bytes);
+            }
+        }
+
+        return WorkerRequestFrame.FromUtf8(requestUtf8.Value);
+    }
+
+    private static bool TryValidateRequestFrame(
+        WorkerRequestFrame requestFrame,
+        int maxProtocolLineCharacters,
+        int maxProtocolLineUtf8Bytes,
+        out string validationError)
+        => requestFrame.IsUtf8
+            ? WorkerProtocolJsonValidator.TryValidate(
+                requestFrame.Utf8Json,
+                maxProtocolLineCharacters,
+                maxProtocolLineUtf8Bytes,
+                out validationError)
+            : WorkerProtocolJsonValidator.TryValidate(
+                requestFrame.Json!,
+                maxProtocolLineCharacters,
+                out validationError);
+
+    private static WorkerRequest? DeserializeRequestFrame(
+        WorkerRequestFrame requestFrame,
+        int maxProtocolLineUtf8Bytes)
+        => requestFrame.IsUtf8
+            ? BoundedJson.Deserialize<WorkerRequest>(requestFrame.Utf8Json.Span, maxProtocolLineUtf8Bytes, JsonOptions)
+            : BoundedJson.Deserialize<WorkerRequest>(requestFrame.Json!, maxProtocolLineUtf8Bytes, JsonOptions);
+
     private static void WriteResponse(TextWriter output, WorkerResponse response)
     {
         output.WriteLine(JsonSerializer.Serialize(response, JsonOptions));
@@ -772,6 +853,23 @@ internal static class SymbolExtractionWorker
         JsonSerializer.Serialize(output, response, JsonOptions);
         output.WriteByte((byte)'\n');
         output.Flush();
+    }
+
+    private delegate WorkerRequestFrame? ReadRequestFrame(
+        int maxProtocolLineCharacters,
+        int maxProtocolLineUtf8Bytes,
+        CancellationToken cancellationToken);
+
+    private readonly record struct WorkerRequestFrame(
+        string? Json,
+        ReadOnlyMemory<byte> Utf8Json,
+        bool IsUtf8)
+    {
+        internal static WorkerRequestFrame FromText(string json)
+            => new(json, ReadOnlyMemory<byte>.Empty, IsUtf8: false);
+
+        internal static WorkerRequestFrame FromUtf8(ReadOnlyMemory<byte> utf8Json)
+            => new(null, utf8Json, IsUtf8: true);
     }
 
     private static WorkerResponse InvokeInsideWorker(WorkerRequest request, WorkerOptions options, CancellationToken cancellationToken)

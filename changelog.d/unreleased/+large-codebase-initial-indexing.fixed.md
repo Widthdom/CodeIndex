@@ -1,6 +1,7 @@
 ---
 category: fixed
 affected:
+  - src/CodeIndex/Cli/ProgramRunner.cs
   - src/CodeIndex/Cli/IndexCommandRunner.FullScan.cs
   - src/CodeIndex/Database/DbWriter.cs
   - src/CodeIndex/Database/DbWriter.References.cs
@@ -18,6 +19,7 @@ affected:
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.Patterns.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractor.cs
   - src/CodeIndex/Indexer/Symbols/SymbolExtractionWorker.cs
+  - src/CodeIndex/WorkerProtocolJsonValidator.cs
   - src/CodeIndex/Mcp/McpToolHandlers.Indexing.Execution.cs
   - tests/CodeIndex.Tests/ExtractorPluginRegistryTests.cs
   - tests/CodeIndex.Tests/CSharpPrepassSymbolArtifactCacheTests.cs
@@ -29,6 +31,7 @@ affected:
   - tests/CodeIndex.Tests/McpServerToolsCallTests.cs
   - tests/CodeIndex.Tests/ReferenceSecondaryIndexBulkLoadGuardTests.cs
   - tests/CodeIndex.Tests/SymbolExtractorRequiredLiteralGateTests.cs
+  - tests/CodeIndex.Tests/SymbolExtractionWorkerUtf8ProtocolTests.cs
   - DEVELOPER_GUIDE.md
   - TESTING_GUIDE.md
 ---
@@ -43,6 +46,7 @@ affected:
 - **Persistent symbol workers reuse bounded pattern-directory snapshots across languages** — each project-root reload discovers user and root configs once, while nested ancestor directories, including missing and rejected results, are observed once per worker command. The cache follows live filesystem casing and falls back to uncached discovery when full so configs are never skipped; direct registry callers keep dynamic discovery.
 - **First-time C# extraction reuses checksum-verified prepass symbols** — empty-database CLI and MCP full indexes can consume bounded, take-once built-in symbols already extracted for the static-interface workspace. After materializing the immutable lookup snapshots, the prepass transfers ownership of admitted per-file symbol lists and releases the redundant workspace fallback objects instead of cloning the full symbol graph. The main pass still rereads and validates every file and falls back on checksum drift, incomplete prepasses, regex timeouts, or cache limits; rebuilds, updates, and symbols-only runs remain unchanged.
 - **Initial indexes skip regex patterns whose mandatory literals are absent** — built-in case-sensitive symbol patterns now opt into an audited, Ordinal two-or-more-character literal gate before line-by-line matching. Pattern order and output stay unchanged, and C# incomplete-attribute plus C++ same-line recovery consume the same filtered set. IgnoreCase, custom/plugin, one-character, and no-common-literal patterns remain ungated.
+- **Symbol workers consume the existing UTF-8 request frames without decoding them twice** — the parent keeps its single `SerializeToUtf8Bytes` write, while the all-language child path now performs bounded newline framing, validation, and deserialization directly from raw standard-input bytes. CRLF/final-EOF framing, protocol and JSON bounds, cancellation, Unicode behavior, and sanitized invalid-UTF-8/JSON errors remain unchanged; the decoded `TextReader` path stays available for diagnostics.
 
 ## 日本語
 
@@ -54,3 +58,4 @@ affected:
 - **persistent symbol worker が全言語で上限付き pattern-directory snapshot を再利用するようにしました** — project-root reload ごとに user / root config を1回だけ探索し、missing や reject を含む nested ancestor directory は worker command ごとに初回結果を再利用します。cache は実 filesystem の case policy に従い、飽和時は uncached discovery に fallback して config を skip しません。registry の direct caller は従来どおり動的に探索します。
 - **初回 C# extraction で checksum 検証済み prepass symbol を再利用するようにしました** — 空 database からの CLI / MCP full index は、static-interface workspace 用に抽出済みの built-in symbol を上限付き・take-once で利用できます。immutable な lookup snapshot を materialize した後、prepass は admit した file ごとの symbol list の所有権を移し、symbol graph 全体を clone せず重複する workspace fallback object を解放します。main pass は各 file を引き続き再読込・検証し、checksum drift、不完全な prepass、regex timeout、cache 上限では通常 extraction へ fallback します。rebuild、update、symbols-only は従来どおりです。
 - **初回 index で必須 literal がない正規表現 pattern を skip するようにしました** — built-in の case-sensitive symbol pattern は、行単位の match 前に監査済みの2文字以上の literal を Ordinal で判定します。pattern 順と出力は変えず、C# の不完全 attribute recovery と C++ の same-line recovery も同じ filtered set を使います。IgnoreCase、custom/plugin、1文字、共通 literal を持たない pattern は gate 対象外です。
+- **symbol worker が既存の UTF-8 request frame を二重 decode せず処理するようにしました** — parent 側の `SerializeToUtf8Bytes` による1回の書き込みは変えず、全言語共通の child 経路で標準入力の raw byte から上限付き newline framing、validation、deserialize を直接行います。CRLF / final EOF の framing、protocol / JSON 上限、cancellation、Unicode の挙動、不正 UTF-8 / JSON の sanitization 済み error は従来どおりで、decoded `TextReader` 経路も診断用に維持します。

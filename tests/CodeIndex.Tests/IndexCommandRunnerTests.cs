@@ -579,8 +579,11 @@ public partial class IndexCommandRunnerTests
                 "public class 顧客 { }\n",
                 Path.Combine(projectRoot, "顧客.cs"),
                 projectRoot);
-            using var input = new StringReader(
-                JsonSerializer.Serialize(request, SymbolExtractionWorker.JsonOptions) + "\n");
+            var requestUtf8 = JsonSerializer.SerializeToUtf8Bytes(request, SymbolExtractionWorker.JsonOptions);
+            using var input = new MemoryStream();
+            input.Write(requestUtf8);
+            input.WriteByte((byte)'\n');
+            input.Position = 0;
             using var output = new MemoryStream();
             using var error = new StringWriter();
 

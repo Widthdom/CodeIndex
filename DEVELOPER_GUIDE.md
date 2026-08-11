@@ -282,6 +282,21 @@ array, short files skip impossible FTS-token tracking, and high-ratio invalid
 UTF-8 decode replacements retain only the aggregate count used by
 `non_utf8_likely` rather than a line number for every damaged line.
 
+Isolated symbol extraction uses one byte-oriented newline protocol for every
+language. The parent still serializes each request once with
+`JsonSerializer.SerializeToUtf8Bytes`, writes those bytes followed by LF, and
+reads the bounded UTF-8 response frame. The child opens standard input as a raw
+stream, reads it with `BoundedLineReader.ReadUtf8LineAsync`, validates the byte
+payload, and deserializes directly from that span; the `TextReader` overload is
+diagnostic-only. Do not reintroduce a `Console.In` / decoded-string copy in the
+production path. Preserve the negotiated frame/byte bound, JSON depth/property/
+string bounds, CRLF stripping (including buffer boundaries), an unterminated
+final frame, stable EOF, and cancellation of a pending read. Invalid UTF-8 and
+malformed JSON must keep returning the sanitized exception category without
+echoing request content or secrets. This contract is shared by every language
+request routed through the symbol worker, including built-in and custom-pattern
+configurations.
+
 Parallel full scans use shared dynamic work claiming for the main extraction
 body. To keep a large file near the input tail from starting only in the final
 worker wave, they probe at most the last `min(4 * workers, 64)` work items and
@@ -4076,6 +4091,18 @@ content 再走査を避けます。normalized facts を持たない caller 用�
 通常の indexing をその経路へ戻さないでください。80行以下の file は chunk 境界 array を保持せず、
 短い file は発生し得ない FTS token 追跡を省き、高比率の invalid UTF-8 decode replacement は
 破損行ごとの番号ではなく `non_utf8_likely` に必要な集約件数だけを保持します。
+
+isolated symbol extraction は全言語で1つの byte-oriented newline protocol を共有します。
+parent は各 request を引き続き `JsonSerializer.SerializeToUtf8Bytes` で1回だけ serialize し、
+その byte 列と LF を書き込み、上限付き UTF-8 response frame を読みます。child は標準入力を
+raw stream として開き、`BoundedLineReader.ReadUtf8LineAsync` で読み取り、byte payload を検証して
+その span から直接 deserialize します。`TextReader` overload は診断専用です。本番経路へ
+`Console.In` や decoded string の copy を戻さないでください。negotiated frame / byte 上限、
+JSON の depth / property / string 上限、buffer 境界をまたぐ場合を含む CRLF の除去、終端改行の
+ない最後の frame、安定した EOF、pending read の cancellation を維持します。不正 UTF-8 と
+malformed JSON は request content や secret を反射せず、sanitization 済みの exception category
+だけを返してください。この契約は built-in / custom pattern configuration を含め、symbol worker
+へ routing されるすべての language request で共有されます。
 
 parallel full scan は extraction 本体を共有dynamic claimで配分します。入力末尾の大きなfileが
 最後のworker waveまで開始されないことを防ぐため、末尾の

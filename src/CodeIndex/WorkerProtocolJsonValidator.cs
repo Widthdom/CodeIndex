@@ -40,6 +40,35 @@ internal static class WorkerProtocolJsonValidator
         }
     }
 
+    internal static bool TryValidate(
+        ReadOnlyMemory<byte> utf8Json,
+        int maxPayloadCharacters,
+        int maxUtf8Bytes,
+        out string error)
+    {
+        var maxDepth = ResolveMaxJsonDepth();
+        var maxProperties = MaxJsonPropertiesForTesting ?? DefaultMaxJsonProperties;
+        var effectiveMaxStringCharacters = MaxStringCharactersForTesting ?? maxPayloadCharacters;
+        var propertyCount = 0;
+        if (IsPayloadOverLimit(utf8Json.Span, maxPayloadCharacters, maxUtf8Bytes))
+        {
+            error = SafeDiagnosticFormatter.FormatCategoryType("worker_protocol_error", "json_payload_length_exceeded");
+            return false;
+        }
+
+        try
+        {
+            using var document = BoundedJson.ParseDocument(utf8Json, maxUtf8Bytes, maxDepth);
+            ValidateElement(document.RootElement, maxProperties, effectiveMaxStringCharacters, ref propertyCount, out error);
+            return error.Length == 0;
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidDataException)
+        {
+            error = SafeDiagnosticFormatter.FormatCategoryType("worker_protocol_error", nameof(JsonException));
+            return false;
+        }
+    }
+
     private static int ResolveMaxJsonDepth()
     {
         var maxDepth = MaxJsonDepthForTesting ?? DefaultMaxJsonDepth;
@@ -54,6 +83,19 @@ internal static class WorkerProtocolJsonValidator
             return true;
 
         return Encoding.UTF8.GetByteCount(json) > maxCharactersAndUtf8Bytes;
+    }
+
+    private static bool IsPayloadOverLimit(
+        ReadOnlySpan<byte> utf8Json,
+        int maxCharacters,
+        int maxUtf8Bytes)
+    {
+        if (maxCharacters <= 0 || maxUtf8Bytes <= 0 || utf8Json.Length > maxUtf8Bytes)
+            return true;
+        if (utf8Json.Length <= maxCharacters)
+            return false;
+
+        return Encoding.UTF8.GetCharCount(utf8Json) > maxCharacters;
     }
 
     private static void ValidateElement(
