@@ -2,7 +2,7 @@ using CodeIndex.Cli;
 
 namespace CodeIndex.Tests;
 
-public partial class QueryCommandRunnerTests
+public sealed class QueryCommandRunnerBoundsTests
 {
     [Theory]
     [InlineData("--visibility")]
