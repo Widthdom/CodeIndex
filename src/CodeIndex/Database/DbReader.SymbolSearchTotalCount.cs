@@ -38,7 +38,8 @@ public partial class DbReader
         }
         using var cmd = _conn.CreateCommand();
 
-        var logicalPartialKeySql = BuildLogicalPartialKeySql(
+        var logicalPartialKeySql = LogicalPartialQuerySql.BuildKey(
+            this,
             GetSymbolColumnSql("signature"),
             GetSymbolColumnSql("container_name"),
             GetSymbolColumnSql("container_qualified_name"),

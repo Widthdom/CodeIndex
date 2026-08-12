@@ -2,33 +2,8 @@ namespace CodeIndex.Database;
 
 public partial class DbReader
 {
-    private string BuildLogicalPartialKeySql(
-        string signatureSql,
-        string containerNameSql,
-        string containerQualifiedNameSql,
-        string familyKeySql,
-        string returnTypeSql)
-    {
-        return LogicalPartialSymbolGrouper.BuildSqlKeyExpression(
-            "f.lang",
-            "s.kind",
-            "s.name",
-            "s.id",
-            "f.path",
-            signatureSql,
-            containerNameSql,
-            containerQualifiedNameSql,
-            familyKeySql,
-            returnTypeSql,
-            GetSymbolColumnSql("is_partial_declaration"),
-            _hotspotFamilyReadyLanguages.Contains("csharp"));
-    }
-
     private static string GetGenericSymbolRankNamePenaltySql(string nameSql)
         => $"CASE WHEN lower({nameSql}) IN {GenericSymbolRankNamesSql} THEN {GenericSymbolRankNamePenaltySqlLiteral} ELSE 1.0 END";
-
-    private static string BuildCanonicalDeclarationIdentitySql(string signatureSql)
-        => $"csharp_partial_declaration_identity({signatureSql})";
 
     private static string BuildLogicalPartialSymbolQuery(string matchingSymbolsSql, SymbolSortMode sortMode)
     {

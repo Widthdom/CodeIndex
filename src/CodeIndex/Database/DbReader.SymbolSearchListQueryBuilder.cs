@@ -29,20 +29,21 @@ public partial class DbReader
         string ComplexityScore,
         string ExactNameOrder);
 
-    private sealed record SymbolSearchCanonicalSql(
-        string LogicalPartialKey,
-        string Generated,
-        string PrimaryRank,
-        string SemanticScore,
-        string DeclarationIdentity);
-
     private string BuildSymbolSearchListSql(SymbolSearchQueryPlan plan)
     {
         var columns = BuildSymbolSearchColumnSql();
         var includeRankSignals =
             plan.SortMode != SymbolSortMode.Name && _hasReferencesTable;
         var ranking = BuildSymbolSearchRankingSql(columns, includeRankSignals);
-        var canonical = BuildSymbolSearchCanonicalSql(columns);
+        var canonical = LogicalPartialQuerySql.Build(
+            this,
+            columns.Signature,
+            columns.ContainerName,
+            columns.ContainerQualifiedName,
+            columns.FamilyKey,
+            columns.ReturnType,
+            columns.BodyStartLine,
+            columns.BodyEndLine);
         var sql = BuildSymbolSearchSelectSql(columns, ranking, canonical);
         sql += SymbolSearchQueryPredicateBuilder.BuildFull(this, plan);
         SymbolSearchQueryPredicateBuilder.AppendFilters(
@@ -186,41 +187,10 @@ public partial class DbReader
             : string.Empty;
     }
 
-    private SymbolSearchCanonicalSql BuildSymbolSearchCanonicalSql(
-        SymbolSearchColumnSql columns)
-    {
-        var logicalPartialKey = BuildLogicalPartialKeySql(
-            columns.Signature,
-            columns.ContainerName,
-            columns.ContainerQualifiedName,
-            columns.FamilyKey,
-            columns.ReturnType);
-        var generated = _fileColumns.Contains("generated")
-            ? "CASE WHEN COALESCE(f.generated, 0) <> 0 OR codeindex_generated_file_name(f.path) THEN 1 ELSE 0 END"
-            : "CASE WHEN codeindex_generated_file_name(f.path) THEN 1 ELSE 0 END";
-        var primaryRank = LogicalPartialSymbolGrouper.BuildSqlPrimaryRankExpression(
-            "s.kind",
-            columns.BodyStartLine,
-            columns.BodyEndLine);
-        var semanticScore = LogicalPartialSymbolGrouper.BuildSqlSemanticScoreExpression(
-            columns.Signature,
-            "s.kind",
-            GetSymbolColumnSql("declaration_semantic_score"));
-        var fallbackIdentity = BuildCanonicalDeclarationIdentitySql(columns.Signature);
-        var declarationIdentity =
-            $"CASE WHEN s.kind IN ('function', 'test.method') THEN COALESCE(csharp_partial_callable_identity({columns.Signature}, s.name, {columns.ReturnType}), {fallbackIdentity}) ELSE {fallbackIdentity} END";
-        return new SymbolSearchCanonicalSql(
-            logicalPartialKey,
-            generated,
-            primaryRank,
-            semanticScore,
-            declarationIdentity);
-    }
-
     private string BuildSymbolSearchSelectSql(
         SymbolSearchColumnSql columns,
         SymbolSearchRankingSql ranking,
-        SymbolSearchCanonicalSql canonical)
+        LogicalPartialCanonicalSql canonical)
     {
         return $@"
             SELECT f.path, f.lang, s.kind, {GetSymbolColumnSql("sub_kind")} AS sub_kind, s.name, s.line,

@@ -736,6 +736,12 @@ public partial class DbReaderTests
             """);
 
         var analysis = _reader.AnalyzeImpact("FooService", maxDepth: 3, limit: 10);
+        var pagedAnalysis = _reader.AnalyzeImpact(
+            "FooService",
+            maxDepth: 3,
+            limit: 1,
+            offset: 1,
+            responseCollection: "definitions");
 
         Assert.Equal("file_dependency_hints", analysis.ImpactMode);
         Assert.True(analysis.Heuristic);
@@ -744,6 +750,15 @@ public partial class DbReaderTests
         Assert.Equal(2, analysis.DefinitionCount);
         Assert.Equal(1, analysis.HintCount);
         Assert.Equal("src/App.cs", Assert.Single(analysis.FileImpacts).SourcePath);
+
+        Assert.Equal("namespace", Assert.Single(pagedAnalysis.Definitions).Kind);
+        Assert.Equal(2, pagedAnalysis.DefinitionCount);
+        Assert.Equal(2, pagedAnalysis.LogicalDefinitionCount);
+        Assert.True(pagedAnalysis.HasClassLikeDefinitions);
+        Assert.Equal("file_dependency_hints", pagedAnalysis.ImpactMode);
+        Assert.True(pagedAnalysis.Heuristic);
+        Assert.Equal(1, pagedAnalysis.HintCount);
+        Assert.Equal("src/App.cs", Assert.Single(pagedAnalysis.FileImpacts).SourcePath);
     }
 
     [Fact]
@@ -1058,6 +1073,32 @@ public partial class DbReaderTests
         Assert.False(analysis.Truncated);
         Assert.Null(analysis.TruncatedReason);
         Assert.False(analysis.CountIsAuthoritative);
+    }
+
+    [Fact]
+    public void AnalyzeImpact_PartialFamilyBeyondProjectionLimitResolvesCompleteRootSet()
+    {
+        const int familyMemberCount = 51;
+        for (var index = 0; index < familyMemberCount; index++)
+        {
+            InsertIndexedFile(
+                $"src/Large.Part{index:D2}.cs",
+                "csharp",
+                "public partial class Large { }");
+        }
+        var reader = CreateReferenceIdentityReadyImpactReader();
+        reader.ImpactPartialFamilyMemberBudget = 64;
+
+        var analysis = reader.AnalyzeImpact("Large", maxDepth: 2, limit: 10);
+
+        Assert.Equal(familyMemberCount, analysis.DefinitionCount);
+        Assert.Equal(1, analysis.LogicalDefinitionCount);
+        Assert.Equal("logical_partial_family", analysis.TraversalRootScope);
+        Assert.Equal(familyMemberCount, analysis.PartialFamilyMemberCount);
+        Assert.Equal(familyMemberCount, analysis.PartialFamilyMemberRootCount);
+        Assert.Equal(64, analysis.PartialFamilyMemberRootLimit);
+        Assert.False(analysis.PartialFamilyMemberRootTruncated);
+        Assert.Equal(0, analysis.PartialFamilyMemberRootOmitted);
     }
 
     [Fact]
