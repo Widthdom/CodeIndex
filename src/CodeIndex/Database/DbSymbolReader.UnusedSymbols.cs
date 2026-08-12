@@ -377,64 +377,8 @@ public partial class DbReader
         @"\{\s*(?:get|set|init)\b|=>",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
-    private sealed class UnusedCandidateSymbol
-    {
-        public long FileId { get; init; }
-        public string Path { get; init; } = string.Empty;
-        public string? Lang { get; init; }
-        public string Kind { get; init; } = string.Empty;
-        public string Name { get; init; } = string.Empty;
-        public int Line { get; init; }
-        public int StartLine { get; init; }
-        public int EndLine { get; init; }
-        public string? Signature { get; init; }
-        public string? Visibility { get; init; }
-        public string? ReturnType { get; init; }
-        public string? ContainerKind { get; init; }
-        public string? ContainerName { get; init; }
-        public string? ContainerQualifiedName { get; init; }
-        public bool IsPublicOrExported { get; init; }
-        public bool IsReflectionOrConfigSuspect { get; init; }
-        public int ProvisionalBucketOrder { get; init; }
-    }
-
     private readonly record struct UnusedCandidateChunk(int StartLine, int EndLine, string Content);
     private readonly record struct UnusedContractDomainClassification(string Domain, List<string> Tags);
-
-
-    private string BuildAmbiguousCSharpEnumMemberExclusionSql(
-        string symbolAlias,
-        string fileAlias,
-        IReadOnlyList<string>? pathPatterns,
-        IReadOnlyList<string>? excludePathPatterns,
-        bool excludeTests)
-    {
-        var symbolContainerKindSql = GetSymbolColumnSql("container_kind", "''", symbolAlias);
-        var symbolContainerNameSql = GetSymbolColumnSql("container_name", "''", symbolAlias);
-        var symbolContainerQualifiedNameSql = GetSymbolColumnSql("container_qualified_name", symbolContainerNameSql, symbolAlias);
-        var peerContainerKindSql = GetSymbolColumnSql("container_kind", "''", "s_peer");
-        var peerContainerNameSql = GetSymbolColumnSql("container_name", "''", "s_peer");
-        var peerContainerQualifiedNameSql = GetSymbolColumnSql("container_qualified_name", peerContainerNameSql, "s_peer");
-        var peerPathFiltersSql = BuildPathFiltersSql("f_peer", pathPatterns, excludePathPatterns, excludeTests);
-
-        return $@"
-                NOT (
-                    {fileAlias}.lang = 'csharp'
-                    AND {symbolAlias}.kind = 'enum'
-                    AND {symbolContainerKindSql} = 'enum'
-                    AND EXISTS (
-                        SELECT 1
-                        FROM symbols s_peer
-                        JOIN files f_peer ON f_peer.id = s_peer.file_id
-                        WHERE f_peer.lang = 'csharp'
-                          {peerPathFiltersSql}
-                          AND s_peer.kind = 'enum'
-                          AND {peerContainerKindSql} = 'enum'
-                          AND s_peer.name = {symbolAlias}.name
-                          AND {peerContainerQualifiedNameSql} <> {symbolContainerQualifiedNameSql}
-                    )
-                )";
-    }
 
     /// <summary>
     /// Find symbols that have no matching references in the reference table (potential dead code).
@@ -604,7 +548,7 @@ public partial class DbReader
             while (!AllTargetUnusedBucketsFilled(resultsByBucket, targetBuckets, targetCount))
             {
                 var batch = FetchUnusedCandidateSymbols(batchSize, offset, provisionalBucket, kind, lang,
-                    pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters).ToList();
+                    pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters);
                 if (batch.Count == 0)
                     break;
 
@@ -639,7 +583,7 @@ public partial class DbReader
         while (results.Count < targetCount)
         {
             var batch = FetchUnusedCandidateSymbols(batchSize, offset, provisionalBucketOrder, kind, lang,
-                pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters).ToList();
+                pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters);
             if (batch.Count == 0)
                 break;
 
@@ -673,7 +617,7 @@ public partial class DbReader
             && candidatesFetched < candidateBudget)
         {
             var batch = FetchUnusedCandidateSymbols(batchSize, offset, 2, kind, lang,
-                pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters).ToList();
+                pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters);
             if (batch.Count == 0)
                 break;
 
@@ -861,125 +805,6 @@ public partial class DbReader
             var lineNumber = chunk.StartLine + i;
             if (!linesByNumber.ContainsKey(lineNumber))
                 linesByNumber.Add(lineNumber, lines[i]);
-        }
-    }
-
-    private IEnumerable<UnusedCandidateSymbol> FetchUnusedCandidateSymbols(int fetchLimit, int offset, int provisionalBucketOrder, string? kind, string? lang,
-        IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null)
-    {
-        var graphLangs = GetWorkspaceSupportedReferenceLanguages()
-            .Where(value => !IsSqlLanguage(value))
-            .ToList();
-        var visibilitySql = $"lower({GetSymbolColumnSql("visibility", "''")})";
-        var signatureSql = $"lower({GetSymbolColumnSql("signature", "''")})";
-        const string pathSql = "lower(f.path)";
-        var isPublicOrExportedSql = $"{visibilitySql} IN ('public', 'open', 'pub', 'export')";
-        var hasConfigContextSql = $@"(
-                {pathSql} LIKE 'config/%'
-                OR {pathSql} LIKE '%/config/%'
-                OR {pathSql} LIKE 'settings/%'
-                OR {pathSql} LIKE '%/settings/%'
-                OR {pathSql} LIKE 'options/%'
-                OR {pathSql} LIKE '%/options/%'
-                OR {signatureSql} LIKE '%iconfiguration%'
-                OR {signatureSql} LIKE '%configurationsection%'
-                OR {signatureSql} LIKE '%ioptions%'
-                OR {signatureSql} LIKE '%options<%'
-            )";
-        var isReflectionOrConfigSuspectSql = $@"(
-                {isPublicOrExportedSql}
-                AND s.kind = 'property'
-                AND {hasConfigContextSql}
-            )";
-        var provisionalBucketOrderSql = $@"
-            CASE
-                WHEN {isReflectionOrConfigSuspectSql} THEN 3
-                WHEN {isPublicOrExportedSql} THEN 2
-                WHEN {visibilitySql} IN ('private', 'fileprivate') THEN 0
-                ELSE 1
-            END";
-
-        var sql = $@"
-            SELECT s.file_id, f.path, f.lang, s.kind, s.name, s.line,
-                   {GetSymbolColumnSql("start_line", "s.line")} AS start_line,
-                   {GetSymbolColumnSql("end_line", "s.line")} AS end_line,
-                   {GetSymbolColumnSql("signature")} AS signature,
-                   {GetSymbolColumnSql("visibility")} AS visibility,
-                   {GetSymbolColumnSql("return_type")} AS return_type,
-                   {GetSymbolColumnSql("container_kind")} AS container_kind,
-                   {GetSymbolColumnSql("container_name")} AS container_name,
-                   {GetSymbolColumnSql("container_qualified_name", GetSymbolColumnSql("container_name", "''"))} AS container_qualified_name,
-                   CASE WHEN {isPublicOrExportedSql} THEN 1 ELSE 0 END AS is_public_or_exported,
-                   CASE WHEN {isReflectionOrConfigSuspectSql} THEN 1 ELSE 0 END AS is_reflection_or_config_suspect,
-                   {provisionalBucketOrderSql} AS provisional_bucket_order
-            FROM symbols s
-            JOIN files f ON s.file_id = f.id
-            WHERE s.kind NOT IN ('import', 'namespace')";
-        sql += $"\n              AND {BuildAmbiguousCSharpEnumMemberExclusionSql("s", "f", pathPatterns, excludePathPatterns, excludeTests)}";
-        sql += """
-              AND NOT EXISTS (
-                  SELECT 1
-                  FROM symbol_references sr
-                  WHERE sr.symbol_name IS NOT NULL
-                    AND sr.symbol_name <> ''
-                    AND sr.symbol_name = s.name
-              )
-            """;
-
-        if (lang != null)
-            sql += SymbolLanguageFileIdFilter;
-        else
-            sql += $" AND f.lang IN ({string.Join(",", graphLangs.Select((_, i) => $"@gl{i}"))})";
-
-        if (kind != null)
-            sql += " AND s.kind = @kind";
-
-        sql += " AND (" + provisionalBucketOrderSql + ") = @provisionalBucketOrder";
-        AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
-        AppendVisibilityFilters(ref sql, visibilityFilters, excludeVisibilityFilters);
-        sql += " ORDER BY f.path, s.line, s.name";
-        sql += " LIMIT @limit OFFSET @offset";
-
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = sql;
-        if (lang != null)
-            SqliteCommandPolicy.Add(cmd, "@lang", lang);
-        else
-        {
-            for (int i = 0; i < graphLangs.Count; i++)
-                SqliteCommandPolicy.Add(cmd, $"@gl{i}", graphLangs[i]);
-        }
-        if (kind != null)
-            SqliteCommandPolicy.Add(cmd, "@kind", kind);
-        SqliteCommandPolicy.Add(cmd, "@provisionalBucketOrder", provisionalBucketOrder);
-        SqliteCommandPolicy.Add(cmd, "@limit", fetchLimit);
-        SqliteCommandPolicy.Add(cmd, "@offset", offset);
-        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
-        AddVisibilityFilterParameters(cmd, visibilityFilters, excludeVisibilityFilters);
-
-        using var reader = cmd.ExecuteTrackedReader();
-        while (reader.TrackedRead())
-        {
-            yield return new UnusedCandidateSymbol
-            {
-                FileId = reader.GetInt64(0),
-                Path = reader.GetString(1),
-                Lang = GetNullableString(reader, 2),
-                Kind = reader.GetString(3),
-                Name = reader.GetString(4),
-                Line = reader.GetInt32(5),
-                StartLine = GetInt32OrFallback(reader, 6, 5),
-                EndLine = GetInt32OrFallback(reader, 7, 5),
-                Signature = GetNullableString(reader, 8),
-                Visibility = GetNullableString(reader, 9),
-                ReturnType = GetNullableString(reader, 10),
-                ContainerKind = GetNullableString(reader, 11),
-                ContainerName = GetNullableString(reader, 12),
-                ContainerQualifiedName = GetNullableString(reader, 13),
-                IsPublicOrExported = reader.GetInt32(14) != 0,
-                IsReflectionOrConfigSuspect = reader.GetInt32(15) != 0,
-                ProvisionalBucketOrder = reader.GetInt32(16),
-            };
         }
     }
 
@@ -1247,157 +1072,6 @@ public partial class DbReader
         return end >= text.Length || char.IsWhiteSpace(text[end]);
     }
 
-    private List<UnusedSymbolResult> FetchUnusedCandidates(int fetchLimit, int provisionalBucketOrder, int offset, string? kind, string? lang,
-        IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null)
-    {
-        var graphLangs = GetWorkspaceSupportedReferenceLanguages();
-        var visibilitySql = $"lower({GetSymbolColumnSql("visibility", "''")})";
-        var signatureSql = $"lower({GetSymbolColumnSql("signature", "''")})";
-        const string pathSql = "lower(f.path)";
-        var isPublicOrExportedSql = $"{visibilitySql} IN ('public', 'open', 'pub', 'export')";
-        var hasConfigContextSql = $@"(
-                {pathSql} LIKE 'config/%'
-                OR {pathSql} LIKE '%/config/%'
-                OR {pathSql} LIKE 'settings/%'
-                OR {pathSql} LIKE '%/settings/%'
-                OR {pathSql} LIKE 'options/%'
-                OR {pathSql} LIKE '%/options/%'
-                OR {signatureSql} LIKE '%iconfiguration%'
-                OR {signatureSql} LIKE '%configurationsection%'
-                OR {signatureSql} LIKE '%ioptions%'
-                OR {signatureSql} LIKE '%options<%'
-            )";
-        var isReflectionOrConfigSuspectSql = $@"(
-                {isPublicOrExportedSql}
-                AND s.kind = 'property'
-                AND {hasConfigContextSql}
-            )";
-        var provisionalBucketOrderSql = $@"
-            CASE
-                WHEN {isReflectionOrConfigSuspectSql} THEN 3
-                WHEN {isPublicOrExportedSql} THEN 2
-                WHEN {visibilitySql} IN ('private', 'fileprivate') THEN 0
-                ELSE 1
-            END";
-
-        var sql = $@"
-            WITH unused_candidates AS (
-                SELECT s.file_id, f.path, f.lang, s.kind, s.name, s.line,
-                       {GetSymbolColumnSql("start_line", "s.line")} AS start_line,
-                       {GetSymbolColumnSql("end_line", "s.line")} AS end_line,
-                       {GetSymbolColumnSql("signature")} AS signature,
-                       {GetSymbolColumnSql("visibility")} AS visibility,
-                       {GetSymbolColumnSql("return_type")} AS return_type,
-                       {GetSymbolColumnSql("container_kind")} AS container_kind,
-                       {GetSymbolColumnSql("container_name")} AS container_name,
-                       {GetSymbolColumnSql("container_qualified_name", GetSymbolColumnSql("container_name", "''"))} AS container_qualified_name,
-                       CASE WHEN {isPublicOrExportedSql} THEN 1 ELSE 0 END AS is_public_or_exported,
-                       CASE WHEN {isReflectionOrConfigSuspectSql} THEN 1 ELSE 0 END AS is_reflection_or_config_suspect,
-                       {provisionalBucketOrderSql} AS provisional_bucket_order
-                FROM symbols s
-                JOIN files f ON s.file_id = f.id
-                WHERE s.kind NOT IN ('import', 'namespace')
-                  AND NOT EXISTS (
-                      SELECT 1
-                      FROM symbol_references sr
-                      JOIN files rf ON rf.id = sr.file_id" + ReferenceLineJoinSql("sr") + @"
-                      WHERE sr.symbol_name = s.name
-                         OR (f.lang = 'sql' AND rf.lang = 'sql' AND (
-                                (sql_resolve_reference_segment_count_at(sr.symbol_name, " + ReferenceContextSql("sr") + @", sr.container_name, sr.column_number) = sql_segment_count(s.name)
-                                 AND sql_reference_matches_target_at(sr.symbol_name, " + ReferenceContextSql("sr") + @", sr.container_name, sr.column_number, s.name) = 1)
-                         OR (sql_segment_count(sr.symbol_name) = 1
-                            AND sql_allow_leaf_fallback_at(sr.symbol_name, " + ReferenceContextSql("sr") + @", sr.container_name, sr.column_number) = 1
-                            AND sr.symbol_name = sql_leaf_name(s.name) COLLATE NOCASE
-                            AND NOT EXISTS (
-                                    SELECT 1
-                                    FROM symbols s_exact
-                                    JOIN files f_exact ON f_exact.id = s_exact.file_id
-                                    WHERE f_exact.lang = 'sql'
-                                      AND sql_segment_count(s_exact.name) = sql_resolve_reference_segment_count_at(sr.symbol_name, " + ReferenceContextSql("sr") + @", sr.container_name, sr.column_number)
-                                     AND sql_reference_matches_target_at(sr.symbol_name, " + ReferenceContextSql("sr") + @", sr.container_name, sr.column_number, s_exact.name) = 1
-                                ))
-                         ))
-                  )";
-        if (_hasChunksTable && HasTable("chunks"))
-        {
-            sql += BuildSameFilePrivateUseExclusionSql(
-                "s",
-                "f",
-                visibilitySql,
-                GetSymbolColumnSql("start_line", "s.line"),
-                GetSymbolColumnSql("end_line", "s.line"));
-            sql += BuildCSharpPartialContainingTypeUseExclusionSql("s", "f", visibilitySql);
-        }
-        sql += $"\n              AND {BuildAmbiguousCSharpEnumMemberExclusionSql("s", "f", pathPatterns, excludePathPatterns, excludeTests)}";
-
-        if (lang != null)
-            sql += SymbolLanguageFileIdFilter;
-        else
-            sql += $" AND f.lang IN ({string.Join(",", graphLangs.Select((_, i) => $"@gl{i}"))})";
-
-        if (kind != null)
-            sql += " AND s.kind = @kind";
-
-        AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
-        AppendVisibilityFilters(ref sql, visibilityFilters, excludeVisibilityFilters);
-        sql += @"
-            )
-            SELECT file_id, path, lang, kind, name, line, start_line, end_line, signature, visibility,
-                   return_type, container_kind, container_name, container_qualified_name,
-                   is_public_or_exported, is_reflection_or_config_suspect, provisional_bucket_order
-            FROM unused_candidates
-            WHERE provisional_bucket_order = @bucketOrder
-            ORDER BY path, line, name
-            LIMIT @limit OFFSET @offset";
-
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = sql;
-        SqliteCommandPolicy.Add(cmd, "@bucketOrder", provisionalBucketOrder);
-        SqliteCommandPolicy.Add(cmd, "@limit", fetchLimit);
-        SqliteCommandPolicy.Add(cmd, "@offset", offset);
-        if (lang != null)
-            SqliteCommandPolicy.Add(cmd, "@lang", lang);
-        else
-        {
-            var langList = graphLangs.ToList();
-            for (int i = 0; i < langList.Count; i++)
-                SqliteCommandPolicy.Add(cmd, $"@gl{i}", langList[i]);
-        }
-        if (kind != null)
-            SqliteCommandPolicy.Add(cmd, "@kind", kind);
-        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
-        AddVisibilityFilterParameters(cmd, visibilityFilters, excludeVisibilityFilters);
-
-        var results = new List<UnusedSymbolResult>();
-        using var reader = cmd.ExecuteTrackedReader();
-        while (reader.TrackedRead())
-        {
-            var candidate = new UnusedCandidateSymbol
-            {
-                FileId = reader.GetInt64(0),
-                Path = reader.GetString(1),
-                Lang = GetNullableString(reader, 2),
-                Kind = reader.GetString(3),
-                Name = reader.GetString(4),
-                Line = reader.GetInt32(5),
-                StartLine = GetInt32OrFallback(reader, 6, 5),
-                EndLine = GetInt32OrFallback(reader, 7, 5),
-                Signature = GetNullableString(reader, 8),
-                Visibility = GetNullableString(reader, 9),
-                ReturnType = GetNullableString(reader, 10),
-                ContainerKind = GetNullableString(reader, 11),
-                ContainerName = GetNullableString(reader, 12),
-                ContainerQualifiedName = GetNullableString(reader, 13),
-                IsPublicOrExported = reader.GetInt32(14) != 0,
-                IsReflectionOrConfigSuspect = reader.GetInt32(15) != 0,
-                ProvisionalBucketOrder = reader.GetInt32(16),
-            };
-            results.Add(CreateUnusedSymbolResult(candidate));
-        }
-
-        return results;
-    }
-
     private static List<UnusedSymbolResult> DiversifyUnusedResults(List<UnusedSymbolResult> results, int limit)
     {
         if (results.Count == 0 || limit <= 0)
@@ -1624,7 +1298,7 @@ public partial class DbReader
             while (true)
             {
                 var batch = FetchUnusedCandidateSymbols(batchSize, offset, bucket, kind, lang,
-                    pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters).ToList();
+                    pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters);
                 if (batch.Count == 0)
                     break;
 
@@ -1764,82 +1438,14 @@ public partial class DbReader
         if (!ScopeMayIncludeSqlSymbols(kind, lang, pathPatterns, excludePathPatterns, excludeTests))
             return CountUnusedSymbolsWithoutSqlResolver(kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters);
 
-        var graphLangs = GetWorkspaceSupportedReferenceLanguages();
-        using var cmd = _conn.CreateCommand();
-        var referenceLineJoin = ReferenceLineJoinSql("sr");
-        var contextSql = ReferenceContextSql("sr");
-        var sql = @"
-            SELECT COUNT(*), COUNT(DISTINCT f.path), MAX(CASE WHEN f.lang = 'sql' THEN 1 ELSE 0 END)
-            FROM symbols s
-            JOIN files f ON s.file_id = f.id
-            WHERE s.kind NOT IN ('import', 'namespace')
-              AND NOT EXISTS (
-                  SELECT 1
-                  FROM symbol_references sr
-                  JOIN files rf ON rf.id = sr.file_id" + referenceLineJoin + @"
-                  WHERE sr.symbol_name = s.name
-                     OR (f.lang = 'sql' AND rf.lang = 'sql' AND (
-                            (sql_resolve_reference_segment_count_at(sr.symbol_name, " + contextSql + @", sr.container_name, sr.column_number) = sql_segment_count(s.name)
-                             AND sql_reference_matches_target_at(sr.symbol_name, " + contextSql + @", sr.container_name, sr.column_number, s.name) = 1)
-                         OR (sql_segment_count(sr.symbol_name) = 1
-                            AND sql_allow_leaf_fallback_at(sr.symbol_name, " + contextSql + @", sr.container_name, sr.column_number) = 1
-                            AND sr.symbol_name = sql_leaf_name(s.name) COLLATE NOCASE
-                            AND NOT EXISTS (
-                                    SELECT 1
-                                    FROM symbols s_exact
-                                    JOIN files f_exact ON f_exact.id = s_exact.file_id
-                                    WHERE f_exact.lang = 'sql'
-                                      AND sql_segment_count(s_exact.name) = sql_resolve_reference_segment_count_at(sr.symbol_name, " + contextSql + @", sr.container_name, sr.column_number)
-                                      AND sql_reference_matches_target_at(sr.symbol_name, " + contextSql + @", sr.container_name, sr.column_number, s_exact.name) = 1
-                                ))
-                     ))
-              )";
-        if (_hasChunksTable && HasTable("chunks"))
-        {
-            sql += BuildSameFilePrivateUseExclusionSql(
-                "s",
-                "f",
-                $"lower({GetSymbolColumnSql("visibility", "''")})",
-                GetSymbolColumnSql("start_line", "s.line"),
-                GetSymbolColumnSql("end_line", "s.line"));
-            sql += BuildCSharpPartialContainingTypeUseExclusionSql(
-                "s",
-                "f",
-                $"lower({GetSymbolColumnSql("visibility", "''")})");
-        }
-        sql += $"\n              AND {BuildAmbiguousCSharpEnumMemberExclusionSql("s", "f", pathPatterns, excludePathPatterns, excludeTests)}";
-
-        if (lang != null)
-            sql += SymbolLanguageFileIdFilter;
-        else
-            sql += $" AND f.lang IN ({string.Join(",", graphLangs.Select((_, i) => $"@gl{i}"))})";
-
-        if (kind != null)
-            sql += " AND s.kind = @kind";
-
-        AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
-        AppendVisibilityFilters(ref sql, visibilityFilters, excludeVisibilityFilters);
-        cmd.CommandText = sql;
-        if (lang != null)
-            SqliteCommandPolicy.Add(cmd, "@lang", lang);
-        else
-        {
-            var langList = graphLangs.ToList();
-            for (int i = 0; i < langList.Count; i++)
-                SqliteCommandPolicy.Add(cmd, $"@gl{i}", langList[i]);
-        }
-        if (kind != null)
-            SqliteCommandPolicy.Add(cmd, "@kind", kind);
-        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
-        AddVisibilityFilterParameters(cmd, visibilityFilters, excludeVisibilityFilters);
-
-        using var reader = cmd.ExecuteTrackedReader();
-        if (!reader.TrackedRead())
-            return new QueryCountResult(0, 0);
-        return new QueryCountResult(
-            reader.GetInt32(0),
-            reader.GetInt32(1),
-            reader.FieldCount > 2 && !reader.IsDBNull(2) && Convert.ToInt32(reader.GetValue(2)) != 0);
+        return CountUnusedCandidates(new UnusedCandidateScope(
+            kind,
+            lang,
+            pathPatterns,
+            excludePathPatterns,
+            excludeTests,
+            visibilityFilters,
+            excludeVisibilityFilters));
     }
 
     private QueryCountResult CountFilteredUnusedSymbols(string? kind, string? lang,
@@ -1894,7 +1500,7 @@ public partial class DbReader
             while (true)
             {
                 var batch = FetchUnusedCandidateSymbols(batchSize, offset, bucket, kind, lang,
-                    pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters).ToList();
+                    pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters);
                 if (batch.Count == 0)
                     break;
 
