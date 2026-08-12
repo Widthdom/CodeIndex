@@ -353,25 +353,7 @@ public partial class McpServer
         var languageCounts = scanResult.LanguageCounts;
         var hasSqlTargets = languageCounts.ContainsKey("sql");
         var hasTypeScriptTargets = languageCounts.ContainsKey("typescript");
-        var knownReadableFileSizes = new Dictionary<string, long>(files.Count, StringComparer.Ordinal);
-        long knownReadableBytesRead = 0;
-        var knownReadableByteEstimateComplete = true;
-        void RememberReadableFileSize(string path, long size)
-        {
-            var priorSize = knownReadableFileSizes.TryGetValue(path, out var prior)
-                ? prior
-                : (long?)null;
-            if (knownReadableByteEstimateComplete
-                && !FtsBulkLoadTriggerGuard.TryUpdateKnownByteTotal(
-                    knownReadableBytesRead,
-                    priorSize,
-                    size,
-                    out knownReadableBytesRead))
-            {
-                knownReadableByteEstimateComplete = false;
-            }
-            knownReadableFileSizes[path] = size;
-        }
+        var readableBytes = new McpIndexReadableByteTracker(files.Count);
         var discoveryPlan = BuildMcpIndexDiscoveryPlan(
             writer,
             projectPath,
@@ -761,96 +743,22 @@ public partial class McpServer
                         target.GeneratedExtractionSuppressed == true);
         }
 
-        IndexedFileStatReuseResult?[]? statMatchedFiles = null;
-        bool[]? statPreflightCompleted = null;
-        var estimatedDirtyBytes = staleFilePurgePlan.DeletedBytes;
-        var persistedSizeExcessBytes = 0L;
-        var byteEstimateComplete = !scanHadErrors
-            && staleFilePurgePlan.ByteEstimateComplete
-            && knownReadableByteEstimateComplete;
-        var useFtsBulkLoad = rebuild || startedWithNoIndexedFiles;
-        var everyTargetMatchedFtsStatPreflight = !useFtsBulkLoad
-            && staleFilePurgePlan.Count == 0;
-        if (!useFtsBulkLoad)
-        {
-            statMatchedFiles = new IndexedFileStatReuseResult?[fileTargets.Length];
-            statPreflightCompleted = new bool[fileTargets.Length];
-            McpIndexFtsStatPreflightBufferAllocatedForTesting?.Invoke(fileTargets.Length);
-            for (var targetIndex = 0; targetIndex < fileTargets.Length; targetIndex++)
-            {
-                requestToken.ThrowIfCancellationRequested();
-                var target = fileTargets[targetIndex];
-                try
-                {
-                    authorizedRoot.EnsureAuthorizedEntry(target.FilePath);
-                    var statMatchedFile = GetStatMatchedFile(target);
-                    statMatchedFiles[targetIndex] = statMatchedFile;
-                    statPreflightCompleted[targetIndex] = true;
-                    if (statMatchedFile != null)
-                    {
-                        RememberReadableFileSize(target.FilePath, statMatchedFile.Value.Size);
-                        continue;
-                    }
-
-                    everyTargetMatchedFtsStatPreflight = false;
-
-                    var info = new FileInfo(target.FilePath);
-                    if (!info.Exists || info.Length < 0)
-                    {
-                        byteEstimateComplete = false;
-                        continue;
-                    }
-
-                    RememberReadableFileSize(target.FilePath, info.Length);
-                    var persistedSize = reusableIndexedFileStats!.GetPersistedSize(target.IndexPath);
-                    if (!FtsBulkLoadTriggerGuard.TryAccumulateDirtyFileBytes(
-                            estimatedDirtyBytes,
-                            persistedSizeExcessBytes,
-                            info.Length,
-                            persistedSize,
-                            out estimatedDirtyBytes,
-                            out persistedSizeExcessBytes))
-                    {
-                        byteEstimateComplete = false;
-                    }
-                }
-                catch (OperationCanceledException) when (requestToken.IsCancellationRequested)
-                {
-                    throw;
-                }
-                catch (McpIndexAuthorizationException)
-                {
-                    throw;
-                }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
-                {
-                    // Estimation must never bypass the existing per-file failure contract.
-                    // The real loop retries authorization/stat work inside its normal try/catch.
-                    byteEstimateComplete = false;
-                    everyTargetMatchedFtsStatPreflight = false;
-                    statPreflightCompleted[targetIndex] = false;
-                }
-            }
-
-            byteEstimateComplete &= knownReadableByteEstimateComplete;
-            var totalBytes = knownReadableBytesRead;
-            if (!knownReadableByteEstimateComplete
-                || totalBytes > long.MaxValue - staleFilePurgePlan.DeletedBytes)
-                byteEstimateComplete = false;
-            else
-                totalBytes += staleFilePurgePlan.DeletedBytes;
-            if (totalBytes > long.MaxValue - persistedSizeExcessBytes)
-                byteEstimateComplete = false;
-            else
-                totalBytes += persistedSizeExcessBytes;
-
-            useFtsBulkLoad = byteEstimateComplete
-                && FtsBulkLoadTriggerGuard.ShouldUseForDirtyBytes(estimatedDirtyBytes, totalBytes);
-        }
+        var ftsPreflight = BuildMcpIndexFtsPreflight(
+            fileTargets,
+            staleFilePurgePlan,
+            rebuild,
+            startedWithNoIndexedFiles,
+            scanHadErrors,
+            reusableIndexedFileStats,
+            authorizedRoot,
+            GetStatMatchedFile,
+            readableBytes,
+            requestToken);
+        var useFtsBulkLoad = ftsPreflight.UseBulkLoad;
 
         var reuseFinalCSharpStatAtActualSkip = false;
         if (preservePriorPositiveCSharpSourceNoOp
-            && everyTargetMatchedFtsStatPreflight)
+            && ftsPreflight.EveryTargetMatched)
         {
             // A pure no-op performs its second and final C# stat pass at the readiness
             // boundary. Reuse the candidate result in the per-file skip loop meanwhile.
@@ -859,7 +767,7 @@ public partial class McpServer
         }
 
         if (preservePriorPositiveCSharpSourceNoOp
-            && !everyTargetMatchedFtsStatPreflight)
+            && !ftsPreflight.EveryTargetMatched)
         {
             // Re-stat directly after the potentially long whole-workspace dirty-byte pass.
             // This is the last read-only boundary before readiness/purge/file mutations.
@@ -939,10 +847,7 @@ public partial class McpServer
                     }
 
                     foreach (var targetIndex in invalidatedCSharpTargetIndexes)
-                    {
-                        statMatchedFiles![targetIndex] = null;
-                        statPreflightCompleted![targetIndex] = true;
-                    }
+                        ftsPreflight.InvalidateTarget(targetIndex);
                 }
             }
         }
@@ -1199,7 +1104,7 @@ public partial class McpServer
             {
                 var info = new FileInfo(target.FilePath);
                 if (info.Exists && info.Length >= 0)
-                    RememberReadableFileSize(target.FilePath, info.Length);
+                    readableBytes.Remember(target.FilePath, info.Length);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
                 or NotSupportedException or ArgumentException)
@@ -1230,8 +1135,8 @@ public partial class McpServer
             HdlGraphContractMatchesCurrent = hdlGraphContractMatchesCurrent,
             HotspotFamilyTrustMatchesCurrent = hotspotFamilyTrustMatchesCurrent,
             ReusableIndexedFileStats = reusableIndexedFileStats,
-            StatMatchedFiles = statMatchedFiles,
-            StatPreflightCompleted = statPreflightCompleted,
+            StatMatchedFiles = ftsPreflight.StatMatches,
+            StatPreflightCompleted = ftsPreflight.Completed,
             SymbolKindFilter = symbolKindFilter,
             PostExtractionHooks = postExtractionHooks,
             GetCSharpWorkspace = () => csharpWorkspace,
@@ -1244,7 +1149,7 @@ public partial class McpServer
             LoadedCSharpWorkspaceSnapshotMatches = LoadedCSharpWorkspaceSnapshotMatches,
             DeferCSharpStatRevalidation = DeferCSharpMutationsForStatRevalidation,
             DeferCSharpLoadedSnapshotDrift = DeferCSharpMutationsForLoadedSnapshotDrift,
-            RememberReadableFileSize = RememberReadableFileSize,
+            RememberReadableFileSize = readableBytes.Remember,
             InsertIssuesForIndexedFile = InsertIssuesForIndexedFile,
             WriteProjectRootOnce = WriteProjectRootOnce,
             MarkSymbolKindFilterMetaIncompleteOnce = MarkSymbolKindFilterMetaIncompleteOnce,
@@ -1644,16 +1549,16 @@ public partial class McpServer
             // MCP の no-op full-scan root backfill も readiness stamp 後に限定する。
             WriteProjectRootOnce();
             writer.WriteUnknownExtensionFileMetadata(scanResult.UnknownExtensionFiles);
-            var bytesRead = knownReadableFileSizes.Count == files.Count
-                ? (BytesRead: knownReadableBytesRead,
-                    SkippedFileCount: knownReadableByteEstimateComplete ? 0L : 1L)
+            var bytesRead = readableBytes.Sizes.Count == files.Count
+                ? (BytesRead: readableBytes.Total,
+                    SkippedFileCount: readableBytes.EstimateComplete ? 0L : 1L)
                 : SumReadableFileBytes(
                         files,
                         projectPath,
                         indexRunDiagnostics,
                         mcpIndexDiagnostics,
                         authorizedRoot.EnsureAuthorizedEntry,
-                        knownReadableFileSizes);
+                        readableBytes.Sizes);
             var referenceExtractionCapHits = writer.GetReferenceExtractionCapHits(issuesStateAvailable: true);
             writer.SetMetaValues(
                 (DbContext.LastIndexRunModeMetaKey, rebuild ? "rebuild" : "mcp"),
