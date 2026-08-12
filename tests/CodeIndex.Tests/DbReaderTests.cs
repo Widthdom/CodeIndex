@@ -5455,6 +5455,38 @@ public partial class DbReaderTests : IDisposable
     }
 
     [Fact]
+    public void GetTransitiveCallers_GraphStateBudgetTerminatesAfterCycleState()
+    {
+        InsertIndexedFile("src/impact_graph_state_budget.cs", "csharp",
+            """
+            public static class ImpactGraphStateBudget
+            {
+                public static void ImpactGraphBudgetRoot() { ImpactGraphBudgetRoot(); }
+                public static void ImpactGraphBudgetZed() { ImpactGraphBudgetRoot(); }
+            }
+            """);
+        _writer.ClearReferenceIdentityContractReady();
+        using var reader = new DbReader(_db.Connection)
+        {
+            ImpactGraphStateEntryBudgetForTesting = 3,
+        };
+
+        var (results, truncated, truncatedReason, terminationReason, cycles) =
+            reader.GetTransitiveCallers(
+                "ImpactGraphBudgetRoot",
+                maxDepth: 1,
+                limit: 10,
+                lang: "csharp",
+                pathPatterns: ["src/*impact_graph_state_budget*"]);
+
+        Assert.Equal("ImpactGraphBudgetZed", Assert.Single(results).CallerName);
+        Assert.NotEmpty(cycles);
+        Assert.True(truncated);
+        Assert.Equal(ImpactTruncatedReasons.GraphStateBudget, truncatedReason);
+        Assert.Equal(ImpactTerminationReasons.GraphStateBudget, terminationReason);
+    }
+
+    [Fact]
     public void GetCallers_ReportsAndCanExcludeSelfReferences()
     {
         InsertIndexedFile("src/self_reference_query.cs", "csharp",

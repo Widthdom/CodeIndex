@@ -647,6 +647,7 @@ public partial class DbReaderTests
 
         Assert.True(analysis.Truncated);
         Assert.Equal(ImpactTruncatedReasons.UserLimit, analysis.TruncatedReason);
+        Assert.Equal(ImpactTerminationReasons.RowLimitTruncated, analysis.TerminationReason);
         Assert.Equal(2, analysis.Callers.Count);
     }
 

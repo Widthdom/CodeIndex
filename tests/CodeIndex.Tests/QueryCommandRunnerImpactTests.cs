@@ -1,4 +1,3 @@
-using System.Reflection;
 using System.Text.Json;
 using CodeIndex.Cli;
 using CodeIndex.Database;
@@ -196,7 +195,7 @@ public partial class QueryCommandRunnerTests
             });
 
             var references = new List<ReferenceRecord>();
-            for (var i = 0; i < ImpactBoundaryCallerProbeSourceCount(); i++)
+            for (var i = 0; i < 3; i++)
             {
                 references.Add(new ReferenceRecord
                 {
@@ -207,66 +206,57 @@ public partial class QueryCommandRunnerTests
                     Column = 1,
                     Context = $"Caller{i}();",
                     ContainerKind = "function",
-                    ContainerName = $"Caller{i}",
+                    ContainerName = $"A{i}",
                 });
-
-                if (i == 0)
-                    continue;
-
                 references.Add(new ReferenceRecord
                 {
                     FileId = fileId,
-                    SymbolName = "Caller0",
+                    SymbolName = "ZBoundary",
                     ReferenceKind = "call",
                     Line = i + 1,
                     Column = 1,
-                    Context = $"Caller{i}();",
+                    Context = "ZBoundary();",
                     ContainerKind = "function",
-                    ContainerName = $"Caller{i}",
+                    ContainerName = $"A{i}",
                 });
             }
+            references.Add(new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = "Root",
+                ReferenceKind = "call",
+                Line = 4,
+                Column = 1,
+                Context = "Root();",
+                ContainerKind = "function",
+                ContainerName = "ZBoundary",
+            });
 
             writer.InsertReferences(references);
             writer.MarkGraphReady();
-            using var reader = new DbReader(db.Connection);
-            var visited = Enumerable.Range(1, ImpactBoundaryCallerProbeSourceCount() - 1)
-                .Select(i => $"src/Dense.cs:Caller{i}:call")
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
-            var method = typeof(DbReader).GetMethod("InspectBoundaryCallers", BindingFlags.Instance | BindingFlags.NonPublic);
-            Assert.NotNull(method);
+            using var reader = new DbReader(db.Connection)
+            {
+                ImpactBoundaryCallerProbeBudgetForTesting = 3,
+            };
 
-            var inspection = method!.Invoke(reader,
-            [
-                "Caller0",
-                null,
-                "Root",
-                new HashSet<string>(StringComparer.OrdinalIgnoreCase),
-                null,
-                visited,
-                new Dictionary<string, HashSet<string>>(StringComparer.Ordinal),
-                new Dictionary<string, ImpactCycleMemberResult>(StringComparer.Ordinal),
-                new List<ImpactCycleResult>(),
-                new HashSet<string>(StringComparer.Ordinal),
-                false,
-                "csharp",
-                null,
-                null,
-                false,
-                false,
-                false,
-            ]);
-            Assert.NotNull(inspection);
-            var type = inspection!.GetType();
+            var (results, truncated, truncatedReason, terminationReason, cycles) =
+                reader.GetTransitiveCallers(
+                    "Root",
+                    maxDepth: 1,
+                    limit: 10,
+                    lang: "csharp",
+                    pathPatterns: ["src/Dense.cs"]);
 
-            Assert.True((bool)type.GetProperty("HasUnvisitedCaller")!.GetValue(inspection)!);
-            Assert.True((bool)type.GetProperty("ProbeBudgetHit")!.GetValue(inspection)!);
+            Assert.Equal(4, results.Count);
+            Assert.True(truncated);
+            Assert.Equal(ImpactTruncatedReasons.BoundaryProbeBudget, truncatedReason);
+            Assert.Equal(ImpactTerminationReasons.BoundaryProbeBudget, terminationReason);
+            Assert.Empty(cycles);
         }
         finally
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
-
-        static int ImpactBoundaryCallerProbeSourceCount() => DbReader.ImpactBoundaryCallerProbeBudget + 100;
     }
 
     [Fact]
