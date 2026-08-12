@@ -166,17 +166,6 @@ public partial class DbWriter
         set => ScopedTypeScriptAugmentationReadyCheckForTesting.Value = value;
     }
 
-    private readonly record struct TypeScriptInterfaceDeclaration(
-        long FileId,
-        string Path,
-        string Name,
-        int Line,
-        int Column,
-        string Signature,
-        string Kind,
-        string ContainerName,
-        string? Visibility);
-
     public int RebuildTypeScriptAugmentationReferences(string? projectRoot = null) =>
         RebuildTypeScriptAugmentationReferencesCore(
             projectRoot,
@@ -247,245 +236,25 @@ public partial class DbWriter
         {
             cancellationToken.ThrowIfCancellationRequested();
             _ = TryStartDeferredHotspotReferenceMutation();
-
-            string[]? scopedNames = null;
-            if (dirtyNames != null)
-            {
-                var uniqueNames = new HashSet<string>(StringComparer.Ordinal);
-                var inspectedNameCount = 0;
-                foreach (var name in dirtyNames)
-                {
-                    if (!string.IsNullOrEmpty(name))
-                        uniqueNames.Add(name);
-                    if ((++inspectedNameCount & 1_023) == 0)
-                        cancellationToken.ThrowIfCancellationRequested();
-                }
-                cancellationToken.ThrowIfCancellationRequested();
-                if (uniqueNames.Count > 1_024
-                    && ShouldUseFullTypeScriptAugmentationRebuild(uniqueNames.Count, cancellationToken))
-                {
-                    scopedNames = null;
-                }
-                else
-                {
-                    scopedNames = [.. uniqueNames];
-                    Array.Sort(scopedNames, StringComparer.Ordinal);
-                }
-            }
-
+            var scopePlan = BuildTypeScriptAugmentationScopePlan(dirtyNames, cancellationToken);
             var affectedFileIds = new HashSet<long>();
-            var deletedReferences = new List<(
-                long Id,
-                long FileId,
-                long? SourceId,
-                long? TargetId,
-                string? ContainerNameFolded,
-                string? SymbolNameFolded)>();
-            if (scopedNames == null)
-            {
-                var deleteCmd = RentCommand(
-                    """
-                    DELETE FROM symbol_references
-                    WHERE reference_kind = 'augmentation'
-                    RETURNING id,
-                              file_id,
-                              source_symbol_id,
-                              target_symbol_id,
-                              container_name_folded,
-                              symbol_name_folded
-                    """,
-                    static _ => { });
-                try
-                {
-                    using var reader = deleteCmd.ExecuteReader();
-                    var deletedRowCount = 0;
-                    while (reader.Read())
-                    {
-                        var fileId = reader.GetInt64(1);
-                        affectedFileIds.Add(fileId);
-                        deletedReferences.Add((
-                            reader.GetInt64(0),
-                            fileId,
-                            ReadNullableInt64(reader, 2),
-                            ReadNullableInt64(reader, 3),
-                            ReadNullableString(reader, 4),
-                            ReadNullableString(reader, 5)));
-                        if ((++deletedRowCount & 255) == 0)
-                            cancellationToken.ThrowIfCancellationRequested();
-                    }
-                    cancellationToken.ThrowIfCancellationRequested();
-                }
-                finally
-                {
-                    ReleaseCommand(deleteCmd);
-                }
-            }
-            else
-            {
-                ForEachTypeScriptAugmentationNameBatch(scopedNames, cancellationToken, (names, offset, count) =>
-                {
-                    using var deleteCmd = CreateTypeScriptAugmentationNameCommand(
-                        names,
-                        offset,
-                        count,
-                        """
-                        DELETE FROM symbol_references
-                        WHERE reference_kind = 'augmentation'
-                          AND symbol_name IN ({0})
-                        RETURNING id,
-                                  file_id,
-                                  source_symbol_id,
-                                  target_symbol_id,
-                                  container_name_folded,
-                                  symbol_name_folded
-                        """);
-                    using var reader = deleteCmd.ExecuteReader();
-                    var deletedRowCount = 0;
-                    while (reader.Read())
-                    {
-                        var fileId = reader.GetInt64(1);
-                        affectedFileIds.Add(fileId);
-                        deletedReferences.Add((
-                            reader.GetInt64(0),
-                            fileId,
-                            ReadNullableInt64(reader, 2),
-                            ReadNullableInt64(reader, 3),
-                            ReadNullableString(reader, 4),
-                            ReadNullableString(reader, 5)));
-                        if ((++deletedRowCount & 255) == 0)
-                            cancellationToken.ThrowIfCancellationRequested();
-                    }
-                });
-            }
-            TrackReferenceGraphDeletedReferences(deletedReferences);
-
-            var references = new List<ReferenceRecord>();
-            var declarations = new List<TypeScriptInterfaceDeclaration>();
-            if (scopedNames == null)
-            {
-                var cmd = RentCommand(
-                    BuildTypeScriptInterfaceDeclarationSql(namePredicate: null),
-                    static _ => { });
-                try
-                {
-                    using var reader = cmd.ExecuteReader();
-                    ReadTypeScriptInterfaceDeclarations(reader, declarations, cancellationToken);
-                }
-                finally
-                {
-                    ReleaseCommand(cmd);
-                }
-            }
-            else
-            {
-                ForEachTypeScriptAugmentationNameBatch(scopedNames, cancellationToken, (names, offset, count) =>
-                {
-                    using var cmd = CreateTypeScriptAugmentationNameCommand(
-                        names,
-                        offset,
-                        count,
-                        BuildTypeScriptInterfaceDeclarationSql("s.name IN ({0})"));
-                    using var reader = cmd.ExecuteReader();
-                    ReadTypeScriptInterfaceDeclarations(reader, declarations, cancellationToken);
-                });
-            }
-
-            var moduleFileIds = FindTypeScriptModuleFileIds(
-                projectRoot,
-                declarations,
-                includeIndexedInterfaceMarkers: scopedNames != null,
+            var deletedReferenceCount = DeleteAndTrackTypeScriptAugmentationReferences(
+                scopePlan,
+                affectedFileIds,
                 cancellationToken);
-            var groupIndexes = new Dictionary<(string Name, string ScopeKey), int>(declarations.Count);
-            var groups = new List<(int FirstDeclarationIndex, List<int>? DeclarationIndexes)>(declarations.Count);
-            for (var declarationIndex = 0; declarationIndex < declarations.Count; declarationIndex++)
-            {
-                if ((declarationIndex & 1_023) == 0)
-                    cancellationToken.ThrowIfCancellationRequested();
-                var declaration = declarations[declarationIndex];
-                var key = (
-                    declaration.Name,
-                    BuildTypeScriptScopeKey(
-                        declaration.FileId,
-                        declaration.Path,
-                        declaration.Signature,
-                        declaration.ContainerName,
-                        moduleFileIds));
-                if (!groupIndexes.TryGetValue(key, out var groupIndex))
-                {
-                    groupIndexes.Add(key, groups.Count);
-                    groups.Add((declarationIndex, null));
-                    continue;
-                }
-
-                var group = groups[groupIndex];
-                if (group.DeclarationIndexes == null)
-                    group.DeclarationIndexes = new List<int>(2) { group.FirstDeclarationIndex };
-                group.DeclarationIndexes.Add(declarationIndex);
-                groups[groupIndex] = group;
-            }
-
-            var mergedGroupCount = 0;
-            var materializedDeclarationIndexCount = 0;
-            var mergedDeclarationCount = 0;
-            for (var groupIndex = 0; groupIndex < groups.Count; groupIndex++)
-            {
-                if ((groupIndex & 1_023) == 0)
-                    cancellationToken.ThrowIfCancellationRequested();
-                var group = groups[groupIndex];
-                if (group.DeclarationIndexes == null)
-                    continue;
-
-                mergedGroupCount++;
-                materializedDeclarationIndexCount += group.DeclarationIndexes.Count;
-                foreach (var declarationIndex in group.DeclarationIndexes)
-                {
-                    if ((mergedDeclarationCount++ & 1_023) == 0)
-                        cancellationToken.ThrowIfCancellationRequested();
-                    var declaration = declarations[declarationIndex];
-                    references.Add(new ReferenceRecord
-                    {
-                        FileId = declaration.FileId,
-                        SymbolName = declaration.Name,
-                        ReferenceKind = "augmentation",
-                        Line = declaration.Line,
-                        Column = declaration.Column,
-                        Context = declaration.Signature,
-                        ContainerKind = declaration.Kind == "interface" ? "interface" : "type",
-                        ContainerName = declaration.Name,
-                    });
-                }
-            }
-            TypeScriptAugmentationGroupingForTesting?.Invoke(new TypeScriptAugmentationGroupingStats(
-                declarations.Count,
-                groups.Count,
-                mergedGroupCount,
-                materializedDeclarationIndexCount,
-                scopedNames?.Length));
-
-            InsertReferencesInAtomicFileScope(
+            var declarations = LoadTypeScriptInterfaceDeclarations(scopePlan, cancellationToken);
+            var references = ProjectTypeScriptAugmentationReferences(
+                projectRoot,
+                scopePlan,
+                declarations,
+                cancellationToken);
+            ApplyTypeScriptAugmentationReferences(
                 references,
-                refreshMutualRecursionFlags: true,
-                cancellationToken,
-                referenceSecondaryIndexBulkLoad);
-            if (references.Count == 0
-                && (deletedReferences.Count > 0 || finalizeDeferredReferenceGraph))
-            {
-                // The insert helper intentionally no-ops for an empty batch. Augmentation
-                // rebuilds finalize only when they deleted synthetic edges or explicitly
-                // inherited a coalesced graph pass. Marker-only validation stays O(1) here.
-                // 空batchはedge削除または先行pass統合時だけgraphを確定し、marker検証だけなら省く。
-                cancellationToken.ThrowIfCancellationRequested();
-                RefreshMutualRecursionFlags(
-                    cancellationToken,
-                    referenceSecondaryIndexBulkLoad: referenceSecondaryIndexBulkLoad);
-            }
-            for (var referenceIndex = 0; referenceIndex < references.Count; referenceIndex++)
-            {
-                if ((referenceIndex & 1_023) == 0)
-                    cancellationToken.ThrowIfCancellationRequested();
-                affectedFileIds.Remove(references[referenceIndex].FileId);
-            }
-            RefreshHotspotReferenceCounts(affectedFileIds, cancellationToken);
+                deletedReferenceCount,
+                affectedFileIds,
+                finalizeDeferredReferenceGraph,
+                referenceSecondaryIndexBulkLoad,
+                cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
             MarkTypeScriptAugmentationReady();
             ownedDeferredRefresh?.Complete(cancellationToken);
@@ -500,116 +269,6 @@ public partial class DbWriter
                 "TypeScript augmentation rebuild was interrupted.",
                 exception,
                 cancellationToken);
-        }
-    }
-
-    private static string BuildTypeScriptInterfaceDeclarationSql(string? namePredicate) =>
-        @"
-            SELECT s.file_id,
-                   f.path,
-                   s.name,
-                   s.line,
-                   s.start_column,
-                   s.signature,
-                   s.kind,
-                   s.container_name,
-                   s.visibility
-            FROM symbols s"
-        + (namePredicate == null ? string.Empty : " INDEXED BY idx_symbols_name")
-        + @"
-            JOIN files f ON f.id = s.file_id
-            WHERE f.lang = 'typescript'
-              AND s.name IS NOT NULL
-              AND s.name <> ''
-              AND s.kind = 'interface'"
-        + (namePredicate == null ? string.Empty : "\n              AND " + namePredicate)
-        + "\n            ORDER BY s.name, s.file_id, s.line";
-
-    private static void ReadTypeScriptInterfaceDeclarations(
-        Microsoft.Data.Sqlite.SqliteDataReader reader,
-        List<TypeScriptInterfaceDeclaration> declarations,
-        CancellationToken cancellationToken)
-    {
-        while (reader.Read())
-        {
-            declarations.Add(new TypeScriptInterfaceDeclaration(
-                reader.GetInt64(0),
-                reader.GetString(1),
-                reader.GetString(2),
-                reader.IsDBNull(3) ? 1 : Math.Max(1, reader.GetInt32(3)),
-                reader.IsDBNull(4) ? 1 : Math.Max(1, reader.GetInt32(4) + 1),
-                reader.IsDBNull(5) ? string.Empty : reader.GetString(5),
-                reader.IsDBNull(6) ? string.Empty : reader.GetString(6),
-                reader.IsDBNull(7) ? string.Empty : reader.GetString(7),
-                reader.IsDBNull(8) ? null : reader.GetString(8)));
-            if ((declarations.Count & 255) == 0)
-                cancellationToken.ThrowIfCancellationRequested();
-        }
-        cancellationToken.ThrowIfCancellationRequested();
-    }
-
-    private Microsoft.Data.Sqlite.SqliteCommand CreateTypeScriptAugmentationNameCommand(
-        IReadOnlyList<string> names,
-        int offset,
-        int count,
-        string sqlTemplate)
-    {
-        SqliteDynamicSql.EnsureParameterBudget(count, "TypeScript augmentation name batch");
-        var command = _conn.CreateCommand();
-        command.Transaction = _activeTransaction;
-        var parameterNames = new string[count];
-        for (var index = 0; index < count; index++)
-        {
-            var parameterName = SqliteDynamicSql.BuildParameterName("augmentation_name", index);
-            parameterNames[index] = parameterName;
-            command.Parameters.Add(parameterName, Microsoft.Data.Sqlite.SqliteType.Text).Value = names[offset + index];
-        }
-        command.CommandText = string.Format(
-            System.Globalization.CultureInfo.InvariantCulture,
-            sqlTemplate,
-            string.Join(", ", parameterNames));
-        return command;
-    }
-
-    private static void ForEachTypeScriptAugmentationNameBatch(
-        IReadOnlyList<string> names,
-        CancellationToken cancellationToken,
-        Action<IReadOnlyList<string>, int, int> action)
-    {
-        const int nameBatchSize = 900;
-        for (var offset = 0; offset < names.Count; offset += nameBatchSize)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            action(names, offset, Math.Min(nameBatchSize, names.Count - offset));
-            TypeScriptAugmentationNameBatchForTesting?.Invoke((offset / nameBatchSize) + 1);
-            cancellationToken.ThrowIfCancellationRequested();
-        }
-    }
-
-    private bool ShouldUseFullTypeScriptAugmentationRebuild(
-        int dirtyNameCount,
-        CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        var cmd = RentCommand(
-            @"
-                SELECT COUNT(*)
-                FROM symbols s INDEXED BY idx_symbols_kind
-                JOIN files f ON f.id = s.file_id
-                WHERE s.kind = 'interface'
-                  AND f.lang = 'typescript'",
-            static _ => { });
-        try
-        {
-            var declarationCount = Convert.ToInt64(
-                cmd.ExecuteScalar(),
-                System.Globalization.CultureInfo.InvariantCulture);
-            cancellationToken.ThrowIfCancellationRequested();
-            return dirtyNameCount >= Math.Max(1_024L, (declarationCount + 1L) / 2L);
-        }
-        finally
-        {
-            ReleaseCommand(cmd);
         }
     }
 
