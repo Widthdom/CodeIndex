@@ -127,7 +127,7 @@ public static partial class ReferenceExtractor
             return CoreReferenceLineFlow.StopExtraction;
 
         var callContext = new CoreCallReferenceContext(
-            line,
+            in line,
             loop.Lookups,
             prepared.JavaSameLineCtor,
             prepared.CSharpAttributeRanges,
@@ -142,7 +142,7 @@ public static partial class ReferenceExtractor
             sqlSuppressedCallIndices,
             loop.SqlWindowFunctionCallSiteSuppressions,
             prepared.DefinitionState);
-        EmitCoreCallReferences(callContext);
+        EmitCoreCallReferences(in callContext);
 
         if (ReferenceLimitReached(line.References))
             return CoreReferenceLineFlow.StopExtraction;
