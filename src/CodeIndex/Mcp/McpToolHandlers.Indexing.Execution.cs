@@ -316,13 +316,11 @@ public partial class McpServer
         // applied only after a bulk guard, when selected, has suspended synchronization.
         // FTS trigger policy 選択前に stale file cleanup を plan し、実削除は bulk guard
         // 選択時に同期を停止した後だけ行う。
-        var staleFilePurgePlan = startedWithNoIndexedFiles
-            ? FilePurgePlan.Empty
-            : writer.PlanStaleFiles(projectPath, cancellationToken: requestToken);
-        var purged = staleFilePurgePlan.Count;
-        McpIndexStaleFilePurgePlannedForTesting?.Invoke(purged);
-        if (purged > 0)
-            csharpMetadataTargetsNeedRefresh = true;
+        var initialStaleFilePurgePlan = PlanInitialMcpIndexPurge(
+            writer,
+            projectPath,
+            startedWithNoIndexedFiles,
+            requestToken);
 
         // Load current reference-language support before the deferred mutation phase.
         // deferred mutation phase の前に現在の reference-language support を読み込む。
@@ -337,8 +335,6 @@ public partial class McpServer
         var csharpPrepassSymbolArtifacts = CSharpPrepassSymbolArtifactCache
             .CreateForFreshBuiltInExtraction(
                 startedWithNoIndexedFilesBeforeRebuild && !rebuild);
-        var purgedRefs = 0;
-
         // Scan and index / スキャン・インデックス
         var scanWithDirectorySnapshots = indexer.ScanFilesDetailedWithDirectoryListingSnapshots(
             cancellationToken: requestToken);
@@ -351,125 +347,12 @@ public partial class McpServer
         if (memorySamples != null)
             memorySamples.Add(CaptureMcpIndexMemorySample("scan", runStopwatch));
         var files = scanResult.Files;
-        var fileTargets = new CSharpStaticInterfacePrepass.FileTarget[files.Count];
+        var targets = BuildMcpIndexTargetSet(projectPath, indexer, scanResult);
+        var fileTargets = targets.All;
+        var csharpPrepassTargets = targets.CSharp;
         var languageCounts = scanResult.LanguageCounts;
-        var csharpPrepassTargetCapacity = languageCounts.TryGetValue("csharp", out var csharpFileCount) ? csharpFileCount : 0;
-        var csharpPrepassTargets = new List<CSharpStaticInterfacePrepass.FileTarget>(csharpPrepassTargetCapacity);
         var hasSqlTargets = languageCounts.ContainsKey("sql");
         var hasTypeScriptTargets = languageCounts.ContainsKey("typescript");
-        var hasGeneratedCodeExtractionSuppressionPatterns = indexer.HasGeneratedCodeExtractionSuppressionPatterns;
-        for (var i = 0; i < files.Count; i++)
-        {
-            var filePath = files[i];
-            var language = FileIndexer.GetReusableDetectedLanguage(filePath, scanResult.FileLanguages);
-            var target = CSharpStaticInterfacePrepass.FileTarget.Create(projectPath, filePath, language);
-            target = target with
-            {
-                GeneratedExtractionSuppressed = hasGeneratedCodeExtractionSuppressionPatterns
-                    && indexer.IsGeneratedCodeExtractionSuppressed(target.IndexPath),
-                ResolveSymlinkTargets = indexer.ResolvesSymlinkTargets
-            };
-            fileTargets[i] = target;
-            if (language == "csharp")
-                csharpPrepassTargets.Add(target);
-        }
-
-        HashSet<string>? scanRetainedPaths = null;
-        HashSet<string>? scanListedDirectories = null;
-        HashSet<string>? scanAuthoritativeSubtreeDirectories = null;
-        HashSet<string>? scanExplicitlyRemovedPaths = null;
-        if (!startedWithNoIndexedFiles)
-        {
-            scanRetainedPaths = new HashSet<string>(fileTargets.Length, StringComparer.Ordinal);
-            foreach (var target in fileTargets)
-                scanRetainedPaths.Add(target.IndexPath);
-
-            FilePurgePlan scanDerivedPurgePlan;
-            if (scanHadErrors)
-            {
-                // A failed probe is not proof that a persisted row disappeared. Conversely,
-                // a successful immediate-child listing is authoritative only for that parent,
-                // while a fully scanned or deliberately pruned directory authorizes its subtree.
-                // probe failureは既存row消滅の根拠にせず、partial scanのauthorityはlisted直下と
-                // fully-scanned / deliberate-prune subtreeだけに厳密に限定する。
-                scanRetainedPaths.UnionWith(
-                    scanResult.ProbeFailedFilePaths.Select(FileIndexer.NormalizeIndexPath));
-                scanListedDirectories = scanResult.ListedDirectories
-                    .Select(FileIndexer.NormalizeIndexPath)
-                    .ToHashSet(StringComparer.Ordinal);
-                scanAuthoritativeSubtreeDirectories = scanResult.FullyScannedDirectories
-                    .Select(FileIndexer.NormalizeIndexPath)
-                    .ToHashSet(StringComparer.Ordinal);
-                scanAuthoritativeSubtreeDirectories.UnionWith(
-                    scanResult.AttributePrunedDirectories.Select(FileIndexer.NormalizeIndexPath));
-                scanAuthoritativeSubtreeDirectories.UnionWith(
-                    scanResult.NestedRepositories.Select(FileIndexer.NormalizeIndexPath));
-                scanExplicitlyRemovedPaths = scanResult.NonIndexablePaths
-                    .Select(FileIndexer.NormalizeIndexPath)
-                    .ToHashSet(StringComparer.Ordinal);
-                scanDerivedPurgePlan = scanAuthoritativeSubtreeDirectories.Contains(string.Empty)
-                    ? writer.PlanFilesOutsideRetainedSet(scanRetainedPaths, requestToken)
-                    : writer.PlanFilesOutsideRetainedSetWithinListedDirectories(
-                        scanRetainedPaths,
-                        scanListedDirectories,
-                        scanAuthoritativeSubtreeDirectories,
-                        scanExplicitlyRemovedPaths,
-                        requestToken);
-            }
-            else
-            {
-                // A clean recursive scan is authoritative for the complete retained set,
-                // including files that still exist but became ignored or unsupported.
-                // clean scanでは保持集合全体をauthorityとし、存在するignore/unsupported化も除外する。
-                scanDerivedPurgePlan = writer.PlanFilesOutsideRetainedSet(
-                    scanRetainedPaths,
-                    requestToken);
-            }
-
-            if (scanDerivedPurgePlan.Count > 0)
-            {
-                var scanPlanContainsPreScanPlan = staleFilePurgePlan.Count <= scanDerivedPurgePlan.Count;
-                for (var planIndex = 0;
-                     scanPlanContainsPreScanPlan && planIndex < staleFilePurgePlan.FileIds.Count;
-                     planIndex++)
-                {
-                    scanPlanContainsPreScanPlan = FilePurgePlan.ContainsSortedFileId(
-                        scanDerivedPurgePlan.FileIds,
-                        staleFilePurgePlan.FileIds[planIndex]);
-                }
-
-                // Preserve the immutable pre-scan plan when a path reappeared during scanning.
-                // When the authoritative scan plan already contains every pre-scan ID, it is
-                // the exact union and retains its deleted-byte estimate without double counting.
-                // scan中に再出現したpathはpre-scan planを維持する。一方scan planが全IDを包含する
-                // 場合はそれ自体が正確なunionなので、deleted-byte見積りを重複加算しない。
-                staleFilePurgePlan = scanPlanContainsPreScanPlan
-                    ? scanDerivedPurgePlan
-                    : FilePurgePlan.Merge([staleFilePurgePlan, scanDerivedPurgePlan]);
-            }
-        }
-
-        purged = staleFilePurgePlan.Count;
-        if (purged > 0)
-            csharpMetadataTargetsNeedRefresh = true;
-        if (deferCSharpMutationsForIncompleteScan && staleFilePurgePlan.Count > 0)
-        {
-            // Do not combine an incomplete C# workspace with any planned deletion. A clean
-            // retry can apply the same stale cleanup while rebuilding implicit references.
-            // C# workspaceが不完全なrunではplanned deleteを延期し、clean retryへ委ねる。
-            staleFilePurgePlan = FilePurgePlan.Empty;
-            purged = 0;
-        }
-        var hadCSharpStaticInterfaceContractsBeforePurge = !startedWithNoIndexedFiles
-            && staleFilePurgePlan.Count > 0
-            && writer.HasCSharpFilesInFileIds(staleFilePurgePlan.FileIds, requestToken)
-            && (indexSnapshot.CSharpStaticInterfaceSourceEvidence == true
-                || writer.HasCSharpStaticInterfaceContractMembersInFileIds(
-                    staleFilePurgePlan.FileIds,
-                    includeInterfaceDeclarationsAsConservativeEvidence:
-                        indexSnapshot.CSharpStaticInterfaceSourceEvidence == null
-                        || !priorFilterRetainedCSharpContractMembers,
-                    requestToken));
         var knownReadableFileSizes = new Dictionary<string, long>(files.Count, StringComparer.Ordinal);
         long knownReadableBytesRead = 0;
         var knownReadableByteEstimateComplete = true;
@@ -489,14 +372,24 @@ public partial class McpServer
             }
             knownReadableFileSizes[path] = size;
         }
-        HashSet<string>? retainedPathsForReuse = null;
-        if (!rebuild
-            && !startedWithNoIndexedFiles
-            && staleFilePurgePlan.RemainingFileCount - fileTargets.LongLength > fileTargets.LongLength)
-        {
-            retainedPathsForReuse = scanRetainedPaths;
-            McpIndexRetainedPathFilterAllocatedForTesting?.Invoke(fileTargets.Length);
-        }
+        var discoveryPlan = BuildMcpIndexDiscoveryPlan(
+            writer,
+            projectPath,
+            scanResult,
+            targets,
+            initialStaleFilePurgePlan,
+            startedWithNoIndexedFiles,
+            deferCSharpMutationsForIncompleteScan,
+            indexSnapshot.CSharpStaticInterfaceSourceEvidence,
+            priorFilterRetainedCSharpContractMembers,
+            requestToken);
+        var staleFilePurgePlan = discoveryPlan.PurgePlan;
+        var retainedPathsForReuse = discoveryPlan.RetainedPathsForReuse;
+        var hadCSharpStaticInterfaceContractsBeforePurge =
+            discoveryPlan.HadCSharpStaticInterfaceContractsBeforePurge;
+        var purged = staleFilePurgePlan.Count;
+        if (purged > 0)
+            csharpMetadataTargetsNeedRefresh = true;
         await EmitProgressNotificationAsync(progressToken, 0, files.Count, "Index scan complete; indexing files.").ConfigureAwait(false);
         var csharpPositiveNoOpPolicyCandidate = indexSnapshot.CSharpStaticInterfaceSourceEvidence is not null
             && indexSnapshot.IndexComplete
@@ -514,11 +407,12 @@ public partial class McpServer
         var hasCSharpLanguageTransitions = false;
         void ObservePersistedCSharpPath(string indexPath)
         {
-            if (!hasCSharpLanguageTransitions && IsExistingCSharpSymbolPathNowNonCSharp(indexPath))
+            if (!hasCSharpLanguageTransitions
+                && discoveryPlan.ScanAuthority.IsExistingCSharpSymbolPathNowNonCSharp(indexPath))
                 hasCSharpLanguageTransitions = true;
         }
 
-        var reusableIndexedFileStats = !rebuild && !startedWithNoIndexedFiles
+        var reusableIndexedFileStats = !startedWithNoIndexedFiles
             ? writer.LoadReusableIndexedFileStats(
                 maxSymbolsPerFile,
                 maxReferencesPerFile,
@@ -564,52 +458,15 @@ public partial class McpServer
             {
                 allCSharpPrepassTargetsReusable = false;
                 (csharpPrepassStatReuse ??= new Dictionary<string, IndexedFileStatReuseResult?>(
-                    csharpPrepassTargetCapacity,
+                    csharpPrepassTargets.Count,
                     StringComparer.Ordinal))[target.IndexPath] = null;
                 return false;
             }
 
             (csharpPrepassStatReuse ??= new Dictionary<string, IndexedFileStatReuseResult?>(
-                csharpPrepassTargetCapacity,
+                csharpPrepassTargets.Count,
                 StringComparer.Ordinal))[target.IndexPath] = existingFile.Value;
             return true;
-        }
-
-        bool IsExistingCSharpSymbolPathNowNonCSharp(string indexPath)
-        {
-            var normalizedIndexPath = FileIndexer.NormalizeIndexPath(indexPath);
-            var currentPath = Path.Combine(
-                projectPath,
-                FileIndexer.NormalizeRelativePathForCurrentPlatform(normalizedIndexPath));
-            if (scanResult.FileLanguages.TryGetValue(currentPath, out var currentLanguage))
-                return currentLanguage != "csharp";
-
-            if (scanRetainedPaths?.Contains(normalizedIndexPath) == true)
-                return false;
-            if (!scanHadErrors)
-                return true;
-            if (scanExplicitlyRemovedPaths?.Contains(normalizedIndexPath) == true)
-                return true;
-
-            var directory = GetIndexParentDirectory(normalizedIndexPath);
-            if (scanListedDirectories?.Contains(directory) == true)
-                return true;
-            while (true)
-            {
-                if (scanAuthoritativeSubtreeDirectories?.Contains(directory) == true)
-                    return true;
-                if (directory.Length == 0)
-                    break;
-                directory = GetIndexParentDirectory(directory);
-            }
-
-            return false;
-        }
-
-        static string GetIndexParentDirectory(string path)
-        {
-            var separatorIndex = path.LastIndexOf('/');
-            return separatorIndex >= 0 ? path[..separatorIndex] : string.Empty;
         }
 
         Dictionary<string, CSharpStaticInterfacePrepass.FileStatSnapshot>? csharpWorkspaceFileSnapshots = null;
@@ -678,7 +535,7 @@ public partial class McpServer
         {
             allCSharpPrepassTargetsReusable = true;
             csharpPrepassStatReuse = new Dictionary<string, IndexedFileStatReuseResult?>(
-                csharpPrepassTargetCapacity,
+                csharpPrepassTargets.Count,
                 StringComparer.Ordinal);
             foreach (var target in csharpPrepassTargets)
             {
@@ -725,7 +582,8 @@ public partial class McpServer
                     isGeneratedCodeExtractionSuppressed: IsGeneratedExtractionSuppressed,
                     parallelism: 1,
                     excludedExistingFileIds: staleFilePurgePlan.FileIds,
-                    isExistingSymbolPathExcluded: IsExistingCSharpSymbolPathNowNonCSharp,
+                    isExistingSymbolPathExcluded:
+                        discoveryPlan.ScanAuthority.IsExistingCSharpSymbolPathNowNonCSharp,
                     patternConfigsAlreadyLoaded: true,
                     cancellationToken: requestToken,
                     symbolArtifactCache: csharpPrepassSymbolArtifacts));
@@ -870,8 +728,7 @@ public partial class McpServer
         var indexedSymbolExtractorLanguages = new HashSet<string>(languageCounts.Count, StringComparer.Ordinal);
         var symbolsDroppedByKindFilter = 0;
         var mutualRecursionRefreshNeeded = !referenceIdentityContractMatchedBeforeMutation
-            || purged > 0
-            || purgedRefs > 0;
+            || purged > 0;
         var freshCountFiles = 0L;
         var freshCountChunks = 0L;
         var freshCountSymbols = 0L;
@@ -1039,7 +896,8 @@ public partial class McpServer
                         isGeneratedCodeExtractionSuppressed: IsGeneratedExtractionSuppressed,
                         parallelism: 1,
                         excludedExistingFileIds: staleFilePurgePlan.FileIds,
-                        isExistingSymbolPathExcluded: IsExistingCSharpSymbolPathNowNonCSharp,
+                        isExistingSymbolPathExcluded:
+                            discoveryPlan.ScanAuthority.IsExistingCSharpSymbolPathNowNonCSharp,
                         patternConfigsAlreadyLoaded: true,
                         cancellationToken: requestToken));
                 preservePriorPositiveCSharpSourceNoOp = false;
@@ -1314,7 +1172,7 @@ public partial class McpServer
         }
 
         McpIndexReferencePurgeForTesting?.Invoke();
-        purgedRefs = deferCSharpMutationsForIncompleteScan || startedWithNoIndexedFiles
+        var purgedRefs = deferCSharpMutationsForIncompleteScan || startedWithNoIndexedFiles
             ? 0
             : writer.PurgeUnsupportedReferences(ReferenceExtractor.GetSupportedLanguages(projectPath));
         if (purgedRefs > 0)
