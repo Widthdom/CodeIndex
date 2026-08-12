@@ -216,7 +216,7 @@ public partial class QueryCommandRunnerTests
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            const int minimumGuardedCandidates = 200;
+            const int minimumGuardedCandidates = DbReader.MaxGuardedSearchCandidates;
             var fixtures = Enumerable.Range(0, minimumGuardedCandidates + 1)
                 .Select(i =>
                 {
@@ -230,20 +230,28 @@ public partial class QueryCommandRunnerTests
 
             using var env = EnvironmentVariableScope.Capture(SearchAuditRecipes.RecipePathsEnvironmentVariable);
             env.Set(SearchAuditRecipes.RecipePathsEnvironmentVariable, null);
-            string[] BuildArgs(params string[] outputArgs) =>
-            [
-                "--recipe", "broad-token-audit",
-                "--include-query", "token-term-broad",
-                "--include-query", "auth-token",
-                "--db", dbPath,
-                "--limit", "1",
-                "--total-limit", "0",
-                "--require-before", "CDIDX_REVIEW_NO_SUCH_GUARD",
-                "--guard-window", "1",
-                .. outputArgs,
-            ];
+            string[] BuildArgs(string? totalLimit, string limit, params string[] outputArgs)
+            {
+                var args = new List<string>
+                {
+                    "--recipe", "broad-token-audit",
+                    "--include-query", "token-term-broad",
+                    "--include-query", "auth-token",
+                    "--db", dbPath,
+                    "--limit", limit,
+                };
+                if (totalLimit is not null)
+                    args.AddRange(["--total-limit", totalLimit]);
+                args.AddRange(
+                [
+                    "--require-before", "CDIDX_REVIEW_NO_SUCH_GUARD",
+                    "--guard-window", "1",
+                    .. outputArgs,
+                ]);
+                return [.. args];
+            }
             var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                BuildArgs("--json"),
+                BuildArgs("0", "1", "--json"),
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
@@ -267,8 +275,53 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("clean", successfulQuery.GetProperty("freshness_state").GetString());
             Assert.Equal("zero_match", successfulQuery.GetProperty("result_state").GetString());
 
+            foreach (var projection in new[]
+                     {
+                         (TotalLimit: "0", Limit: "1", Args: new[] { "--format", "compact", "--json" }),
+                         (TotalLimit: (string?)null, Limit: "1000", Args: new[] { "--format", "count", "--summary-only", "--json" }),
+                     })
+            {
+                var (projectionExitCode, projectionStdout, projectionStderr) = CaptureConsole(
+                    () => QueryCommandRunner.RunSearch(
+                        BuildArgs(projection.TotalLimit, projection.Limit, projection.Args),
+                        _jsonOptions));
+                Assert.Equal(CommandExitCodes.UsageError, projectionExitCode);
+                Assert.Contains(
+                    "one or more recipe queries failed",
+                    projectionStderr,
+                    StringComparison.Ordinal);
+                using var projectionDocument = ParseJsonOutput(projectionStdout);
+                var projectionRoot = projectionDocument.RootElement;
+                Assert.Equal(2, projectionRoot.GetProperty("query_count").GetInt32());
+                var projectionFreshness = projectionRoot.TryGetProperty("summary", out var projectionSummary)
+                    ? projectionSummary.GetProperty("query_freshness")
+                    : projectionRoot.GetProperty("query_freshness");
+                Assert.Equal("mixed", projectionFreshness.GetProperty("state").GetString());
+                Assert.Contains(
+                    projectionFreshness.GetProperty("invalid_query_names").EnumerateArray(),
+                    name => name.GetString() == "token-term-broad");
+                var failedProjection = Assert.Single(
+                    projectionFreshness.GetProperty("queries").EnumerateArray(),
+                    query => query.GetProperty("name").GetString() == "token-term-broad");
+                Assert.Equal("invalid", failedProjection.GetProperty("freshness_state").GetString());
+                Assert.Equal("query_guard_limit_exceeded", failedProjection.GetProperty("reason").GetString());
+                var successfulFreshness = Assert.Single(
+                    projectionFreshness.GetProperty("queries").EnumerateArray(),
+                    query => query.GetProperty("name").GetString() == "auth-token");
+                Assert.Equal("clean", successfulFreshness.GetProperty("freshness_state").GetString());
+                Assert.Equal("zero_match", successfulFreshness.GetProperty("result_state").GetString());
+                Assert.Equal(0, successfulFreshness.GetProperty("match_count").GetInt32());
+                var successfulProjection = Assert.Single(projectionRoot.GetProperty("queries").EnumerateArray());
+                Assert.Equal("auth-token", successfulProjection.GetProperty("name").GetString());
+                Assert.Equal(0, successfulProjection.GetProperty("count").GetInt32());
+                if (successfulProjection.TryGetProperty("file_count", out var projectionFileCount))
+                    Assert.Equal(0, projectionFileCount.GetInt32());
+                else if (projectionRoot.TryGetProperty("file_count", out var rootFileCount))
+                    Assert.Equal(0, rootFileCount.GetInt32());
+            }
+
             var (sarifExitCode, sarifStdout, sarifStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                BuildArgs("--format", "sarif"),
+                BuildArgs("0", "1", "--format", "sarif"),
                 _jsonOptions));
             Assert.Equal(CommandExitCodes.UsageError, sarifExitCode);
             Assert.Contains("one or more recipe queries failed", sarifStderr, StringComparison.Ordinal);
@@ -284,7 +337,7 @@ public partial class QueryCommandRunnerTests
             }
 
             var (draftExitCode, draftStdout, draftStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                BuildArgs("--format", "issue-drafts"),
+                BuildArgs("0", "1", "--format", "issue-drafts"),
                 _jsonOptions));
             Assert.Equal(CommandExitCodes.UsageError, draftExitCode);
             Assert.Contains("one or more recipe queries failed", draftStderr, StringComparison.Ordinal);
@@ -299,11 +352,151 @@ public partial class QueryCommandRunnerTests
             }
 
             var (textExitCode, textStdout, textStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                BuildArgs(),
+                BuildArgs("0", "1"),
                 _jsonOptions));
             Assert.Equal(CommandExitCodes.UsageError, textExitCode);
             Assert.Contains("Invalid queries: token-term-broad", textStdout, StringComparison.Ordinal);
             Assert.Contains("one or more recipe queries failed", textStderr, StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunSearch_RecipeQueryDriversPreserveFilteredRowsAndFreshnessAcrossFormats()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_recipe_query_driver_parity");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertFreshIndexedFile(
+                projectRoot,
+                dbPath,
+                "src/retained.cs",
+                "csharp",
+                """
+                using System.Text.RegularExpressions;
+
+                public static class Retained
+                {
+                    public static Match Run(string input) => Regex.Match(input, "token");
+                }
+                """);
+            TestProjectHelper.InsertFreshIndexedFile(
+                projectRoot,
+                dbPath,
+                "src/safe.cs",
+                "csharp",
+                """
+                using System.Text.RegularExpressions;
+
+                public static class Safe
+                {
+                    public static string Run(string input) => Regex.Escape(input);
+                }
+                """);
+            TestProjectHelper.InsertFreshIndexedFile(
+                projectRoot,
+                dbPath,
+                "src/bounded.cs",
+                "csharp",
+                """
+                using Regex = CodeIndex.Indexer.BoundedRegex;
+
+                public static class Bounded
+                {
+                    public static object Run(string input) => Regex.Match(input, "token");
+                }
+                """);
+            TestProjectHelper.InsertFreshIndexedFile(
+                projectRoot,
+                dbPath,
+                "src/comment.cs",
+                "csharp",
+                """
+                public static class CommentOnly
+                {
+                    // Regex.Match(input, pattern)
+                }
+                """);
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                db.InitializeSchema();
+                var writer = new DbWriter(db.Connection);
+                writer.MarkGraphReady();
+                writer.SetMeta(
+                    DbContext.ReferenceIdentityContractVersionMetaKey,
+                    DbContext.ReferenceIdentityContractVersion.ToString(
+                        System.Globalization.CultureInfo.InvariantCulture));
+            }
+
+            string[] BaseArgs(params string[] outputArgs) =>
+            [
+                "--recipe", "dogfood-risk-patterns/static-regex-api",
+                "--db", dbPath,
+                "--lang", "csharp",
+                "--limit", "10",
+                .. outputArgs,
+            ];
+
+            foreach (var outputArgs in new[]
+                     {
+                         new[] { "--json" },
+                         new[] { "--format", "compact" },
+                         new[] { "--format", "count", "--summary-only", "--json" },
+                     })
+            {
+                var (exitCode, stdout, stderr) = CaptureConsole(
+                    () => QueryCommandRunner.RunSearch(BaseArgs(outputArgs), _jsonOptions));
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal(string.Empty, stderr);
+                using var document = ParseJsonOutput(stdout);
+                var root = document.RootElement;
+                var query = Assert.Single(root.GetProperty("queries").EnumerateArray());
+                Assert.Equal("static-regex-api", query.GetProperty("name").GetString());
+                Assert.Equal(1, query.GetProperty("count").GetInt32());
+                if (query.TryGetProperty("file_count", out var queryFileCount))
+                    Assert.Equal(1, queryFileCount.GetInt32());
+                else if (root.TryGetProperty("file_count", out var rootFileCount))
+                    Assert.Equal(1, rootFileCount.GetInt32());
+                if (query.TryGetProperty("results", out var results))
+                {
+                    var result = Assert.Single(results.EnumerateArray());
+                    Assert.Equal("src/retained.cs", result.GetProperty("path").GetString());
+                }
+
+                var freshness = root.TryGetProperty("summary", out var summary)
+                    ? summary.GetProperty("query_freshness")
+                    : root.GetProperty("query_freshness");
+                Assert.Equal("clean", freshness.GetProperty("state").GetString());
+                var observation = Assert.Single(freshness.GetProperty("queries").EnumerateArray());
+                Assert.Equal("static-regex-api", observation.GetProperty("name").GetString());
+                Assert.Equal("matched", observation.GetProperty("result_state").GetString());
+                Assert.Equal(1, observation.GetProperty("match_count").GetInt32());
+            }
+
+            var (aggregationExitCode, aggregationStdout, aggregationStderr) = CaptureConsole(
+                () => QueryCommandRunner.RunSearch(BaseArgs("--count-by", "file", "--json"), _jsonOptions));
+            Assert.Equal(CommandExitCodes.Success, aggregationExitCode);
+            Assert.Equal(string.Empty, aggregationStderr);
+            using var aggregationDocument = ParseJsonOutput(aggregationStdout);
+            var aggregationRoot = aggregationDocument.RootElement;
+            Assert.Equal("count_by", aggregationRoot.GetProperty("mode").GetString());
+            Assert.Equal("file", aggregationRoot.GetProperty("group_by").GetString());
+            Assert.Equal(1, aggregationRoot.GetProperty("result_count").GetInt32());
+            Assert.Equal(1, aggregationRoot.GetProperty("file_count").GetInt32());
+            var aggregationQuery = Assert.Single(aggregationRoot.GetProperty("queries").EnumerateArray());
+            Assert.Equal("static-regex-api", aggregationQuery.GetProperty("name").GetString());
+            Assert.Equal(1, aggregationQuery.GetProperty("count").GetInt32());
+            Assert.Equal(1, aggregationQuery.GetProperty("file_count").GetInt32());
+            Assert.Equal(1, aggregationQuery.GetProperty("returned_groups").GetInt32());
+            Assert.Equal(1, aggregationQuery.GetProperty("total_groups").GetInt32());
+            Assert.False(aggregationQuery.GetProperty("groups_truncated").GetBoolean());
+            var aggregationGroup = Assert.Single(aggregationQuery.GetProperty("groups").EnumerateArray());
+            Assert.Equal("src/retained.cs", aggregationGroup.GetProperty("file").GetString());
+            Assert.Equal(1, aggregationGroup.GetProperty("count").GetInt32());
         }
         finally
         {
