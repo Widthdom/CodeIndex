@@ -10,6 +10,147 @@ namespace CodeIndex.Tests;
 public partial class DbReaderTests
 {
     [Fact]
+    public void HotspotCandidateFilters_StayAlignedAcrossSiteGroupedFileAndCountQueries()
+    {
+        var alphaFileId = CreateFile("src/hotspot_alignment/alpha.cs");
+        var betaFileId = CreateFile("src/hotspot_alignment/beta.cs");
+        var privateFileId = CreateFile("src/hotspot_alignment/private.cs");
+        var excludedFileId = CreateFile("src/hotspot_alignment/excluded/duplicate.cs");
+        var testFileId = CreateFile("tests/hotspot_alignment/duplicate.cs");
+        var outsideFileId = CreateFile("other/hotspot_alignment/duplicate.cs");
+        var callerFileId = CreateFile("callers/hotspot_alignment/caller.cs");
+        _writer.InsertSymbols(
+        [
+            CreateFunction(alphaFileId, "VisibilityAlignedHotspot", "public"),
+            CreateFunction(privateFileId, "VisibilityAlignedHotspot", "private"),
+            CreateFunction(alphaFileId, "PathAmbiguousHotspot", "public", line: 3),
+            CreateFunction(outsideFileId, "PathAmbiguousHotspot", "public"),
+            CreateFunction(alphaFileId, "ExcludedPathAmbiguousHotspot", "public", line: 5),
+            CreateFunction(excludedFileId, "ExcludedPathAmbiguousHotspot", "public"),
+            CreateFunction(betaFileId, "TestAmbiguousHotspot", "public"),
+            CreateFunction(testFileId, "TestAmbiguousHotspot", "public"),
+            CreateFunction(betaFileId, "BetaUniqueHotspot", "public", line: 3),
+            CreateFunction(alphaFileId, "FamilyAlignedHotspot", "public", line: 7, familyKey: "alignment-family"),
+            CreateFunction(betaFileId, "FamilyAlignedHotspot", "public", line: 5, familyKey: "alignment-family"),
+        ]);
+
+        var references = new List<ReferenceRecord>();
+        AddReferences(references, alphaFileId, "VisibilityAlignedHotspot", 1);
+        AddReferences(references, callerFileId, "VisibilityAlignedHotspot", 2);
+        AddReferences(references, alphaFileId, "PathAmbiguousHotspot", 1);
+        AddReferences(references, callerFileId, "PathAmbiguousHotspot", 2);
+        AddReferences(references, outsideFileId, "PathAmbiguousHotspot", 1);
+        AddReferences(references, alphaFileId, "ExcludedPathAmbiguousHotspot", 1);
+        AddReferences(references, callerFileId, "ExcludedPathAmbiguousHotspot", 2);
+        AddReferences(references, excludedFileId, "ExcludedPathAmbiguousHotspot", 1);
+        AddReferences(references, betaFileId, "TestAmbiguousHotspot", 1);
+        AddReferences(references, callerFileId, "TestAmbiguousHotspot", 2);
+        AddReferences(references, testFileId, "TestAmbiguousHotspot", 1);
+        AddReferences(references, callerFileId, "BetaUniqueHotspot", 2);
+        AddReferences(references, callerFileId, "FamilyAlignedHotspot", 3);
+        _writer.InsertReferences(references);
+
+        string[] includedPaths = ["src/hotspot_alignment/*", "tests/hotspot_alignment/*"];
+        string[] excludedPaths = ["src/hotspot_alignment/excluded/*"];
+        string[] includedVisibilities = ["public", "private"];
+        string[] excludedVisibilities = ["private"];
+        var sites = _reader.GetSymbolHotspots(
+            20, "function", "csharp", includedPaths, excludedPaths, excludeTests: true,
+            includedVisibilities, excludedVisibilities);
+        var grouped = _reader.GetGroupedSymbolHotspots(
+            20, "function", "csharp", includedPaths, excludedPaths, excludeTests: true,
+            includedVisibilities, excludedVisibilities);
+        var files = _reader.GetFileSymbolHotspots(
+            20, "function", "csharp", includedPaths, excludedPaths, excludeTests: true,
+            includedVisibilities, excludedVisibilities);
+        var siteCount = _reader.CountSymbolHotspots(
+            "function", "csharp", includedPaths, excludedPaths, excludeTests: true,
+            includedVisibilities, excludedVisibilities);
+        var groupedCount = _reader.CountGroupedSymbolHotspots(
+            "function", "csharp", includedPaths, excludedPaths, excludeTests: true,
+            includedVisibilities, excludedVisibilities);
+        var fileCount = _reader.CountFileSymbolHotspots(
+            "function", "csharp", includedPaths, excludedPaths, excludeTests: true,
+            includedVisibilities, excludedVisibilities);
+
+        Assert.Equal(6, sites.Count);
+        Assert.Equal(6, grouped.Count);
+        Assert.Equal(2, files.Count);
+        Assert.Equal(new HotspotCountResult(6, 2), siteCount);
+        Assert.Equal(new HotspotCountResult(6, 2, 7), groupedCount);
+        Assert.Equal(new HotspotCountResult(2, 2), fileCount);
+        Assert.Equal(
+            sites.Select(result => result.Symbol.Name).Order(StringComparer.Ordinal),
+            grouped.Select(result => result.Symbol.Name).Order(StringComparer.Ordinal));
+        Assert.Equal(
+            sites.Select(result => result.Symbol.Path).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal),
+            files.Select(result => result.Path).Order(StringComparer.Ordinal));
+        Assert.Equal(3, Site("VisibilityAlignedHotspot").ReferenceCount);
+        Assert.Equal(1, Site("PathAmbiguousHotspot").ReferenceCount);
+        Assert.Equal(1, Site("ExcludedPathAmbiguousHotspot").ReferenceCount);
+        Assert.Equal(1, Site("TestAmbiguousHotspot").ReferenceCount);
+        Assert.Equal(2, Site("BetaUniqueHotspot").ReferenceCount);
+        Assert.Equal(3, Site("FamilyAlignedHotspot").ReferenceCount);
+        Assert.Equal(2, Group("FamilyAlignedHotspot").DefinitionSites);
+
+        SymbolHotspotResult Site(string name) => Assert.Single(
+            sites,
+            result => result.Symbol.Name == name);
+        GroupedHotspotResult Group(string name) => Assert.Single(
+            grouped,
+            result => result.Symbol.Name == name);
+
+        long CreateFile(string path) => _writer.UpsertFile(new FileRecord
+        {
+            Path = path,
+            Lang = "csharp",
+            Size = 100,
+            Lines = 20,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+
+        static SymbolRecord CreateFunction(
+            long fileId,
+            string name,
+            string visibility,
+            int line = 1,
+            string? familyKey = null) => new()
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = name,
+                Line = line,
+                StartLine = line,
+                EndLine = line + 1,
+                BodyStartLine = line + 1,
+                BodyEndLine = line + 1,
+                Signature = $"{visibility} void {name}()",
+                Visibility = visibility,
+                FamilyKey = familyKey,
+            };
+
+        static void AddReferences(
+            List<ReferenceRecord> destination,
+            long fileId,
+            string name,
+            int count)
+        {
+            for (var index = 0; index < count; index++)
+            {
+                destination.Add(new ReferenceRecord
+                {
+                    FileId = fileId,
+                    SymbolName = name,
+                    ReferenceKind = "call",
+                    Line = 10 + index,
+                    Column = 5,
+                    Context = name + "();",
+                });
+            }
+        }
+    }
+
+    [Fact]
     public void GetSymbolHotspots_RanksRealCallsAboveManyLowerWeightSubscribeEdges()
     {
         var fileId = _writer.UpsertFile(new FileRecord

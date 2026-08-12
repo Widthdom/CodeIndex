@@ -11,115 +11,18 @@ public partial class DbReader
 {
     private SymbolHotspotRowsQuery BuildGroupedSymbolHotspotRowsQuery(int? resultLimit, string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, IReadOnlyList<string>? visibilityFilters, IReadOnlyList<string>? excludeVisibilityFilters)
     {
-        var containerNameSql = GetSymbolColumnSql("container_name");
-        var containerQualifiedNameSql = GetSymbolColumnSql("container_qualified_name");
-        var familyKeySql = GetSymbolColumnSql("family_key");
-        var hotspotFamilyLangs = _hotspotFamilyReadyLanguages
-            .OrderBy(value => value, StringComparer.Ordinal)
-            .ToList();
-        var familyLangConditionSql = hotspotFamilyLangs.Count > 0
-            ? $"f.lang IN ({string.Join(",", hotspotFamilyLangs.Select((_, i) => $"@hotspotFamilyLang{i}"))})"
-            : "0";
-        var familyTargetKeySql = hotspotFamilyLangs.Count > 0
-            ? $@"CASE
-                    WHEN {familyLangConditionSql}
-                     AND COALESCE({familyKeySql}, '') <> ''
-                        THEN 'family|' || COALESCE(f.lang, '') || '|' || COALESCE(s.kind, '') || '|' || {familyKeySql}
-                    ELSE NULL
-                END"
-            : "NULL";
-        var containerTargetKeySql = $@"CASE
-                    WHEN COALESCE({containerQualifiedNameSql}, '') <> ''
-                        THEN 'container|' || CAST(s.file_id AS TEXT) || '|' || COALESCE(s.kind, '') || '|' || {containerQualifiedNameSql}
-                    ELSE NULL
-                END";
-        var csharpFunctionDefinitionGateSql = _symbolColumns.Contains("body_start_line")
-            && _symbolColumns.Contains("body_end_line")
-            && _symbolColumns.Contains("signature")
-            && _symbolColumns.Contains("container_kind")
-            ? @"
-                  AND NOT (
-                      f.lang = 'csharp'
-                      AND s.kind = 'function'
-                      AND s.container_kind = 'function'
-                      AND (
-                          (s.body_start_line IS NULL AND s.body_end_line IS NULL)
-                          OR (s.container_kind = 'function' AND COALESCE(s.signature, '') LIKE '%.' || s.name || '(%')
-                      )
-                  )"
-            : string.Empty;
-        var graphLangs = GetWorkspaceSupportedReferenceLanguages().ToList();
-        var candidateLimit = GetBoundedHotspotCandidateLimit(resultLimit);
-        var boundedCandidatePrefix = BuildBoundedHotspotCandidatePrefix(candidateLimit);
-        var boundedSymbolPredicate = BuildBoundedHotspotSymbolPredicate(candidateLimit);
-        var sql = $@"
-            WITH {boundedCandidatePrefix}all_candidate_symbols AS MATERIALIZED (
-                SELECT s.id, s.file_id, s.name, s.kind, f.path, f.lang, s.line,
-                       {GetSymbolColumnSql("visibility")} AS visibility,
-                       {containerNameSql} AS container_name,
-                       CASE
-                           WHEN {familyTargetKeySql} IS NOT NULL
-                               THEN {familyTargetKeySql}
-                           WHEN {containerTargetKeySql} IS NOT NULL
-                               THEN {containerTargetKeySql}
-                           ELSE 'file|' || CAST(s.file_id AS TEXT)
-                       END AS logical_target_key,
-                       COALESCE({familyTargetKeySql}, {containerTargetKeySql}) AS count_safe_key
-                FROM symbols s
-                JOIN files f ON s.file_id = f.id
-                WHERE s.kind NOT IN ('import', 'namespace')" + csharpFunctionDefinitionGateSql + boundedSymbolPredicate;
-
-        if (lang != null)
-            sql += SymbolLanguageFileIdFilter;
-        else
-            sql += $" AND f.lang IN ({string.Join(",", graphLangs.Select((_, i) => $"@gl{i}"))})";
-        if (kind != null)
-            sql += " AND s.kind = @kind";
-        AppendVisibilityFilters(ref sql, visibilityFilters, excludeVisibilityFilters);
-
-        sql += @"
-            ),
-            name_cardinality AS (
-                SELECT lang,
-                       name,
-                       COUNT(*) AS defs,
-                       COUNT(DISTINCT logical_target_key) AS target_groups,
-                       COUNT(DISTINCT count_safe_key) AS count_safe_groups,
-                       COUNT(count_safe_key) AS count_safe_defs
-                FROM all_candidate_symbols
-                GROUP BY lang, name
-            ),
-            filtered_candidates AS MATERIALIZED (
-                SELECT id,
-                       file_id,
-                       name,
-                       kind,
-                       path,
-                       lang,
-                       line,
-                       visibility,
-                       container_name,
-                       logical_target_key
-                FROM all_candidate_symbols
-                WHERE 1 = 1";
-        if (pathPatterns is { Count: > 0 })
-        {
-            var ors = new List<string>(pathPatterns.Count);
-            for (int i = 0; i < pathPatterns.Count; i++)
-                ors.Add(BuildPathColumnFilterPredicate("path", "pathPattern", i, pathPatterns[i]));
-            sql += " AND (" + string.Join(" OR ", ors) + ")";
-        }
-        if (excludePathPatterns != null)
-        {
-            for (int i = 0; i < excludePathPatterns.Count; i++)
-                sql += $" AND NOT {BuildPathColumnFilterPredicate("path", "excludePathPattern", i, excludePathPatterns[i])}";
-        }
-        if (excludeTests)
-            sql += $" AND NOT {TestPathCondition.Replace("f.path", "path")}";
-        sql += @"
-            ),
+        var candidatePlan = BuildSymbolHotspotCandidatePlan(
+            resultLimit,
+            kind,
+            lang,
+            pathPatterns,
+            excludePathPatterns,
+            excludeTests,
+            visibilityFilters,
+            excludeVisibilityFilters);
+        var sql = candidatePlan.Sql + @"
             logical_references AS MATERIALIZED (
-                " + BuildHotspotLogicalReferenceRowsSql(includeLeafMetadata: false, boundedCandidates: candidateLimit.HasValue) + @"
+                " + BuildHotspotLogicalReferenceRowsSql(includeLeafMetadata: false, boundedCandidates: candidatePlan.CandidateLimit.HasValue) + @"
             ),
             file_reference_counts AS MATERIALIZED (
                 SELECT lang,
@@ -296,7 +199,7 @@ public partial class DbReader
                 GROUP BY hs.name, hs.kind
             )";
 
-        return new SymbolHotspotRowsQuery(sql, graphLangs, hotspotFamilyLangs, candidateLimit);
+        return new SymbolHotspotRowsQuery(sql, candidatePlan);
     }
 
     public HotspotCountResult CountGroupedSymbolHotspots(string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null)
@@ -883,125 +786,16 @@ public partial class DbReader
 
     private SymbolHotspotRowsQuery BuildSymbolHotspotRowsQuery(int? resultLimit, string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, IReadOnlyList<string>? visibilityFilters, IReadOnlyList<string>? excludeVisibilityFilters)
     {
-        var containerNameSql = GetSymbolColumnSql("container_name");
-        var containerQualifiedNameSql = GetSymbolColumnSql("container_qualified_name");
-        var familyKeySql = GetSymbolColumnSql("family_key");
-        var hotspotFamilyLangs = _hotspotFamilyReadyLanguages
-            .OrderBy(value => value, StringComparer.Ordinal)
-            .ToList();
-        var familyLangConditionSql = hotspotFamilyLangs.Count > 0
-            ? $"f.lang IN ({string.Join(",", hotspotFamilyLangs.Select((_, i) => $"@hotspotFamilyLang{i}"))})"
-            : "0";
-        var familyTargetKeySql = hotspotFamilyLangs.Count > 0
-            ? $@"CASE
-                    WHEN {familyLangConditionSql}
-                     AND COALESCE({familyKeySql}, '') <> ''
-                        THEN 'family|' || COALESCE(f.lang, '') || '|' || COALESCE(s.kind, '') || '|' || {familyKeySql}
-                    ELSE NULL
-                END"
-            : "NULL";
-        var containerTargetKeySql = $@"CASE
-                    WHEN COALESCE({containerQualifiedNameSql}, '') <> ''
-                        THEN 'container|' || CAST(s.file_id AS TEXT) || '|' || COALESCE(s.kind, '') || '|' || {containerQualifiedNameSql}
-                    ELSE NULL
-                END";
-        var csharpFunctionDefinitionGateSql = _symbolColumns.Contains("body_start_line")
-            && _symbolColumns.Contains("body_end_line")
-            && _symbolColumns.Contains("signature")
-            && _symbolColumns.Contains("container_kind")
-            ? @"
-                  AND NOT (
-                      f.lang = 'csharp'
-                      AND s.kind = 'function'
-                      AND s.container_kind = 'function'
-                      AND (
-                          (s.body_start_line IS NULL AND s.body_end_line IS NULL)
-                          OR (s.container_kind = 'function' AND COALESCE(s.signature, '') LIKE '%.' || s.name || '(%')
-                      )
-                  )"
-            : string.Empty;
-        // Ambiguity is computed from the unscoped language/kind candidate set so `--path`
-        // cannot hide an out-of-scope duplicate and accidentally promote a same-name symbol
-        // back to codebase-wide counting. Cross-file grouping is allowed only when the
-        // extractor persisted an authoritative family key on a DB that is stamped as fully
-        // current for hotspot-family semantics (currently partial-type families). Same-file
-        // same-container overloads can still share one conservative target key, but only
-        // unique names or authoritative families may promote to codebase-wide counts.
-        // 曖昧性は path 非依存の候補集合で判定し、`--path` で隠れた重複定義が一意扱いに
-        // 戻ってしまうことを防ぐ。cross-file の集約は current な hotspot-family semantics で
-        // fully-ready と判定された DB 上の正式な family key のみに限定し、same-file の
-        // same-container overload は保守的な target として扱いつつ、codebase-wide 集計への
-        // 昇格は一意名か authoritative family のみに限定する。
-        var candidateLimit = GetBoundedHotspotCandidateLimit(resultLimit);
-        var boundedCandidatePrefix = BuildBoundedHotspotCandidatePrefix(candidateLimit);
-        var boundedSymbolPredicate = BuildBoundedHotspotSymbolPredicate(candidateLimit);
-        var sql = $@"
-            WITH {boundedCandidatePrefix}all_candidate_symbols AS MATERIALIZED (
-                SELECT s.id, s.file_id, s.name, s.kind, f.path, f.lang, s.line,
-                       {GetSymbolColumnSql("visibility")} AS visibility,
-                       {containerNameSql} AS container_name,
-                       CASE
-                           WHEN {familyTargetKeySql} IS NOT NULL
-                               THEN {familyTargetKeySql}
-                           WHEN {containerTargetKeySql} IS NOT NULL
-                               THEN {containerTargetKeySql}
-                           ELSE 'file|' || CAST(s.file_id AS TEXT)
-                       END AS logical_target_key,
-                       COALESCE({familyTargetKeySql}, {containerTargetKeySql}) AS count_safe_key
-                FROM symbols s
-                JOIN files f ON s.file_id = f.id
-                WHERE s.kind NOT IN ('import', 'namespace')" + csharpFunctionDefinitionGateSql + boundedSymbolPredicate;
-
-        var graphLangs = GetWorkspaceSupportedReferenceLanguages().ToList();
-        if (lang != null)
-            sql += SymbolLanguageFileIdFilter;
-        else
-            sql += $" AND f.lang IN ({string.Join(",", graphLangs.Select((_, i) => $"@gl{i}"))})";
-        if (kind != null)
-            sql += " AND s.kind = @kind";
-        AppendVisibilityFilters(ref sql, visibilityFilters, excludeVisibilityFilters);
-
-        sql += @"
-            ),
-            name_cardinality AS (
-                SELECT lang,
-                       name,
-                       COUNT(*) AS defs,
-                       COUNT(DISTINCT logical_target_key) AS target_groups,
-                       COUNT(DISTINCT count_safe_key) AS count_safe_groups,
-                       COUNT(count_safe_key) AS count_safe_defs
-                FROM all_candidate_symbols
-                GROUP BY lang, name
-            ),
-            filtered_candidates AS MATERIALIZED (
-                SELECT id,
-                       file_id,
-                       name,
-                       kind,
-                       path,
-                       lang,
-                       line,
-                       visibility,
-                       container_name,
-                       logical_target_key
-                FROM all_candidate_symbols
-                WHERE 1 = 1";
-        if (pathPatterns != null && pathPatterns.Count > 0)
-        {
-            var ors = new List<string>(pathPatterns.Count);
-            for (int i = 0; i < pathPatterns.Count; i++)
-                ors.Add(BuildPathColumnFilterPredicate("path", "pathPattern", i, pathPatterns[i]));
-            sql += " AND (" + string.Join(" OR ", ors) + ")";
-        }
-        if (excludePathPatterns != null)
-        {
-            for (int i = 0; i < excludePathPatterns.Count; i++)
-                sql += $" AND NOT {BuildPathColumnFilterPredicate("path", "excludePathPattern", i, excludePathPatterns[i])}";
-        }
-        if (excludeTests)
-            sql += $" AND NOT {TestPathCondition.Replace("f.path", "path")}";
-        sql += @"
-            ),
+        var candidatePlan = BuildSymbolHotspotCandidatePlan(
+            resultLimit,
+            kind,
+            lang,
+            pathPatterns,
+            excludePathPatterns,
+            excludeTests,
+            visibilityFilters,
+            excludeVisibilityFilters);
+        var sql = candidatePlan.Sql + @"
             grouped_candidates AS (
                 SELECT MIN(id) AS symbol_id,
                        name,
@@ -1043,7 +837,7 @@ public partial class DbReader
                  AND gm.kind = gc.kind
             ),
             logical_references AS MATERIALIZED (
-                " + BuildHotspotLogicalReferenceRowsSql(includeLeafMetadata: true, boundedCandidates: candidateLimit.HasValue) + @"
+                " + BuildHotspotLogicalReferenceRowsSql(includeLeafMetadata: true, boundedCandidates: candidatePlan.CandidateLimit.HasValue) + @"
             ),
             file_reference_counts_exact AS MATERIALIZED (
                 SELECT lang,
@@ -1223,35 +1017,12 @@ public partial class DbReader
                 FROM filtered_candidates
                 GROUP BY path, COALESCE(lang, '')
             )";
-        return new SymbolHotspotRowsQuery(sql, graphLangs, hotspotFamilyLangs, candidateLimit);
-    }
-
-    private static void AddSymbolHotspotParameters(SqliteCommand command, SymbolHotspotRowsQuery query, int? limit, string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, IReadOnlyList<string>? visibilityFilters, IReadOnlyList<string>? excludeVisibilityFilters)
-    {
-        if (limit.HasValue)
-            SqliteCommandPolicy.Add(command, "@limit", limit.Value);
-        if (query.CandidateLimit.HasValue)
-            SqliteCommandPolicy.Add(command, "@candidateReferenceLimit", query.CandidateLimit.Value);
-        if (lang != null)
-            SqliteCommandPolicy.Add(command, "@lang", lang);
-        else
-        {
-            for (int i = 0; i < query.GraphLanguages.Count; i++)
-                SqliteCommandPolicy.Add(command, $"@gl{i}", query.GraphLanguages[i]);
-        }
-        if (kind != null)
-            SqliteCommandPolicy.Add(command, "@kind", kind);
-        AddPathFilterParameters(command, pathPatterns, excludePathPatterns);
-        AddVisibilityFilterParameters(command, visibilityFilters, excludeVisibilityFilters);
-        for (int i = 0; i < query.HotspotFamilyLanguages.Count; i++)
-            SqliteCommandPolicy.Add(command, $"@hotspotFamilyLang{i}", query.HotspotFamilyLanguages[i]);
+        return new SymbolHotspotRowsQuery(sql, candidatePlan);
     }
 
     private sealed record SymbolHotspotRowsQuery(
         string Sql,
-        List<string> GraphLanguages,
-        List<string> HotspotFamilyLanguages,
-        int? CandidateLimit);
+        SymbolHotspotCandidatePlan CandidatePlan);
 
     private static HotspotCountResult ExecuteHotspotCountSummary(SqliteCommand command)
     {
