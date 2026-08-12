@@ -12729,19 +12729,25 @@ public partial class QueryCommandRunnerTests
                 "invalid.db",
                 "not a SQLite database");
 
-            var (validationExitCode, validationStdout, validationStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
-                [
-                    "AlignmentNeedle",
-                    "--db", invalidDbPath,
-                    "--count",
-                    "--group-by", "file",
-                    "--count-by", "file"
-                ],
-                _jsonOptions));
+            var validationCases = new (string[] Arguments, string ExpectedError)[]
+            {
+                (["AlignmentNeedle", "--count", "--group-by", "file", "--count-by", "file"], "--group-by cannot be combined with --count-by or --unique"),
+                (["--list-recipes", "--named-query", "named=AlignmentNeedle"], "--list-recipes cannot be combined with --recipe, --named-query, or extra positional arguments"),
+                (["--named-query", "named=AlignmentNeedle", "--recipe", "risky-code"], "--named-query cannot be combined with a positional query, --query, --recipe, or extra positional arguments"),
+                (["AlignmentNeedle", "--recipe", "risky-code"], "--recipe expands into its own curated query set and cannot be combined with a search query"),
+                (["--recipe", "risky-code", "--count-by", "bogus", "--unique", "file"], "--count-by for recipe search must be one of path, file, symbol, origin, return-type, or subsystem"),
+                (["AlignmentNeedle", "--count-by", "bogus", "--unique", "file"], "--count-by cannot be combined with --unique"),
+            };
+            foreach (var (arguments, expectedError) in validationCases)
+            {
+                var (validationExitCode, validationStdout, validationStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                    [.. arguments, "--db", invalidDbPath],
+                    _jsonOptions));
 
-            Assert.Equal(CommandExitCodes.UsageError, validationExitCode);
-            Assert.Equal(string.Empty, validationStdout);
-            Assert.Contains("--group-by cannot be combined with --count-by or --unique", validationStderr);
+                Assert.Equal(CommandExitCodes.UsageError, validationExitCode);
+                Assert.Equal(string.Empty, validationStdout);
+                Assert.Contains(expectedError, validationStderr);
+            }
 
             var (zeroCountExitCode, zeroCountStdout, zeroCountStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 ["MissingNeedle", "--db", dbPath, "--count", "--json"],
