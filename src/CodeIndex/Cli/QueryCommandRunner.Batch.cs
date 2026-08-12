@@ -947,7 +947,11 @@ public static partial class QueryCommandRunner
 
     private sealed class BatchInputPump
     {
+        // Output-limit recovery can own one channel slot plus one producer-local line.
+        private const int ReplayLineCapacity = 2;
         private readonly Channel<BatchPumpedLine> _lines;
+        private readonly object _replayGate = new();
+        private readonly LinkedList<BatchPumpedLine> _replayLines = [];
 
         public BatchInputPump(TextReader reader)
         {
@@ -966,7 +970,38 @@ public static partial class QueryCommandRunner
             _ = Task.Run(() => Pump(reader));
         }
 
-        public async ValueTask<BatchPumpedLine?> ReadAsync(CancellationToken cancellationToken)
+        public ValueTask<BatchPumpedLine?> ReadAsync(CancellationToken cancellationToken)
+        {
+            lock (_replayGate)
+            {
+                if (_replayLines.First is not { } first)
+                    return ReadPumpedLineAsync(cancellationToken);
+
+                _replayLines.RemoveFirst();
+                return ValueTask.FromResult<BatchPumpedLine?>(first.Value);
+            }
+        }
+
+        public void ReplayBeforeBufferedInput(IReadOnlyList<BatchPumpedLine> lines)
+        {
+            if (lines.Count == 0)
+                return;
+
+            lock (_replayGate)
+            {
+                if (_replayLines.Count + lines.Count > ReplayLineCapacity)
+                {
+                    throw new InvalidOperationException(
+                        "Parallel batch replay exceeded the bounded input ownership window.");
+                }
+
+                for (var index = lines.Count - 1; index >= 0; index--)
+                    _replayLines.AddFirst(lines[index]);
+            }
+        }
+
+        private async ValueTask<BatchPumpedLine?> ReadPumpedLineAsync(
+            CancellationToken cancellationToken)
         {
             try
             {
@@ -980,11 +1015,13 @@ public static partial class QueryCommandRunner
 
         private void Pump(TextReader reader)
         {
+            long sequence = 0;
             try
             {
                 while (TryReadBatchLine(reader, out var line, out var exceededLimit))
                 {
-                    _lines.Writer.WriteAsync(new BatchPumpedLine(line, exceededLimit))
+                    _lines.Writer.WriteAsync(
+                            new BatchPumpedLine(++sequence, line, exceededLimit))
                         .AsTask()
                         .GetAwaiter()
                         .GetResult();
@@ -998,7 +1035,10 @@ public static partial class QueryCommandRunner
         }
     }
 
-    private readonly record struct BatchPumpedLine(string? Line, bool ExceededLimit);
+    private readonly record struct BatchPumpedLine(
+        long Sequence,
+        string? Line,
+        bool ExceededLimit);
 
     private readonly record struct BatchParallelCommandResult(
         int ExitCode,

@@ -663,8 +663,8 @@ public partial class QueryCommandRunnerTests
                 Assert.Equal(2, lines.Count);
                 var firstSummary = lines[1].RootElement;
                 Assert.Equal("batch_summary", firstSummary.GetProperty("record").GetString());
-                Assert.Equal(4, firstSummary.GetProperty("input_lines_read").GetInt32());
-                Assert.Equal(3, firstSummary.GetProperty("commands_processed").GetInt32());
+                Assert.Equal(2, firstSummary.GetProperty("input_lines_read").GetInt32());
+                Assert.Equal(2, firstSummary.GetProperty("commands_processed").GetInt32());
                 Assert.Equal(0, firstSummary.GetProperty("line_errors").GetInt32());
                 Assert.Equal(1, firstSummary.GetProperty("command_failures").GetInt32());
                 Assert.True(firstSummary.GetProperty("output_limit_reached").GetBoolean());
@@ -689,6 +689,128 @@ public partial class QueryCommandRunnerTests
             releaseSecond.Set();
             if (firstRun is not null)
                 await firstRun.WaitAsync(TimeSpan.FromSeconds(15));
+        }
+    }
+
+    [Fact]
+    public async Task RunBatch_ParallelOutputLimitPreservesAcceptedUndispatchedRecordsForNextInvocation()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_batch_output_limit_replay");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        using var bothStarted = new CountdownEvent(2);
+        using var releaseWorkers = new ManualResetEventSlim();
+        using var fourthPrepared = new ManualResetEventSlim();
+        using var stdout = new StringWriter();
+        using var stderr = new StringWriter();
+        Task<(int First, int Second)>? runs = null;
+
+        QueryCommandRunner.BatchParallelCommandStartedForTesting = _ =>
+        {
+            bothStarted.Signal();
+            if (!bothStarted.Wait(TimeSpan.FromSeconds(15)))
+                throw new TimeoutException("Both replay batch workers did not start.");
+            if (!releaseWorkers.Wait(TimeSpan.FromSeconds(15)))
+                throw new TimeoutException("The fourth replay batch item was not prepared.");
+        };
+        QueryCommandRunner.BatchParallelItemPreparedForTesting = lineNumber =>
+        {
+            if (lineNumber != 4)
+                return;
+            fourthPrepared.Set();
+            releaseWorkers.Set();
+        };
+
+        try
+        {
+            runs = Task.Factory.StartNew(
+                () =>
+                {
+                    using var capture = ConsoleCapture.Start(
+                        stdout,
+                        stderr,
+                        new StringReader(
+                            """
+                            ["search","batch-replay-original-1","--json"]
+                            ["search","batch-replay-original-2","--json"]
+                            ["search","batch-replay-original-3","--json"]
+                            ["search","batch-replay-original-4","--json"]
+                            ["search","batch-replay-sentinel-5","--json"]
+                            """ + "\n"));
+                    var first = QueryCommandRunner.RunBatch(
+                        [
+                            "--db", dbPath,
+                            "--json-summary",
+                            "--parallel", "2",
+                            "--max-output-chars", QueryCommandRunner.BatchMinTotalOutputChars.ToString(),
+                        ],
+                        _jsonOptions);
+                    var second = QueryCommandRunner.RunBatch(
+                        ["--db", dbPath, "--json-summary"],
+                        _jsonOptions);
+                    return (first, second);
+                },
+                CancellationToken.None,
+                TaskCreationOptions.LongRunning,
+                TaskScheduler.Default);
+
+            var (firstExitCode, secondExitCode) = await runs.WaitAsync(TimeSpan.FromSeconds(30));
+            Assert.True(fourthPrepared.IsSet);
+            Assert.Equal(CommandExitCodes.InvalidArgument, firstExitCode);
+            Assert.Equal(CommandExitCodes.Success, secondExitCode);
+            Assert.Equal(string.Empty, stderr.ToString());
+
+            var lines = ParseJsonLines(stdout.ToString());
+            try
+            {
+                Assert.Equal(6, lines.Count);
+                Assert.Equal(
+                    "batch_output_limit",
+                    lines[0].RootElement
+                        .GetProperty("error")
+                        .GetProperty("category")
+                        .GetString());
+
+                var firstSummary = lines[1].RootElement;
+                Assert.Equal("batch_summary", firstSummary.GetProperty("record").GetString());
+                Assert.Equal(2, firstSummary.GetProperty("input_lines_read").GetInt32());
+                Assert.Equal(2, firstSummary.GetProperty("commands_processed").GetInt32());
+                Assert.True(firstSummary.GetProperty("output_limit_reached").GetBoolean());
+
+                var expectedQueries = new[]
+                {
+                    "batch-replay-original-3",
+                    "batch-replay-original-4",
+                    "batch-replay-sentinel-5",
+                };
+                for (var index = 0; index < expectedQueries.Length; index++)
+                {
+                    var record = lines[index + 2].RootElement;
+                    Assert.Equal(index + 1, record.GetProperty("line").GetInt32());
+                    Assert.Equal("search", record.GetProperty("command").GetString());
+                    Assert.Equal(
+                        expectedQueries[index],
+                        record.GetProperty("arguments")[0].GetString());
+                }
+
+                var secondSummary = lines[^1].RootElement;
+                Assert.Equal("batch_summary", secondSummary.GetProperty("record").GetString());
+                Assert.Equal(3, secondSummary.GetProperty("input_lines_read").GetInt32());
+                Assert.Equal(3, secondSummary.GetProperty("commands_processed").GetInt32());
+                Assert.False(secondSummary.GetProperty("output_limit_reached").GetBoolean());
+            }
+            finally
+            {
+                foreach (var document in lines)
+                    document.Dispose();
+            }
+        }
+        finally
+        {
+            QueryCommandRunner.BatchParallelCommandStartedForTesting = null;
+            QueryCommandRunner.BatchParallelItemPreparedForTesting = null;
+            releaseWorkers.Set();
+            if (runs is not null)
+                await runs.WaitAsync(TimeSpan.FromSeconds(15));
         }
     }
 

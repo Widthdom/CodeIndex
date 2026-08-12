@@ -30,12 +30,13 @@ public static partial class QueryCommandRunner
             BatchTerminalOutputReserveChars,
             jsonOptions);
         var state = new BatchExecutionState();
+        var replayTracker = new BatchParallelReplayTracker();
         using var stopProducing = new CancellationTokenSource();
         using var producerCancellation = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken,
             stopProducing.Token);
         var batchInput = GetBatchInputPump(Console.In);
-        var input = Channel.CreateBounded<BatchPendingItem>(
+        var input = Channel.CreateBounded<BatchParallelPendingItem>(
             new BoundedChannelOptions(1)
             {
                 FullMode = BoundedChannelFullMode.Wait,
@@ -51,12 +52,16 @@ public static partial class QueryCommandRunner
                 plan,
                 jsonOptions,
                 state,
+                replayTracker,
                 batchInput,
                 input.Writer,
-                stopProducing.Token,
-                producerCancellation.Token,
-                cancellationToken);
-            var producer = Task.Run(() => ProduceBatchItemsAsync(producerPlan), cancellationToken);
+                new BatchParallelProducerCancellation(
+                    stopProducing.Token,
+                    producerCancellation.Token,
+                    cancellationToken));
+            var producer = Task.Run(
+                () => ProduceBatchItemsAsync(producerPlan),
+                CancellationToken.None);
             var active = new Queue<BatchActiveItem>();
             var consumerPlan = new BatchParallelConsumerPlan(
                 plan,
@@ -65,6 +70,7 @@ public static partial class QueryCommandRunner
                 availableSessions,
                 new BatchParallelOutputServices(stdoutRouter, stderrRouter, jsonOutput),
                 state,
+                replayTracker,
                 cancellationToken);
 
             try
@@ -103,6 +109,12 @@ public static partial class QueryCommandRunner
             {
             }
 
+            if (state.OutputLimitReached && !cancellationToken.IsCancellationRequested)
+            {
+                batchInput.ReplayBeforeBufferedInput(
+                    replayTracker.TakeForReplay(state));
+            }
+
             if (state.CancellationObserved)
                 state.FirstFailure = CommandExitCodes.CancelledBySignal;
 
@@ -139,15 +151,15 @@ public static partial class QueryCommandRunner
         var plan = producer.ExecutionPlan;
         try
         {
-            while (!producer.StopToken.IsCancellationRequested)
+            while (!producer.Cancellation.StopToken.IsCancellationRequested)
             {
-                if (producer.CallerToken.IsCancellationRequested)
+                if (producer.Cancellation.CallerToken.IsCancellationRequested)
                 {
                     producer.State.CancellationObserved = true;
                     break;
                 }
 
-                var pumpedLine = await producer.Input.ReadAsync(producer.ReadToken)
+                var pumpedLine = await producer.Input.ReadAsync(producer.Cancellation.ReadToken)
                     .ConfigureAwait(false);
                 if (pumpedLine is null)
                     break;
@@ -159,34 +171,46 @@ public static partial class QueryCommandRunner
                     producer.State,
                     producer.JsonOptions,
                     writeDiagnostics: false,
-                    producer.CallerToken,
+                    producer.Cancellation.CallerToken,
                     out var item);
+                if (preparation == BatchLinePreparationKind.Blank)
+                    continue;
+                if (preparation == BatchLinePreparationKind.CancellationWithoutRecord)
+                    break;
+
+                producer.ReplayTracker.Register(in currentLine, preparation);
+                var pendingItem = new BatchParallelPendingItem(
+                    item,
+                    currentLine.Sequence);
                 switch (preparation)
                 {
-                    case BatchLinePreparationKind.Blank:
-                        continue;
-
-                    case BatchLinePreparationKind.CancellationWithoutRecord:
-                        break;
-
                     case BatchLinePreparationKind.CancellationRecord:
                     case BatchLinePreparationKind.InputLimit:
-                        await producer.Output.WriteAsync(item, producer.StopToken)
+                        await producer.Output.WriteAsync(
+                                pendingItem,
+                                producer.Cancellation.StopToken)
                             .ConfigureAwait(false);
                         RecordPreparedBatchLine(producer.State, preparation);
+                        producer.ReplayTracker.MarkCountersRecorded(currentLine.Sequence);
                         break;
 
                     case BatchLinePreparationKind.LineLengthError:
-                        await producer.Output.WriteAsync(item, producer.StopToken)
+                        await producer.Output.WriteAsync(
+                                pendingItem,
+                                producer.Cancellation.StopToken)
                             .ConfigureAwait(false);
                         RecordPreparedBatchLine(producer.State, preparation);
+                        producer.ReplayTracker.MarkCountersRecorded(currentLine.Sequence);
                         continue;
 
                     case BatchLinePreparationKind.ParseError:
                     case BatchLinePreparationKind.Command:
                         RecordPreparedBatchLine(producer.State, preparation);
+                        producer.ReplayTracker.MarkCountersRecorded(currentLine.Sequence);
                         BatchParallelItemPreparedForTesting?.Invoke(item.LineNumber);
-                        await producer.Output.WriteAsync(item, producer.StopToken)
+                        await producer.Output.WriteAsync(
+                                pendingItem,
+                                producer.Cancellation.StopToken)
                             .ConfigureAwait(false);
                         continue;
 
@@ -200,9 +224,9 @@ public static partial class QueryCommandRunner
 
             producer.Output.TryComplete();
         }
-        catch (OperationCanceledException) when (producer.ReadToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (producer.Cancellation.ReadToken.IsCancellationRequested)
         {
-            if (producer.CallerToken.IsCancellationRequested)
+            if (producer.Cancellation.CallerToken.IsCancellationRequested)
                 producer.State.CancellationObserved = true;
             producer.Output.TryComplete();
         }
@@ -215,7 +239,7 @@ public static partial class QueryCommandRunner
 
     private static void ConsumeBatchItemsInOrder(
         in BatchParallelConsumerPlan consumer,
-        ChannelReader<BatchPendingItem> input,
+        ChannelReader<BatchParallelPendingItem> input,
         Queue<BatchActiveItem> active)
     {
         while (!consumer.State.OutputLimitReached)
@@ -238,12 +262,14 @@ public static partial class QueryCommandRunner
 
     private static void FillBatchWorkerQueue(
         in BatchParallelConsumerPlan consumer,
-        ChannelReader<BatchPendingItem> input,
+        ChannelReader<BatchParallelPendingItem> input,
         Queue<BatchActiveItem> active)
     {
         while (active.Count < consumer.ExecutionPlan.Parallelism
-               && input.TryRead(out var item))
+               && input.TryRead(out var pendingItem))
         {
+            consumer.ReplayTracker.Commit(pendingItem.InputSequence);
+            var item = pendingItem.Item;
             BatchParallelSession? session = null;
             Task<BatchParallelCommandResult?> result;
             if (item.Error is not null)
@@ -280,7 +306,7 @@ public static partial class QueryCommandRunner
 
     private static bool ShouldConsumeOldestBatchItem(
         in BatchParallelConsumerPlan consumer,
-        ChannelReader<BatchPendingItem> input,
+        ChannelReader<BatchParallelPendingItem> input,
         Queue<BatchActiveItem> active)
         => active.Count > 0
            && (active.Peek().Result.IsCompleted
@@ -368,7 +394,7 @@ public static partial class QueryCommandRunner
     }
 
     private static bool WaitForBatchInputOrOldestWorker(
-        ChannelReader<BatchPendingItem> input,
+        ChannelReader<BatchParallelPendingItem> input,
         Queue<BatchActiveItem> active)
     {
         using var waitCancellation = new CancellationTokenSource();
@@ -499,8 +525,12 @@ public static partial class QueryCommandRunner
         BatchExecutionPlan ExecutionPlan,
         JsonSerializerOptions JsonOptions,
         BatchExecutionState State,
+        BatchParallelReplayTracker ReplayTracker,
         BatchInputPump Input,
-        ChannelWriter<BatchPendingItem> Output,
+        ChannelWriter<BatchParallelPendingItem> Output,
+        BatchParallelProducerCancellation Cancellation);
+
+    private readonly record struct BatchParallelProducerCancellation(
         CancellationToken StopToken,
         CancellationToken ReadToken,
         CancellationToken CallerToken);
@@ -512,6 +542,7 @@ public static partial class QueryCommandRunner
         Queue<BatchParallelSession> AvailableSessions,
         BatchParallelOutputServices Output,
         BatchExecutionState State,
+        BatchParallelReplayTracker ReplayTracker,
         CancellationToken CancellationToken);
 
     private readonly record struct BatchParallelOutputServices(
@@ -523,4 +554,123 @@ public static partial class QueryCommandRunner
         BatchPendingItem Item,
         Task<BatchParallelCommandResult?> Result,
         BatchParallelSession? Session);
+
+    private readonly record struct BatchParallelPendingItem(
+        BatchPendingItem Item,
+        long InputSequence);
+
+    private readonly record struct BatchParallelReplayEntry(
+        BatchPumpedLine Input,
+        BatchLinePreparationKind Preparation,
+        bool CountersRecorded);
+
+    private sealed class BatchParallelReplayTracker
+    {
+        // A bounded channel slot, the producer's local item, and the consumer's
+        // just-read item can overlap until the consumer records its commit.
+        private const int Capacity = 3;
+        private readonly object _gate = new();
+        private readonly List<BatchParallelReplayEntry> _uncommitted = new(Capacity);
+
+        public void Register(
+            in BatchPumpedLine input,
+            BatchLinePreparationKind preparation)
+        {
+            lock (_gate)
+            {
+                if (_uncommitted.Count == Capacity)
+                {
+                    throw new InvalidOperationException(
+                        "Parallel batch input ownership exceeded its bounded channel window.");
+                }
+
+                _uncommitted.Add(new BatchParallelReplayEntry(
+                    input,
+                    preparation,
+                    CountersRecorded: false));
+            }
+        }
+
+        public void MarkCountersRecorded(long sequence)
+        {
+            lock (_gate)
+            {
+                for (var index = 0; index < _uncommitted.Count; index++)
+                {
+                    var entry = _uncommitted[index];
+                    if (entry.Input.Sequence != sequence)
+                        continue;
+
+                    _uncommitted[index] = entry with { CountersRecorded = true };
+                    return;
+                }
+
+                // The consumer can commit the line immediately after the
+                // channel write completes, before the producer reaches here.
+                // A committed line no longer needs rollback metadata.
+            }
+        }
+
+        public void Commit(long sequence)
+        {
+            lock (_gate)
+            {
+                for (var index = 0; index < _uncommitted.Count; index++)
+                {
+                    if (_uncommitted[index].Input.Sequence != sequence)
+                        continue;
+
+                    _uncommitted.RemoveAt(index);
+                    return;
+                }
+            }
+
+            throw new InvalidOperationException(
+                "Parallel batch input was dispatched without a matching ownership lease.");
+        }
+
+        public BatchPumpedLine[] TakeForReplay(BatchExecutionState state)
+        {
+            BatchParallelReplayEntry[] entries;
+            lock (_gate)
+            {
+                entries = [.. _uncommitted];
+                _uncommitted.Clear();
+            }
+
+            Array.Sort(
+                entries,
+                static (left, right) => left.Input.Sequence.CompareTo(right.Input.Sequence));
+            var replay = new BatchPumpedLine[entries.Length];
+            for (var index = 0; index < entries.Length; index++)
+            {
+                var entry = entries[index];
+                replay[index] = entry.Input;
+                state.InputLinesRead--;
+                if (!entry.CountersRecorded)
+                    continue;
+
+                if (entry.Preparation == BatchLinePreparationKind.Command)
+                {
+                    state.CommandsProcessed--;
+                }
+                else
+                {
+                    state.LineErrors--;
+                    if (entry.Preparation == BatchLinePreparationKind.InputLimit)
+                        state.InputLimitReached = false;
+                }
+            }
+
+            if (state.InputLinesRead < 0
+                || state.CommandsProcessed < 0
+                || state.LineErrors < 0)
+            {
+                throw new InvalidOperationException(
+                    "Parallel batch replay produced invalid committed counters.");
+            }
+
+            return replay;
+        }
+    }
 }
