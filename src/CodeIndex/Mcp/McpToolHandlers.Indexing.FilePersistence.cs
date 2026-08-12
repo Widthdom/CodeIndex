@@ -22,7 +22,7 @@ public partial class McpServer
         var target = context.Targets[targetIndex];
         context.CancellationToken.ThrowIfCancellationRequested();
         context.AuthorizedRoot.EnsureAuthorizedEntry(target.FilePath);
-        if (context.DeferCSharpMutations()
+        if (context.CSharpWorkspace.DeferMutations
             && target.Language == "csharp")
         {
             TryRememberMcpIndexFileSize(context, target.FilePath);
@@ -31,11 +31,11 @@ public partial class McpServer
         }
 
         var statMatchedFile = ResolveMcpStatMatch(context, targetIndex, in target);
-        if (context.PreservePriorPositiveCSharpSourceNoOp()
+        if (context.CSharpWorkspace.PreservePriorPositiveSourceNoOp
             && target.Language == "csharp"
             && statMatchedFile == null)
         {
-            context.DeferCSharpStatRevalidation(in target);
+            context.CSharpWorkspace.DeferForStatRevalidation(in target, context.Writer);
             return await CompleteMcpIndexFileEarlyAsync(context, session, emitProgress: true)
                 .ConfigureAwait(false);
         }
@@ -54,7 +54,10 @@ public partial class McpServer
             target.Language,
             context.CancellationToken);
         var record = loaded.Record;
-        if (!context.LoadedCSharpWorkspaceSnapshotMatches(in target, record))
+        if (!context.CSharpWorkspace.LoadedSnapshotMatches(
+                in target,
+                record,
+                context.Writer))
         {
             context.RememberReadableFileSize(target.FilePath, record.Size);
             return await CompleteMcpIndexFileEarlyAsync(context, session, emitProgress: true)
@@ -171,7 +174,7 @@ public partial class McpServer
                 && context.SymbolKindFilterMatchesPrior
                 && (record.Lang != "csharp" || context.CSharpIndexedProjectRootCompatible)
                 && (record.Lang != "csharp" || context.CSharpSymbolNameContractMatchesCurrent)
-                && (record.Lang != "csharp" || !context.GetCSharpWorkspace().HasStaticInterfaceContracts)
+                && (record.Lang != "csharp" || !context.CSharpWorkspace.Workspace.HasStaticInterfaceContracts)
                 && (record.Lang != "sql" || context.SqlGraphContractMatchesCurrent)
                 && (record.Lang is not ("verilog" or "systemverilog" or "vhdl")
                     || context.HdlGraphContractMatchesCurrent)

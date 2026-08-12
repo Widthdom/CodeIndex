@@ -12,13 +12,6 @@ public partial class McpServer
     private delegate IndexedFileStatReuseResult? McpIndexStatMatchResolver(
         in CSharpStaticInterfacePrepass.FileTarget target);
 
-    private delegate bool McpIndexLoadedSnapshotMatcher(
-        in CSharpStaticInterfacePrepass.FileTarget target,
-        FileRecord record);
-
-    private delegate void McpIndexStatRevalidationHandler(
-        in CSharpStaticInterfacePrepass.FileTarget target);
-
     private sealed class McpIndexFileLoopContext
     {
         internal required DbWriter Writer { get; init; }
@@ -46,15 +39,8 @@ public partial class McpServer
         internal bool[]? StatPreflightCompleted { get; init; }
         internal required SymbolKindFilter SymbolKindFilter { get; init; }
         internal required IndexCommandRunner.LazyDisposable<PostExtractionHookRunner> PostExtractionHooks { get; init; }
-        internal required Func<CSharpStaticInterfaceWorkspaceSymbols> GetCSharpWorkspace { get; init; }
-        internal required Func<CSharpPrepassSymbolArtifactCache?> GetCSharpPrepassArtifacts { get; init; }
-        internal required Func<bool> DeferCSharpMutations { get; init; }
-        internal required Func<bool> PreservePriorPositiveCSharpSourceNoOp { get; init; }
-        internal required Func<bool> HasCSharpWorkspaceSnapshots { get; init; }
+        internal required McpIndexCSharpWorkspaceState CSharpWorkspace { get; init; }
         internal required McpIndexStatMatchResolver GetStatMatchedFile { get; init; }
-        internal required McpIndexLoadedSnapshotMatcher LoadedCSharpWorkspaceSnapshotMatches { get; init; }
-        internal required McpIndexStatRevalidationHandler DeferCSharpStatRevalidation { get; init; }
-        internal required Action<string> DeferCSharpLoadedSnapshotDrift { get; init; }
         internal required Action<string, long> RememberReadableFileSize { get; init; }
         internal required Action<long, IReadOnlyList<FileIssue>> InsertIssuesForIndexedFile { get; init; }
         internal required Action WriteProjectRootOnce { get; init; }

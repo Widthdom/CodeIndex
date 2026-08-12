@@ -73,7 +73,7 @@ public partial class McpServer
     {
         if (record.Lang == "csharp"
             && record.Checksum is { } checksum
-            && context.GetCSharpPrepassArtifacts()?.TryTake(
+            && context.CSharpWorkspace.PrepassArtifacts?.TryTake(
                 record.Path,
                 checksum,
                 out var artifact) == true)
@@ -173,7 +173,7 @@ public partial class McpServer
                    record.Lang,
                    "reference_extraction"))
         {
-            var workspace = context.GetCSharpWorkspace();
+            var workspace = context.CSharpWorkspace.Workspace;
             extraction = ReferenceExtractor.ExtractDetailedNormalized(
                 fileId,
                 record.Lang,

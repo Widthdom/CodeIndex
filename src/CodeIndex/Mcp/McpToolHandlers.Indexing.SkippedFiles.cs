@@ -54,7 +54,10 @@ public partial class McpServer
                 target.RelativePath,
                 target.Language);
             context.RememberReadableFileSize(target.FilePath, record.Size);
-            if (!context.LoadedCSharpWorkspaceSnapshotMatches(in target, record))
+            if (!context.CSharpWorkspace.LoadedSnapshotMatches(
+                    in target,
+                    record,
+                    context.Writer))
             {
                 session.Skipped++;
                 return;
@@ -144,9 +147,11 @@ public partial class McpServer
         if (session.FileBatchMarked)
             context.Writer.ClearBatchInProgress();
 
-        if (target.Language == "csharp" && context.HasCSharpWorkspaceSnapshots())
+        if (target.Language == "csharp" && context.CSharpWorkspace.HasFileSnapshots)
         {
-            context.DeferCSharpLoadedSnapshotDrift(target.DisplayRelativePath);
+            context.CSharpWorkspace.DeferForLoadedSnapshotDrift(
+                target.DisplayRelativePath,
+                context.Writer);
             session.Skipped++;
             session.Processed++;
             await EmitProgressNotificationAsync(
