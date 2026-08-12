@@ -11,6 +11,51 @@ namespace CodeIndex.Tests;
 public partial class DbReaderTests
 {
     [Fact]
+    public void GetFileDependencyCycleCandidates_PreCanceledTokenThrows()
+    {
+        var token = new CancellationToken(canceled: true);
+
+        var exception = Assert.Throws<OperationCanceledException>(
+            () => _reader.GetFileDependencyCycleCandidates(
+                limit: 1,
+                out _,
+                cancellationToken: token));
+
+        Assert.Equal(token, exception.CancellationToken);
+    }
+
+    [Fact]
+    public void GetFileDependencyCycleCandidates_ReversePathScopeAppliesIncludeAndExcludeToTargets()
+    {
+        var sourceFileId = InsertSyntheticDependencyFile("src/ReverseCycleSource.cs");
+        var includedTargetId = InsertSyntheticDependencyFile("targets/keep/IncludedCycleTarget.cs");
+        var excludedTargetId = InsertSyntheticDependencyFile("targets/drop/ExcludedCycleTarget.cs");
+        _writer.InsertSymbols([
+            new SymbolRecord { FileId = includedTargetId, Kind = "class", Name = "IncludedCycleTarget", Line = 1, StartLine = 1, EndLine = 1 },
+            new SymbolRecord { FileId = excludedTargetId, Kind = "class", Name = "ExcludedCycleTarget", Line = 1, StartLine = 1, EndLine = 1 },
+        ]);
+        _writer.InsertReferences([
+            new ReferenceRecord { FileId = sourceFileId, SymbolName = "IncludedCycleTarget", ReferenceKind = "call", Line = 1, Column = 1, Context = "IncludedCycleTarget()" },
+            new ReferenceRecord { FileId = sourceFileId, SymbolName = "ExcludedCycleTarget", ReferenceKind = "call", Line = 2, Column = 1, Context = "ExcludedCycleTarget()" },
+        ]);
+
+        var candidates = _reader.GetFileDependencyCycleCandidates(
+            limit: 10,
+            out var candidateRowCount,
+            lang: "csharp",
+            pathPatterns: ["targets"],
+            excludePathPatterns: ["targets/drop"],
+            reverse: true);
+
+        var candidate = Assert.Single(candidates);
+        Assert.Equal(1, candidateRowCount);
+        Assert.Equal("src/ReverseCycleSource.cs", candidate.SourcePath);
+        Assert.Equal("targets/keep/IncludedCycleTarget.cs", candidate.TargetPath);
+        Assert.Equal(1, candidate.ReferenceCount);
+        Assert.Equal(candidate.ReferenceCount, candidate.RankingScore);
+    }
+
+    [Fact]
     public void GetFileDependencies_PreCanceledTokenThrows()
     {
         var token = new CancellationToken(canceled: true);
