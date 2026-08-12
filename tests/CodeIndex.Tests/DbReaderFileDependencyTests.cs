@@ -11,6 +11,17 @@ namespace CodeIndex.Tests;
 public partial class DbReaderTests
 {
     [Fact]
+    public void GetFileDependencies_PreCanceledTokenThrows()
+    {
+        var token = new CancellationToken(canceled: true);
+
+        var exception = Assert.Throws<OperationCanceledException>(
+            () => _reader.GetFileDependencies(cancellationToken: token));
+
+        Assert.Equal(token, exception.CancellationToken);
+    }
+
+    [Fact]
     public void GetFileDependencies_PythonUsesFileLocalImportsAndModuleOwnership_Issue4412()
     {
         InsertIndexedFile("src/models/user.py", "python", "class User:\n    pass\n");
