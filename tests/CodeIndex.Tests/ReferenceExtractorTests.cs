@@ -4547,6 +4547,45 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_PythonReferenceLimitStillRunsMutualRecursionFinalization()
+    {
+        const string content = """
+            def alpha():
+                beta()
+
+            def beta():
+                alpha()
+
+            def gamma():
+                alpha()
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(
+            1,
+            "python",
+            content,
+            symbols,
+            maxReferenceCount: 2);
+
+        Assert.Equal(2, references.Count);
+        Assert.Contains(references, reference =>
+            reference.ContainerName == "alpha"
+            && reference.SymbolName == "beta"
+            && reference.ReferenceKind == "call"
+            && reference.IsMutualRecursion
+            && !reference.IsSelfReference);
+        Assert.Contains(references, reference =>
+            reference.ContainerName == "beta"
+            && reference.SymbolName == "alpha"
+            && reference.ReferenceKind == "call"
+            && reference.IsMutualRecursion
+            && !reference.IsSelfReference);
+        Assert.DoesNotContain(references, reference =>
+            reference.ContainerName == "gamma");
+    }
+
+    [Fact]
     public void Extract_CSharpConstructorAlias_DoesNotRewriteQualifiedCallWhenAliasNameAppearsElsewhereOnLine()
     {
         const string content = """

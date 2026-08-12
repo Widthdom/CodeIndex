@@ -586,7 +586,8 @@ Candidate-ordered parallel-index recovery tests must prove that the fatal result
 - Go function-like symbol coverage shares qualified receiver containers and branch labels in one file fixture while excluding switch keywords.
 - Consolidated Python/Go extractor fixtures retain exact symbol/reference cardinality, including complete per-container result sets, and source-line assertions when those were part of the original regression contract.
 - Assembly reference coverage shares direct call/branch forms and tab-separated decorated indirect-target negatives in one exact-cardinality fixture.
-- Solidity reference coverage shares inheritance whitespace variants, library/modifier/event/interface edges, and comment/string negatives in one fixture.
+- Solidity reference coverage shares inheritance whitespace variants, library/modifier/event/interface edges, and comment/string negatives in one fixture. Its detailed early-return fixture lowers the definition and container safety limits together and asserts that both diagnostics survive before Solidity-specific extraction returns.
+- Python mutual-recursion finalization coverage keeps a complete two-edge cycle ahead of a capped later call and asserts that the retained cycle is still marked when the reference list is already full.
 - Terraform reference coverage shares resource/module/data traversals and raw `var`/`local` object references in one exact-per-name fixture.
 - Language masker copy-on-write coverage pairs unchanged-array reuse and required-clone behavior within the same Lua and Solidity test methods.
 - COBOL target-statement coverage places SQL/CICS, report, sort, queue, file, literal, and external-call variants in one program and checks exact grouped edge counts.
@@ -1642,7 +1643,8 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - Go function-like symbol coverage は qualified receiver container と branch label を1つの file fixture で共有し、switch keyword を除外します。
 - 統合した Python/Go extractor fixture でも、container ごとの完全な result set を含む symbol/reference の厳密な件数と、元の回帰契約に含まれていた source line の assertion を維持します。
 - Assembly reference coverage は direct call/branch と tab 区切り decorated indirect-target の negative case を、厳密な件数を持つ1つの fixture で共有します。
-- Solidity reference coverage は inheritance whitespace variant、library/modifier/event/interface edge、comment/string negative を1つの fixture で共有します。
+- Solidity reference coverage は inheritance whitespace variant、library/modifier/event/interface edge、comment/string negative を1つの fixture で共有します。詳細 early-return fixture では definition と container の safety limit を同時に下げ、Solidity 固有抽出から戻る前に両方の diagnostic が維持されることを検証します。
+- Python mutual-recursion finalization coverage は、上限で除外される後続 call より前に完全な2-edge cycle を置き、reference list が既に満杯でも保持済み cycle が mutual として印付けされることを検証します。
 - Terraform reference coverage は resource/module/data traversal と raw `var`/`local` object reference を、name ごとの厳密な件数を持つ1つの fixture で共有します。
 - Language masker の copy-on-write coverage は、変更不要時の配列再利用と mask 必要時の clone を Lua/Solidity それぞれ同じテストメソッド内で検証します。
 - COBOL target-statement coverage は SQL/CICS、report、sort、queue、file、literal、external-call variant を1つの program に配置し、group ごとの edge 件数を厳密に検証します。

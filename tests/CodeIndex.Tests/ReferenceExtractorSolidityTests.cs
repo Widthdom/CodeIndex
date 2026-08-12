@@ -1,4 +1,5 @@
 using CodeIndex.Indexer;
+using CodeIndex.Models;
 
 namespace CodeIndex.Tests;
 
@@ -40,5 +41,45 @@ public partial class ReferenceExtractorTests
         Assert.Contains(references, reference => reference.SymbolName == "TabbedBase" && reference.ReferenceKind == "extends" && reference.ContainerName == "Tabbed");
         Assert.Contains(references, reference => reference.SymbolName == "Parent" && reference.ReferenceKind == "extends");
         Assert.DoesNotContain(references, reference => reference.SymbolName is "Phantom" or "CommentOnly");
+    }
+
+    [Fact]
+    public void ExtractDetailed_SolidityEarlyReturnPreservesSafetyDiagnostics()
+    {
+        const string content = """
+            contract Vault is Ownable {
+                function run() external onlyOwner {}
+            }
+            """;
+        var previousLimits = ReferenceExtractor.SafetyLimitsForTesting;
+        try
+        {
+            ReferenceExtractor.SafetyLimitsForTesting = new ReferenceExtractionSafetyLimits
+            {
+                MaxLookupSymbols = 1,
+                MaxLookupLines = 100,
+                MaxNamesPerLine = 100,
+                MaxContainerCandidates = 1,
+            };
+            var symbols = SymbolExtractor.Extract(1, "solidity", content);
+
+            var result = ReferenceExtractor.ExtractDetailed(
+                1,
+                "solidity",
+                content,
+                symbols);
+
+            Assert.Contains(result.References, reference =>
+                reference.SymbolName == "Ownable"
+                && reference.ReferenceKind == "extends");
+            Assert.Contains(result.Diagnostics, diagnostic =>
+                diagnostic.Kind == "reference_definition_lookup_symbol_budget_exceeded");
+            Assert.Contains(result.Diagnostics, diagnostic =>
+                diagnostic.Kind == "reference_container_candidate_budget_exceeded");
+        }
+        finally
+        {
+            ReferenceExtractor.SafetyLimitsForTesting = previousLimits;
+        }
     }
 }
