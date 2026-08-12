@@ -12713,6 +12713,92 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearchCore_ValidationRoutingAndDatabaseExecutionRemainAligned()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_core_execution_alignment");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/alignment.cs",
+                "csharp",
+                "public sealed class AlignmentFixture { public void AlignmentNeedle() { } }\n");
+            var invalidDbPath = TestProjectHelper.WriteTextFile(
+                projectRoot,
+                "invalid.db",
+                "not a SQLite database");
+
+            var (validationExitCode, validationStdout, validationStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                [
+                    "AlignmentNeedle",
+                    "--db", invalidDbPath,
+                    "--count",
+                    "--group-by", "file",
+                    "--count-by", "file"
+                ],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.UsageError, validationExitCode);
+            Assert.Equal(string.Empty, validationStdout);
+            Assert.Contains("--group-by cannot be combined with --count-by or --unique", validationStderr);
+
+            var (zeroCountExitCode, zeroCountStdout, zeroCountStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["MissingNeedle", "--db", dbPath, "--count", "--json"],
+                _jsonOptions));
+            using (var zeroCountDocument = ParseJsonOutput(zeroCountStdout))
+            {
+                Assert.Equal(CommandExitCodes.Success, zeroCountExitCode);
+                Assert.Equal(string.Empty, zeroCountStderr);
+                Assert.Equal(0, zeroCountDocument.RootElement.GetProperty("count").GetInt32());
+                Assert.Equal(0, zeroCountDocument.RootElement.GetProperty("files").GetInt32());
+            }
+
+            var (countExitCode, countStdout, countStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["AlignmentNeedle", "--db", dbPath, "--count", "--json"],
+                _jsonOptions));
+            using (var countDocument = ParseJsonOutput(countStdout))
+            {
+                Assert.Equal(CommandExitCodes.Success, countExitCode);
+                Assert.Equal(string.Empty, countStderr);
+                Assert.Equal(1, countDocument.RootElement.GetProperty("count").GetInt32());
+                Assert.Equal(1, countDocument.RootElement.GetProperty("files").GetInt32());
+            }
+
+            var (plainExitCode, plainStdout, plainStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["AlignmentNeedle", "--db", dbPath, "--json", "--profile", "--slow-query-ms", "0"],
+                _jsonOptions));
+            var plainLines = plainStdout.Split(
+                '\n',
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+            Assert.Equal(CommandExitCodes.Success, plainExitCode);
+            Assert.Equal(string.Empty, plainStderr);
+            Assert.Equal(3, plainLines.Length);
+            using (var resultDocument = JsonDocument.Parse(plainLines[0]))
+            using (var profileDocument = JsonDocument.Parse(plainLines[1]))
+            using (var terminalDocument = JsonDocument.Parse(plainLines[2]))
+            {
+                Assert.Equal("src/alignment.cs", resultDocument.RootElement.GetProperty("path").GetString());
+                Assert.True(profileDocument.RootElement.TryGetProperty("profile", out _));
+                Assert.True(IsJsonStreamDoneSentinel(terminalDocument.RootElement));
+            }
+
+            var (strictExitCode, strictStdout, strictStderr) = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["MissingNeedle", "--db", dbPath, "--strict-not-found"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.NotFound, strictExitCode);
+            Assert.Equal(string.Empty, strictStdout);
+            Assert.Contains("No results found", strictStderr);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_ProfileEmitsSqlPhasesAndQueryPlan_Issue1643()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_profile");
