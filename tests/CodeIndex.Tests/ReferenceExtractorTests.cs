@@ -5686,6 +5686,33 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_PhpDocblockMethod_ReturnPrecedesParametersAtReferenceLimit()
+    {
+        const string content = """
+            <?php
+            final class Processor {
+                /**
+                 * @method Result process(InputMessage $message)
+                 */
+            }
+            ?>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+        var references = ReferenceExtractor.Extract(
+            1,
+            "php",
+            content,
+            symbols,
+            maxReferenceCount: 1);
+
+        var reference = Assert.Single(references);
+        Assert.Equal("Result", reference.SymbolName);
+        Assert.Equal("type_reference", reference.ReferenceKind);
+        Assert.Equal("Processor", reference.ContainerName);
+    }
+
+    [Fact]
     public void Extract_PhpDocblockTemplateBounds_EmitTypeReferences()
     {
         const string content = """

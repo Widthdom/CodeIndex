@@ -2,6 +2,24 @@ namespace CodeIndex.Indexer;
 
 public static partial class ReferenceExtractor
 {
+    private static void EmitRDocumentationReferences(
+        in CoreDocumentationLineContext line)
+    {
+        var context = line.OriginalLine.Trim();
+        if (context.Length == 0)
+            return;
+
+        RReferenceExtractor.EmitRoxygenImportFromReferences(
+            line.OriginalLine, line.References, line.Seen, line.FileId, context,
+            line.LineNumber, container: null);
+        RReferenceExtractor.EmitRoxygenImportReferences(
+            line.OriginalLine, line.References, line.Seen, line.FileId, context,
+            line.LineNumber, container: null);
+        RReferenceExtractor.EmitRoxygenMethodReferences(
+            line.OriginalLine, line.References, line.Seen, line.FileId, context,
+            line.LineNumber, container: null);
+    }
+
     private static void EmitRLineReferences(in CoreReferenceLineContext line)
     {
         EmitRNamespaceAndDispatchReferences(in line);

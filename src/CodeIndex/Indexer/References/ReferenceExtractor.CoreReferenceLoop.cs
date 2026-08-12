@@ -62,11 +62,7 @@ public static partial class ReferenceExtractor
         internal bool XamlInXmlComment;
         internal readonly XamlReferenceExtractor.BindingPropertyElementState? XamlBindingPropertyElementState;
         internal readonly XamlReferenceExtractor.BindingMarkupExtensionState? XamlBindingMarkupExtensionState;
-        internal bool CSharpInDelimitedDocComment;
-        internal bool JvmInDelimitedDocComment;
-        internal bool PhpInDocblock;
-        internal SymbolRecord? PhpDocblockContainer;
-        internal HashSet<string>? PhpDocblockPropertyNames;
+        internal CoreDocumentationState Documentation;
         internal readonly MarkupSchemaReferenceExtractor.MarkupState? MarkupSchemaState;
         internal readonly CssReferenceExtractor.SassLoudCommentState? SassPreparedCommentState;
         internal readonly CssReferenceExtractor.SassLoudCommentState? SassOriginalCommentState;

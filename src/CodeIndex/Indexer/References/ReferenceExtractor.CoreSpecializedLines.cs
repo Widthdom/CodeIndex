@@ -275,121 +275,19 @@ public static partial class ReferenceExtractor
         }
     }
 
-    private static void EmitPhpAndScssLineReferences(
+    private static void EmitScssLineReferences(
         in CoreReferenceLineContext line)
     {
-        if (line.Language == "css")
-        {
-            CssReferenceExtractor.EmitScss(
-                line.PreparedLine,
-                line.References,
-                line.Seen,
-                line.FileId,
-                line.Context,
-                line.LineNumber,
-                line.Container);
-        }
+        if (line.Language != "css")
+            return;
 
-        if (line.Language == "php")
-        {
-            PhpReferenceExtractor.EmitStaticAccessReferences(
-                line.PreparedLine,
-                line.References,
-                line.Seen,
-                line.FileId,
-                line.Context,
-                line.LineNumber,
-                line.Container);
-
-            PhpReferenceExtractor.EmitInstanceofReferences(
-                line.PreparedLine,
-                line.References,
-                line.Seen,
-                line.FileId,
-                line.Context,
-                line.LineNumber,
-                line.Container);
-
-            PhpReferenceExtractor.EmitCatchTypeReferences(
-                line.PreparedLine,
-                line.References,
-                line.Seen,
-                line.FileId,
-                line.Context,
-                line.LineNumber,
-                line.Container);
-
-            PhpReferenceExtractor.EmitReturnTypeReferences(
-                line.PreparedLine,
-                line.References,
-                line.Seen,
-                line.FileId,
-                line.Context,
-                line.LineNumber,
-                line.Container);
-
-            PhpReferenceExtractor.EmitParameterTypeReferences(
-                line.PreparedLine,
-                line.References,
-                line.Seen,
-                line.FileId,
-                line.Context,
-                line.LineNumber,
-                line.Container);
-
-            PhpReferenceExtractor.EmitPropertyTypeReferences(
-                line.PreparedLine,
-                line.References,
-                line.Seen,
-                line.FileId,
-                line.Context,
-                line.LineNumber,
-                line.Container);
-
-            PhpReferenceExtractor.EmitInheritanceTypeReferences(
-                line.PreparedLine,
-                line.References,
-                line.Seen,
-                line.FileId,
-                line.Context,
-                line.LineNumber,
-                line.Container);
-
-            PhpReferenceExtractor.EmitUseTypeReferences(
-                line.PreparedLine,
-                line.References,
-                line.Seen,
-                line.FileId,
-                line.Context,
-                line.LineNumber,
-                line.Container);
-
-            PhpReferenceExtractor.EmitUseFunctionReferences(
-                line.PreparedLine,
-                line.References,
-                line.Seen,
-                line.FileId,
-                line.Context,
-                line.LineNumber,
-                line.Container);
-
-            PhpReferenceExtractor.EmitUseConstReferences(
-                line.PreparedLine,
-                line.References,
-                line.Seen,
-                line.FileId,
-                line.Context,
-                line.LineNumber,
-                line.Container);
-
-            PhpReferenceExtractor.EmitObjectMemberAccessReferences(
-                line.PreparedLine,
-                line.References,
-                line.Seen,
-                line.FileId,
-                line.Context,
-                line.LineNumber,
-                line.Container);
-        }
+        CssReferenceExtractor.EmitScss(
+            line.PreparedLine,
+            line.References,
+            line.Seen,
+            line.FileId,
+            line.Context,
+            line.LineNumber,
+            line.Container);
     }
 }

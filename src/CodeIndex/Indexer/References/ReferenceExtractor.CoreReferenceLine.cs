@@ -220,59 +220,15 @@ public static partial class ReferenceExtractor
         out string sourceContext)
     {
         var request = loop.Request;
-        var input = loop.Preparation;
         var lineNumber = lineIndex + 1;
-        if (request.Language is "csharp" or "java" or "kotlin" or "r" or "php")
-        {
-            Func<SymbolRecord?>? getPhpLineContainer = null;
-            if (request.Language == "php")
-            {
-                SymbolRecord? phpLineContainer = null;
-                var phpLineContainerResolved = false;
-
-                SymbolRecord? GetPhpLineContainer()
-                {
-                    if (!phpLineContainerResolved)
-                    {
-                        phpLineContainer =
-                            loop.ContainerResolver.Find(lineNumber);
-                        phpLineContainerResolved = true;
-                    }
-
-                    return phpLineContainer;
-                }
-
-                getPhpLineContainer = GetPhpLineContainer;
-            }
-
-            var documentationLine = new CoreDocumentationLineContext(
-                request.FileId,
-                request.Language,
-                input.Lines,
-                input.PreparedLines,
-                input.StructuralLines,
-                lineIndex,
-                lineNumber,
-                originalLine,
-                preparedLine,
-                loop.References,
-                loop.Seen,
-                loop.ContainerCandidates,
-                loop.ContainerResolver,
-                loop.Lookups,
-                input.CSharpLinesInsideMultilineStringContent,
-                input.CSharpLinesInsideBlockComment,
-                csharpAttributeRangesOnLine,
-                loop.CSharpAttributeRanges,
-                getPhpLineContainer);
-            EmitCoreDocumentationReferences(
-                in documentationLine,
-                ref state.CSharpInDelimitedDocComment,
-                ref state.JvmInDelimitedDocComment,
-                ref state.PhpInDocblock,
-                ref state.PhpDocblockContainer,
-                ref state.PhpDocblockPropertyNames);
-        }
+        EmitCoreLanguageDocumentationReferences(
+            loop,
+            state,
+            lineIndex,
+            lineNumber,
+            originalLine,
+            preparedLine,
+            csharpAttributeRangesOnLine);
 
         if (preparedLineIsWhiteSpace
             && request.Language
@@ -323,4 +279,5 @@ public static partial class ReferenceExtractor
             state.MarkupSchemaState);
         return true;
     }
+
 }

@@ -121,7 +121,8 @@ public static partial class ReferenceExtractor
         if (line.Language is "csharp" or "java")
             EmitParenlessInitializerReferences(in line);
 
-        EmitPhpAndScssLineReferences(in line);
+        EmitScssLineReferences(in line);
+        EmitPhpLineReferences(in line);
 
         if (ReferenceLimitReached(line.References))
             return CoreReferenceLineFlow.StopExtraction;
