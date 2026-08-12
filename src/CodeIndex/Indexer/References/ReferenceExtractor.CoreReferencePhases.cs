@@ -54,7 +54,7 @@ public static partial class ReferenceExtractor
             return CoreReferenceLineFlow.StopExtraction;
 
         var typeContext = new CoreTypeReferenceContext(
-            line,
+            in line,
             loop.Lookups,
             loop.ContainerCandidates,
             request.Symbols,
@@ -80,7 +80,7 @@ public static partial class ReferenceExtractor
             state.XamlBindingPropertyElementState,
             state.XamlBindingMarkupExtensionState);
         if (EmitCoreTypeReferences(
-                typeContext,
+                in typeContext,
                 ref state.PendingCSharpMultiLineTypePattern,
                 ref state.XamlInXmlComment))
         {
