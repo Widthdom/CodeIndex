@@ -244,33 +244,13 @@ public partial class McpServer : IDisposable
             }
         }
 
-        return toolName switch
-        {
-            "search" => ExecuteSearch(id, args),
-            "definition" => ExecuteDefinition(id, args),
-            "references" => ExecuteReferences(id, args),
-            "callers" => ExecuteCallers(id, args),
-            "callees" => ExecuteCallees(id, args),
-            "symbols" => ExecuteSymbols(id, args),
-            "files" => ExecuteFiles(id, args),
-            "find_in_file" => ExecuteFindInFile(id, args),
-            "excerpt" => ExecuteExcerpt(id, args),
-            "read_resource" => ExecuteReadResource(id, args),
-            "map" => ExecuteMap(id, args),
-            "analyze_symbol" => ExecuteAnalyzeSymbol(id, args),
-            "status" => ExecuteStatus(id, args),
-            "outline" => ExecuteOutline(id, args),
-            "batch_query" => ExecuteBatchQuery(id, args),
-            "deps" => ExecuteDeps(id, args),
-            "impact_analysis" => ExecuteImpactAnalysis(id, args),
-            "languages" => ExecuteLanguages(id, args),
-            "validate" => ExecuteValidate(id, args),
-            "unused_symbols" => ExecuteUnusedSymbols(id, args),
-            "symbol_hotspots" => ExecuteSymbolHotspots(id, args),
-            "ping" => ExecutePing(id),
-            "suggest_improvement" => await ExecuteSuggestImprovementAsync(id, args).ConfigureAwait(false),
-            _ => createUnknownToolResponse(),
-        };
+        if (toolName == "batch_query")
+            return ExecuteBatchQuery(id, args);
+        if (toolName == "suggest_improvement")
+            return await ExecuteSuggestImprovementAsync(id, args).ConfigureAwait(false);
+
+        return DispatchSynchronousToolCall(toolName, id, args)
+            ?? createUnknownToolResponse();
     }
 
     private void EmitToolInvocationTelemetry(string toolName, JsonNode? args, JsonNode response, DateTimeOffset startedAt, double elapsedMs, string? errorType)
