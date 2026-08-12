@@ -2199,6 +2199,10 @@ public partial class IndexCommandRunnerTests
         var projectRoot = CreateTempProject();
         var previousFailureHook =
             IndexCommandRunner.UpdateParallelExtractionFailureForTesting;
+        var previousEventHook =
+            IndexCommandRunner.UpdateParallelExtractionEventForTesting;
+        var previousCommittedHook =
+            IndexCommandRunner.UpdateFileCommittedForTesting;
         try
         {
             CreateAuthoritativeParallelUpdateProject(
@@ -2216,16 +2220,35 @@ public partial class IndexCommandRunnerTests
             var succeedingChecksumBefore = ReadIndexedChecksum(dbPath, succeedingPath);
             File.AppendAllText(Path.Combine(projectRoot, failingPath), "// fail symbols\n");
             File.AppendAllText(Path.Combine(projectRoot, succeedingPath), "// still persist\n");
+            File.AppendAllText(
+                Path.Combine(projectRoot, "Source02.cs"),
+                new string('x', 2049));
             File.SetLastWriteTimeUtc(
                 Path.Combine(projectRoot, failingPath),
                 DateTime.UtcNow.AddSeconds(2));
             File.SetLastWriteTimeUtc(
                 Path.Combine(projectRoot, succeedingPath),
                 DateTime.UtcNow.AddSeconds(2));
+            File.SetLastWriteTimeUtc(
+                Path.Combine(projectRoot, "Source02.cs"),
+                DateTime.UtcNow.AddSeconds(2));
+            var persistenceEvents = new ConcurrentQueue<(string Kind, int Index, string Path)>();
+            var committedFiles = new ConcurrentQueue<(int Processed, int Total)>();
             IndexCommandRunner.UpdateParallelExtractionFailureForTesting =
                 (path, phase) => path == failingPath && phase == "symbols"
                     ? new InvalidOperationException("parallel symbols failure")
                     : null;
+            IndexCommandRunner.UpdateParallelExtractionEventForTesting = item =>
+            {
+                if (item.Kind is
+                    IndexCommandRunner.UpdateParallelExtractionEventKind.PersistenceStarted
+                    or IndexCommandRunner.UpdateParallelExtractionEventKind.PersistenceCompleted)
+                {
+                    persistenceEvents.Enqueue((item.Kind.ToString(), item.TargetIndex, item.RelativePath));
+                }
+            };
+            IndexCommandRunner.UpdateFileCommittedForTesting = (processed, total) =>
+                committedFiles.Enqueue((processed, total));
 
             var (exitCode, json) = RunAndCaptureJson(
                 [
@@ -2233,25 +2256,54 @@ public partial class IndexCommandRunnerTests
                     "--files",
                     failingPath,
                     succeedingPath,
+                    "IParseable.cs",
+                    "Source02.cs",
                     "--json",
                     "--parallelism",
                     "2",
+                    "--max-file-bytes",
+                    "512",
                 ]);
 
             Assert.Equal(CommandExitCodes.PartialResult, exitCode);
             Assert.Equal("partial", json.GetProperty("status").GetString());
+            var summary = json.GetProperty("summary");
+            Assert.Equal(3, summary.GetProperty("updated").GetInt32());
+            Assert.Equal(0, summary.GetProperty("removed").GetInt32());
+            Assert.Equal(0, summary.GetProperty("skipped").GetInt32());
+            Assert.Equal(0, summary.GetProperty("warnings").GetInt32());
+            Assert.Equal(1, summary.GetProperty("errors").GetInt32());
             Assert.Equal(failingChecksumBefore, ReadIndexedChecksum(dbPath, failingPath));
             Assert.NotEqual(succeedingChecksumBefore, ReadIndexedChecksum(dbPath, succeedingPath));
             var failure = Assert.Single(
                 json.GetProperty("file_errors").EnumerateArray(),
                 item => item.GetProperty("file").GetString() == failingPath);
             Assert.Equal("symbols", failure.GetProperty("phase").GetString());
+            Assert.Equal(
+                [
+                    ("PersistenceStarted", 1, "Source01.cs"),
+                    ("PersistenceCompleted", 1, "Source01.cs"),
+                    ("PersistenceStarted", 2, "IParseable.cs"),
+                    ("PersistenceCompleted", 2, "IParseable.cs"),
+                    ("PersistenceCompleted", 3, "Source02.cs"),
+                ],
+                persistenceEvents.ToArray());
+            Assert.Equal([(1, 4), (2, 4)], committedFiles.ToArray());
             Assert.False(json.GetProperty("csharp_metadata_target_ready").GetBoolean());
+            Assert.False(json.GetProperty("index_complete").GetBoolean());
+            AssertCompletenessReason(json, "index_incomplete_reasons", "file_too_large");
+            var (statusExitCode, status) = RunStatusAndCaptureJson(
+                ["--db", dbPath, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, statusExitCode);
+            Assert.False(status.GetProperty("migration_in_progress").GetBoolean());
         }
         finally
         {
             IndexCommandRunner.UpdateParallelExtractionFailureForTesting =
                 previousFailureHook;
+            IndexCommandRunner.UpdateParallelExtractionEventForTesting =
+                previousEventHook;
+            IndexCommandRunner.UpdateFileCommittedForTesting = previousCommittedHook;
             DeleteDirectory(projectRoot);
         }
     }
