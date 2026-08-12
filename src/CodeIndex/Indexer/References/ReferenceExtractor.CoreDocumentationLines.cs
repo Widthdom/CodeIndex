@@ -26,7 +26,7 @@ public static partial class ReferenceExtractor
         Func<SymbolRecord?>? GetPhpLineContainer);
 
     private static void EmitCoreDocumentationReferences(
-        CoreDocumentationLineContext line,
+        in CoreDocumentationLineContext line,
         ref bool csharpInDelimitedDocComment,
         ref bool jvmInDelimitedDocComment,
         ref bool phpInDocblock,

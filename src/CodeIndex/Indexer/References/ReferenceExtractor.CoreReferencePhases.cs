@@ -7,26 +7,26 @@ public static partial class ReferenceExtractor
     private static CoreReferenceLineFlow EmitCoreOrderedReferencePhases(
         CoreReferenceLoopContext loop,
         CoreReferenceLoopState state,
-        CorePreparedReferenceLine prepared)
+        in CorePreparedReferenceLine prepared)
     {
         var initialFlow = EmitCoreInitialReferencePhases(
             loop,
             state,
-            prepared);
+            in prepared);
         if (initialFlow != CoreReferenceLineFlow.Continue)
             return initialFlow;
 
-        return EmitCoreRemainingReferencePhases(loop, state, prepared);
+        return EmitCoreRemainingReferencePhases(loop, state, in prepared);
     }
 
     private static CoreReferenceLineFlow EmitCoreInitialReferencePhases(
         CoreReferenceLoopContext loop,
         CoreReferenceLoopState state,
-        CorePreparedReferenceLine prepared)
+        in CorePreparedReferenceLine prepared)
     {
         var request = loop.Request;
         var input = loop.Preparation;
-        var line = prepared.Line;
+        ref readonly var line = ref prepared.Line;
         if (state.ShaderState is not null)
         {
             ShaderReferenceExtractor.EmitLineReferences(
@@ -47,7 +47,7 @@ public static partial class ReferenceExtractor
         if (loop.IsJsxFile
             && line.Language is "javascript" or "typescript")
         {
-            EmitJsxElementReferences(line);
+            EmitJsxElementReferences(in line);
         }
 
         if (ReferenceLimitReached(line.References))
@@ -95,13 +95,13 @@ public static partial class ReferenceExtractor
     private static CoreReferenceLineFlow EmitCoreRemainingReferencePhases(
         CoreReferenceLoopContext loop,
         CoreReferenceLoopState state,
-        CorePreparedReferenceLine prepared)
+        in CorePreparedReferenceLine prepared)
     {
         var request = loop.Request;
         var input = loop.Preparation;
-        var line = prepared.Line;
+        ref readonly var line = ref prepared.Line;
         EmitInfrastructureLineReferences(
-            line,
+            in line,
             loop.DockerfileStageNames,
             loop.DockerfileVariableNames,
             loop.CobolCallableSymbols);
@@ -110,7 +110,7 @@ public static partial class ReferenceExtractor
             return CoreReferenceLineFlow.StopExtraction;
 
         var sqlSuppressedCallIndices = EmitSqlLineReferences(
-            line,
+            in line,
             input.StructuralLines[line.LineIndex],
             state.SqlState,
             prepared.DefinitionState);
@@ -119,9 +119,9 @@ public static partial class ReferenceExtractor
             return CoreReferenceLineFlow.StopExtraction;
 
         if (line.Language is "csharp" or "java")
-            EmitParenlessInitializerReferences(line);
+            EmitParenlessInitializerReferences(in line);
 
-        EmitPhpAndScssLineReferences(line);
+        EmitPhpAndScssLineReferences(in line);
 
         if (ReferenceLimitReached(line.References))
             return CoreReferenceLineFlow.StopExtraction;
@@ -149,7 +149,7 @@ public static partial class ReferenceExtractor
 
         EmitCoreMethodAndMemberReferences(
             loop,
-            line,
+            in line,
             prepared.CSharpAttributeRanges,
             prepared.ContainerResolver.ResolveContainerForCall);
 
@@ -161,14 +161,14 @@ public static partial class ReferenceExtractor
                 line.LineNumber,
                 out var tagHitsOnLine))
         {
-            EmitJavaScriptTaggedTemplateReferences(line, tagHitsOnLine);
+            EmitJavaScriptTaggedTemplateReferences(in line, tagHitsOnLine);
         }
 
         if (ReferenceLimitReached(line.References))
             return CoreReferenceLineFlow.StopExtraction;
 
         EmitMetadataLineReferences(
-            line,
+            in line,
             prepared.CSharpAttributeTopLevelRanges);
 
         if (ReferenceLimitReached(line.References))
@@ -194,16 +194,16 @@ public static partial class ReferenceExtractor
             return CoreReferenceLineFlow.StopExtraction;
 
         if (line.Language == "python")
-            EmitPythonLineReferences(line, loop.Lookups);
+            EmitPythonLineReferences(in line, loop.Lookups);
         if (line.Language == "r")
-            EmitRLineReferences(line);
+            EmitRLineReferences(in line);
 
         return CoreReferenceLineFlow.Continue;
     }
 
     private static void EmitCoreMethodAndMemberReferences(
         CoreReferenceLoopContext loop,
-        CoreReferenceLineContext line,
+        in CoreReferenceLineContext line,
         List<(int start, int end)>? csharpAttributeRanges,
         Func<int, SymbolRecord?> resolveContainerForCall)
     {

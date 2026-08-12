@@ -18,7 +18,7 @@ public static partial class ReferenceExtractor
             return CoreReferenceLineFlow.LineConsumed;
         }
 
-        return EmitCoreOrderedReferencePhases(loop, state, prepared);
+        return EmitCoreOrderedReferencePhases(loop, state, in prepared);
     }
 
     private static bool TryPrepareCoreReferenceLine(
@@ -161,7 +161,7 @@ public static partial class ReferenceExtractor
             containerResolver.ResolveContainerForCall,
             state.IsIgnoredCallName);
         prepared = new CorePreparedReferenceLine(
-            line,
+            in line,
             languageLines.OriginalLineForLanguage,
             csharpAttributeRanges,
             csharpAttributeTopLevelRanges,
@@ -266,7 +266,7 @@ public static partial class ReferenceExtractor
                 loop.CSharpAttributeRanges,
                 getPhpLineContainer);
             EmitCoreDocumentationReferences(
-                documentationLine,
+                in documentationLine,
                 ref state.CSharpInDelimitedDocComment,
                 ref state.JvmInDelimitedDocComment,
                 ref state.PhpInDocblock,

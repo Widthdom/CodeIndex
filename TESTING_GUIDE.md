@@ -542,7 +542,7 @@ Candidate-ordered parallel-index recovery tests must prove that the fatal result
 - C# constructor base-target coverage shares generic, interface-list, nested-generic, multiline, and constrained layouts in one fixture and asserts each rewritten edge by its unique terminal type.
 - C# multiline member attribution shares expression-bodied method and property layouts, Allman/same-line braces, and intervening block comments in one fixture, using unique member containers for assertions.
 - Python `isinstance`/`issubclass` runtime type checks share single-type and tuple forms in one module fixture, with function containers retaining case-level assertions.
-- Python class-header type references share single-base, multiple-base, and metaclass forms in one module fixture, distinguished by class container.
+- Python class-header type references share single-base, multiple-base, and metaclass forms in one module fixture, distinguished by class container; a dedicated capped-output fixture also locks multiline class-header remapping after the reference limit is reached.
 - Python annotation coverage shares direct and generic return, parameter, and local-variable forms in one module fixture, with function containers preserving each assertion.
 - Python semantic-type symbol coverage shares PEP 695 aliases, `TypeAlias`, `NewType`, `TypeVar`, `ParamSpec`, `TypeVarTuple`, and real imports in one module fixture, asserting dedicated kinds and import-filter exclusion; typing-factory reference coverage keeps unique target types in its shared module fixture.
 - Python advanced-typing coverage shares multiline/commented `TypeVar`, `ParamSpec`, callable annotations, variadic tuple unpacking, and literal unions in one logical-header fixture with unique type names.
@@ -1598,7 +1598,7 @@ dotnet test --filter "FullyQualifiedName~GitHelperTests"
 - C# constructor の base-target coverage は generic、interface list、nested generic、multiline、constraint 付き layout を1つの fixture で共有し、一意な末尾型ごとに書き換え後の edge を検証します。
 - C# multiline member 帰属テストは expression-bodied method/property、Allman/same-line brace、途中の block comment を1つの fixture で共有し、一意な member container ごとに検証します。
 - Python の `isinstance`/`issubclass` runtime type check は単一型と tuple 形式を1つの module fixture で共有し、function container ごとの検証を維持します。
-- Python class header の type reference は単一 base、複数 base、metaclass 形式を1つの module fixture で共有し、class container で区別します。
+- Python class header の type reference は単一 base、複数 base、metaclass 形式を1つの module fixture で共有して class container で区別し、専用の capped-output fixture で reference limit 到達後の multiline class-header remap も固定します。
 - Python annotation coverage は direct/generic の return、parameter、local variable 形式を1つの module fixture で共有し、function container ごとの検証を維持します。
 - Python semantic-type symbol coverage は PEP 695 alias、`TypeAlias`、`NewType`、`TypeVar`、`ParamSpec`、`TypeVarTuple`、実際の import を1つの module fixture で共有し、専用 kind と import filter からの除外を検証します。typing factory の reference coverage は一意な target type を持つ共有 module fixture を維持します。
 - Python advanced typing coverage は multiline/comment 付き `TypeVar`、`ParamSpec`、callable annotation、variadic tuple unpack、literal union を一意な型名を持つ1つの logical-header fixture で共有します。

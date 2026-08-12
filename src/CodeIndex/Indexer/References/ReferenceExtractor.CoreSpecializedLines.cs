@@ -5,7 +5,7 @@ namespace CodeIndex.Indexer;
 
 public static partial class ReferenceExtractor
 {
-    private static void EmitJsxElementReferences(CoreReferenceLineContext line)
+    private static void EmitJsxElementReferences(in CoreReferenceLineContext line)
     {
         if (line.PreparedLine.IndexOf('<') < 0)
             return;
@@ -77,7 +77,7 @@ public static partial class ReferenceExtractor
     }
 
     private static void EmitInfrastructureLineReferences(
-        CoreReferenceLineContext line,
+        in CoreReferenceLineContext line,
         HashSet<string>? dockerfileStageNames,
         HashSet<string>? dockerfileVariableNames,
         IReadOnlyList<SymbolRecord>? cobolCallableSymbols)
@@ -133,7 +133,7 @@ public static partial class ReferenceExtractor
     }
 
     private static HashSet<int>? EmitSqlLineReferences(
-        CoreReferenceLineContext line,
+        in CoreReferenceLineContext line,
         string structuralLine,
         SqlReferenceExtractor.State? sqlState,
         CoreLineDefinitionState definitionState)
@@ -158,7 +158,8 @@ public static partial class ReferenceExtractor
                     callIndex));
     }
 
-    private static void EmitParenlessInitializerReferences(CoreReferenceLineContext line)
+    private static void EmitParenlessInitializerReferences(
+        in CoreReferenceLineContext line)
     {
         if (line.PreparedLine.IndexOf("new", StringComparison.Ordinal) < 0)
             return;
@@ -274,7 +275,8 @@ public static partial class ReferenceExtractor
         }
     }
 
-    private static void EmitPhpAndScssLineReferences(CoreReferenceLineContext line)
+    private static void EmitPhpAndScssLineReferences(
+        in CoreReferenceLineContext line)
     {
         if (line.Language == "css")
         {

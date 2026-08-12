@@ -121,13 +121,34 @@ public static partial class ReferenceExtractor
     }
 
     private readonly record struct CorePreparedReferenceLine(
-        CoreReferenceLineContext Line,
         string OriginalLineForLanguage,
         List<(int start, int end)>? CSharpAttributeRanges,
         List<(int start, int end)>? CSharpAttributeTopLevelRanges,
         CoreLineDefinitionState DefinitionState,
         (SymbolRecord Synthetic, int NameIndex, int OpenBraceIndex, int CloseBraceIndex)? JavaSameLineCtor,
-        CoreReferenceLineContainerResolver ContainerResolver);
+        CoreReferenceLineContainerResolver ContainerResolver)
+    {
+        public readonly CoreReferenceLineContext Line;
+
+        public CorePreparedReferenceLine(
+            in CoreReferenceLineContext line,
+            string originalLineForLanguage,
+            List<(int start, int end)>? cSharpAttributeRanges,
+            List<(int start, int end)>? cSharpAttributeTopLevelRanges,
+            CoreLineDefinitionState definitionState,
+            (SymbolRecord Synthetic, int NameIndex, int OpenBraceIndex, int CloseBraceIndex)? javaSameLineCtor,
+            CoreReferenceLineContainerResolver containerResolver)
+            : this(
+                originalLineForLanguage,
+                cSharpAttributeRanges,
+                cSharpAttributeTopLevelRanges,
+                definitionState,
+                javaSameLineCtor,
+                containerResolver)
+        {
+            Line = line;
+        }
+    }
 
     private static CSharpMultiLineTypePatternState EmitCoreReferenceLines(
         CoreReferenceLoopContext loop)
