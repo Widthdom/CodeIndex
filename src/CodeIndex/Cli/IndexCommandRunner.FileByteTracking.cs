@@ -93,94 +93,113 @@ public static partial class IndexCommandRunner
         }
     }
 
-    private static bool ShouldUseFullScanFtsBulkLoad(
-        bool rebuild,
-        bool startedWithNoIndexedFiles,
-        int extractionWorkItemCount,
-        FilePurgePlan staleFilePurgePlan,
-        bool scanHadErrors,
-        ReadableFileByteTracker readableFileBytes,
-        ReusableIndexedFileStatsSnapshot reusableIndexedFileStats,
-        IReadOnlyList<FullScanFileTarget> fileTargets,
-        IReadOnlyList<int>? extractionFileIndexes,
-        Action throwIfCancelled)
+    private sealed partial class FullScanPreWriteSession
     {
-        if (rebuild || startedWithNoIndexedFiles)
-            return true;
-        if (extractionWorkItemCount == 0 && staleFilePurgePlan.Count == 0)
-            return false;
-
-        var dirtyBytes = staleFilePurgePlan.DeletedBytes;
-        var persistedSizeExcessBytes = 0L;
-        var byteEstimateComplete = !scanHadErrors
-            && staleFilePurgePlan.ByteEstimateComplete
-            && readableFileBytes.EstimateComplete;
-
-        void AddDirtyFileBytes(int fileIndex)
+        internal void DecideFtsBulkLoad()
         {
-            throwIfCancelled();
-            try
+            var request = Request;
+            var options = request.Core.Options;
+            var baseline = request.Baseline;
+            var runtime = request.Runtime;
+            var scan = State.Scan;
+            var csharp = State.CSharp;
+            var selection = State.Selection;
+            if (options.Rebuild || baseline.StartedWithNoIndexedFiles)
             {
-                var target = fileTargets[fileIndex];
-                var info = new FileInfo(target.FilePath);
-                if (!info.Exists || info.Length < 0)
-                {
-                    byteEstimateComplete = false;
-                    return;
-                }
+                selection.UseFtsBulkLoad = true;
+                return;
+            }
 
-                readableFileBytes.Remember(fileIndex, info.Length);
-                var persistedSize = reusableIndexedFileStats.GetPersistedSize(target.IndexPath);
-                if (!FtsBulkLoadTriggerGuard.TryAccumulateDirtyFileBytes(
-                        dirtyBytes,
-                        persistedSizeExcessBytes,
-                        info.Length,
-                        persistedSize,
-                        out dirtyBytes,
-                        out persistedSizeExcessBytes))
+            if (selection.ExtractionWorkItemCount == 0
+                && scan.StaleFilePurgePlan.Count == 0)
+            {
+                selection.UseFtsBulkLoad = false;
+                return;
+            }
+
+            var dirtyBytes = scan.StaleFilePurgePlan.DeletedBytes;
+            var persistedSizeExcessBytes = 0L;
+            var byteEstimateComplete = !baseline.ScanHadErrors
+                && scan.StaleFilePurgePlan.ByteEstimateComplete
+                && selection.ReadableFileBytes.EstimateComplete;
+
+            void AddDirtyFileBytes(int fileIndex)
+            {
+                ThrowIfFullScanCancelled();
+                try
+                {
+                    var target = runtime.FileTargets[fileIndex];
+                    var info = new FileInfo(target.FilePath);
+                    if (!info.Exists || info.Length < 0)
+                    {
+                        byteEstimateComplete = false;
+                        return;
+                    }
+
+                    selection.ReadableFileBytes.Remember(
+                        fileIndex,
+                        info.Length);
+                    var persistedSize = csharp.ReusableIndexedFileStats!
+                        .GetPersistedSize(target.IndexPath);
+                    if (!FtsBulkLoadTriggerGuard.TryAccumulateDirtyFileBytes(
+                            dirtyBytes,
+                            persistedSizeExcessBytes,
+                            info.Length,
+                            persistedSize,
+                            out dirtyBytes,
+                            out persistedSizeExcessBytes))
+                    {
+                        byteEstimateComplete = false;
+                    }
+                }
+                catch (Exception ex) when (
+                    ex is IOException
+                        or UnauthorizedAccessException
+                        or NotSupportedException
+                        or ArgumentException)
                 {
                     byteEstimateComplete = false;
                 }
             }
-            catch (Exception ex) when (
-                ex is IOException
-                    or UnauthorizedAccessException
-                    or NotSupportedException
-                    or ArgumentException)
+
+            if (selection.ExtractionFileIndexes != null)
+            {
+                foreach (var fileIndex in selection.ExtractionFileIndexes)
+                    AddDirtyFileBytes(fileIndex);
+            }
+            else
+            {
+                for (var fileIndex = 0;
+                     fileIndex < runtime.FileTargets.Length;
+                     fileIndex++)
+                {
+                    AddDirtyFileBytes(fileIndex);
+                }
+            }
+
+            byteEstimateComplete &=
+                selection.ReadableFileBytes.EstimateComplete;
+            var totalBytes = selection.ReadableFileBytes.KnownBytes;
+            if (!selection.ReadableFileBytes.EstimateComplete
+                || totalBytes
+                > long.MaxValue - scan.StaleFilePurgePlan.DeletedBytes)
             {
                 byteEstimateComplete = false;
             }
-        }
+            else
+            {
+                totalBytes += scan.StaleFilePurgePlan.DeletedBytes;
+            }
 
-        if (extractionFileIndexes != null)
-        {
-            foreach (var fileIndex in extractionFileIndexes)
-                AddDirtyFileBytes(fileIndex);
-        }
-        else
-        {
-            for (var fileIndex = 0; fileIndex < fileTargets.Count; fileIndex++)
-                AddDirtyFileBytes(fileIndex);
-        }
+            if (totalBytes > long.MaxValue - persistedSizeExcessBytes)
+                byteEstimateComplete = false;
+            else
+                totalBytes += persistedSizeExcessBytes;
 
-        byteEstimateComplete &= readableFileBytes.EstimateComplete;
-        var totalBytes = readableFileBytes.KnownBytes;
-        if (!readableFileBytes.EstimateComplete
-            || totalBytes > long.MaxValue - staleFilePurgePlan.DeletedBytes)
-        {
-            byteEstimateComplete = false;
+            selection.UseFtsBulkLoad = byteEstimateComplete
+                && FtsBulkLoadTriggerGuard.ShouldUseForDirtyBytes(
+                    dirtyBytes,
+                    totalBytes);
         }
-        else
-        {
-            totalBytes += staleFilePurgePlan.DeletedBytes;
-        }
-
-        if (totalBytes > long.MaxValue - persistedSizeExcessBytes)
-            byteEstimateComplete = false;
-        else
-            totalBytes += persistedSizeExcessBytes;
-
-        return byteEstimateComplete
-            && FtsBulkLoadTriggerGuard.ShouldUseForDirtyBytes(dirtyBytes, totalBytes);
     }
 }

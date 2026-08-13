@@ -5,399 +5,375 @@ namespace CodeIndex.Cli;
 
 public static partial class IndexCommandRunner
 {
-    private sealed class FullScanTargetSelectionContext
+    private sealed partial class FullScanPreWriteSession
     {
-        internal required DbWriter Writer { get; init; }
-        internal required FileIndexer Indexer { get; init; }
-        internal required IndexCommandOptions Options { get; init; }
-        internal required string ProjectRoot { get; init; }
-        internal required FullScanFileTarget[] FileTargets { get; init; }
-        internal required IReadOnlyList<CSharpStaticInterfacePrepass.FileTarget>
-            CSharpPrepassTargets
-        { get; init; }
-        internal required FilePurgePlan StaleFilePurgePlan { get; init; }
-        internal required bool CanSkipTargetsBeforeContentLoad { get; init; }
-        internal required bool StartedWithNoIndexedFiles { get; init; }
-        internal required bool CSharpIndexedProjectRootCompatible
+        internal void PrepareExtractionTargets()
         {
-            get;
-            init;
-        }
-
-        internal required int ExtractionParallelism { get; init; }
-        internal required bool? PriorCSharpStaticInterfaceSourceEvidence
-        {
-            get;
-            init;
-        }
-
-        internal required CSharpStaticInterfaceWorkspaceSymbols CSharpWorkspace
-        {
-            get;
-            init;
-        }
-
-        internal Dictionary<string, CSharpStaticInterfacePrepass.FileStatSnapshot>?
-            CSharpWorkspaceFileSnapshots
-        { get; init; }
-        internal required bool ForceFullCSharpRefreshFromInvalidatedNoOp
-        {
-            get;
-            init;
-        }
-
-        internal required bool PreservePriorPositiveCSharpSourceNoOp
-        {
-            get;
-            init;
-        }
-
-        internal required bool CSharpSourceEvidenceForStamp { get; init; }
-        internal required bool CSharpSourceEvidenceComplete { get; init; }
-        internal required CancellationToken CancellationToken { get; init; }
-        internal required Action ThrowIfFullScanCancelled { get; init; }
-        internal required Func<bool>
-            GetDeferCSharpMutationsForIncompleteScan
-        { get; init; }
-        internal required Func<int, bool, IndexedFileStatReuseResult?>
-            GetFullScanTargetStatMatch
-        { get; init; }
-        internal required Action<int, IndexedFileStatReuseResult>
-            RecordFullScanTargetStatSkip
-        { get; init; }
-        internal required Action<CSharpStaticInterfaceWorkspaceSymbols>
-            DeferCSharpMutationsForIncompleteWorkspace
-        { get; init; }
-        internal required Func<string, bool>
-            IsExistingCSharpSymbolPathNowNonCSharp
-        { get; init; }
-    }
-
-    private sealed class FullScanTargetSelectionState
-    {
-        internal List<int>? ExtractionFileIndexes { get; set; }
-        internal int ExtractionWorkItemCount { get; set; }
-        internal required CSharpStaticInterfaceWorkspaceSymbols CSharpWorkspace
-        {
-            get;
-            set;
-        }
-
-        internal Dictionary<string, CSharpStaticInterfacePrepass.FileStatSnapshot>?
-            CSharpWorkspaceFileSnapshots
-        { get; set; }
-        internal bool ForceFullCSharpRefreshFromInvalidatedNoOp { get; set; }
-        internal bool PreservePriorPositiveCSharpSourceNoOp { get; set; }
-        internal bool CSharpSourceEvidenceForStamp { get; set; }
-        internal bool CSharpSourceEvidenceComplete { get; set; }
-    }
-
-    private sealed record FullScanTargetSelectionResult(
-        List<int>? ExtractionFileIndexes,
-        int ExtractionWorkItemCount,
-        CSharpStaticInterfaceWorkspaceSymbols CSharpWorkspace,
-        Dictionary<string, CSharpStaticInterfacePrepass.FileStatSnapshot>?
-            CSharpWorkspaceFileSnapshots,
-        bool ForceFullCSharpRefreshFromInvalidatedNoOp,
-        bool PreservePriorPositiveCSharpSourceNoOp,
-        bool CSharpSourceEvidenceForStamp,
-        bool CSharpSourceEvidenceComplete);
-
-    private static FullScanTargetSelectionResult
-        PrepareFullScanExtractionTargets(
-            FullScanTargetSelectionContext context)
-    {
-        context.ThrowIfFullScanCancelled();
-        var state = new FullScanTargetSelectionState
-        {
-            CSharpWorkspace = context.CSharpWorkspace,
-            CSharpWorkspaceFileSnapshots =
-                context.CSharpWorkspaceFileSnapshots,
-            ForceFullCSharpRefreshFromInvalidatedNoOp =
-                context.ForceFullCSharpRefreshFromInvalidatedNoOp,
-            PreservePriorPositiveCSharpSourceNoOp =
-                context.PreservePriorPositiveCSharpSourceNoOp,
-            CSharpSourceEvidenceForStamp =
-                context.CSharpSourceEvidenceForStamp,
-            CSharpSourceEvidenceComplete =
-                context.CSharpSourceEvidenceComplete,
-        };
-
-        if (context.CanSkipTargetsBeforeContentLoad)
-        {
-            SelectReusableFullScanTargets(context, state);
-        }
-        else if (context.GetDeferCSharpMutationsForIncompleteScan())
-        {
-            SelectFullScanTargetsWithDeferredCSharp(context, state);
-        }
-        else
-        {
-            state.ExtractionWorkItemCount = context.FileTargets.Length;
-        }
-
-        return new FullScanTargetSelectionResult(
-            state.ExtractionFileIndexes,
-            state.ExtractionWorkItemCount,
-            state.CSharpWorkspace,
-            state.CSharpWorkspaceFileSnapshots,
-            state.ForceFullCSharpRefreshFromInvalidatedNoOp,
-            state.PreservePriorPositiveCSharpSourceNoOp,
-            state.CSharpSourceEvidenceForStamp,
-            state.CSharpSourceEvidenceComplete);
-    }
-
-    private static void SelectReusableFullScanTargets(
-        FullScanTargetSelectionContext context,
-        FullScanTargetSelectionState state)
-    {
-        var fileTargets = context.FileTargets;
-        var statPreflightMatched = new bool[fileTargets.Length];
-        var csharpNoOpHasInterveningWork =
-            context.StaleFilePurgePlan.Count > 0;
-        for (var fileIndex = 0; fileIndex < fileTargets.Length; fileIndex++)
-        {
-            context.ThrowIfFullScanCancelled();
-            if (context.GetDeferCSharpMutationsForIncompleteScan()
-                && fileTargets[fileIndex].Language == "csharp")
+            ThrowIfFullScanCancelled();
+            var selection = State.Selection;
+            if (Request.Reuse.CanSkipTargetsBeforeContentLoad)
             {
-                continue;
+                SelectReusableFullScanTargets();
             }
-
-            statPreflightMatched[fileIndex] =
-                context.GetFullScanTargetStatMatch(
-                    fileIndex,
-                    true) != null;
-            if (!statPreflightMatched[fileIndex])
-                csharpNoOpHasInterveningWork = true;
-        }
-
-        var revalidatedMatches =
-            new IndexedFileStatReuseResult?[fileTargets.Length];
-        RevalidateNonCSharpFullScanTargets(
-            context,
-            statPreflightMatched,
-            revalidatedMatches,
-            ref csharpNoOpHasInterveningWork);
-        var preservedCSharpNoOpInvalidated =
-            RevalidateCSharpFullScanTargets(
-                context,
-                state,
-                statPreflightMatched,
-                revalidatedMatches,
-                csharpNoOpHasInterveningWork);
-        if (preservedCSharpNoOpInvalidated)
-        {
-            RebuildInvalidatedFullScanCSharpNoOp(
-                context,
-                state,
-                revalidatedMatches);
-        }
-
-        state.ExtractionFileIndexes =
-            new List<int>(fileTargets.Length);
-        for (var fileIndex = 0; fileIndex < fileTargets.Length; fileIndex++)
-        {
-            context.ThrowIfFullScanCancelled();
-            if (context.GetDeferCSharpMutationsForIncompleteScan()
-                && fileTargets[fileIndex].Language == "csharp")
+            else if (State.Scan.DeferCSharpMutationsForIncompleteScan)
             {
-                RecordDeferredFullScanCSharpTarget(context, fileIndex);
-                continue;
-            }
-
-            var revalidated = revalidatedMatches[fileIndex];
-            if (revalidated != null)
-            {
-                context.RecordFullScanTargetStatSkip(
-                    fileIndex,
-                    revalidated.Value);
+                SelectFullScanTargetsWithDeferredCSharp();
             }
             else
             {
-                state.ExtractionFileIndexes.Add(fileIndex);
+                selection.ExtractionWorkItemCount =
+                    Request.Runtime.FileTargets.Length;
             }
         }
 
-        state.ExtractionWorkItemCount =
-            state.ExtractionFileIndexes.Count;
-    }
-
-    private static void RevalidateNonCSharpFullScanTargets(
-        FullScanTargetSelectionContext context,
-        IReadOnlyList<bool> statPreflightMatched,
-        IList<IndexedFileStatReuseResult?> revalidatedMatches,
-        ref bool csharpNoOpHasInterveningWork)
-    {
-        for (var fileIndex = 0;
-             fileIndex < context.FileTargets.Length;
-             fileIndex++)
+        private void SelectReusableFullScanTargets()
         {
-            context.ThrowIfFullScanCancelled();
-            if (context.FileTargets[fileIndex].Language == "csharp")
-                continue;
-
-            var revalidated = statPreflightMatched[fileIndex]
-                ? context.GetFullScanTargetStatMatch(fileIndex, false)
-                : null;
-            revalidatedMatches[fileIndex] = revalidated;
-            if (revalidated == null)
-                csharpNoOpHasInterveningWork = true;
-        }
-    }
-
-    private static bool RevalidateCSharpFullScanTargets(
-        FullScanTargetSelectionContext context,
-        FullScanTargetSelectionState state,
-        IReadOnlyList<bool> statPreflightMatched,
-        IList<IndexedFileStatReuseResult?> revalidatedMatches,
-        bool csharpNoOpHasInterveningWork)
-    {
-        var preservedCSharpNoOpInvalidated = false;
-        for (var fileIndex = 0;
-             fileIndex < context.FileTargets.Length;
-             fileIndex++)
-        {
-            context.ThrowIfFullScanCancelled();
-            if (context.FileTargets[fileIndex].Language != "csharp"
-                || context.GetDeferCSharpMutationsForIncompleteScan())
+            var fileTargets = Request.Runtime.FileTargets;
+            var statPreflightMatched = new bool[fileTargets.Length];
+            var csharpNoOpHasInterveningWork =
+                State.Scan.StaleFilePurgePlan.Count > 0;
+            for (var fileIndex = 0;
+                 fileIndex < fileTargets.Length;
+                 fileIndex++)
             {
-                continue;
+                ThrowIfFullScanCancelled();
+                if (State.Scan.DeferCSharpMutationsForIncompleteScan
+                    && fileTargets[fileIndex].Language == "csharp")
+                {
+                    continue;
+                }
+
+                statPreflightMatched[fileIndex] =
+                    GetFullScanTargetStatMatch(fileIndex, true) != null;
+                if (!statPreflightMatched[fileIndex])
+                    csharpNoOpHasInterveningWork = true;
             }
 
-            var revalidated = statPreflightMatched[fileIndex]
-                ? context.GetFullScanTargetStatMatch(
-                    fileIndex,
-                    state.PreservePriorPositiveCSharpSourceNoOp
-                    && !csharpNoOpHasInterveningWork)
-                : null;
-            revalidatedMatches[fileIndex] = revalidated;
-            if (state.PreservePriorPositiveCSharpSourceNoOp
-                && revalidated == null)
+            var revalidatedMatches =
+                new IndexedFileStatReuseResult?[fileTargets.Length];
+            RevalidateNonCSharpFullScanTargets(
+                statPreflightMatched,
+                revalidatedMatches,
+                ref csharpNoOpHasInterveningWork);
+            var preservedCSharpNoOpInvalidated =
+                RevalidateCSharpFullScanTargets(
+                    statPreflightMatched,
+                    revalidatedMatches,
+                    csharpNoOpHasInterveningWork);
+            if (preservedCSharpNoOpInvalidated)
+                RebuildInvalidatedFullScanCSharpNoOp(revalidatedMatches);
+
+            var selection = State.Selection;
+            selection.ExtractionFileIndexes =
+                new List<int>(fileTargets.Length);
+            for (var fileIndex = 0;
+                 fileIndex < fileTargets.Length;
+                 fileIndex++)
             {
-                preservedCSharpNoOpInvalidated = true;
+                ThrowIfFullScanCancelled();
+                if (State.Scan.DeferCSharpMutationsForIncompleteScan
+                    && fileTargets[fileIndex].Language == "csharp")
+                {
+                    RecordDeferredFullScanCSharpTarget(fileIndex);
+                    continue;
+                }
+
+                var revalidated = revalidatedMatches[fileIndex];
+                if (revalidated != null)
+                {
+                    RecordFullScanTargetStatSkip(
+                        fileIndex,
+                        revalidated.Value);
+                }
+                else
+                {
+                    selection.ExtractionFileIndexes.Add(fileIndex);
+                }
             }
+
+            selection.ExtractionWorkItemCount =
+                selection.ExtractionFileIndexes.Count;
         }
 
-        return preservedCSharpNoOpInvalidated;
-    }
-
-    private static void RebuildInvalidatedFullScanCSharpNoOp(
-        FullScanTargetSelectionContext context,
-        FullScanTargetSelectionState state,
-        IList<IndexedFileStatReuseResult?> revalidatedMatches)
-    {
-        state.CSharpWorkspace = BuildStableFullScanCSharpWorkspace(
-            context.ProjectRoot,
-            context.CSharpPrepassTargets,
-            out var workspaceFileSnapshots,
-            () => CSharpStaticInterfacePrepass.BuildWorkspaceSymbols(
-                context.Writer,
-                context.Indexer,
-                context.CSharpPrepassTargets,
-                includeExistingSymbols:
-                    context.CSharpIndexedProjectRootCompatible
-                    && !context.Options.Rebuild
-                    && !context.StartedWithNoIndexedFiles,
-                canReuseExistingSymbolsWithoutRead: null,
-                parallelism: context.ExtractionParallelism,
-                excludedExistingFileIds:
-                    context.StaleFilePurgePlan.FileIds,
-                isExistingSymbolPathExcluded:
-                    context.IsExistingCSharpSymbolPathNowNonCSharp,
-                patternConfigsAlreadyLoaded: true,
-                cancellationToken: context.CancellationToken),
-            context.CancellationToken);
-        state.CSharpWorkspaceFileSnapshots = workspaceFileSnapshots;
-        state.PreservePriorPositiveCSharpSourceNoOp = false;
-        if (!state.CSharpWorkspace.SourceContractEvidenceComplete)
+        private void RevalidateNonCSharpFullScanTargets(
+            IReadOnlyList<bool> statPreflightMatched,
+            IList<IndexedFileStatReuseResult?> revalidatedMatches,
+            ref bool csharpNoOpHasInterveningWork)
         {
-            var incompleteSourcePaths =
-                state.CSharpWorkspace.IncompleteSourcePaths;
-            context.DeferCSharpMutationsForIncompleteWorkspace(
-                state.CSharpWorkspace);
-            state.CSharpSourceEvidenceForStamp = false;
-            state.CSharpSourceEvidenceComplete = false;
-            state.CSharpWorkspace =
-                new CSharpStaticInterfaceWorkspaceSymbols(
-                    [],
-                    false,
-                    SourceContractEvidenceComplete: false,
-                    IncompleteSourcePaths: incompleteSourcePaths);
-            return;
-        }
-
-        var requiresFullCSharpRefresh =
-            context.PriorCSharpStaticInterfaceSourceEvidence == true
-            || state.CSharpWorkspace.HasStaticInterfaceContracts
-            || state.CSharpWorkspace
-                .RequiresMemberReadReferenceRefresh;
-        state.ForceFullCSharpRefreshFromInvalidatedNoOp =
-            requiresFullCSharpRefresh;
-        state.CSharpSourceEvidenceForStamp =
-            state.CSharpWorkspace.HasSourceStaticInterfaceContracts;
-        state.CSharpSourceEvidenceComplete = true;
-        if (!requiresFullCSharpRefresh)
-            return;
-
-        state.CSharpWorkspace = state.CSharpWorkspace with
-        {
-            HasStaticInterfaceContracts = true,
-        };
-        for (var fileIndex = 0;
-             fileIndex < context.FileTargets.Length;
-             fileIndex++)
-        {
-            if (context.FileTargets[fileIndex].Language == "csharp")
-                revalidatedMatches[fileIndex] = null;
-        }
-    }
-
-    private static void SelectFullScanTargetsWithDeferredCSharp(
-        FullScanTargetSelectionContext context,
-        FullScanTargetSelectionState state)
-    {
-        state.ExtractionFileIndexes =
-            new List<int>(context.FileTargets.Length);
-        for (var fileIndex = 0;
-             fileIndex < context.FileTargets.Length;
-             fileIndex++)
-        {
-            if (context.FileTargets[fileIndex].Language != "csharp")
+            var fileTargets = Request.Runtime.FileTargets;
+            for (var fileIndex = 0;
+                 fileIndex < fileTargets.Length;
+                 fileIndex++)
             {
-                state.ExtractionFileIndexes.Add(fileIndex);
-                continue;
+                ThrowIfFullScanCancelled();
+                if (fileTargets[fileIndex].Language == "csharp")
+                    continue;
+
+                var revalidated = statPreflightMatched[fileIndex]
+                    ? GetFullScanTargetStatMatch(fileIndex, false)
+                    : null;
+                revalidatedMatches[fileIndex] = revalidated;
+                if (revalidated == null)
+                    csharpNoOpHasInterveningWork = true;
+            }
+        }
+
+        private bool RevalidateCSharpFullScanTargets(
+            IReadOnlyList<bool> statPreflightMatched,
+            IList<IndexedFileStatReuseResult?> revalidatedMatches,
+            bool csharpNoOpHasInterveningWork)
+        {
+            var fileTargets = Request.Runtime.FileTargets;
+            var csharp = State.CSharp;
+            var preservedCSharpNoOpInvalidated = false;
+            for (var fileIndex = 0;
+                 fileIndex < fileTargets.Length;
+                 fileIndex++)
+            {
+                ThrowIfFullScanCancelled();
+                if (fileTargets[fileIndex].Language != "csharp"
+                    || State.Scan.DeferCSharpMutationsForIncompleteScan)
+                {
+                    continue;
+                }
+
+                var revalidated = statPreflightMatched[fileIndex]
+                    ? GetFullScanTargetStatMatch(
+                        fileIndex,
+                        csharp.PreservePriorPositiveSourceNoOp
+                        && !csharpNoOpHasInterveningWork)
+                    : null;
+                revalidatedMatches[fileIndex] = revalidated;
+                if (csharp.PreservePriorPositiveSourceNoOp
+                    && revalidated == null)
+                {
+                    preservedCSharpNoOpInvalidated = true;
+                }
             }
 
-            RecordDeferredFullScanCSharpTarget(context, fileIndex);
+            return preservedCSharpNoOpInvalidated;
         }
 
-        state.ExtractionWorkItemCount =
-            state.ExtractionFileIndexes.Count;
-    }
-
-    private static void RecordDeferredFullScanCSharpTarget(
-        FullScanTargetSelectionContext context,
-        int fileIndex)
-    {
-        long currentSize = 0;
-        try
+        private void RebuildInvalidatedFullScanCSharpNoOp(
+            IList<IndexedFileStatReuseResult?> revalidatedMatches)
         {
-            var info = new FileInfo(
-                context.FileTargets[fileIndex].FilePath);
-            if (info.Exists && info.Length >= 0)
-                currentSize = info.Length;
-        }
-        catch (Exception ex) when (
-            ex is IOException
-                or UnauthorizedAccessException
-                or NotSupportedException
-                or ArgumentException)
-        {
+            var request = Request;
+            var core = request.Core;
+            var baseline = request.Baseline;
+            var contracts = request.Contracts;
+            var runtime = request.Runtime;
+            var scan = State.Scan;
+            var csharp = State.CSharp;
+            csharp.Workspace = BuildStableFullScanCSharpWorkspace(
+                core.ProjectRoot,
+                runtime.CSharpPrepassTargets,
+                out var workspaceFileSnapshots,
+                () => CSharpStaticInterfacePrepass.BuildWorkspaceSymbols(
+                    core.Writer,
+                    core.Indexer,
+                    runtime.CSharpPrepassTargets,
+                    includeExistingSymbols:
+                        contracts.CSharpIndexedProjectRootCompatible
+                        && !core.Options.Rebuild
+                        && !baseline.StartedWithNoIndexedFiles,
+                    canReuseExistingSymbolsWithoutRead: null,
+                    parallelism: runtime.ExtractionParallelism,
+                    excludedExistingFileIds:
+                        scan.StaleFilePurgePlan.FileIds,
+                    isExistingSymbolPathExcluded:
+                        IsExistingCSharpSymbolPathNowNonCSharp,
+                    patternConfigsAlreadyLoaded: true,
+                    cancellationToken: runtime.CancellationToken),
+                runtime.CancellationToken);
+            csharp.WorkspaceFileSnapshots = workspaceFileSnapshots;
+            csharp.PreservePriorPositiveSourceNoOp = false;
+            if (!csharp.Workspace.SourceContractEvidenceComplete)
+            {
+                var incompleteSourcePaths =
+                    csharp.Workspace.IncompleteSourcePaths;
+                DeferCSharpMutationsForIncompleteWorkspace(csharp.Workspace);
+                csharp.Evidence.ForStamp = false;
+                csharp.Evidence.Complete = false;
+                csharp.Workspace =
+                    new CSharpStaticInterfaceWorkspaceSymbols(
+                        [],
+                        false,
+                        SourceContractEvidenceComplete: false,
+                        IncompleteSourcePaths: incompleteSourcePaths);
+                return;
+            }
+
+            var requiresFullCSharpRefresh =
+                baseline.PriorCSharpStaticInterfaceSourceEvidence == true
+                || csharp.Workspace.HasStaticInterfaceContracts
+                || csharp.Workspace.RequiresMemberReadReferenceRefresh;
+            csharp.ForceFullRefreshFromInvalidatedNoOp =
+                requiresFullCSharpRefresh;
+            csharp.Evidence.ForStamp =
+                csharp.Workspace.HasSourceStaticInterfaceContracts;
+            csharp.Evidence.Complete = true;
+            if (!requiresFullCSharpRefresh)
+                return;
+
+            csharp.Workspace = csharp.Workspace with
+            {
+                HasStaticInterfaceContracts = true,
+            };
+            for (var fileIndex = 0;
+                 fileIndex < runtime.FileTargets.Length;
+                 fileIndex++)
+            {
+                if (runtime.FileTargets[fileIndex].Language == "csharp")
+                    revalidatedMatches[fileIndex] = null;
+            }
         }
 
-        context.RecordFullScanTargetStatSkip(
-            fileIndex,
-            new IndexedFileStatReuseResult(0, currentSize));
+        private void SelectFullScanTargetsWithDeferredCSharp()
+        {
+            var fileTargets = Request.Runtime.FileTargets;
+            var selection = State.Selection;
+            selection.ExtractionFileIndexes =
+                new List<int>(fileTargets.Length);
+            for (var fileIndex = 0;
+                 fileIndex < fileTargets.Length;
+                 fileIndex++)
+            {
+                if (fileTargets[fileIndex].Language != "csharp")
+                {
+                    selection.ExtractionFileIndexes.Add(fileIndex);
+                    continue;
+                }
+
+                RecordDeferredFullScanCSharpTarget(fileIndex);
+            }
+
+            selection.ExtractionWorkItemCount =
+                selection.ExtractionFileIndexes.Count;
+        }
+
+        private void RecordDeferredFullScanCSharpTarget(int fileIndex)
+        {
+            long currentSize = 0;
+            try
+            {
+                var info = new FileInfo(
+                    Request.Runtime.FileTargets[fileIndex].FilePath);
+                if (info.Exists && info.Length >= 0)
+                    currentSize = info.Length;
+            }
+            catch (Exception ex) when (
+                ex is IOException
+                    or UnauthorizedAccessException
+                    or NotSupportedException
+                    or ArgumentException)
+            {
+            }
+
+            RecordFullScanTargetStatSkip(
+                fileIndex,
+                new IndexedFileStatReuseResult(0, currentSize));
+        }
+
+        private IndexedFileStatReuseResult? GetFullScanTargetStatMatch(
+            int fileIndex,
+            bool allowCSharpPrepassCache)
+        {
+            var request = Request;
+            var core = request.Core;
+            var baseline = request.Baseline;
+            var contracts = request.Contracts;
+            var reuse = request.Reuse;
+            if (!reuse.CanSkipTargetsBeforeContentLoad)
+                return null;
+
+            var csharp = State.CSharp;
+            var target = request.Runtime.FileTargets[fileIndex];
+            var language = target.Language;
+            var targetRequiresRefresh =
+                reuse.JavaScriptTypeScriptRefreshRequired
+                && (IsJavaScriptTypeScriptLanguage(language)
+                    || IsJavaScriptTypeScriptConfigPath(target.IndexPath));
+            var allowReuse = contracts.SymbolKindFilterMatchesPrior
+                && !targetRequiresRefresh
+                && !baseline.PriorSymbolsOnlyGraphOmitted
+                && (language != "csharp"
+                    || contracts.CSharpIndexedProjectRootCompatible)
+                && (language != "csharp"
+                    || contracts.CSharpSymbolNameContractMatchesCurrent)
+                && (language != "csharp"
+                    || !csharp.Workspace.HasStaticInterfaceContracts)
+                && (language != "sql"
+                    || reuse.SqlGraphContractMatchesCurrent)
+                && (language is not ("verilog" or "systemverilog" or "vhdl")
+                    || reuse.HdlGraphContractMatchesCurrent)
+                && AllowReuseWithCurrentHotspotFamilyTrust(
+                    language,
+                    reuse.HotspotFamilyTrustMatchesCurrent);
+            if (!allowReuse)
+                return null;
+
+            if (allowCSharpPrepassCache
+                && language == "csharp"
+                && csharp.CSharpPrepassStatReuse != null
+                && csharp.CSharpPrepassStatReuse.TryGetValue(
+                    target.IndexPath,
+                    out var cachedCSharpPrepassReuse))
+            {
+                return cachedCSharpPrepassReuse;
+            }
+
+            return IndexedFileStatReuse.TryGetReusableUnchangedFile(
+                csharp.ReusableIndexedFileStats!,
+                target.FilePath,
+                target.IndexPath,
+                language,
+                target.GeneratedExtractionSuppressed);
+        }
+
+        private void RecordFullScanTargetStatSkip(
+            int fileIndex,
+            IndexedFileStatReuseResult existingFile)
+        {
+            var runtime = Request.Runtime;
+            var options = Request.Core.Options;
+            var selection = State.Selection;
+            var target = runtime.FileTargets[fileIndex];
+            var language = target.Language;
+            selection.Skipped++;
+            selection.Processed++;
+            selection.ReadableFileBytes.Remember(fileIndex, existingFile.Size);
+            if (!string.IsNullOrWhiteSpace(language))
+            {
+                selection.SkippedSymbolExtractorLanguages ??=
+                    new HashSet<string>(StringComparer.Ordinal);
+                selection.SkippedSymbolExtractorLanguages.Add(language);
+            }
+
+            if (FileIndexer.SupportsHotspotFamilyMarkerLanguage(language)
+                && language != null)
+            {
+                selection.ReusedHotspotFamilyLanguages ??=
+                    new HashSet<string>(StringComparer.Ordinal);
+                selection.ReusedHotspotFamilyLanguages.Add(language);
+            }
+
+            if (options.Verbose && !options.Json && !options.Quiet)
+            {
+                CommandOutputWriter.WriteLine(
+                    $"  [SKIP] {target.IndexPath} (unchanged)");
+            }
+        }
+
+        private void ThrowIfFullScanCancelled()
+        {
+            var runtime = Request.Runtime;
+            if (!runtime.CancellationToken.IsCancellationRequested)
+                return;
+
+            throw new IndexInterruptedException(
+                State.Selection.Processed,
+                runtime.FilesCount,
+                runtime.ActualMode);
+        }
     }
 }

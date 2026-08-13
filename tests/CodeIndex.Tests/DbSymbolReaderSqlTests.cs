@@ -5,29 +5,27 @@ public class DbSymbolReaderSqlTests
     [Fact]
     public void HotspotFilteredCandidates_UseExplicitProjection()
     {
-        var source = RepositoryTestPaths.ReadText("src", "CodeIndex", "Database", "DbSymbolReader.Hotspots.cs");
-        var filteredBlocks = source
+        var source = RepositoryTestPaths.ReadText(
+            "src",
+            "CodeIndex",
+            "Database",
+            "DbSymbolReader.HotspotCandidates.cs");
+        var filteredBlock = Assert.Single(source
             .Replace("filtered_candidates AS MATERIALIZED (", "filtered_candidates AS (", StringComparison.Ordinal)
             .Split("filtered_candidates AS (", StringSplitOptions.None)
-            .Skip(1)
-            .ToList();
+            .Skip(1));
 
-        Assert.Equal(2, filteredBlocks.Count);
-        foreach (var block in filteredBlocks)
-        {
-            var projection = block[..block.IndexOf("FROM all_candidate_symbols", StringComparison.Ordinal)];
-            Assert.DoesNotContain("SELECT *", projection, StringComparison.Ordinal);
-            Assert.Contains("SELECT id,", projection, StringComparison.Ordinal);
-            Assert.Contains("file_id,", projection, StringComparison.Ordinal);
-            Assert.Contains("name,", projection, StringComparison.Ordinal);
-            Assert.Contains("kind,", projection, StringComparison.Ordinal);
-            Assert.Contains("path,", projection, StringComparison.Ordinal);
-            Assert.Contains("lang,", projection, StringComparison.Ordinal);
-            Assert.Contains("line,", projection, StringComparison.Ordinal);
-            Assert.Contains("visibility,", projection, StringComparison.Ordinal);
-            Assert.Contains("container_name,", projection, StringComparison.Ordinal);
-            Assert.Contains("logical_target_key", projection, StringComparison.Ordinal);
-        }
+        var projection = filteredBlock[..filteredBlock.IndexOf(
+            "FROM all_candidate_symbols",
+            StringComparison.Ordinal)];
+        Assert.DoesNotContain("SELECT *", projection, StringComparison.Ordinal);
+        Assert.Equal(
+            "SELECT id, file_id, name, kind, path, lang, line, visibility, container_name, logical_target_key",
+            string.Join(
+                ' ',
+                projection.Split(
+                    (char[]?)null,
+                    StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)));
     }
 
 }

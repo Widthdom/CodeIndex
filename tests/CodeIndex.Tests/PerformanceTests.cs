@@ -243,6 +243,56 @@ public class PerformanceTests : IDisposable
 #else
     [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
 #endif
+    public void SymbolExtraction_PatternContext_StaysWithinAllocationBudget()
+    {
+        const string content = "package sample\n\nfunc run() {}\n";
+        const int extractionCount = 4_096;
+        var symbols = SymbolExtractor.Extract(1, "go", content);
+        Assert.Contains(symbols, symbol => symbol.Kind == "function" && symbol.Name == "run");
+        for (var iteration = 0; iteration < 32; iteration++)
+            _ = SymbolExtractor.Extract(1, "go", content);
+
+        var allocatedBytes = MeasureAllocatedBytes(() =>
+        {
+            for (var iteration = 0; iteration < extractionCount; iteration++)
+                _ = SymbolExtractor.Extract(1, "go", content);
+        });
+
+        Assert.True(
+            allocatedBytes < 16_730_000,
+            $"Pattern extraction allocated {allocatedBytes:N0} bytes for {extractionCount:N0} files");
+    }
+
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
+    public void StructuralLineMasking_JvmTripleStrings_StaysWithinAllocationBudget()
+    {
+        string[] lines = ["val value = \"\"\"literal\"\"\""];
+        const int maskingCount = 4_096;
+        var masked = StructuralLineMasker.MaskLines("kotlin", lines);
+        Assert.DoesNotContain("literal", masked[0], StringComparison.Ordinal);
+        for (var iteration = 0; iteration < 32; iteration++)
+            _ = StructuralLineMasker.MaskLines("kotlin", lines);
+
+        var allocatedBytes = MeasureAllocatedBytes(() =>
+        {
+            for (var iteration = 0; iteration < maskingCount; iteration++)
+                _ = StructuralLineMasker.MaskLines("kotlin", lines);
+        });
+
+        Assert.True(
+            allocatedBytes < 1_000_000,
+            $"JVM triple-string masking allocated {allocatedBytes:N0} bytes for {maskingCount:N0} calls");
+    }
+
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
     public void SymbolExtraction_CsharpSameLineRecoveryDecisions_StayWithinAllocationBudget()
     {
         const int propertyCount = 1_000;

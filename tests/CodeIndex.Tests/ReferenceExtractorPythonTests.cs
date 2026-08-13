@@ -373,6 +373,33 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_PythonLogicalHeader_RemapRunsAfterReferenceLimitReached()
+    {
+        const string content = """
+            class Derived(
+                FirstBase,
+                SecondBase,
+            ):
+                pass
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(
+            1,
+            "python",
+            content,
+            symbols,
+            maxReferenceCount: 1);
+
+        var reference = Assert.Single(references);
+        Assert.Equal("FirstBase", reference.SymbolName);
+        Assert.Equal("type_reference", reference.ReferenceKind);
+        Assert.Equal(2, reference.Line);
+        Assert.Equal(5, reference.Column);
+        Assert.Equal("FirstBase,", reference.Context);
+    }
+
+    [Fact]
     public void Extract_PythonClassHook_AssignsReferencesToHookContainer()
     {
         const string content = """

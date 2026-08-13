@@ -316,13 +316,11 @@ public partial class McpServer
         // applied only after a bulk guard, when selected, has suspended synchronization.
         // FTS trigger policy 選択前に stale file cleanup を plan し、実削除は bulk guard
         // 選択時に同期を停止した後だけ行う。
-        var staleFilePurgePlan = startedWithNoIndexedFiles
-            ? FilePurgePlan.Empty
-            : writer.PlanStaleFiles(projectPath, cancellationToken: requestToken);
-        var purged = staleFilePurgePlan.Count;
-        McpIndexStaleFilePurgePlannedForTesting?.Invoke(purged);
-        if (purged > 0)
-            csharpMetadataTargetsNeedRefresh = true;
+        var initialStaleFilePurgePlan = PlanInitialMcpIndexPurge(
+            writer,
+            projectPath,
+            startedWithNoIndexedFiles,
+            requestToken);
 
         // Load current reference-language support before the deferred mutation phase.
         // deferred mutation phase の前に現在の reference-language support を読み込む。
@@ -337,166 +335,43 @@ public partial class McpServer
         var csharpPrepassSymbolArtifacts = CSharpPrepassSymbolArtifactCache
             .CreateForFreshBuiltInExtraction(
                 startedWithNoIndexedFilesBeforeRebuild && !rebuild);
-        var purgedRefs = 0;
-
         // Scan and index / スキャン・インデックス
         var scanWithDirectorySnapshots = indexer.ScanFilesDetailedWithDirectoryListingSnapshots(
             cancellationToken: requestToken);
         var scanResult = scanWithDirectorySnapshots.ScanResult;
         var scanInputSnapshot = scanWithDirectorySnapshots.InputSnapshot;
         var scanHadErrors = scanResult.HadErrors;
-        var deferCSharpMutationsForIncompleteScan = !startedWithNoIndexedFiles
+        var initialDeferCSharpMutations = !startedWithNoIndexedFiles
             && scanHadErrors
             && indexSnapshot.CSharpStaticInterfaceSourceEvidence != false;
         if (memorySamples != null)
             memorySamples.Add(CaptureMcpIndexMemorySample("scan", runStopwatch));
         var files = scanResult.Files;
-        var fileTargets = new CSharpStaticInterfacePrepass.FileTarget[files.Count];
+        var targets = BuildMcpIndexTargetSet(projectPath, indexer, scanResult);
+        var fileTargets = targets.All;
+        var csharpPrepassTargets = targets.CSharp;
         var languageCounts = scanResult.LanguageCounts;
-        var csharpPrepassTargetCapacity = languageCounts.TryGetValue("csharp", out var csharpFileCount) ? csharpFileCount : 0;
-        var csharpPrepassTargets = new List<CSharpStaticInterfacePrepass.FileTarget>(csharpPrepassTargetCapacity);
         var hasSqlTargets = languageCounts.ContainsKey("sql");
         var hasTypeScriptTargets = languageCounts.ContainsKey("typescript");
-        var hasGeneratedCodeExtractionSuppressionPatterns = indexer.HasGeneratedCodeExtractionSuppressionPatterns;
-        for (var i = 0; i < files.Count; i++)
-        {
-            var filePath = files[i];
-            var language = FileIndexer.GetReusableDetectedLanguage(filePath, scanResult.FileLanguages);
-            var target = CSharpStaticInterfacePrepass.FileTarget.Create(projectPath, filePath, language);
-            target = target with
-            {
-                GeneratedExtractionSuppressed = hasGeneratedCodeExtractionSuppressionPatterns
-                    && indexer.IsGeneratedCodeExtractionSuppressed(target.IndexPath),
-                ResolveSymlinkTargets = indexer.ResolvesSymlinkTargets
-            };
-            fileTargets[i] = target;
-            if (language == "csharp")
-                csharpPrepassTargets.Add(target);
-        }
-
-        HashSet<string>? scanRetainedPaths = null;
-        HashSet<string>? scanListedDirectories = null;
-        HashSet<string>? scanAuthoritativeSubtreeDirectories = null;
-        HashSet<string>? scanExplicitlyRemovedPaths = null;
-        if (!startedWithNoIndexedFiles)
-        {
-            scanRetainedPaths = new HashSet<string>(fileTargets.Length, StringComparer.Ordinal);
-            foreach (var target in fileTargets)
-                scanRetainedPaths.Add(target.IndexPath);
-
-            FilePurgePlan scanDerivedPurgePlan;
-            if (scanHadErrors)
-            {
-                // A failed probe is not proof that a persisted row disappeared. Conversely,
-                // a successful immediate-child listing is authoritative only for that parent,
-                // while a fully scanned or deliberately pruned directory authorizes its subtree.
-                // probe failureは既存row消滅の根拠にせず、partial scanのauthorityはlisted直下と
-                // fully-scanned / deliberate-prune subtreeだけに厳密に限定する。
-                scanRetainedPaths.UnionWith(
-                    scanResult.ProbeFailedFilePaths.Select(FileIndexer.NormalizeIndexPath));
-                scanListedDirectories = scanResult.ListedDirectories
-                    .Select(FileIndexer.NormalizeIndexPath)
-                    .ToHashSet(StringComparer.Ordinal);
-                scanAuthoritativeSubtreeDirectories = scanResult.FullyScannedDirectories
-                    .Select(FileIndexer.NormalizeIndexPath)
-                    .ToHashSet(StringComparer.Ordinal);
-                scanAuthoritativeSubtreeDirectories.UnionWith(
-                    scanResult.AttributePrunedDirectories.Select(FileIndexer.NormalizeIndexPath));
-                scanAuthoritativeSubtreeDirectories.UnionWith(
-                    scanResult.NestedRepositories.Select(FileIndexer.NormalizeIndexPath));
-                scanExplicitlyRemovedPaths = scanResult.NonIndexablePaths
-                    .Select(FileIndexer.NormalizeIndexPath)
-                    .ToHashSet(StringComparer.Ordinal);
-                scanDerivedPurgePlan = scanAuthoritativeSubtreeDirectories.Contains(string.Empty)
-                    ? writer.PlanFilesOutsideRetainedSet(scanRetainedPaths, requestToken)
-                    : writer.PlanFilesOutsideRetainedSetWithinListedDirectories(
-                        scanRetainedPaths,
-                        scanListedDirectories,
-                        scanAuthoritativeSubtreeDirectories,
-                        scanExplicitlyRemovedPaths,
-                        requestToken);
-            }
-            else
-            {
-                // A clean recursive scan is authoritative for the complete retained set,
-                // including files that still exist but became ignored or unsupported.
-                // clean scanでは保持集合全体をauthorityとし、存在するignore/unsupported化も除外する。
-                scanDerivedPurgePlan = writer.PlanFilesOutsideRetainedSet(
-                    scanRetainedPaths,
-                    requestToken);
-            }
-
-            if (scanDerivedPurgePlan.Count > 0)
-            {
-                var scanPlanContainsPreScanPlan = staleFilePurgePlan.Count <= scanDerivedPurgePlan.Count;
-                for (var planIndex = 0;
-                     scanPlanContainsPreScanPlan && planIndex < staleFilePurgePlan.FileIds.Count;
-                     planIndex++)
-                {
-                    scanPlanContainsPreScanPlan = FilePurgePlan.ContainsSortedFileId(
-                        scanDerivedPurgePlan.FileIds,
-                        staleFilePurgePlan.FileIds[planIndex]);
-                }
-
-                // Preserve the immutable pre-scan plan when a path reappeared during scanning.
-                // When the authoritative scan plan already contains every pre-scan ID, it is
-                // the exact union and retains its deleted-byte estimate without double counting.
-                // scan中に再出現したpathはpre-scan planを維持する。一方scan planが全IDを包含する
-                // 場合はそれ自体が正確なunionなので、deleted-byte見積りを重複加算しない。
-                staleFilePurgePlan = scanPlanContainsPreScanPlan
-                    ? scanDerivedPurgePlan
-                    : FilePurgePlan.Merge([staleFilePurgePlan, scanDerivedPurgePlan]);
-            }
-        }
-
-        purged = staleFilePurgePlan.Count;
+        var readableBytes = new McpIndexReadableByteTracker(files.Count);
+        var discoveryPlan = BuildMcpIndexDiscoveryPlan(
+            writer,
+            projectPath,
+            scanResult,
+            targets,
+            initialStaleFilePurgePlan,
+            startedWithNoIndexedFiles,
+            initialDeferCSharpMutations,
+            indexSnapshot.CSharpStaticInterfaceSourceEvidence,
+            priorFilterRetainedCSharpContractMembers,
+            requestToken);
+        var staleFilePurgePlan = discoveryPlan.PurgePlan;
+        var retainedPathsForReuse = discoveryPlan.RetainedPathsForReuse;
+        var hadCSharpStaticInterfaceContractsBeforePurge =
+            discoveryPlan.HadCSharpStaticInterfaceContractsBeforePurge;
+        var purged = staleFilePurgePlan.Count;
         if (purged > 0)
             csharpMetadataTargetsNeedRefresh = true;
-        if (deferCSharpMutationsForIncompleteScan && staleFilePurgePlan.Count > 0)
-        {
-            // Do not combine an incomplete C# workspace with any planned deletion. A clean
-            // retry can apply the same stale cleanup while rebuilding implicit references.
-            // C# workspaceが不完全なrunではplanned deleteを延期し、clean retryへ委ねる。
-            staleFilePurgePlan = FilePurgePlan.Empty;
-            purged = 0;
-        }
-        var hadCSharpStaticInterfaceContractsBeforePurge = !startedWithNoIndexedFiles
-            && staleFilePurgePlan.Count > 0
-            && writer.HasCSharpFilesInFileIds(staleFilePurgePlan.FileIds, requestToken)
-            && (indexSnapshot.CSharpStaticInterfaceSourceEvidence == true
-                || writer.HasCSharpStaticInterfaceContractMembersInFileIds(
-                    staleFilePurgePlan.FileIds,
-                    includeInterfaceDeclarationsAsConservativeEvidence:
-                        indexSnapshot.CSharpStaticInterfaceSourceEvidence == null
-                        || !priorFilterRetainedCSharpContractMembers,
-                    requestToken));
-        var knownReadableFileSizes = new Dictionary<string, long>(files.Count, StringComparer.Ordinal);
-        long knownReadableBytesRead = 0;
-        var knownReadableByteEstimateComplete = true;
-        void RememberReadableFileSize(string path, long size)
-        {
-            var priorSize = knownReadableFileSizes.TryGetValue(path, out var prior)
-                ? prior
-                : (long?)null;
-            if (knownReadableByteEstimateComplete
-                && !FtsBulkLoadTriggerGuard.TryUpdateKnownByteTotal(
-                    knownReadableBytesRead,
-                    priorSize,
-                    size,
-                    out knownReadableBytesRead))
-            {
-                knownReadableByteEstimateComplete = false;
-            }
-            knownReadableFileSizes[path] = size;
-        }
-        HashSet<string>? retainedPathsForReuse = null;
-        if (!rebuild
-            && !startedWithNoIndexedFiles
-            && staleFilePurgePlan.RemainingFileCount - fileTargets.LongLength > fileTargets.LongLength)
-        {
-            retainedPathsForReuse = scanRetainedPaths;
-            McpIndexRetainedPathFilterAllocatedForTesting?.Invoke(fileTargets.Length);
-        }
         await EmitProgressNotificationAsync(progressToken, 0, files.Count, "Index scan complete; indexing files.").ConfigureAwait(false);
         var csharpPositiveNoOpPolicyCandidate = indexSnapshot.CSharpStaticInterfaceSourceEvidence is not null
             && indexSnapshot.IndexComplete
@@ -514,11 +389,12 @@ public partial class McpServer
         var hasCSharpLanguageTransitions = false;
         void ObservePersistedCSharpPath(string indexPath)
         {
-            if (!hasCSharpLanguageTransitions && IsExistingCSharpSymbolPathNowNonCSharp(indexPath))
+            if (!hasCSharpLanguageTransitions
+                && discoveryPlan.ScanAuthority.IsExistingCSharpSymbolPathNowNonCSharp(indexPath))
                 hasCSharpLanguageTransitions = true;
         }
 
-        var reusableIndexedFileStats = !rebuild && !startedWithNoIndexedFiles
+        var reusableIndexedFileStats = !startedWithNoIndexedFiles
             ? writer.LoadReusableIndexedFileStats(
                 maxSymbolsPerFile,
                 maxReferencesPerFile,
@@ -532,11 +408,33 @@ public partial class McpServer
                 maxFileSizeBytes:
                     maxFileBytes ?? FileIndexer.DefaultMaxFileSizeBytes)
             : null;
-        Dictionary<string, IndexedFileStatReuseResult?>? csharpPrepassStatReuse = null;
         var priorPositiveCSharpSourceNoOpCandidate = false;
-        var allCSharpPrepassTargetsReusable = false;
         bool IsGeneratedExtractionSuppressed(CSharpStaticInterfacePrepass.FileTarget target)
             => target.GeneratedExtractionSuppressed == true;
+
+        var failures = new List<IndexFileFailure>();
+        if (scanHadErrors)
+        {
+            foreach (var error in scanResult.Errors)
+            {
+                if (error.IsFatal)
+                    failures.Add(BuildScanFailure(error));
+            }
+        }
+        var csharpFailures = new McpIndexCSharpFailureCollector(projectPath, failures);
+        var csharpState = new McpIndexCSharpWorkspaceState(
+            new McpIndexCSharpWorkspaceContext(
+                projectPath,
+                authorizedRoot,
+                csharpPrepassTargets,
+                reusableIndexedFileStats,
+                readableBytes,
+                csharpFailures,
+                requestToken))
+        {
+            DeferMutations = initialDeferCSharpMutations,
+            PrepassArtifacts = csharpPrepassSymbolArtifacts,
+        };
 
         bool CanReuseCSharpPrepassTargetWithoutRead(CSharpStaticInterfacePrepass.FileTarget target)
         {
@@ -562,124 +460,21 @@ public partial class McpServer
                 IsGeneratedExtractionSuppressed(target));
             if (existingFile == null)
             {
-                allCSharpPrepassTargetsReusable = false;
-                (csharpPrepassStatReuse ??= new Dictionary<string, IndexedFileStatReuseResult?>(
-                    csharpPrepassTargetCapacity,
-                    StringComparer.Ordinal))[target.IndexPath] = null;
+                csharpState.AllPrepassTargetsReusable = false;
+                csharpState.EnsurePrepassStatReuse()[target.IndexPath] = null;
                 return false;
             }
 
-            (csharpPrepassStatReuse ??= new Dictionary<string, IndexedFileStatReuseResult?>(
-                csharpPrepassTargetCapacity,
-                StringComparer.Ordinal))[target.IndexPath] = existingFile.Value;
+            csharpState.EnsurePrepassStatReuse()[target.IndexPath] = existingFile.Value;
             return true;
-        }
-
-        bool IsExistingCSharpSymbolPathNowNonCSharp(string indexPath)
-        {
-            var normalizedIndexPath = FileIndexer.NormalizeIndexPath(indexPath);
-            var currentPath = Path.Combine(
-                projectPath,
-                FileIndexer.NormalizeRelativePathForCurrentPlatform(normalizedIndexPath));
-            if (scanResult.FileLanguages.TryGetValue(currentPath, out var currentLanguage))
-                return currentLanguage != "csharp";
-
-            if (scanRetainedPaths?.Contains(normalizedIndexPath) == true)
-                return false;
-            if (!scanHadErrors)
-                return true;
-            if (scanExplicitlyRemovedPaths?.Contains(normalizedIndexPath) == true)
-                return true;
-
-            var directory = GetIndexParentDirectory(normalizedIndexPath);
-            if (scanListedDirectories?.Contains(directory) == true)
-                return true;
-            while (true)
-            {
-                if (scanAuthoritativeSubtreeDirectories?.Contains(directory) == true)
-                    return true;
-                if (directory.Length == 0)
-                    break;
-                directory = GetIndexParentDirectory(directory);
-            }
-
-            return false;
-        }
-
-        static string GetIndexParentDirectory(string path)
-        {
-            var separatorIndex = path.LastIndexOf('/');
-            return separatorIndex >= 0 ? path[..separatorIndex] : string.Empty;
-        }
-
-        Dictionary<string, CSharpStaticInterfacePrepass.FileStatSnapshot>? csharpWorkspaceFileSnapshots = null;
-
-        string FormatCSharpWorkspaceSnapshotPath(string? path)
-        {
-            if (string.IsNullOrWhiteSpace(path) || path == "<csharp_workspace>")
-                return "<csharp_workspace>";
-            if (!Path.IsPathRooted(path))
-                return FileIndexer.NormalizePathSeparators(path);
-            return FormatDiagnosticPath(projectPath, path);
-        }
-
-        CSharpStaticInterfaceWorkspaceSymbols BuildStableCSharpWorkspace(
-            Func<CSharpStaticInterfaceWorkspaceSymbols> buildWorkspace)
-        {
-            csharpWorkspaceFileSnapshots = null;
-            Dictionary<string, CSharpStaticInterfacePrepass.FileStatSnapshot> fileSnapshots = [];
-            string? failedFilePath = null;
-            var capturedFiles = CSharpStaticInterfacePrepass.TryCaptureFileStatSnapshots(
-                csharpPrepassTargets,
-                out fileSnapshots,
-                out failedFilePath,
-                requestToken,
-                target => authorizedRoot.EnsureAuthorizedEntry(target.FilePath));
-            if (!capturedFiles)
-            {
-                return new CSharpStaticInterfaceWorkspaceSymbols(
-                    [],
-                    HasStaticInterfaceContracts: true,
-                    SourceContractEvidenceComplete: false,
-                    IncompleteSourcePaths:
-                    [
-                        FormatCSharpWorkspaceSnapshotPath(failedFilePath)
-                    ]);
-            }
-
-            McpIndexCSharpPrepassForTesting?.Invoke();
-            var workspace = buildWorkspace();
-            var stableFiles = CSharpStaticInterfacePrepass.TryValidateFileStatSnapshots(
-                csharpPrepassTargets,
-                fileSnapshots,
-                out var changedFilePath,
-                requestToken,
-                target => authorizedRoot.EnsureAuthorizedEntry(target.FilePath));
-            if (!stableFiles || !workspace.SourceContractEvidenceComplete)
-            {
-                var incompletePath = workspace.IncompleteSourcePaths?.FirstOrDefault()
-                    ?? changedFilePath
-                    ?? "<csharp_workspace>";
-                return workspace with
-                {
-                    HasStaticInterfaceContracts = true,
-                    SourceContractEvidenceComplete = false,
-                    IncompleteSourcePaths = [FormatCSharpWorkspaceSnapshotPath(incompletePath)],
-                };
-            }
-
-            csharpWorkspaceFileSnapshots = fileSnapshots;
-            return workspace;
         }
 
         priorPositiveCSharpSourceNoOpCandidate = csharpPositiveNoOpPolicyCandidate
             && !hasCSharpLanguageTransitions;
         if (priorPositiveCSharpSourceNoOpCandidate)
         {
-            allCSharpPrepassTargetsReusable = true;
-            csharpPrepassStatReuse = new Dictionary<string, IndexedFileStatReuseResult?>(
-                csharpPrepassTargetCapacity,
-                StringComparer.Ordinal);
+            csharpState.AllPrepassTargetsReusable = true;
+            var prepassStatReuse = csharpState.EnsurePrepassStatReuse();
             foreach (var target in csharpPrepassTargets)
             {
                 requestToken.ThrowIfCancellationRequested();
@@ -690,29 +485,26 @@ public partial class McpServer
                     target.IndexPath,
                     target.Language,
                     IsGeneratedExtractionSuppressed(target));
-                csharpPrepassStatReuse[target.IndexPath] = existingFile;
-                allCSharpPrepassTargetsReusable &= existingFile != null;
+                prepassStatReuse[target.IndexPath] = existingFile;
+                csharpState.AllPrepassTargetsReusable &= existingFile != null;
             }
         }
 
-        CSharpStaticInterfaceWorkspaceSymbols csharpWorkspace;
-        IReadOnlyList<string> incompleteCSharpPrepassPaths = [];
-        var forceFullCSharpRefreshFromInvalidatedNoOp = false;
-        if (csharpPrepassTargets.Count == 0 || deferCSharpMutationsForIncompleteScan)
+        if (csharpPrepassTargets.Count == 0 || csharpState.DeferMutations)
         {
-            csharpWorkspace = new CSharpStaticInterfaceWorkspaceSymbols([], false);
+            csharpState.Workspace = new CSharpStaticInterfaceWorkspaceSymbols([], false);
         }
         else if (priorPositiveCSharpSourceNoOpCandidate
-                 && allCSharpPrepassTargetsReusable)
+                 && csharpState.AllPrepassTargetsReusable)
         {
             // Existing graph rows are already complete and every C# stat matched. Avoid
             // loading persisted contract symbols or constructing a lookup that no file will use.
             // 全C# stat一致のpositive no-opではDB symbol/lookup loadを完全に省略する。
-            csharpWorkspace = new CSharpStaticInterfaceWorkspaceSymbols([], false);
+            csharpState.Workspace = new CSharpStaticInterfaceWorkspaceSymbols([], false);
         }
         else
         {
-            csharpWorkspace = BuildStableCSharpWorkspace(() =>
+            csharpState.Workspace = csharpState.BuildStableWorkspace(() =>
                 CSharpStaticInterfacePrepass.BuildWorkspaceSymbols(
                     writer,
                     indexer,
@@ -725,172 +517,60 @@ public partial class McpServer
                     isGeneratedCodeExtractionSuppressed: IsGeneratedExtractionSuppressed,
                     parallelism: 1,
                     excludedExistingFileIds: staleFilePurgePlan.FileIds,
-                    isExistingSymbolPathExcluded: IsExistingCSharpSymbolPathNowNonCSharp,
+                    isExistingSymbolPathExcluded:
+                        discoveryPlan.ScanAuthority.IsExistingCSharpSymbolPathNowNonCSharp,
                     patternConfigsAlreadyLoaded: true,
                     cancellationToken: requestToken,
-                    symbolArtifactCache: csharpPrepassSymbolArtifacts));
-            forceFullCSharpRefreshFromInvalidatedNoOp =
+                    symbolArtifactCache: csharpState.PrepassArtifacts));
+            csharpState.ForceFullRefreshFromInvalidatedNoOp =
                 indexSnapshot.CSharpStaticInterfaceSourceEvidence == true
-                || csharpWorkspace.HasStaticInterfaceContracts
-                || csharpWorkspace.RequiresMemberReadReferenceRefresh;
+                || csharpState.Workspace.HasStaticInterfaceContracts
+                || csharpState.Workspace.RequiresMemberReadReferenceRefresh;
         }
-        if (!csharpWorkspace.SourceContractEvidenceComplete)
+        if (!csharpState.Workspace.SourceContractEvidenceComplete)
         {
-            csharpPrepassSymbolArtifacts?.Clear();
-            csharpPrepassSymbolArtifacts = null;
-            incompleteCSharpPrepassPaths = csharpWorkspace.IncompleteSourcePaths ?? [];
-            deferCSharpMutationsForIncompleteScan = true;
+            csharpState.DeferForIncompletePrepass();
             staleFilePurgePlan = FilePurgePlan.Empty;
             purged = 0;
             hadCSharpStaticInterfaceContractsBeforePurge = false;
-            csharpWorkspace = new CSharpStaticInterfaceWorkspaceSymbols(
-                [],
-                false,
-                SourceContractEvidenceComplete: false,
-                IncompleteSourcePaths: incompleteCSharpPrepassPaths);
         }
-        var preservePriorPositiveCSharpSourceNoOp = priorPositiveCSharpSourceNoOpCandidate
-            && allCSharpPrepassTargetsReusable
-            && !deferCSharpMutationsForIncompleteScan;
-        var csharpSourceEvidenceForStamp = preservePriorPositiveCSharpSourceNoOp
+        csharpState.PreservePriorPositiveSourceNoOp = priorPositiveCSharpSourceNoOpCandidate
+            && csharpState.AllPrepassTargetsReusable
+            && !csharpState.DeferMutations;
+        csharpState.SourceEvidenceForStamp = csharpState.PreservePriorPositiveSourceNoOp
             ? indexSnapshot.CSharpStaticInterfaceSourceEvidence == true
-            : csharpWorkspace.HasSourceStaticInterfaceContracts;
-        var csharpSourceEvidenceComplete = preservePriorPositiveCSharpSourceNoOp
-            || csharpWorkspace.SourceContractEvidenceComplete;
-        if (preservePriorPositiveCSharpSourceNoOp)
-            csharpWorkspace = csharpWorkspace with { HasStaticInterfaceContracts = false };
-        if (!deferCSharpMutationsForIncompleteScan
-            && !preservePriorPositiveCSharpSourceNoOp
-            && (forceFullCSharpRefreshFromInvalidatedNoOp
+            : csharpState.Workspace.HasSourceStaticInterfaceContracts;
+        csharpState.SourceEvidenceComplete = csharpState.PreservePriorPositiveSourceNoOp
+            || csharpState.Workspace.SourceContractEvidenceComplete;
+        if (csharpState.PreservePriorPositiveSourceNoOp)
+            csharpState.Workspace = csharpState.Workspace with { HasStaticInterfaceContracts = false };
+        if (!csharpState.DeferMutations
+            && !csharpState.PreservePriorPositiveSourceNoOp
+            && (csharpState.ForceFullRefreshFromInvalidatedNoOp
                 || requiresConservativeCSharpSourceRefresh
-                || !csharpSourceEvidenceComplete
+                || !csharpState.SourceEvidenceComplete
                 || (purged > 0 && hadCSharpStaticInterfaceContractsBeforePurge)))
         {
-            csharpWorkspace = csharpWorkspace with { HasStaticInterfaceContracts = true };
-        }
-        var failures = new List<IndexFileFailure>();
-        if (scanHadErrors)
-        {
-            foreach (var error in scanResult.Errors)
-            {
-                if (error.IsFatal)
-                    failures.Add(BuildScanFailure(error));
-            }
+            csharpState.Workspace = csharpState.Workspace with { HasStaticInterfaceContracts = true };
         }
         int processed = 0, skipped = 0, errors = failures.Count;
-        var reportedCSharpWorkspaceFailures = new HashSet<string>(StringComparer.Ordinal);
 
-        void RecordCSharpWorkspaceFailure(string path, string stage, Exception exception)
+        if (!csharpState.SourceEvidenceComplete)
         {
-            path = string.IsNullOrWhiteSpace(path) ? "<csharp_workspace>" : path;
-            if (!reportedCSharpWorkspaceFailures.Add($"{stage}\n{path}"))
-                return;
-
-            errors++;
-            var platformRelativePath = FileIndexer.NormalizeRelativePathForCurrentPlatform(path);
-            failures.Add(BuildIndexFileFailure(
-                projectPath,
-                Path.Combine(projectPath, platformRelativePath),
-                exception,
-                stage));
+            csharpState.RecordIncompletePrepass();
+            errors = failures.Count;
         }
-
-        void RecordIncompleteCSharpPrepassFailures(IReadOnlyList<string> paths)
-        {
-            if (paths.Count == 0)
-            {
-                RecordCSharpWorkspaceFailure(
-                    "<csharp_workspace>",
-                    "csharp_prepass",
-                    new IOException("C# static-interface workspace preflight could not read a source file."));
-                return;
-            }
-
-            foreach (var path in paths.Take(50))
-            {
-                RecordCSharpWorkspaceFailure(
-                    path,
-                    "csharp_prepass",
-                    new IOException("C# static-interface workspace preflight could not read this source file."));
-            }
-        }
-
-        void DeferCSharpMutationsForLoadedSnapshotDrift(string path)
-        {
-            csharpPrepassSymbolArtifacts?.Clear();
-            csharpPrepassSymbolArtifacts = null;
-            deferCSharpMutationsForIncompleteScan = true;
-            preservePriorPositiveCSharpSourceNoOp = false;
-            csharpSourceEvidenceForStamp = false;
-            csharpSourceEvidenceComplete = false;
-            incompleteCSharpPrepassPaths = [path];
-            csharpWorkspaceFileSnapshots = null;
-            csharpWorkspace = new CSharpStaticInterfaceWorkspaceSymbols(
-                [],
-                HasStaticInterfaceContracts: true,
-                SourceContractEvidenceComplete: false,
-                IncompleteSourcePaths: incompleteCSharpPrepassPaths);
-            writer.SetCSharpStaticInterfaceSourceEvidence(null);
-            RecordCSharpWorkspaceFailure(
-                path,
-                "csharp_workspace_validation",
-                new IOException(
-                    "A C# source changed after workspace preflight; rerun indexing to refresh the complete C# graph."));
-        }
-
-        bool LoadedCSharpWorkspaceSnapshotMatches(
-            CSharpStaticInterfacePrepass.FileTarget target,
-            FileRecord record)
-        {
-            if (target.Language != "csharp" || csharpWorkspaceFileSnapshots == null)
-                return true;
-
-            if (CSharpStaticInterfacePrepass.TryValidateLoadedFileStatSnapshot(
-                    target.FilePath,
-                    target.IndexPath,
-                    target.DisplayRelativePath,
-                    record.Size,
-                    record.Modified,
-                    csharpWorkspaceFileSnapshots,
-                    out var changedPath,
-                    requestToken,
-                    authorizedRoot.EnsureAuthorizedEntry))
-            {
-                return true;
-            }
-
-            DeferCSharpMutationsForLoadedSnapshotDrift(
-                FormatCSharpWorkspaceSnapshotPath(changedPath ?? target.DisplayRelativePath));
-            return false;
-        }
-
-        if (!csharpSourceEvidenceComplete)
-            RecordIncompleteCSharpPrepassFailures(incompleteCSharpPrepassPaths);
         HashSet<string>? reusedHotspotFamilyLanguages = null;
         var indexedSymbolExtractorLanguages = new HashSet<string>(languageCounts.Count, StringComparer.Ordinal);
         var symbolsDroppedByKindFilter = 0;
         var mutualRecursionRefreshNeeded = !referenceIdentityContractMatchedBeforeMutation
-            || purged > 0
-            || purgedRefs > 0;
+            || purged > 0;
         var freshCountFiles = 0L;
         var freshCountChunks = 0L;
         var freshCountSymbols = 0L;
         var freshCountReferences = 0L;
-        void CountFreshInsertedRows(
-            int chunkCount = 0,
-            int symbolCount = 0,
-            int referenceCount = 0)
-        {
-            if (!startedWithNoIndexedFiles)
-                return;
-
-            freshCountFiles++;
-            freshCountChunks += chunkCount;
-            freshCountSymbols += symbolCount;
-            freshCountReferences += referenceCount;
-        }
-
-        IndexedFileStatReuseResult? GetStatMatchedFile(CSharpStaticInterfacePrepass.FileTarget target)
+        IndexedFileStatReuseResult? GetStatMatchedFile(
+            in CSharpStaticInterfacePrepass.FileTarget target)
         {
             var allowStatReuse = !rebuild
                 && !startedWithNoIndexedFiles
@@ -898,115 +578,32 @@ public partial class McpServer
                 && symbolKindFilterMatchesPrior
                 && (target.Language != "csharp" || csharpIndexedProjectRootCompatible)
                 && (target.Language != "csharp" || csharpSymbolNameContractMatchesCurrent)
-                && (target.Language != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
+                && (target.Language != "csharp" || !csharpState.Workspace.HasStaticInterfaceContracts)
                 && (target.Language != "sql" || sqlGraphContractMatchesCurrent)
                 && (target.Language is not ("verilog" or "systemverilog" or "vhdl") || hdlGraphContractMatchesCurrent)
                 && AllowReuseWithCurrentHotspotFamilyTrust(target.Language, hotspotFamilyTrustMatchesCurrent);
             if (!allowStatReuse)
                 return null;
 
-            return target.Language == "csharp"
-                && csharpPrepassStatReuse != null
-                && csharpPrepassStatReuse.TryGetValue(target.IndexPath, out var cachedCSharpPrepassReuse)
-                    ? cachedCSharpPrepassReuse
-                    : IndexedFileStatReuse.TryGetReusableUnchangedFile(
-                        reusableIndexedFileStats!,
-                        target.FilePath,
-                        target.IndexPath,
-                        target.Language,
-                        IsGeneratedExtractionSuppressed(target));
+            return csharpState.GetStatMatchedFile(in target);
         }
 
-        IndexedFileStatReuseResult?[]? statMatchedFiles = null;
-        bool[]? statPreflightCompleted = null;
-        var estimatedDirtyBytes = staleFilePurgePlan.DeletedBytes;
-        var persistedSizeExcessBytes = 0L;
-        var byteEstimateComplete = !scanHadErrors
-            && staleFilePurgePlan.ByteEstimateComplete
-            && knownReadableByteEstimateComplete;
-        var useFtsBulkLoad = rebuild || startedWithNoIndexedFiles;
-        var everyTargetMatchedFtsStatPreflight = !useFtsBulkLoad
-            && staleFilePurgePlan.Count == 0;
-        if (!useFtsBulkLoad)
-        {
-            statMatchedFiles = new IndexedFileStatReuseResult?[fileTargets.Length];
-            statPreflightCompleted = new bool[fileTargets.Length];
-            McpIndexFtsStatPreflightBufferAllocatedForTesting?.Invoke(fileTargets.Length);
-            for (var targetIndex = 0; targetIndex < fileTargets.Length; targetIndex++)
-            {
-                requestToken.ThrowIfCancellationRequested();
-                var target = fileTargets[targetIndex];
-                try
-                {
-                    authorizedRoot.EnsureAuthorizedEntry(target.FilePath);
-                    var statMatchedFile = GetStatMatchedFile(target);
-                    statMatchedFiles[targetIndex] = statMatchedFile;
-                    statPreflightCompleted[targetIndex] = true;
-                    if (statMatchedFile != null)
-                    {
-                        RememberReadableFileSize(target.FilePath, statMatchedFile.Value.Size);
-                        continue;
-                    }
-
-                    everyTargetMatchedFtsStatPreflight = false;
-
-                    var info = new FileInfo(target.FilePath);
-                    if (!info.Exists || info.Length < 0)
-                    {
-                        byteEstimateComplete = false;
-                        continue;
-                    }
-
-                    RememberReadableFileSize(target.FilePath, info.Length);
-                    var persistedSize = reusableIndexedFileStats!.GetPersistedSize(target.IndexPath);
-                    if (!FtsBulkLoadTriggerGuard.TryAccumulateDirtyFileBytes(
-                            estimatedDirtyBytes,
-                            persistedSizeExcessBytes,
-                            info.Length,
-                            persistedSize,
-                            out estimatedDirtyBytes,
-                            out persistedSizeExcessBytes))
-                    {
-                        byteEstimateComplete = false;
-                    }
-                }
-                catch (OperationCanceledException) when (requestToken.IsCancellationRequested)
-                {
-                    throw;
-                }
-                catch (McpIndexAuthorizationException)
-                {
-                    throw;
-                }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
-                {
-                    // Estimation must never bypass the existing per-file failure contract.
-                    // The real loop retries authorization/stat work inside its normal try/catch.
-                    byteEstimateComplete = false;
-                    everyTargetMatchedFtsStatPreflight = false;
-                    statPreflightCompleted[targetIndex] = false;
-                }
-            }
-
-            byteEstimateComplete &= knownReadableByteEstimateComplete;
-            var totalBytes = knownReadableBytesRead;
-            if (!knownReadableByteEstimateComplete
-                || totalBytes > long.MaxValue - staleFilePurgePlan.DeletedBytes)
-                byteEstimateComplete = false;
-            else
-                totalBytes += staleFilePurgePlan.DeletedBytes;
-            if (totalBytes > long.MaxValue - persistedSizeExcessBytes)
-                byteEstimateComplete = false;
-            else
-                totalBytes += persistedSizeExcessBytes;
-
-            useFtsBulkLoad = byteEstimateComplete
-                && FtsBulkLoadTriggerGuard.ShouldUseForDirtyBytes(estimatedDirtyBytes, totalBytes);
-        }
+        var ftsPreflight = BuildMcpIndexFtsPreflight(
+            fileTargets,
+            staleFilePurgePlan,
+            rebuild,
+            startedWithNoIndexedFiles,
+            scanHadErrors,
+            reusableIndexedFileStats,
+            authorizedRoot,
+            GetStatMatchedFile,
+            readableBytes,
+            requestToken);
+        var useFtsBulkLoad = ftsPreflight.UseBulkLoad;
 
         var reuseFinalCSharpStatAtActualSkip = false;
-        if (preservePriorPositiveCSharpSourceNoOp
-            && everyTargetMatchedFtsStatPreflight)
+        if (csharpState.PreservePriorPositiveSourceNoOp
+            && ftsPreflight.EveryTargetMatched)
         {
             // A pure no-op performs its second and final C# stat pass at the readiness
             // boundary. Reuse the candidate result in the per-file skip loop meanwhile.
@@ -1014,8 +611,8 @@ public partial class McpServer
             reuseFinalCSharpStatAtActualSkip = true;
         }
 
-        if (preservePriorPositiveCSharpSourceNoOp
-            && !everyTargetMatchedFtsStatPreflight)
+        if (csharpState.PreservePriorPositiveSourceNoOp
+            && !ftsPreflight.EveryTargetMatched)
         {
             // Re-stat directly after the potentially long whole-workspace dirty-byte pass.
             // This is the last read-only boundary before readiness/purge/file mutations.
@@ -1042,7 +639,7 @@ public partial class McpServer
 
             if (invalidatedCSharpTargetIndexes.Count > 0)
             {
-                csharpWorkspace = BuildStableCSharpWorkspace(() =>
+                csharpState.Workspace = csharpState.BuildStableWorkspace(() =>
                     CSharpStaticInterfacePrepass.BuildWorkspaceSymbols(
                         writer,
                         indexer,
@@ -1052,39 +649,40 @@ public partial class McpServer
                         isGeneratedCodeExtractionSuppressed: IsGeneratedExtractionSuppressed,
                         parallelism: 1,
                         excludedExistingFileIds: staleFilePurgePlan.FileIds,
-                        isExistingSymbolPathExcluded: IsExistingCSharpSymbolPathNowNonCSharp,
+                        isExistingSymbolPathExcluded:
+                            discoveryPlan.ScanAuthority.IsExistingCSharpSymbolPathNowNonCSharp,
                         patternConfigsAlreadyLoaded: true,
                         cancellationToken: requestToken));
-                preservePriorPositiveCSharpSourceNoOp = false;
-                if (!csharpWorkspace.SourceContractEvidenceComplete)
+                csharpState.PreservePriorPositiveSourceNoOp = false;
+                if (!csharpState.Workspace.SourceContractEvidenceComplete)
                 {
-                    incompleteCSharpPrepassPaths = csharpWorkspace.IncompleteSourcePaths ?? [];
-                    deferCSharpMutationsForIncompleteScan = true;
+                    csharpState.IncompletePrepassPaths = csharpState.Workspace.IncompleteSourcePaths ?? [];
+                    csharpState.DeferMutations = true;
                     staleFilePurgePlan = FilePurgePlan.Empty;
                     purged = 0;
                     hadCSharpStaticInterfaceContractsBeforePurge = false;
-                    csharpSourceEvidenceForStamp = false;
-                    csharpSourceEvidenceComplete = false;
-                    csharpWorkspace = new CSharpStaticInterfaceWorkspaceSymbols(
+                    csharpState.SourceEvidenceForStamp = false;
+                    csharpState.SourceEvidenceComplete = false;
+                    csharpState.Workspace = new CSharpStaticInterfaceWorkspaceSymbols(
                         [],
                         false,
                         SourceContractEvidenceComplete: false,
-                        IncompleteSourcePaths: incompleteCSharpPrepassPaths);
-                    RecordIncompleteCSharpPrepassFailures(incompleteCSharpPrepassPaths);
+                        IncompleteSourcePaths: csharpState.IncompletePrepassPaths);
+                    csharpState.RecordIncompletePrepass();
                     useFtsBulkLoad = false;
                 }
                 else
                 {
                     var requiresFullCSharpRefresh =
                         indexSnapshot.CSharpStaticInterfaceSourceEvidence == true
-                        || csharpWorkspace.HasStaticInterfaceContracts;
-                    forceFullCSharpRefreshFromInvalidatedNoOp = requiresFullCSharpRefresh;
-                    csharpSourceEvidenceForStamp = csharpWorkspace.HasSourceStaticInterfaceContracts;
-                    csharpSourceEvidenceComplete = true;
+                        || csharpState.Workspace.HasStaticInterfaceContracts;
+                    csharpState.ForceFullRefreshFromInvalidatedNoOp = requiresFullCSharpRefresh;
+                    csharpState.SourceEvidenceForStamp = csharpState.Workspace.HasSourceStaticInterfaceContracts;
+                    csharpState.SourceEvidenceComplete = true;
                     useFtsBulkLoad = false;
                     if (requiresFullCSharpRefresh)
                     {
-                        csharpWorkspace = csharpWorkspace with { HasStaticInterfaceContracts = true };
+                        csharpState.Workspace = csharpState.Workspace with { HasStaticInterfaceContracts = true };
                         invalidatedCSharpTargetIndexes.Clear();
                         for (var targetIndex = 0; targetIndex < fileTargets.Length; targetIndex++)
                         {
@@ -1094,172 +692,55 @@ public partial class McpServer
                     }
 
                     foreach (var targetIndex in invalidatedCSharpTargetIndexes)
-                    {
-                        statMatchedFiles![targetIndex] = null;
-                        statPreflightCompleted![targetIndex] = true;
-                    }
+                        ftsPreflight.InvalidateTarget(targetIndex);
                 }
             }
         }
 
-        async Task<JsonNode> ReturnBeforeWriteSnapshotFailureAsync(string changedPath)
-        {
-            var formattedPath = FormatCSharpWorkspaceSnapshotPath(changedPath);
-            RecordCSharpWorkspaceFailure(
-                formattedPath,
-                "csharp_workspace_validation",
-                new IOException(
-                    "Directory entries or scan configuration changed after source discovery; rerun indexing from a stable workspace snapshot."));
-
-            var (totalFiles, totalChunks, totalSymbols, totalReferences) = writer.GetCounts();
-            await EmitProgressNotificationAsync(
-                progressToken,
-                0,
-                files.Count,
-                "Indexing stopped before index-data mutation because scan inputs changed.").ConfigureAwait(false);
-            if (memorySamples != null)
-                memorySamples.Add(CaptureMcpIndexMemorySample("finalize", runStopwatch));
-
-            var discoveredCSharpFiles = languageCounts.ContainsKey("csharp");
-            var discoveredSqlFiles = languageCounts.ContainsKey("sql");
-            var persistedCSharpFiles = writer.HasAnyFilesWithLanguage("csharp");
-            var persistedSqlFiles = writer.HasAnyFilesWithLanguage("sql");
-            var hasCSharpFiles = discoveredCSharpFiles || persistedCSharpFiles;
-            var hasSqlFiles = discoveredSqlFiles || persistedSqlFiles;
-            var sqlGraphContractReady = !hasSqlFiles
-                || (persistedSqlFiles && sqlGraphContractMatchesCurrent);
-            var csharpSymbolNameReady = !hasCSharpFiles
-                || (persistedCSharpFiles && csharpSymbolNameContractMatchesCurrent);
-            var csharpMetadataTargetReady = !hasCSharpFiles
-                || (persistedCSharpFiles && indexSnapshot.MetadataTargetCSharp == currentMetadataTargetVersion);
-            var structured = new JsonObject
-            {
-                ["path"] = projectPath,
-                ["checked_root_identity"] = authorizedRoot.CheckedRootIdentity,
-                ["rebuild"] = rebuild,
-                ["dry_run"] = false,
-                ["max_file_bytes"] = maxFileBytes,
-                ["index_options"] = optionsPayload,
-                ["unsupported_modes"] = unsupportedModesJson,
-                ["summary"] = new JsonObject
-                {
-                    ["files"] = totalFiles,
-                    ["chunks"] = totalChunks,
-                    ["symbols"] = totalSymbols,
-                    ["references"] = totalReferences,
-                    ["scanned"] = files.Count,
-                    ["skipped"] = 0,
-                    ["purged"] = 0,
-                    ["unknown_extension_file_count"] = scanResult.UnknownExtensionFiles.Count,
-                    ["errors"] = errors,
-                    ["failed_count"] = failures.Count,
-                    ["symbols_dropped_by_kind_filter"] = symbolsDroppedByKindFilter,
-                },
-                ["symbol_kind_filter"] = new JsonObject
-                {
-                    ["include"] = ToJsonStringArray(symbolKindFilter.Include),
-                    ["exclude"] = ToJsonStringArray(symbolKindFilter.Exclude),
-                    ["active"] = symbolKindFilter.IsActive,
-                },
-                ["duration_ms"] = runStopwatch.ElapsedMilliseconds,
-                ["started_at"] = runStartedAtUtc.ToString("o", System.Globalization.CultureInfo.InvariantCulture),
-                ["completed_at"] = GetUtcNow().ToString("o", System.Globalization.CultureInfo.InvariantCulture),
-                ["sql_graph_contract_ready"] = sqlGraphContractReady,
-                ["csharp_symbol_name_ready"] = csharpSymbolNameReady,
-                ["csharp_metadata_target_ready"] = csharpMetadataTargetReady,
-                ["fold_ready"] = (indexSnapshot.Readiness & DbContext.FoldReadyFlag) != 0,
-                ["fold_ready_reason"] = (indexSnapshot.Readiness & DbContext.FoldReadyFlag) != 0
-                    ? null
-                    : DegradationReasonCodes.MissingFoldBackfill,
-            };
-            if (memorySamples != null)
-                structured["memory_trace"] = memorySamples;
-
-            var failureArray = new JsonArray();
-            foreach (var failure in failures.Take(50))
-            {
-                failureArray.Add(new JsonObject
-                {
-                    ["path"] = failure.Path,
-                    ["stage"] = failure.Stage,
-                    ["exception_type"] = failure.ExceptionType,
-                    ["message"] = failure.Message,
-                    ["message_truncated"] = failure.MessageTruncated,
-                });
-            }
-            structured["failed_count"] = failures.Count;
-            structured["failures"] = failureArray;
-            if (failures.Count > 50)
-                structured["failures_truncated"] = failures.Count - 50;
-            AddMcpIndexDiagnostics(structured, failures, mcpIndexDiagnostics);
-            var referenceExtractionCapHits = writer.GetReferenceExtractionCapHits(
-                issuesStateAvailable: (indexSnapshot.Readiness & DbContext.IssuesReadyFlag) != 0);
-            using var referenceSignalReader = new DbReader(writer.Connection, isReadOnly: true);
-            var persistedReadiness = referenceSignalReader.GetPersistedIndexGenerationReadiness(
-                referenceExtractionCapHits);
-            AddIndexGenerationReadinessSignal(structured, persistedReadiness);
-            AddReferenceGraphCompletenessSignal(structured, persistedReadiness);
-            if (!sqlGraphContractReady)
-            {
-                AddSqlGraphContractSignal(
-                    structured,
-                    new SqlGraphContractSignal(
-                        Ready: false,
-                        Relevant: true,
-                        DegradedReason: DegradationReasonCodes.BuildSqlGraphContractDegradedReason()));
-            }
-            return CreateToolResult(
+        var beforeWriteFailures = new McpIndexBeforeWriteFailures(
+            failures,
+            mcpIndexDiagnostics,
+            symbolsDroppedByKindFilter);
+        var beforeWrite = await ValidateMcpIndexBeforeWriteAsync(
+            new McpIndexBeforeWriteContext(
                 id,
-                "Indexing stopped before index-data mutation because the scan snapshot changed.",
-                structured);
-        }
-
-        McpIndexInputSnapshotBarrierForTesting?.Invoke("before_write");
-        if (!indexer.TryValidateScanInputSnapshot(
+                new McpIndexBeforeWriteRequest(
+                    projectPath,
+                    authorizedRoot.CheckedRootIdentity,
+                    rebuild,
+                    maxFileBytes,
+                    optionsPayload,
+                    unsupportedModesJson,
+                    symbolKindFilter),
+                new McpIndexBeforeWriteRun(
+                    progressToken,
+                    runStopwatch,
+                    runStartedAtUtc,
+                    memorySamples),
+                indexer,
                 scanInputSnapshot,
-                out var beforeWriteChangedScanInputPath,
-                requestToken))
-        {
-            return await ReturnBeforeWriteSnapshotFailureAsync(
-                beforeWriteChangedScanInputPath).ConfigureAwait(false);
-        }
-
-        if (!deferCSharpMutationsForIncompleteScan)
-        {
-            var stableFiles = true;
-            string? changedFilePath = null;
-            if (csharpWorkspaceFileSnapshots != null)
-            {
-                stableFiles = CSharpStaticInterfacePrepass.TryValidateFileStatSnapshots(
-                    csharpPrepassTargets,
-                    csharpWorkspaceFileSnapshots,
-                    out changedFilePath,
-                    requestToken,
-                    target => authorizedRoot.EnsureAuthorizedEntry(target.FilePath));
-            }
-            if (!stableFiles)
-            {
-                csharpPrepassSymbolArtifacts?.Clear();
-                csharpPrepassSymbolArtifacts = null;
-                var driftPath = FormatCSharpWorkspaceSnapshotPath(changedFilePath);
-                incompleteCSharpPrepassPaths = [driftPath];
-                deferCSharpMutationsForIncompleteScan = true;
-                staleFilePurgePlan = FilePurgePlan.Empty;
-                purged = 0;
-                hadCSharpStaticInterfaceContractsBeforePurge = false;
-                preservePriorPositiveCSharpSourceNoOp = false;
-                csharpSourceEvidenceForStamp = false;
-                csharpSourceEvidenceComplete = false;
-                csharpWorkspaceFileSnapshots = null;
-                csharpWorkspace = new CSharpStaticInterfaceWorkspaceSymbols(
-                    [],
-                    HasStaticInterfaceContracts: true,
-                    SourceContractEvidenceComplete: false,
-                    IncompleteSourcePaths: incompleteCSharpPrepassPaths);
-                RecordIncompleteCSharpPrepassFailures(incompleteCSharpPrepassPaths);
-                useFtsBulkLoad = false;
-            }
-        }
+                scanResult,
+                new McpIndexBeforeWriteReadiness(
+                    indexSnapshot,
+                    sqlGraphContractMatchesCurrent,
+                    csharpSymbolNameContractMatchesCurrent,
+                    currentMetadataTargetVersion),
+                beforeWriteFailures),
+            writer,
+            csharpState,
+            staleFilePurgePlan,
+            purged,
+            hadCSharpStaticInterfaceContractsBeforePurge,
+            useFtsBulkLoad,
+            requestToken).ConfigureAwait(false);
+        if (beforeWrite.Response != null)
+            return beforeWrite.Response;
+        staleFilePurgePlan = beforeWrite.PurgePlan;
+        purged = beforeWrite.Purged;
+        hadCSharpStaticInterfaceContractsBeforePurge =
+            beforeWrite.HadCSharpStaticInterfaceContractsBeforePurge;
+        useFtsBulkLoad = beforeWrite.UseFtsBulkLoad;
+        errors = failures.Count;
 
         // Rebuild destruction and interrupted-FTS recovery are deliberately delayed until
         // the same pre-write scan barrier as ordinary MCP indexing. A drifted scan therefore
@@ -1285,10 +766,10 @@ public partial class McpServer
         using var hotspotAggregateRefresh = writer.BeginDeferredHotspotReferenceAggregateRefresh(
             deferSecondaryIndexes: useFtsBulkLoad);
         writer.RecoverInterruptedFtsBulkLoadIfNeeded(requestToken);
-        if (!preservePriorPositiveCSharpSourceNoOp)
+        if (!csharpState.PreservePriorPositiveSourceNoOp)
         {
             writer.SetCSharpStaticInterfaceSourceEvidence(
-                csharpSourceEvidenceComplete && csharpSourceEvidenceForStamp ? true : null);
+                csharpState.SourceEvidenceComplete && csharpState.SourceEvidenceForStamp ? true : null);
         }
         writer.ClearReadyFlags();
         writer.ClearReferenceIdentityContractReady();
@@ -1296,7 +777,7 @@ public partial class McpServer
         writer.ClearSqlGraphContractReady();
         writer.ClearMetadataTargetReady();
         if (hadCSharpStaticInterfaceContractsBeforePurge
-            || csharpWorkspace.HasStaticInterfaceContracts)
+            || csharpState.Workspace.HasStaticInterfaceContracts)
             writer.SetMeta(DbContext.CSharpSymbolNameContractVersionMetaKey, null);
         if (useFullRunBatchMarker)
             writer.MarkBatchInProgress();
@@ -1327,489 +808,87 @@ public partial class McpServer
         }
 
         McpIndexReferencePurgeForTesting?.Invoke();
-        purgedRefs = deferCSharpMutationsForIncompleteScan || startedWithNoIndexedFiles
+        var purgedRefs = csharpState.DeferMutations || startedWithNoIndexedFiles
             ? 0
             : writer.PurgeUnsupportedReferences(ReferenceExtractor.GetSupportedLanguages(projectPath));
         if (purgedRefs > 0)
             mutualRecursionRefreshNeeded = true;
 
-        for (var targetIndex = 0; targetIndex < fileTargets.Length; targetIndex++)
+        var fileLoopContext = new McpIndexFileLoopContext
         {
-            var target = fileTargets[targetIndex];
-            var filePath = target.FilePath;
-            var fileBatchMarked = false;
-            try
-            {
-                requestToken.ThrowIfCancellationRequested();
-                authorizedRoot.EnsureAuthorizedEntry(filePath);
-                if (deferCSharpMutationsForIncompleteScan
-                    && target.Language == "csharp")
-                {
-                    try
-                    {
-                        var info = new FileInfo(filePath);
-                        if (info.Exists && info.Length >= 0)
-                            RememberReadableFileSize(filePath, info.Length);
-                    }
-                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
-                    {
-                    }
-                    skipped++;
-                    processed++;
-                    await EmitProgressNotificationAsync(progressToken, processed, files.Count).ConfigureAwait(false);
-                    continue;
-                }
-                IndexedFileStatReuseResult? statMatchedFile = null;
-                if (statPreflightCompleted != null)
-                {
-                    if (statPreflightCompleted[targetIndex])
-                    {
-                        var cachedStatMatch = statMatchedFiles![targetIndex];
-                        if (cachedStatMatch != null)
-                        {
-                            // The dirty-byte preflight may span thousands of later files. Re-stat
-                            // cached matches at their actual skip point so that window cannot turn
-                            // a changed file into a clean-run stale-row skip. This intentionally
-                            // bypasses the C# prepass cache too.
-                            // dirty-byte preflight 後の skip 時点で再 stat し、後続 file の
-                            // preflight 中に変化した row を stale のまま再利用しない。
-                            statMatchedFile = reuseFinalCSharpStatAtActualSkip
-                                              && target.Language == "csharp"
-                                ? cachedStatMatch
-                                : IndexedFileStatReuse.TryGetReusableUnchangedFile(
-                                    reusableIndexedFileStats!,
-                                    target.FilePath,
-                                    target.IndexPath,
-                                    target.Language,
-                                    IsGeneratedExtractionSuppressed(target));
-                        }
-                    }
-                    else
-                    {
-                        statMatchedFile = GetStatMatchedFile(target);
-                    }
-                }
-                if (preservePriorPositiveCSharpSourceNoOp
-                    && target.Language == "csharp"
-                    && statMatchedFile == null)
-                {
-                    // The final global C# check passed, but this file changed before its
-                    // actual skip. Row mutations have already begun, so preserve every C#
-                    // row from this point, leave evidence unknown, and require a clean retry.
-                    // global最終check後にC# statが崩れた場合、以後のC# rowを保持してpartialにする。
-                    preservePriorPositiveCSharpSourceNoOp = false;
-                    deferCSharpMutationsForIncompleteScan = true;
-                    csharpSourceEvidenceForStamp = false;
-                    csharpSourceEvidenceComplete = false;
-                    writer.SetCSharpStaticInterfaceSourceEvidence(null);
-                    RecordCSharpWorkspaceFailure(
-                        target.IndexPath,
-                        "csharp_stat_revalidation",
-                        new IOException(
-                            "A C# source changed after final workspace preflight; rerun indexing to refresh the complete C# graph."));
-                    try
-                    {
-                        var info = new FileInfo(filePath);
-                        if (info.Exists && info.Length >= 0)
-                            RememberReadableFileSize(filePath, info.Length);
-                    }
-                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
-                    {
-                    }
-                    skipped++;
-                    processed++;
-                    await EmitProgressNotificationAsync(progressToken, processed, files.Count).ConfigureAwait(false);
-                    continue;
-                }
-                if (statMatchedFile != null)
-                {
-                    skipped++;
-                    processed++;
-                    RememberReadableFileSize(filePath, statMatchedFile.Value.Size);
-                    if (FileIndexer.SupportsHotspotFamilyMarkerLanguage(target.Language) && target.Language != null)
-                    {
-                        reusedHotspotFamilyLanguages ??= new HashSet<string>(StringComparer.Ordinal);
-                        reusedHotspotFamilyLanguages.Add(target.Language);
-                    }
-                    await EmitProgressNotificationAsync(progressToken, processed, files.Count).ConfigureAwait(false);
-                    continue;
-                }
+            Writer = writer,
+            Indexer = indexer,
+            AuthorizedRoot = authorizedRoot,
+            Targets = fileTargets,
+            ProjectPath = projectPath,
+            TotalFileCount = files.Count,
+            ProgressToken = progressToken,
+            CancellationToken = requestToken,
+            MaxSymbolsPerFile = maxSymbolsPerFile,
+            MaxReferencesPerFile = maxReferencesPerFile,
+            Rebuild = rebuild,
+            StartedWithNoIndexedFiles = startedWithNoIndexedFiles,
+            UseFullRunBatchMarker = useFullRunBatchMarker,
+            ReuseFinalCSharpStatAtActualSkip = reuseFinalCSharpStatAtActualSkip,
+            SymbolKindFilterMatchesPrior = symbolKindFilterMatchesPrior,
+            CSharpIndexedProjectRootCompatible = csharpIndexedProjectRootCompatible,
+            CSharpSymbolNameContractMatchesCurrent = csharpSymbolNameContractMatchesCurrent,
+            SqlGraphContractMatchesCurrent = sqlGraphContractMatchesCurrent,
+            HdlGraphContractMatchesCurrent = hdlGraphContractMatchesCurrent,
+            HotspotFamilyTrustMatchesCurrent = hotspotFamilyTrustMatchesCurrent,
+            ReusableIndexedFileStats = reusableIndexedFileStats,
+            StatMatchedFiles = ftsPreflight.StatMatches,
+            StatPreflightCompleted = ftsPreflight.Completed,
+            SymbolKindFilter = symbolKindFilter,
+            PostExtractionHooks = postExtractionHooks,
+            CSharpWorkspace = csharpState,
+            GetStatMatchedFile = GetStatMatchedFile,
+            RememberReadableFileSize = readableBytes.Remember,
+            InsertIssuesForIndexedFile = InsertIssuesForIndexedFile,
+            WriteProjectRootOnce = WriteProjectRootOnce,
+            MarkSymbolKindFilterMetaIncompleteOnce = MarkSymbolKindFilterMetaIncompleteOnce,
+            RequireTypeScriptAugmentationRefresh = RequireTypeScriptAugmentationRefresh,
+            Failures = failures,
+        };
+        var fileLoopSession = new McpIndexFileLoopSession
+        {
+            Processed = processed,
+            Skipped = skipped,
+            FtsMutated = ftsMutated,
+            MutualRecursionRefreshNeeded = mutualRecursionRefreshNeeded,
+            CSharpMetadataTargetsNeedRefresh = csharpMetadataTargetsNeedRefresh,
+            SymbolsDroppedByKindFilter = symbolsDroppedByKindFilter,
+            ReusedHotspotFamilyLanguages = reusedHotspotFamilyLanguages,
+            IndexedSymbolExtractorLanguages = indexedSymbolExtractorLanguages,
+            FreshCountFiles = freshCountFiles,
+            FreshCountChunks = freshCountChunks,
+            FreshCountSymbols = freshCountSymbols,
+            FreshCountReferences = freshCountReferences,
+        };
+        await RunMcpIndexFileLoopAsync(fileLoopContext, fileLoopSession)
+            .ConfigureAwait(false);
+        processed = fileLoopSession.Processed;
+        skipped = fileLoopSession.Skipped;
+        // The typed C# workspace state appends drift failures directly to the shared
+        // failure list. Per-file failures do the same through the session, so the list
+        // remains the authoritative error count at the join.
+        // typed C# workspace state と file loop の双方が共有 failure list へ追記するため、
+        // join 時の error 数は同listから復元する。
+        errors = failures.Count;
+        ftsMutated = fileLoopSession.FtsMutated;
+        mutualRecursionRefreshNeeded = fileLoopSession.MutualRecursionRefreshNeeded;
+        csharpMetadataTargetsNeedRefresh = fileLoopSession.CSharpMetadataTargetsNeedRefresh;
+        symbolsDroppedByKindFilter = fileLoopSession.SymbolsDroppedByKindFilter;
+        reusedHotspotFamilyLanguages = fileLoopSession.ReusedHotspotFamilyLanguages;
+        freshCountFiles = fileLoopSession.FreshCountFiles;
+        freshCountChunks = fileLoopSession.FreshCountChunks;
+        freshCountSymbols = fileLoopSession.FreshCountSymbols;
+        freshCountReferences = fileLoopSession.FreshCountReferences;
 
-                McpIndexFileContentLoadForTesting?.Invoke(target.IndexPath);
-                var loaded = indexer.BuildLoadedRecordWithRawBytes(
-                    filePath,
-                    target.RelativePath,
-                    target.Language,
-                    requestToken);
-                var record = loaded.Record;
-                if (!LoadedCSharpWorkspaceSnapshotMatches(target, record))
-                {
-                    RememberReadableFileSize(filePath, record.Size);
-                    skipped++;
-                    processed++;
-                    await EmitProgressNotificationAsync(progressToken, processed, files.Count).ConfigureAwait(false);
-                    continue;
-                }
-                RememberReadableFileSize(filePath, record.Size);
-                var content = loaded.Content;
-                var rawBytes = loaded.RawBytes;
-                var generatedSuppressionIssue = IsGeneratedExtractionSuppressed(target)
-                    ? indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path)
-                    : null;
-                var existingId = writer.GetReusableUnchangedFileId(
-                    record.Path,
-                    record.Modified,
-                    record.Checksum,
-                    size: record.Size,
-                    lines: record.Lines,
-                    language: record.Lang,
-                    generated: record.Generated,
-                    maxSymbolsPerFile: maxSymbolsPerFile,
-                    maxReferencesPerFile: maxReferencesPerFile,
-                    generatedExtractionSuppressed: generatedSuppressionIssue != null,
-                    allowReuse: !rebuild
-                        && !startedWithNoIndexedFiles
-                        && symbolKindFilterMatchesPrior
-                        && (record.Lang != "csharp" || csharpIndexedProjectRootCompatible)
-                        && (record.Lang != "csharp" || csharpSymbolNameContractMatchesCurrent)
-                        && (record.Lang != "csharp" || !csharpWorkspace.HasStaticInterfaceContracts)
-                        && (record.Lang != "sql" || sqlGraphContractMatchesCurrent)
-                        && (record.Lang is not ("verilog" or "systemverilog" or "vhdl") || hdlGraphContractMatchesCurrent)
-                        && AllowReuseWithCurrentHotspotFamilyTrust(record.Lang, hotspotFamilyTrustMatchesCurrent));
-                if (existingId != null)
-                {
-                    skipped++;
-                    processed++;
-                    if (FileIndexer.SupportsHotspotFamilyMarkerLanguage(record.Lang) && record.Lang != null)
-                    {
-                        reusedHotspotFamilyLanguages ??= new HashSet<string>(StringComparer.Ordinal);
-                        reusedHotspotFamilyLanguages.Add(record.Lang);
-                    }
-                    continue;
-                }
-
-                if (!useFullRunBatchMarker)
-                {
-                    writer.MarkBatchInProgress();
-                    fileBatchMarked = true;
-                }
-                MarkSymbolKindFilterMetaIncompleteOnce();
-                if (record.Lang == "csharp")
-                    csharpMetadataTargetsNeedRefresh = true;
-                var recordRequiresTypeScriptAugmentationRefresh = record.Lang == "typescript";
-                using var txn = writer.BeginTransaction(requestToken, "mcp index file");
-                if (recordRequiresTypeScriptAugmentationRefresh)
-                    RequireTypeScriptAugmentationRefresh();
-                var referenceIdentityChanged = false;
-                var fileId = startedWithNoIndexedFiles
-                    ? writer.InsertNewFile(record)
-                    : writer.UpsertFile(record, out referenceIdentityChanged);
-                if (referenceIdentityChanged)
-                    mutualRecursionRefreshNeeded = true;
-                var chunks = ChunkSplitter.SplitNormalized(fileId, content, loaded.Facts);
-                if (generatedSuppressionIssue != null)
-                {
-                    writer.InsertChunks(chunks, requestToken);
-                    writer.InsertSymbols([], requestToken);
-                    writer.InsertReferencesInAtomicFileScope([], requestToken);
-                    var issues = IndexCommandRunner.AppendIssueIfMissing(
-                        FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, loaded.Facts),
-                        generatedSuppressionIssue);
-                    InsertIssuesForIndexedFile(fileId, issues);
-                    WriteProjectRootOnce();
-                    if (!useFullRunBatchMarker)
-                        writer.ClearBatchInProgress();
-                    txn.Commit();
-                    if (!string.IsNullOrWhiteSpace(record.Lang))
-                        indexedSymbolExtractorLanguages.Add(record.Lang);
-                    CountFreshInsertedRows(chunkCount: chunks.Count);
-                    ftsMutated = true;
-                    processed++;
-                    await EmitProgressNotificationAsync(progressToken, processed, files.Count).ConfigureAwait(false);
-                    McpIndexFileCommittedForTesting?.Invoke(record.Path);
-                    continue;
-                }
-                List<SymbolRecord> symbols;
-                FileIssue? symbolRegexTimeoutIssue;
-                if (string.Equals(record.Lang, "csharp", StringComparison.Ordinal)
-                    && record.Checksum is { } checksum
-                    && csharpPrepassSymbolArtifacts?.TryTake(
-                        record.Path,
-                        checksum,
-                        out var symbolArtifact) == true)
-                {
-                    symbols = symbolArtifact.Symbols;
-                    foreach (var symbol in symbols)
-                        symbol.FileId = fileId;
-                    symbolRegexTimeoutIssue = null;
-                }
-                else
-                {
-                    using var regexTimeouts = BoundedRegex.CaptureTimeouts(
-                        record.Lang,
-                        "symbol_extraction");
-                    symbols = SymbolExtractor.ExtractNormalized(
-                        fileId,
-                        record.Lang,
-                        content,
-                        loaded.HasOversizeLine,
-                        filePath,
-                        projectPath,
-                        requestToken,
-                        loaded.ConflictMarkerLine,
-                        patternConfigsAlreadyLoaded: true);
-                    symbolRegexTimeoutIssue =
-                        IndexCommandRunner.BuildRegexTimeoutIssue(
-                            record.Path,
-                            regexTimeouts);
-                }
-                var familyScopeKey = indexer.GetFamilyScopeKey(filePath, record.Lang);
-                SymbolExtractor.ApplyFamilyScope(symbols, familyScopeKey, record.Lang);
-                var fileContext = new FileContext(projectPath, record.Path, filePath, record.Lang);
-                postExtractionHooks.Value.ObserveCSharpStaticInterfaceSourceSymbols(fileContext, symbols);
-                postExtractionHooks.Value.OnSymbolsExtractedAfterSourceObservation(
-                    fileContext,
-                    symbols,
-                    content,
-                    familyScopeKey);
-                symbolsDroppedByKindFilter += symbolKindFilter.Apply(symbols);
-                var committedChunkCount = 0;
-                var committedSymbolCount = 0;
-                var committedReferenceCount = 0;
-                if (symbols.Count > maxSymbolsPerFile)
-                {
-                    var issue = BuildMcpSymbolCountExceededIssue(record.Path, symbols.Count, maxSymbolsPerFile);
-                    IReadOnlyList<FileIssue> capIssues = symbolRegexTimeoutIssue == null
-                        ? [issue]
-                        : IndexCommandRunner.AppendIssue([symbolRegexTimeoutIssue], issue);
-                    writer.InsertSymbols([], requestToken);
-                    writer.InsertReferencesInAtomicFileScope([], requestToken);
-                    InsertIssuesForIndexedFile(fileId, capIssues);
-                }
-                else
-                {
-                    writer.InsertChunks(chunks, requestToken);
-                    writer.InsertSymbols(symbols, requestToken);
-                    List<ReferenceRecord> references;
-                    ReferenceExtractionResult referenceExtraction;
-                    FileIssue? regexTimeoutIssue;
-                    using (var regexTimeouts = BoundedRegex.CaptureTimeouts(record.Lang, "reference_extraction"))
-                    {
-                        referenceExtraction = ReferenceExtractor.ExtractDetailedNormalized(
-                            fileId,
-                            record.Lang,
-                            content,
-                            loaded.HasOversizeLine,
-                            symbols,
-                            record.Path,
-                            record.Lang == "csharp" ? csharpWorkspace.Symbols : null,
-                            requestToken,
-                            maxReferenceCount: maxReferencesPerFile + 1,
-                            conflictMarkerLine: loaded.ConflictMarkerLine,
-                            workspaceRoot: projectPath,
-                            csharpStaticInterfaceMemberLookups: csharpWorkspace.StaticInterfaceMemberLookups,
-                            csharpQualifiedPatternLookups: csharpWorkspace.QualifiedPatternLookups);
-                        references = referenceExtraction.References;
-                        regexTimeoutIssue = IndexCommandRunner.BuildRegexTimeoutIssue(record.Path, regexTimeouts);
-                    }
-                    postExtractionHooks.Value.OnReferencesExtracted(fileContext, references);
-                    FileIssue? referenceCapIssue = null;
-                    if (references.Count > maxReferencesPerFile)
-                    {
-                        referenceCapIssue = BuildMcpReferenceCountExceededIssue(record.Path, references.Count, maxReferencesPerFile);
-                        references = [];
-                    }
-                    if (startedWithNoIndexedFiles)
-                        writer.InsertReferencesForNewFilesInAtomicFileScope(references, refreshMutualRecursionFlags: false, requestToken);
-                    else
-                        writer.InsertReferencesInAtomicFileScope(references, refreshMutualRecursionFlags: false, requestToken);
-                    if (symbols.Count > 0 || references.Count > 0)
-                        mutualRecursionRefreshNeeded = true;
-                    committedChunkCount = chunks.Count;
-                    committedSymbolCount = symbols.Count;
-                    committedReferenceCount = references.Count;
-                    // Keep MCP index parity with CLI index: persist file-level validation issues too.
-                    // MCPインデックスもCLIインデックスと同等に、ファイル検証issueを保存する。
-                    IReadOnlyList<FileIssue> issues = FileIndexer.ValidateContent(record.Path, rawBytes, content, record.Lang, loaded.Inspection, loaded.Facts);
-                    if (symbolRegexTimeoutIssue != null)
-                        issues = IndexCommandRunner.AppendIssue(issues, symbolRegexTimeoutIssue);
-                    if (regexTimeoutIssue != null)
-                        issues = IndexCommandRunner.AppendIssue(issues, regexTimeoutIssue);
-                    issues = IndexCommandRunner.AppendReferenceExtractionDiagnosticIssues(
-                        issues,
-                        record.Path,
-                        referenceExtraction.Diagnostics);
-                    if (referenceCapIssue != null)
-                        issues = IndexCommandRunner.AppendIssue(issues, referenceCapIssue);
-                    InsertIssuesForIndexedFile(fileId, issues);
-                }
-                WriteProjectRootOnce();
-                if (!useFullRunBatchMarker)
-                    writer.ClearBatchInProgress();
-                txn.Commit();
-                if (!string.IsNullOrWhiteSpace(record.Lang))
-                    indexedSymbolExtractorLanguages.Add(record.Lang);
-                CountFreshInsertedRows(committedChunkCount, committedSymbolCount, committedReferenceCount);
-                ftsMutated = true;
-                McpIndexFileCommittedForTesting?.Invoke(record.Path);
-            }
-            catch (McpIndexAuthorizationException)
-            {
-                if (fileBatchMarked || useFullRunBatchMarker)
-                    writer.ClearBatchInProgress();
-                throw;
-            }
-            catch (FileIndexer.BinaryFileSkippedException ex)
-            {
-                try
-                {
-                    var skippedRecord = indexer.BuildSkippedFileRecord(filePath, target.RelativePath, target.Language);
-                    RememberReadableFileSize(filePath, skippedRecord.Size);
-                    if (!LoadedCSharpWorkspaceSnapshotMatches(target, skippedRecord))
-                    {
-                        skipped++;
-                    }
-                    else
-                    {
-                        if (skippedRecord.Lang == "csharp")
-                            csharpMetadataTargetsNeedRefresh = true;
-                        var skippedRecordRequiresTypeScriptAugmentationRefresh = skippedRecord.Lang == "typescript";
-                        using var txn = writer.BeginTransaction(requestToken, "mcp index skipped binary");
-                        if (skippedRecordRequiresTypeScriptAugmentationRefresh)
-                            RequireTypeScriptAugmentationRefresh();
-                        var referenceIdentityChanged = false;
-                        var fileId = startedWithNoIndexedFiles
-                            ? writer.InsertNewFile(skippedRecord)
-                            : writer.UpsertFile(skippedRecord, out referenceIdentityChanged);
-                        if (referenceIdentityChanged)
-                            mutualRecursionRefreshNeeded = true;
-                        writer.InsertChunks([], requestToken);
-                        writer.InsertSymbols([], requestToken);
-                        writer.InsertReferencesInAtomicFileScope([], requestToken);
-                        InsertIssuesForIndexedFile(fileId, [IndexCommandRunner.BuildNullByteIssue(ex)]);
-                        WriteProjectRootOnce();
-                        txn.Commit();
-                        if (!string.IsNullOrWhiteSpace(skippedRecord.Lang))
-                            indexedSymbolExtractorLanguages.Add(skippedRecord.Lang);
-                        CountFreshInsertedRows();
-                        ftsMutated = true;
-                    }
-                }
-                catch (Exception cleanupEx) when (cleanupEx is not McpIndexAuthorizationException)
-                {
-                    errors++;
-                    failures.Add(BuildIndexFileFailure(projectPath, filePath, cleanupEx, "record_skipped_binary"));
-                }
-            }
-            catch (FileIndexer.FileTooLargeSkippedException ex)
-            {
-                try
-                {
-                    var skippedRecord = indexer.BuildSkippedFileRecord(filePath, target.RelativePath, target.Language);
-                    RememberReadableFileSize(filePath, skippedRecord.Size);
-                    if (!LoadedCSharpWorkspaceSnapshotMatches(target, skippedRecord))
-                    {
-                        skipped++;
-                    }
-                    else
-                    {
-                        if (skippedRecord.Lang == "csharp")
-                            csharpMetadataTargetsNeedRefresh = true;
-                        var skippedRecordRequiresTypeScriptAugmentationRefresh = skippedRecord.Lang == "typescript";
-                        using var txn = writer.BeginTransaction(requestToken, "mcp index skipped oversized file");
-                        if (skippedRecordRequiresTypeScriptAugmentationRefresh)
-                            RequireTypeScriptAugmentationRefresh();
-                        var referenceIdentityChanged = false;
-                        var fileId = startedWithNoIndexedFiles
-                            ? writer.InsertNewFile(skippedRecord)
-                            : writer.UpsertFile(skippedRecord, out referenceIdentityChanged);
-                        if (referenceIdentityChanged)
-                            mutualRecursionRefreshNeeded = true;
-                        writer.InsertChunks([], requestToken);
-                        writer.InsertSymbols([], requestToken);
-                        writer.InsertReferencesInAtomicFileScope([], requestToken);
-                        InsertIssuesForIndexedFile(fileId,
-                        [
-                            new FileIssue
-                            {
-                                Path = ex.RelativePath,
-                                Kind = "file_too_large",
-                                Line = 0,
-                                Message = CommandErrorWriter.FormatSanitizedExceptionMessage(ex),
-                            }
-                        ]);
-                        WriteProjectRootOnce();
-                        txn.Commit();
-                        if (!string.IsNullOrWhiteSpace(skippedRecord.Lang))
-                            indexedSymbolExtractorLanguages.Add(skippedRecord.Lang);
-                        CountFreshInsertedRows();
-                        ftsMutated = true;
-                    }
-                }
-                catch (Exception cleanupEx) when (cleanupEx is not McpIndexAuthorizationException)
-                {
-                    errors++;
-                    failures.Add(BuildIndexFileFailure(projectPath, filePath, cleanupEx, "record_skipped_oversized_file"));
-                }
-            }
-            catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
-            {
-                if (fileBatchMarked)
-                    writer.ClearBatchInProgress();
-
-                if (target.Language == "csharp" && csharpWorkspaceFileSnapshots != null)
-                {
-                    DeferCSharpMutationsForLoadedSnapshotDrift(target.DisplayRelativePath);
-                    skipped++;
-                    processed++;
-                    await EmitProgressNotificationAsync(progressToken, processed, files.Count).ConfigureAwait(false);
-                    continue;
-                }
-
-                try
-                {
-                    var relativePath = FileIndexer.NormalizePathSeparators(
-                        FileIndexer.GetRelativePathFromDirectory(projectPath, filePath));
-                    if (writer.HasFileAtPath(relativePath))
-                    {
-                        using var txn = writer.BeginTransaction(requestToken, "mcp index delete missing file");
-                        writer.DeleteFileByPath(relativePath);
-                        mutualRecursionRefreshNeeded = true;
-                        csharpMetadataTargetsNeedRefresh = true;
-                        RequireTypeScriptAugmentationRefresh();
-                        WriteProjectRootOnce();
-                        txn.Commit();
-                        ftsMutated = true;
-                    }
-                }
-                catch (Exception cleanupEx)
-                {
-                    errors++;
-                    failures.Add(BuildIndexFileFailure(projectPath, filePath, cleanupEx, "delete_missing_file"));
-                }
-            }
-            catch (OperationCanceledException) when (requestToken.IsCancellationRequested)
-            {
-                if (fileBatchMarked || useFullRunBatchMarker)
-                    writer.ClearBatchInProgress();
-                throw;
-            }
-            catch (Exception ex)
-            {
-                if (fileBatchMarked)
-                    writer.ClearBatchInProgress();
-                errors++;
-                failures.Add(BuildIndexFileFailure(projectPath, filePath, ex, "index_file"));
-            }
-            processed++;
-            await EmitProgressNotificationAsync(progressToken, processed, files.Count).ConfigureAwait(false);
-        }
-
-        csharpPrepassSymbolArtifacts?.Clear();
-        csharpPrepassSymbolArtifacts = null;
+        csharpState.ClearArtifacts();
 
         var referenceIdentityReadyForMutualRecursionRefresh =
-            !deferCSharpMutationsForIncompleteScan && mutualRecursionRefreshNeeded
+            !csharpState.DeferMutations && mutualRecursionRefreshNeeded
                 ? writer.CSharpFamilyTrustAllowsReferenceIdentityReady(
                     startedWithNoIndexedFiles
                     && !scanHadErrors
@@ -1822,7 +901,7 @@ public partial class McpServer
             && !scanHadErrors
             && !hasTypeScriptTargets;
         var willRebuildTypeScriptAugmentation =
-            !deferCSharpMutationsForIncompleteScan
+            !csharpState.DeferMutations
             && TypeScriptAugmentationRefreshPolicy.ShouldRebuildReferences(
                 symbolsOnly: false,
                 canFinalize: !scanHadErrors && errors == 0,
@@ -1832,7 +911,7 @@ public partial class McpServer
                     canStampTypeScriptAugmentationReadyWithoutRebuild);
         var deferMutualRecursionRefreshToTypeScriptAugmentation =
             mutualRecursionRefreshNeeded && willRebuildTypeScriptAugmentation;
-        if (!deferCSharpMutationsForIncompleteScan
+        if (!csharpState.DeferMutations
             && mutualRecursionRefreshNeeded
             && !deferMutualRecursionRefreshToTypeScriptAugmentation)
         {
@@ -1872,19 +951,15 @@ public partial class McpServer
         }
         var readinessStableFiles = true;
         string? readinessChangedFilePath = null;
-        if (errors == 0 && !deferCSharpMutationsForIncompleteScan)
+        if (errors == 0 && !csharpState.DeferMutations)
         {
             McpIndexCSharpReadinessValidationForTesting?.Invoke();
-            if (csharpWorkspaceFileSnapshots != null)
+            if (csharpState.HasFileSnapshots)
             {
-                readinessStableFiles = CSharpStaticInterfacePrepass.TryValidateFileStatSnapshots(
-                    csharpPrepassTargets,
-                    csharpWorkspaceFileSnapshots,
-                    out readinessChangedFilePath,
-                    requestToken,
-                    target => authorizedRoot.EnsureAuthorizedEntry(target.FilePath));
+                readinessStableFiles = csharpState.TryValidateFileSnapshots(
+                    out readinessChangedFilePath);
             }
-            else if (preservePriorPositiveCSharpSourceNoOp)
+            else if (csharpState.PreservePriorPositiveSourceNoOp)
             {
                 foreach (var target in csharpPrepassTargets)
                 {
@@ -1916,11 +991,13 @@ public partial class McpServer
                 requestToken);
             if (!readinessStableFiles || !readinessStableScanInputs)
             {
-                DeferCSharpMutationsForLoadedSnapshotDrift(
-                    FormatCSharpWorkspaceSnapshotPath(
+                csharpState.DeferForLoadedSnapshotDrift(
+                    csharpState.FormatSnapshotPath(
                         readinessChangedFilePath
                         ?? readinessChangedScanInputPath
-                        ?? "<csharp_workspace>"));
+                        ?? "<csharp_workspace>"),
+                    writer);
+                errors = failures.Count;
             }
         }
         // MCP index now runs ValidateContent + InsertIssues per file (bdbb2bd) on par with CLI
@@ -1928,24 +1005,25 @@ public partial class McpServer
         // path is no longer accurate. Bits are only stamped when every file committed without
         // throwing, so a partial failure leaves trust degraded and `validate` still surfaces it.
         // MCP index は CLI と同等に file_issues を永続化するため、成功時は graph / issues の両方を stamp する。
-        if (!deferCSharpMutationsForIncompleteScan
+        if (!csharpState.DeferMutations
             && postExtractionHooks.ValueIfCreated?.SawCSharpStaticInterfaceSourceContract == true)
         {
-            if (!csharpWorkspace.HasSourceStaticInterfaceContracts)
+            if (!csharpState.Workspace.HasSourceStaticInterfaceContracts)
             {
-                csharpSourceEvidenceForStamp = false;
-                csharpSourceEvidenceComplete = false;
+                csharpState.SourceEvidenceForStamp = false;
+                csharpState.SourceEvidenceComplete = false;
                 writer.SetCSharpStaticInterfaceSourceEvidence(null);
-                RecordCSharpWorkspaceFailure(
+                csharpFailures.Record(
                     "<csharp_workspace>",
                     "csharp_workspace_validation",
                     new InvalidOperationException(
                         "A C# static-interface contract appeared after workspace preflight; rerun indexing to repair unchanged implementers."));
+                errors = failures.Count;
             }
             else
             {
-                csharpSourceEvidenceForStamp = true;
-                csharpSourceEvidenceComplete = true;
+                csharpState.SourceEvidenceForStamp = true;
+                csharpState.SourceEvidenceComplete = true;
                 writer.SetCSharpStaticInterfaceSourceEvidence(true);
             }
         }
@@ -1954,7 +1032,7 @@ public partial class McpServer
         // the deferred pass before publishing partial metadata.
         // late validation で augmentation を実行できない場合だけ、partial metadata 前に補完する。
         var willRebuildTypeScriptAugmentationAfterReadinessValidation =
-            !deferCSharpMutationsForIncompleteScan
+            !csharpState.DeferMutations
             && TypeScriptAugmentationRefreshPolicy.ShouldRebuildReferences(
                 symbolsOnly: false,
                 canFinalize: !scanHadErrors && errors == 0,
@@ -2050,8 +1128,8 @@ public partial class McpServer
             writer.MarkIssuesReady();
             writer.MarkIndexReaderContractsReady(symbolsOnlyGraphOmitted: false);
             writer.MarkHdlGraphContractReady();
-            if (csharpSourceEvidenceComplete && !preservePriorPositiveCSharpSourceNoOp)
-                writer.SetCSharpStaticInterfaceSourceEvidence(csharpSourceEvidenceForStamp);
+            if (csharpState.SourceEvidenceComplete && !csharpState.PreservePriorPositiveSourceNoOp)
+                writer.SetCSharpStaticInterfaceSourceEvidence(csharpState.SourceEvidenceForStamp);
             csharpSymbolNameReadyAfter = true;
             if (hasCSharpFilesAfter)
             {
@@ -2163,16 +1241,16 @@ public partial class McpServer
             // MCP の no-op full-scan root backfill も readiness stamp 後に限定する。
             WriteProjectRootOnce();
             writer.WriteUnknownExtensionFileMetadata(scanResult.UnknownExtensionFiles);
-            var bytesRead = knownReadableFileSizes.Count == files.Count
-                ? (BytesRead: knownReadableBytesRead,
-                    SkippedFileCount: knownReadableByteEstimateComplete ? 0L : 1L)
+            var bytesRead = readableBytes.Sizes.Count == files.Count
+                ? (BytesRead: readableBytes.Total,
+                    SkippedFileCount: readableBytes.EstimateComplete ? 0L : 1L)
                 : SumReadableFileBytes(
                         files,
                         projectPath,
                         indexRunDiagnostics,
                         mcpIndexDiagnostics,
                         authorizedRoot.EnsureAuthorizedEntry,
-                        knownReadableFileSizes);
+                        readableBytes.Sizes);
             var referenceExtractionCapHits = writer.GetReferenceExtractionCapHits(issuesStateAvailable: true);
             writer.SetMetaValues(
                 (DbContext.LastIndexRunModeMetaKey, rebuild ? "rebuild" : "mcp"),

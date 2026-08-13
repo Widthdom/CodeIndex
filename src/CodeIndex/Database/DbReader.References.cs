@@ -653,34 +653,8 @@ public partial class DbReader
         return false;
     }
 
-
-    // Query-side mirror of the C# declaration canonicalizer. Users commonly type source
-    // spellings such as `@class` or `Outer.@class`; the DB stores the canonical names
-    // without the verbatim `@`, so query entrypoints normalize to the persisted form first.
-    // Rust macro names are also accepted with a trailing `!` because the extractor stores
-    // them without the punctuation, so `my_macro!` and `my_macro` resolve to the same row.
-    // The normalization is applied when `--lang` is omitted or explicitly `csharp` because
-    // name-based lookup still needs to treat C# verbatim spellings as canonical symbol names.
-    // Other languages, including SQL, must preserve leading `@` characters.
-    // C# 宣言側 canonicalizer の query 側ミラー。`@class` / `Outer.@class` のような source
-    // spelling を受けても、DB 側の `@` なし canonical 名に合わせてから検索する。
-    // Rust macro 名も extractor 側では末尾 `!` を落として保存するため、`my_macro!` と `my_macro`
-    // を同じ行へ解決できるようにする。
-    // `--lang` 未指定または `csharp` 指定では name-based lookup が verbatim spelling を canonical 名へ寄せる。
-    // それ以外の言語、特に SQL では先頭 `@` を保持する。
     private static string? NormalizeCSharpVerbatimQuery(string? query, string? lang)
-    {
-        if (!string.IsNullOrWhiteSpace(lang) && string.Equals(lang, "rust", StringComparison.OrdinalIgnoreCase))
-        {
-            var rustNormalized = NormalizeRustSymbolSearchQuery(query);
-            return string.IsNullOrWhiteSpace(rustNormalized) ? null : rustNormalized;
-        }
-
-        if (!string.IsNullOrWhiteSpace(lang) && !string.Equals(lang, "csharp", StringComparison.OrdinalIgnoreCase))
-            return query;
-        var normalized = query == null ? null : NormalizeDbCSharpQualifiedName(query);
-        return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
-    }
+        => SymbolSearchQueryNormalizer.NormalizeCSharpVerbatim(query, lang);
 
     private static bool IsBareVerbatimQueryToken(string? value)
     {

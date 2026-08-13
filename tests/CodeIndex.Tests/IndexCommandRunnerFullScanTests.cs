@@ -2307,6 +2307,137 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FullScan_FatalParallelResultKeepsWorkerResourcesAliveUntilPeersStop()
+    {
+        var projectRoot = CreateTempProject();
+        lock (FullScanContentLoadHookGate)
+        {
+            var previousPhaseHook = IndexCommandRunner.FullScanFilePhaseForTesting;
+            var previousWorkStartedHook =
+                IndexCommandRunner.FullScanExtractionWorkStartedForTesting;
+            var previousWorkersStoppedHook =
+                IndexCommandRunner.FullScanExtractionWorkersStoppedForTesting;
+            var previousArtifactHook =
+                CSharpPrepassSymbolArtifactCache.EventForTesting;
+            using var blockedWorkerStarted = new ManualResetEventSlim();
+            using var releaseBlockedWorker = new ManualResetEventSlim();
+            using var workersStopped = new ManualResetEventSlim();
+            using var artifactCleared = new ManualResetEventSlim();
+            var artifactEvents =
+                new ConcurrentQueue<CSharpPrepassSymbolArtifactCacheEvent>();
+            var pipelineUsed = 0;
+            try
+            {
+                File.WriteAllText(
+                    Path.Combine(projectRoot, "A.cs"),
+                    "public class A { public static int Value => 1; }\n");
+                File.WriteAllText(
+                    Path.Combine(projectRoot, "B.cs"),
+                    "public class B { public static int Value => 2; }\n");
+                CSharpPrepassSymbolArtifactCache.EventForTesting = item =>
+                {
+                    artifactEvents.Enqueue(item);
+                    if (item.Phase == "cleared")
+                        artifactCleared.Set();
+                };
+                IndexCommandRunner.FullScanExtractionWorkStartedForTesting = () =>
+                    Interlocked.Exchange(ref pipelineUsed, 1);
+                IndexCommandRunner.FullScanExtractionWorkersStoppedForTesting =
+                    workersStopped.Set;
+                IndexCommandRunner.FullScanFilePhaseForTesting = (path, phase) =>
+                {
+                    if (phase != "symbols")
+                        return;
+                    if (path == "A.cs")
+                    {
+                        blockedWorkerStarted.Set();
+                        releaseBlockedWorker.Wait(TimeSpan.FromSeconds(30));
+                        return;
+                    }
+                    if (path == "B.cs")
+                    {
+                        if (!blockedWorkerStarted.Wait(TimeSpan.FromSeconds(30)))
+                        {
+                            throw new TimeoutException(
+                                "The blocked full-scan peer did not reach symbol extraction.");
+                        }
+                        throw new IndexCommandRunner.IndexExtractionStalledException(
+                            0,
+                            null,
+                            TimeSpan.FromMilliseconds(10),
+                            "B.cs [symbols]",
+                            "injected fatal full-scan result");
+                    }
+                };
+
+                var stopwatch = Stopwatch.StartNew();
+                var (exitCode, json) = RunAndCaptureJson(
+                    [projectRoot, "--parallelism", "2", "--json", "--quiet"]);
+                stopwatch.Stop();
+
+                Assert.True(blockedWorkerStarted.IsSet);
+                Assert.True(
+                    stopwatch.Elapsed < TimeSpan.FromSeconds(5),
+                    $"The fatal full-scan result waited for its blocked peer for {stopwatch.Elapsed}.");
+                Assert.Equal(CommandExitCodes.CancelledBySignal, exitCode);
+                Assert.Equal(
+                    CommandErrorCodes.IndexExtractionStalled,
+                    json.GetProperty("error_code").GetString());
+                Assert.Contains(
+                    "B.cs [symbols]",
+                    json.GetProperty("message").GetString(),
+                    StringComparison.Ordinal);
+                Assert.Contains(
+                    "injected fatal full-scan result",
+                    json.GetProperty("message").GetString(),
+                    StringComparison.Ordinal);
+                Assert.False(workersStopped.IsSet);
+                Assert.Contains(
+                    artifactEvents,
+                    item => item.Phase == "admitted" && item.Path == "A.cs");
+                Assert.Contains(
+                    artifactEvents,
+                    item => item.Phase == "admitted" && item.Path == "B.cs");
+                Assert.DoesNotContain(artifactEvents, item => item.Phase == "cleared");
+
+                releaseBlockedWorker.Set();
+                Assert.True(
+                    workersStopped.Wait(TimeSpan.FromSeconds(30)),
+                    "The fatal full-scan extraction workers did not stop.");
+                Assert.True(
+                    artifactCleared.Wait(TimeSpan.FromSeconds(30)),
+                    "The full-scan worker resources were not cleared after the workers stopped.");
+                var completedEvents = artifactEvents.ToArray();
+                var takenIndex = Array.FindIndex(
+                    completedEvents,
+                    item => item.Phase == "taken" && item.Path == "A.cs");
+                var clearedIndex = Array.FindIndex(
+                    completedEvents,
+                    item => item.Phase == "cleared");
+                Assert.True(takenIndex >= 0);
+                Assert.True(clearedIndex > takenIndex);
+                Assert.Equal(1, completedEvents.Count(item => item.Phase == "cleared"));
+            }
+            finally
+            {
+                releaseBlockedWorker.Set();
+                var cleanupSafe = Volatile.Read(ref pipelineUsed) == 0
+                    || workersStopped.Wait(TimeSpan.FromSeconds(30));
+                IndexCommandRunner.FullScanFilePhaseForTesting = previousPhaseHook;
+                IndexCommandRunner.FullScanExtractionWorkStartedForTesting =
+                    previousWorkStartedHook;
+                IndexCommandRunner.FullScanExtractionWorkersStoppedForTesting =
+                    previousWorkersStoppedHook;
+                CSharpPrepassSymbolArtifactCache.EventForTesting =
+                    previousArtifactHook;
+                if (cleanupSafe)
+                    DeleteDirectory(projectRoot);
+                SqliteConnection.ClearAllPools();
+            }
+        }
+    }
+
+    [Fact]
     public void Run_FullScan_ParallelCsharpStaticInterfacePrepass_IndexesImplicitImplementationReference()
     {
         const int implementationFileCount = 64;
@@ -2686,24 +2817,42 @@ public partial class IndexCommandRunnerTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
     public void Run_FullScan_PostPrepassCsharpContractLeavesReadinessPartialUntilCleanRetry(
-        bool rebuildExisting)
+        bool rebuildExisting,
+        bool incrementalExisting)
     {
         var projectRoot = CreateTempProject();
-        var interfacePath = Path.Combine(projectRoot, "IParseable.cs");
-        var moneyPath = Path.Combine(projectRoot, "Money.cs");
+        var csharpRoot = Path.Combine(projectRoot, "csharp");
+        var interfacePath = Path.Combine(csharpRoot, "IParseable.cs");
+        var moneyPath = Path.Combine(csharpRoot, "Money.cs");
+        var ftsSourcePath = Path.Combine(projectRoot, "00_FtsBeforeDrift.py");
         const string moneySource =
             "public readonly struct Money : IParseable<Money>\n"
             + "{\n"
             + "    public static Money Parse(string s) => new();\n"
             + "}\n";
         var previousContentLoadHook = IndexCommandRunner.FullScanFileContentLoadForTesting;
+        var previousOptimizeHook = IndexCommandRunner.FullScanFtsOptimizeForTesting;
         var interfaceRewritten = false;
+        var optimizeCount = 0;
         try
         {
-            if (rebuildExisting)
+            Directory.CreateDirectory(csharpRoot);
+            if (incrementalExisting)
+            {
+                File.WriteAllText(ftsSourcePath, "# fullscanftsbaseline\n");
+                File.WriteAllText(
+                    interfacePath,
+                    "public interface IParseable<T> { } // baseline\n");
+                File.WriteAllText(moneyPath, moneySource);
+                Assert.Equal(
+                    CommandExitCodes.Success,
+                    IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions));
+            }
+            else if (rebuildExisting)
             {
                 File.WriteAllText(Path.Combine(projectRoot, "app.py"), "print('ready')\n");
                 Assert.Equal(
@@ -2711,8 +2860,25 @@ public partial class IndexCommandRunnerTests
                     IndexCommandRunner.Run([projectRoot, "--json", "--quiet"], _jsonOptions));
             }
 
+            File.WriteAllText(ftsSourcePath, "# fullscanftsdrifttoken\n");
             File.WriteAllText(interfacePath, "public interface IParseable<T> { }\n");
-            File.WriteAllText(moneyPath, moneySource);
+            File.WriteAllText(
+                moneyPath,
+                incrementalExisting
+                    ? moneySource + "// dirty before extraction\n"
+                    : moneySource);
+            if (incrementalExisting)
+            {
+                var changedAt = DateTime.UtcNow.AddSeconds(2);
+                File.SetLastWriteTimeUtc(ftsSourcePath, changedAt);
+                File.SetLastWriteTimeUtc(interfacePath, changedAt);
+                File.SetLastWriteTimeUtc(moneyPath, changedAt);
+            }
+            IndexCommandRunner.FullScanFtsOptimizeForTesting = () =>
+            {
+                optimizeCount++;
+                previousOptimizeHook?.Invoke();
+            };
             IndexCommandRunner.FullScanFileContentLoadForTesting = path =>
             {
                 if (interfaceRewritten || !path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
@@ -2738,6 +2904,29 @@ public partial class IndexCommandRunnerTests
             Assert.Contains(
                 partialJson.GetProperty("file_errors").EnumerateArray(),
                 error => error.GetProperty("phase").GetString() == "csharp_workspace_validation");
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            (long chunks, long fts, long trigram) ftsCounts;
+            using (var connection = OpenNonPoolingConnection(dbPath))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = """
+                    SELECT
+                        (SELECT COUNT(*) FROM chunks WHERE content LIKE '%fullscanftsdrifttoken%'),
+                        (SELECT COUNT(*) FROM fts_chunks WHERE fts_chunks MATCH 'fullscanftsdrifttoken'),
+                        (SELECT COUNT(*) FROM fts_chunks_trigram WHERE fts_chunks_trigram MATCH 'fullscanftsdrifttoken')
+                    """;
+                using var reader = command.ExecuteReader();
+                Assert.True(reader.Read());
+                ftsCounts = (
+                    reader.GetInt64(0),
+                    reader.GetInt64(1),
+                    reader.GetInt64(2));
+            }
+            Assert.Equal(1L, ftsCounts.chunks);
+            Assert.Equal(
+                (fts: 1L, trigram: 1L, optimize: 1),
+                (fts: ftsCounts.fts, trigram: ftsCounts.trigram, optimize: optimizeCount));
 
             IndexCommandRunner.FullScanFileContentLoadForTesting = previousContentLoadHook;
             var (recoveryExitCode, recoveryJson) = RunAndCaptureJson(arguments);
@@ -2749,6 +2938,7 @@ public partial class IndexCommandRunnerTests
         finally
         {
             IndexCommandRunner.FullScanFileContentLoadForTesting = previousContentLoadHook;
+            IndexCommandRunner.FullScanFtsOptimizeForTesting = previousOptimizeHook;
             DeleteDirectory(projectRoot);
             SqliteConnection.ClearAllPools();
         }
@@ -3185,6 +3375,7 @@ public partial class IndexCommandRunnerTests
     {
         var projectRoot = CreateTempProject();
         var previousBarrierHook = IndexCommandRunner.FullScanInputSnapshotBarrierForTesting;
+        var previousWritePhaseHook = IndexCommandRunner.FullScanWritePhaseStartedForTesting;
         var phases = new List<string>();
         try
         {
@@ -3192,6 +3383,8 @@ public partial class IndexCommandRunnerTests
             if (includeCSharp)
                 File.WriteAllText(Path.Combine(projectRoot, "Plain.cs"), "public sealed class Plain { }\n");
             IndexCommandRunner.FullScanInputSnapshotBarrierForTesting = phases.Add;
+            IndexCommandRunner.FullScanWritePhaseStartedForTesting = () =>
+                phases.Add("write_started");
 
             var args = symbolsOnly
                 ? new[] { projectRoot, "--symbols-only", "--json", "--quiet" }
@@ -3199,11 +3392,14 @@ public partial class IndexCommandRunnerTests
             var exitCode = IndexCommandRunner.Run(args, _jsonOptions);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(["before_write", "before_readiness"], phases);
+            Assert.Equal(
+                ["before_write", "write_started", "before_readiness"],
+                phases);
         }
         finally
         {
             IndexCommandRunner.FullScanInputSnapshotBarrierForTesting = previousBarrierHook;
+            IndexCommandRunner.FullScanWritePhaseStartedForTesting = previousWritePhaseHook;
             DeleteDirectory(projectRoot);
             SqliteConnection.ClearAllPools();
         }
@@ -3351,8 +3547,11 @@ public partial class IndexCommandRunnerTests
         }
     }
 
-    [Fact]
-    public void Run_FullScan_FirstSnapshotBarrierDriftPreservesRowsAndTrustAfterSchemaInitialization()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Run_FullScan_FirstSnapshotBarrierDriftPreservesRowsAndTrustAfterSchemaInitialization(
+        bool rebuild)
     {
         var projectRoot = CreateTempProject();
         var previousBarrierHook = IndexCommandRunner.FullScanInputSnapshotBarrierForTesting;
@@ -3376,6 +3575,7 @@ public partial class IndexCommandRunnerTests
             string? priorAppChecksum;
             bool? priorSourceEvidence;
             string? priorFtsRecoveryMarker;
+            string? priorBatchMarker;
             using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 priorReadiness = db.GetUserVersion();
@@ -3384,7 +3584,9 @@ public partial class IndexCommandRunnerTests
                 var priorWriter = new DbWriter(db);
                 priorSourceEvidence = priorWriter.GetCSharpStaticInterfaceSourceEvidence();
                 priorWriter.MarkFtsBulkLoadRecoveryNeeded();
+                priorWriter.MarkBatchInProgress();
                 priorFtsRecoveryMarker = db.GetMetaString(DbWriter.FtsBulkLoadInProgressMetaKey);
+                priorBatchMarker = db.GetMetaString(DbContext.BatchInProgressMetaKey);
             }
 
             File.WriteAllText(appPath, "def run():\n    return 2\n");
@@ -3402,7 +3604,10 @@ public partial class IndexCommandRunnerTests
                 Directory.SetLastWriteTimeUtc(projectRoot, rootModifiedUtc);
             };
 
-            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json", "--quiet"]);
+            var args = rebuild
+                ? new[] { projectRoot, "--rebuild", "--yes", "--json", "--quiet" }
+                : [projectRoot, "--json", "--quiet"];
+            var (exitCode, json) = RunAndCaptureJson(args);
 
             Assert.Equal(CommandExitCodes.PartialResult, exitCode);
             Assert.Equal("partial", json.GetProperty("status").GetString());
@@ -3417,6 +3622,9 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(
                 priorFtsRecoveryMarker,
                 preservedDb.GetMetaString(DbWriter.FtsBulkLoadInProgressMetaKey));
+            Assert.Equal(
+                priorBatchMarker,
+                preservedDb.GetMetaString(DbContext.BatchInProgressMetaKey));
             Assert.Equal(priorAppChecksum, new DbReader(preservedDb.Connection).GetFileByPath("app.py")?.Checksum);
             Assert.NotNull(new DbReader(preservedDb.Connection).GetFileByPath("obsolete.md"));
             Assert.Equal(

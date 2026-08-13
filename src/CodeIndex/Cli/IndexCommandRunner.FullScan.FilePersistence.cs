@@ -24,7 +24,7 @@ public static partial class IndexCommandRunner
         internal required PostExtractionHookRunner PostExtractionHooks { get; init; }
         internal required SymbolExtractionWorkerClient SymbolExtractionWorker { get; init; }
         internal required CancellationToken CancellationToken { get; init; }
-        internal required Action<long, IReadOnlyList<FileIssue>> InsertIssuesForIndexedFile { get; init; }
+        internal required FullScanExtractionSession ExtractionSession { get; init; }
         internal required Action WriteProjectRootOnce { get; init; }
         internal required Action<string, string> SetPhase { get; init; }
     }
@@ -95,7 +95,7 @@ public static partial class IndexCommandRunner
             var generatedIssues = AppendIssueIfMissing(
                 RequireWorkItemIssues(item),
                 context.GeneratedSuppressionIssue);
-            context.InsertIssuesForIndexedFile(fileId, generatedIssues);
+            context.ExtractionSession.InsertIssuesForIndexedFile(fileId, generatedIssues);
             context.SetPhase(
                 FormatIndexPhasePath(record.Path, "committing"),
                 "committing");
@@ -170,7 +170,7 @@ public static partial class IndexCommandRunner
                 : AppendIssue([symbolRegexTimeoutIssue], issue);
             writer.InsertSymbols([], cancellationToken);
             writer.InsertReferencesInAtomicFileScope([], cancellationToken);
-            context.InsertIssuesForIndexedFile(fileId, capIssues);
+            context.ExtractionSession.InsertIssuesForIndexedFile(fileId, capIssues);
             txn.Commit();
             return new FullScanFilePersistenceResult(
                 chunks.Count,
@@ -330,7 +330,7 @@ public static partial class IndexCommandRunner
             mutualRecursionRefreshNeeded = true;
         context.SetPhase(FormatIndexPhasePath(record.Path, "validating"), "validating");
         var issues = RequireWorkItemIssues(item);
-        context.InsertIssuesForIndexedFile(fileId, issues);
+        context.ExtractionSession.InsertIssuesForIndexedFile(fileId, issues);
         context.SetPhase(FormatIndexPhasePath(record.Path, "committing"), "committing");
         context.WriteProjectRootOnce();
         txn.Commit();

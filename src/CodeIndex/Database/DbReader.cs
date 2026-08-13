@@ -80,15 +80,13 @@ public partial class DbReader : IDisposable
     private readonly IReadOnlySet<string> _fileColumns;
     private readonly IReadOnlySet<string> _symbolColumns;
     private readonly IReadOnlySet<string> _referenceColumns;
+    private readonly IReadOnlySet<string> _chunkColumns;
     private readonly IReadOnlySet<string> _chunkIndexes;
     private readonly IReadOnlySet<string> _symbolIndexes;
     private readonly IReadOnlySet<string> _referenceIndexes;
     private readonly HashSet<string> _indexedHotspotFamilyLanguages;
-    private readonly Dictionary<string, List<CSharpUsingStaticScope>> _csharpUsingStaticScopesByPath = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, List<CSharpNamespaceScope>> _csharpNamespaceScopesByPath = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, CSharpPathUsingCatalog> _csharpUsingCatalogsByPath = new(StringComparer.Ordinal);
     private readonly Dictionary<string, List<CSharpContainingTypeScope>> _csharpContainingTypeScopesByPath = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, List<CSharpUsingNamespaceScope>> _csharpUsingNamespaceScopesByPath = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, List<CSharpUsingAliasScope>> _csharpUsingAliasScopesByPath = new(StringComparer.Ordinal);
     private readonly Dictionary<string, Dictionary<int, HashSet<string>>> _activeCSharpTypeNamespacesByPathLine = new(StringComparer.Ordinal);
     private readonly Dictionary<string, Dictionary<int, List<CSharpContainingTypeScope>>> _activeCSharpContainingTypeScopesByPathLine = new(StringComparer.Ordinal);
     private readonly Dictionary<string, Dictionary<int, HashSet<string>>> _activeCSharpUsingStaticTargetsByPathLine = new(StringComparer.Ordinal);
@@ -98,9 +96,7 @@ public partial class DbReader : IDisposable
     private readonly Dictionary<string, HashSet<string>> _csharpInheritedContainingTypesByQualifiedName = new(StringComparer.Ordinal);
     private readonly Dictionary<string, CSharpContainingTypeScope?> _csharpContainingTypeScopeByQualifiedName = new(StringComparer.Ordinal);
     private bool _disposed;
-    private HashSet<string>? _csharpGlobalUsingStaticTargets;
-    private HashSet<string>? _csharpGlobalUsingNamespaces;
-    private Dictionary<string, CSharpUsingAliasScope>? _csharpGlobalUsingAliasesByName;
+    private CSharpGlobalUsingCatalog? _csharpGlobalUsingCatalog;
     private IReadOnlyCollection<string>? _workspaceSupportedReferenceLanguages;
     internal readonly bool _hasReferencesTable;
     internal readonly bool _hasHotspotReferenceCountsTable;
@@ -280,11 +276,7 @@ public partial class DbReader : IDisposable
     private const string SyntheticTopLevelCallerName = "<top-level>";
     private const string SyntheticTopLevelCallerKind = "function";
 
-    private sealed record CSharpNamespaceScope(string QualifiedName, int ScopeStartLine, int ScopeEndLine);
     private sealed record CSharpContainingTypeScope(string Path, string Kind, string QualifiedName, string? Visibility, string? Signature, int DeclarationLine, int ScopeStartLine, int ScopeEndLine);
-    private sealed record CSharpUsingStaticScope(string TargetQualifiedName, int Line, int ScopeStartLine, int ScopeEndLine);
-    private sealed record CSharpUsingNamespaceScope(string TargetQualifiedName, int Line, int ScopeStartLine, int ScopeEndLine);
-    private sealed record CSharpUsingAliasScope(string AliasName, string TargetQualifiedName, int Line, int ScopeStartLine, int ScopeEndLine, bool TargetsType);
     private sealed record CSharpTypeNamespaceCandidate(string QualifiedName, string Path, bool IsFileLocal);
     private sealed record CSharpContainingTypeCandidate(string QualifiedName, bool AccessibleFromDerivedType);
 
@@ -607,6 +599,7 @@ public partial class DbReader : IDisposable
         GeneratedColumnAvailableScope.Value = _fileColumns.Contains("generated");
         _symbolColumns = LoadColumns("symbols");
         _referenceColumns = LoadColumns("symbol_references");
+        _chunkColumns = LoadColumns("chunks");
         _chunkIndexes = LoadIndexes("chunks");
         _symbolIndexes = LoadIndexes("symbols");
         int userVersion;
@@ -741,11 +734,8 @@ public partial class DbReader : IDisposable
             return;
 
         _disposed = true;
-        _csharpUsingStaticScopesByPath.Clear();
-        _csharpNamespaceScopesByPath.Clear();
+        _csharpUsingCatalogsByPath.Clear();
         _csharpContainingTypeScopesByPath.Clear();
-        _csharpUsingNamespaceScopesByPath.Clear();
-        _csharpUsingAliasScopesByPath.Clear();
         _activeCSharpTypeNamespacesByPathLine.Clear();
         _activeCSharpContainingTypeScopesByPathLine.Clear();
         _activeCSharpUsingStaticTargetsByPathLine.Clear();
@@ -754,9 +744,7 @@ public partial class DbReader : IDisposable
         _csharpTypeContainingTypesByName.Clear();
         _csharpInheritedContainingTypesByQualifiedName.Clear();
         _csharpContainingTypeScopeByQualifiedName.Clear();
-        _csharpGlobalUsingStaticTargets = null;
-        _csharpGlobalUsingNamespaces = null;
-        _csharpGlobalUsingAliasesByName = null;
+        _csharpGlobalUsingCatalog = null;
     }
 
     /// <summary>

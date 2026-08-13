@@ -68,17 +68,9 @@ public partial class DbReader
             return cachedActiveNamespaces;
         }
 
-        if (!_csharpNamespaceScopesByPath.TryGetValue(path, out var namespaceScopes))
-        {
-            namespaceScopes = LoadCSharpNamespaceScopes(path);
-            _csharpNamespaceScopesByPath[path] = namespaceScopes;
-        }
-
-        if (!_csharpUsingNamespaceScopesByPath.TryGetValue(path, out var usingNamespaceScopes))
-        {
-            usingNamespaceScopes = LoadCSharpUsingNamespaceScopes(path);
-            _csharpUsingNamespaceScopesByPath[path] = usingNamespaceScopes;
-        }
+        var usingCatalog = GetCSharpPathUsingCatalog(path);
+        var namespaceScopes = usingCatalog.NamespaceDeclarations;
+        var usingNamespaceScopes = usingCatalog.NamespaceImports;
 
         var activeNamespaces = new HashSet<string>(StringComparer.Ordinal);
         foreach (var scope in namespaceScopes)
@@ -267,7 +259,10 @@ public partial class DbReader
         if (lastDot > 0)
             namespacePrefix = containingTypeName[..lastDot];
 
-        foreach (var baseTypeReference in ParseCSharpBaseTypeReferences(signature))
+        var baseTypeReferences = CSharpBaseListParser.Parse(
+            signature,
+            CSharpBaseListProjection.TypeReference);
+        foreach (var baseTypeReference in baseTypeReferences)
         {
             var normalizedBase = NormalizeCSharpBaseTypeReference(baseTypeReference);
             if (string.IsNullOrWhiteSpace(normalizedBase))
@@ -312,7 +307,9 @@ public partial class DbReader
         if (containingTypeScope.Kind is not ("class" or "struct" or "interface"))
             return [];
 
-        var baseTypeReferences = ParseCSharpBaseTypeReferences(containingTypeScope.Signature);
+        var baseTypeReferences = CSharpBaseListParser.Parse(
+            containingTypeScope.Signature,
+            CSharpBaseListProjection.TypeReference);
         if (baseTypeReferences.Count == 0)
             return [];
 
@@ -467,11 +464,7 @@ public partial class DbReader
         if (TryResolveActiveCSharpUsingAliasScope(path, lineNumber, symbolName, requireTypeAlias: true, out _))
             return true;
 
-        if (!_csharpUsingAliasScopesByPath.TryGetValue(path, out var scopes))
-        {
-            scopes = LoadCSharpUsingAliasScopes(path);
-            _csharpUsingAliasScopesByPath[path] = scopes;
-        }
+        var scopes = GetCSharpPathUsingCatalog(path).Aliases;
 
         for (var i = scopes.Count - 1; i >= 0; i--)
         {
@@ -517,11 +510,7 @@ public partial class DbReader
             return cachedActiveTargets;
         }
 
-        if (!_csharpUsingStaticScopesByPath.TryGetValue(path, out var scopes))
-        {
-            scopes = LoadCSharpUsingStaticScopes(path);
-            _csharpUsingStaticScopesByPath[path] = scopes;
-        }
+        var scopes = GetCSharpPathUsingCatalog(path).StaticImports;
 
         var activeTargets = new HashSet<string>(StringComparer.Ordinal);
         foreach (var scope in scopes)
@@ -544,128 +533,6 @@ public partial class DbReader
 
         activeTargetsByLine[lineNumber] = activeTargets;
         return activeTargets;
-    }
-
-    private List<CSharpNamespaceScope> LoadCSharpNamespaceScopes(string path)
-    {
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = @"
-            SELECT s.line, s.body_start_line, s.body_end_line, s.end_line, s.name, s.signature, f.lines
-            FROM symbols s
-            JOIN files f ON s.file_id = f.id
-            WHERE f.path = @path
-              AND f.lang = 'csharp'
-              AND s.kind = 'namespace'
-            ORDER BY s.line";
-        SqliteCommandPolicy.Add(cmd, "@path", path);
-
-        var scopes = new List<CSharpNamespaceScope>();
-        using var reader = cmd.ExecuteTrackedReader();
-        while (reader.TrackedRead())
-        {
-            var line = reader.GetInt32(0);
-            var startLine = reader.IsDBNull(1) ? line : reader.GetInt32(1);
-            var endLine = reader.IsDBNull(2)
-                ? (reader.IsDBNull(3) ? line : reader.GetInt32(3))
-                : reader.GetInt32(2);
-            var signature = GetNullableString(reader, 5);
-            if (!string.IsNullOrWhiteSpace(signature)
-                && signature.TrimEnd().EndsWith(';')
-                && !reader.IsDBNull(6))
-            {
-                endLine = Math.Max(endLine, reader.GetInt32(6));
-            }
-
-            if (startLine <= 0 || endLine < startLine)
-                continue;
-
-            var qualifiedName = NormalizeDbCSharpQualifiedName(reader.GetString(4)) ?? string.Empty;
-            scopes.Add(new CSharpNamespaceScope(qualifiedName, startLine, endLine));
-        }
-
-        return scopes;
-    }
-
-    private List<CSharpUsingNamespaceScope> LoadCSharpUsingNamespaceScopes(string path)
-    {
-        var sql = @"
-            SELECT s.kind, s.line, s.body_start_line, s.body_end_line, s.end_line, s.signature, f.lines
-            FROM symbols s
-            JOIN files f ON s.file_id = f.id
-            WHERE f.path = @path
-              AND f.lang = 'csharp'
-              AND (s.kind = 'import' OR s.kind = 'namespace')
-            ORDER BY s.line";
-        var cmd = RentCommand(sql, static c => c.Parameters.Add("@path", SqliteType.Text));
-        SetParameter(cmd, "@path", path);
-
-        var namespaceScopes = new List<(int StartLine, int EndLine)>();
-        var imports = new List<(int Line, string Signature)>();
-        try
-        {
-            using var reader = cmd.ExecuteTrackedReader();
-            while (reader.TrackedRead())
-            {
-                var kind = reader.GetString(0);
-                var line = reader.GetInt32(1);
-                if (kind == "namespace")
-                {
-                    var startLine = reader.IsDBNull(2) ? line : reader.GetInt32(2);
-                    var endLine = reader.IsDBNull(3)
-                        ? (reader.IsDBNull(4) ? line : reader.GetInt32(4))
-                        : reader.GetInt32(3);
-                    var signature = GetNullableString(reader, 5);
-                    if (!string.IsNullOrWhiteSpace(signature)
-                        && signature.TrimEnd().EndsWith(';')
-                        && !reader.IsDBNull(6))
-                    {
-                        endLine = Math.Max(endLine, reader.GetInt32(6));
-                    }
-
-                    if (startLine > 0 && endLine >= startLine)
-                        namespaceScopes.Add((startLine, endLine));
-                    continue;
-                }
-
-                if (!reader.IsDBNull(5))
-                    imports.Add((line, reader.GetString(5)));
-            }
-        }
-        finally
-        {
-            ReleaseCommand(cmd);
-        }
-
-        var scopes = new List<CSharpUsingNamespaceScope>();
-        foreach (var import in imports)
-        {
-            if (!TryParseCSharpUsingNamespaceImport(import.Signature, out var target, out var isGlobal)
-                || isGlobal)
-            {
-                continue;
-            }
-
-            var scopeStartLine = 1;
-            var scopeEndLine = int.MaxValue;
-            var scopeWidth = int.MaxValue;
-            foreach (var (startLine, endLine) in namespaceScopes)
-            {
-                if (import.Line < startLine || import.Line > endLine)
-                    continue;
-
-                var width = endLine - startLine;
-                if (width > scopeWidth)
-                    continue;
-
-                scopeStartLine = startLine;
-                scopeEndLine = endLine;
-                scopeWidth = width;
-            }
-
-            scopes.Add(new CSharpUsingNamespaceScope(target!, import.Line, scopeStartLine, scopeEndLine));
-        }
-
-        return scopes;
     }
 
     private List<CSharpContainingTypeScope> LoadCSharpContainingTypeScopes(string path)
@@ -743,7 +610,9 @@ public partial class DbReader
         if (!string.Equals(containingTypeScope.Kind, "class", StringComparison.Ordinal))
             return null;
 
-        var baseTypeReference = ParseCSharpBaseTypeReference(containingTypeScope.Signature);
+        var baseTypeReference = CSharpBaseListParser.Parse(
+            containingTypeScope.Signature,
+            CSharpBaseListProjection.TypeReference).FirstOrDefault();
         if (string.IsNullOrWhiteSpace(baseTypeReference))
             return null;
 
@@ -824,125 +693,6 @@ public partial class DbReader
         return normalizedReference;
     }
 
-    private static string? ParseCSharpBaseTypeReference(string? signature)
-    {
-        var references = ParseCSharpBaseTypeReferences(signature);
-        return references.Count == 0 ? null : references[0];
-    }
-
-    private static List<string> ParseCSharpBaseTypeReferences(string? signature)
-    {
-        if (string.IsNullOrWhiteSpace(signature))
-            return [];
-
-        var text = signature.TrimEnd();
-        if (text.EndsWith("{", StringComparison.Ordinal))
-            text = text[..^1].TrimEnd();
-
-        var colonIndex = FindCSharpBaseListColonIndex(text);
-        if (colonIndex < 0)
-            return [];
-
-        var baseList = text[(colonIndex + 1)..];
-        var whereIndex = baseList.IndexOf(" where ", StringComparison.Ordinal);
-        if (whereIndex >= 0)
-            baseList = baseList[..whereIndex];
-
-        var entries = new List<string>();
-        foreach (var entry in EnumerateCSharpBaseListEntries(baseList))
-        {
-            var trimmed = entry.Trim();
-            if (trimmed.Length > 0)
-                entries.Add(trimmed);
-        }
-
-        return entries;
-    }
-
-    private static int FindCSharpBaseListColonIndex(string signature)
-    {
-        var angleDepth = 0;
-        var parenDepth = 0;
-        var squareDepth = 0;
-        for (var i = 0; i < signature.Length; i++)
-        {
-            switch (signature[i])
-            {
-                case '<':
-                    angleDepth++;
-                    break;
-                case '>':
-                    if (angleDepth > 0)
-                        angleDepth--;
-                    break;
-                case '(':
-                    parenDepth++;
-                    break;
-                case ')':
-                    if (parenDepth > 0)
-                        parenDepth--;
-                    break;
-                case '[':
-                    squareDepth++;
-                    break;
-                case ']':
-                    if (squareDepth > 0)
-                        squareDepth--;
-                    break;
-                case ':':
-                    if (angleDepth == 0 && parenDepth == 0 && squareDepth == 0)
-                        return i;
-                    break;
-            }
-        }
-
-        return -1;
-    }
-
-    private static IEnumerable<string> EnumerateCSharpBaseListEntries(string baseList)
-    {
-        var angleDepth = 0;
-        var parenDepth = 0;
-        var squareDepth = 0;
-        var start = 0;
-        for (var i = 0; i < baseList.Length; i++)
-        {
-            switch (baseList[i])
-            {
-                case '<':
-                    angleDepth++;
-                    break;
-                case '>':
-                    if (angleDepth > 0)
-                        angleDepth--;
-                    break;
-                case '(':
-                    parenDepth++;
-                    break;
-                case ')':
-                    if (parenDepth > 0)
-                        parenDepth--;
-                    break;
-                case '[':
-                    squareDepth++;
-                    break;
-                case ']':
-                    if (squareDepth > 0)
-                        squareDepth--;
-                    break;
-                case ',':
-                    if (angleDepth == 0 && parenDepth == 0 && squareDepth == 0)
-                    {
-                        yield return baseList[start..i];
-                        start = i + 1;
-                    }
-                    break;
-            }
-        }
-
-        yield return baseList[start..];
-    }
-
     private static string NormalizeCSharpBaseTypeReference(string typeReference)
     {
         if (string.IsNullOrWhiteSpace(typeReference))
@@ -1017,286 +767,6 @@ public partial class DbReader
         return split < 0 ? qualifiedName : qualifiedName[(split + (split == lastColon ? 2 : 1))..];
     }
 
-    private List<CSharpUsingStaticScope> LoadCSharpUsingStaticScopes(string path)
-    {
-        var sql = @"
-            SELECT s.kind, s.line, s.body_start_line, s.body_end_line, s.end_line, s.signature, f.lines
-            FROM symbols s
-            JOIN files f ON s.file_id = f.id
-            WHERE f.path = @path
-              AND f.lang = 'csharp'
-              AND (s.kind = 'import' OR s.kind = 'namespace')
-            ORDER BY s.line";
-        var cmd = RentCommand(sql, static c => c.Parameters.Add("@path", SqliteType.Text));
-        SetParameter(cmd, "@path", path);
-
-        var namespaceScopes = new List<(int StartLine, int EndLine)>();
-        var imports = new List<(int Line, string Signature)>();
-        try
-        {
-            using var reader = cmd.ExecuteTrackedReader();
-            while (reader.TrackedRead())
-            {
-                var kind = reader.GetString(0);
-                var line = reader.GetInt32(1);
-                if (kind == "namespace")
-                {
-                    var startLine = reader.IsDBNull(2) ? line : reader.GetInt32(2);
-                    var endLine = reader.IsDBNull(3)
-                        ? (reader.IsDBNull(4) ? line : reader.GetInt32(4))
-                        : reader.GetInt32(3);
-                    var signature = GetNullableString(reader, 5);
-                    if (!string.IsNullOrWhiteSpace(signature)
-                        && signature.TrimEnd().EndsWith(';')
-                        && !reader.IsDBNull(6))
-                    {
-                        endLine = Math.Max(endLine, reader.GetInt32(6));
-                    }
-
-                    if (startLine > 0 && endLine >= startLine)
-                        namespaceScopes.Add((startLine, endLine));
-                    continue;
-                }
-
-                if (!reader.IsDBNull(5))
-                    imports.Add((line, reader.GetString(5)));
-            }
-        }
-        finally
-        {
-            ReleaseCommand(cmd);
-        }
-
-        var scopes = new List<CSharpUsingStaticScope>();
-        foreach (var import in imports)
-        {
-            if (!TryParseCSharpUsingStaticImport(import.Signature, out var target, out var isGlobal)
-                || isGlobal)
-            {
-                continue;
-            }
-
-            var scopeStartLine = 1;
-            var scopeEndLine = int.MaxValue;
-            var scopeWidth = int.MaxValue;
-            foreach (var (startLine, endLine) in namespaceScopes)
-            {
-                if (import.Line < startLine || import.Line > endLine)
-                    continue;
-
-                var width = endLine - startLine;
-                if (width > scopeWidth)
-                    continue;
-
-                scopeStartLine = startLine;
-                scopeEndLine = endLine;
-                scopeWidth = width;
-            }
-
-            scopes.Add(new CSharpUsingStaticScope(target!, import.Line, scopeStartLine, scopeEndLine));
-        }
-
-        return scopes;
-    }
-
-    private List<CSharpUsingAliasScope> LoadCSharpUsingAliasScopes(string path)
-    {
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = @"
-            SELECT s.kind, s.line, s.body_start_line, s.body_end_line, s.end_line, s.signature, f.lines
-            FROM symbols s
-            JOIN files f ON s.file_id = f.id
-            WHERE f.path = @path
-              AND f.lang = 'csharp'
-              AND (s.kind = 'import' OR s.kind = 'namespace')
-            ORDER BY s.line";
-        SqliteCommandPolicy.Add(cmd, "@path", path);
-
-        var namespaceScopes = new List<(int StartLine, int EndLine)>();
-        var imports = new List<(int Line, string Signature)>();
-        using var reader = cmd.ExecuteTrackedReader();
-        while (reader.TrackedRead())
-        {
-            var kind = reader.GetString(0);
-            var line = reader.GetInt32(1);
-            if (kind == "namespace")
-            {
-                var startLine = reader.IsDBNull(2) ? line : reader.GetInt32(2);
-                var endLine = reader.IsDBNull(3)
-                    ? (reader.IsDBNull(4) ? line : reader.GetInt32(4))
-                    : reader.GetInt32(3);
-                var signature = GetNullableString(reader, 5);
-                if (!string.IsNullOrWhiteSpace(signature)
-                    && signature.TrimEnd().EndsWith(';')
-                    && !reader.IsDBNull(6))
-                {
-                    endLine = Math.Max(endLine, reader.GetInt32(6));
-                }
-
-                if (startLine > 0 && endLine >= startLine)
-                    namespaceScopes.Add((startLine, endLine));
-                continue;
-            }
-
-            if (!reader.IsDBNull(5))
-                imports.Add((line, reader.GetString(5)));
-        }
-
-        var scopes = new List<CSharpUsingAliasScope>();
-        foreach (var import in imports)
-        {
-            if (!TryParseCSharpUsingAliasImport(import.Signature, out var aliasName, out var targetQualifiedName, out var isGlobal)
-                || isGlobal)
-            {
-                continue;
-            }
-
-            var scopeStartLine = 1;
-            var scopeEndLine = int.MaxValue;
-            var scopeWidth = int.MaxValue;
-            foreach (var (startLine, endLine) in namespaceScopes)
-            {
-                if (import.Line < startLine || import.Line > endLine)
-                    continue;
-
-                var width = endLine - startLine;
-                if (width > scopeWidth)
-                    continue;
-
-                scopeStartLine = startLine;
-                scopeEndLine = endLine;
-                scopeWidth = width;
-            }
-
-            scopes.Add(new CSharpUsingAliasScope(
-                aliasName!,
-                targetQualifiedName!,
-                import.Line,
-                scopeStartLine,
-                scopeEndLine,
-                IsKnownCSharpTypeQualifiedName(targetQualifiedName!)));
-        }
-
-        return scopes;
-    }
-
-    private HashSet<string> GetGlobalCSharpUsingStaticTargets()
-    {
-        if (_csharpGlobalUsingStaticTargets != null)
-            return _csharpGlobalUsingStaticTargets;
-
-        var sql = @"
-            SELECT s.signature
-            FROM symbols s
-            JOIN files f ON s.file_id = f.id
-            WHERE f.lang = 'csharp'
-              AND s.kind = 'import'";
-
-        var targets = new HashSet<string>(StringComparer.Ordinal);
-        var cmd = RentCommand(sql, static _ => { });
-        try
-        {
-            using var reader = cmd.ExecuteTrackedReader();
-            while (reader.TrackedRead())
-            {
-                if (reader.IsDBNull(0))
-                    continue;
-                if (TryParseCSharpUsingStaticImport(reader.GetString(0), out var target, out var isGlobal)
-                    && isGlobal)
-                {
-                    targets.Add(target!);
-                }
-            }
-        }
-        finally
-        {
-            ReleaseCommand(cmd);
-        }
-
-        _csharpGlobalUsingStaticTargets = targets;
-        return _csharpGlobalUsingStaticTargets;
-    }
-
-    private Dictionary<string, CSharpUsingAliasScope> GetGlobalCSharpUsingAliasesByName()
-    {
-        if (_csharpGlobalUsingAliasesByName != null)
-            return _csharpGlobalUsingAliasesByName;
-
-        var sql = @"
-            SELECT s.signature
-            FROM symbols s
-            JOIN files f ON s.file_id = f.id
-            WHERE f.lang = 'csharp'
-              AND s.kind = 'import'";
-
-        var aliases = new Dictionary<string, CSharpUsingAliasScope>(StringComparer.Ordinal);
-        var cmd = RentCommand(sql, static _ => { });
-        try
-        {
-            using var reader = cmd.ExecuteTrackedReader();
-            while (reader.TrackedRead())
-            {
-                if (reader.IsDBNull(0))
-                    continue;
-                if (TryParseCSharpUsingAliasImport(reader.GetString(0), out var aliasName, out var targetQualifiedName, out var isGlobal)
-                    && isGlobal)
-                {
-                    aliases[aliasName!] = new CSharpUsingAliasScope(
-                        aliasName!,
-                        targetQualifiedName!,
-                        0,
-                        1,
-                        int.MaxValue,
-                        IsKnownCSharpTypeQualifiedName(targetQualifiedName!));
-                }
-            }
-        }
-        finally
-        {
-            ReleaseCommand(cmd);
-        }
-
-        _csharpGlobalUsingAliasesByName = aliases;
-        return _csharpGlobalUsingAliasesByName;
-    }
-
-    private HashSet<string> GetGlobalCSharpUsingNamespaces()
-    {
-        if (_csharpGlobalUsingNamespaces != null)
-            return _csharpGlobalUsingNamespaces;
-
-        var sql = @"
-            SELECT s.signature
-            FROM symbols s
-            JOIN files f ON s.file_id = f.id
-            WHERE f.lang = 'csharp'
-              AND s.kind = 'import'";
-
-        var namespaces = new HashSet<string>(StringComparer.Ordinal);
-        var cmd = RentCommand(sql, static _ => { });
-        try
-        {
-            using var reader = cmd.ExecuteTrackedReader();
-            while (reader.TrackedRead())
-            {
-                if (reader.IsDBNull(0))
-                    continue;
-                if (TryParseCSharpUsingNamespaceImport(reader.GetString(0), out var target, out var isGlobal)
-                    && isGlobal)
-                {
-                    namespaces.Add(target!);
-                }
-            }
-        }
-        finally
-        {
-            ReleaseCommand(cmd);
-        }
-
-        _csharpGlobalUsingNamespaces = namespaces;
-        return _csharpGlobalUsingNamespaces;
-    }
-
     private static bool TryParseCSharpUsingStaticImport(string signature, out string? target, out bool isGlobal)
     {
         target = null;
@@ -1354,11 +824,7 @@ public partial class DbReader
         if (string.IsNullOrWhiteSpace(aliasName))
             return false;
 
-        if (!_csharpUsingAliasScopesByPath.TryGetValue(path, out var scopes))
-        {
-            scopes = LoadCSharpUsingAliasScopes(path);
-            _csharpUsingAliasScopesByPath[path] = scopes;
-        }
+        var scopes = GetCSharpPathUsingCatalog(path).Aliases;
 
         for (var i = scopes.Count - 1; i >= 0; i--)
         {

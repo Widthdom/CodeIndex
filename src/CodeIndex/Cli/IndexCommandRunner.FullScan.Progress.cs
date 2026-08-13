@@ -9,36 +9,30 @@ public static partial class IndexCommandRunner
         private readonly IndexCommandOptions options;
         private readonly int filesCount;
         private readonly IndexProgressReporter indexProgress;
-        private readonly Func<int> getProcessed;
-        private readonly Func<bool> isProgressVisible;
-        private readonly Func<string?> getCurrentJsonIndexFile;
-        private readonly Func<ActiveExtractionPhase?[]> getActiveExtractionPhases;
+        private readonly FullScanPreWriteSelectionState selection;
         private bool redirectedIndexingMessagePrinted;
         private long lastJsonProgressAt = Stopwatch.GetTimestamp();
         private CancellationTokenSource? jsonHeartbeatCts;
         private Task? jsonHeartbeatTask;
+        internal bool IndexProgressVisible { get; set; }
+        internal string? CurrentJsonIndexFile { get; set; }
+        internal ActiveExtractionPhase?[] ActiveExtractionPhases { get; set; } = [];
 
         internal FullScanProgressSession(
             IndexCommandOptions options,
             int filesCount,
             IndexProgressReporter indexProgress,
-            Func<int> getProcessed,
-            Func<bool> isProgressVisible,
-            Func<string?> getCurrentJsonIndexFile,
-            Func<ActiveExtractionPhase?[]> getActiveExtractionPhases)
+            FullScanPreWriteSelectionState selection)
         {
             this.options = options;
             this.filesCount = filesCount;
             this.indexProgress = indexProgress;
-            this.getProcessed = getProcessed;
-            this.isProgressVisible = isProgressVisible;
-            this.getCurrentJsonIndexFile = getCurrentJsonIndexFile;
-            this.getActiveExtractionPhases = getActiveExtractionPhases;
+            this.selection = selection;
         }
 
         internal void EnsureIndexingActivityVisible()
         {
-            if (options.Json || options.Quiet || isProgressVisible())
+            if (options.Json || options.Quiet || IndexProgressVisible)
                 return;
 
             if (indexProgress.Interactive)
@@ -59,7 +53,7 @@ public static partial class IndexCommandRunner
             if (!options.Json || options.Quiet || filesCount == 0)
                 return;
 
-            var processed = getProcessed();
+            var processed = selection.Processed;
             var now = Stopwatch.GetTimestamp();
             if (processed == 0
                 || processed == filesCount
@@ -104,14 +98,14 @@ public static partial class IndexCommandRunner
                             break;
 
                         var file = GetJsonIndexHeartbeatPath(
-                            getCurrentJsonIndexFile(),
+                            CurrentJsonIndexFile,
                             FormatActiveExtractionPhases(
-                                getActiveExtractionPhases()));
+                                ActiveExtractionPhases));
                         var fileSuffix = string.IsNullOrEmpty(file)
                             ? string.Empty
                             : $": {file}";
                         ConsoleUi.TryWriteErrorLine(
-                            $"cdidx: still indexing {getProcessed():N0}/{filesCount:N0} file(s){fileSuffix}...");
+                            $"cdidx: still indexing {selection.Processed:N0}/{filesCount:N0} file(s){fileSuffix}...");
                     }
                 },
                 token);

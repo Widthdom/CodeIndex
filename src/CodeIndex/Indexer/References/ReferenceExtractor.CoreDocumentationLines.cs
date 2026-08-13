@@ -22,146 +22,77 @@ public static partial class ReferenceExtractor
         bool[]? CSharpLinesInsideMultilineStringContent,
         bool[]? CSharpLinesInsideBlockComment,
         List<(int start, int end)>? CSharpAttributeRangesOnLine,
-        List<(int start, int end)>?[]? CSharpAttributeRanges,
-        Func<SymbolRecord?>? GetPhpLineContainer);
+        List<(int start, int end)>?[]? CSharpAttributeRanges);
+
+    private struct CoreDocumentationState
+    {
+        internal bool CSharpInDelimitedDocComment;
+        internal bool JvmInDelimitedDocComment;
+        internal PhpDocumentationState Php;
+    }
+
+    private static void EmitCoreLanguageDocumentationReferences(
+        CoreReferenceLoopContext loop,
+        CoreReferenceLoopState state,
+        int lineIndex,
+        int lineNumber,
+        string originalLine,
+        string preparedLine,
+        List<(int start, int end)>? csharpAttributeRangesOnLine)
+    {
+        var request = loop.Request;
+        if (request.Language == "php")
+        {
+            var phpLine = new CorePhpDocumentationLineContext(
+                request.FileId,
+                originalLine,
+                lineNumber,
+                loop.References,
+                loop.Seen,
+                loop.ContainerResolver);
+            EmitPhpDocumentationReferences(
+                in phpLine,
+                ref state.Documentation.Php);
+            return;
+        }
+
+        if (request.Language is not ("csharp" or "java" or "kotlin" or "r"))
+            return;
+
+        var input = loop.Preparation;
+        var documentationLine = new CoreDocumentationLineContext(
+            request.FileId,
+            request.Language,
+            input.Lines,
+            input.PreparedLines,
+            input.StructuralLines,
+            lineIndex,
+            lineNumber,
+            originalLine,
+            preparedLine,
+            loop.References,
+            loop.Seen,
+            loop.ContainerCandidates,
+            loop.ContainerResolver,
+            loop.Lookups,
+            input.CSharpLinesInsideMultilineStringContent,
+            input.CSharpLinesInsideBlockComment,
+            csharpAttributeRangesOnLine,
+            loop.CSharpAttributeRanges);
+        EmitCoreDocumentationReferences(
+            in documentationLine,
+            ref state.Documentation);
+    }
 
     private static void EmitCoreDocumentationReferences(
-        CoreDocumentationLineContext line,
-        ref bool csharpInDelimitedDocComment,
-        ref bool jvmInDelimitedDocComment,
-        ref bool phpInDocblock,
-        ref SymbolRecord? phpDocblockContainer,
-        ref HashSet<string>? phpDocblockPropertyNames)
+        in CoreDocumentationLineContext line,
+        ref CoreDocumentationState state)
     {
-        if (line.Language == "csharp"
-            && line.CSharpLinesInsideMultilineStringContent != null
-            && !(line.CSharpLinesInsideMultilineStringContent?[line.LineIndex] ?? false)
-            && TryGetCSharpXmlDocCommentSpan(
-                line.OriginalLine,
-                csharpInDelimitedDocComment,
-                line.CSharpLinesInsideBlockComment?[line.LineIndex] ?? false,
-                out var csharpDocCommentStartIndex,
-                out var csharpDocCommentEndExclusive,
-                out var nextCsharpDelimitedDocComment))
-        {
-            var csharpDocCommentText = line.OriginalLine[csharpDocCommentStartIndex..csharpDocCommentEndExclusive];
-            if (csharpDocCommentText.IndexOf("cref=\"", StringComparison.OrdinalIgnoreCase) >= 0)
-            {
-                var innermostContainer = line.ContainerResolver.Find(line.LineNumber);
-                var sameLineDeclarationStartColumn = GetCSharpSameLineDocumentedDeclarationStartColumn(
-                    line.OriginalLine,
-                    csharpDocCommentEndExclusive,
-                    nextCsharpDelimitedDocComment);
-                var docContainer = FindDocumentedContainer(
-                    line.ContainerCandidates,
-                    line.StructuralLines[line.LineIndex],
-                    line.PreparedLine,
-                    line.CSharpAttributeRangesOnLine,
-                    line.LineNumber,
-                    sameLineDeclarationStartColumn);
-                if (docContainer != null
-                    && (docContainer.StartLine == line.LineNumber
-                        || CanAttachCSharpXmlDocCommentToNextDeclaration(
-                            innermostContainer,
-                            line.Lookups.GetCSharpXmlDocAttachmentScopeCandidates(),
-                            line.CSharpAttributeRanges,
-                            line.PreparedLines,
-                            line.LineNumber,
-                            docContainer)))
-                {
-                    CSharpReferenceExtractor.EmitDocCrefReferences(
-                        csharpDocCommentText,
-                        line.References,
-                        line.Seen,
-                        line.FileId,
-                        csharpDocCommentStartIndex,
-                        csharpDocCommentText.Trim(),
-                        line.LineNumber,
-                        docContainer);
-                }
-            }
-            csharpInDelimitedDocComment = nextCsharpDelimitedDocComment;
-        }
-        else if (line.Language is "java" or "kotlin"
-                 && TryGetJvmDocCommentSpan(
-                     line.OriginalLine,
-                     jvmInDelimitedDocComment,
-                     out var jvmDocCommentStartIndex,
-                     out var jvmDocCommentEndExclusive,
-                     out var jvmSameLineDeclarationStartColumn,
-                     out var nextJvmDelimitedDocComment))
-        {
-            if (jvmDocCommentEndExclusive > jvmDocCommentStartIndex)
-            {
-                var docContainer = FindJvmDocumentedContainer(
-                    line.ContainerCandidates,
-                    line.Lines,
-                    line.StructuralLines[line.LineIndex],
-                    line.LineNumber,
-                    jvmSameLineDeclarationStartColumn);
-                if (docContainer != null)
-                {
-                    var docText = line.OriginalLine[jvmDocCommentStartIndex..jvmDocCommentEndExclusive];
-                    EmitJvmDocLinkReferences(
-                        line.Language,
-                        docText,
-                        line.References,
-                        line.Seen,
-                        line.FileId,
-                        jvmDocCommentStartIndex,
-                        docText.Trim(),
-                        line.LineNumber,
-                        docContainer);
-                }
-            }
-
-            jvmInDelimitedDocComment = nextJvmDelimitedDocComment;
-        }
-
-        if (line.Language == "r")
-        {
-            var roxygenContext = line.OriginalLine.Trim();
-            if (roxygenContext.Length > 0)
-            {
-                RReferenceExtractor.EmitRoxygenImportFromReferences(
-                    line.OriginalLine,
-                    line.References,
-                    line.Seen,
-                    line.FileId,
-                    roxygenContext,
-                    line.LineNumber,
-                    container: null);
-                RReferenceExtractor.EmitRoxygenImportReferences(
-                    line.OriginalLine,
-                    line.References,
-                    line.Seen,
-                    line.FileId,
-                    roxygenContext,
-                    line.LineNumber,
-                    container: null);
-                RReferenceExtractor.EmitRoxygenMethodReferences(
-                    line.OriginalLine,
-                    line.References,
-                    line.Seen,
-                    line.FileId,
-                    roxygenContext,
-                    line.LineNumber,
-                    container: null);
-            }
-        }
-
-        if (line.Language == "php")
-        {
-            EmitPhpLinePreambleReferences(
-                line.OriginalLine,
-                line.References,
-                line.Seen,
-                line.FileId,
-                line.LineNumber,
-                line.GetPhpLineContainer!,
-                ref phpInDocblock,
-                ref phpDocblockContainer,
-                ref phpDocblockPropertyNames);
-        }
+        if (line.Language == "csharp")
+            EmitCoreCSharpDocumentationReferences(in line, ref state.CSharpInDelimitedDocComment);
+        else if (line.Language is "java" or "kotlin")
+            EmitCoreJvmDocumentationReferences(in line, ref state.JvmInDelimitedDocComment);
+        else if (line.Language == "r")
+            EmitRDocumentationReferences(in line);
     }
 }

@@ -17,8 +17,29 @@ public partial class McpServer
 
     private static JsonArray CreateToolCatalog()
     {
-        var tools = new JsonArray
-        {
+        var tools = new JsonArray();
+        AddToolDefinitions(tools, CreateQueryAndDiscoveryTools());
+        AddToolDefinitions(tools, CreateGraphAndAnalysisTools());
+        AddToolDefinitions(tools, CreateWorkspaceInspectionTools());
+        AddToolDefinitions(tools, CreateProtocolUtilityTools());
+        AddToolDefinitions(tools, CreateIndexMaintenanceTools());
+        AddToolDefinitions(tools, CreateAuditAndFeedbackTools());
+
+        AddProjectScopeProperties(tools);
+        AddCommonSchemaConstraints(tools);
+        return tools;
+    }
+
+    private static void AddToolDefinitions(JsonArray catalog, JsonObject[] definitions)
+    {
+        foreach (var definition in definitions)
+            catalog.Add(definition);
+    }
+
+    private static JsonObject[] CreateQueryAndDiscoveryTools()
+    {
+        return
+        [
             CreateToolDefinition(
                 "search",
                 "Use this when starting broad code discovery, checking error text, or running named search audit recipes. Prefer it before shell grep; common next step is `excerpt`, `definition`, or `references` on the best hit. Returns snippets plus `result_stable_at`, `next_cursor`, and `next_step_suggestion` or `recovery_hint`. Use `prefix`/trailing `*` to widen token matching, `rawQuery` for FTS5 syntax, `exactSubstring` for case-sensitive identity, and `tokenBoundary` when a code phrase must not match inside longer identifiers. Details and examples: USER_GUIDE.md#search. / 広いコード調査、エラー文言確認、search audit recipe 実行の起点に使う。shell grep より優先し、次は最有力ヒットに `excerpt` / `definition` / `references` を使う。`prefix` / 末尾 `*` / `rawQuery` / `exactSubstring` / `tokenBoundary` の詳細と例は USER_GUIDE.md#search を参照。",
@@ -350,6 +371,13 @@ public partial class McpServer
                     ["required"] = new JsonArray { "query", "path" }
                 },
                 ReadOnlyAnnotations()),
+        ];
+    }
+
+    private static JsonObject[] CreateGraphAndAnalysisTools()
+    {
+        return
+        [
             CreateToolDefinition(
                 "map",
                 "Use this when orienting in an unfamiliar repo, module, language mix, or hotspot area before searching. Prefer `search`, `symbols`, `outline`, or `excerpt` as the next step after choosing a path. Return a repo-level overview with selectable sections (`tree`, `languages`, `hotspots`, `metrics`) and optional module depth control. / 不慣れなリポジトリ、モジュール、言語構成、hotspot 領域を search 前に把握するときに使う。path を選んだ後は `search` / `symbols` / `outline` / `excerpt` を優先する。セクション選択（`tree`, `languages`, `hotspots`, `metrics`）とモジュール深さ制御に対応したリポジトリ俯瞰情報を返す。",
@@ -419,6 +447,13 @@ public partial class McpServer
                     ["required"] = new JsonArray { "query" }
                 },
                 ReadOnlyAnnotations()),
+        ];
+    }
+
+    private static JsonObject[] CreateWorkspaceInspectionTools()
+    {
+        return
+        [
             CreateToolDefinition(
                 "status",
                 "Get database statistics, readiness state, and optional CLI-style freshness checks. Use `check`, `scopes`, `staleAfterSeconds`, `explain`, `config`, `logPath`, `format`, or `fields` for bounded health-check views. / DB統計、readiness 状態、必要に応じて CLI 風の freshness check を取得。`check` / `scopes` / `staleAfterSeconds` / `explain` / `config` / `logPath` / `format` / `fields` で health-check 用の出力に絞り込める。",
@@ -577,6 +612,13 @@ public partial class McpServer
                     }
                 },
                 ReadOnlyAnnotations()),
+        ];
+    }
+
+    private static JsonObject[] CreateProtocolUtilityTools()
+    {
+        return
+        [
             CreateToolDefinition(
                 "ping",
                 "Lightweight connection check. Returns server version and timestamp. No database required. / 軽量接続チェック。サーバーバージョンとタイムスタンプを返す。DB不要。",
@@ -619,6 +661,13 @@ public partial class McpServer
                     ["required"] = new JsonArray { "queries" }
                 },
                 ReadOnlyAnnotations()),
+        ];
+    }
+
+    private static JsonObject[] CreateIndexMaintenanceTools()
+    {
+        return
+        [
             CreateToolDefinition(
                 "index",
                 "Index or re-index a project directory. Scans source files, extracts symbols, and builds FTS5 search index. On transports that can carry out-of-band server messages (stdio, and HTTP clients connected to `/events`), when the tools/call request includes a bounded scalar/object `_meta.progressToken`, this tool emits `notifications/progress` with that token while scanning, indexing, and finalizing; oversized or unsupported tokens are ignored instead of echoed. / プロジェクトディレクトリをインデックス（再インデックス）。ソースファイルをスキャンし、シンボルを抽出してFTS5検索インデックスを構築。out-of-band のサーバーメッセージを送れる transport（stdio、および `/events` に接続した HTTP クライアント）では、tools/call リクエストに bounded scalar/object の `_meta.progressToken` が含まれる場合、スキャン・インデックス・finalize 中に同じ token の `notifications/progress` を送信し、上限超過または未対応 token は echo せず無視する。",
@@ -660,6 +709,13 @@ public partial class McpServer
                     }
                 },
                 IndexAnnotations()),
+        ];
+    }
+
+    private static JsonObject[] CreateAuditAndFeedbackTools()
+    {
+        return
+        [
             CreateToolDefinition(
                 "symbol_hotspots",
                 "Find the most-referenced symbols in the codebase (hotspot analysis). "
@@ -742,11 +798,7 @@ public partial class McpServer
                     },
                     ["required"] = new JsonArray { "category", "description" }
                 },
-                SuggestionAnnotations())
-        };
-
-        AddProjectScopeProperties(tools);
-        AddCommonSchemaConstraints(tools);
-        return tools;
+                SuggestionAnnotations()),
+        ];
     }
 }

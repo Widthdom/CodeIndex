@@ -1,26 +1,10 @@
-using CodeIndex.Cli;
-using CodeIndex.Diagnostics;
 using CodeIndex.Indexer;
-using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
-using System.Globalization;
-using System.Runtime.CompilerServices;
-using System.Runtime.ExceptionServices;
-using System.Text.Json;
 
 namespace CodeIndex.Database;
 
 public partial class DbContext : IDisposable
 {
-    private static readonly ConditionalWeakTable<SqliteConnection, CSharpCallableTypeKindLookup>
-        CSharpCallableTypeKindLookups = new();
-    private static readonly ConditionalWeakTable<SqliteConnection, object>
-        ConnectionFunctionRegistrations = new();
-    private static readonly object ConnectionFunctionRegistrationLock = new();
-    private static readonly ConditionalWeakTable<SqliteConnection, object>
-        CSharpPartialDeclarationFunctionRegistrations = new();
-    private static readonly object CSharpPartialDeclarationFunctionRegistrationLock = new();
-
     private static SqliteConnection OpenArtifactPreservingQueryOnly(string dbPath)
     {
         var connection = CreateArtifactPreservingQueryOnlyConnection(
@@ -34,272 +18,10 @@ public partial class DbContext : IDisposable
     }
 
     internal static void RegisterConnectionFunctions(SqliteConnection connection)
-    {
-        lock (ConnectionFunctionRegistrationLock)
-        {
-            if (ConnectionFunctionRegistrations.TryGetValue(connection, out _))
-                return;
-
-            RegisterConnectionFunctionsCore(connection);
-            ConnectionFunctionRegistrations.Add(connection, new object());
-        }
-    }
-
-    private static void RegisterConnectionFunctionsCore(SqliteConnection connection)
-    {
-        static int? ToNullableInt(long? value)
-            => value is null || value < int.MinValue || value > int.MaxValue ? null : (int)value.Value;
-
-        connection.CreateFunction(
-            "markdown_resolve_path",
-            (string? sourcePath, string? targetPath) => DbReader.ResolveMarkdownDependencyPath(sourcePath, targetPath));
-        connection.CreateFunction(
-            "markdown_normalize_fragment",
-            (string? fragment) => fragment == null
-                ? null
-                : MarkdownAnchorIdentity.NormalizeHeadingFragment(fragment));
-        connection.CreateFunction(
-            "python_import_resolves",
-            (string? sourcePath, string? targetPath, string? referenceName, string? referenceKind, string? context, long? columnNumber, string? signature) =>
-                PythonImportBindingResolver.ResolvesDependency(sourcePath, targetPath, referenceName, referenceKind, context, columnNumber, signature));
-        connection.CreateFunction(
-            "python_import_target_name",
-            (string? sourcePath, string? referenceName, string? context, long? columnNumber, string? signature) =>
-                PythonImportBindingResolver.ResolveTargetName(sourcePath, referenceName, context, columnNumber, signature));
-        connection.CreateFunction(
-            "sql_leaf_name",
-            (string? name) => string.IsNullOrWhiteSpace(name) ? null : SqlNameResolver.GetLeafName(name));
-        connection.CreateFunction(
-            "sql_leaf_name_folded",
-            (string? name) =>
-            {
-                if (string.IsNullOrWhiteSpace(name))
-                    return null;
-
-                var leafName = SqlNameResolver.GetLeafName(name);
-                return leafName.Length == 0 ? null : NameFold.Fold(leafName) ?? leafName;
-            });
-        connection.CreateFunction(
-            "codeindex_name_fold",
-            (string? name) => NameFold.Fold(name),
-            isDeterministic: true);
-        connection.CreateFunction(
-            "sql_normalize_name",
-            (string? name) => string.IsNullOrWhiteSpace(name) ? null : SqlNameResolver.NormalizeQualifiedName(name));
-        connection.CreateFunction(
-            "sql_normalize_name_folded",
-            (string? name) =>
-            {
-                if (string.IsNullOrWhiteSpace(name))
-                    return null;
-
-                var normalizedName = SqlNameResolver.NormalizeQualifiedName(name);
-                return normalizedName.Length == 0 ? null : NameFold.Fold(normalizedName) ?? normalizedName;
-            });
-        connection.CreateFunction(
-            "sql_normalize_csharp_verbatim_name",
-            (string? text) => string.IsNullOrWhiteSpace(text) ? null : CSharpVerbatimNameNormalizer.Normalize(text));
-        connection.CreateFunction(
-            "csharp_identifier_occurrence_count",
-            (string? text, string? identifier) => CountCSharpIdentifierOccurrences(text, identifier));
-        connection.CreateFunction(
-            "csharp_identifier_occurrence_count_in_line_range",
-            (string? text, long? chunkStartLine, long? rangeStartLine, long? rangeEndLine, string? identifier) =>
-                CountCSharpIdentifierOccurrencesInLineRange(
-                    text,
-                    chunkStartLine,
-                    rangeStartLine,
-                    rangeEndLine,
-                    identifier));
-        connection.CreateFunction(
-            "csharp_reference_type_arity",
-            (string? context, string? identifier, long? columnNumber) =>
-                CSharpTypeReferenceArity.GetReferenceArity(context, identifier, columnNumber));
-        connection.CreateFunction(
-            "csharp_reference_is_member_receiver",
-            (string? context, string? identifier, long? columnNumber) =>
-                CSharpTypeReferenceArity.IsMemberReceiver(context, identifier, columnNumber));
-        connection.CreateFunction(
-            "csharp_definition_type_arity",
-            (string? signature, string? identifier, string? symbolKind) =>
-                CSharpTypeReferenceArity.GetDefinitionArity(signature, identifier, symbolKind));
-        connection.CreateFunction(
-            "csharp_constructor_parameter_count",
-            (string? signature, string? identifier, string? symbolKind) =>
-                CSharpTypeReferenceArity.GetConstructorParameterCount(signature, identifier, symbolKind));
-        var csharpCallableTypeKinds = CSharpCallableTypeKindLookups.GetValue(
-            connection,
-            static _ => new CSharpCallableTypeKindLookup());
-        connection.CreateFunction(
-            "csharp_partial_callable_identity",
-            (string? signature, string? identifier, string? returnType) =>
-                LogicalPartialSymbolGrouper.BuildCallableIdentity(
-                    signature,
-                    identifier,
-                    returnType,
-                    containerQualifiedName: null,
-                    typeKinds: null),
-            isDeterministic: true);
-        connection.CreateFunction(
-            "csharp_partial_callable_identity",
-            (string? signature, string? identifier, string? returnType, string? containerQualifiedName) =>
-                LogicalPartialSymbolGrouper.BuildCallableIdentity(
-                    signature,
-                    identifier,
-                    returnType,
-                    containerQualifiedName,
-                    csharpCallableTypeKinds));
-        connection.CreateFunction(
-            "csharp_partial_callable_identity",
-            (string? signature, string? identifier, string? returnType, string? containerQualifiedName, long? symbolId) =>
-                LogicalPartialSymbolGrouper.BuildCallableIdentity(
-                    signature,
-                    identifier,
-                    returnType,
-                    containerQualifiedName,
-                    csharpCallableTypeKinds,
-                    symbolId));
-        connection.CreateFunction(
-            "csharp_partial_semantic_score",
-            (string? signature, string? symbolKind) =>
-                LogicalPartialSymbolGrouper.GetSemanticScore(signature, symbolKind),
-            isDeterministic: true);
-        connection.CreateFunction(
-            "csharp_partial_declaration_identity",
-            (string? signature) =>
-                LogicalPartialSymbolGrouper.BuildCanonicalDeclarationIdentity(signature),
-            isDeterministic: true);
-        RegisterCSharpPartialDeclarationFunction(connection);
-        connection.CreateFunction(
-            "codeindex_generated_file_name",
-            (string? path) => FileIndexer.HasGeneratedCodeFileName(path ?? string.Empty),
-            isDeterministic: true);
-        connection.CreateFunction(
-            "csharp_invocation_argument_count",
-            (string? context, string? identifier, long? columnNumber) =>
-                CSharpTypeReferenceArity.GetInvocationArgumentCount(context, identifier, columnNumber));
-        connection.CreateFunction(
-            "csharp_definition_is_value_type",
-            (string? signature, string? symbolKind) =>
-                CSharpTypeReferenceArity.IsValueTypeDeclaration(signature, symbolKind));
-        connection.CreateFunction(
-            "csharp_base_identifiers_json",
-            (string? signature) =>
-                JsonSerializer.Serialize(
-                    DbWriter.ParseCSharpBaseIdentifiers(signature),
-                    CliJsonSerializerContext.Default.ListString));
-        connection.CreateFunction(
-            "csharp_base_name_folded",
-            (string? baseReference) =>
-            {
-                var leaf = GetCSharpBaseReferenceLeaf(baseReference);
-                return leaf == null ? null : NameFold.Fold(leaf) ?? leaf;
-            });
-        connection.CreateFunction(
-            "csharp_base_name",
-            (string? baseReference) => GetCSharpBaseReferenceLeaf(baseReference));
-        connection.CreateFunction(
-            "csharp_base_reference_matches",
-            (string? baseReference, string? candidateName, string? candidateQualifiedName, string? derivingQualifiedName) =>
-                CSharpBaseReferenceMatches(
-                    baseReference,
-                    candidateName,
-                    candidateQualifiedName,
-                    derivingQualifiedName) ? 1 : 0);
-        connection.CreateFunction(
-            "sql_normalize_exact_source_name",
-            (string? text, string? lang) => string.IsNullOrWhiteSpace(text) ? null : ExactSourceSearchNormalizer.Normalize(text, lang));
-        connection.CreateFunction(
-            "sql_segment_count",
-            (string? name) => string.IsNullOrWhiteSpace(name) ? (int?)null : SqlNameResolver.GetSegmentCount(name));
-        connection.CreateFunction(
-            "sql_context_has_name",
-            (string? context, string? query) => SqlNameResolver.ContextContainsQualifiedName(context, query) ? 1 : 0);
-        connection.CreateFunction(
-            "sql_context_has_name_folded",
-            (string? context, string? query) => SqlNameResolver.ContextContainsQualifiedNameFolded(context, query) ? 1 : 0);
-        connection.CreateFunction(
-            "sql_context_has_name_at",
-            (string? context, string? query, long? columnNumber) =>
-                SqlNameResolver.ContextContainsQualifiedNameAtColumn(context, query, ToNullableInt(columnNumber)) ? 1 : 0);
-        connection.CreateFunction(
-            "sql_context_has_name_folded_at",
-            (string? context, string? query, long? columnNumber) =>
-                SqlNameResolver.ContextContainsQualifiedNameFoldedAtColumn(context, query, ToNullableInt(columnNumber)) ? 1 : 0);
-        connection.CreateFunction(
-            "sql_context_like_name_at",
-            (string? context, string? query, long? columnNumber) =>
-                SqlNameResolver.ContextContainsQualifiedNameLikeAtColumn(context, query, ToNullableInt(columnNumber)) ? 1 : 0);
-        connection.CreateFunction(
-            "sql_context_like_name_folded_at",
-            (string? context, string? query, long? columnNumber) =>
-                SqlNameResolver.ContextContainsQualifiedNameLikeFoldedAtColumn(context, query, ToNullableInt(columnNumber)) ? 1 : 0);
-        connection.CreateFunction(
-            "sql_resolve_reference_name",
-            (string? symbolName, string? context, string? containerName) =>
-            {
-                var resolved = SqlNameResolver.ResolveReferenceName(symbolName, context, containerName);
-                return resolved.Length == 0 ? null : resolved;
-            });
-        connection.CreateFunction(
-            "sql_resolve_reference_name_folded",
-            (string? symbolName, string? context, string? containerName) =>
-            {
-                var resolved = SqlNameResolver.ResolveReferenceNameFolded(symbolName, context, containerName);
-                return resolved.Length == 0 ? null : resolved;
-            });
-        connection.CreateFunction(
-            "sql_resolve_reference_name_at",
-            (string? symbolName, string? context, string? containerName, long? columnNumber) =>
-            {
-                var resolved = SqlNameResolver.ResolveReferenceNameAtColumn(symbolName, context, containerName, ToNullableInt(columnNumber));
-                return resolved.Length == 0 ? null : resolved;
-            });
-        connection.CreateFunction(
-            "sql_resolve_reference_name_folded_at",
-            (string? symbolName, string? context, string? containerName, long? columnNumber) =>
-            {
-                var resolved = SqlNameResolver.ResolveReferenceNameFoldedAtColumn(symbolName, context, containerName, ToNullableInt(columnNumber));
-                return resolved.Length == 0 ? null : resolved;
-            });
-        connection.CreateFunction(
-            "sql_resolve_reference_segment_count_at",
-            (string? symbolName, string? context, string? containerName, long? columnNumber) => (int?)(
-                SqlNameResolver.ResolveReferenceSegmentCountAtColumn(symbolName, context, containerName, ToNullableInt(columnNumber)) is var segmentCount
-                && segmentCount > 0
-                    ? segmentCount
-                    : null));
-        connection.CreateFunction(
-            "sql_reference_matches_target_at",
-            (string? symbolName, string? context, string? containerName, long? columnNumber, string? targetName) =>
-                SqlNameResolver.ReferenceMatchesTargetAtColumn(symbolName, context, containerName, ToNullableInt(columnNumber), targetName) ? 1 : 0);
-        connection.CreateFunction(
-            "sql_allow_leaf_fallback_at",
-            (string? symbolName, string? context, string? containerName, long? columnNumber) =>
-                SqlNameResolver.AllowLeafFallbackAtColumn(symbolName, context, containerName, ToNullableInt(columnNumber)) ? 1 : 0);
-    }
+        => ConnectionFunctionRegistrar.Register(connection);
 
     internal static void RegisterCSharpPartialDeclarationFunction(SqliteConnection connection)
-    {
-        lock (CSharpPartialDeclarationFunctionRegistrationLock)
-        {
-            // DbReader also accepts caller-owned raw connections, so it must ensure this
-            // function exists. DbContext connections already registered it, however, and
-            // SQLite rejects replacing a function while any statement is active.
-            // DbReader は caller-owned raw connection も受け付けるため、この function を
-            // 保証する。一方 DbContext connection では登録済みであり、active statement 中の
-            // 再登録を SQLite が拒否するため、connection 単位で一度だけ登録する。
-            if (CSharpPartialDeclarationFunctionRegistrations.TryGetValue(connection, out _))
-                return;
-
-            connection.CreateFunction(
-                "csharp_is_partial_declaration",
-                (string? signature, string? kind, string? name) =>
-                    LogicalPartialSymbolGrouper.ContainsPartialModifier(signature, kind, name),
-                isDeterministic: true);
-            CSharpPartialDeclarationFunctionRegistrations.Add(connection, new object());
-        }
-    }
+        => ConnectionFunctionRegistrar.RegisterCSharpPartialDeclaration(connection);
 
     internal static void RefreshCSharpCallableTypeKinds(
         SqliteConnection connection,
@@ -308,18 +30,13 @@ public partial class DbContext : IDisposable
         IReadOnlyList<string>? candidateQueries = null,
         bool exact = false,
         bool useFoldedNames = false)
-    {
-        var lookup = CSharpCallableTypeKindLookups.GetValue(
-            connection,
-            static _ => new CSharpCallableTypeKindLookup());
-        lookup.RefreshIfChanged(
+        => ConnectionFunctionRegistrar.RefreshCSharpCallableTypeKinds(
             connection,
             fileColumns,
             symbolColumns,
             candidateQueries,
             exact,
             useFoldedNames);
-    }
 
     internal static int CountCSharpIdentifierOccurrences(string? text, string? identifier)
     {
@@ -835,25 +552,10 @@ public partial class DbContext : IDisposable
         int maxAttempts = 5,
         CancellationToken cancellationToken = default,
         Action<SqliteConnection>? registerConnectionFunctions = null)
-    {
-        if (maxAttempts <= 0)
-            throw new ArgumentOutOfRangeException(nameof(maxAttempts), maxAttempts, "Must be at least 1.");
-
-        cancellationToken.ThrowIfCancellationRequested();
-        registerConnectionFunctions ??= RegisterConnectionFunctions;
-        for (var attempt = 1; attempt <= maxAttempts; attempt++)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            try
-            {
-                registerConnectionFunctions(connection);
-                return;
-            }
-            catch (SqliteException ex) when (DbConnectionFactory.IsTransientBusyError(ex) && attempt < maxAttempts)
-            {
-                DbConnectionFactory.SleepBeforeRetry(50 * attempt, sleep, cancellationToken);
-            }
-        }
-    }
-
+        => ConnectionFunctionRegistrar.RegisterWithRetry(
+            connection,
+            sleep,
+            maxAttempts,
+            cancellationToken,
+            registerConnectionFunctions);
 }

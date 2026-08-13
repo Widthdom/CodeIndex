@@ -5,7 +5,7 @@ namespace CodeIndex.Indexer;
 
 public static partial class ReferenceExtractor
 {
-    private static void EmitJsxElementReferences(CoreReferenceLineContext line)
+    private static void EmitJsxElementReferences(in CoreReferenceLineContext line)
     {
         if (line.PreparedLine.IndexOf('<') < 0)
             return;
@@ -77,7 +77,7 @@ public static partial class ReferenceExtractor
     }
 
     private static void EmitInfrastructureLineReferences(
-        CoreReferenceLineContext line,
+        in CoreReferenceLineContext line,
         HashSet<string>? dockerfileStageNames,
         HashSet<string>? dockerfileVariableNames,
         IReadOnlyList<SymbolRecord>? cobolCallableSymbols)
@@ -133,7 +133,7 @@ public static partial class ReferenceExtractor
     }
 
     private static HashSet<int>? EmitSqlLineReferences(
-        CoreReferenceLineContext line,
+        in CoreReferenceLineContext line,
         string structuralLine,
         SqlReferenceExtractor.State? sqlState,
         CoreLineDefinitionState definitionState)
@@ -158,7 +158,8 @@ public static partial class ReferenceExtractor
                     callIndex));
     }
 
-    private static void EmitParenlessInitializerReferences(CoreReferenceLineContext line)
+    private static void EmitParenlessInitializerReferences(
+        in CoreReferenceLineContext line)
     {
         if (line.PreparedLine.IndexOf("new", StringComparison.Ordinal) < 0)
             return;
@@ -274,120 +275,19 @@ public static partial class ReferenceExtractor
         }
     }
 
-    private static void EmitPhpAndScssLineReferences(CoreReferenceLineContext line)
+    private static void EmitScssLineReferences(
+        in CoreReferenceLineContext line)
     {
-        if (line.Language == "css")
-        {
-            CssReferenceExtractor.EmitScss(
-                line.PreparedLine,
-                line.References,
-                line.Seen,
-                line.FileId,
-                line.Context,
-                line.LineNumber,
-                line.Container);
-        }
+        if (line.Language != "css")
+            return;
 
-        if (line.Language == "php")
-        {
-            PhpReferenceExtractor.EmitStaticAccessReferences(
-                line.PreparedLine,
-                line.References,
-                line.Seen,
-                line.FileId,
-                line.Context,
-                line.LineNumber,
-                line.Container);
-
-            PhpReferenceExtractor.EmitInstanceofReferences(
-                line.PreparedLine,
-                line.References,
-                line.Seen,
-                line.FileId,
-                line.Context,
-                line.LineNumber,
-                line.Container);
-
-            PhpReferenceExtractor.EmitCatchTypeReferences(
-                line.PreparedLine,
-                line.References,
-                line.Seen,
-                line.FileId,
-                line.Context,
-                line.LineNumber,
-                line.Container);
-
-            PhpReferenceExtractor.EmitReturnTypeReferences(
-                line.PreparedLine,
-                line.References,
-                line.Seen,
-                line.FileId,
-                line.Context,
-                line.LineNumber,
-                line.Container);
-
-            PhpReferenceExtractor.EmitParameterTypeReferences(
-                line.PreparedLine,
-                line.References,
-                line.Seen,
-                line.FileId,
-                line.Context,
-                line.LineNumber,
-                line.Container);
-
-            PhpReferenceExtractor.EmitPropertyTypeReferences(
-                line.PreparedLine,
-                line.References,
-                line.Seen,
-                line.FileId,
-                line.Context,
-                line.LineNumber,
-                line.Container);
-
-            PhpReferenceExtractor.EmitInheritanceTypeReferences(
-                line.PreparedLine,
-                line.References,
-                line.Seen,
-                line.FileId,
-                line.Context,
-                line.LineNumber,
-                line.Container);
-
-            PhpReferenceExtractor.EmitUseTypeReferences(
-                line.PreparedLine,
-                line.References,
-                line.Seen,
-                line.FileId,
-                line.Context,
-                line.LineNumber,
-                line.Container);
-
-            PhpReferenceExtractor.EmitUseFunctionReferences(
-                line.PreparedLine,
-                line.References,
-                line.Seen,
-                line.FileId,
-                line.Context,
-                line.LineNumber,
-                line.Container);
-
-            PhpReferenceExtractor.EmitUseConstReferences(
-                line.PreparedLine,
-                line.References,
-                line.Seen,
-                line.FileId,
-                line.Context,
-                line.LineNumber,
-                line.Container);
-
-            PhpReferenceExtractor.EmitObjectMemberAccessReferences(
-                line.PreparedLine,
-                line.References,
-                line.Seen,
-                line.FileId,
-                line.Context,
-                line.LineNumber,
-                line.Container);
-        }
+        CssReferenceExtractor.EmitScss(
+            line.PreparedLine,
+            line.References,
+            line.Seen,
+            line.FileId,
+            line.Context,
+            line.LineNumber,
+            line.Container);
     }
 }

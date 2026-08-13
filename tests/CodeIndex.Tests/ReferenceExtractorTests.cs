@@ -4547,6 +4547,45 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_PythonReferenceLimitStillRunsMutualRecursionFinalization()
+    {
+        const string content = """
+            def alpha():
+                beta()
+
+            def beta():
+                alpha()
+
+            def gamma():
+                alpha()
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "python", content);
+        var references = ReferenceExtractor.Extract(
+            1,
+            "python",
+            content,
+            symbols,
+            maxReferenceCount: 2);
+
+        Assert.Equal(2, references.Count);
+        Assert.Contains(references, reference =>
+            reference.ContainerName == "alpha"
+            && reference.SymbolName == "beta"
+            && reference.ReferenceKind == "call"
+            && reference.IsMutualRecursion
+            && !reference.IsSelfReference);
+        Assert.Contains(references, reference =>
+            reference.ContainerName == "beta"
+            && reference.SymbolName == "alpha"
+            && reference.ReferenceKind == "call"
+            && reference.IsMutualRecursion
+            && !reference.IsSelfReference);
+        Assert.DoesNotContain(references, reference =>
+            reference.ContainerName == "gamma");
+    }
+
+    [Fact]
     public void Extract_CSharpConstructorAlias_DoesNotRewriteQualifiedCallWhenAliasNameAppearsElsewhereOnLine()
     {
         const string content = """
@@ -5683,6 +5722,33 @@ public partial class ReferenceExtractorTests
         Assert.Contains(references, reference => reference.SymbolName == "Context" && reference.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "array" && reference.ReferenceKind == "type_reference");
         Assert.DoesNotContain(references, reference => reference.SymbolName == "message" && reference.ReferenceKind == "type_reference");
+    }
+
+    [Fact]
+    public void Extract_PhpDocblockMethod_ReturnPrecedesParametersAtReferenceLimit()
+    {
+        const string content = """
+            <?php
+            final class Processor {
+                /**
+                 * @method Result process(InputMessage $message)
+                 */
+            }
+            ?>
+            """;
+
+        var symbols = SymbolExtractor.Extract(1, "php", content);
+        var references = ReferenceExtractor.Extract(
+            1,
+            "php",
+            content,
+            symbols,
+            maxReferenceCount: 1);
+
+        var reference = Assert.Single(references);
+        Assert.Equal("Result", reference.SymbolName);
+        Assert.Equal("type_reference", reference.ReferenceKind);
+        Assert.Equal("Processor", reference.ContainerName);
     }
 
     [Fact]

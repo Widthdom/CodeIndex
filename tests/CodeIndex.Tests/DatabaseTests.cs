@@ -8891,6 +8891,213 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void RebuildTypeScriptAugmentationReferences_ScopedGraphTracksDeletedEdgesWithoutReplacement()
+    {
+        var firstFileId = _writer.UpsertFile(CreateTypeScriptFile("src/scoped-delete-first.ts"));
+        var secondFileId = _writer.UpsertFile(CreateTypeScriptFile("src/scoped-delete-second.ts"));
+        _writer.InsertSymbols(
+        [
+            CreateInterface(firstFileId, "ScopedDeletedMerge"),
+            CreateInterface(secondFileId, "ScopedDeletedMerge"),
+        ]);
+        Assert.Equal(2, _writer.RebuildTypeScriptAugmentationReferences("."));
+        Assert.True(ExecuteScalarLong(
+            "SELECT COUNT(*) FROM symbol_reference_candidates") > 0);
+
+        ExecuteNonQuery(
+            _db.Connection,
+            $"DELETE FROM symbols WHERE file_id = {secondFileId.ToString(CultureInfo.InvariantCulture)} AND name = 'ScopedDeletedMerge'");
+
+        var previousScopeHook = DbWriter.ReferenceGraphRefreshScopeForTesting;
+        DbWriter.ReferenceGraphRefreshScopeStats? scopeStats = null;
+        try
+        {
+            DbWriter.ReferenceGraphRefreshScopeForTesting = stats =>
+            {
+                scopeStats = stats;
+                previousScopeHook?.Invoke(stats);
+            };
+            using var graphScope = _writer.BeginReferenceGraphRefreshScope();
+
+            Assert.Equal(
+                0,
+                _writer.RebuildTypeScriptAugmentationReferences(
+                    ".",
+                    ["ScopedDeletedMerge"]));
+
+            Assert.NotNull(scopeStats);
+            Assert.False(scopeStats!.UsedFullRefresh);
+            Assert.Equal(
+                0,
+                ExecuteScalarLong(
+                    "SELECT COUNT(*) FROM symbol_references WHERE reference_kind = 'augmentation'"));
+            Assert.Equal(
+                0,
+                ExecuteScalarLong("SELECT COUNT(*) FROM symbol_reference_candidates"));
+            Assert.Equal(
+                0,
+                ExecuteScalarLong(
+                    "SELECT COUNT(*) FROM hotspot_reference_counts WHERE lang = 'typescript'"));
+            Assert.True(_writer.TypeScriptAugmentationVersionMatchesCurrent());
+            Assert.True(_writer.ReferenceIdentityContractMatchesCurrent());
+            Assert.Equal(
+                DbContext.HotspotReferenceAggregateFlags,
+                ExecuteScalarLong("PRAGMA user_version")
+                    & DbContext.HotspotReferenceAggregateFlags);
+        }
+        finally
+        {
+            DbWriter.ReferenceGraphRefreshScopeForTesting = previousScopeHook;
+        }
+
+        static FileRecord CreateTypeScriptFile(string path) => new()
+        {
+            Path = path,
+            Lang = "typescript",
+            Size = 80,
+            Lines = 4,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        };
+
+        static SymbolRecord CreateInterface(long fileId, string name) => new()
+        {
+            FileId = fileId,
+            Kind = "interface",
+            Name = name,
+            Line = 1,
+            StartLine = 1,
+            EndLine = 1,
+            Signature = $"interface {name} {{ value: number }}",
+        };
+    }
+
+    [Fact]
+    public void RebuildTypeScriptAugmentationReferences_CancellationDuringOwnedDeferredHotspotCompletionRollsBack()
+    {
+        var firstFileId = _writer.UpsertFile(CreateTypeScriptFile("src/owned-cancel-first.ts"));
+        var secondFileId = _writer.UpsertFile(CreateTypeScriptFile("src/owned-cancel-second.ts"));
+        _writer.InsertSymbols(
+        [
+            CreateInterface(firstFileId, "OwnedCancellationMerge"),
+            CreateInterface(secondFileId, "OwnedCancellationMerge"),
+        ]);
+        Assert.Equal(2, _writer.RebuildTypeScriptAugmentationReferences("."));
+
+        var referenceSnapshot = ReadAugmentationReferenceSnapshot();
+        var candidateSnapshot = ReadAugmentationCandidateSnapshot();
+        var hotspotSnapshot = ReadTypeScriptHotspotSnapshot();
+        var augmentationReady = ReadMeta(DbContext.TypeScriptAugmentationVersionMetaKey);
+        var referenceIdentityReady = ReadMeta(DbContext.ReferenceIdentityContractVersionMetaKey);
+        var userVersion = ExecuteScalarLong("PRAGMA user_version");
+        var previousDirtyFilesHook = DbWriter.DeferredHotspotDirtyFilesForTesting;
+        using var cancellation = new CancellationTokenSource();
+        var completionCount = 0;
+        try
+        {
+            DbWriter.DeferredHotspotDirtyFilesForTesting = fileIds =>
+            {
+                completionCount++;
+                previousDirtyFilesHook?.Invoke(fileIds);
+                cancellation.Cancel();
+            };
+
+            var exception = Assert.Throws<OperationCanceledException>(() =>
+                _writer.RebuildTypeScriptAugmentationReferences(
+                    ".",
+                    dirtyNames: null,
+                    cancellation.Token));
+
+            Assert.Equal(cancellation.Token, exception.CancellationToken);
+            Assert.Equal(1, completionCount);
+            Assert.Equal(referenceSnapshot, ReadAugmentationReferenceSnapshot());
+            Assert.Equal(candidateSnapshot, ReadAugmentationCandidateSnapshot());
+            Assert.Equal(hotspotSnapshot, ReadTypeScriptHotspotSnapshot());
+            Assert.Equal(
+                augmentationReady,
+                ReadMeta(DbContext.TypeScriptAugmentationVersionMetaKey));
+            Assert.Equal(
+                referenceIdentityReady,
+                ReadMeta(DbContext.ReferenceIdentityContractVersionMetaKey));
+            Assert.Equal(userVersion, ExecuteScalarLong("PRAGMA user_version"));
+            Assert.True(_writer.TypeScriptAugmentationVersionMatchesCurrent());
+            Assert.True(_writer.ReferenceIdentityContractMatchesCurrent());
+        }
+        finally
+        {
+            DbWriter.DeferredHotspotDirtyFilesForTesting = previousDirtyFilesHook;
+        }
+
+        string ReadAugmentationReferenceSnapshot() => ExecuteScalarString(
+            """
+            SELECT COALESCE(group_concat(entry, '|'), '')
+            FROM (
+                SELECT id || ':' || file_id || ':' || hex(COALESCE(symbol_name, '')) || ':' ||
+                       reference_kind || ':' || COALESCE(line, -1) || ':' ||
+                       COALESCE(column_number, -1) || ':' || hex(COALESCE(context, '')) || ':' ||
+                       hex(COALESCE(container_kind, '')) || ':' ||
+                       hex(COALESCE(container_name, '')) || ':' ||
+                       hex(COALESCE(symbol_name_folded, '')) || ':' ||
+                       hex(COALESCE(container_name_folded, '')) || ':' ||
+                       is_self_reference || ':' || is_mutual_recursion || ':' ||
+                       COALESCE(source_symbol_id, -1) || ':' ||
+                       COALESCE(target_symbol_id, -1) || ':' ||
+                       hex(COALESCE(target_symbol_key, '')) || ':' ||
+                       hex(COALESCE(resolution_state, '')) || ':' ||
+                       resolution_candidate_count AS entry
+                FROM symbol_references
+                WHERE reference_kind = 'augmentation'
+                ORDER BY id
+            )
+            """);
+
+        string ReadAugmentationCandidateSnapshot() => ExecuteScalarString(
+            """
+            SELECT COALESCE(group_concat(entry, '|'), '')
+            FROM (
+                SELECT candidate.reference_id || ':' || candidate.symbol_id || ':' ||
+                       candidate.scope_rank AS entry
+                FROM symbol_reference_candidates AS candidate
+                ORDER BY candidate.reference_id, candidate.symbol_id
+            )
+            """);
+
+        string ReadTypeScriptHotspotSnapshot() => ExecuteScalarString(
+            """
+            SELECT COALESCE(group_concat(entry, '|'), '')
+            FROM (
+                SELECT file_id || ':' || lang || ':' || hex(raw_symbol_name) || ':' ||
+                       hex(symbol_name) || ':' || symbol_segment_count || ':' ||
+                       allow_leaf_fallback || ':' || reference_count || ':' ||
+                       printf('%.17g', reference_score) AS entry
+                FROM hotspot_reference_counts
+                WHERE lang = 'typescript'
+                ORDER BY file_id, raw_symbol_name, symbol_name,
+                         symbol_segment_count, allow_leaf_fallback
+            )
+            """);
+
+        static FileRecord CreateTypeScriptFile(string path) => new()
+        {
+            Path = path,
+            Lang = "typescript",
+            Size = 80,
+            Lines = 4,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        };
+
+        static SymbolRecord CreateInterface(long fileId, string name) => new()
+        {
+            FileId = fileId,
+            Kind = "interface",
+            Name = name,
+            Line = 1,
+            StartLine = 1,
+            EndLine = 1,
+            Signature = $"interface {name} {{ value: number }}",
+        };
+    }
+
+    [Fact]
     public void RebuildTypeScriptAugmentationReferences_ScopesOldAndNewDirtyNames()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_ts_aug_dirty_names");

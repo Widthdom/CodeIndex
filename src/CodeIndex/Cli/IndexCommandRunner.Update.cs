@@ -342,28 +342,6 @@ public static partial class IndexCommandRunner
             }
         }
 
-        void RecordUpdateFileFailure(
-            string relativePath,
-            string phase,
-            Exception exception)
-        {
-            DemoteReadinessOnce();
-            LogIndexFileFailure("index_update_file_failed", relativePath, phase, exception);
-
-            errors++;
-            var errorMessage = FormatIndexFileException(exception);
-            errorList.Add(new CliJsonMessage(relativePath, errorMessage));
-            if (fileErrorList.Count < PartialIndexFileErrorLimit)
-                fileErrorList.Add(BuildIndexFileError(relativePath, phase, exception));
-            if (!options.Json)
-            {
-                updateProgress.Pause();
-                CommandErrorWriter.WriteStderr(
-                    FormatPerFileErrorLine("ERR ", relativePath, exception, errorMessage));
-                updateProgress.Resume();
-            }
-        }
-
         void ThrowIfUpdateCancelled()
         {
             if (!cancellationToken.IsCancellationRequested)
@@ -686,56 +664,72 @@ public static partial class IndexCommandRunner
                 useUpdateSecondaryIndexStaging,
                 cancellationToken);
 
-        var updateLoop = RunUpdateFileLoop(new UpdateFileLoopContext
-        {
-            Writer = writer,
-            Indexer = indexer,
-            Options = options,
-            Stopwatch = stopwatch,
-            ProjectRoot = projectRoot,
-            IndexRunDiagnostics = indexRunDiagnostics,
-            TargetPaths = targetPaths,
-            UpdateProgress = updateProgress,
-            MemorySamples = memorySamples,
-            Updated = updated,
-            Removed = removed,
-            Skipped = skipped,
-            FtsMutated = ftsMutated,
-            MutualRecursionRefreshNeeded = mutualRecursionRefreshNeeded,
-            CSharpMetadataTargetsNeedRefresh = csharpMetadataTargetsNeedRefresh,
-            SymbolsDroppedByKindFilter = symbolsDroppedByKindFilter,
-            CSharpWorkspace = csharpWorkspace,
-            CSharpWorkspaceSnapshots = csharpWorkspaceSnapshots,
-            ScannedUpdateLanguages = scannedUpdateLanguages,
-            SymbolKindFilterMatchesPrior = symbolKindFilterMatchesPrior,
-            CSharpSymbolNameContractMatchesCurrent = csharpSymbolNameContractMatchesCurrent,
-            SqlGraphContractMatchesCurrent = sqlGraphContractMatchesCurrent,
-            HdlGraphContractMatchesCurrent = hdlGraphContractMatchesCurrent,
-            PostExtractionHooks = postExtractionHooks,
-            VisitedFileIdentities = visitedFileIdentities,
-            ErrorList = errorList,
-            FileErrorList = fileErrorList,
-            WarningList = warningList,
-            CancellationToken = cancellationToken,
-            RecordScanErrors = RecordScanErrors,
-            RecordCSharpWorkspaceDrift = RecordCSharpWorkspaceDrift,
-            DemoteReadinessOnce = DemoteReadinessOnce,
-            WriteProjectRootOnce = WriteProjectRootOnce,
-            RequireTypeScriptAugmentationRefresh = RequireTypeScriptAugmentationRefresh,
-            PurgeStaleUpdateCleanupPaths = PurgeStaleUpdateCleanupPaths,
-            RecordDynamicGraphFileRefresh = RecordDynamicGraphFileRefresh,
-            RecordUpdateFileFailure = RecordUpdateFileFailure,
-            IsProjectRootWritten = () => projectRootWritten,
-        });
-        updated = updateLoop.Updated;
-        removed = updateLoop.Removed;
-        skipped = updateLoop.Skipped;
-        warnings += updateLoop.Warnings;
-        errors += updateLoop.Errors;
-        ftsMutated = updateLoop.FtsMutated;
-        mutualRecursionRefreshNeeded = updateLoop.MutualRecursionRefreshNeeded;
-        csharpMetadataTargetsNeedRefresh = updateLoop.CSharpMetadataTargetsNeedRefresh;
-        symbolsDroppedByKindFilter = updateLoop.SymbolsDroppedByKindFilter;
+        var updateLoop = new UpdateFileLoopSession(
+            new UpdateFileLoopRuntime(
+                writer,
+                indexer,
+                options,
+                projectRoot,
+                updateProgress,
+                cancellationToken,
+                targetPaths,
+                memorySamples),
+            new UpdateFileLoopCounters(
+                updated,
+                removed,
+                skipped,
+                Warnings: 0,
+                Errors: 0,
+                symbolsDroppedByKindFilter),
+            new UpdateFileLoopRefreshState(
+                ftsMutated,
+                mutualRecursionRefreshNeeded,
+                csharpMetadataTargetsNeedRefresh,
+                CurrentPath: null,
+                CurrentPhase: "preparing",
+                ParallelSourceWorkspaceDriftDetected: false,
+                ReadableFileBytes: null),
+            new UpdateFileLoopWorkspace(
+                csharpWorkspace,
+                csharpWorkspaceSnapshots,
+                scannedUpdateLanguages,
+                symbolKindFilterMatchesPrior,
+                csharpSymbolNameContractMatchesCurrent,
+                sqlGraphContractMatchesCurrent,
+                hdlGraphContractMatchesCurrent),
+            new UpdateFileLoopOutput(
+                stopwatch,
+                indexRunDiagnostics,
+                postExtractionHooks,
+                visitedFileIdentities,
+                errorList,
+                fileErrorList,
+                warningList),
+            new UpdateFileLoopReadinessOperations(
+                RecordScanErrors,
+                RecordCSharpWorkspaceDrift,
+                DemoteReadinessOnce,
+                RequireTypeScriptAugmentationRefresh,
+                RecordDynamicGraphFileRefresh),
+            new UpdateFileLoopPersistenceOperations(
+                WriteProjectRootOnce,
+                PurgeStaleUpdateCleanupPaths,
+                () => projectRootWritten),
+            new UpdateFileLoopParallelTesting(
+                UpdateParallelExtractionEventForTesting,
+                UpdateParallelExtractionFailureForTesting,
+                IndexExtractionStallTimeoutForTesting,
+                UpdateParallelExtractionWorkersStoppedForTesting))
+            .Run();
+        updated = updateLoop.Counters.Updated;
+        removed = updateLoop.Counters.Removed;
+        skipped = updateLoop.Counters.Skipped;
+        warnings += updateLoop.Counters.Warnings;
+        errors += updateLoop.Counters.Errors;
+        ftsMutated = updateLoop.Refresh.FtsMutated;
+        mutualRecursionRefreshNeeded = updateLoop.Refresh.MutualRecursionRefreshNeeded;
+        csharpMetadataTargetsNeedRefresh = updateLoop.Refresh.CSharpMetadataTargetsNeedRefresh;
+        symbolsDroppedByKindFilter = updateLoop.Counters.SymbolsDroppedByKindFilter;
         var readableFileBytes = updateLoop.ReadableFileBytes;
 
         if (options.ChangedBetweenSpecified

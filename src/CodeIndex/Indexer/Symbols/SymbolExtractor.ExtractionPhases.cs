@@ -173,12 +173,21 @@ public static partial class SymbolExtractor
             _cssQualifiedRuleAncestors ??= FindCssQualifiedRuleAncestors(CssScannerLines!);
     }
 
-    private sealed class PatternScanState
+    private struct PatternScanState
     {
-        public FSharpTypeBodyState FSharpTypeBodyState = FSharpTypeBodyState.None;
+        public PatternScanState()
+        {
+            FSharpTypeBodyState = FSharpTypeBodyState.None;
+            GoImportBlock = false;
+            CSharpSuppressedContinuationUntil = -1;
+            CSharpSuppressedContinuationResumeLine = -1;
+            CSharpSuppressedContinuationResumeRawColumn = 0;
+        }
+
+        public FSharpTypeBodyState FSharpTypeBodyState;
         public bool GoImportBlock;
-        public int CSharpSuppressedContinuationUntil = -1;
-        public int CSharpSuppressedContinuationResumeLine = -1;
+        public int CSharpSuppressedContinuationUntil;
+        public int CSharpSuppressedContinuationResumeLine;
         public int CSharpSuppressedContinuationResumeRawColumn;
     }
 
@@ -197,7 +206,7 @@ public static partial class SymbolExtractor
         string? projectRoot,
         string[] lines,
         PatternScanInputs scanInputs,
-        PatternScanState scanState,
+        ref PatternScanState scanState,
         SymbolExtractionList symbols,
         SymbolExtractionState extractionState,
         HashSet<string>? dockerfileStageNames,
