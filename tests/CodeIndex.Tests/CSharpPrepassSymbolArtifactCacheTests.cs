@@ -82,6 +82,35 @@ public class CSharpPrepassSymbolArtifactCacheTests
     }
 
     [Fact]
+    public void QualifiedPatternLookups_PreserveRawNonEnumTypeShadowing()
+    {
+        var lookups = ReferenceExtractor.BuildCSharpQualifiedPatternLookups(
+        [
+            new SymbolRecord { Kind = "enum", Name = "Shade" },
+            new SymbolRecord
+            {
+                Kind = "enum",
+                Name = "Red",
+                ContainerKind = "enum",
+                ContainerName = "Shade",
+            },
+            new SymbolRecord { Kind = "class", Name = "Shade" },
+            new SymbolRecord { Kind = "enum", Name = "Tone" },
+            new SymbolRecord
+            {
+                Kind = "enum",
+                Name = "Warm",
+                ContainerKind = "enum",
+                ContainerName = "Tone",
+            },
+            new SymbolRecord { Kind = "field", Name = "Tone" },
+        ]);
+
+        Assert.False(Assert.Single(lookups.EnumMemberLookup["Red"]).AllowShortNameFallback);
+        Assert.True(Assert.Single(lookups.EnumMemberLookup["Warm"]).AllowShortNameFallback);
+    }
+
+    [Fact]
     public void TryTake_MatchingChecksumOwnsDeepCloneAndIsTakeOnce()
     {
         var source = CreatePopulatedSymbol();

@@ -471,6 +471,10 @@ partial and must not make that transient result authoritative. Keep admission
 bounded to 4,096 files, 131,072 symbols, and an estimated 32 MiB, and clear all
 unconsumed artifacts before reference-graph work begins.
 
+The workspace qualified-pattern lookup needs only raw non-enum type names for
+enum-shadowing decisions. Build that conflict set directly; do not call the
+per-file type-name builder and discard its normalized and qualified known-type set.
+
 Authoritative full scans collect the C#, VB, F#, and MSBuild project-marker
 fingerprints during the shared source-directory enumeration. The same pass also
 builds a budget-independent directory marker-count snapshot used by
@@ -4309,6 +4313,10 @@ persistence、reference extraction、bounded-regex issue は通常の main-pass 
 extraction へ fallback します。timeout した prepass 結果は partial であり、一過性の結果を
 authoritative にしてはいけません。admission は 4,096 file、131,072 symbol、推定 32 MiB に制限し、未消費
 artifact は reference graph 開始前にすべて clear してください。
+
+workspace qualified-pattern lookup が enum shadowing 判定に必要とするのは raw な non-enum type
+nameだけです。このconflict setは直接構築し、per-file type-name builderを呼んでnormalized / qualified
+known-type setを直後に捨てないでください。
 
 authoritative な full scan は、共有 source-directory enumeration 中に C#、VB、F#、
 MSBuild の project-marker fingerprint を収集します。同じ pass で budget 非依存の

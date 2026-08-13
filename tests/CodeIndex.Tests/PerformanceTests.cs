@@ -400,6 +400,9 @@ public class PerformanceTests : IDisposable
             {
                 Kind = "interface",
                 Name = $"IUnrelated{index}",
+                ContainerKind = "namespace",
+                ContainerName = "Demo",
+                ContainerQualifiedName = "Demo",
                 Signature = $"public interface IUnrelated{index}<T>",
             });
         }
@@ -408,6 +411,9 @@ public class PerformanceTests : IDisposable
         {
             Kind = "interface",
             Name = "IContract",
+            ContainerKind = "namespace",
+            ContainerName = "Demo",
+            ContainerQualifiedName = "Demo",
             Signature = "public interface IContract<T>",
         });
         workspaceSymbols.Add(new SymbolRecord
@@ -421,15 +427,23 @@ public class PerformanceTests : IDisposable
         });
 
         _ = ReferenceExtractor.BuildCSharpStaticInterfaceMemberLookups(workspaceSymbols);
+        _ = ReferenceExtractor.BuildCSharpQualifiedPatternLookups(workspaceSymbols);
         ReferenceExtractor.CSharpStaticInterfaceMemberLookups? lookups = null;
+        ReferenceExtractor.CSharpQualifiedPatternLookups? qualifiedLookups = null;
         var allocatedBytes = MeasureAllocatedBytes(
             () => lookups = ReferenceExtractor.BuildCSharpStaticInterfaceMemberLookups(workspaceSymbols));
+        var qualifiedAllocatedBytes = MeasureAllocatedBytes(
+            () => qualifiedLookups = ReferenceExtractor.BuildCSharpQualifiedPatternLookups(workspaceSymbols));
 
         Assert.True(
             allocatedBytes < 64_000,
             $"C# static-interface lookup allocated {allocatedBytes:N0} bytes for unrelated interfaces");
         Assert.Single(lookups!.ContractsByType);
         Assert.Single(lookups.InterfaceGenericParameters);
+        Assert.Equal(unrelatedInterfaceCount + 1, qualifiedLookups!.TypePatternLookup.Count);
+        Assert.True(
+            qualifiedAllocatedBytes < 7_000_000,
+            $"C# qualified workspace lookup allocated {qualifiedAllocatedBytes:N0} bytes");
     }
 
 #if NET8_0
