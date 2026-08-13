@@ -3185,6 +3185,7 @@ public partial class IndexCommandRunnerTests
     {
         var projectRoot = CreateTempProject();
         var previousBarrierHook = IndexCommandRunner.FullScanInputSnapshotBarrierForTesting;
+        var previousWritePhaseHook = IndexCommandRunner.FullScanWritePhaseStartedForTesting;
         var phases = new List<string>();
         try
         {
@@ -3192,6 +3193,8 @@ public partial class IndexCommandRunnerTests
             if (includeCSharp)
                 File.WriteAllText(Path.Combine(projectRoot, "Plain.cs"), "public sealed class Plain { }\n");
             IndexCommandRunner.FullScanInputSnapshotBarrierForTesting = phases.Add;
+            IndexCommandRunner.FullScanWritePhaseStartedForTesting = () =>
+                phases.Add("write_started");
 
             var args = symbolsOnly
                 ? new[] { projectRoot, "--symbols-only", "--json", "--quiet" }
@@ -3199,11 +3202,14 @@ public partial class IndexCommandRunnerTests
             var exitCode = IndexCommandRunner.Run(args, _jsonOptions);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal(["before_write", "before_readiness"], phases);
+            Assert.Equal(
+                ["before_write", "write_started", "before_readiness"],
+                phases);
         }
         finally
         {
             IndexCommandRunner.FullScanInputSnapshotBarrierForTesting = previousBarrierHook;
+            IndexCommandRunner.FullScanWritePhaseStartedForTesting = previousWritePhaseHook;
             DeleteDirectory(projectRoot);
             SqliteConnection.ClearAllPools();
         }
@@ -3351,8 +3357,11 @@ public partial class IndexCommandRunnerTests
         }
     }
 
-    [Fact]
-    public void Run_FullScan_FirstSnapshotBarrierDriftPreservesRowsAndTrustAfterSchemaInitialization()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Run_FullScan_FirstSnapshotBarrierDriftPreservesRowsAndTrustAfterSchemaInitialization(
+        bool rebuild)
     {
         var projectRoot = CreateTempProject();
         var previousBarrierHook = IndexCommandRunner.FullScanInputSnapshotBarrierForTesting;
@@ -3376,6 +3385,7 @@ public partial class IndexCommandRunnerTests
             string? priorAppChecksum;
             bool? priorSourceEvidence;
             string? priorFtsRecoveryMarker;
+            string? priorBatchMarker;
             using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 priorReadiness = db.GetUserVersion();
@@ -3384,7 +3394,9 @@ public partial class IndexCommandRunnerTests
                 var priorWriter = new DbWriter(db);
                 priorSourceEvidence = priorWriter.GetCSharpStaticInterfaceSourceEvidence();
                 priorWriter.MarkFtsBulkLoadRecoveryNeeded();
+                priorWriter.MarkBatchInProgress();
                 priorFtsRecoveryMarker = db.GetMetaString(DbWriter.FtsBulkLoadInProgressMetaKey);
+                priorBatchMarker = db.GetMetaString(DbContext.BatchInProgressMetaKey);
             }
 
             File.WriteAllText(appPath, "def run():\n    return 2\n");
@@ -3402,7 +3414,10 @@ public partial class IndexCommandRunnerTests
                 Directory.SetLastWriteTimeUtc(projectRoot, rootModifiedUtc);
             };
 
-            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json", "--quiet"]);
+            var args = rebuild
+                ? new[] { projectRoot, "--rebuild", "--yes", "--json", "--quiet" }
+                : [projectRoot, "--json", "--quiet"];
+            var (exitCode, json) = RunAndCaptureJson(args);
 
             Assert.Equal(CommandExitCodes.PartialResult, exitCode);
             Assert.Equal("partial", json.GetProperty("status").GetString());
@@ -3417,6 +3432,9 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(
                 priorFtsRecoveryMarker,
                 preservedDb.GetMetaString(DbWriter.FtsBulkLoadInProgressMetaKey));
+            Assert.Equal(
+                priorBatchMarker,
+                preservedDb.GetMetaString(DbContext.BatchInProgressMetaKey));
             Assert.Equal(priorAppChecksum, new DbReader(preservedDb.Connection).GetFileByPath("app.py")?.Checksum);
             Assert.NotNull(new DbReader(preservedDb.Connection).GetFileByPath("obsolete.md"));
             Assert.Equal(
