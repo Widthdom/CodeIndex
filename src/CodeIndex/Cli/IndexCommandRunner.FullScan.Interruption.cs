@@ -82,7 +82,7 @@ public static partial class IndexCommandRunner
         long lastProgressTimestamp,
         string? currentFile,
         ActiveExtractionPhase?[] activeExtractionPhases,
-        Action cancelStalledWork)
+        CancellationTokenSource stalledWorkCancellation)
     {
         if (!TryGetFullScanExtractionStallPath(
                 filesProcessed,
@@ -96,7 +96,7 @@ public static partial class IndexCommandRunner
             return;
         }
 
-        cancelStalledWork();
+        stalledWorkCancellation.Cancel();
         throw new IndexExtractionStalledException(filesProcessed, filesTotal, timeout, activePath);
     }
 

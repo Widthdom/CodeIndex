@@ -10,414 +10,346 @@ namespace CodeIndex.Cli;
 
 public static partial class IndexCommandRunner
 {
-    private sealed class FullScanExtractionConsumerContext
-    {
-        internal required DbWriter Writer { get; init; }
-        internal required FileIndexer Indexer { get; init; }
-        internal required IndexCommandOptions Options { get; init; }
-        internal required string ProjectRoot { get; init; }
-        internal required FullScanFileTarget[] FileTargets { get; init; }
-        internal required int FilesCount { get; init; }
-        internal required int ProcessedBeforeExtraction { get; init; }
-        internal required bool ForceExtractorRefresh { get; init; }
-        internal required bool StartedWithNoIndexedFiles { get; init; }
-        internal required bool PriorSymbolsOnlyGraphOmitted { get; init; }
-        internal required bool SymbolKindFilterMatchesPrior { get; init; }
-        internal required bool CSharpIndexedProjectRootCompatible { get; init; }
-        internal required bool CSharpSymbolNameContractMatchesCurrent { get; init; }
-        internal required bool SqlGraphContractMatchesCurrent { get; init; }
-        internal required bool HdlGraphContractMatchesCurrent { get; init; }
-        internal required ReadableFileByteTracker ReadableFileBytes { get; init; }
-        internal required PostExtractionHookRunner PostExtractionHooks { get; init; }
-        internal required SymbolExtractionWorkerClient SymbolExtractionWorker { get; init; }
-        internal required IndexProgressReporter IndexProgress { get; init; }
-        internal required BlockingCollection<FullScanFileWorkItem> ExtractionResults { get; init; }
-        internal required Task[] Workers { get; init; }
-        internal required TimeSpan ExtractionStallTimeout { get; init; }
-        internal required ActiveExtractionPhase?[] ActiveExtractionPhases { get; init; }
-        internal required CancellationToken CancellationToken { get; init; }
-        internal required Action CancelExtraction { get; init; }
-        internal required Action EnsureIndexingActivityVisible { get; init; }
-        internal required Action ReportJsonIndexProgressIfNeeded { get; init; }
-        internal required Action<int, int?> ThrowIfFullScanCancelled { get; init; }
-        internal required Action<int> PublishProcessedCount { get; init; }
-        internal required Action<string?> SetCurrentJsonIndexFile { get; init; }
-        internal required Func<string?> GetCurrentJsonIndexFile { get; init; }
-        internal required Func<bool> GetDeferCSharpMutationsForIncompleteScan { get; init; }
-        internal required Func<bool> GetFtsMutated { get; init; }
-        internal required Func<CSharpStaticInterfaceWorkspaceSymbols> GetCSharpWorkspace { get; init; }
-        internal required Func<CSharpPrepassSymbolArtifactCache?> GetCSharpPrepassSymbolArtifacts { get; init; }
-        internal required Func<Dictionary<string, CSharpStaticInterfacePrepass.FileStatSnapshot>?> GetCSharpWorkspaceFileSnapshots { get; init; }
-        internal required Action<string> DeferCSharpMutationsForLoadedSnapshotDrift { get; init; }
-        internal required Func<string?, string, bool> TargetRequiresJavaScriptTypeScriptRefresh { get; init; }
-        internal required Func<string?, bool> AllowReuseWithCurrentHotspotFamilyTrust { get; init; }
-        internal required Action RequireTypeScriptAugmentationRefresh { get; init; }
-        internal required Action WriteProjectRootOnce { get; init; }
-        internal required Action<long, IReadOnlyList<FileIssue>> InsertIssuesForIndexedFile { get; init; }
-        internal required Action<int, int, int> CountFreshInsertedRows { get; init; }
-        internal required FullScanExtractionConsumerState State { get; init; }
-    }
+    private readonly record struct FullScanExtractionConsumerResources(
+        PostExtractionHookRunner PostExtractionHooks,
+        SymbolExtractionWorkerClient SymbolExtractionWorker,
+        BlockingCollection<FullScanFileWorkItem> ExtractionResults,
+        Task[] Workers,
+        TimeSpan ExtractionStallTimeout,
+        ActiveExtractionPhase?[] ActiveExtractionPhases,
+        CancellationTokenSource ExtractionCancellation,
+        int ProcessedBeforeExtraction);
 
-    private sealed class FullScanExtractionConsumerState
+    private sealed partial class FullScanExtractionSession
     {
-        internal int Processed { get; set; }
-        internal int Skipped { get; set; }
-        internal int Warnings { get; set; }
-        internal int ErrorsAdded { get; set; }
-        internal bool FtsMutated { get; set; }
-        internal bool MutualRecursionRefreshNeeded { get; set; }
-        internal bool CSharpMetadataTargetsNeedRefresh { get; set; }
-        internal int SymbolsDroppedByKindFilter { get; set; }
-        internal long ExtractedFiles { get; set; }
-        internal long ExtractedChunks { get; set; }
-        internal long ExtractedSymbols { get; set; }
-        internal long ExtractedReferences { get; set; }
-        internal HashSet<string>? ReusedHotspotFamilyLanguages { get; set; }
-        internal HashSet<string>? SkippedSymbolExtractorLanguages { get; set; }
-        internal required HashSet<string> IndexedSymbolExtractorLanguages { get; init; }
-        internal required List<CliJsonMessage> ErrorList { get; init; }
-        internal required List<StatusIndexFileError> FileErrorList { get; init; }
-        internal required List<CliJsonMessage> WarningList { get; init; }
-    }
-
-    private static FullScanExtractionConsumerState ConsumeFullScanExtractionResults(
-        FullScanExtractionConsumerContext context)
-    {
-        var lastExtractionProgressAt = Stopwatch.GetTimestamp();
-        while (!context.ExtractionResults.IsCompleted)
+        internal void ConsumeFullScanExtractionResults(
+            in FullScanExtractionConsumerResources resources)
         {
-            var processed = context.ProcessedBeforeExtraction + context.State.Processed;
-            context.ThrowIfFullScanCancelled(processed, context.FilesCount);
-            if (!context.ExtractionResults.TryTake(out var item, millisecondsTimeout: 100))
+            var lastExtractionProgressAt = Stopwatch.GetTimestamp();
+            while (!resources.ExtractionResults.IsCompleted)
             {
-                ThrowIfFullScanExtractionStalled(
-                    processed,
-                    context.FilesCount,
-                    context.ExtractionStallTimeout,
-                    lastExtractionProgressAt,
-                    context.GetCurrentJsonIndexFile(),
-                    context.ActiveExtractionPhases,
-                    context.CancelExtraction);
-                continue;
-            }
-
-            lastExtractionProgressAt = Stopwatch.GetTimestamp();
-            context.SetCurrentJsonIndexFile(item.RelativePath);
-            ProcessFullScanExtractionItem(context, item);
-            CompleteFullScanExtractionItem(context);
-        }
-
-        Task.WaitAll(context.Workers, context.CancellationToken);
-        return context.State;
-    }
-
-    private static void ProcessFullScanExtractionItem(
-        FullScanExtractionConsumerContext context,
-        FullScanFileWorkItem item)
-    {
-        var state = context.State;
-        var options = context.Options;
-        var writer = context.Writer;
-        var indexFilePhase = item.FailurePhase ?? "preparing";
-        var itemFileExtracted = item.Record == null ? 0L : 1L;
-        var itemChunksExtracted = item.Chunks?.Count ?? 0L;
-        var itemSymbolsExtracted = item.Symbols?.Count ?? 0L;
-        var itemReferencesExtracted = item.References?.Count ?? 0L;
-        context.EnsureIndexingActivityVisible();
-        if (item.Exception is IndexExtractionStalledException stalledException)
-            RethrowPreservingStackTrace(stalledException);
-
-        try
-        {
-            if (ShouldDeferFullScanCSharpItem(context, item))
-            {
-                state.Skipped++;
-                return;
-            }
-
-            if (item.Exception != null)
-                RethrowPreservingStackTrace(item.Exception);
-
-            if (item.Record == null)
-            {
-                RecordSkippedFullScanExtractionItem(context, item);
-                return;
-            }
-
-            var record = item.Record;
-            context.ReadableFileBytes.Remember(item.FileIndex, record.Size);
-            if (item.Warning != null && !options.Json && !options.Quiet)
-            {
-                context.IndexProgress.Pause();
-                ConsoleUi.PrintWarning(item.Warning);
-                context.IndexProgress.Resume();
-            }
-
-            var generatedSuppressionIssue = item.GeneratedSuppressionChecked
-                ? item.GeneratedSuppressionIssue
-                : context.Indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path);
-            var existingId = GetReusableFullScanFileId(context, record, generatedSuppressionIssue);
-            if (existingId != null)
-            {
-                RecordReusedFullScanExtractionItem(context, record);
-                return;
-            }
-
-            if (record.Lang == "csharp")
-                state.CSharpMetadataTargetsNeedRefresh = true;
-            if (record.Lang == "typescript")
-                context.RequireTypeScriptAugmentationRefresh();
-
-            var persistence = PersistFullScanFile(new FullScanFilePersistenceContext
-            {
-                Writer = writer,
-                Indexer = context.Indexer,
-                Options = options,
-                ProjectRoot = context.ProjectRoot,
-                Item = item,
-                Record = record,
-                GeneratedSuppressionIssue = generatedSuppressionIssue,
-                StartedWithNoIndexedFiles = context.StartedWithNoIndexedFiles,
-                DeferCSharpMutationsForIncompleteScan =
-                    context.GetDeferCSharpMutationsForIncompleteScan(),
-                CSharpWorkspace = context.GetCSharpWorkspace(),
-                CSharpPrepassSymbolArtifacts =
-                    context.GetCSharpPrepassSymbolArtifacts(),
-                PostExtractionHooks = context.PostExtractionHooks,
-                SymbolExtractionWorker = context.SymbolExtractionWorker,
-                CancellationToken = context.CancellationToken,
-                InsertIssuesForIndexedFile = context.InsertIssuesForIndexedFile,
-                WriteProjectRootOnce = context.WriteProjectRootOnce,
-                SetPhase = (path, phase) =>
+                var processed = resources.ProcessedBeforeExtraction + Processed;
+                ThrowIfFullScanCancelled(processed, FilesCount);
+                if (!resources.ExtractionResults.TryTake(out var item, millisecondsTimeout: 100))
                 {
-                    context.SetCurrentJsonIndexFile(path);
-                    indexFilePhase = phase;
-                },
-            });
-            itemChunksExtracted = persistence.ExtractedChunks;
-            itemSymbolsExtracted = persistence.ExtractedSymbols;
-            itemReferencesExtracted = persistence.ExtractedReferences;
-            state.SymbolsDroppedByKindFilter += persistence.SymbolsDroppedByKindFilter;
-            state.MutualRecursionRefreshNeeded |= persistence.MutualRecursionRefreshNeeded;
-            state.CSharpMetadataTargetsNeedRefresh |= persistence.CSharpMetadataTargetsNeedRefresh;
-            state.FtsMutated = true;
-            if (persistence.StampSymbolExtractorLanguage
-                && !string.IsNullOrWhiteSpace(record.Lang))
-            {
-                state.IndexedSymbolExtractorLanguages.Add(record.Lang);
+                    ThrowIfFullScanExtractionStalled(
+                        processed,
+                        FilesCount,
+                        resources.ExtractionStallTimeout,
+                        lastExtractionProgressAt,
+                        CurrentJsonIndexFile,
+                        resources.ActiveExtractionPhases,
+                        resources.ExtractionCancellation);
+                    continue;
+                }
+
+                lastExtractionProgressAt = Stopwatch.GetTimestamp();
+                CurrentJsonIndexFile = item.RelativePath;
+                ProcessFullScanExtractionItem(in resources, item);
+                CompleteFullScanExtractionItem(resources.ProcessedBeforeExtraction);
             }
-            context.CountFreshInsertedRows(
-                persistence.PersistedChunks,
-                persistence.PersistedSymbols,
-                persistence.PersistedReferences);
-            context.IndexProgress.WriteVerbose(persistence.VerboseMessage);
+
+            Task.WaitAll(resources.Workers, CancellationToken);
         }
-        catch (IndexExtractionStalledException)
+
+        private void ProcessFullScanExtractionItem(
+            in FullScanExtractionConsumerResources resources,
+            FullScanFileWorkItem item)
         {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            LogIndexFileFailure("index_file_failed", item.FilePath, indexFilePhase, ex);
-            state.ErrorsAdded++;
-            var errorMessage = FormatIndexFileException(ex);
-            state.ErrorList.Add(new CliJsonMessage(item.FilePath, errorMessage));
-            if (state.FileErrorList.Count < PartialIndexFileErrorLimit)
-                state.FileErrorList.Add(BuildIndexFileError(item.RelativePath, indexFilePhase, ex));
-            if (!options.Json)
+            var options = Options;
+            var writer = Writer;
+            var indexFilePhase = item.FailurePhase ?? "preparing";
+            var itemFileExtracted = item.Record == null ? 0L : 1L;
+            var itemChunksExtracted = item.Chunks?.Count ?? 0L;
+            var itemSymbolsExtracted = item.Symbols?.Count ?? 0L;
+            var itemReferencesExtracted = item.References?.Count ?? 0L;
+            FullScanProgress.EnsureIndexingActivityVisible();
+            if (item.Exception is IndexExtractionStalledException stalledException)
+                RethrowPreservingStackTrace(stalledException);
+
+            try
             {
-                context.IndexProgress.Pause();
-                ConsoleUi.ClearProgressLine();
-                ConsoleUi.TryWriteErrorLine(
-                    FormatPerFileErrorLine("ERR ", item.FilePath, ex, errorMessage));
-                context.IndexProgress.Resume();
+                if (ShouldDeferFullScanCSharpItem(item))
+                {
+                    Skipped++;
+                    return;
+                }
+
+                if (item.Exception != null)
+                    RethrowPreservingStackTrace(item.Exception);
+
+                if (item.Record == null)
+                {
+                    RecordSkippedFullScanExtractionItem(item);
+                    return;
+                }
+
+                var record = item.Record;
+                ReadableFileBytes.Remember(item.FileIndex, record.Size);
+                if (item.Warning != null && !options.Json && !options.Quiet)
+                {
+                    IndexProgress.Pause();
+                    ConsoleUi.PrintWarning(item.Warning);
+                    IndexProgress.Resume();
+                }
+
+                var generatedSuppressionIssue = item.GeneratedSuppressionChecked
+                    ? item.GeneratedSuppressionIssue
+                    : Indexer.BuildGeneratedCodeExtractionSkippedIssue(record.Path);
+                var existingId = GetReusableFullScanFileId(record, generatedSuppressionIssue);
+                if (existingId != null)
+                {
+                    RecordReusedFullScanExtractionItem(record);
+                    return;
+                }
+
+                if (record.Lang == "csharp")
+                    CSharpMetadataTargetsNeedRefresh = true;
+                if (record.Lang == "typescript")
+                    RequireTypeScriptAugmentationRefresh();
+
+                var persistence = PersistFullScanFile(new FullScanFilePersistenceContext
+                {
+                    Writer = writer,
+                    Indexer = Indexer,
+                    Options = options,
+                    ProjectRoot = ProjectRoot,
+                    Item = item,
+                    Record = record,
+                    GeneratedSuppressionIssue = generatedSuppressionIssue,
+                    StartedWithNoIndexedFiles = StartedWithNoIndexedFiles,
+                    DeferCSharpMutationsForIncompleteScan =
+                        DeferCSharpMutationsForIncompleteScan,
+                    CSharpWorkspace = CSharpWorkspace,
+                    CSharpPrepassSymbolArtifacts =
+                        CSharpPrepassSymbolArtifacts,
+                    PostExtractionHooks = resources.PostExtractionHooks,
+                    SymbolExtractionWorker = resources.SymbolExtractionWorker,
+                    CancellationToken = CancellationToken,
+                    ExtractionSession = this,
+                    WriteProjectRootOnce = WriteProjectRootOnce,
+                    SetPhase = (path, phase) =>
+                    {
+                        CurrentJsonIndexFile = path;
+                        indexFilePhase = phase;
+                    },
+                });
+                itemChunksExtracted = persistence.ExtractedChunks;
+                itemSymbolsExtracted = persistence.ExtractedSymbols;
+                itemReferencesExtracted = persistence.ExtractedReferences;
+                SymbolsDroppedByKindFilter += persistence.SymbolsDroppedByKindFilter;
+                MutualRecursionRefreshNeeded |= persistence.MutualRecursionRefreshNeeded;
+                CSharpMetadataTargetsNeedRefresh |= persistence.CSharpMetadataTargetsNeedRefresh;
+                FtsMutated = true;
+                if (persistence.StampSymbolExtractorLanguage
+                    && !string.IsNullOrWhiteSpace(record.Lang))
+                {
+                    IndexedSymbolExtractorLanguages.Add(record.Lang);
+                }
+                CountFreshInsertedRows(
+                    persistence.PersistedChunks,
+                    persistence.PersistedSymbols,
+                    persistence.PersistedReferences);
+                IndexProgress.WriteVerbose(persistence.VerboseMessage);
+            }
+            catch (IndexExtractionStalledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                LogIndexFileFailure("index_file_failed", item.FilePath, indexFilePhase, ex);
+                ErrorsAdded++;
+                var errorMessage = FormatIndexFileException(ex);
+                ErrorList.Add(new CliJsonMessage(item.FilePath, errorMessage));
+                if (FileErrorList.Count < PartialIndexFileErrorLimit)
+                    FileErrorList.Add(BuildIndexFileError(item.RelativePath, indexFilePhase, ex));
+                if (!options.Json)
+                {
+                    IndexProgress.Pause();
+                    ConsoleUi.ClearProgressLine();
+                    ConsoleUi.TryWriteErrorLine(
+                        FormatPerFileErrorLine("ERR ", item.FilePath, ex, errorMessage));
+                    IndexProgress.Resume();
+                }
+            }
+            finally
+            {
+                ExtractedFiles += itemFileExtracted;
+                ExtractedChunks += itemChunksExtracted;
+                ExtractedSymbols += itemSymbolsExtracted;
+                ExtractedReferences += itemReferencesExtracted;
             }
         }
-        finally
-        {
-            state.ExtractedFiles += itemFileExtracted;
-            state.ExtractedChunks += itemChunksExtracted;
-            state.ExtractedSymbols += itemSymbolsExtracted;
-            state.ExtractedReferences += itemReferencesExtracted;
-        }
-    }
 
-    private static bool ShouldDeferFullScanCSharpItem(
-        FullScanExtractionConsumerContext context,
-        FullScanFileWorkItem item)
-    {
-        if (item.FileIndex < 0
-            || context.FileTargets[item.FileIndex].Language != "csharp")
+        private bool ShouldDeferFullScanCSharpItem(
+            FullScanFileWorkItem item)
         {
-            return false;
-        }
+            if (item.FileIndex < 0
+                || FileTargets[item.FileIndex].Language != "csharp")
+            {
+                return false;
+            }
 
-        var deferCurrentItem = context.GetDeferCSharpMutationsForIncompleteScan();
-        if (!deferCurrentItem
-            && item.Exception is CSharpWorkspaceSnapshotDriftException driftException)
-        {
-            context.DeferCSharpMutationsForLoadedSnapshotDrift(driftException.Path);
-            context.State.FtsMutated = context.GetFtsMutated();
-            return true;
-        }
+            var deferCurrentItem = DeferCSharpMutationsForIncompleteScan;
+            if (!deferCurrentItem
+                && item.Exception is CSharpWorkspaceSnapshotDriftException driftException)
+            {
+                DeferCSharpMutationsForLoadedSnapshotDrift(driftException.Path);
+                return true;
+            }
 
-        var workspaceFileSnapshots = context.GetCSharpWorkspaceFileSnapshots();
-        if (!deferCurrentItem
-            && item.Record != null
-            && workspaceFileSnapshots != null
-            && !CSharpStaticInterfacePrepass.TryValidateLoadedFileStatSnapshot(
-                item.FilePath,
-                context.FileTargets[item.FileIndex].IndexPath,
-                context.FileTargets[item.FileIndex].DisplayRelativePath,
-                item.Record.Size,
-                item.Record.Modified,
-                workspaceFileSnapshots,
-                out var changedPath,
-                context.CancellationToken))
-        {
-            context.DeferCSharpMutationsForLoadedSnapshotDrift(
-                changedPath ?? context.FileTargets[item.FileIndex].DisplayRelativePath);
-            context.State.FtsMutated = context.GetFtsMutated();
-            return true;
+            var workspaceFileSnapshots = CSharpWorkspaceFileSnapshots;
+            if (!deferCurrentItem
+                && item.Record != null
+                && workspaceFileSnapshots != null
+                && !CSharpStaticInterfacePrepass.TryValidateLoadedFileStatSnapshot(
+                    item.FilePath,
+                    FileTargets[item.FileIndex].IndexPath,
+                    FileTargets[item.FileIndex].DisplayRelativePath,
+                    item.Record.Size,
+                    item.Record.Modified,
+                    workspaceFileSnapshots,
+                    out var changedPath,
+                    CancellationToken))
+            {
+                DeferCSharpMutationsForLoadedSnapshotDrift(
+                    changedPath ?? FileTargets[item.FileIndex].DisplayRelativePath);
+                return true;
+            }
+
+            return deferCurrentItem;
         }
 
-        return deferCurrentItem;
-    }
-
-    private static void RecordSkippedFullScanExtractionItem(
-        FullScanExtractionConsumerContext context,
-        FullScanFileWorkItem item)
-    {
-        var state = context.State;
-        var path = item.RelativePath;
-        state.Warnings++;
-        state.WarningList.Add(new CliJsonMessage(path, item.Warning ?? "File skipped"));
-        if (!context.Options.Json
-            && !context.Options.Quiet
-            && item.Warning != null)
+        private void RecordSkippedFullScanExtractionItem(
+            FullScanFileWorkItem item)
         {
-            context.IndexProgress.Pause();
-            ConsoleUi.PrintWarning(item.Warning);
-            context.IndexProgress.Resume();
+            var path = item.RelativePath;
+            Warnings++;
+            WarningList.Add(new CliJsonMessage(path, item.Warning ?? "File skipped"));
+            if (!Options.Json
+                && !Options.Quiet
+                && item.Warning != null)
+            {
+                IndexProgress.Pause();
+                ConsoleUi.PrintWarning(item.Warning);
+                IndexProgress.Resume();
+            }
+
+            if (!Writer.HasFileAtPath(path))
+            {
+                Skipped++;
+                return;
+            }
+
+            using var deleteTxn = Writer.BeginTransaction(
+                CancellationToken,
+                "full scan delete skipped file");
+            if (!Writer.DeleteFileByPath(path))
+                return;
+
+            CSharpMetadataTargetsNeedRefresh = true;
+            RequireTypeScriptAugmentationRefresh();
+            WriteProjectRootOnce();
+            deleteTxn.Commit();
+            FtsMutated = true;
         }
 
-        if (!context.Writer.HasFileAtPath(path))
+        private long? GetReusableFullScanFileId(
+            FileRecord record,
+            FileIssue? generatedSuppressionIssue)
         {
-            state.Skipped++;
-            return;
-        }
+            var options = Options;
+            if (ForceExtractorRefresh
+                || options.Rebuild
+                || StartedWithNoIndexedFiles
+                || options.SymbolsOnly)
+            {
+                return null;
+            }
 
-        using var deleteTxn = context.Writer.BeginTransaction(
-            context.CancellationToken,
-            "full scan delete skipped file");
-        if (!context.Writer.DeleteFileByPath(path))
-            return;
-
-        state.CSharpMetadataTargetsNeedRefresh = true;
-        context.RequireTypeScriptAugmentationRefresh();
-        context.WriteProjectRootOnce();
-        deleteTxn.Commit();
-        state.FtsMutated = true;
-    }
-
-    private static long? GetReusableFullScanFileId(
-        FullScanExtractionConsumerContext context,
-        FileRecord record,
-        FileIssue? generatedSuppressionIssue)
-    {
-        var options = context.Options;
-        if (context.ForceExtractorRefresh
-            || options.Rebuild
-            || context.StartedWithNoIndexedFiles
-            || options.SymbolsOnly)
-        {
-            return null;
-        }
-
-        var targetRequiresRefresh =
-            context.TargetRequiresJavaScriptTypeScriptRefresh(record.Lang, record.Path);
-        return context.Writer.GetReusableUnchangedFileId(
-            record.Path,
-            record.Modified,
-            record.Checksum,
-            size: record.Size,
-            lines: record.Lines,
-            language: record.Lang,
-            generated: record.Generated,
-            maxSymbolsPerFile: options.MaxSymbolsPerFile,
-            maxReferencesPerFile: options.MaxReferencesPerFile,
-            generatedExtractionSuppressed: generatedSuppressionIssue != null,
-            allowReuse: context.SymbolKindFilterMatchesPrior
-                && !targetRequiresRefresh
-                && !context.PriorSymbolsOnlyGraphOmitted
-                && (record.Lang != "csharp" || context.CSharpIndexedProjectRootCompatible)
-                && (record.Lang != "csharp" || context.CSharpSymbolNameContractMatchesCurrent)
-                && (record.Lang != "csharp" || !context.GetCSharpWorkspace().HasStaticInterfaceContracts)
-                && (record.Lang != "sql" || context.SqlGraphContractMatchesCurrent)
-                && (record.Lang is not ("verilog" or "systemverilog" or "vhdl")
-                    || context.HdlGraphContractMatchesCurrent)
-                && context.AllowReuseWithCurrentHotspotFamilyTrust(record.Lang));
-    }
-
-    private static void RecordReusedFullScanExtractionItem(
-        FullScanExtractionConsumerContext context,
-        FileRecord record)
-    {
-        var state = context.State;
-        var stalePurged = context.GetDeferCSharpMutationsForIncompleteScan()
-            ? 0
-            : context.Writer.PurgeStaleFilesSharingChecksum(
-                context.ProjectRoot,
+            var targetRequiresRefresh =
+                TargetRequiresJavaScriptTypeScriptRefresh(record.Lang, record.Path);
+            return Writer.GetReusableUnchangedFileId(
                 record.Path,
-                record.Checksum);
-        if (stalePurged > 0)
-        {
-            state.FtsMutated = true;
-            state.CSharpMetadataTargetsNeedRefresh = true;
-            context.RequireTypeScriptAugmentationRefresh();
-            if (!context.Options.SymbolsOnly)
-                state.MutualRecursionRefreshNeeded = true;
+                record.Modified,
+                record.Checksum,
+                size: record.Size,
+                lines: record.Lines,
+                language: record.Lang,
+                generated: record.Generated,
+                maxSymbolsPerFile: options.MaxSymbolsPerFile,
+                maxReferencesPerFile: options.MaxReferencesPerFile,
+                generatedExtractionSuppressed: generatedSuppressionIssue != null,
+                allowReuse: SymbolKindFilterMatchesPrior
+                    && !targetRequiresRefresh
+                    && !PriorSymbolsOnlyGraphOmitted
+                    && (record.Lang != "csharp" || CSharpIndexedProjectRootCompatible)
+                    && (record.Lang != "csharp" || CSharpSymbolNameContractMatchesCurrent)
+                    && (record.Lang != "csharp" || !CSharpWorkspace.HasStaticInterfaceContracts)
+                    && (record.Lang != "sql" || SqlGraphContractMatchesCurrent)
+                    && (record.Lang is not ("verilog" or "systemverilog" or "vhdl")
+                        || HdlGraphContractMatchesCurrent)
+                    && AllowReuseWithCurrentHotspotFamilyTrust(record.Lang));
         }
 
-        state.Skipped++;
-        if (!string.IsNullOrWhiteSpace(record.Lang))
+        private void RecordReusedFullScanExtractionItem(
+            FileRecord record)
         {
-            state.SkippedSymbolExtractorLanguages ??=
-                new HashSet<string>(StringComparer.Ordinal);
-            state.SkippedSymbolExtractorLanguages.Add(record.Lang);
-        }
-        if (FileIndexer.SupportsHotspotFamilyMarkerLanguage(record.Lang)
-            && record.Lang != null)
-        {
-            state.ReusedHotspotFamilyLanguages ??=
-                new HashSet<string>(StringComparer.Ordinal);
-            state.ReusedHotspotFamilyLanguages.Add(record.Lang);
-        }
-        if (context.Options.Verbose
-            && !context.Options.Json
-            && !context.Options.Quiet)
-        {
-            context.IndexProgress.Pause();
-            ConsoleUi.ClearProgressLine();
-            CommandOutputWriter.WriteLine($"  [SKIP] {record.Path}");
-            context.IndexProgress.Resume();
-        }
-    }
+            var stalePurged = DeferCSharpMutationsForIncompleteScan
+                ? 0
+                : Writer.PurgeStaleFilesSharingChecksum(
+                    ProjectRoot,
+                    record.Path,
+                    record.Checksum);
+            if (stalePurged > 0)
+            {
+                FtsMutated = true;
+                CSharpMetadataTargetsNeedRefresh = true;
+                RequireTypeScriptAugmentationRefresh();
+                if (!Options.SymbolsOnly)
+                    MutualRecursionRefreshNeeded = true;
+            }
 
-    private static void CompleteFullScanExtractionItem(
-        FullScanExtractionConsumerContext context)
-    {
-        context.State.Processed++;
-        var processed = context.ProcessedBeforeExtraction + context.State.Processed;
-        context.PublishProcessedCount(processed);
-        context.SetCurrentJsonIndexFile(null);
-        context.ThrowIfFullScanCancelled(processed, context.FilesCount);
-        context.ReportJsonIndexProgressIfNeeded();
-        if (context.Options.Json || context.Options.Quiet)
-            return;
+            Skipped++;
+            if (!string.IsNullOrWhiteSpace(record.Lang))
+            {
+                SkippedSymbolExtractorLanguages ??=
+                    new HashSet<string>(StringComparer.Ordinal);
+                SkippedSymbolExtractorLanguages.Add(record.Lang);
+            }
+            if (FileIndexer.SupportsHotspotFamilyMarkerLanguage(record.Lang)
+                && record.Lang != null)
+            {
+                ReusedHotspotFamilyLanguages ??=
+                    new HashSet<string>(StringComparer.Ordinal);
+                ReusedHotspotFamilyLanguages.Add(record.Lang);
+            }
+            if (Options.Verbose
+                && !Options.Json
+                && !Options.Quiet)
+            {
+                IndexProgress.Pause();
+                ConsoleUi.ClearProgressLine();
+                CommandOutputWriter.WriteLine($"  [SKIP] {record.Path}");
+                IndexProgress.Resume();
+            }
+        }
 
-        context.IndexProgress.Pause();
-        ConsoleUi.PrintProgress(processed, context.FilesCount);
-        context.IndexProgress.Resume();
+        private void CompleteFullScanExtractionItem(int processedBeforeExtraction)
+        {
+            Processed++;
+            var processed = processedBeforeExtraction + Processed;
+            ProcessedCount = processed;
+            CurrentJsonIndexFile = null;
+            ThrowIfFullScanCancelled(processed, FilesCount);
+            FullScanProgress.ReportJsonIndexProgressIfNeeded();
+            if (Options.Json || Options.Quiet)
+                return;
+
+            IndexProgress.Pause();
+            ConsoleUi.PrintProgress(processed, FilesCount);
+            IndexProgress.Resume();
+        }
     }
 }

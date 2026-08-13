@@ -255,25 +255,21 @@ public static partial class IndexCommandRunner
         var mutualRecursionRefreshNeeded = !options.SymbolsOnly
             && (!writer.ReferenceIdentityContractMatchesCurrent() || purged > 0);
 
-        var indexProgressVisible = false;
+        FullScanProgressSession? fullScanProgressForResume = null;
         var indexProgress = new IndexProgressReporter(
             options,
             "Indexing...",
             spinnerFrames,
             ConsoleUi.TryWriteErrorLine,
-            canResume: () => preWriteSelection.Processed < files.Count && !indexProgressVisible,
+            canResume: () => preWriteSelection.Processed < files.Count
+                && !fullScanProgressForResume!.IndexProgressVisible,
             clearProgressLineBeforeWrite: true);
         var indexedSymbolExtractorLanguages = new HashSet<string>(languageCounts.Count, StringComparer.Ordinal);
-        string? currentJsonIndexFile = null;
-        ActiveExtractionPhase?[] activeExtractionPhases = [];
-        using var fullScanProgress = new FullScanProgressSession(
+        using var fullScanProgress = fullScanProgressForResume = new FullScanProgressSession(
             options,
             files.Count,
             indexProgress,
-            () => preWriteSelection.Processed,
-            () => indexProgressVisible,
-            () => currentJsonIndexFile,
-            () => activeExtractionPhases);
+            preWriteSelection);
         var extractionParallelism = Math.Max(1, options.Parallelism);
         var typeScriptAugmentationNeedsRefresh = !options.SymbolsOnly
             && (options.Rebuild
@@ -351,21 +347,6 @@ public static partial class IndexCommandRunner
             return false;
         }
 
-        bool TargetRequiresJavaScriptTypeScriptRefresh(
-            string? language,
-            string indexPath)
-            => javaScriptTypeScriptRefreshRequired
-               && (IsJavaScriptTypeScriptLanguage(language)
-                   || IsJavaScriptTypeScriptConfigPath(indexPath));
-
-        void InsertIssuesForIndexedFile(long fileId, IReadOnlyList<FileIssue> issues)
-        {
-            if (startedWithNoIndexedFiles)
-                writer.InsertIssuesForNewFile(fileId, issues);
-            else
-                writer.InsertIssues(fileId, issues);
-        }
-
         var preWriteState = new FullScanPreWriteState
         {
             Scan = new FullScanPreWriteMutableScanState
@@ -384,6 +365,7 @@ public static partial class IndexCommandRunner
             {
                 ErrorList = errorList,
                 FileErrorList = fileErrorList,
+                WarningList = warningList,
                 ReportedCSharpWorkspaceFailures =
                     reportedCSharpWorkspaceFailures,
                 Errors = errors,
@@ -453,24 +435,6 @@ public static partial class IndexCommandRunner
         var persistedChunks = 0L;
         var persistedSymbols = 0L;
         var persistedReferences = 0L;
-        void CountFreshInsertedRows(
-            int chunkCount = 0,
-            int symbolCount = 0,
-            int referenceCount = 0)
-        {
-            persistedFiles++;
-            persistedChunks += chunkCount;
-            persistedSymbols += symbolCount;
-            persistedReferences += referenceCount;
-            if (!startedWithNoIndexedFiles)
-                return;
-
-            freshCountFiles++;
-            freshCountChunks += chunkCount;
-            freshCountSymbols += symbolCount;
-            freshCountReferences += referenceCount;
-        }
-
         var inputValidation = preWriteSession.PrepareWriteBoundary(
             discovery.InputSnapshot);
         if (!inputValidation.IsValid)
@@ -517,37 +481,12 @@ public static partial class IndexCommandRunner
         var csharpWorkspace = csharpPreflight.Workspace;
         var csharpWorkspaceFileSnapshots =
             csharpPreflight.WorkspaceFileSnapshots;
-        var csharpPrepassSymbolArtifacts =
-            csharpPreflight.PrepassSymbolArtifacts;
         var preservePriorPositiveCSharpSourceNoOp =
             csharpPreflight.PreservePriorPositiveSourceNoOp;
         var csharpSourceEvidenceForStamp =
             csharpPreflight.Evidence.ForStamp;
         var csharpSourceEvidenceComplete =
             csharpPreflight.Evidence.Complete;
-
-        void DeferCSharpMutationsForLoadedSnapshotDrift(string path)
-        {
-            csharpPrepassSymbolArtifacts?.Clear();
-            csharpPrepassSymbolArtifacts = null;
-            path = FormatCSharpWorkspaceSnapshotPath(projectRoot, path);
-            deferCSharpMutationsForIncompleteScan = true;
-            preservePriorPositiveCSharpSourceNoOp = false;
-            csharpSourceEvidenceForStamp = false;
-            csharpSourceEvidenceComplete = false;
-            csharpWorkspaceFileSnapshots = null;
-            csharpWorkspace = new CSharpStaticInterfaceWorkspaceSymbols(
-                [],
-                HasStaticInterfaceContracts: true,
-                SourceContractEvidenceComplete: false,
-                IncompleteSourcePaths: [path]);
-            writer.SetCSharpStaticInterfaceSourceEvidence(null);
-            RecordCSharpWorkspaceFailure(
-                path,
-                "csharp_workspace_validation",
-                new IOException(
-                    "A C# source changed after workspace preflight; rerun indexing to refresh the complete C# graph."));
-        }
 
         // The captured scan has now crossed its only pre-write authority barrier. Start the
         // outer write scopes immediately afterwards so no durable readiness, evidence, purge,
@@ -662,115 +601,93 @@ public static partial class IndexCommandRunner
 
         fullScanProgress.ReportJsonIndexProgressIfNeeded();
 
-        var extractionPipeline = RunFullScanExtractionPipeline(
-            new FullScanExtractionPipelineContext
+        var extractionSession = new FullScanExtractionSession
+        {
+            Request = new FullScanExtractionRequest(
+                    new FullScanExtractionCore(
+                        writer,
+                        indexer,
+                        options,
+                        projectRoot,
+                        fileTargets,
+                        preWriteSelection.ReadableFileBytes,
+                        indexProgress,
+                        fullScanProgress),
+                    new FullScanExtractionWork(
+                        extractionFileIndexes,
+                        extractionWorkItemCount,
+                        extractionParallelism,
+                        files.Count,
+                        forceExtractorRefresh,
+                        authoritativeFreshFoldRowsClaim,
+                        cancellationToken,
+                        actualMode),
+                    new FullScanExtractionContracts(
+                        priorSymbolsOnlyGraphOmitted,
+                        symbolKindFilterMatchesPrior,
+                        csharpIndexedProjectRootCompatible,
+                        csharpSymbolNameContractMatchesCurrent,
+                        sqlGraphContractMatchesCurrent,
+                        hdlGraphContractMatchesCurrent,
+                        startedWithNoIndexedFiles),
+                    new FullScanExtractionReuse(
+                        javaScriptTypeScriptRefreshRequired,
+                        hotspotFamilyTrustMatchesCurrent)),
+            State = new FullScanExtractionState
             {
-                Writer = writer,
-                Indexer = indexer,
-                Options = options,
-                ProjectRoot = projectRoot,
-                FileTargets = fileTargets,
-                ExtractionFileIndexes = extractionFileIndexes,
-                ExtractionWorkItemCount = extractionWorkItemCount,
-                ExtractionParallelism = extractionParallelism,
-                FilesCount = files.Count,
-                ForceExtractorRefresh = forceExtractorRefresh,
-                StartedWithNoIndexedFiles = startedWithNoIndexedFiles,
-                AuthoritativeFreshFoldRowsClaim = authoritativeFreshFoldRowsClaim,
-                PriorSymbolsOnlyGraphOmitted =
-                    priorSymbolsOnlyGraphOmitted,
-                SymbolKindFilterMatchesPrior =
-                    symbolKindFilterMatchesPrior,
-                CSharpIndexedProjectRootCompatible =
-                    csharpIndexedProjectRootCompatible,
-                CSharpSymbolNameContractMatchesCurrent =
-                    csharpSymbolNameContractMatchesCurrent,
-                SqlGraphContractMatchesCurrent =
-                    sqlGraphContractMatchesCurrent,
-                HdlGraphContractMatchesCurrent =
-                    hdlGraphContractMatchesCurrent,
-                ReadableFileBytes = preWriteSelection.ReadableFileBytes,
-                IndexProgress = indexProgress,
-                FullScanProgress = fullScanProgress,
-                CancellationToken = cancellationToken,
-                GetProcessedCount = () => preWriteSelection.Processed,
-                PublishProcessedCount = value => preWriteSelection.Processed = value,
-                ThrowIfFullScanCancelled =
-                    ThrowIfFullScanCancelled,
-                SetIndexProgressVisible =
-                    value => indexProgressVisible = value,
-                SetActiveExtractionPhases =
-                    phases => activeExtractionPhases = phases,
-                SetCurrentJsonIndexFile =
-                    path => currentJsonIndexFile = path,
-                GetCurrentJsonIndexFile =
-                    () => currentJsonIndexFile,
-                GetDeferCSharpMutationsForIncompleteScan =
-                    () => deferCSharpMutationsForIncompleteScan,
-                GetFtsMutated = () => ftsMutated,
-                GetCSharpWorkspace = () => csharpWorkspace,
-                GetCSharpPrepassSymbolArtifacts =
-                    () => csharpPrepassSymbolArtifacts,
-                GetCSharpWorkspaceFileSnapshots =
-                    () => csharpWorkspaceFileSnapshots,
-                DeferCSharpMutationsForLoadedSnapshotDrift =
-                    DeferCSharpMutationsForLoadedSnapshotDrift,
-                TargetRequiresJavaScriptTypeScriptRefresh =
-                    TargetRequiresJavaScriptTypeScriptRefresh,
-                AllowReuseWithCurrentHotspotFamilyTrust = language =>
-                    AllowReuseWithCurrentHotspotFamilyTrust(
-                        language,
-                        hotspotFamilyTrustMatchesCurrent),
-                RequireTypeScriptAugmentationRefresh =
-                    RequireTypeScriptAugmentationRefresh,
-                WriteProjectRootOnce = WriteProjectRootOnce,
-                InsertIssuesForIndexedFile =
-                    InsertIssuesForIndexedFile,
-                CountFreshInsertedRows = CountFreshInsertedRows,
-                ConsumerState = new FullScanExtractionConsumerState
+                PreWrite = preWriteState,
+                Refresh = new FullScanExtractionRefreshState
                 {
                     FtsMutated = ftsMutated,
-                    MutualRecursionRefreshNeeded =
-                        mutualRecursionRefreshNeeded,
-                    CSharpMetadataTargetsNeedRefresh =
-                        csharpMetadataTargetsNeedRefresh,
-                    SymbolsDroppedByKindFilter =
-                        symbolsDroppedByKindFilter,
-                    ReusedHotspotFamilyLanguages =
-                        preWriteSelection.ReusedHotspotFamilyLanguages,
-                    SkippedSymbolExtractorLanguages =
-                        preWriteSelection.SkippedSymbolExtractorLanguages,
-                    IndexedSymbolExtractorLanguages =
-                        indexedSymbolExtractorLanguages,
-                    ErrorList = errorList,
-                    FileErrorList = fileErrorList,
-                    WarningList = warningList,
+                    MutualRecursionRefreshNeeded = mutualRecursionRefreshNeeded,
+                    CSharpMetadataTargetsNeedRefresh = csharpMetadataTargetsNeedRefresh,
+                    SymbolsDroppedByKindFilter = symbolsDroppedByKindFilter,
+                    ReusedHotspotFamilyLanguages = preWriteSelection.ReusedHotspotFamilyLanguages,
+                    SkippedSymbolExtractorLanguages = preWriteSelection.SkippedSymbolExtractorLanguages,
+                    IndexedSymbolExtractorLanguages = indexedSymbolExtractorLanguages,
                 },
-            });
-        var postExtractionHooks =
-            extractionPipeline.PostExtractionHooks;
-        var extractionState = extractionPipeline.ConsumerState;
-        if (extractionState != null)
-        {
-            preWriteSelection.Skipped += extractionState.Skipped;
-            warnings += extractionState.Warnings;
-            errors += extractionState.ErrorsAdded;
-            ftsMutated = extractionState.FtsMutated;
-            mutualRecursionRefreshNeeded =
-                extractionState.MutualRecursionRefreshNeeded;
-            csharpMetadataTargetsNeedRefresh =
-                extractionState.CSharpMetadataTargetsNeedRefresh;
-            symbolsDroppedByKindFilter =
-                extractionState.SymbolsDroppedByKindFilter;
-            extractedFiles += extractionState.ExtractedFiles;
-            extractedChunks += extractionState.ExtractedChunks;
-            extractedSymbols += extractionState.ExtractedSymbols;
-            extractedReferences += extractionState.ExtractedReferences;
-            preWriteSelection.ReusedHotspotFamilyLanguages =
-                extractionState.ReusedHotspotFamilyLanguages;
-            preWriteSelection.SkippedSymbolExtractorLanguages =
-                extractionState.SkippedSymbolExtractorLanguages;
-        }
+            },
+            External = new FullScanExtractionExternalOperations(
+                    RequireTypeScriptAugmentationRefresh,
+                    WriteProjectRootOnce),
+        };
+        var postExtractionHooks = RunFullScanExtractionPipeline(extractionSession);
+        preWriteState.CSharp.PrepassSymbolArtifacts = null;
+        deferCSharpMutationsForIncompleteScan =
+            preWriteState.Scan.DeferCSharpMutationsForIncompleteScan;
+        csharpWorkspaceFileSnapshots =
+            preWriteState.CSharp.WorkspaceFileSnapshots;
+        csharpWorkspace = preWriteState.CSharp.Workspace;
+        preservePriorPositiveCSharpSourceNoOp =
+            preWriteState.CSharp.PreservePriorPositiveSourceNoOp;
+        csharpSourceEvidenceForStamp = preWriteState.CSharp.Evidence.ForStamp;
+        csharpSourceEvidenceComplete = preWriteState.CSharp.Evidence.Complete;
+        preWriteSelection.Skipped += extractionSession.State.Counts.Skipped;
+        persistedFiles += extractionSession.State.PersistenceCounts.PersistedFiles;
+        persistedChunks += extractionSession.State.PersistenceCounts.PersistedChunks;
+        persistedSymbols += extractionSession.State.PersistenceCounts.PersistedSymbols;
+        persistedReferences += extractionSession.State.PersistenceCounts.PersistedReferences;
+        freshCountFiles += extractionSession.State.PersistenceCounts.FreshFiles;
+        freshCountChunks += extractionSession.State.PersistenceCounts.FreshChunks;
+        freshCountSymbols += extractionSession.State.PersistenceCounts.FreshSymbols;
+        freshCountReferences += extractionSession.State.PersistenceCounts.FreshReferences;
+        warnings += extractionSession.State.Counts.Warnings;
+        errors = preWriteState.Diagnostics.Errors + extractionSession.State.Counts.Errors;
+        ftsMutated = extractionSession.State.Refresh.FtsMutated;
+        mutualRecursionRefreshNeeded =
+            extractionSession.State.Refresh.MutualRecursionRefreshNeeded;
+        csharpMetadataTargetsNeedRefresh =
+            extractionSession.State.Refresh.CSharpMetadataTargetsNeedRefresh;
+        symbolsDroppedByKindFilter =
+            extractionSession.State.Refresh.SymbolsDroppedByKindFilter;
+        extractedFiles += extractionSession.State.Counts.ExtractedFiles;
+        extractedChunks += extractionSession.State.Counts.ExtractedChunks;
+        extractedSymbols += extractionSession.State.Counts.ExtractedSymbols;
+        extractedReferences += extractionSession.State.Counts.ExtractedReferences;
+        preWriteSelection.ReusedHotspotFamilyLanguages =
+            extractionSession.State.Refresh.ReusedHotspotFamilyLanguages;
+        preWriteSelection.SkippedSymbolExtractorLanguages =
+            extractionSession.State.Refresh.SkippedSymbolExtractorLanguages;
 
         indexProgress.Pause();
 
@@ -927,10 +844,21 @@ public static partial class IndexCommandRunner
                 cancellationToken);
             if (!readinessStableFiles || !readinessStableScanInputs)
             {
-                DeferCSharpMutationsForLoadedSnapshotDrift(
+                extractionSession.DeferCSharpMutationsForLoadedSnapshotDrift(
                     readinessChangedFilePath
                     ?? readinessChangedScanInputPath
                     ?? "<csharp_workspace>");
+                deferCSharpMutationsForIncompleteScan =
+                    preWriteState.Scan.DeferCSharpMutationsForIncompleteScan;
+                preservePriorPositiveCSharpSourceNoOp =
+                    preWriteState.CSharp.PreservePriorPositiveSourceNoOp;
+                csharpSourceEvidenceForStamp = preWriteState.CSharp.Evidence.ForStamp;
+                csharpSourceEvidenceComplete = preWriteState.CSharp.Evidence.Complete;
+                csharpWorkspaceFileSnapshots =
+                    preWriteState.CSharp.WorkspaceFileSnapshots;
+                csharpWorkspace = preWriteState.CSharp.Workspace;
+                errors = preWriteState.Diagnostics.Errors
+                    + extractionSession.State.Counts.Errors;
             }
         }
 

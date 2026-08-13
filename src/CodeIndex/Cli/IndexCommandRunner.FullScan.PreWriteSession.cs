@@ -114,6 +114,7 @@ public static partial class IndexCommandRunner
     {
         internal required List<CliJsonMessage> ErrorList { get; init; }
         internal required List<StatusIndexFileError> FileErrorList { get; init; }
+        internal required List<CliJsonMessage> WarningList { get; init; }
         internal required HashSet<string> ReportedCSharpWorkspaceFailures { get; init; }
         internal int Errors { get; set; }
     }
