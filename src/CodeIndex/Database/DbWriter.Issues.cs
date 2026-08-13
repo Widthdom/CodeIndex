@@ -45,7 +45,9 @@ public partial class DbWriter
             return;
         }
 
-        int rowsPerStatement = GetRowsPerInsertStatement(columnCount: 6);
+        int rowsPerStatement = IsInTransaction()
+            ? GetRowsPerCallerTransactionInsertStatement(columnCount: 6)
+            : GetRowsPerInsertStatement(columnCount: 6);
         for (int i = 0; i < issues.Count; i += rowsPerStatement)
         {
             int end = Math.Min(i + rowsPerStatement, issues.Count);
@@ -111,6 +113,7 @@ public partial class DbWriter
         }
 
         cmd.CommandText = sql.ToString();
+        ReportBatchStatementForTesting("insert_issues", end - start, end - start);
         cmd.ExecuteNonQuery();
     }
 }

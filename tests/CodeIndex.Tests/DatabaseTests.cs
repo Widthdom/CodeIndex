@@ -8251,6 +8251,118 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void CallerOwnedTransactionBatchStatements_BoundNamedParametersAcrossPersistenceTables()
+    {
+        const int ParameterBudget = 32;
+        var fileId = UpsertTestFile(
+            "src/caller-transaction-batches.cs",
+            checksum: "caller-transaction-batches");
+        var chunks = Enumerable.Range(0, 7)
+            .Select(index => new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = index,
+                StartLine = index + 1,
+                EndLine = index + 1,
+                Content = $"chunk_{index}",
+            })
+            .ToArray();
+        var symbols = Enumerable.Range(0, 3)
+            .Select(index => new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = $"target_{index}",
+                Line = index + 1,
+                StartLine = index + 1,
+                EndLine = index + 1,
+            })
+            .ToArray();
+        var issues = Enumerable.Range(0, 6)
+            .Select(index => new FileIssue
+            {
+                Path = "src/caller-transaction-batches.cs",
+                Kind = $"test_issue_{index}",
+                Line = index + 1,
+                Message = $"test issue {index}",
+            })
+            .ToArray();
+        var references = Enumerable.Range(0, 5)
+            .Select(index => new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = $"target_{index % symbols.Length}",
+                ReferenceKind = "call",
+                Line = index + 1,
+                Column = 1,
+                Context = $"target_{index % symbols.Length}();",
+                ContainerKind = "function",
+                ContainerName = "caller",
+            })
+            .ToArray();
+        var statements = new List<DbWriter.DbWriterBatchStatement>();
+        var previousStatementHook = DbWriter.BatchStatementExecutingForTesting;
+        try
+        {
+            DbWriter.BatchStatementExecutingForTesting = statement =>
+            {
+                statements.Add(statement);
+                previousStatementHook?.Invoke(statement);
+            };
+
+            using var transaction = _writer.BeginTransaction();
+            _writer.InsertChunks(chunks);
+            _writer.InsertSymbols(symbols);
+            _writer.InsertIssuesForNewFile(fileId, issues);
+            _writer.InsertReferencesForNewFilesInAtomicFileScope(
+                references,
+                refreshMutualRecursionFlags: false,
+                CancellationToken.None);
+            transaction.Commit();
+        }
+        finally
+        {
+            DbWriter.BatchStatementExecutingForTesting = previousStatementHook;
+        }
+
+        Assert.Equal(
+            [(6, 6), (1, 1)],
+            BatchRows("insert_chunks"));
+        Assert.Equal(
+            [(1, 1), (1, 1), (1, 1)],
+            BatchRows("insert_symbols"));
+        Assert.Equal(
+            [(5, 5), (1, 1)],
+            BatchRows("insert_issues"));
+        Assert.Equal(
+            [(5, 5)],
+            BatchRows("insert_reference_lines"));
+        Assert.Equal(
+            [(2, 2), (2, 2), (1, 1)],
+            BatchRows("insert_references"));
+
+        var columnsByOperation = new Dictionary<string, int>(StringComparer.Ordinal)
+        {
+            ["insert_chunks"] = 5,
+            ["insert_symbols"] = 25,
+            ["insert_issues"] = 6,
+            ["insert_reference_lines"] = 3,
+            ["insert_references"] = 14,
+        };
+        Assert.All(
+            statements,
+            statement => Assert.True(
+                statement.StatementRows * columnsByOperation[statement.Operation] <= ParameterBudget,
+                $"{statement.Operation} used {statement.StatementRows * columnsByOperation[statement.Operation]} parameters."));
+
+        (int ActiveRows, int StatementRows)[] BatchRows(string operation)
+            => statements
+                .Where(statement => statement.Operation == operation)
+                .Select(statement => (statement.ActiveRows, statement.StatementRows))
+                .ToArray();
+    }
+
+    [Fact]
     public void ReferenceLineLookup_BatchedInputUsesUniqueAutoIndexPlan()
     {
         const int StatementRowCount = 5;
@@ -10107,19 +10219,27 @@ public class DatabaseTests : IDisposable
             }
 
             Assert.Equal(0, transactionCount);
-            Assert.Equal([0, 71, 142, 213, 284, 355, 356], progressRows);
             Assert.Equal(
-                [(71, 71), (71, 71), (71, 71), (71, 71), (71, 71), (1, 1)],
-                statements.Where(statement => statement.Operation == "insert_references")
-                    .Select(statement => (statement.ActiveRows, statement.StatementRows))
-                    .ToArray());
+                Enumerable.Range(0, (ReferenceCount / 2) + 1).Select(index => index * 2),
+                progressRows);
+            var atomicReferenceStatements = statements
+                .Where(statement => statement.Operation == "insert_references")
+                .ToArray();
+            Assert.Equal(ReferenceCount / 2, atomicReferenceStatements.Length);
+            Assert.All(atomicReferenceStatements, statement =>
+            {
+                Assert.Equal((2, 2), (statement.ActiveRows, statement.StatementRows));
+                Assert.True(statement.StatementRows * 14 <= 32);
+            });
+            var atomicLineWriteStatements = statements
+                .Where(statement => statement.Operation == lineWriteOperation)
+                .ToArray();
+            Assert.Equal(ReferenceCount, atomicLineWriteStatements.Sum(statement => statement.ActiveRows));
+            Assert.All(
+                atomicLineWriteStatements,
+                statement => Assert.True(statement.StatementRows * 3 <= 32));
             Assert.Equal(
-                [(284, 284), (72, 72)],
-                statements.Where(statement => statement.Operation == lineWriteOperation)
-                    .Select(statement => (statement.ActiveRows, statement.StatementRows))
-                    .ToArray());
-            Assert.Equal(
-                referenceLinesAreNew ? 0 : 2,
+                referenceLinesAreNew ? 0 : atomicLineWriteStatements.Length,
                 statements.Count(statement => statement.Operation == "lookup_reference_lines"));
         }
         finally
@@ -10133,7 +10253,7 @@ public class DatabaseTests : IDisposable
     [Fact]
     public void InsertReferences_AtomicFileScopeCapsReferenceLineWindowAtThirtyTwoBatches()
     {
-        const int ReferenceCount = 71 * 33;
+        const int ReferenceCount = 2 * 33;
         var fileId = UpsertTestFile(
             "src/atomic-reference-window-cap.cs",
             checksum: "atomic-reference-window-cap");
@@ -10398,7 +10518,7 @@ public class DatabaseTests : IDisposable
         {
             DbWriter.BatchProgressCheckpointForTesting = progress =>
             {
-                if (progress.Operation == "insert_references" && progress.RowsProcessed == 71)
+                if (progress.Operation == "insert_references" && progress.RowsProcessed == 2)
                     cancellation.Cancel();
                 previousProgressHook?.Invoke(progress);
             };

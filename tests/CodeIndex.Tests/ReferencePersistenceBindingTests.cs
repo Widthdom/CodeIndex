@@ -92,11 +92,22 @@ public sealed class ReferencePersistenceBindingTests : IDisposable
             DbWriter.ReferenceInsertBindingWorkForTesting = previousWorkHook;
         }
 
-        var work = Assert.Single(observedWork);
-        Assert.Equal(3, work.StatementRows);
-        Assert.Equal(3 * 14, work.BoundParameterCount);
-        Assert.Equal(3, work.MaterializedReferenceCount);
-        Assert.Equal(2, work.MaterializedReferenceLineCount);
+        if (atomicFileScope)
+        {
+            Assert.Equal([2, 1], observedWork.Select(work => work.StatementRows));
+            Assert.Equal([2 * 14, 14], observedWork.Select(work => work.BoundParameterCount));
+        }
+        else
+        {
+            var work = Assert.Single(observedWork);
+            Assert.Equal(3, work.StatementRows);
+            Assert.Equal(3 * 14, work.BoundParameterCount);
+        }
+        Assert.All(observedWork, work =>
+        {
+            Assert.Equal(3, work.MaterializedReferenceCount);
+            Assert.Equal(2, work.MaterializedReferenceLineCount);
+        });
 
         using var command = _db.Connection.CreateCommand();
         command.Parameters.AddWithValue("@fileId", fileId);

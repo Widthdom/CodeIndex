@@ -20,7 +20,9 @@ public partial class DbWriter
     {
         if (chunks.Count == 0) return;
 
-        int rowsPerStatement = GetRowsPerInsertStatement(columnCount: 5);
+        int rowsPerStatement = IsInTransaction()
+            ? GetRowsPerCallerTransactionInsertStatement(columnCount: 5)
+            : GetRowsPerInsertStatement(columnCount: 5);
         for (int i = 0; i < chunks.Count; i += rowsPerStatement)
         {
             CheckBatchCancellationAndReportProgress("insert_chunks", i, chunks.Count, cancellationToken);
@@ -59,7 +61,9 @@ public partial class DbWriter
         TrackReferenceGraphInsertedSymbols(symbols);
         InvalidateReferenceIdentityContractForMutation();
 
-        int rowsPerStatement = GetRowsPerInsertStatement(columnCount: 25);
+        int rowsPerStatement = IsInTransaction()
+            ? GetRowsPerCallerTransactionInsertStatement(columnCount: 25)
+            : GetRowsPerInsertStatement(columnCount: 25);
         var foldedNameCache = CreateFoldedNameCache(
             Math.Min(symbols.Count, rowsPerStatement),
             namesPerRow: 1);
@@ -221,6 +225,7 @@ public partial class DbWriter
                 cmd.Parameters[parameterIndex++].Value = chunk.Content;
             }
 
+            ReportBatchStatementForTesting("insert_chunks", batchCount, batchCount);
             cmd.ExecuteNonQuery();
         }
         finally
@@ -280,6 +285,7 @@ public partial class DbWriter
                     symbol.DisplayNameFolded);
             }
 
+            ReportBatchStatementForTesting("insert_symbols", batchCount, batchCount);
             cmd.ExecuteNonQuery();
         }
         finally

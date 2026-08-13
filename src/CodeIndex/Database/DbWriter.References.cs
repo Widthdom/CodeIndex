@@ -1743,8 +1743,11 @@ public partial class DbWriter
         // aggregate refresh 前に中断した場合は trust bit を残さず raw fallback に降格する。
         var aggregateWasReady = ClearHotspotReferenceAggregateReady();
 
-        int rowsPerStatement = GetRowsPerInsertStatement(
-            columnCount: ReferenceInsertParameterCountPerRow);
+        int rowsPerStatement = batchesAreAtomicInCaller
+            ? GetRowsPerCallerTransactionInsertStatement(
+                columnCount: ReferenceInsertParameterCountPerRow)
+            : GetRowsPerInsertStatement(
+                columnCount: ReferenceInsertParameterCountPerRow);
         var foldedNameCache = CreateFoldedNameCache(
             Math.Min(references.Count, rowsPerStatement),
             namesPerRow: 2);
@@ -1758,6 +1761,7 @@ public partial class DbWriter
                 references,
                 referenceLinesAreNew,
                 newReferenceLineIds,
+                useCallerTransactionParameterBudget: true,
                 foldedNameCache,
                 rowsPerStatement,
                 referenceBatchCount,
@@ -1786,6 +1790,7 @@ public partial class DbWriter
                     end,
                     referenceLinesAreNew,
                     newReferenceLineIds,
+                    useCallerTransactionParameterBudget: false,
                     cancellationToken);
                 InsertReferenceBatch(references, start, end, referenceLineIds, foldedNameCache);
                 transaction.Commit();
@@ -1808,6 +1813,7 @@ public partial class DbWriter
         IReadOnlyList<ReferenceRecord> references,
         bool referenceLinesAreNew,
         Dictionary<(long FileId, int Line, string Context), long>? newReferenceLineIds,
+        bool useCallerTransactionParameterBudget,
         Dictionary<string, string?> foldedNameCache,
         int rowsPerStatement,
         int referenceBatchCount,
@@ -1833,6 +1839,7 @@ public partial class DbWriter
                 windowEnd,
                 referenceLinesAreNew,
                 newReferenceLineIds,
+                useCallerTransactionParameterBudget,
                 cancellationToken);
 
             for (int batchIndex = windowStartBatch; batchIndex < windowEndBatch; batchIndex++)
@@ -1890,10 +1897,22 @@ public partial class DbWriter
         int end,
         bool referenceLinesAreNew,
         Dictionary<(long FileId, int Line, string Context), long>? newReferenceLineIds,
+        bool useCallerTransactionParameterBudget,
         CancellationToken cancellationToken)
         => referenceLinesAreNew
-            ? InsertNewReferenceLines(references, start, end, newReferenceLineIds!, cancellationToken)
-            : UpsertReferenceLines(references, start, end, cancellationToken);
+            ? InsertNewReferenceLines(
+                references,
+                start,
+                end,
+                newReferenceLineIds!,
+                useCallerTransactionParameterBudget,
+                cancellationToken)
+            : UpsertReferenceLines(
+                references,
+                start,
+                end,
+                useCallerTransactionParameterBudget,
+                cancellationToken);
 
     private void InsertReferenceBatch(
         IReadOnlyList<ReferenceRecord> references,
@@ -2078,6 +2097,7 @@ public partial class DbWriter
         IReadOnlyList<ReferenceRecord> references,
         int start,
         int end,
+        bool useCallerTransactionParameterBudget,
         CancellationToken cancellationToken)
     {
         var lineIds = ReferenceLineBatchMap.Create(
@@ -2086,7 +2106,9 @@ public partial class DbWriter
             end,
             cancellationToken);
         var rows = lineIds.Keys;
-        int rowsPerStatement = GetRowsPerInsertStatement(columnCount: 3);
+        int rowsPerStatement = useCallerTransactionParameterBudget
+            ? GetRowsPerCallerTransactionInsertStatement(columnCount: 3)
+            : GetRowsPerInsertStatement(columnCount: 3);
         for (int i = 0; i < rows.Length; i += rowsPerStatement)
         {
             CheckBatchCancellationAndReportProgress("upsert_reference_lines", i, rows.Length, cancellationToken);
@@ -2106,7 +2128,7 @@ public partial class DbWriter
             }
         }
 
-        int keysPerStatement = GetRowsPerInsertStatement(columnCount: 3);
+        int keysPerStatement = rowsPerStatement;
         for (int i = 0; i < rows.Length; i += keysPerStatement)
         {
             CheckBatchCancellationAndReportProgress("lookup_reference_lines", i, rows.Length, cancellationToken);
@@ -2146,6 +2168,7 @@ public partial class DbWriter
         int start,
         int end,
         Dictionary<(long FileId, int Line, string Context), long> knownLineIds,
+        bool useCallerTransactionParameterBudget,
         CancellationToken cancellationToken)
     {
         var lineIds = ReferenceLineBatchMap.Create(
@@ -2163,7 +2186,9 @@ public partial class DbWriter
                 rows.Add(key);
         }
 
-        int rowsPerStatement = GetRowsPerInsertStatement(columnCount: 3);
+        int rowsPerStatement = useCallerTransactionParameterBudget
+            ? GetRowsPerCallerTransactionInsertStatement(columnCount: 3)
+            : GetRowsPerInsertStatement(columnCount: 3);
         for (int i = 0; i < rows.Count; i += rowsPerStatement)
         {
             CheckBatchCancellationAndReportProgress("insert_reference_lines", i, rows.Count, cancellationToken);
