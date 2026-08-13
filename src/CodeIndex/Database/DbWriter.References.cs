@@ -1931,6 +1931,7 @@ public partial class DbWriter
                     "insert_references",
                     start,
                     references.Count,
+                    rowsPerStatement,
                     cancellationToken);
                 using var transaction = BeginReferenceBatchTransaction(cancellationToken);
                 var referenceLineIds = MaterializeReferenceLines(
@@ -1946,7 +1947,12 @@ public partial class DbWriter
             }
         }
 
-        CheckBatchCancellationAndReportProgress("insert_references", references.Count, references.Count, cancellationToken);
+        CheckBatchCancellationAndReportProgress(
+            "insert_references",
+            references.Count,
+            references.Count,
+            rowsPerStatement,
+            cancellationToken);
         RefreshHotspotReferenceCounts(references, cancellationToken);
         RestoreHotspotReferenceAggregateReady(aggregateWasReady);
         if (refreshMutualRecursionFlags)
@@ -1975,6 +1981,7 @@ public partial class DbWriter
                 "insert_references",
                 windowStart,
                 references.Count,
+                rowsPerStatement,
                 cancellationToken);
             int windowEndBatch = GetAtomicReferenceLineWindowEndBatch(
                 windowStartBatch,
@@ -1999,6 +2006,7 @@ public partial class DbWriter
                         "insert_references",
                         start,
                         references.Count,
+                        rowsPerStatement,
                         cancellationToken);
                 }
                 int end = Math.Min(start + rowsPerStatement, references.Count);
@@ -2209,6 +2217,7 @@ public partial class DbWriter
                     "refresh_hotspot_reference_counts",
                     completed,
                     fileIds.Count,
+                    rowsAdvancedSincePreviousCheckpoint: 1,
                     cancellationToken);
                 cmd.Parameters["@file_id"].Value = fileId;
                 try
@@ -2253,7 +2262,12 @@ public partial class DbWriter
             : GetRowsPerInsertStatement(columnCount: 3);
         for (int i = 0; i < rows.Length; i += rowsPerStatement)
         {
-            CheckBatchCancellationAndReportProgress("upsert_reference_lines", i, rows.Length, cancellationToken);
+            CheckBatchCancellationAndReportProgress(
+                "upsert_reference_lines",
+                i,
+                rows.Length,
+                rowsPerStatement,
+                cancellationToken);
             int batchEnd = Math.Min(i + rowsPerStatement, rows.Length);
             var statementRowCount = batchEnd - i;
             var sql = ReferenceLineUpsertSqlCache.GetOrAdd(statementRowCount, static count => BuildReferenceLineUpsertSql(count));
@@ -2273,7 +2287,12 @@ public partial class DbWriter
         int keysPerStatement = rowsPerStatement;
         for (int i = 0; i < rows.Length; i += keysPerStatement)
         {
-            CheckBatchCancellationAndReportProgress("lookup_reference_lines", i, rows.Length, cancellationToken);
+            CheckBatchCancellationAndReportProgress(
+                "lookup_reference_lines",
+                i,
+                rows.Length,
+                keysPerStatement,
+                cancellationToken);
             int keyEnd = Math.Min(i + keysPerStatement, rows.Length);
             var statementRowCount = keyEnd - i;
             var sql = ReferenceLineLookupSqlCache.GetOrAdd(statementRowCount, static count => BuildReferenceLineLookupSql(count));
@@ -2333,7 +2352,12 @@ public partial class DbWriter
             : GetRowsPerInsertStatement(columnCount: 3);
         for (int i = 0; i < rows.Count; i += rowsPerStatement)
         {
-            CheckBatchCancellationAndReportProgress("insert_reference_lines", i, rows.Count, cancellationToken);
+            CheckBatchCancellationAndReportProgress(
+                "insert_reference_lines",
+                i,
+                rows.Count,
+                rowsPerStatement,
+                cancellationToken);
             int batchEnd = Math.Min(i + rowsPerStatement, rows.Count);
             var statementRowCount = batchEnd - i;
             var sql = ReferenceLineInsertSqlCache.GetOrAdd(statementRowCount, static count => BuildReferenceLineInsertSql(count));

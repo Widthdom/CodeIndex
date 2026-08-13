@@ -25,7 +25,12 @@ public partial class DbWriter
             : GetRowsPerInsertStatement(columnCount: 5);
         for (int i = 0; i < chunks.Count; i += rowsPerStatement)
         {
-            CheckBatchCancellationAndReportProgress("insert_chunks", i, chunks.Count, cancellationToken);
+            CheckBatchCancellationAndReportProgress(
+                "insert_chunks",
+                i,
+                chunks.Count,
+                rowsPerStatement,
+                cancellationToken);
             int end = Math.Min(i + rowsPerStatement, chunks.Count);
             try
             {
@@ -40,7 +45,12 @@ public partial class DbWriter
                 InsertChunksWithRowSkip(chunks, i, end, batchException, cancellationToken);
             }
         }
-        CheckBatchCancellationAndReportProgress("insert_chunks", chunks.Count, chunks.Count, cancellationToken);
+        CheckBatchCancellationAndReportProgress(
+            "insert_chunks",
+            chunks.Count,
+            chunks.Count,
+            rowsPerStatement,
+            cancellationToken);
     }
 
     /// <summary>
@@ -69,7 +79,12 @@ public partial class DbWriter
             namesPerRow: 1);
         for (int i = 0; i < symbols.Count; i += rowsPerStatement)
         {
-            CheckBatchCancellationAndReportProgress("insert_symbols", i, symbols.Count, cancellationToken);
+            CheckBatchCancellationAndReportProgress(
+                "insert_symbols",
+                i,
+                symbols.Count,
+                rowsPerStatement,
+                cancellationToken);
             int end = Math.Min(i + rowsPerStatement, symbols.Count);
             try
             {
@@ -84,7 +99,12 @@ public partial class DbWriter
                 InsertSymbolsWithRowSkip(symbols, i, end, batchException, cancellationToken);
             }
         }
-        CheckBatchCancellationAndReportProgress("insert_symbols", symbols.Count, symbols.Count, cancellationToken);
+        CheckBatchCancellationAndReportProgress(
+            "insert_symbols",
+            symbols.Count,
+            symbols.Count,
+            rowsPerStatement,
+            cancellationToken);
     }
 
     private void TrackCurrentWriterCSharpFamilyRows(IReadOnlyList<SymbolRecord> symbols)
@@ -111,7 +131,12 @@ public partial class DbWriter
         using var transaction = !IsInTransaction() ? BeginTransaction(cancellationToken, "insert chunks row skip") : null;
         for (int i = start; i < end; i++)
         {
-            CheckBatchCancellationAndReportProgress("insert_chunks_row_skip", i, end, cancellationToken);
+            CheckBatchCancellationAndReportProgress(
+                "insert_chunks_row_skip",
+                i,
+                end,
+                rowsAdvancedSincePreviousCheckpoint: 1,
+                cancellationToken);
             var chunk = chunks[i];
             ExecuteWithRowSavepoint(
                 () => InsertChunkBatch(chunks, i, i + 1),
@@ -127,7 +152,12 @@ public partial class DbWriter
         var foldedNameCache = CreateFoldedNameCache(end - start, namesPerRow: 1);
         for (int i = start; i < end; i++)
         {
-            CheckBatchCancellationAndReportProgress("insert_symbols_row_skip", i, end, cancellationToken);
+            CheckBatchCancellationAndReportProgress(
+                "insert_symbols_row_skip",
+                i,
+                end,
+                rowsAdvancedSincePreviousCheckpoint: 1,
+                cancellationToken);
             var symbol = symbols[i];
             ExecuteWithRowSavepoint(
                 () => InsertSymbolBatch(symbols, i, i + 1, foldedNameCache),
@@ -141,19 +171,44 @@ public partial class DbWriter
         string operation,
         int rowsProcessed,
         int rowsTotal,
+        int rowsAdvancedSincePreviousCheckpoint,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (rowsTotal <= BatchSize && BatchProgressCheckpointForTesting == null)
+        var checkpoint = BatchProgressCheckpointForTesting;
+        var shouldWriteLog = ShouldWriteBatchProgressLog(
+            rowsProcessed,
+            rowsTotal,
+            rowsAdvancedSincePreviousCheckpoint);
+        if (checkpoint == null && !shouldWriteLog)
             return;
 
         var progress = new DbWriterBatchProgress(operation, rowsProcessed, rowsTotal);
-        BatchProgressCheckpointForTesting?.Invoke(progress);
+        checkpoint?.Invoke(progress);
+        if (!shouldWriteLog)
+            return;
+
         GlobalToolLog.Info(
             "db_writer_batch_checkpoint"
             + $" operation={operation}"
             + $" rows_processed={rowsProcessed.ToString(System.Globalization.CultureInfo.InvariantCulture)}"
             + $" rows_total={rowsTotal.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
+    }
+
+    private static bool ShouldWriteBatchProgressLog(
+        int rowsProcessed,
+        int rowsTotal,
+        int rowsAdvancedSincePreviousCheckpoint)
+    {
+        if (rowsTotal <= BatchSize)
+            return false;
+        if (rowsProcessed >= rowsTotal)
+            return true;
+
+        var previousRowsProcessed = Math.Max(
+            0,
+            rowsProcessed - Math.Max(1, rowsAdvancedSincePreviousCheckpoint));
+        return rowsProcessed / BatchSize > previousRowsProcessed / BatchSize;
     }
 
     private void ExecuteWithRowSavepoint(Action insertRow, Action<Exception> onSkip)

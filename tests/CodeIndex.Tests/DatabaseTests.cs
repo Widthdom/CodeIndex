@@ -8775,6 +8775,120 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void CallerOwnedTransactionBatchProgress_LogsByRowsWhileCheckpointsStayPerStatement()
+    {
+        const int RowCount = 1001;
+        var fileId = UpsertTestFile(
+            "src/caller-transaction-progress.cs",
+            checksum: "caller-transaction-progress");
+        var symbols = Enumerable.Range(0, RowCount)
+            .Select(index => new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = $"target_{index}",
+                Line = index + 1,
+                StartLine = index + 1,
+                EndLine = index + 1,
+            })
+            .ToArray();
+        var references = Enumerable.Range(0, RowCount)
+            .Select(index => new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = symbols[index].Name,
+                ReferenceKind = "call",
+                Line = index + 1,
+                Column = 1,
+                Context = $"target_{index}();",
+                ContainerKind = "function",
+                ContainerName = "caller",
+            })
+            .ToArray();
+        var checkpointRows = new Dictionary<string, List<int>>(StringComparer.Ordinal)
+        {
+            ["insert_symbols"] = [],
+            ["insert_references"] = [],
+        };
+        using var env = EnvironmentVariableScope.Capture(
+            "CDIDX_FORCE_GLOBAL_TOOL_LOG",
+            "CDIDX_DISABLE_PERSISTENT_LOG",
+            "CDIDX_GLOBAL_TOOL_LOG_DIR");
+        env.Set("CDIDX_FORCE_GLOBAL_TOOL_LOG", "1");
+        env.Set("CDIDX_DISABLE_PERSISTENT_LOG", null);
+        env.Set("CDIDX_GLOBAL_TOOL_LOG_DIR", _dbDir);
+        using var logStream = new MemoryStream();
+        using var logWriter = new StreamWriter(
+            logStream,
+            new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+            bufferSize: 1024,
+            leaveOpen: true);
+        var previousCheckpointHook = DbWriter.BatchProgressCheckpointForTesting;
+        try
+        {
+            DbWriter.BatchProgressCheckpointForTesting = progress =>
+            {
+                if (checkpointRows.TryGetValue(progress.Operation, out var rows))
+                    rows.Add(progress.RowsProcessed);
+            };
+
+            using (var logSession = GlobalToolLog.TryStartForTesting(
+                ["index", "."],
+                "test",
+                createWriter: _ => logWriter))
+            {
+                Assert.NotNull(logSession);
+                using var transaction = _writer.BeginTransaction();
+                _writer.InsertSymbols(symbols);
+                _writer.InsertReferencesForNewFilesInAtomicFileScope(
+                    references,
+                    refreshMutualRecursionFlags: false,
+                    CancellationToken.None);
+                transaction.Commit();
+            }
+        }
+        finally
+        {
+            DbWriter.BatchProgressCheckpointForTesting = previousCheckpointHook;
+        }
+
+        Assert.Equal(
+            Enumerable.Range(0, RowCount + 1).ToArray(),
+            checkpointRows["insert_symbols"]);
+        Assert.Equal(
+            Enumerable.Range(0, (RowCount + 1) / 2)
+                .Select(index => index * 2)
+                .Append(RowCount)
+                .ToArray(),
+            checkpointRows["insert_references"]);
+
+        logStream.Position = 0;
+        using var logReader = new StreamReader(logStream, Encoding.UTF8, leaveOpen: true);
+        var progressLogRows = logReader.ReadToEnd()
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Where(line => line.Contains("db_writer_batch_checkpoint", StringComparison.Ordinal))
+            .ToArray();
+        Assert.Equal(6, progressLogRows.Length);
+        AssertProgressLogRows("insert_symbols", [500, 1000, RowCount]);
+        AssertProgressLogRows("insert_references", [500, 1000, RowCount]);
+
+        void AssertProgressLogRows(string operation, int[] expectedRows)
+        {
+            var operationRows = progressLogRows
+                .Where(line => line.Contains($" operation={operation} ", StringComparison.Ordinal))
+                .Select(line =>
+                {
+                    var marker = "rows_processed=";
+                    var start = line.IndexOf(marker, StringComparison.Ordinal) + marker.Length;
+                    var end = line.IndexOf(' ', start);
+                    return int.Parse(line[start..end], CultureInfo.InvariantCulture);
+                })
+                .ToArray();
+            Assert.Equal(expectedRows, operationRows);
+        }
+    }
+
+    [Fact]
     public void ReferenceLineLookup_BatchedInputUsesUniqueAutoIndexPlan()
     {
         const int StatementRowCount = 5;
@@ -10802,7 +10916,7 @@ public class DatabaseTests : IDisposable
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void InsertReferences_AtomicFileScopeReusesSameContextAcrossBatchBoundary(bool referenceLinesAreNew)
+    public void InsertReferences_AtomicFileScopeReusesSameContextAcrossWindowBoundary(bool referenceLinesAreNew)
     {
         var fileId = UpsertTestFile(
             $"src/atomic-reference-boundary-{referenceLinesAreNew}.cs",
@@ -10813,18 +10927,18 @@ public class DatabaseTests : IDisposable
                 FileId = fileId,
                 SymbolName = index switch
                 {
-                    70 => "boundary_same_first",
-                    71 => "boundary_same_second",
-                    72 => "boundary_different_context",
+                    63 => "boundary_same_first",
+                    64 => "boundary_same_second",
+                    66 => "boundary_different_context",
                     _ => $"callee_{index}",
                 },
                 ReferenceKind = "call",
-                Line = index is 70 or 71 or 72 ? 500 : index + 1,
+                Line = index is 63 or 64 or 66 ? 500 : index + 1,
                 Column = index + 1,
                 Context = index switch
                 {
-                    70 or 71 => "shared boundary context",
-                    72 => "different boundary context",
+                    63 or 64 => "shared boundary context",
+                    66 => "different boundary context",
                     _ => $"line {index}",
                 },
                 ContainerKind = "function",
