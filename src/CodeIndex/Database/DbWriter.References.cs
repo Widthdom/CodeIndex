@@ -10,6 +10,8 @@ public partial class DbWriter
     private const string NonIdentifierReceiverQualifier =
         NonTypeReceiverQualifierPrefix + "\u001fqualified";
     private const int MaxReferenceLineWindowBatchCount = 32;
+    private const string ReferenceLowerRankCandidateMatchesTable =
+        "reference_lower_rank_candidate_matches";
 
     private const string MutualRecursionValueSql = """
         CASE
@@ -110,7 +112,7 @@ public partial class DbWriter
         WHERE r.source_symbol_id IS NOT {ReferenceSourceSymbolValueSql}
         """;
 
-    private const string CreateReferenceUniqueFamiliesSql = """
+    private static readonly string CreateReferenceUniqueFamiliesSql = $"""
         CREATE TEMP TABLE IF NOT EXISTS reference_unique_symbol_families (
             lang        TEXT NOT NULL,
             name_folded TEXT NOT NULL,
@@ -155,6 +157,10 @@ public partial class DbWriter
             symbol_id     INTEGER NOT NULL PRIMARY KEY,
             type_identity TEXT COLLATE BINARY,
             type_arity    INTEGER
+        ) WITHOUT ROWID;
+
+        CREATE TEMP TABLE IF NOT EXISTS {ReferenceLowerRankCandidateMatchesTable} (
+            reference_id INTEGER NOT NULL PRIMARY KEY
         ) WITHOUT ROWID
         """;
 
@@ -1156,6 +1162,19 @@ public partial class DbWriter
               WHERE existing.reference_id = r.id
           );
 
+        -- Rank-5 fallbacks only need to know whether a lower rank matched. Keep that
+        -- one-row-per-reference fact compact instead of probing the much larger
+        -- physical-candidate table once for every fallback candidate.
+        -- rank 5 fallbackが必要とするのは下位rankの一致有無だけであるため、各fallback
+        -- candidateから巨大な物理candidate表を参照せず、referenceごと1行の集合に縮約する。
+        DELETE FROM temp.{ReferenceLowerRankCandidateMatchesTable};
+
+        INSERT INTO temp.{ReferenceLowerRankCandidateMatchesTable}(reference_id)
+        SELECT lower_rank_candidate.reference_id
+        FROM symbol_reference_candidates AS lower_rank_candidate
+        WHERE lower_rank_candidate.scope_rank < 5
+        GROUP BY lower_rank_candidate.reference_id;
+
         INSERT INTO symbol_reference_candidates(reference_id, symbol_id, scope_rank)
         SELECT r.id, unique_target.symbol_id, 5
         FROM symbol_references AS r
@@ -1198,8 +1217,9 @@ public partial class DbWriter
                  = {CSharpReferenceTypeAritySql}
           )
           AND NOT EXISTS (
-              SELECT 1 FROM symbol_reference_candidates AS existing
-              WHERE existing.reference_id = r.id
+              SELECT 1
+              FROM temp.{ReferenceLowerRankCandidateMatchesTable} AS lower_rank_match
+              WHERE lower_rank_match.reference_id = r.id
           );
 
         INSERT INTO symbol_reference_candidates(reference_id, symbol_id, scope_rank)
@@ -1240,8 +1260,9 @@ public partial class DbWriter
               )
           )
           AND NOT EXISTS (
-              SELECT 1 FROM symbol_reference_candidates AS existing
-              WHERE existing.reference_id = r.id
+              SELECT 1
+              FROM temp.{ReferenceLowerRankCandidateMatchesTable} AS lower_rank_match
+              WHERE lower_rank_match.reference_id = r.id
           )
           AND (source_file.lang <> 'dependency_lock' OR target.file_id = r.file_id);
 
@@ -1263,8 +1284,9 @@ public partial class DbWriter
           AND r.target_qualifier IS NULL
           AND r.reference_kind NOT IN ('instantiate', 'type_reference')
           AND NOT EXISTS (
-              SELECT 1 FROM symbol_reference_candidates AS existing
-              WHERE existing.reference_id = r.id
+              SELECT 1
+              FROM temp.{ReferenceLowerRankCandidateMatchesTable} AS lower_rank_match
+              WHERE lower_rank_match.reference_id = r.id
           );
 
         INSERT INTO symbol_reference_candidates(reference_id, symbol_id, scope_rank)
@@ -1285,9 +1307,9 @@ public partial class DbWriter
           AND r.target_qualifier IS NULL
           AND r.reference_kind = 'attribute'
           AND NOT EXISTS (
-              SELECT 1 FROM symbol_reference_candidates AS existing
-              WHERE existing.reference_id = r.id
-                AND existing.scope_rank < 5
+              SELECT 1
+              FROM temp.{ReferenceLowerRankCandidateMatchesTable} AS lower_rank_match
+              WHERE lower_rank_match.reference_id = r.id
           );
 
         INSERT INTO symbol_reference_candidates(reference_id, symbol_id, scope_rank)
@@ -1443,8 +1465,9 @@ public partial class DbWriter
               )
           )
           AND NOT EXISTS (
-              SELECT 1 FROM symbol_reference_candidates AS existing
-              WHERE existing.reference_id = r.id
+              SELECT 1
+              FROM temp.{ReferenceLowerRankCandidateMatchesTable} AS lower_rank_match
+              WHERE lower_rank_match.reference_id = r.id
           );
 
         """;

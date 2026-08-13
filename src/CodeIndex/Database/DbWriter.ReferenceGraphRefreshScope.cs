@@ -227,6 +227,8 @@ public partial class DbWriter
         const string fullInstantiateNamePredicateSql = "AND s.name_folded IS NOT NULL";
         const string fullCSharpTypeSymbolSourceSql = "FROM symbols AS type_symbol";
         const string fullCSharpTypeNamePredicateSql = "AND type_symbol.name_folded IS NOT NULL";
+        const string fullLowerRankCandidateSourceSql =
+            "FROM symbol_reference_candidates AS lower_rank_candidate";
         const int expectedReferenceSourceCount = 14;
 
         if (CountOrdinalOccurrences(RefreshReferenceCandidatesSql, fullDeleteSql) != 1
@@ -235,7 +237,8 @@ public partial class DbWriter
             || CountOrdinalOccurrences(RefreshReferenceCandidatesSql, fullInstantiateSymbolSourceSql) != 1
             || CountOrdinalOccurrences(RefreshReferenceCandidatesSql, fullInstantiateNamePredicateSql) != 1
             || CountOrdinalOccurrences(RefreshReferenceCandidatesSql, fullCSharpTypeSymbolSourceSql) != 1
-            || CountOrdinalOccurrences(RefreshReferenceCandidatesSql, fullCSharpTypeNamePredicateSql) != 1)
+            || CountOrdinalOccurrences(RefreshReferenceCandidatesSql, fullCSharpTypeNamePredicateSql) != 1
+            || CountOrdinalOccurrences(RefreshReferenceCandidatesSql, fullLowerRankCandidateSourceSql) != 1)
         {
             throw new InvalidOperationException(
                 "The reference-candidate SQL shape changed without updating the dirty-scope projection.");
@@ -265,6 +268,10 @@ public partial class DbWriter
             .Replace(
                 fullCSharpTypeNamePredicateSql,
                 "AND type_lookup_name.lang = 'csharp'\n              AND type_symbol.name_folded = type_lookup_name.name_folded",
+                StringComparison.Ordinal)
+            .Replace(
+                fullLowerRankCandidateSourceSql,
+                $"FROM temp.{ReferenceGraphDirtyReferencesTable} AS dirty_lower_rank\n        CROSS JOIN symbol_reference_candidates AS lower_rank_candidate\n          ON lower_rank_candidate.reference_id = dirty_lower_rank.reference_id",
                 StringComparison.Ordinal);
     }
 

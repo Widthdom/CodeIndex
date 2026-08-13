@@ -1046,6 +1046,39 @@ public class DatabaseTests : IDisposable
         using var scope = _writer.BeginReferenceGraphRefreshScope();
         _writer.RefreshMutualRecursionFlags();
 
+        var fullCandidateSql = Assert.Single(
+            DbWriter.CSharpGraphCandidateSqlForTesting,
+            static entry => entry.Scope == "full").Sql;
+        Assert.Equal(
+            1,
+            fullCandidateSql.Split(
+                "FROM symbol_reference_candidates AS lower_rank_candidate",
+                StringSplitOptions.None).Length - 1);
+        Assert.Equal(
+            5,
+            fullCandidateSql.Split(
+                "FROM temp.reference_lower_rank_candidate_matches AS lower_rank_match",
+                StringSplitOptions.None).Length - 1);
+        var fullCandidateStatements = fullCandidateSql
+            .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var fullMaterializationIndex = Array.FindIndex(fullCandidateStatements, static statement =>
+            statement.StartsWith(
+                "INSERT INTO temp.reference_lower_rank_candidate_matches",
+                StringComparison.Ordinal));
+        Assert.True(fullMaterializationIndex >= 0);
+        Assert.Equal(
+            9,
+            fullCandidateStatements[..fullMaterializationIndex].Count(static statement =>
+                statement.StartsWith(
+                    "INSERT INTO symbol_reference_candidates",
+                    StringComparison.Ordinal)));
+        Assert.Equal(
+            5,
+            fullCandidateStatements[(fullMaterializationIndex + 1)..].Count(static statement =>
+                statement.StartsWith(
+                    "INSERT INTO symbol_reference_candidates",
+                    StringComparison.Ordinal)));
+
         var candidateSql = DbWriter.RefreshScopedReferenceCandidatesSqlForTesting;
         Assert.DoesNotContain("AND s.name_folded IS NOT NULL", candidateSql, StringComparison.Ordinal);
         Assert.Contains(
@@ -1065,9 +1098,35 @@ public class DatabaseTests : IDisposable
             candidateSql.Split(
                 "FROM temp.reference_graph_dirty_references AS dirty_reference",
                 StringSplitOptions.None).Length - 1);
+        Assert.Equal(
+            5,
+            candidateSql.Split(
+                "FROM temp.reference_lower_rank_candidate_matches AS lower_rank_match",
+                StringSplitOptions.None).Length - 1);
 
-        var candidateInserts = candidateSql
-            .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        var candidateStatements = candidateSql
+            .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var lowerRankMaterialization = Assert.Single(candidateStatements.Where(static statement =>
+            statement.StartsWith(
+                "INSERT INTO temp.reference_lower_rank_candidate_matches",
+                StringComparison.Ordinal)));
+        Assert.Contains(
+            "FROM temp.reference_graph_dirty_references AS dirty_lower_rank",
+            lowerRankMaterialization,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "CROSS JOIN symbol_reference_candidates AS lower_rank_candidate",
+            lowerRankMaterialization,
+            StringComparison.Ordinal);
+        var lowerRankPlan = ReadQueryPlanDetails(_db.Connection, lowerRankMaterialization);
+        Assert.Contains(lowerRankPlan, static detail => detail.Contains(
+            "SEARCH lower_rank_candidate USING INDEX",
+            StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(lowerRankPlan, static detail =>
+            detail.Equals("SCAN lower_rank_candidate", StringComparison.OrdinalIgnoreCase)
+            || detail.StartsWith("SCAN lower_rank_candidate ", StringComparison.OrdinalIgnoreCase));
+
+        var candidateInserts = candidateStatements
             .Where(static statement => statement.StartsWith(
                 "INSERT INTO symbol_reference_candidates",
                 StringComparison.Ordinal))
@@ -1084,6 +1143,14 @@ public class DatabaseTests : IDisposable
             Assert.DoesNotContain(plan, static detail =>
                 detail.Equals("SCAN r", StringComparison.OrdinalIgnoreCase)
                 || detail.StartsWith("SCAN r ", StringComparison.OrdinalIgnoreCase));
+            if (statement.Contains(
+                    "FROM temp.reference_lower_rank_candidate_matches AS lower_rank_match",
+                    StringComparison.Ordinal))
+            {
+                Assert.Contains(plan, static detail => detail.Contains(
+                    "SEARCH lower_rank_match USING PRIMARY KEY",
+                    StringComparison.OrdinalIgnoreCase));
+            }
         }
         Assert.Contains(candidatePlans, static detail => detail.Contains(
             "SEARCH type_identity_fact USING PRIMARY KEY",

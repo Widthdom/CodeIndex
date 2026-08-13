@@ -415,6 +415,14 @@ for every join candidate. Scoped refreshes must limit symbol facts to their
 lookup-name set and derive identity facts from that bounded population; full and
 retained rebuilds use the complete C# symbol-fact population.
 
+After rank 0–4 candidate construction, graph finalization materializes the
+distinct matching reference IDs into a compact `WITHOUT ROWID` TEMP table. All
+language-independent and C# rank-5 fallbacks consult that set instead of probing
+the physical candidate table, while the persisted row-per-symbol candidate and
+ambiguity contracts remain unchanged. Scoped refreshes must build the set by
+driving from dirty reference IDs into the candidate primary key, and every graph
+pass must clear it before materialization so retries cannot observe stale rows.
+
 Repository-wide incremental scans load stat-reuse candidates with one SQLite
 statement before the C# contract prepass and parallel extraction. Each candidate
 is still compared with a fresh filesystem size and UTC modification time, and
@@ -4246,6 +4254,13 @@ join candidate ごとに identity 文字列を再構築したり constructor-own
 scalar function へ再入したりせず、primary-key の fact lookup を使います。scoped refresh の symbol fact は
 lookup-name 集合だけに限定し、identity fact もその限定済み集合から作ります。full / retained rebuild は
 C# symbol fact の全対象を使います。
+
+rank 0〜4 の candidate 構築後は、一致した reference ID の distinct 集合を compact な
+`WITHOUT ROWID` TEMP table に materialize します。言語共通および C# の rank 5 fallback は
+巨大な物理 candidate table ではなくこの集合を参照し、永続化される symbol ごとの candidate 行と
+ambiguity 契約は変更しません。scoped refresh は dirty reference ID から candidate primary key を
+seek して集合を作り、retry が古い行を参照しないよう graph pass ごとに materialize 前の clear を
+維持してください。
 
 リポジトリ全体の incremental scan は、C# contract prepass と parallel extraction の前に
 stat-reuse 候補を 1 回の SQLite statement で読みます。各候補は引き続き最新の filesystem
