@@ -2329,7 +2329,7 @@ public partial class IndexCommandRunnerTests
         {
             generatedPatterns.Set(
                 IndexCommandRunner.GeneratedCodePatternsEnvironmentVariable,
-                scenario == "generated" ? "Source02.cs" : null);
+                scenario == "generated" ? "Source00.cs" : null);
             CreateAuthoritativeParallelUpdateProject(serialRoot, implementationCount: 3);
             CreateAuthoritativeParallelUpdateProject(parallelRoot, implementationCount: 3);
             var initialModifiedUtc = DateTime.UtcNow.AddSeconds(-4);
@@ -2410,6 +2410,13 @@ public partial class IndexCommandRunnerTests
                     payload => payload.Path == "IParseable.cs"
                         && payload.HasSourceContract);
             }
+            else if (scenario == "generated")
+            {
+                Assert.Contains(
+                    completedPayloads,
+                    payload => payload.Path == "Source00.cs"
+                        && payload.RetainedSymbols == 0);
+            }
             foreach (var property in new[]
                      {
                          "updated",
@@ -2428,6 +2435,45 @@ public partial class IndexCommandRunnerTests
             var parallelProjection = ReadStableUpdateProjection(
                 Path.Combine(parallelRoot, ".cdidx", "codeindex.db"));
             Assert.Equal(serialProjection, parallelProjection);
+            if (scenario == "generated")
+            {
+                foreach (var json in new[] { serialJson, parallelJson })
+                {
+                    var summary = json.GetProperty("summary");
+                    Assert.Equal(4, summary.GetProperty("updated").GetInt32());
+                    Assert.Equal(0, summary.GetProperty("skipped").GetInt32());
+                    Assert.Equal(0, summary.GetProperty("errors").GetInt32());
+                }
+                var issuePrefix = $"issues:Source00.cs\u001f{FileIndexer.GeneratedCodeExtractionSkippedIssueKind}\u001f";
+                Assert.Contains(
+                    serialProjection,
+                    item => item.StartsWith(issuePrefix, StringComparison.Ordinal));
+                Assert.Contains(
+                    parallelProjection,
+                    item => item.StartsWith(issuePrefix, StringComparison.Ordinal));
+            }
+            else if (scenario == "oversize")
+            {
+                foreach (var json in new[] { serialJson, parallelJson })
+                {
+                    var summary = json.GetProperty("summary");
+                    Assert.Equal(4, summary.GetProperty("updated").GetInt32());
+                    Assert.Equal(0, summary.GetProperty("skipped").GetInt32());
+                    Assert.Equal(0, summary.GetProperty("errors").GetInt32());
+                    Assert.False(json.GetProperty("index_complete").GetBoolean());
+                    AssertCompletenessReason(
+                        json,
+                        "index_incomplete_reasons",
+                        "file_too_large");
+                }
+                const string issuePrefix = "issues:Source02.cs\u001ffile_too_large\u001f";
+                Assert.Contains(
+                    serialProjection,
+                    item => item.StartsWith(issuePrefix, StringComparison.Ordinal));
+                Assert.Contains(
+                    parallelProjection,
+                    item => item.StartsWith(issuePrefix, StringComparison.Ordinal));
+            }
             var (serialStatusExitCode, serialStatus) = RunStatusAndCaptureJson(
                 [
                     "--db",
@@ -2442,6 +2488,8 @@ public partial class IndexCommandRunnerTests
                 ]);
             Assert.Equal(CommandExitCodes.Success, serialStatusExitCode);
             Assert.Equal(serialStatusExitCode, parallelStatusExitCode);
+            Assert.False(serialStatus.GetProperty("migration_in_progress").GetBoolean());
+            Assert.False(parallelStatus.GetProperty("migration_in_progress").GetBoolean());
             foreach (var property in new[]
                      {
                          "graph_table_available",
@@ -2475,6 +2523,8 @@ public partial class IndexCommandRunnerTests
                     "--parallelism",
                     parallelism,
                 };
+                if (scenario == "oversize")
+                    args.Insert(4, "Source02.cs");
                 switch (scenario)
                 {
                     case "symbol_cap":
