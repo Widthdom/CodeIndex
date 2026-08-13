@@ -345,6 +345,51 @@ public class PerformanceTests : IDisposable
 #else
     [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
 #endif
+    public void CSharpPrepassWorkspaceSegments_AvoidFlattenedReferenceBuffers()
+    {
+        const int segmentCount = 32;
+        const int symbolsPerSegment = 4_096;
+        IReadOnlyList<SymbolRecord>?[] segments = Enumerable.Range(0, segmentCount)
+            .Select(_ => (IReadOnlyList<SymbolRecord>)Enumerable.Repeat(
+                new SymbolRecord { Kind = "function", Name = "Ordinary" },
+                symbolsPerSegment).ToArray())
+            .ToArray();
+        var prefix = Array.Empty<SymbolRecord>();
+
+        var warmup = new CSharpStaticInterfacePrepass.CSharpWorkspaceSymbolSegments(
+            prefix,
+            segments,
+            segmentCount * symbolsPerSegment);
+        Assert.Equal(segmentCount * symbolsPerSegment, warmup.Count);
+        Assert.Equal(warmup.Count, warmup.Count(static _ => true));
+
+        CSharpStaticInterfacePrepass.CSharpWorkspaceSymbolSegments? view = null;
+        var observed = 0;
+        var allocatedBytes = MeasureAllocatedBytes(() =>
+        {
+            view = new CSharpStaticInterfacePrepass.CSharpWorkspaceSymbolSegments(
+                prefix,
+                segments,
+                segmentCount * symbolsPerSegment);
+            foreach (var symbol in view)
+            {
+                if (symbol.Kind == "function")
+                    observed++;
+            }
+        });
+
+        Assert.NotNull(view);
+        Assert.Equal(segmentCount * symbolsPerSegment, observed);
+        Assert.True(
+            allocatedBytes < 16_384,
+            $"Segmented C# prepass workspace allocated {allocatedBytes:N0} bytes");
+    }
+
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
     public void CSharpStaticInterfaceLookup_UnrelatedInterfacesStayWithinAllocationBudget()
     {
         const int unrelatedInterfaceCount = 20_000;

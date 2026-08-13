@@ -200,19 +200,6 @@ internal static class CSharpStaticInterfacePrepass
                 }
             });
 
-        var pendingSymbolCount = 0;
-        foreach (var extracted in extractedByCandidate)
-            pendingSymbolCount += extracted?.Count ?? 0;
-
-        var pendingSymbols = new List<SymbolRecord>(pendingSymbolCount);
-        for (var candidateIndex = 0; candidateIndex < extractedByCandidate.Length; candidateIndex++)
-        {
-            var extracted = extractedByCandidate[candidateIndex];
-            if (extracted != null)
-                pendingSymbols.AddRange(extracted);
-        }
-
-        var hasSourceStaticInterfaceContracts = HasCSharpStaticInterfaceContractSymbol(pendingSymbols);
         var hadPendingContracts = false;
         var hadPendingMemberReadTargets = false;
         var shouldLoadExistingSymbols = includeExistingSymbols
@@ -227,20 +214,39 @@ internal static class CSharpStaticInterfacePrepass
                 out hadPendingMemberReadTargets,
                 cancellationToken)
             : [];
-        symbols.AddRange(pendingSymbols);
-        var hasStaticInterfaceContracts = HasCSharpStaticInterfaceContractSymbol(symbols) || hadPendingContracts;
+        IReadOnlyList<SymbolRecord> workspaceSymbols;
+        CSharpWorkspaceSymbolEvidence pendingEvidence;
+        if (symbolArtifactCache == null)
+        {
+            pendingEvidence = AppendExtractedWorkspaceSymbols(
+                extractedByCandidate,
+                symbols);
+            workspaceSymbols = symbols;
+        }
+        else
+        {
+            pendingEvidence = InspectExtractedWorkspaceSymbols(extractedByCandidate);
+            workspaceSymbols = new CSharpWorkspaceSymbolSegments(
+                symbols,
+                extractedByCandidate,
+                pendingEvidence.SymbolCount);
+        }
+        var hasSourceStaticInterfaceContracts = pendingEvidence.HasStaticInterfaceContracts;
+        var hasStaticInterfaceContracts =
+            HasCSharpStaticInterfaceContractSymbol(symbols)
+            || hadPendingContracts
+            || hasSourceStaticInterfaceContracts;
         var requiresMemberReadReferenceRefresh =
             hadPendingMemberReadTargets
-            || pendingSymbols.Any(
-                ReferenceExtractor.IsCSharpQualifiedMemberReadTargetSymbol);
+            || pendingEvidence.HasMemberReadTargets;
         IReadOnlyList<string> incompletePaths = firstIncompleteSourcePath == null
             ? []
             : [firstIncompleteSourcePath];
         var isSourceEvidenceComplete = sourceEvidenceComplete != 0;
         var staticInterfaceMemberLookups =
-            ReferenceExtractor.BuildCSharpStaticInterfaceMemberLookups(symbols);
+            ReferenceExtractor.BuildCSharpStaticInterfaceMemberLookups(workspaceSymbols);
         var qualifiedPatternLookups =
-            ReferenceExtractor.BuildCSharpQualifiedPatternLookups(symbols);
+            ReferenceExtractor.BuildCSharpQualifiedPatternLookups(workspaceSymbols);
         // Materialize every immutable workspace lookup before transferring the raw
         // per-file lists. The main pass may mutate owned symbols after take, while
         // reference extraction must continue to observe this prepass snapshot.
@@ -278,6 +284,61 @@ internal static class CSharpStaticInterfacePrepass
             requiresMemberReadReferenceRefresh);
     }
 
+    internal static CSharpWorkspaceSymbolEvidence AppendExtractedWorkspaceSymbols(
+        IReadOnlyList<SymbolRecord>?[] extractedByCandidate,
+        List<SymbolRecord> workspaceSymbols)
+    {
+        var evidence = InspectExtractedWorkspaceSymbols(extractedByCandidate);
+        workspaceSymbols.EnsureCapacity(checked(workspaceSymbols.Count + evidence.SymbolCount));
+        foreach (var extracted in extractedByCandidate)
+        {
+            if (extracted != null)
+                workspaceSymbols.AddRange(extracted);
+        }
+
+        return evidence;
+    }
+
+    private static CSharpWorkspaceSymbolEvidence InspectExtractedWorkspaceSymbols(
+        IReadOnlyList<SymbolRecord>?[] extractedByCandidate)
+    {
+        var symbolCount = 0;
+        var hasStaticInterfaceContracts = false;
+        var hasMemberReadTargets = false;
+        foreach (var extracted in extractedByCandidate)
+        {
+            if (extracted == null)
+                continue;
+
+            symbolCount = checked(symbolCount + extracted.Count);
+            if (hasStaticInterfaceContracts && hasMemberReadTargets)
+                continue;
+
+            foreach (var symbol in extracted)
+            {
+                if (!hasStaticInterfaceContracts
+                    && IsCSharpStaticInterfaceContractSymbol(symbol))
+                {
+                    hasStaticInterfaceContracts = true;
+                }
+
+                if (!hasMemberReadTargets
+                    && ReferenceExtractor.IsCSharpQualifiedMemberReadTargetSymbol(symbol))
+                {
+                    hasMemberReadTargets = true;
+                }
+
+                if (hasStaticInterfaceContracts && hasMemberReadTargets)
+                    break;
+            }
+        }
+
+        return new CSharpWorkspaceSymbolEvidence(
+            symbolCount,
+            hasStaticInterfaceContracts,
+            hasMemberReadTargets);
+    }
+
     internal static CSharpStaticInterfaceWorkspaceSymbols BuildWorkspaceSymbols(
         DbWriter writer,
         FileIndexer indexer,
@@ -313,6 +374,68 @@ internal static class CSharpStaticInterfacePrepass
         }
 
         return false;
+    }
+
+    internal readonly record struct CSharpWorkspaceSymbolEvidence(
+        int SymbolCount,
+        bool HasStaticInterfaceContracts,
+        bool HasMemberReadTargets);
+
+    internal sealed class CSharpWorkspaceSymbolSegments : IReadOnlyList<SymbolRecord>
+    {
+        private readonly IReadOnlyList<SymbolRecord> _prefix;
+        private readonly IReadOnlyList<SymbolRecord>?[] _candidateSegments;
+
+        internal CSharpWorkspaceSymbolSegments(
+            IReadOnlyList<SymbolRecord> prefix,
+            IReadOnlyList<SymbolRecord>?[] candidateSegments,
+            int candidateSymbolCount)
+        {
+            _prefix = prefix;
+            _candidateSegments = candidateSegments;
+            Count = checked(prefix.Count + candidateSymbolCount);
+        }
+
+        public int Count { get; }
+
+        public SymbolRecord this[int index]
+        {
+            get
+            {
+                if ((uint)index >= (uint)Count)
+                    throw new ArgumentOutOfRangeException(nameof(index));
+                if (index < _prefix.Count)
+                    return _prefix[index];
+
+                index -= _prefix.Count;
+                foreach (var segment in _candidateSegments)
+                {
+                    if (segment == null)
+                        continue;
+                    if (index < segment.Count)
+                        return segment[index];
+                    index -= segment.Count;
+                }
+
+                throw new InvalidOperationException("The workspace symbol segments changed after construction.");
+            }
+        }
+
+        public IEnumerator<SymbolRecord> GetEnumerator()
+        {
+            foreach (var symbol in _prefix)
+                yield return symbol;
+            foreach (var segment in _candidateSegments)
+            {
+                if (segment == null)
+                    continue;
+                foreach (var symbol in segment)
+                    yield return symbol;
+            }
+        }
+
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator()
+            => GetEnumerator();
     }
 
     private static IEnumerable<FileTarget> EnumerateFileTargets(string projectRoot, IEnumerable<string> filePaths)

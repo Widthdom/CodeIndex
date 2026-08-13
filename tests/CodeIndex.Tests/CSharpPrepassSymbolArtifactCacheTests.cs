@@ -8,6 +8,80 @@ namespace CodeIndex.Tests;
 public class CSharpPrepassSymbolArtifactCacheTests
 {
     [Fact]
+    public void CSharpWorkspaceAssembly_PreservesOrderIdentityAndEvidence()
+    {
+        var existing = CreateMinimalSymbols(1);
+        existing[0].Name = "Existing";
+        var contract = new SymbolRecord
+        {
+            Kind = "function",
+            Name = "Create",
+            Signature = "static abstract T Create();",
+            ContainerKind = "interface",
+            ContainerName = "IContract",
+        };
+        var enumMember = new SymbolRecord
+        {
+            Kind = "enum",
+            Name = "Red",
+            ContainerKind = "enum",
+            ContainerName = "Shade",
+        };
+        var ordinary = CreateMinimalSymbols(1)[0];
+        ordinary.Name = "Ordinary";
+        IReadOnlyList<SymbolRecord>?[] segments =
+        [
+            null,
+            new List<SymbolRecord> { contract },
+            [],
+            new List<SymbolRecord> { enumMember, ordinary },
+        ];
+
+        var appended = new List<SymbolRecord>(existing);
+        var evidence = CSharpStaticInterfacePrepass.AppendExtractedWorkspaceSymbols(
+            segments,
+            appended);
+        Assert.Equal(3, evidence.SymbolCount);
+        Assert.True(evidence.HasStaticInterfaceContracts);
+        Assert.True(evidence.HasMemberReadTargets);
+        Assert.Equal(
+            new[] { existing[0], contract, enumMember, ordinary },
+            appended,
+            ReferenceEqualityComparer.Instance);
+
+        var ordinaryOnly = new List<SymbolRecord>();
+        var ordinaryEvidence = CSharpStaticInterfacePrepass.AppendExtractedWorkspaceSymbols(
+            [new List<SymbolRecord> { ordinary }],
+            ordinaryOnly);
+        Assert.False(ordinaryEvidence.HasStaticInterfaceContracts);
+        Assert.False(ordinaryEvidence.HasMemberReadTargets);
+        Assert.Same(ordinary, Assert.Single(ordinaryOnly));
+    }
+
+    [Fact]
+    public void CSharpWorkspaceSymbolSegments_PreservesPrefixCandidateOrderCountAndIdentity()
+    {
+        var prefix = CreateMinimalSymbols(2);
+        var first = CreateMinimalSymbols(2);
+        var last = CreateMinimalSymbols(1);
+        IReadOnlyList<SymbolRecord>?[] segments = [null, first, [], last];
+        var view = new CSharpStaticInterfacePrepass.CSharpWorkspaceSymbolSegments(
+            prefix,
+            segments,
+            candidateSymbolCount: 3);
+
+        Assert.Equal(5, view.Count);
+        Assert.Equal(
+            prefix.Concat(first).Concat(last),
+            view,
+            ReferenceEqualityComparer.Instance);
+        Assert.Same(prefix[0], view[0]);
+        Assert.Same(last[0], view[^1]);
+        Assert.Throws<ArgumentOutOfRangeException>(() => view[-1]);
+        Assert.Throws<ArgumentOutOfRangeException>(() => view[view.Count]);
+    }
+
+    [Fact]
     public void TryTake_MatchingChecksumOwnsDeepCloneAndIsTakeOnce()
     {
         var source = CreatePopulatedSymbol();

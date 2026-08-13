@@ -456,7 +456,9 @@ artifact once only after that checksum matches. Generic cache admission keeps
 deep-clone isolation for direct callers. The fresh-index production path instead
 materializes both workspace lookup snapshots first, then transfers ownership of
 each admitted per-file symbol list and releases the redundant workspace-symbol
-fallback list. Main-pass mutation therefore remains isolated from the lookup
+fallback list. It enumerates those per-file lists through a non-owning segmented
+view while building the snapshots, so neither a transient flattened list nor a
+second workspace-sized pointer buffer is required. Main-pass mutation therefore remains isolated from the lookup
 snapshots without retaining duplicate `SymbolRecord` objects. Artifact-producing
 extraction receives the main pass's absolute file path and project root so
 file-local family identities stay identical. File ID assignment, family scope,
@@ -4296,7 +4298,9 @@ pass は引き続き authoritative な content read と hook、stat snapshot / T
 実行します。正規化 path の artifact は checksum 一致後に1回だけ取り出します。汎用 cache admission は
 direct caller 向けの deep-clone isolation を維持します。fresh-index の production 経路では、先に2種類の
 workspace lookup snapshot を materialize し、その後で admit した file ごとの symbol list の所有権を
-cache へ移し、重複する workspace-symbol fallback list を解放します。これにより main-pass mutation と
+cache へ移し、重複する workspace-symbol fallback list を解放します。snapshot 構築中は file ごとの
+list を non-owning な segmented view で列挙し、一時的な flattened list と workspace 規模の2つ目の
+pointer bufferを作りません。これにより main-pass mutation と
 lookup snapshot の分離を保ったまま、重複する `SymbolRecord` object を保持しません。artifact を生成する
 extraction には main pass と同じ absolute file path / project root を渡し、file-local family identity を
 一致させてください。FileId、family scope、source observation、post-extraction hook、kind filter、cap、line 検証、
