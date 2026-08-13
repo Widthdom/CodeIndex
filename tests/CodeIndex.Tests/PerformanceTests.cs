@@ -55,7 +55,7 @@ public class PerformanceTests : IDisposable
                 atomicFileScope: true));
     }
 
-    [Fact(Skip = "Performance test — run manually with: dotnet test --filter Insert10KFiles")]
+    [ManualPerformanceFact]
     public void Insert10KFiles_CompletesInReasonableTime()
     {
         var writer = new DbWriter(_db.Connection);
@@ -86,8 +86,8 @@ public class PerformanceTests : IDisposable
         Assert.Equal(10_000, files);
     }
 
-    [Fact(Skip = "Performance test — run manually with: dotnet test --filter Search10KFileIndex")]
-    public void Search10KFileIndex_ReturnsInReasonableTime()
+    [ManualPerformanceFact]
+    public void Search1KFileIndex_ReturnsInReasonableTime()
     {
         var writer = new DbWriter(_db.Connection);
 
@@ -125,7 +125,7 @@ public class PerformanceTests : IDisposable
         Assert.True(results.Count > 0);
     }
 
-    [Fact(Skip = "Performance test — run manually with: dotnet test --filter ExtractLargeSameLineSymbolFixture_CompletesInReasonableTime")]
+    [ManualPerformanceFact]
     public void ExtractLargeSameLineSymbolFixture_CompletesInReasonableTime()
     {
         var content = string.Join(

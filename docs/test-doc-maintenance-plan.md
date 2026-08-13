@@ -70,7 +70,7 @@ candidate before changing a skip.
 |---|---|---|
 | Target-framework or platform-specific | `ProductionCliFactAttribute`, `ProductionCliTheoryAttribute`, `ExternalProcessFactAttribute`, `ExternalProcessTheoryAttribute`, and practical-budget guards that run only on the production `net8.0` target. | Keep the shared skip-reason constants and their contract tests beside the attributes. Do not duplicate literal reasons at call sites. |
 | External process or toolchain limitation | Published/trimmed CLI and installer paths that can be reported as skipped when SDK/ILLink/runtime availability prevents the test from reaching `cdidx` (#2586, #3571). | Keep the tracking issue in the reason or surrounding guide text, and prefer narrowing the environment guard over disabling broader coverage. |
-| Performance-only or manual benchmark | `PerformanceTests` large-scale checks such as `Insert10KFiles` and extractor stress tests with manual `dotnet test --filter ...` instructions. | Keep them skipped by default, keep the command in the reason, and do not treat them as required PR gates. |
+| Performance-only or manual benchmark | `PerformanceTests` large-scale checks such as `Insert10KFiles` and extractor stress tests using `ManualPerformanceFactAttribute`. | Keep them skipped by default, require `CDIDX_RUN_MANUAL_PERFORMANCE_TESTS=1` plus a focused `dotnet test --filter ...` invocation, and do not treat them as required PR gates. |
 | Temporary investigation skip | Skips with owner, expiration, and `blocked by #NNNN` metadata. | A temporary skip must cite a tracking issue, owner, and expiry date. If that metadata is missing, remove the skip or open the tracking issue before adding it. |
 | Intentionally disabled coverage | No standing class of untracked intentional disables should exist. | If coverage must remain disabled, create an issue first and use the temporary-skip format until the replacement coverage lands. |
 
@@ -204,7 +204,7 @@ exact-substring query を使い、変更前に候補を 1 件ずつ確認して�
 |---|---|---|
 | 対象フレームワークまたはプラットフォーム固有 | `ProductionCliFactAttribute`、`ProductionCliTheoryAttribute`、`ExternalProcessFactAttribute`、`ExternalProcessTheoryAttribute`、production `net8.0` target だけで走る practical-budget guard。 | 共有 skip-reason constant とその contract test を attribute の近くに置く。call site に literal reason を重複させない。 |
 | 外部プロセスまたはツールチェーン制約 | SDK/ILLink/runtime の可用性により `cdidx` に到達する前に skipped として報告されうる published/trimmed CLI と installer 経路（#2586、#3571）。 | reason または周辺 guide text に tracking issue を残し、広い coverage を止めるより environment guard を狭める。 |
-| 性能専用または手動ベンチマーク | `PerformanceTests` の `Insert10KFiles` などの大規模チェックと、手動 `dotnet test --filter ...` 指示付き extractor stress test。 | 既定では skipped のままにし、reason に実行コマンドを残し、PR 必須 gate として扱わない。 |
+| 性能専用または手動ベンチマーク | `ManualPerformanceFactAttribute` を使う `PerformanceTests` の `Insert10KFiles` などの大規模チェックと extractor stress test。 | 既定では skipped のままにし、`CDIDX_RUN_MANUAL_PERFORMANCE_TESTS=1` と focused `dotnet test --filter ...` の両方を必須とし、PR 必須 gate として扱わない。 |
 | 一時調査用 skip | owner、expiration、`blocked by #NNNN` metadata を持つ skip。 | temporary skip は tracking issue、owner、expiry date を必ず持つ。metadata がなければ skip を削除するか、追加前に tracking issue を起票する。 |
 | 意図的な無効化 | 未追跡の intentional disable を常設カテゴリとして持たない。 | coverage を無効化したままにする必要がある場合は先に issue を作り、replacement coverage が入るまで temporary-skip format を使う。 |
 
