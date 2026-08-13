@@ -1270,51 +1270,84 @@ public partial class DbWriter
         GROUP BY lower_rank_candidate.reference_id;
 
         INSERT INTO symbol_reference_candidates(reference_id, symbol_id, scope_rank)
-        SELECT r.id, unique_target.symbol_id, 5
-        FROM symbol_references AS r
-        JOIN files AS source_file ON source_file.id = r.file_id
-        JOIN (
-            SELECT type_symbol.id AS symbol_id,
+        WITH csharp_type_reference_members(
+            symbol_id,
+            name_folded,
+            name,
+            type_arity,
+            type_identity) AS MATERIALIZED (
+            SELECT type_symbol.id,
                    type_symbol.name_folded,
                    type_symbol.name,
-                   {BuildCSharpDefinitionTypeAritySql("type_symbol")} AS type_arity
+                   type_symbol_fact.definition_type_arity,
+                   type_identity_fact.type_identity
             FROM symbols AS type_symbol
             JOIN files AS target_file
               ON target_file.id = type_symbol.file_id
+            CROSS JOIN temp.csharp_symbol_facts AS type_symbol_fact
+              ON type_symbol_fact.symbol_id = type_symbol.id
+            CROSS JOIN temp.csharp_type_identity_facts AS type_identity_fact
+              ON type_identity_fact.symbol_id = type_symbol.id
             WHERE target_file.lang = 'csharp'
               AND type_symbol.name_folded IS NOT NULL
               AND type_symbol.kind IN ('class', 'struct', 'record', 'interface', 'enum', 'delegate')
-              AND {BuildCSharpDefinitionTypeAritySql("type_symbol")} IS NOT NULL
+              AND type_symbol_fact.definition_type_arity IS NOT NULL
+        ),
+        csharp_unique_type_reference_families(
+            name_folded,
+            name,
+            type_arity,
+            type_identity) AS MATERIALIZED (
+            SELECT type_member.name_folded,
+                   type_member.name,
+                   type_member.type_arity,
+                   MIN(type_member.type_identity COLLATE BINARY)
+            FROM csharp_type_reference_members AS type_member
+            GROUP BY type_member.name_folded,
+                     type_member.name,
+                     type_member.type_arity
+            HAVING COUNT(DISTINCT type_member.type_identity COLLATE BINARY) = 1
+        ),
+        matched_csharp_type_reference_families(
+            reference_id,
+            name_folded,
+            name,
+            type_arity,
+            type_identity) AS MATERIALIZED (
+            SELECT r.id,
+                   unique_family.name_folded,
+                   unique_family.name,
+                   unique_family.type_arity,
+                   unique_family.type_identity
+            FROM symbol_references AS r
+            JOIN files AS source_file ON source_file.id = r.file_id
+            JOIN csharp_unique_type_reference_families AS unique_family
+              ON unique_family.name_folded = r.symbol_name_folded
+             AND unique_family.name = r.symbol_name COLLATE BINARY
+            LEFT JOIN temp.csharp_reference_facts AS reference_fact
+              ON reference_fact.reference_id = r.id
+            WHERE source_file.lang = 'csharp'
+              AND r.target_qualifier IS NULL
+              AND r.reference_kind = 'type_reference'
+              AND (
+                  reference_fact.type_arity IS NULL
+                  OR unique_family.type_arity = reference_fact.type_arity
+              )
               AND NOT EXISTS (
                   SELECT 1
-                  FROM symbols AS other_type
-                  JOIN files AS other_type_file
-                    ON other_type_file.id = other_type.file_id
-                   AND other_type_file.lang = 'csharp'
-                  WHERE other_type.name_folded = type_symbol.name_folded
-                    AND other_type.name = type_symbol.name COLLATE BINARY
-                    AND other_type.kind IN ('class', 'struct', 'record', 'interface', 'enum', 'delegate')
-                    AND {BuildCSharpDefinitionTypeAritySql("other_type")}
-                        = {BuildCSharpDefinitionTypeAritySql("type_symbol")}
-                    AND {BuildCSharpTypeIdentitySql("other_type")}
-                        <> {BuildCSharpTypeIdentitySql("type_symbol")} COLLATE BINARY
+                  FROM temp.{ReferenceLowerRankCandidateMatchesTable} AS lower_rank_match
+                  WHERE lower_rank_match.reference_id = r.id
               )
-        ) AS unique_target
-          ON unique_target.name_folded = r.symbol_name_folded
-         AND unique_target.name = r.symbol_name COLLATE BINARY
-        WHERE source_file.lang = 'csharp'
-          AND r.target_qualifier IS NULL
-          AND r.reference_kind = 'type_reference'
-          AND (
-              {CSharpReferenceTypeAritySql} IS NULL
-              OR unique_target.type_arity
-                 = {CSharpReferenceTypeAritySql}
-          )
-          AND NOT EXISTS (
-              SELECT 1
-              FROM temp.{ReferenceLowerRankCandidateMatchesTable} AS lower_rank_match
-              WHERE lower_rank_match.reference_id = r.id
-          );
+        )
+        SELECT matched_family.reference_id,
+               type_member.symbol_id,
+               5
+        FROM matched_csharp_type_reference_families AS matched_family
+        JOIN csharp_type_reference_members AS type_member
+          ON type_member.name_folded = matched_family.name_folded
+         AND type_member.name = matched_family.name COLLATE BINARY
+         AND type_member.type_arity = matched_family.type_arity
+         AND type_member.type_identity = matched_family.type_identity COLLATE BINARY;
 
         INSERT INTO symbol_reference_candidates(reference_id, symbol_id, scope_rank)
         SELECT r.id, target.id, 5

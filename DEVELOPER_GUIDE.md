@@ -429,6 +429,13 @@ ambiguity contracts remain unchanged. Scoped refreshes must build the set by
 driving from dirty reference IDs into the candidate primary key, and every graph
 pass must clear it before materialization so retries cannot observe stale rows.
 
+The unqualified C# rank-5 type fallback materializes physical type members from
+the shared symbol and type-identity facts, groups them into unique logical
+families by exact name, arity, and identity, and matches each reference to that
+family once. Only the final projection expands a matched family back to every
+physical member. This preserves row-per-symbol candidates for partial types while
+avoiding repeated compatibility and ambiguity work for every partial declaration.
+
 Resolution also materializes the nullable target-family key once per target symbol
 into a primary-keyed TEMP fact table. Full, fresh, differential, and retained
 refreshes populate all symbols; scoped refreshes first deduplicate target symbol
@@ -4290,6 +4297,12 @@ rank 0〜4 の candidate 構築後は、一致した reference ID の distinct �
 ambiguity 契約は変更しません。scoped refresh は dirty reference ID から candidate primary key を
 seek して集合を作り、retry が古い行を参照しないよう graph pass ごとに materialize 前の clear を
 維持してください。
+
+qualifier のない C# rank 5 type fallback は、共有 symbol / type-identity fact から物理 type member を
+materializeし、exact name・arity・identityごとの一意な論理familyへgroup化して、referenceごとの照合を
+family単位で1回だけ行います。一致したfamilyを全物理memberへ展開するのは最終projectionだけです。
+これによりpartial typeのsymbolごとのcandidate行を維持しつつ、各partial宣言でcompatibilityとambiguity
+判定を繰り返しません。
 
 resolution は nullable な target-family key も target symbol ごとに1回だけ primary-keyed TEMP
 fact table へ materialize します。full / fresh / differential / retained refresh は全 symbol を投入し、

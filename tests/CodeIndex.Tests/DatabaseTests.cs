@@ -361,6 +361,23 @@ public class DatabaseTests : IDisposable
         {
             Assert.Contains("temp.csharp_type_identity_facts", sql, StringComparison.Ordinal);
             Assert.Contains("temp.csharp_constructor_identity_facts", sql, StringComparison.Ordinal);
+            Assert.Contains(
+                "csharp_type_reference_members(",
+                sql,
+                StringComparison.Ordinal);
+            Assert.Contains(
+                "csharp_unique_type_reference_families(",
+                sql,
+                StringComparison.Ordinal);
+            Assert.Contains(
+                "matched_csharp_type_reference_families(",
+                sql,
+                StringComparison.Ordinal);
+            Assert.Contains(
+                "HAVING COUNT(DISTINCT type_member.type_identity COLLATE BINARY) = 1",
+                sql,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain("symbols AS other_type", sql, StringComparison.Ordinal);
             Assert.DoesNotContain("file-local:", sql, StringComparison.Ordinal);
             Assert.DoesNotContain("ranked_constructor_owners", sql, StringComparison.Ordinal);
             Assert.DoesNotContain(
@@ -384,6 +401,213 @@ public class DatabaseTests : IDisposable
             }
 
             return count;
+        }
+    }
+
+    [Fact]
+    public void CSharpTypeReferenceFamilies_MatchOnceAndExpandEveryPartialMember()
+    {
+        var partialAFileId = UpsertTestFile("proj/Widget.A.cs", "widget-a");
+        var partialBFileId = UpsertTestFile("proj/Widget.B.cs", "widget-b");
+        var lowerCaseFileId = UpsertTestFile("proj/lower-widget.cs", "lower-widget");
+        var arityTwoFileId = UpsertTestFile("other/Widget2.cs", "widget-arity-two");
+        var callerFileId = UpsertTestFile("proj/WidgetCaller.cs", "widget-caller");
+        _writer.InsertSymbols([
+            CreateType(
+                partialAFileId,
+                "Widget",
+                "Demo",
+                "proj|Demo+Widget`1",
+                "public partial class Widget<T>"),
+            CreateType(
+                partialBFileId,
+                "Widget",
+                "Demo",
+                "proj|Demo+Widget`1",
+                "public partial class Widget<T>"),
+            CreateType(
+                lowerCaseFileId,
+                "widget",
+                "Demo",
+                "proj|Demo+widget`1",
+                "public class widget<T>"),
+            CreateType(
+                arityTwoFileId,
+                "Widget",
+                "Other",
+                "other|Other+Widget`2",
+                "public class Widget<TLeft, TRight>"),
+        ]);
+        _writer.InsertReferences([
+            new ReferenceRecord
+            {
+                FileId = callerFileId,
+                SymbolName = "Widget",
+                ReferenceKind = "type_reference",
+                Line = 1,
+                Column = 1,
+                Context = "Widget<int> value;",
+            },
+            new ReferenceRecord
+            {
+                FileId = callerFileId,
+                SymbolName = "Widget",
+                ReferenceKind = "type_reference",
+                Line = 2,
+                Column = 1,
+                Context = "unparseable",
+            },
+            new ReferenceRecord
+            {
+                FileId = callerFileId,
+                SymbolName = "widget",
+                ReferenceKind = "type_reference",
+                Line = 3,
+                Column = 1,
+                Context = "widget<int> lower;",
+            },
+        ], refreshMutualRecursionFlags: false);
+
+        _writer.RefreshMutualRecursionFlags();
+
+        AssertUnconflictedCandidates();
+
+        using (var scope = _writer.BeginReferenceGraphRefreshScope())
+        {
+            using var transaction = _writer.BeginTransaction();
+            var conflictFileId = _writer.InsertNewFile(new FileRecord
+            {
+                Path = "other/Widget.cs",
+                Lang = "csharp",
+                Size = 100,
+                Lines = 5,
+                Modified = new DateTime(2026, 8, 14, 0, 0, 0, DateTimeKind.Utc),
+                Checksum = "widget-conflict",
+            });
+            _writer.InsertSymbols([
+                CreateType(
+                    conflictFileId,
+                    "Widget",
+                    "Other",
+                    "other|Other+Widget`1",
+                    "public class Widget<T>"),
+            ]);
+            transaction.Commit();
+            _writer.RefreshMutualRecursionFlags();
+        }
+
+        AssertConflictedCandidates();
+        var scopedConflictSnapshot = ReadReferenceGraphSemanticSnapshot();
+
+        _writer.RefreshMutualRecursionFlags();
+        AssertConflictedCandidates();
+        var fullConflictSnapshot = ReadReferenceGraphSemanticSnapshot();
+        Assert.Equal(scopedConflictSnapshot, fullConflictSnapshot);
+
+        using (var transaction = _db.Connection.BeginTransaction())
+        {
+            DbWriter.RebuildRetainedReferenceGraph(
+                _db.Connection,
+                transaction,
+                CancellationToken.None);
+            transaction.Commit();
+        }
+
+        AssertConflictedCandidates();
+        Assert.Equal(fullConflictSnapshot, ReadReferenceGraphSemanticSnapshot());
+
+        using (var scope = _writer.BeginReferenceGraphRefreshScope())
+        {
+            using var transaction = _writer.BeginTransaction();
+            Assert.True(_writer.DeleteFileByPath("other/Widget.cs"));
+            transaction.Commit();
+            _writer.RefreshMutualRecursionFlags();
+        }
+
+        AssertUnconflictedCandidates();
+        var scopedSnapshot = ReadReferenceGraphSemanticSnapshot();
+
+        _writer.RefreshMutualRecursionFlags();
+        AssertUnconflictedCandidates();
+        var fullSnapshot = ReadReferenceGraphSemanticSnapshot();
+        Assert.Equal(scopedSnapshot, fullSnapshot);
+
+        using (var transaction = _db.Connection.BeginTransaction())
+        {
+            DbWriter.RebuildRetainedReferenceGraph(
+                _db.Connection,
+                transaction,
+                CancellationToken.None);
+            transaction.Commit();
+        }
+
+        AssertUnconflictedCandidates();
+        Assert.Equal(fullSnapshot, ReadReferenceGraphSemanticSnapshot());
+
+        static SymbolRecord CreateType(
+            long fileId,
+            string name,
+            string container,
+            string familyKey,
+            string signature)
+            => new()
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = name,
+                Line = 1,
+                StartLine = 1,
+                EndLine = 5,
+                Signature = signature,
+                ContainerQualifiedName = container,
+                FamilyKey = familyKey,
+            };
+
+        void AssertConflictedCandidates()
+        {
+            Assert.Equal(
+                0,
+                ExecuteScalarLong("""
+                    SELECT COUNT(*)
+                    FROM symbol_reference_candidates AS candidate
+                    JOIN symbol_references AS reference
+                      ON reference.id = candidate.reference_id
+                    WHERE reference.symbol_name = 'Widget'
+                      AND reference.line = 1
+                    """));
+            AssertCandidatePaths(line: 2, "other/Widget2.cs");
+            AssertCandidatePaths(line: 3, "proj/lower-widget.cs");
+        }
+
+        void AssertUnconflictedCandidates()
+        {
+            AssertCandidatePaths(
+                line: 1,
+                "proj/Widget.A.cs|proj/Widget.B.cs");
+            AssertCandidatePaths(
+                line: 2,
+                "other/Widget2.cs|proj/Widget.A.cs|proj/Widget.B.cs");
+            AssertCandidatePaths(line: 3, "proj/lower-widget.cs");
+        }
+
+        void AssertCandidatePaths(int line, string expected)
+        {
+            Assert.Equal(
+                expected,
+                ExecuteScalarString($"""
+                    SELECT group_concat(candidate_path.path, '|')
+                    FROM (
+                        SELECT target_file.path
+                        FROM symbol_reference_candidates AS candidate
+                        JOIN symbol_references AS reference
+                          ON reference.id = candidate.reference_id
+                        JOIN symbols AS target ON target.id = candidate.symbol_id
+                        JOIN files AS target_file ON target_file.id = target.file_id
+                        WHERE reference.line = {line}
+                          AND candidate.scope_rank = 5
+                        ORDER BY target_file.path COLLATE BINARY
+                    ) AS candidate_path
+                    """));
         }
     }
 
@@ -1256,6 +1480,24 @@ public class DatabaseTests : IDisposable
             StringComparison.OrdinalIgnoreCase));
         Assert.Contains(csharpTypePlan, static detail => detail.Contains(
             "SEARCH type_lookup_name USING PRIMARY KEY",
+            StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(csharpTypePlan, static detail => detail.Contains(
+            "MATERIALIZE csharp_type_reference_members",
+            StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(csharpTypePlan, static detail => detail.Contains(
+            "MATERIALIZE csharp_unique_type_reference_families",
+            StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(csharpTypePlan, static detail => detail.Contains(
+            "MATERIALIZE matched_csharp_type_reference_families",
+            StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(csharpTypePlan, static detail => detail.Contains(
+            "SEARCH type_symbol_fact USING PRIMARY KEY",
+            StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(csharpTypePlan, static detail => detail.Contains(
+            "SEARCH type_identity_fact USING PRIMARY KEY",
+            StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(csharpTypePlan, static detail => detail.Contains(
+            "SEARCH reference_fact USING PRIMARY KEY",
             StringComparison.OrdinalIgnoreCase));
         Assert.DoesNotContain(csharpTypePlan, static detail =>
             detail.Equals("SCAN type_symbol", StringComparison.OrdinalIgnoreCase)
