@@ -59,6 +59,15 @@ public partial class DbWriter
              AND symbol_lookup.name_folded = symbol.name_folded
             """);
 
+    private static string RefreshCSharpPropertyTargetFactsScopedSql =>
+        BuildRefreshCSharpPropertyTargetFactsSql(
+            $"""
+            FROM temp.{ReferenceGraphLookupNamesTable} AS property_lookup
+            CROSS JOIN symbols AS target INDEXED BY idx_symbols_name_folded
+            """,
+            "property_lookup.lang = 'csharp' " +
+            "AND target.name_folded = property_lookup.name_folded");
+
     private static string NormalizeCSharpPropertyReceiverReferencesScopedSql =>
         BuildCSharpPropertyReceiverNormalizationSql(
             $"r.id IN (SELECT reference_id FROM temp.{ReferenceGraphDirtyReferencesTable})");
@@ -185,6 +194,7 @@ public partial class DbWriter
                 + RefreshCSharpSymbolFactsFullSql + "\n"
                 + RefreshCSharpTypeIdentityFactsSql + "\n"
                 + RefreshCSharpConstructorIdentityFactsSql + "\n"
+                + RefreshCSharpPropertyTargetFactsFullSql + "\n"
                 + NormalizeCSharpPropertyReceiverReferencesFullSql + "\n"
                 + RefreshReferenceCandidatesSql),
             (
@@ -193,6 +203,7 @@ public partial class DbWriter
                 + RefreshCSharpSymbolFactsScopedSql + "\n"
                 + RefreshCSharpTypeIdentityFactsSql + "\n"
                 + RefreshCSharpConstructorIdentityFactsSql + "\n"
+                + RefreshCSharpPropertyTargetFactsScopedSql + "\n"
                 + NormalizeCSharpPropertyReceiverReferencesScopedSql + "\n"
                 + RefreshScopedReferenceCandidatesSql),
             (
@@ -201,6 +212,7 @@ public partial class DbWriter
                 + RefreshCSharpSymbolFactsFullSql + "\n"
                 + RefreshCSharpTypeIdentityFactsSql + "\n"
                 + RefreshCSharpConstructorIdentityFactsSql + "\n"
+                + RefreshCSharpPropertyTargetFactsFullSql + "\n"
                 + NormalizeCSharpPropertyReceiverReferencesFullSql + "\n"
                 + RefreshReferenceCandidatesSql),
         ];
@@ -212,6 +224,26 @@ public partial class DbWriter
             ("full", RefreshReferenceCandidatesSql),
             ("scoped", RefreshScopedReferenceCandidatesSql),
             ("retained", RefreshReferenceCandidatesSql),
+        ];
+
+    internal static IReadOnlyList<(
+        string Scope,
+        string MaterializationSql,
+        string NormalizationSql)> CSharpPropertyReceiverFactSqlForTesting
+        =>
+        [
+            (
+                "full",
+                RefreshCSharpPropertyTargetFactsFullSql,
+                NormalizeCSharpPropertyReceiverReferencesFullSql),
+            (
+                "scoped",
+                RefreshCSharpPropertyTargetFactsScopedSql,
+                NormalizeCSharpPropertyReceiverReferencesScopedSql),
+            (
+                "retained",
+                RefreshCSharpPropertyTargetFactsFullSql,
+                NormalizeCSharpPropertyReceiverReferencesFullSql),
         ];
 
     internal static IReadOnlyList<string> ScopedReferenceGraphUpdateStatementsForTesting

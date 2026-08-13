@@ -292,6 +292,12 @@ public class DatabaseTests : IDisposable
             var constructorIdentityInsert = sql.IndexOf(
                 "INSERT INTO temp.csharp_constructor_identity_facts",
                 StringComparison.Ordinal);
+            var propertyTargetDelete = sql.IndexOf(
+                "DELETE FROM temp.csharp_property_target_facts",
+                StringComparison.Ordinal);
+            var propertyTargetInsert = sql.IndexOf(
+                "INSERT INTO temp.csharp_property_target_facts",
+                StringComparison.Ordinal);
             var normalization = sql.IndexOf(
                 "DELETE FROM temp.csharp_type_inheritance",
                 StringComparison.Ordinal);
@@ -308,7 +314,9 @@ public class DatabaseTests : IDisposable
                 && typeIdentityDelete < typeIdentityInsert
                 && typeIdentityInsert < constructorIdentityDelete
                 && constructorIdentityDelete < constructorIdentityInsert
-                && constructorIdentityInsert < normalization
+                && constructorIdentityInsert < propertyTargetDelete
+                && propertyTargetDelete < propertyTargetInsert
+                && propertyTargetInsert < normalization
                 && normalization < candidates,
                 $"Unexpected {scope} C# graph fact stage order.");
             Assert.Equal(1, CountOccurrences(sql, "WITH type_identity_parts("));
@@ -319,6 +327,33 @@ public class DatabaseTests : IDisposable
         var scopedSql = Assert.Single(stages, static stage => stage.Scope == "scoped").Sql;
         Assert.DoesNotContain("reference_graph_lookup_names AS symbol_lookup", fullSql, StringComparison.Ordinal);
         Assert.Contains("reference_graph_lookup_names AS symbol_lookup", scopedSql, StringComparison.Ordinal);
+
+        var propertyStages = DbWriter.CSharpPropertyReceiverFactSqlForTesting;
+        Assert.Equal(["full", "scoped", "retained"], propertyStages.Select(static stage => stage.Scope));
+        foreach (var (scope, materializationSql, normalizationSql) in propertyStages)
+        {
+            Assert.Contains("DELETE FROM temp.csharp_property_target_facts", materializationSql, StringComparison.Ordinal);
+            Assert.Contains("INSERT INTO temp.csharp_property_target_facts", materializationSql, StringComparison.Ordinal);
+            Assert.Contains("target.kind IN ('field', 'property')", materializationSql, StringComparison.Ordinal);
+            Assert.DoesNotContain("JOIN symbols AS target", normalizationSql, StringComparison.Ordinal);
+            Assert.Equal(3, CountOccurrences(normalizationSql, "temp.csharp_property_target_facts AS target"));
+            Assert.Equal(1, CountOccurrences(
+                normalizationSql,
+                "reference_fact.is_property_receiver_reference = 1"));
+            Assert.Equal(1, CountOccurrences(
+                normalizationSql,
+                "reference_fact.is_member_receiver = 1"));
+
+            if (scope == "scoped")
+            {
+                Assert.Contains("reference_graph_lookup_names AS property_lookup", materializationSql, StringComparison.Ordinal);
+                Assert.Contains("symbols AS target INDEXED BY idx_symbols_name_folded", materializationSql, StringComparison.Ordinal);
+            }
+            else
+            {
+                Assert.DoesNotContain("reference_graph_lookup_names AS property_lookup", materializationSql, StringComparison.Ordinal);
+            }
+        }
 
         var candidateStages = DbWriter.CSharpGraphCandidateSqlForTesting;
         Assert.Equal(["full", "scoped", "retained"], candidateStages.Select(static stage => stage.Scope));
@@ -349,6 +384,41 @@ public class DatabaseTests : IDisposable
             }
 
             return count;
+        }
+    }
+
+    [Fact]
+    public void CSharpPropertyReceiverNormalization_SeeksFactBackedReferencesAndTargets()
+    {
+        _writer.RefreshMutualRecursionFlags();
+        var fullStage = Assert.Single(
+            DbWriter.CSharpPropertyReceiverFactSqlForTesting,
+            static stage => stage.Scope == "full");
+        var updates = fullStage.NormalizationSql.Split(
+            ';',
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(static statement => statement.StartsWith(
+                "UPDATE symbol_references",
+                StringComparison.Ordinal))
+            .ToArray();
+        Assert.Equal(2, updates.Length);
+
+        foreach (var update in updates)
+        {
+            var plan = ReadQueryPlanDetails(_db.Connection, update);
+            Assert.Contains(
+                plan,
+                static detail => detail.Contains(
+                    "SEARCH r USING INTEGER PRIMARY KEY",
+                    StringComparison.Ordinal));
+            Assert.DoesNotContain(
+                plan,
+                static detail => detail.StartsWith("SCAN r ", StringComparison.Ordinal));
+            Assert.True(
+                plan.Any(static detail => detail.Contains(
+                    "SEARCH target USING PRIMARY KEY",
+                    StringComparison.Ordinal)),
+                string.Join(Environment.NewLine, plan));
         }
     }
 

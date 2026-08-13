@@ -149,10 +149,19 @@ public partial class DbWriter
         ) WITHOUT ROWID;
 
         CREATE TEMP TABLE IF NOT EXISTS csharp_reference_facts (
-            reference_id       INTEGER NOT NULL PRIMARY KEY,
-            type_arity         INTEGER,
-            argument_count     INTEGER,
-            is_member_receiver INTEGER NOT NULL
+            reference_id                  INTEGER NOT NULL PRIMARY KEY,
+            type_arity                    INTEGER,
+            argument_count                INTEGER,
+            is_member_receiver            INTEGER NOT NULL,
+            is_property_receiver_reference INTEGER NOT NULL
+        ) WITHOUT ROWID;
+
+        CREATE TEMP TABLE IF NOT EXISTS csharp_property_target_facts (
+            name_folded              TEXT NOT NULL,
+            name                     TEXT NOT NULL COLLATE BINARY,
+            container_qualified_name TEXT NOT NULL COLLATE BINARY,
+            symbol_id                INTEGER NOT NULL,
+            PRIMARY KEY(name_folded, name, container_qualified_name, symbol_id)
         ) WITHOUT ROWID;
 
         CREATE TEMP TABLE IF NOT EXISTS csharp_symbol_facts (
@@ -181,6 +190,12 @@ public partial class DbWriter
         ) WITHOUT ROWID
         """;
 
+    private const string CreateCSharpReferenceFactIndexesSql = """
+        CREATE INDEX IF NOT EXISTS temp.idx_csharp_reference_facts_property_receiver
+        ON csharp_reference_facts(reference_id)
+        WHERE is_property_receiver_reference = 1
+        """;
+
     private static readonly string RefreshReferenceResolutionSymbolFactsFullSql = $"""
         DELETE FROM temp.{ReferenceResolutionSymbolFactsTable};
 
@@ -199,7 +214,8 @@ public partial class DbWriter
                 reference_id,
                 type_arity,
                 argument_count,
-                is_member_receiver)
+                is_member_receiver,
+                is_property_receiver_reference)
             SELECT r.id,
                    CASE
                        WHEN r.reference_kind IN ('instantiate', 'type_reference')
@@ -234,6 +250,13 @@ public partial class DbWriter
                            r.symbol_name,
                            r.column_number)
                        ELSE 0
+                   END,
+                   CASE
+                       WHEN r.reference_kind = 'reference'
+                        AND r.target_qualifier LIKE
+                            char(31) || 'property_receiver:%'
+                       THEN 1
+                       ELSE 0
                    END
             FROM symbol_references AS r
             JOIN files AS source_file
@@ -254,6 +277,37 @@ public partial class DbWriter
 
     private static string RefreshCSharpReferenceFactsFullSql =>
         BuildRefreshCSharpReferenceFactsSql("1 = 1");
+
+    private static string BuildRefreshCSharpPropertyTargetFactsSql(
+        string symbolSource,
+        string scopePredicate)
+        => $"""
+            DELETE FROM temp.csharp_property_target_facts;
+
+            INSERT INTO temp.csharp_property_target_facts(
+                name_folded,
+                name,
+                container_qualified_name,
+                symbol_id)
+            SELECT target.name_folded,
+                   target.name,
+                   target.container_qualified_name,
+                   target.id
+            {symbolSource}
+            JOIN files AS target_file
+              ON target_file.id = target.file_id
+             AND target_file.lang = 'csharp'
+            WHERE {scopePredicate}
+              AND target.kind IN ('field', 'property')
+              AND target.name_folded IS NOT NULL
+              AND target.name IS NOT NULL
+              AND target.container_qualified_name IS NOT NULL;
+            """;
+
+    private static string RefreshCSharpPropertyTargetFactsFullSql =>
+        BuildRefreshCSharpPropertyTargetFactsSql(
+            "FROM symbols AS target",
+            "1 = 1");
 
     private static string BuildRefreshCSharpSymbolFactsSql(string scopeJoin)
         => $"""
@@ -787,20 +841,22 @@ public partial class DbWriter
         SET reference_kind = 'type_reference',
             target_qualifier = NULL
         WHERE {scopePredicate}
+          AND r.id IN (
+              SELECT reference_fact.reference_id
+              FROM temp.csharp_reference_facts AS reference_fact
+              WHERE reference_fact.is_property_receiver_reference = 1
+          )
           AND r.reference_kind = 'reference'
           AND r.target_qualifier LIKE char(31) || 'property_receiver:%'
           AND NOT EXISTS (
               SELECT 1
               FROM symbols AS source
               JOIN files AS source_file ON source_file.id = source.file_id
-              JOIN symbols AS target
+              JOIN temp.csharp_property_target_facts AS target
                 ON target.name_folded = r.symbol_name_folded
                AND target.name = r.symbol_name COLLATE BINARY
-              JOIN files AS target_file ON target_file.id = target.file_id
               WHERE source.id = r.source_symbol_id
                 AND source_file.lang = 'csharp'
-                AND target_file.lang = 'csharp'
-                AND target.kind IN ('field', 'property')
                 AND target.container_qualified_name IN (
                     SELECT source.container_qualified_name
                     UNION
@@ -820,14 +876,11 @@ public partial class DbWriter
                 SELECT target.container_qualified_name
                 FROM symbols AS source
                 JOIN files AS source_file ON source_file.id = source.file_id
-                JOIN symbols AS target
+                JOIN temp.csharp_property_target_facts AS target
                   ON target.name_folded = r.symbol_name_folded
                  AND target.name = r.symbol_name COLLATE BINARY
-                JOIN files AS target_file ON target_file.id = target.file_id
                 WHERE source.id = r.source_symbol_id
                   AND source_file.lang = 'csharp'
-                  AND target_file.lang = 'csharp'
-                  AND target.kind IN ('field', 'property')
                   AND target.container_qualified_name IN (
                       SELECT source.container_qualified_name
                       UNION
@@ -849,29 +902,26 @@ public partial class DbWriter
                                        target.container_qualified_name COLLATE BINARY
                              ), 33)
                          END,
-                         target.id
+                         target.symbol_id
                 LIMIT 1
             )
         WHERE {scopePredicate}
+          AND r.id IN (
+              SELECT reference_fact.reference_id
+              FROM temp.csharp_reference_facts AS reference_fact
+              WHERE reference_fact.is_member_receiver = 1
+          )
           AND r.reference_kind = 'type_reference'
           AND r.target_qualifier IS NULL
-          AND COALESCE((
-                  SELECT reference_fact.is_member_receiver
-                  FROM temp.csharp_reference_facts AS reference_fact
-                  WHERE reference_fact.reference_id = r.id
-              ), 0) = 1
           AND EXISTS (
               SELECT 1
               FROM symbols AS source
               JOIN files AS source_file ON source_file.id = source.file_id
-              JOIN symbols AS target
+              JOIN temp.csharp_property_target_facts AS target
                 ON target.name_folded = r.symbol_name_folded
                AND target.name = r.symbol_name COLLATE BINARY
-              JOIN files AS target_file ON target_file.id = target.file_id
               WHERE source.id = r.source_symbol_id
                 AND source_file.lang = 'csharp'
-                AND target_file.lang = 'csharp'
-                AND target.kind IN ('field', 'property')
                 AND target.container_qualified_name IN (
                     SELECT source.container_qualified_name
                     UNION
@@ -1646,11 +1696,13 @@ public partial class DbWriter
         command.Transaction = transaction;
         command.CommandText =
             CreateReferenceUniqueFamiliesSql + ";\n" +
+            CreateCSharpReferenceFactIndexesSql + ";\n" +
             RefreshReferenceSourceSymbolsFullSql + ";\n" +
             RefreshCSharpReferenceFactsFullSql + "\n" +
             RefreshCSharpSymbolFactsFullSql + "\n" +
             RefreshCSharpTypeIdentityFactsSql + "\n" +
             RefreshCSharpConstructorIdentityFactsSql + "\n" +
+            RefreshCSharpPropertyTargetFactsFullSql + "\n" +
             NormalizeCSharpPropertyReceiverReferencesFullSql + "\n" +
             RefreshReferenceUniqueFamiliesSql + "\n" +
             RefreshReferenceCandidatesSql + "\n" +
@@ -2415,6 +2467,7 @@ public partial class DbWriter
         if (graphScope != null)
             graphScope.IsCompleting = true;
         SqliteCommand? createUniqueFamiliesCommand = null;
+        SqliteCommand? createCSharpReferenceFactIndexesCommand = null;
         SqliteCommand? refreshIdentityCommand = null;
         SqliteCommand? refreshMutualCommand = null;
         try
@@ -2425,6 +2478,10 @@ public partial class DbWriter
             cancellationToken.ThrowIfCancellationRequested();
             createUniqueFamiliesCommand = RentCommand(CreateReferenceUniqueFamiliesSql, static _ => { });
             createUniqueFamiliesCommand.ExecuteNonQuery();
+            createCSharpReferenceFactIndexesCommand = RentCommand(
+                CreateCSharpReferenceFactIndexesSql,
+                static _ => { });
+            createCSharpReferenceFactIndexesCommand.ExecuteNonQuery();
             cancellationToken.ThrowIfCancellationRequested();
             var refreshPlan = graphScope == null
                 ? new ReferenceGraphRefreshPlan(true, 0, 0, 0, 0)
@@ -2468,6 +2525,7 @@ public partial class DbWriter
                                      RefreshCSharpSymbolFactsFullSql + "\n" +
                                      RefreshCSharpTypeIdentityFactsSql + "\n" +
                                      RefreshCSharpConstructorIdentityFactsSql + "\n" +
+                                     RefreshCSharpPropertyTargetFactsFullSql + "\n" +
                                      NormalizeCSharpPropertyReceiverReferencesFullSql + "\n" +
                                      RefreshReferenceUniqueFamiliesSql + "\n" +
                                      RefreshReferenceCandidatesSql + "\n" +
@@ -2482,6 +2540,7 @@ public partial class DbWriter
                                      RefreshCSharpSymbolFactsScopedSql + "\n" +
                                      RefreshCSharpTypeIdentityFactsSql + "\n" +
                                      RefreshCSharpConstructorIdentityFactsSql + "\n" +
+                                     RefreshCSharpPropertyTargetFactsScopedSql + "\n" +
                                      NormalizeCSharpPropertyReceiverReferencesScopedSql + "\n" +
                                      RefreshScopedReferenceUniqueFamiliesSql + "\n" +
                                      RefreshScopedReferenceCandidatesSql + "\n" +
@@ -2539,6 +2598,8 @@ public partial class DbWriter
                 ReleaseCommand(refreshMutualCommand);
             if (refreshIdentityCommand != null)
                 ReleaseCommand(refreshIdentityCommand);
+            if (createCSharpReferenceFactIndexesCommand != null)
+                ReleaseCommand(createCSharpReferenceFactIndexesCommand);
             if (createUniqueFamiliesCommand != null)
                 ReleaseCommand(createUniqueFamiliesCommand);
             if (graphScope != null)
