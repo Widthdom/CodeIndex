@@ -8,17 +8,23 @@ internal static partial class StructuralLineMasker
         Scala,
     }
 
-    private static void MaskKotlinTripleStringContents(string[] lines) =>
-        new JvmTripleStringScanner(
+    private static void MaskKotlinTripleStringContents(string[] lines)
+    {
+        var scanner = new JvmTripleStringScanner(
             lines,
-            JvmTripleStringPolicy.Kotlin).MaskLines();
+            JvmTripleStringPolicy.Kotlin);
+        scanner.MaskLines();
+    }
 
-    private static void MaskScalaTripleStringContents(string[] lines) =>
-        new JvmTripleStringScanner(
+    private static void MaskScalaTripleStringContents(string[] lines)
+    {
+        var scanner = new JvmTripleStringScanner(
             lines,
-            JvmTripleStringPolicy.Scala).MaskLines();
+            JvmTripleStringPolicy.Scala);
+        scanner.MaskLines();
+    }
 
-    private sealed class JvmTripleStringScanner(
+    private struct JvmTripleStringScanner(
         string[] lines,
         JvmTripleStringPolicy policy)
     {

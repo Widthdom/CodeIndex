@@ -268,6 +268,31 @@ public class PerformanceTests : IDisposable
 #else
     [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
 #endif
+    public void StructuralLineMasking_JvmTripleStrings_StaysWithinAllocationBudget()
+    {
+        string[] lines = ["val value = \"\"\"literal\"\"\""];
+        const int maskingCount = 4_096;
+        var masked = StructuralLineMasker.MaskLines("kotlin", lines);
+        Assert.DoesNotContain("literal", masked[0], StringComparison.Ordinal);
+        for (var iteration = 0; iteration < 32; iteration++)
+            _ = StructuralLineMasker.MaskLines("kotlin", lines);
+
+        var allocatedBytes = MeasureAllocatedBytes(() =>
+        {
+            for (var iteration = 0; iteration < maskingCount; iteration++)
+                _ = StructuralLineMasker.MaskLines("kotlin", lines);
+        });
+
+        Assert.True(
+            allocatedBytes < 1_000_000,
+            $"JVM triple-string masking allocated {allocatedBytes:N0} bytes for {maskingCount:N0} calls");
+    }
+
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
     public void SymbolExtraction_CsharpSameLineRecoveryDecisions_StayWithinAllocationBudget()
     {
         const int propertyCount = 1_000;
