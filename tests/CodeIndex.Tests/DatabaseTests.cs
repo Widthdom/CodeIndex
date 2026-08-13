@@ -1191,6 +1191,31 @@ public class DatabaseTests : IDisposable
             detail.Equals("SCAN type_symbol", StringComparison.OrdinalIgnoreCase)
             || detail.StartsWith("SCAN type_symbol ", StringComparison.OrdinalIgnoreCase));
 
+        var scopedResolutionFacts = Assert.Single(
+            DbWriter.ReferenceResolutionFactSqlForTesting,
+            static entry => entry.Scope == "scoped");
+        var scopedResolutionFactInsert = Assert.Single(
+            scopedResolutionFacts.MaterializationSql
+                .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Where(static statement => statement.StartsWith(
+                    "WITH dirty_target_symbols",
+                    StringComparison.Ordinal)));
+        var scopedResolutionFactPlan = ReadQueryPlanDetails(
+            _db.Connection,
+            scopedResolutionFactInsert);
+        Assert.Contains(scopedResolutionFactPlan, static detail => detail.Contains(
+            "SEARCH candidate USING COVERING INDEX",
+            StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(scopedResolutionFactPlan, static detail => detail.Contains(
+            "SEARCH target USING INTEGER PRIMARY KEY",
+            StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(scopedResolutionFactPlan, static detail => detail.Contains(
+            "SEARCH target_file USING INTEGER PRIMARY KEY",
+            StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(scopedResolutionFactPlan, static detail =>
+            detail.Equals("SCAN candidate", StringComparison.OrdinalIgnoreCase)
+            || detail.StartsWith("SCAN candidate ", StringComparison.OrdinalIgnoreCase));
+
         foreach (var statement in DbWriter.ScopedReferenceGraphUpdateStatementsForTesting)
         {
             var plan = ReadQueryPlanDetails(_db.Connection, statement);
@@ -1201,6 +1226,14 @@ public class DatabaseTests : IDisposable
                 detail.Equals("SCAN r", StringComparison.OrdinalIgnoreCase)
                 || detail.StartsWith("SCAN r ", StringComparison.OrdinalIgnoreCase));
         }
+        var scopedResolutionPlan = ReadQueryPlanDetails(
+            _db.Connection,
+            scopedResolutionFacts.ResolutionSql.Split(
+                ';',
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)[0]);
+        Assert.Contains(scopedResolutionPlan, static detail => detail.Contains(
+            "SEARCH target_fact USING PRIMARY KEY",
+            StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]

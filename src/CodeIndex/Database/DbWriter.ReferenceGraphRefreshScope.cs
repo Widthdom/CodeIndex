@@ -107,6 +107,24 @@ public partial class DbWriter
 
     private static readonly string RefreshScopedReferenceCandidatesSql = BuildScopedReferenceCandidatesSql();
 
+    private static readonly string RefreshScopedReferenceResolutionSymbolFactsSql = $"""
+        DELETE FROM temp.{ReferenceResolutionSymbolFactsTable};
+
+        WITH dirty_target_symbols(symbol_id) AS MATERIALIZED (
+            SELECT candidate.symbol_id
+            FROM temp.{ReferenceGraphDirtyReferencesTable} AS dirty_target_reference
+            CROSS JOIN symbol_reference_candidates AS candidate
+              ON candidate.reference_id = dirty_target_reference.reference_id
+            GROUP BY candidate.symbol_id
+        )
+        INSERT INTO temp.{ReferenceResolutionSymbolFactsTable}(symbol_id, target_key)
+        SELECT target.id,
+               {ReferenceResolutionTargetKeySql}
+        FROM dirty_target_symbols AS dirty_target
+        JOIN symbols AS target ON target.id = dirty_target.symbol_id
+        JOIN files AS target_file ON target_file.id = target.file_id;
+        """;
+
     private static readonly string RefreshScopedReferenceResolutionValuesSql = $"""
         UPDATE symbol_references AS r
         SET (target_symbol_id, target_symbol_key, resolution_candidate_count, resolution_state) = {ReferenceResolutionValueSql}
@@ -143,6 +161,19 @@ public partial class DbWriter
 
     internal static string RefreshScopedReferenceCandidatesSqlForTesting
         => RefreshScopedReferenceCandidatesSql;
+
+    internal static IReadOnlyList<(
+        string Scope,
+        string MaterializationSql,
+        string ResolutionSql)> ReferenceResolutionFactSqlForTesting
+        =>
+        [
+            ("fresh", RefreshReferenceResolutionSymbolFactsFullSql, RefreshReferenceResolutionFreshSparseSql),
+            ("full", RefreshReferenceResolutionSymbolFactsFullSql, RefreshReferenceResolutionFullSql),
+            ("differential", RefreshReferenceResolutionSymbolFactsFullSql, RefreshReferenceResolutionDifferentialSql),
+            ("scoped", RefreshScopedReferenceResolutionSymbolFactsSql, RefreshScopedReferenceResolutionSql),
+            ("retained", RefreshReferenceResolutionSymbolFactsFullSql, RefreshReferenceResolutionFullSql),
+        ];
 
     internal static IReadOnlyList<(string Scope, string Sql)>
         CSharpGraphFactEvaluationSqlForTesting

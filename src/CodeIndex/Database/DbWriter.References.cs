@@ -12,6 +12,21 @@ public partial class DbWriter
     private const int MaxReferenceLineWindowBatchCount = 32;
     private const string ReferenceLowerRankCandidateMatchesTable =
         "reference_lower_rank_candidate_matches";
+    private const string ReferenceResolutionSymbolFactsTable =
+        "reference_resolution_symbol_facts";
+
+    private const string ReferenceResolutionTargetKeySql = """
+        target_file.lang || char(31) || target_file.path || char(31) ||
+        COALESCE(target.container_qualified_name, target.container_name, '') || char(31) ||
+        COALESCE(target.name, '')
+        """;
+
+    private static readonly string CreateReferenceResolutionSymbolFactsTableSql = $"""
+        CREATE TEMP TABLE IF NOT EXISTS {ReferenceResolutionSymbolFactsTable} (
+            symbol_id  INTEGER NOT NULL PRIMARY KEY,
+            target_key TEXT COLLATE BINARY
+        ) WITHOUT ROWID
+        """;
 
     private const string MutualRecursionValueSql = """
         CASE
@@ -159,9 +174,21 @@ public partial class DbWriter
             type_arity    INTEGER
         ) WITHOUT ROWID;
 
+        {CreateReferenceResolutionSymbolFactsTableSql};
+
         CREATE TEMP TABLE IF NOT EXISTS {ReferenceLowerRankCandidateMatchesTable} (
             reference_id INTEGER NOT NULL PRIMARY KEY
         ) WITHOUT ROWID
+        """;
+
+    private static readonly string RefreshReferenceResolutionSymbolFactsFullSql = $"""
+        DELETE FROM temp.{ReferenceResolutionSymbolFactsTable};
+
+        INSERT INTO temp.{ReferenceResolutionSymbolFactsTable}(symbol_id, target_key)
+        SELECT target.id,
+               {ReferenceResolutionTargetKeySql}
+        FROM symbols AS target
+        JOIN files AS target_file ON target_file.id = target.file_id;
         """;
 
     private static string BuildRefreshCSharpReferenceFactsSql(string scopePredicate)
@@ -1486,15 +1513,11 @@ public partial class DbWriter
             FROM (
                 SELECT COUNT(*) AS candidate_count,
                        MIN(c.symbol_id) AS minimum_symbol_id,
-                       COUNT(DISTINCT target_file.lang || char(31) || target_file.path || char(31) ||
-                                              COALESCE(target.container_qualified_name, target.container_name, '') || char(31) ||
-                                              COALESCE(target.name, '')) AS target_family_count,
-                       MIN(target_file.lang || char(31) || target_file.path || char(31) ||
-                           COALESCE(target.container_qualified_name, target.container_name, '') || char(31) ||
-                           COALESCE(target.name, '')) AS minimum_target_key
+                       COUNT(DISTINCT target_fact.target_key) AS target_family_count,
+                       MIN(target_fact.target_key) AS minimum_target_key
                     FROM symbol_reference_candidates AS c
-                    JOIN symbols AS target ON target.id = c.symbol_id
-                    JOIN files AS target_file ON target_file.id = target.file_id
+                    JOIN temp.reference_resolution_symbol_facts AS target_fact
+                      ON target_fact.symbol_id = c.symbol_id
                     WHERE c.reference_id = r.id
             ) AS resolution
         )
@@ -1518,7 +1541,9 @@ public partial class DbWriter
         """;
 
     internal static string RefreshReferenceResolutionFullSqlForTesting
-        => RefreshReferenceResolutionFullSql;
+        => CreateReferenceResolutionSymbolFactsTableSql + ";\n"
+           + RefreshReferenceResolutionSymbolFactsFullSql + "\n"
+           + RefreshReferenceResolutionFullSql;
 
     private static readonly string RefreshReferenceResolutionDifferentialSql = $"""
         UPDATE symbol_references AS r
@@ -1539,15 +1564,11 @@ public partial class DbWriter
             SELECT candidate.reference_id,
                    COUNT(*) AS candidate_count,
                    MIN(candidate.symbol_id) AS minimum_symbol_id,
-                   COUNT(DISTINCT target_file.lang || char(31) || target_file.path || char(31) ||
-                                          COALESCE(target.container_qualified_name, target.container_name, '') || char(31) ||
-                                          COALESCE(target.name, '')) AS target_family_count,
-                   MIN(target_file.lang || char(31) || target_file.path || char(31) ||
-                       COALESCE(target.container_qualified_name, target.container_name, '') || char(31) ||
-                       COALESCE(target.name, '')) AS minimum_target_key
+                   COUNT(DISTINCT target_fact.target_key) AS target_family_count,
+                   MIN(target_fact.target_key) AS minimum_target_key
             FROM symbol_reference_candidates AS candidate
-            JOIN symbols AS target ON target.id = candidate.symbol_id
-            JOIN files AS target_file ON target_file.id = target.file_id
+            JOIN temp.{ReferenceResolutionSymbolFactsTable} AS target_fact
+              ON target_fact.symbol_id = candidate.symbol_id
             GROUP BY candidate.reference_id
         )
         UPDATE symbol_references AS r
@@ -1578,7 +1599,9 @@ public partial class DbWriter
         """;
 
     internal static string RefreshReferenceResolutionFreshSparseSqlForTesting
-        => RefreshReferenceResolutionFreshSparseSql;
+        => CreateReferenceResolutionSymbolFactsTableSql + ";\n"
+           + RefreshReferenceResolutionSymbolFactsFullSql + "\n"
+           + RefreshReferenceResolutionFreshSparseSql;
 
     private static readonly string RefreshMutualRecursionFlagsSql = $"""
         WITH desired_mutual_recursion(id, desired_value) AS MATERIALIZED (
@@ -1631,6 +1654,7 @@ public partial class DbWriter
             NormalizeCSharpPropertyReceiverReferencesFullSql + "\n" +
             RefreshReferenceUniqueFamiliesSql + "\n" +
             RefreshReferenceCandidatesSql + "\n" +
+            RefreshReferenceResolutionSymbolFactsFullSql + "\n" +
             RefreshReferenceResolutionFullSql + "\n" +
             RefreshMutualRecursionFlagsSql;
         using var cancellationRegistration = cancellationToken.Register(command.Cancel);
@@ -2454,6 +2478,7 @@ public partial class DbWriter
                                      NormalizeCSharpPropertyReceiverReferencesFullSql + "\n" +
                                      RefreshReferenceUniqueFamiliesSql + "\n" +
                                      RefreshReferenceCandidatesSql + "\n" +
+                                     RefreshReferenceResolutionSymbolFactsFullSql + "\n" +
                                      refreshReferenceResolutionSql + "\n";
             }
             else
@@ -2467,6 +2492,7 @@ public partial class DbWriter
                                      NormalizeCSharpPropertyReceiverReferencesScopedSql + "\n" +
                                      RefreshScopedReferenceUniqueFamiliesSql + "\n" +
                                      RefreshScopedReferenceCandidatesSql + "\n" +
+                                     RefreshScopedReferenceResolutionSymbolFactsSql + "\n" +
                                      RefreshScopedReferenceResolutionSql + "\n" +
                                      ExpandReferenceGraphNewMutualScopeSql + "\n";
             }

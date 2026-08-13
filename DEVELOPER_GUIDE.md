@@ -423,6 +423,14 @@ ambiguity contracts remain unchanged. Scoped refreshes must build the set by
 driving from dirty reference IDs into the candidate primary key, and every graph
 pass must clear it before materialization so retries cannot observe stale rows.
 
+Resolution also materializes the nullable target-family key once per target symbol
+into a primary-keyed TEMP fact table. Full, fresh, differential, and retained
+refreshes populate all symbols; scoped refreshes first deduplicate target symbol
+IDs reachable from dirty-reference candidates. Resolution must join candidates to
+that fact by symbol ID instead of rebuilding the language/path/container/name key
+for every physical candidate. Preserve a `NULL` key when legacy target language is
+missing, while still resolving a single valid candidate by ID.
+
 Repository-wide incremental scans load stat-reuse candidates with one SQLite
 statement before the C# contract prepass and parallel extraction. Each candidate
 is still compared with a fresh filesystem size and UTC modification time, and
@@ -4261,6 +4269,13 @@ rank 0〜4 の candidate 構築後は、一致した reference ID の distinct �
 ambiguity 契約は変更しません。scoped refresh は dirty reference ID から candidate primary key を
 seek して集合を作り、retry が古い行を参照しないよう graph pass ごとに materialize 前の clear を
 維持してください。
+
+resolution は nullable な target-family key も target symbol ごとに1回だけ primary-keyed TEMP
+fact table へ materialize します。full / fresh / differential / retained refresh は全 symbol を投入し、
+scoped refresh は dirty-reference candidate から到達する target symbol ID を先に重複排除します。
+resolution は物理 candidate ごとに language / path / container / name key を再構築せず、symbol IDで
+このfactへjoinしてください。legacy targetのlanguageが欠ける場合はkeyを`NULL`のまま保ちつつ、
+有効candidateが1件ならIDによるresolved状態を維持します。
 
 リポジトリ全体の incremental scan は、C# contract prepass と parallel extraction の前に
 stat-reuse 候補を 1 回の SQLite statement で読みます。各候補は引き続き最新の filesystem

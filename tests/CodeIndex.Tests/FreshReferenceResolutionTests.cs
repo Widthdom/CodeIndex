@@ -145,6 +145,93 @@ public sealed class FreshReferenceResolutionTests : IDisposable
     }
 
     [Fact]
+    public void ReferenceResolutionFacts_ConstructTargetKeysOnceAcrossEveryRefreshScope()
+    {
+        foreach (var (scope, materializationSql, resolutionSql) in
+                 DbWriter.ReferenceResolutionFactSqlForTesting)
+        {
+            Assert.Equal(
+                1,
+                CountOccurrences(
+                    materializationSql,
+                    "target_file.lang || char(31) || target_file.path"));
+            Assert.Contains(
+                "INSERT INTO temp.reference_resolution_symbol_facts",
+                materializationSql,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain(
+                "target_file.lang || char(31) || target_file.path",
+                resolutionSql,
+                StringComparison.Ordinal);
+            Assert.Contains(
+                "JOIN temp.reference_resolution_symbol_facts AS target_fact",
+                resolutionSql,
+                StringComparison.Ordinal);
+            Assert.Equal(
+                scope is "differential" or "scoped" ? 2 : 1,
+                CountOccurrences(resolutionSql, "JOIN temp.reference_resolution_symbol_facts AS target_fact"));
+        }
+
+        var scoped = Assert.Single(
+            DbWriter.ReferenceResolutionFactSqlForTesting,
+            static entry => entry.Scope == "scoped");
+        Assert.Contains(
+            "WITH dirty_target_symbols(symbol_id) AS MATERIALIZED",
+            scoped.MaterializationSql,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "FROM temp.reference_graph_dirty_references AS dirty_target_reference",
+            scoped.MaterializationSql,
+            StringComparison.Ordinal);
+        Assert.Contains("GROUP BY candidate.symbol_id", scoped.MaterializationSql, StringComparison.Ordinal);
+
+        foreach (var allSymbolsScope in new[] { "fresh", "full", "differential", "retained" })
+        {
+            var materialization = Assert.Single(
+                DbWriter.ReferenceResolutionFactSqlForTesting,
+                entry => entry.Scope == allSymbolsScope).MaterializationSql;
+            Assert.Contains("FROM symbols AS target", materialization, StringComparison.Ordinal);
+            Assert.DoesNotContain("dirty_target_symbols", materialization, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void ReferenceResolutionFacts_PreserveResolvedLegacyCandidateWithNullTargetKey()
+    {
+        var callerFileId = InsertFile("src/legacy-caller.py", "python");
+        var targetFileId = InsertFile("src/legacy-target.py", "python");
+        _writer.InsertSymbols([CreateSymbol(targetFileId, "LegacyTarget", line: 1)]);
+        _writer.InsertReferences(
+            [CreateReference(callerFileId, "LegacyTarget", line: 10)],
+            refreshMutualRecursionFlags: false);
+
+        Execute($"""
+            INSERT INTO symbol_reference_candidates(reference_id, symbol_id, scope_rank)
+            SELECT reference.id, target.id, 0
+            FROM symbol_references AS reference
+            CROSS JOIN symbols AS target
+            WHERE reference.symbol_name = 'LegacyTarget'
+              AND target.name = 'LegacyTarget';
+
+            UPDATE files SET lang = NULL WHERE id = {targetFileId};
+            """);
+
+        Execute(DbWriter.RefreshReferenceResolutionFullSqlForTesting);
+
+        Assert.Equal(
+            1,
+            ScalarLong("""
+                SELECT COUNT(*)
+                FROM symbol_references
+                WHERE symbol_name = 'LegacyTarget'
+                  AND resolution_state = 'resolved'
+                  AND resolution_candidate_count = 1
+                  AND target_symbol_id IS NOT NULL
+                  AND target_symbol_key IS NULL
+                """));
+    }
+
+    [Fact]
     public void FreshResolutionSql_MatchesFullOracleForAllStatesAcrossCSharpAndPython()
     {
         var csharpCallerFileId = InsertFile("src/caller.cs", "csharp");
@@ -238,6 +325,15 @@ public sealed class FreshReferenceResolutionTests : IDisposable
         Assert.Equal(
             new ResolutionRow("resolved", 1, HasTargetId: true, HasTargetKey: true, IsSelf: false),
             ReadResolutionRow("src/caller.cs", 10));
+        Assert.Equal(
+            "csharp\u001fsrc/target.cs\u001f\u001fCsTarget",
+            ScalarString("""
+                SELECT reference.target_symbol_key
+                FROM symbol_references AS reference
+                JOIN files AS file ON file.id = reference.file_id
+                WHERE file.path = 'src/caller.cs'
+                  AND reference.line = 10
+                """));
         Assert.Equal(
             new ResolutionRow("unresolved", 0, HasTargetId: false, HasTargetKey: false, IsSelf: false),
             ReadResolutionRow("src/caller.cs", 11));
@@ -442,6 +538,16 @@ public sealed class FreshReferenceResolutionTests : IDisposable
         using var command = _db.Connection.CreateCommand();
         command.CommandText = sql;
         return Convert.ToInt64(command.ExecuteScalar(), CultureInfo.InvariantCulture);
+    }
+
+    private string? ScalarString(string sql)
+    {
+        using var command = _db.Connection.CreateCommand();
+        command.CommandText = sql;
+        var value = command.ExecuteScalar();
+        return value == null || value == DBNull.Value
+            ? null
+            : Convert.ToString(value, CultureInfo.InvariantCulture);
     }
 
     private static int CountOccurrences(string text, string value)
