@@ -8888,6 +8888,74 @@ public class DatabaseTests : IDisposable
         }
     }
 
+    [Theory]
+    [InlineData(1_000)]
+    [InlineData(1_001)]
+    public void HotspotAggregateRefreshProgress_LogsExactBoundaryAndCompletion(int fileCount)
+    {
+        using var env = EnvironmentVariableScope.Capture(
+            "CDIDX_FORCE_GLOBAL_TOOL_LOG",
+            "CDIDX_DISABLE_PERSISTENT_LOG",
+            "CDIDX_GLOBAL_TOOL_LOG_DIR");
+        env.Set("CDIDX_FORCE_GLOBAL_TOOL_LOG", "1");
+        env.Set("CDIDX_DISABLE_PERSISTENT_LOG", null);
+        env.Set("CDIDX_GLOBAL_TOOL_LOG_DIR", _dbDir);
+        using var logStream = new MemoryStream();
+        using var logWriter = new StreamWriter(
+            logStream,
+            new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+            bufferSize: 1024,
+            leaveOpen: true);
+        var checkpointRows = new List<int>(fileCount + 1);
+        var previousCheckpointHook = DbWriter.BatchProgressCheckpointForTesting;
+        try
+        {
+            DbWriter.BatchProgressCheckpointForTesting = progress =>
+            {
+                if (progress.Operation == "refresh_hotspot_reference_counts")
+                    checkpointRows.Add(progress.RowsProcessed);
+                previousCheckpointHook?.Invoke(progress);
+            };
+            using var logSession = GlobalToolLog.TryStartForTesting(
+                ["index", "."],
+                "test",
+                createWriter: _ => logWriter);
+            Assert.NotNull(logSession);
+            _writer.RefreshHotspotReferenceCountsForTesting(
+                Enumerable.Range(1, fileCount)
+                    .Select(static index => (long)index)
+                    .ToArray(),
+                CancellationToken.None);
+        }
+        finally
+        {
+            DbWriter.BatchProgressCheckpointForTesting = previousCheckpointHook;
+        }
+
+        Assert.Equal(Enumerable.Range(0, fileCount + 1), checkpointRows);
+
+        logStream.Position = 0;
+        using var logReader = new StreamReader(logStream, Encoding.UTF8, leaveOpen: true);
+        var progressRows = logReader.ReadToEnd()
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Where(line => line.Contains(
+                "db_writer_batch_checkpoint operation=refresh_hotspot_reference_counts ",
+                StringComparison.Ordinal))
+            .Select(line =>
+            {
+                var marker = "rows_processed=";
+                var start = line.IndexOf(marker, StringComparison.Ordinal) + marker.Length;
+                var end = line.IndexOf(' ', start);
+                return int.Parse(line[start..end], CultureInfo.InvariantCulture);
+            })
+            .ToArray();
+
+        int[] expectedProgressRows = fileCount == 1_000
+            ? [500, 1_000]
+            : [500, 1_000, 1_001];
+        Assert.Equal(expectedProgressRows, progressRows);
+    }
+
     [Fact]
     public void ReferenceLineLookup_BatchedInputUsesUniqueAutoIndexPlan()
     {

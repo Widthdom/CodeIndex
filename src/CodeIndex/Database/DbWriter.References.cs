@@ -2235,6 +2235,12 @@ public partial class DbWriter
                 cancellationToken.ThrowIfCancellationRequested();
                 completed++;
             }
+            CheckBatchCancellationAndReportProgress(
+                "refresh_hotspot_reference_counts",
+                completed,
+                fileIds.Count,
+                rowsAdvancedSincePreviousCheckpoint: 1,
+                cancellationToken);
         }
         finally
         {
@@ -2243,6 +2249,11 @@ public partial class DbWriter
 
         transaction.Commit();
     }
+
+    internal void RefreshHotspotReferenceCountsForTesting(
+        IReadOnlyCollection<long> fileIds,
+        CancellationToken cancellationToken)
+        => RefreshHotspotReferenceCounts(fileIds, cancellationToken);
 
     private ReferenceLineBatchMap UpsertReferenceLines(
         IReadOnlyList<ReferenceRecord> references,
