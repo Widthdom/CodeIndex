@@ -1875,7 +1875,6 @@ public partial class DbWriter
                 references.Count,
                 cancellationToken);
             int windowEndBatch = GetAtomicReferenceLineWindowEndBatch(
-                references,
                 windowStartBatch,
                 referenceBatchCount,
                 rowsPerStatement);
@@ -1909,34 +1908,28 @@ public partial class DbWriter
     }
 
     private static int GetAtomicReferenceLineWindowEndBatch(
-        IReadOnlyList<ReferenceRecord> references,
         int windowStartBatch,
         int referenceBatchCount,
         int rowsPerStatement)
     {
         int maxReferenceLines = GetRowsPerInsertStatement(columnCount: 3);
-        var windowKeys = new HashSet<(long FileId, int Line, string Context)>(maxReferenceLines);
-        int windowEndBatch = windowStartBatch;
-        while (windowEndBatch < referenceBatchCount
-               && windowEndBatch - windowStartBatch < MaxReferenceLineWindowBatchCount)
-        {
-            int batchStart = windowEndBatch * rowsPerStatement;
-            int batchEnd = Math.Min(batchStart + rowsPerStatement, references.Count);
-            for (int index = batchStart; index < batchEnd; index++)
-            {
-                var reference = references[index];
-                var key = (reference.FileId, reference.Line, reference.Context);
-                windowKeys.Add(key);
-            }
-
-            if (windowKeys.Count > maxReferenceLines && windowEndBatch > windowStartBatch)
-                break;
-
-            windowEndBatch++;
-        }
-
-        return windowEndBatch;
+        int worstCaseBatches = Math.Max(1, maxReferenceLines / rowsPerStatement);
+        int windowBatchCount = Math.Min(
+            MaxReferenceLineWindowBatchCount,
+            worstCaseBatches);
+        return Math.Min(
+            referenceBatchCount,
+            windowStartBatch + windowBatchCount);
     }
+
+    internal static int GetAtomicReferenceLineWindowEndBatchForTesting(
+        int windowStartBatch,
+        int referenceBatchCount,
+        int rowsPerStatement)
+        => GetAtomicReferenceLineWindowEndBatch(
+            windowStartBatch,
+            referenceBatchCount,
+            rowsPerStatement);
 
     private ReferenceLineBatchMap MaterializeReferenceLines(
         IReadOnlyList<ReferenceRecord> references,

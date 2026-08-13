@@ -10402,6 +10402,25 @@ public class DatabaseTests : IDisposable
     }
 
     [Theory]
+    [InlineData(0, 33, 2, 32)]
+    [InlineData(32, 33, 2, 33)]
+    [InlineData(0, 10, 71, 4)]
+    [InlineData(0, 10, 334, 1)]
+    public void AtomicReferenceLineWindowSizing_UsesWorstCaseRowsWithoutTupleHashing(
+        int windowStartBatch,
+        int referenceBatchCount,
+        int rowsPerStatement,
+        int expectedEndBatch)
+    {
+        Assert.Equal(
+            expectedEndBatch,
+            DbWriter.GetAtomicReferenceLineWindowEndBatchForTesting(
+                windowStartBatch,
+                referenceBatchCount,
+                rowsPerStatement));
+    }
+
+    [Theory]
     [InlineData(false, 72)]
     [InlineData(true, 142)]
     public void InsertReferences_AtomicFileScopeFailureRollsBackEveryPriorBatch(

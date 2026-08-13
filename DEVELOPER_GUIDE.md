@@ -383,7 +383,9 @@ batch-local key-to-ordinal map, resolves each unique line ID, then releases the
 tuple lookup before binding `symbol_references` from ordinal arrays. Preserve
 this path for both new-file inserts and replacement upserts, including atomic
 file windows, so large multi-language reference sets do not rehash file/line/
-context tuples for every persisted edge.
+context tuples for every persisted edge. Atomic window sizing uses the worst-case
+rows-per-statement bound and leaves the materializer as the only tuple-hash pass;
+do not restore a duplicate key-sizing set before it.
 
 Use the same secondary-index deferral for an existing-database full scan when
 the established FTS dirty-byte policy selects bulk loading. Scoped updates have
@@ -4240,6 +4242,8 @@ map を構築し、unique な line ID を解決した後、`symbol_references` �
 する前に tuple lookup を解放します。巨大な multi-language reference 集合で file / line /
 context tuple を edge ごとに再 hash しないよう、新規 file insert と replacement upsert の両方、
 atomic file window を含む全経路でこの契約を維持してください。
+atomic window の size は rows-per-statement の最悪ケース境界から算出し、materializer だけを
+tuple-hash pass として保ちます。その前段に重複した key-sizing set を戻さないでください。
 
 既存DBの full scan でも、既定の FTS dirty-byte policy が bulk load を選ぶ場合は同じ secondary
 index 退避を使います。scoped update には workspace 全体の authoritative な byte estimate が
