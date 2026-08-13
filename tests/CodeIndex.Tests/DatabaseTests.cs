@@ -292,6 +292,12 @@ public class DatabaseTests : IDisposable
             var constructorIdentityInsert = sql.IndexOf(
                 "INSERT INTO temp.csharp_constructor_identity_facts",
                 StringComparison.Ordinal);
+            var propertyTargetDelete = sql.IndexOf(
+                "DELETE FROM temp.csharp_property_target_facts",
+                StringComparison.Ordinal);
+            var propertyTargetInsert = sql.IndexOf(
+                "INSERT INTO temp.csharp_property_target_facts",
+                StringComparison.Ordinal);
             var normalization = sql.IndexOf(
                 "DELETE FROM temp.csharp_type_inheritance",
                 StringComparison.Ordinal);
@@ -308,7 +314,9 @@ public class DatabaseTests : IDisposable
                 && typeIdentityDelete < typeIdentityInsert
                 && typeIdentityInsert < constructorIdentityDelete
                 && constructorIdentityDelete < constructorIdentityInsert
-                && constructorIdentityInsert < normalization
+                && constructorIdentityInsert < propertyTargetDelete
+                && propertyTargetDelete < propertyTargetInsert
+                && propertyTargetInsert < normalization
                 && normalization < candidates,
                 $"Unexpected {scope} C# graph fact stage order.");
             Assert.Equal(1, CountOccurrences(sql, "WITH type_identity_parts("));
@@ -320,12 +328,56 @@ public class DatabaseTests : IDisposable
         Assert.DoesNotContain("reference_graph_lookup_names AS symbol_lookup", fullSql, StringComparison.Ordinal);
         Assert.Contains("reference_graph_lookup_names AS symbol_lookup", scopedSql, StringComparison.Ordinal);
 
+        var propertyStages = DbWriter.CSharpPropertyReceiverFactSqlForTesting;
+        Assert.Equal(["full", "scoped", "retained"], propertyStages.Select(static stage => stage.Scope));
+        foreach (var (scope, materializationSql, normalizationSql) in propertyStages)
+        {
+            Assert.Contains("DELETE FROM temp.csharp_property_target_facts", materializationSql, StringComparison.Ordinal);
+            Assert.Contains("INSERT INTO temp.csharp_property_target_facts", materializationSql, StringComparison.Ordinal);
+            Assert.Contains("target.kind IN ('field', 'property')", materializationSql, StringComparison.Ordinal);
+            Assert.DoesNotContain("JOIN symbols AS target", normalizationSql, StringComparison.Ordinal);
+            Assert.Equal(3, CountOccurrences(normalizationSql, "temp.csharp_property_target_facts AS target"));
+            Assert.Equal(1, CountOccurrences(
+                normalizationSql,
+                "reference_fact.is_property_receiver_reference = 1"));
+            Assert.Equal(1, CountOccurrences(
+                normalizationSql,
+                "reference_fact.is_member_receiver = 1"));
+
+            if (scope == "scoped")
+            {
+                Assert.Contains("reference_graph_lookup_names AS property_lookup", materializationSql, StringComparison.Ordinal);
+                Assert.Contains("symbols AS target INDEXED BY idx_symbols_name_folded", materializationSql, StringComparison.Ordinal);
+            }
+            else
+            {
+                Assert.DoesNotContain("reference_graph_lookup_names AS property_lookup", materializationSql, StringComparison.Ordinal);
+            }
+        }
+
         var candidateStages = DbWriter.CSharpGraphCandidateSqlForTesting;
         Assert.Equal(["full", "scoped", "retained"], candidateStages.Select(static stage => stage.Scope));
         foreach (var (scope, sql) in candidateStages)
         {
             Assert.Contains("temp.csharp_type_identity_facts", sql, StringComparison.Ordinal);
             Assert.Contains("temp.csharp_constructor_identity_facts", sql, StringComparison.Ordinal);
+            Assert.Contains(
+                "csharp_type_reference_members(",
+                sql,
+                StringComparison.Ordinal);
+            Assert.Contains(
+                "csharp_unique_type_reference_families(",
+                sql,
+                StringComparison.Ordinal);
+            Assert.Contains(
+                "matched_csharp_type_reference_families(",
+                sql,
+                StringComparison.Ordinal);
+            Assert.Contains(
+                "HAVING COUNT(DISTINCT type_member.type_identity COLLATE BINARY) = 1",
+                sql,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain("symbols AS other_type", sql, StringComparison.Ordinal);
             Assert.DoesNotContain("file-local:", sql, StringComparison.Ordinal);
             Assert.DoesNotContain("ranked_constructor_owners", sql, StringComparison.Ordinal);
             Assert.DoesNotContain(
@@ -349,6 +401,248 @@ public class DatabaseTests : IDisposable
             }
 
             return count;
+        }
+    }
+
+    [Fact]
+    public void CSharpTypeReferenceFamilies_MatchOnceAndExpandEveryPartialMember()
+    {
+        var partialAFileId = UpsertTestFile("proj/Widget.A.cs", "widget-a");
+        var partialBFileId = UpsertTestFile("proj/Widget.B.cs", "widget-b");
+        var lowerCaseFileId = UpsertTestFile("proj/lower-widget.cs", "lower-widget");
+        var arityTwoFileId = UpsertTestFile("other/Widget2.cs", "widget-arity-two");
+        var callerFileId = UpsertTestFile("proj/WidgetCaller.cs", "widget-caller");
+        _writer.InsertSymbols([
+            CreateType(
+                partialAFileId,
+                "Widget",
+                "Demo",
+                "proj|Demo+Widget`1",
+                "public partial class Widget<T>"),
+            CreateType(
+                partialBFileId,
+                "Widget",
+                "Demo",
+                "proj|Demo+Widget`1",
+                "public partial class Widget<T>"),
+            CreateType(
+                lowerCaseFileId,
+                "widget",
+                "Demo",
+                "proj|Demo+widget`1",
+                "public class widget<T>"),
+            CreateType(
+                arityTwoFileId,
+                "Widget",
+                "Other",
+                "other|Other+Widget`2",
+                "public class Widget<TLeft, TRight>"),
+        ]);
+        _writer.InsertReferences([
+            new ReferenceRecord
+            {
+                FileId = callerFileId,
+                SymbolName = "Widget",
+                ReferenceKind = "type_reference",
+                Line = 1,
+                Column = 1,
+                Context = "Widget<int> value;",
+            },
+            new ReferenceRecord
+            {
+                FileId = callerFileId,
+                SymbolName = "Widget",
+                ReferenceKind = "type_reference",
+                Line = 2,
+                Column = 1,
+                Context = "unparseable",
+            },
+            new ReferenceRecord
+            {
+                FileId = callerFileId,
+                SymbolName = "widget",
+                ReferenceKind = "type_reference",
+                Line = 3,
+                Column = 1,
+                Context = "widget<int> lower;",
+            },
+        ], refreshMutualRecursionFlags: false);
+
+        _writer.RefreshMutualRecursionFlags();
+
+        AssertUnconflictedCandidates();
+
+        using (var scope = _writer.BeginReferenceGraphRefreshScope())
+        {
+            using var transaction = _writer.BeginTransaction();
+            var conflictFileId = _writer.InsertNewFile(new FileRecord
+            {
+                Path = "other/Widget.cs",
+                Lang = "csharp",
+                Size = 100,
+                Lines = 5,
+                Modified = new DateTime(2026, 8, 14, 0, 0, 0, DateTimeKind.Utc),
+                Checksum = "widget-conflict",
+            });
+            _writer.InsertSymbols([
+                CreateType(
+                    conflictFileId,
+                    "Widget",
+                    "Other",
+                    "other|Other+Widget`1",
+                    "public class Widget<T>"),
+            ]);
+            transaction.Commit();
+            _writer.RefreshMutualRecursionFlags();
+        }
+
+        AssertConflictedCandidates();
+        var scopedConflictSnapshot = ReadReferenceGraphSemanticSnapshot();
+
+        _writer.RefreshMutualRecursionFlags();
+        AssertConflictedCandidates();
+        var fullConflictSnapshot = ReadReferenceGraphSemanticSnapshot();
+        Assert.Equal(scopedConflictSnapshot, fullConflictSnapshot);
+
+        using (var transaction = _db.Connection.BeginTransaction())
+        {
+            DbWriter.RebuildRetainedReferenceGraph(
+                _db.Connection,
+                transaction,
+                CancellationToken.None);
+            transaction.Commit();
+        }
+
+        AssertConflictedCandidates();
+        Assert.Equal(fullConflictSnapshot, ReadReferenceGraphSemanticSnapshot());
+
+        using (var scope = _writer.BeginReferenceGraphRefreshScope())
+        {
+            using var transaction = _writer.BeginTransaction();
+            Assert.True(_writer.DeleteFileByPath("other/Widget.cs"));
+            transaction.Commit();
+            _writer.RefreshMutualRecursionFlags();
+        }
+
+        AssertUnconflictedCandidates();
+        var scopedSnapshot = ReadReferenceGraphSemanticSnapshot();
+
+        _writer.RefreshMutualRecursionFlags();
+        AssertUnconflictedCandidates();
+        var fullSnapshot = ReadReferenceGraphSemanticSnapshot();
+        Assert.Equal(scopedSnapshot, fullSnapshot);
+
+        using (var transaction = _db.Connection.BeginTransaction())
+        {
+            DbWriter.RebuildRetainedReferenceGraph(
+                _db.Connection,
+                transaction,
+                CancellationToken.None);
+            transaction.Commit();
+        }
+
+        AssertUnconflictedCandidates();
+        Assert.Equal(fullSnapshot, ReadReferenceGraphSemanticSnapshot());
+
+        static SymbolRecord CreateType(
+            long fileId,
+            string name,
+            string container,
+            string familyKey,
+            string signature)
+            => new()
+            {
+                FileId = fileId,
+                Kind = "class",
+                Name = name,
+                Line = 1,
+                StartLine = 1,
+                EndLine = 5,
+                Signature = signature,
+                ContainerQualifiedName = container,
+                FamilyKey = familyKey,
+            };
+
+        void AssertConflictedCandidates()
+        {
+            Assert.Equal(
+                0,
+                ExecuteScalarLong("""
+                    SELECT COUNT(*)
+                    FROM symbol_reference_candidates AS candidate
+                    JOIN symbol_references AS reference
+                      ON reference.id = candidate.reference_id
+                    WHERE reference.symbol_name = 'Widget'
+                      AND reference.line = 1
+                    """));
+            AssertCandidatePaths(line: 2, "other/Widget2.cs");
+            AssertCandidatePaths(line: 3, "proj/lower-widget.cs");
+        }
+
+        void AssertUnconflictedCandidates()
+        {
+            AssertCandidatePaths(
+                line: 1,
+                "proj/Widget.A.cs|proj/Widget.B.cs");
+            AssertCandidatePaths(
+                line: 2,
+                "other/Widget2.cs|proj/Widget.A.cs|proj/Widget.B.cs");
+            AssertCandidatePaths(line: 3, "proj/lower-widget.cs");
+        }
+
+        void AssertCandidatePaths(int line, string expected)
+        {
+            Assert.Equal(
+                expected,
+                ExecuteScalarString($"""
+                    SELECT group_concat(candidate_path.path, '|')
+                    FROM (
+                        SELECT target_file.path
+                        FROM symbol_reference_candidates AS candidate
+                        JOIN symbol_references AS reference
+                          ON reference.id = candidate.reference_id
+                        JOIN symbols AS target ON target.id = candidate.symbol_id
+                        JOIN files AS target_file ON target_file.id = target.file_id
+                        WHERE reference.line = {line}
+                          AND candidate.scope_rank = 5
+                        ORDER BY target_file.path COLLATE BINARY
+                    ) AS candidate_path
+                    """));
+        }
+    }
+
+    [Fact]
+    public void CSharpPropertyReceiverNormalization_SeeksFactBackedReferencesAndTargets()
+    {
+        _writer.RefreshMutualRecursionFlags();
+        var fullStage = Assert.Single(
+            DbWriter.CSharpPropertyReceiverFactSqlForTesting,
+            static stage => stage.Scope == "full");
+        var updates = fullStage.NormalizationSql.Split(
+            ';',
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(static statement => statement.StartsWith(
+                "UPDATE symbol_references",
+                StringComparison.Ordinal))
+            .ToArray();
+        Assert.Equal(2, updates.Length);
+
+        foreach (var update in updates)
+        {
+            var plan = ReadQueryPlanDetails(_db.Connection, update);
+            Assert.Contains(
+                plan,
+                static detail => detail.Contains(
+                    "SEARCH r USING INTEGER PRIMARY KEY",
+                    StringComparison.Ordinal));
+            Assert.DoesNotContain(
+                plan,
+                static detail => detail.StartsWith("SCAN r ", StringComparison.Ordinal));
+            Assert.True(
+                plan.Any(static detail => detail.Contains(
+                    "SEARCH target USING PRIMARY KEY",
+                    StringComparison.Ordinal)),
+                string.Join(Environment.NewLine, plan));
         }
     }
 
@@ -1046,6 +1340,39 @@ public class DatabaseTests : IDisposable
         using var scope = _writer.BeginReferenceGraphRefreshScope();
         _writer.RefreshMutualRecursionFlags();
 
+        var fullCandidateSql = Assert.Single(
+            DbWriter.CSharpGraphCandidateSqlForTesting,
+            static entry => entry.Scope == "full").Sql;
+        Assert.Equal(
+            1,
+            fullCandidateSql.Split(
+                "FROM symbol_reference_candidates AS lower_rank_candidate",
+                StringSplitOptions.None).Length - 1);
+        Assert.Equal(
+            5,
+            fullCandidateSql.Split(
+                "FROM temp.reference_lower_rank_candidate_matches AS lower_rank_match",
+                StringSplitOptions.None).Length - 1);
+        var fullCandidateStatements = fullCandidateSql
+            .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var fullMaterializationIndex = Array.FindIndex(fullCandidateStatements, static statement =>
+            statement.StartsWith(
+                "INSERT INTO temp.reference_lower_rank_candidate_matches",
+                StringComparison.Ordinal));
+        Assert.True(fullMaterializationIndex >= 0);
+        Assert.Equal(
+            9,
+            fullCandidateStatements[..fullMaterializationIndex].Count(static statement =>
+                statement.StartsWith(
+                    "INSERT INTO symbol_reference_candidates",
+                    StringComparison.Ordinal)));
+        Assert.Equal(
+            5,
+            fullCandidateStatements[(fullMaterializationIndex + 1)..].Count(static statement =>
+                statement.StartsWith(
+                    "INSERT INTO symbol_reference_candidates",
+                    StringComparison.Ordinal)));
+
         var candidateSql = DbWriter.RefreshScopedReferenceCandidatesSqlForTesting;
         Assert.DoesNotContain("AND s.name_folded IS NOT NULL", candidateSql, StringComparison.Ordinal);
         Assert.Contains(
@@ -1065,9 +1392,35 @@ public class DatabaseTests : IDisposable
             candidateSql.Split(
                 "FROM temp.reference_graph_dirty_references AS dirty_reference",
                 StringSplitOptions.None).Length - 1);
+        Assert.Equal(
+            5,
+            candidateSql.Split(
+                "FROM temp.reference_lower_rank_candidate_matches AS lower_rank_match",
+                StringSplitOptions.None).Length - 1);
 
-        var candidateInserts = candidateSql
-            .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        var candidateStatements = candidateSql
+            .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var lowerRankMaterialization = Assert.Single(candidateStatements.Where(static statement =>
+            statement.StartsWith(
+                "INSERT INTO temp.reference_lower_rank_candidate_matches",
+                StringComparison.Ordinal)));
+        Assert.Contains(
+            "FROM temp.reference_graph_dirty_references AS dirty_lower_rank",
+            lowerRankMaterialization,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "CROSS JOIN symbol_reference_candidates AS lower_rank_candidate",
+            lowerRankMaterialization,
+            StringComparison.Ordinal);
+        var lowerRankPlan = ReadQueryPlanDetails(_db.Connection, lowerRankMaterialization);
+        Assert.Contains(lowerRankPlan, static detail => detail.Contains(
+            "SEARCH lower_rank_candidate USING INDEX",
+            StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(lowerRankPlan, static detail =>
+            detail.Equals("SCAN lower_rank_candidate", StringComparison.OrdinalIgnoreCase)
+            || detail.StartsWith("SCAN lower_rank_candidate ", StringComparison.OrdinalIgnoreCase));
+
+        var candidateInserts = candidateStatements
             .Where(static statement => statement.StartsWith(
                 "INSERT INTO symbol_reference_candidates",
                 StringComparison.Ordinal))
@@ -1084,6 +1437,14 @@ public class DatabaseTests : IDisposable
             Assert.DoesNotContain(plan, static detail =>
                 detail.Equals("SCAN r", StringComparison.OrdinalIgnoreCase)
                 || detail.StartsWith("SCAN r ", StringComparison.OrdinalIgnoreCase));
+            if (statement.Contains(
+                    "FROM temp.reference_lower_rank_candidate_matches AS lower_rank_match",
+                    StringComparison.Ordinal))
+            {
+                Assert.Contains(plan, static detail => detail.Contains(
+                    "SEARCH lower_rank_match USING PRIMARY KEY",
+                    StringComparison.OrdinalIgnoreCase));
+            }
         }
         Assert.Contains(candidatePlans, static detail => detail.Contains(
             "SEARCH type_identity_fact USING PRIMARY KEY",
@@ -1120,9 +1481,52 @@ public class DatabaseTests : IDisposable
         Assert.Contains(csharpTypePlan, static detail => detail.Contains(
             "SEARCH type_lookup_name USING PRIMARY KEY",
             StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(csharpTypePlan, static detail => detail.Contains(
+            "MATERIALIZE csharp_type_reference_members",
+            StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(csharpTypePlan, static detail => detail.Contains(
+            "MATERIALIZE csharp_unique_type_reference_families",
+            StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(csharpTypePlan, static detail => detail.Contains(
+            "MATERIALIZE matched_csharp_type_reference_families",
+            StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(csharpTypePlan, static detail => detail.Contains(
+            "SEARCH type_symbol_fact USING PRIMARY KEY",
+            StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(csharpTypePlan, static detail => detail.Contains(
+            "SEARCH type_identity_fact USING PRIMARY KEY",
+            StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(csharpTypePlan, static detail => detail.Contains(
+            "SEARCH reference_fact USING PRIMARY KEY",
+            StringComparison.OrdinalIgnoreCase));
         Assert.DoesNotContain(csharpTypePlan, static detail =>
             detail.Equals("SCAN type_symbol", StringComparison.OrdinalIgnoreCase)
             || detail.StartsWith("SCAN type_symbol ", StringComparison.OrdinalIgnoreCase));
+
+        var scopedResolutionFacts = Assert.Single(
+            DbWriter.ReferenceResolutionFactSqlForTesting,
+            static entry => entry.Scope == "scoped");
+        var scopedResolutionFactInsert = Assert.Single(
+            scopedResolutionFacts.MaterializationSql
+                .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Where(static statement => statement.StartsWith(
+                    "WITH dirty_target_symbols",
+                    StringComparison.Ordinal)));
+        var scopedResolutionFactPlan = ReadQueryPlanDetails(
+            _db.Connection,
+            scopedResolutionFactInsert);
+        Assert.Contains(scopedResolutionFactPlan, static detail => detail.Contains(
+            "SEARCH candidate USING COVERING INDEX",
+            StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(scopedResolutionFactPlan, static detail => detail.Contains(
+            "SEARCH target USING INTEGER PRIMARY KEY",
+            StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(scopedResolutionFactPlan, static detail => detail.Contains(
+            "SEARCH target_file USING INTEGER PRIMARY KEY",
+            StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(scopedResolutionFactPlan, static detail =>
+            detail.Equals("SCAN candidate", StringComparison.OrdinalIgnoreCase)
+            || detail.StartsWith("SCAN candidate ", StringComparison.OrdinalIgnoreCase));
 
         foreach (var statement in DbWriter.ScopedReferenceGraphUpdateStatementsForTesting)
         {
@@ -1134,6 +1538,14 @@ public class DatabaseTests : IDisposable
                 detail.Equals("SCAN r", StringComparison.OrdinalIgnoreCase)
                 || detail.StartsWith("SCAN r ", StringComparison.OrdinalIgnoreCase));
         }
+        var scopedResolutionPlan = ReadQueryPlanDetails(
+            _db.Connection,
+            scopedResolutionFacts.ResolutionSql.Split(
+                ';',
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)[0]);
+        Assert.Contains(scopedResolutionPlan, static detail => detail.Contains(
+            "SEARCH target_fact USING PRIMARY KEY",
+            StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -8251,6 +8663,300 @@ public class DatabaseTests : IDisposable
     }
 
     [Fact]
+    public void CallerOwnedTransactionBatchStatements_BoundNamedParametersAcrossPersistenceTables()
+    {
+        const int ParameterBudget = 32;
+        var fileId = UpsertTestFile(
+            "src/caller-transaction-batches.cs",
+            checksum: "caller-transaction-batches");
+        var chunks = Enumerable.Range(0, 7)
+            .Select(index => new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = index,
+                StartLine = index + 1,
+                EndLine = index + 1,
+                Content = $"chunk_{index}",
+            })
+            .ToArray();
+        var symbols = Enumerable.Range(0, 3)
+            .Select(index => new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = $"target_{index}",
+                Line = index + 1,
+                StartLine = index + 1,
+                EndLine = index + 1,
+            })
+            .ToArray();
+        var issues = Enumerable.Range(0, 6)
+            .Select(index => new FileIssue
+            {
+                Path = "src/caller-transaction-batches.cs",
+                Kind = $"test_issue_{index}",
+                Line = index + 1,
+                Message = $"test issue {index}",
+            })
+            .ToArray();
+        var references = Enumerable.Range(0, 5)
+            .Select(index => new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = $"target_{index % symbols.Length}",
+                ReferenceKind = "call",
+                Line = index + 1,
+                Column = 1,
+                Context = $"target_{index % symbols.Length}();",
+                ContainerKind = "function",
+                ContainerName = "caller",
+            })
+            .ToArray();
+        var statements = new List<DbWriter.DbWriterBatchStatement>();
+        var previousStatementHook = DbWriter.BatchStatementExecutingForTesting;
+        try
+        {
+            DbWriter.BatchStatementExecutingForTesting = statement =>
+            {
+                statements.Add(statement);
+                previousStatementHook?.Invoke(statement);
+            };
+
+            using var transaction = _writer.BeginTransaction();
+            _writer.InsertChunks(chunks);
+            _writer.InsertSymbols(symbols);
+            _writer.InsertIssuesForNewFile(fileId, issues);
+            _writer.InsertReferencesForNewFilesInAtomicFileScope(
+                references,
+                refreshMutualRecursionFlags: false,
+                CancellationToken.None);
+            transaction.Commit();
+        }
+        finally
+        {
+            DbWriter.BatchStatementExecutingForTesting = previousStatementHook;
+        }
+
+        Assert.Equal(
+            [(6, 6), (1, 1)],
+            BatchRows("insert_chunks"));
+        Assert.Equal(
+            [(1, 1), (1, 1), (1, 1)],
+            BatchRows("insert_symbols"));
+        Assert.Equal(
+            [(5, 5), (1, 1)],
+            BatchRows("insert_issues"));
+        Assert.Equal(
+            [(5, 5)],
+            BatchRows("insert_reference_lines"));
+        Assert.Equal(
+            [(2, 2), (2, 2), (1, 1)],
+            BatchRows("insert_references"));
+
+        var columnsByOperation = new Dictionary<string, int>(StringComparer.Ordinal)
+        {
+            ["insert_chunks"] = 5,
+            ["insert_symbols"] = 25,
+            ["insert_issues"] = 6,
+            ["insert_reference_lines"] = 3,
+            ["insert_references"] = 14,
+        };
+        Assert.All(
+            statements,
+            statement => Assert.True(
+                statement.StatementRows * columnsByOperation[statement.Operation] <= ParameterBudget,
+                $"{statement.Operation} used {statement.StatementRows * columnsByOperation[statement.Operation]} parameters."));
+
+        (int ActiveRows, int StatementRows)[] BatchRows(string operation)
+            => statements
+                .Where(statement => statement.Operation == operation)
+                .Select(statement => (statement.ActiveRows, statement.StatementRows))
+                .ToArray();
+    }
+
+    [Fact]
+    public void CallerOwnedTransactionBatchProgress_LogsByRowsWhileCheckpointsStayPerStatement()
+    {
+        const int RowCount = 1001;
+        var fileId = UpsertTestFile(
+            "src/caller-transaction-progress.cs",
+            checksum: "caller-transaction-progress");
+        var symbols = Enumerable.Range(0, RowCount)
+            .Select(index => new SymbolRecord
+            {
+                FileId = fileId,
+                Kind = "function",
+                Name = $"target_{index}",
+                Line = index + 1,
+                StartLine = index + 1,
+                EndLine = index + 1,
+            })
+            .ToArray();
+        var references = Enumerable.Range(0, RowCount)
+            .Select(index => new ReferenceRecord
+            {
+                FileId = fileId,
+                SymbolName = symbols[index].Name,
+                ReferenceKind = "call",
+                Line = index + 1,
+                Column = 1,
+                Context = $"target_{index}();",
+                ContainerKind = "function",
+                ContainerName = "caller",
+            })
+            .ToArray();
+        var checkpointRows = new Dictionary<string, List<int>>(StringComparer.Ordinal)
+        {
+            ["insert_symbols"] = [],
+            ["insert_references"] = [],
+        };
+        using var env = EnvironmentVariableScope.Capture(
+            "CDIDX_FORCE_GLOBAL_TOOL_LOG",
+            "CDIDX_DISABLE_PERSISTENT_LOG",
+            "CDIDX_GLOBAL_TOOL_LOG_DIR");
+        env.Set("CDIDX_FORCE_GLOBAL_TOOL_LOG", "1");
+        env.Set("CDIDX_DISABLE_PERSISTENT_LOG", null);
+        env.Set("CDIDX_GLOBAL_TOOL_LOG_DIR", _dbDir);
+        using var logStream = new MemoryStream();
+        using var logWriter = new StreamWriter(
+            logStream,
+            new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+            bufferSize: 1024,
+            leaveOpen: true);
+        var previousCheckpointHook = DbWriter.BatchProgressCheckpointForTesting;
+        try
+        {
+            DbWriter.BatchProgressCheckpointForTesting = progress =>
+            {
+                if (checkpointRows.TryGetValue(progress.Operation, out var rows))
+                    rows.Add(progress.RowsProcessed);
+            };
+
+            using (var logSession = GlobalToolLog.TryStartForTesting(
+                ["index", "."],
+                "test",
+                createWriter: _ => logWriter))
+            {
+                Assert.NotNull(logSession);
+                using var transaction = _writer.BeginTransaction();
+                _writer.InsertSymbols(symbols);
+                _writer.InsertReferencesForNewFilesInAtomicFileScope(
+                    references,
+                    refreshMutualRecursionFlags: false,
+                    CancellationToken.None);
+                transaction.Commit();
+            }
+        }
+        finally
+        {
+            DbWriter.BatchProgressCheckpointForTesting = previousCheckpointHook;
+        }
+
+        Assert.Equal(
+            Enumerable.Range(0, RowCount + 1).ToArray(),
+            checkpointRows["insert_symbols"]);
+        Assert.Equal(
+            Enumerable.Range(0, (RowCount + 1) / 2)
+                .Select(index => index * 2)
+                .Append(RowCount)
+                .ToArray(),
+            checkpointRows["insert_references"]);
+
+        logStream.Position = 0;
+        using var logReader = new StreamReader(logStream, Encoding.UTF8, leaveOpen: true);
+        var progressLogRows = logReader.ReadToEnd()
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Where(line => line.Contains("db_writer_batch_checkpoint", StringComparison.Ordinal))
+            .ToArray();
+        Assert.Equal(6, progressLogRows.Length);
+        AssertProgressLogRows("insert_symbols", [500, 1000, RowCount]);
+        AssertProgressLogRows("insert_references", [500, 1000, RowCount]);
+
+        void AssertProgressLogRows(string operation, int[] expectedRows)
+        {
+            var operationRows = progressLogRows
+                .Where(line => line.Contains($" operation={operation} ", StringComparison.Ordinal))
+                .Select(line =>
+                {
+                    var marker = "rows_processed=";
+                    var start = line.IndexOf(marker, StringComparison.Ordinal) + marker.Length;
+                    var end = line.IndexOf(' ', start);
+                    return int.Parse(line[start..end], CultureInfo.InvariantCulture);
+                })
+                .ToArray();
+            Assert.Equal(expectedRows, operationRows);
+        }
+    }
+
+    [Theory]
+    [InlineData(1_000)]
+    [InlineData(1_001)]
+    public void HotspotAggregateRefreshProgress_LogsExactBoundaryAndCompletion(int fileCount)
+    {
+        using var env = EnvironmentVariableScope.Capture(
+            "CDIDX_FORCE_GLOBAL_TOOL_LOG",
+            "CDIDX_DISABLE_PERSISTENT_LOG",
+            "CDIDX_GLOBAL_TOOL_LOG_DIR");
+        env.Set("CDIDX_FORCE_GLOBAL_TOOL_LOG", "1");
+        env.Set("CDIDX_DISABLE_PERSISTENT_LOG", null);
+        env.Set("CDIDX_GLOBAL_TOOL_LOG_DIR", _dbDir);
+        using var logStream = new MemoryStream();
+        using var logWriter = new StreamWriter(
+            logStream,
+            new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+            bufferSize: 1024,
+            leaveOpen: true);
+        var checkpointRows = new List<int>(fileCount + 1);
+        var previousCheckpointHook = DbWriter.BatchProgressCheckpointForTesting;
+        try
+        {
+            DbWriter.BatchProgressCheckpointForTesting = progress =>
+            {
+                if (progress.Operation == "refresh_hotspot_reference_counts")
+                    checkpointRows.Add(progress.RowsProcessed);
+                previousCheckpointHook?.Invoke(progress);
+            };
+            using var logSession = GlobalToolLog.TryStartForTesting(
+                ["index", "."],
+                "test",
+                createWriter: _ => logWriter);
+            Assert.NotNull(logSession);
+            _writer.RefreshHotspotReferenceCountsForTesting(
+                Enumerable.Range(1, fileCount)
+                    .Select(static index => (long)index)
+                    .ToArray(),
+                CancellationToken.None);
+        }
+        finally
+        {
+            DbWriter.BatchProgressCheckpointForTesting = previousCheckpointHook;
+        }
+
+        Assert.Equal(Enumerable.Range(0, fileCount + 1), checkpointRows);
+
+        logStream.Position = 0;
+        using var logReader = new StreamReader(logStream, Encoding.UTF8, leaveOpen: true);
+        var progressRows = logReader.ReadToEnd()
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Where(line => line.Contains(
+                "db_writer_batch_checkpoint operation=refresh_hotspot_reference_counts ",
+                StringComparison.Ordinal))
+            .Select(line =>
+            {
+                var marker = "rows_processed=";
+                var start = line.IndexOf(marker, StringComparison.Ordinal) + marker.Length;
+                var end = line.IndexOf(' ', start);
+                return int.Parse(line[start..end], CultureInfo.InvariantCulture);
+            })
+            .ToArray();
+
+        int[] expectedProgressRows = fileCount == 1_000
+            ? [500, 1_000]
+            : [500, 1_000, 1_001];
+        Assert.Equal(expectedProgressRows, progressRows);
+    }
+
+    [Fact]
     public void ReferenceLineLookup_BatchedInputUsesUniqueAutoIndexPlan()
     {
         const int StatementRowCount = 5;
@@ -10107,19 +10813,27 @@ public class DatabaseTests : IDisposable
             }
 
             Assert.Equal(0, transactionCount);
-            Assert.Equal([0, 71, 142, 213, 284, 355, 356], progressRows);
             Assert.Equal(
-                [(71, 71), (71, 71), (71, 71), (71, 71), (71, 71), (1, 1)],
-                statements.Where(statement => statement.Operation == "insert_references")
-                    .Select(statement => (statement.ActiveRows, statement.StatementRows))
-                    .ToArray());
+                Enumerable.Range(0, (ReferenceCount / 2) + 1).Select(index => index * 2),
+                progressRows);
+            var atomicReferenceStatements = statements
+                .Where(statement => statement.Operation == "insert_references")
+                .ToArray();
+            Assert.Equal(ReferenceCount / 2, atomicReferenceStatements.Length);
+            Assert.All(atomicReferenceStatements, statement =>
+            {
+                Assert.Equal((2, 2), (statement.ActiveRows, statement.StatementRows));
+                Assert.True(statement.StatementRows * 14 <= 32);
+            });
+            var atomicLineWriteStatements = statements
+                .Where(statement => statement.Operation == lineWriteOperation)
+                .ToArray();
+            Assert.Equal(ReferenceCount, atomicLineWriteStatements.Sum(statement => statement.ActiveRows));
+            Assert.All(
+                atomicLineWriteStatements,
+                statement => Assert.True(statement.StatementRows * 3 <= 32));
             Assert.Equal(
-                [(284, 284), (72, 72)],
-                statements.Where(statement => statement.Operation == lineWriteOperation)
-                    .Select(statement => (statement.ActiveRows, statement.StatementRows))
-                    .ToArray());
-            Assert.Equal(
-                referenceLinesAreNew ? 0 : 2,
+                referenceLinesAreNew ? 0 : atomicLineWriteStatements.Length,
                 statements.Count(statement => statement.Operation == "lookup_reference_lines"));
         }
         finally
@@ -10133,7 +10847,7 @@ public class DatabaseTests : IDisposable
     [Fact]
     public void InsertReferences_AtomicFileScopeCapsReferenceLineWindowAtThirtyTwoBatches()
     {
-        const int ReferenceCount = 71 * 33;
+        const int ReferenceCount = 2 * 33;
         var fileId = UpsertTestFile(
             "src/atomic-reference-window-cap.cs",
             checksum: "atomic-reference-window-cap");
@@ -10179,6 +10893,25 @@ public class DatabaseTests : IDisposable
                 .Select(statement => (statement.ActiveRows, statement.StatementRows))
                 .ToArray());
         Assert.Equal(2, statements.Count(statement => statement.Operation == "lookup_reference_lines"));
+    }
+
+    [Theory]
+    [InlineData(0, 33, 2, 32)]
+    [InlineData(32, 33, 2, 33)]
+    [InlineData(0, 10, 71, 4)]
+    [InlineData(0, 10, 334, 1)]
+    public void AtomicReferenceLineWindowSizing_UsesWorstCaseRowsWithoutTupleHashing(
+        int windowStartBatch,
+        int referenceBatchCount,
+        int rowsPerStatement,
+        int expectedEndBatch)
+    {
+        Assert.Equal(
+            expectedEndBatch,
+            DbWriter.GetAtomicReferenceLineWindowEndBatchForTesting(
+                windowStartBatch,
+                referenceBatchCount,
+                rowsPerStatement));
     }
 
     [Theory]
@@ -10251,7 +10984,7 @@ public class DatabaseTests : IDisposable
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void InsertReferences_AtomicFileScopeReusesSameContextAcrossBatchBoundary(bool referenceLinesAreNew)
+    public void InsertReferences_AtomicFileScopeReusesSameContextAcrossWindowBoundary(bool referenceLinesAreNew)
     {
         var fileId = UpsertTestFile(
             $"src/atomic-reference-boundary-{referenceLinesAreNew}.cs",
@@ -10262,18 +10995,18 @@ public class DatabaseTests : IDisposable
                 FileId = fileId,
                 SymbolName = index switch
                 {
-                    70 => "boundary_same_first",
-                    71 => "boundary_same_second",
-                    72 => "boundary_different_context",
+                    63 => "boundary_same_first",
+                    64 => "boundary_same_second",
+                    66 => "boundary_different_context",
                     _ => $"callee_{index}",
                 },
                 ReferenceKind = "call",
-                Line = index is 70 or 71 or 72 ? 500 : index + 1,
+                Line = index is 63 or 64 or 66 ? 500 : index + 1,
                 Column = index + 1,
                 Context = index switch
                 {
-                    70 or 71 => "shared boundary context",
-                    72 => "different boundary context",
+                    63 or 64 => "shared boundary context",
+                    66 => "different boundary context",
                     _ => $"line {index}",
                 },
                 ContainerKind = "function",
@@ -10398,7 +11131,7 @@ public class DatabaseTests : IDisposable
         {
             DbWriter.BatchProgressCheckpointForTesting = progress =>
             {
-                if (progress.Operation == "insert_references" && progress.RowsProcessed == 71)
+                if (progress.Operation == "insert_references" && progress.RowsProcessed == 2)
                     cancellation.Cancel();
                 previousProgressHook?.Invoke(progress);
             };

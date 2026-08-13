@@ -27,14 +27,63 @@ public partial class DbWriter
         bool useFreshReferenceResolutionDefaults)
     {
         var sql = CreateBatchSqlBuilder(rowCount, estimatedCharsPerRow: 256);
+        if (useFreshReferenceResolutionDefaults)
+        {
+            sql.Append(@"
+                WITH fresh_reference(
+                    input_ordinal,
+                    file_id, symbol_name, reference_kind, line, column_number, span_length,
+                    context, reference_line_id, container_kind, container_name,
+                    symbol_name_folded, container_name_folded, is_self_reference,
+                    is_mutual_recursion, target_qualifier) AS (
+                    VALUES ");
+            var freshParameterIndex = 0;
+            for (var row = 0; row < rowCount; row++)
+            {
+                if (row > 0)
+                    sql.Append(", ");
+                AppendReferenceInsertParameterTuple(
+                    sql,
+                    ref freshParameterIndex,
+                    row);
+            }
+            sql.Append($@"
+                )
+                INSERT INTO symbol_references (
+                    file_id, symbol_name, reference_kind, line, column_number, span_length,
+                    context, reference_line_id, container_kind, container_name,
+                    symbol_name_folded, container_name_folded, is_self_reference,
+                    is_mutual_recursion, target_qualifier, source_symbol_id,
+                    resolution_state, resolution_candidate_count)
+                SELECT r.file_id,
+                       r.symbol_name,
+                       r.reference_kind,
+                       r.line,
+                       r.column_number,
+                       r.span_length,
+                       r.context,
+                       r.reference_line_id,
+                       r.container_kind,
+                       r.container_name,
+                       r.symbol_name_folded,
+                       r.container_name_folded,
+                       r.is_self_reference,
+                       r.is_mutual_recursion,
+                       r.target_qualifier,
+                       {BuildReferenceSourceSymbolValueSql("r")},
+                       'unresolved',
+                       0
+                FROM fresh_reference AS r
+                ORDER BY r.input_ordinal");
+            return sql.ToString();
+        }
+
         sql.Append(@"
                 INSERT INTO symbol_references (
                     file_id, symbol_name, reference_kind, line, column_number, span_length,
                     context, reference_line_id, container_kind, container_name,
                     symbol_name_folded, container_name_folded, is_self_reference,
                     is_mutual_recursion, target_qualifier");
-        if (useFreshReferenceResolutionDefaults)
-            sql.Append(", resolution_state, resolution_candidate_count");
         sql.Append(@"
                 )
                 VALUES ");
@@ -45,18 +94,24 @@ public partial class DbWriter
                 sql.Append(", ");
             AppendReferenceInsertParameterTuple(
                 sql,
-                ref parameterIndex,
-                useFreshReferenceResolutionDefaults);
+                ref parameterIndex);
         }
         return sql.ToString();
     }
 
+    internal static string BuildReferenceInsertSqlForTesting(
+        int rowCount,
+        bool useFreshReferenceResolutionDefaults)
+        => BuildReferenceInsertSql(rowCount, useFreshReferenceResolutionDefaults);
+
     private static void AppendReferenceInsertParameterTuple(
         StringBuilder sql,
         ref int parameterIndex,
-        bool useFreshReferenceResolutionDefaults)
+        int? inputOrdinal = null)
     {
         sql.Append('(');
+        if (inputOrdinal is { } ordinal)
+            sql.Append(ordinal).Append(", ");
         for (var column = 0; column < 15; column++)
         {
             if (column > 0)
@@ -66,8 +121,6 @@ public partial class DbWriter
             else
                 sql.Append("@p").Append(parameterIndex++);
         }
-        if (useFreshReferenceResolutionDefaults)
-            sql.Append(", 'unresolved', 0");
         sql.Append(')');
     }
 

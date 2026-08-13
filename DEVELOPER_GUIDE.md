@@ -383,7 +383,9 @@ batch-local key-to-ordinal map, resolves each unique line ID, then releases the
 tuple lookup before binding `symbol_references` from ordinal arrays. Preserve
 this path for both new-file inserts and replacement upserts, including atomic
 file windows, so large multi-language reference sets do not rehash file/line/
-context tuples for every persisted edge.
+context tuples for every persisted edge. Atomic window sizing uses the worst-case
+rows-per-statement bound and leaves the materializer as the only tuple-hash pass;
+do not restore a duplicate key-sizing set before it.
 
 Use the same secondary-index deferral for an existing-database full scan when
 the established FTS dirty-byte policy selects bulk loading. Scoped updates have
@@ -407,13 +409,40 @@ C# reference-graph finalization materializes reference arity, invocation arity,
 member-receiver, definition arity, constructor arity, and value-type facts once
 per applicable row in TEMP tables. Full, scoped, and retained-graph rebuilds must
 then materialize project/file-local type identities and constructor-owner identity
-and arity facts from those symbol facts. Populate all four fact tables before
+and arity facts from those symbol facts. Before property-receiver normalization,
+also materialize C# field/property target identities into a primary-keyed TEMP
+fact set. Populate all fact sets before
 property-receiver normalization, candidate construction, and resolution. Keep
 candidate SQL on primary-key fact lookups instead of rebuilding identity strings,
 rescanning constructor-owner ranges, or re-entering managed SQLite scalar functions
 for every join candidate. Scoped refreshes must limit symbol facts to their
 lookup-name set and derive identity facts from that bounded population; full and
-retained rebuilds use the complete C# symbol-fact population.
+retained rebuilds use the complete C# symbol-fact population. Property-receiver
+normalization must likewise drive from flagged reference facts and the target fact
+primary key; scoped target materialization is restricted to its lookup-name set.
+
+After rank 0–4 candidate construction, graph finalization materializes the
+distinct matching reference IDs into a compact `WITHOUT ROWID` TEMP table. All
+language-independent and C# rank-5 fallbacks consult that set instead of probing
+the physical candidate table, while the persisted row-per-symbol candidate and
+ambiguity contracts remain unchanged. Scoped refreshes must build the set by
+driving from dirty reference IDs into the candidate primary key, and every graph
+pass must clear it before materialization so retries cannot observe stale rows.
+
+The unqualified C# rank-5 type fallback materializes physical type members from
+the shared symbol and type-identity facts, groups them into unique logical
+families by exact name, arity, and identity, and matches each reference to that
+family once. Only the final projection expands a matched family back to every
+physical member. This preserves row-per-symbol candidates for partial types while
+avoiding repeated compatibility and ambiguity work for every partial declaration.
+
+Resolution also materializes the nullable target-family key once per target symbol
+into a primary-keyed TEMP fact table. Full, fresh, differential, and retained
+refreshes populate all symbols; scoped refreshes first deduplicate target symbol
+IDs reachable from dirty-reference candidates. Resolution must join candidates to
+that fact by symbol ID instead of rebuilding the language/path/container/name key
+for every physical candidate. Preserve a `NULL` key when legacy target language is
+missing, while still resolving a single valid candidate by ID.
 
 Repository-wide incremental scans load stat-reuse candidates with one SQLite
 statement before the C# contract prepass and parallel extraction. Each candidate
@@ -440,7 +469,9 @@ artifact once only after that checksum matches. Generic cache admission keeps
 deep-clone isolation for direct callers. The fresh-index production path instead
 materializes both workspace lookup snapshots first, then transfers ownership of
 each admitted per-file symbol list and releases the redundant workspace-symbol
-fallback list. Main-pass mutation therefore remains isolated from the lookup
+fallback list. It enumerates those per-file lists through a non-owning segmented
+view while building the snapshots, so neither a transient flattened list nor a
+second workspace-sized pointer buffer is required. Main-pass mutation therefore remains isolated from the lookup
 snapshots without retaining duplicate `SymbolRecord` objects. Artifact-producing
 extraction receives the main pass's absolute file path and project root so
 file-local family identities stay identical. File ID assignment, family scope,
@@ -452,6 +483,10 @@ admission limits fall back to ordinary extraction. A timed-out prepass result is
 partial and must not make that transient result authoritative. Keep admission
 bounded to 4,096 files, 131,072 symbols, and an estimated 32 MiB, and clear all
 unconsumed artifacts before reference-graph work begins.
+
+The workspace qualified-pattern lookup needs only raw non-enum type names for
+enum-shadowing decisions. Build that conflict set directly; do not call the
+per-file type-name builder and discard its normalized and qualified known-type set.
 
 Authoritative full scans collect the C#, VB, F#, and MSBuild project-marker
 fingerprints during the shared source-directory enumeration. The same pass also
@@ -1274,6 +1309,7 @@ Current stable codes and triggers:
 | Maintenance error contract | `vacuum`, `backfill-fold`, `optimize` / `index --optimize`, and `db integrity` route failures through `MaintenanceDatabaseErrorClassifier` version `1` and one JSON/human writer. SQLite primary codes `5`/`6`, `8`, `11`, and `26` classify locked/busy, not-writable, corrupt, and not-a-database failures without inspecting exception wording. The shared response carries a stable error code/category, conditional recovery hint, redacted path metadata, and optional primary/extended SQLite codes. Absolute paths are redacted by default; `--show-paths` is the explicit diagnostic opt-in. |
 | Durable WAL file set | When WAL is active, the durable SQLite index is the `.db` file plus sibling `.db-wal` and `.db-shm` files. Backups, diagnostics bundles, and manual copies must include all three files when the siblings exist, or use SQLite's `.backup` command/API from a live connection. Copying only `codeindex.db` can produce a stale snapshot because committed pages may still live in `codeindex.db-wal`. |
 | `synchronous=NORMAL` | Under WAL, `NORMAL` avoids per-commit fsync pressure during 500-row indexing batches while preserving database consistency after crashes. |
+| Caller-owned write batching | Full-scan and other atomic file writes already run inside one caller-owned transaction, so their language-neutral chunk, symbol, issue, reference-line, and reference inserts cap each named-parameter statement at 32 parameters. `Microsoft.Data.Sqlite` resolves every parameter name again on execution; this smaller shape avoids dense binding lookup without adding transaction scopes. Cancellation and test checkpoints remain at every statement. For operations above 500 rows, persistent `db_writer_batch_checkpoint` records are emitted only when progress crosses a 500-row boundary and at completion, avoiding a synchronous log flush for every tiny statement. Public writer APIs retain the SQLite-variable-limit batch shape and their existing per-batch transaction/SAVEPOINT contract. |
 | Checkpointing | `DbWriter` runs `PRAGMA wal_checkpoint(PASSIVE)` after each outer transaction commit, and SQLite may also checkpoint automatically after the configured 1000-page threshold. Both checkpoint paths are opportunistic: active readers are not blocked, and an uncheckpointed WAL is expected state rather than corruption. |
 | Checkpoint result contract | Explicit `PRAGMA wal_checkpoint(TRUNCATE)` paths execute a reader and return a structured result containing SQLite's `(busy, log, checkpointed)` values. Non-zero `busy` or positive remaining pages is unsuccessful with a bounded machine reason. `(0, -1, -1)` is SQLite's successful non-WAL no-op. Instance checkpointing, the static read-only-fallback preflight, query diagnostics, top-level status, and nested connection-policy status preserve the same result and counts. Raw exception text and paths must not enter diagnostics. |
 | Crash recovery | If the process is killed after SQLite has committed a transaction but before checkpointing, the next normal opener rolls the WAL forward; no manual recovery step is required. If the process dies before a transaction commits, SQLite rolls that transaction back. |
@@ -1575,6 +1611,11 @@ SQLite resolves referenced tables while preparing every statement in a command b
 A true empty-database ordinary CLI full scan (not `--rebuild` or `--symbols-only`) opts into a
 separate fresh-resolution contract. Reference inserts persist canonical provisional values
 (`unresolved`, candidate count zero, and zero self/mutual flags) without adding bind parameters.
+The fresh CTE also assigns `source_symbol_id` from the same-file symbols already persisted before
+each file's references, using the ordinary narrowest-containing-range tie-break and a literal input
+ordinal to preserve batch order. Finalization therefore omits the all-reference source-identity
+UPDATE on this authoritative path. Ordinary full, differential, scoped, rebuild, retained, and MCP
+paths keep their established source refreshes.
 The early empty observation is advisory: immediately after the authoritative outer write
 transaction begins, the CLI rechecks `files`, `symbols`, and `symbol_references` in that
 transaction. If another connection committed any row during the pre-write gap, the graph scope
@@ -4217,6 +4258,8 @@ map を構築し、unique な line ID を解決した後、`symbol_references` �
 する前に tuple lookup を解放します。巨大な multi-language reference 集合で file / line /
 context tuple を edge ごとに再 hash しないよう、新規 file insert と replacement upsert の両方、
 atomic file window を含む全経路でこの契約を維持してください。
+atomic window の size は rows-per-statement の最悪ケース境界から算出し、materializer だけを
+tuple-hash pass として保ちます。その前段に重複した key-sizing set を戻さないでください。
 
 既存DBの full scan でも、既定の FTS dirty-byte policy が bulk load を選ぶ場合は同じ secondary
 index 退避を使います。scoped update には workspace 全体の authoritative な byte estimate が
@@ -4239,12 +4282,34 @@ single-evaluation の契約を維持してください。
 C# の reference-graph finalization は、reference arity、invocation arity、member receiver、
 definition arity、constructor arity、value-type の fact を、対象 row ごとに TEMP table へ1回だけ
 materialize し、その symbol fact から project / file-local type identity と constructor-owner の identity / arity
-も materialize します。full / scoped / retained graph rebuild の全経路で4つの fact tableを
+も materialize します。property-receiver normalization の前に C# field / property の target identity も
+primary-keyed TEMP fact 集合へ materialize します。full / scoped / retained graph rebuild の全経路で fact 集合を
 property-receiver normalization、candidate 構築、resolution より前に投入してください。candidate SQL は
 join candidate ごとに identity 文字列を再構築したり constructor-owner range を再走査したり managed SQLite
 scalar function へ再入したりせず、primary-key の fact lookup を使います。scoped refresh の symbol fact は
 lookup-name 集合だけに限定し、identity fact もその限定済み集合から作ります。full / retained rebuild は
-C# symbol fact の全対象を使います。
+C# symbol fact の全対象を使います。property-receiver normalization も flag 済み reference fact と target fact の
+primary key から駆動し、scoped target materialization は lookup-name 集合だけに限定してください。
+
+rank 0〜4 の candidate 構築後は、一致した reference ID の distinct 集合を compact な
+`WITHOUT ROWID` TEMP table に materialize します。言語共通および C# の rank 5 fallback は
+巨大な物理 candidate table ではなくこの集合を参照し、永続化される symbol ごとの candidate 行と
+ambiguity 契約は変更しません。scoped refresh は dirty reference ID から candidate primary key を
+seek して集合を作り、retry が古い行を参照しないよう graph pass ごとに materialize 前の clear を
+維持してください。
+
+qualifier のない C# rank 5 type fallback は、共有 symbol / type-identity fact から物理 type member を
+materializeし、exact name・arity・identityごとの一意な論理familyへgroup化して、referenceごとの照合を
+family単位で1回だけ行います。一致したfamilyを全物理memberへ展開するのは最終projectionだけです。
+これによりpartial typeのsymbolごとのcandidate行を維持しつつ、各partial宣言でcompatibilityとambiguity
+判定を繰り返しません。
+
+resolution は nullable な target-family key も target symbol ごとに1回だけ primary-keyed TEMP
+fact table へ materialize します。full / fresh / differential / retained refresh は全 symbol を投入し、
+scoped refresh は dirty-reference candidate から到達する target symbol ID を先に重複排除します。
+resolution は物理 candidate ごとに language / path / container / name key を再構築せず、symbol IDで
+このfactへjoinしてください。legacy targetのlanguageが欠ける場合はkeyを`NULL`のまま保ちつつ、
+有効candidateが1件ならIDによるresolved状態を維持します。
 
 リポジトリ全体の incremental scan は、C# contract prepass と parallel extraction の前に
 stat-reuse 候補を 1 回の SQLite statement で読みます。各候補は引き続き最新の filesystem
@@ -4265,7 +4330,9 @@ pass は引き続き authoritative な content read と hook、stat snapshot / T
 実行します。正規化 path の artifact は checksum 一致後に1回だけ取り出します。汎用 cache admission は
 direct caller 向けの deep-clone isolation を維持します。fresh-index の production 経路では、先に2種類の
 workspace lookup snapshot を materialize し、その後で admit した file ごとの symbol list の所有権を
-cache へ移し、重複する workspace-symbol fallback list を解放します。これにより main-pass mutation と
+cache へ移し、重複する workspace-symbol fallback list を解放します。snapshot 構築中は file ごとの
+list を non-owning な segmented view で列挙し、一時的な flattened list と workspace 規模の2つ目の
+pointer bufferを作りません。これにより main-pass mutation と
 lookup snapshot の分離を保ったまま、重複する `SymbolRecord` object を保持しません。artifact を生成する
 extraction には main pass と同じ absolute file path / project root を渡し、file-local family identity を
 一致させてください。FileId、family scope、source observation、post-extraction hook、kind filter、cap、line 検証、
@@ -4274,6 +4341,10 @@ persistence、reference extraction、bounded-regex issue は通常の main-pass 
 extraction へ fallback します。timeout した prepass 結果は partial であり、一過性の結果を
 authoritative にしてはいけません。admission は 4,096 file、131,072 symbol、推定 32 MiB に制限し、未消費
 artifact は reference graph 開始前にすべて clear してください。
+
+workspace qualified-pattern lookup が enum shadowing 判定に必要とするのは raw な non-enum type
+nameだけです。このconflict setは直接構築し、per-file type-name builderを呼んでnormalized / qualified
+known-type setを直後に捨てないでください。
 
 authoritative な full scan は、共有 source-directory enumeration 中に C#、VB、F#、
 MSBuild の project-marker fingerprint を収集します。同じ pass で budget 非依存の
@@ -5039,6 +5110,7 @@ apply 時は `PRAGMA optimize` を実行します。
 | maintenance error contract | `vacuum`、`backfill-fold`、`optimize` / `index --optimize`、`db integrity` の失敗は `MaintenanceDatabaseErrorClassifier` version `1` と単一の JSON / human writer を通ります。SQLite primary code `5` / `6`、`8`、`11`、`26` から locked / busy、not-writable、corrupt、not-a-database を分類し、例外 message は判定に使いません。共有 response は stable error code / category、条件別 recovery hint、redaction 済み path metadata、任意の primary / extended SQLite code を返します。absolute path は既定で redaction し、`--show-paths` を明示的な diagnostic opt-in とします。 |
 | durable WAL file set | WAL が有効な場合、永続化された SQLite index は `.db` file と sibling の `.db-wal` / `.db-shm` file の組です。backup、diagnostics bundle、手動 copy では sibling が存在する場合に 3 file すべてを含めるか、live connection から SQLite の `.backup` command/API を使う必要があります。`codeindex.db` だけを copy すると、committed page がまだ `codeindex.db-wal` に残っているため stale snapshot になる可能性があります。 |
 | `synchronous=NORMAL` | WAL では `NORMAL` により 500 row 単位の indexing batch ごとの fsync 負荷を避けつつ、crash 後の database consistency を保ちます。 |
+| caller-owned write batch | full-scan などの atomic file write は既に1つの caller-owned transaction 内で実行されるため、言語共通の chunk、symbol、issue、reference-line、reference insert は named parameter statement を32 parameter以下に制限します。`Microsoft.Data.Sqlite` は実行ごとに全 parameter name を再解決するため、この小さい形状で追加 transaction scope を増やさず dense binding lookup を避けます。cancellation / test checkpoint はstatementごとに維持します。500 rowを超えるoperationでは、永続 `db_writer_batch_checkpoint` を500 row境界をまたいだ時点と完了時だけ出力することで、小さなstatementごとの同期log flushを避けます。public writer API は SQLite variable limit までの batch 形状と既存の batch ごとの transaction / SAVEPOINT 契約を維持します。 |
 | checkpoint | `DbWriter` は outer transaction commit 後に `PRAGMA wal_checkpoint(PASSIVE)` を実行し、SQLite も設定済みの 1000 page threshold を超えると自動 checkpoint する場合があります。どちらの checkpoint path も opportunistic で、active reader は block されず、未 checkpoint の WAL は corruption ではなく期待される状態です。 |
 | checkpoint result contract | 明示的な `PRAGMA wal_checkpoint(TRUNCATE)` path は reader を実行し、SQLite の `(busy, log, checkpointed)` を含む構造化結果を返します。`busy` が 0 以外、または remaining page が正の場合は、上限付き machine reason を伴う unsuccessful result です。`(0, -1, -1)` は SQLite の非 WAL database に対する成功 no-op です。instance checkpoint、read-only fallback 前の static preflight、query diagnostics、top-level status、nested connection-policy status は同じ結果と count を保持します。raw exception text や path を diagnostics に含めてはいけません。 |
 | crash recovery | SQLite が transaction を commit した後、checkpoint 前に process が kill された場合、次の通常 open が WAL を roll forward するため手動 recovery は不要です。commit 前に process が終了した transaction は SQLite により rollback されます。 |
@@ -5355,6 +5427,10 @@ prepared command で作成してください。SQLite は command batch の全st
 真に空のdatabaseから始める通常のCLI full scan（`--rebuild` と `--symbols-only` を除く）だけは、
 fresh resolution専用の契約をopt-inします。reference insertはbind parameterを増やさず、
 `unresolved`、candidate count 0、self/mutual flag 0というcanonicalな暫定値を永続化します。
+fresh CTEは各fileのreferenceより先に永続化済みの同一file symbolから`source_symbol_id`も設定し、
+通常経路と同じ最小包含rangeのtie-breakを使い、literalのinput ordinalでbatch順序を維持します。
+このauthoritative経路のfinalizationはreference全件のsource-identity UPDATEを省略します。通常full、
+differential、scoped、rebuild、retained、MCP経路は従来のsource refreshを維持します。
 早期のempty確認はadvisoryです。authoritativeなouter write transaction開始直後に、CLIは同じ
 transaction内で`files`、`symbols`、`symbol_references`を再確認します。write前のgapで別connectionが
 1行でもcommitしていた場合は、最初のrowを永続化する前にgraph scopeのfresh insert defaultを無効化し、

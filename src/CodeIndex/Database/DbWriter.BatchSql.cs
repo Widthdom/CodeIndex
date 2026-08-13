@@ -6,6 +6,10 @@ namespace CodeIndex.Database;
 public partial class DbWriter
 {
     private const int BatchSize = 500;
+    // Microsoft.Data.Sqlite resolves every named parameter through SQLite again on
+    // each execution. Caller-owned transactions let us split dense writes without
+    // adding transaction scopes, so keep those statements below this binding budget.
+    private const int MaxCallerTransactionBatchParameters = 32;
     private const int MaxFoldedNameCacheEntries = 4096;
 
     private static object FoldedNameDbValue(string? name, Dictionary<string, string?> cache)
@@ -71,5 +75,15 @@ public partial class DbWriter
             throw new ArgumentOutOfRangeException(nameof(columnCount));
 
         return Math.Max(1, Math.Min(BatchSize, SqliteDynamicSql.MaxSqlVariables / columnCount));
+    }
+
+    private static int GetRowsPerCallerTransactionInsertStatement(int columnCount)
+    {
+        if (columnCount <= 0)
+            throw new ArgumentOutOfRangeException(nameof(columnCount));
+
+        return Math.Max(1, Math.Min(
+            GetRowsPerInsertStatement(columnCount),
+            MaxCallerTransactionBatchParameters / columnCount));
     }
 }

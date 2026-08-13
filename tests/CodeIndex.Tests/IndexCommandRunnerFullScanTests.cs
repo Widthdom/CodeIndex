@@ -3494,6 +3494,87 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_FreshFullScan_PersistsNestedReferenceSourcesAcrossLanguages()
+    {
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "Caller.cs"),
+                """
+                public sealed class Caller
+                {
+                    public void Outer()
+                    {
+                        Target();
+                        void Inner()
+                        {
+                            Target();
+                        }
+                    }
+                    private static void Target() { }
+                }
+                """);
+            File.WriteAllText(
+                Path.Combine(projectRoot, "caller.py"),
+                """
+                def outer():
+                    python_target()
+                    def inner():
+                        python_target()
+                """);
+
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json", "--quiet"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            using var command = db.Connection.CreateCommand();
+            command.CommandText =
+                """
+                SELECT source_file.path,
+                       reference.line,
+                       source_symbol.name
+                FROM symbol_references AS reference
+                JOIN files AS source_file ON source_file.id = reference.file_id
+                LEFT JOIN symbols AS source_symbol ON source_symbol.id = reference.source_symbol_id
+                WHERE (source_file.path = 'Caller.cs'
+                       AND reference.symbol_name = 'Target'
+                       AND reference.reference_kind = 'call')
+                   OR (source_file.path = 'caller.py'
+                       AND reference.symbol_name = 'python_target'
+                       AND reference.reference_kind = 'call')
+                ORDER BY source_file.path COLLATE BINARY,
+                         reference.line
+                """;
+            using var reader = command.ExecuteReader();
+            var sources = new List<(string Path, long Line, string? Source)>();
+            while (reader.Read())
+            {
+                sources.Add((
+                    reader.GetString(0),
+                    reader.GetInt64(1),
+                    reader.IsDBNull(2) ? null : reader.GetString(2)));
+            }
+
+            Assert.Equal(
+                [
+                    ("Caller.cs", 5L, "Outer"),
+                    ("Caller.cs", 8L, "Inner"),
+                    ("caller.py", 2L, "outer"),
+                    ("caller.py", 4L, "inner"),
+                ],
+                sources);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Fact]
     public void Run_FullScan_FreshSnapshotAbortRetainsDiscoveredLanguageFailuresWithoutRows()
     {
         var projectRoot = CreateTempProject();

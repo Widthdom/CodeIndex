@@ -263,6 +263,24 @@ public static partial class ReferenceExtractor
         return (knownTypeNames ?? EmptyCSharpStringSet, nonEnumTypeNames ?? EmptyCSharpStringSet);
     }
 
+    private static IReadOnlySet<string> BuildCSharpNonEnumTypeNames(
+        IReadOnlyList<SymbolRecord> symbols)
+    {
+        HashSet<string>? names = null;
+        foreach (var symbol in symbols)
+        {
+            if (symbol.Kind is not ("class" or "struct" or "interface" or "delegate")
+                || string.IsNullOrWhiteSpace(symbol.Name))
+            {
+                continue;
+            }
+
+            (names ??= new HashSet<string>(StringComparer.Ordinal)).Add(symbol.Name);
+        }
+
+        return names ?? EmptyCSharpStringSet;
+    }
+
     private static HashSet<string>? BuildCallableDefinitionNames(string language, IReadOnlyList<SymbolRecord> symbols)
     {
         if (language != "csharp")
@@ -525,10 +543,9 @@ public static partial class ReferenceExtractor
 
     internal static CSharpQualifiedPatternLookups BuildCSharpQualifiedPatternLookups(
         IReadOnlyList<SymbolRecord> symbols)
-    {
-        var typeNameSets = BuildCSharpTypeNameSets("csharp", symbols);
-        return BuildCSharpQualifiedPatternLookups(symbols, typeNameSets.NonEnumTypeNames);
-    }
+        => BuildCSharpQualifiedPatternLookups(
+            symbols,
+            BuildCSharpNonEnumTypeNames(symbols));
 
     private static CSharpQualifiedPatternLookups BuildCSharpQualifiedPatternLookups(
         IReadOnlyList<SymbolRecord> symbols,

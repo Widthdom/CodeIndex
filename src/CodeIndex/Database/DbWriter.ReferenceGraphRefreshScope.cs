@@ -39,12 +39,12 @@ public partial class DbWriter
 
     private static readonly string RefreshScopedReferenceSourceSymbolsSql = $"""
         UPDATE symbol_references AS r
-        SET source_symbol_id = {ReferenceSourceSymbolValueSql}
+        SET source_symbol_id = {BuildReferenceSourceSymbolValueSql("r")}
         WHERE r.id IN (
                   SELECT reference_id
                   FROM temp.{ReferenceGraphDirtyReferencesTable}
               )
-          AND r.source_symbol_id IS NOT {ReferenceSourceSymbolValueSql};
+          AND r.source_symbol_id IS NOT {BuildReferenceSourceSymbolValueSql("r")};
         """;
 
     private static string RefreshCSharpReferenceFactsScopedSql =>
@@ -58,6 +58,15 @@ public partial class DbWriter
               ON symbol_lookup.lang = 'csharp'
              AND symbol_lookup.name_folded = symbol.name_folded
             """);
+
+    private static string RefreshCSharpPropertyTargetFactsScopedSql =>
+        BuildRefreshCSharpPropertyTargetFactsSql(
+            $"""
+            FROM temp.{ReferenceGraphLookupNamesTable} AS property_lookup
+            CROSS JOIN symbols AS target INDEXED BY idx_symbols_name_folded
+            """,
+            "property_lookup.lang = 'csharp' " +
+            "AND target.name_folded = property_lookup.name_folded");
 
     private static string NormalizeCSharpPropertyReceiverReferencesScopedSql =>
         BuildCSharpPropertyReceiverNormalizationSql(
@@ -107,6 +116,24 @@ public partial class DbWriter
 
     private static readonly string RefreshScopedReferenceCandidatesSql = BuildScopedReferenceCandidatesSql();
 
+    private static readonly string RefreshScopedReferenceResolutionSymbolFactsSql = $"""
+        DELETE FROM temp.{ReferenceResolutionSymbolFactsTable};
+
+        WITH dirty_target_symbols(symbol_id) AS MATERIALIZED (
+            SELECT candidate.symbol_id
+            FROM temp.{ReferenceGraphDirtyReferencesTable} AS dirty_target_reference
+            CROSS JOIN symbol_reference_candidates AS candidate
+              ON candidate.reference_id = dirty_target_reference.reference_id
+            GROUP BY candidate.symbol_id
+        )
+        INSERT INTO temp.{ReferenceResolutionSymbolFactsTable}(symbol_id, target_key)
+        SELECT target.id,
+               {ReferenceResolutionTargetKeySql}
+        FROM dirty_target_symbols AS dirty_target
+        JOIN symbols AS target ON target.id = dirty_target.symbol_id
+        JOIN files AS target_file ON target_file.id = target.file_id;
+        """;
+
     private static readonly string RefreshScopedReferenceResolutionValuesSql = $"""
         UPDATE symbol_references AS r
         SET (target_symbol_id, target_symbol_key, resolution_candidate_count, resolution_state) = {ReferenceResolutionValueSql}
@@ -144,6 +171,19 @@ public partial class DbWriter
     internal static string RefreshScopedReferenceCandidatesSqlForTesting
         => RefreshScopedReferenceCandidatesSql;
 
+    internal static IReadOnlyList<(
+        string Scope,
+        string MaterializationSql,
+        string ResolutionSql)> ReferenceResolutionFactSqlForTesting
+        =>
+        [
+            ("fresh", RefreshReferenceResolutionSymbolFactsFullSql, RefreshReferenceResolutionFreshSparseSql),
+            ("full", RefreshReferenceResolutionSymbolFactsFullSql, RefreshReferenceResolutionFullSql),
+            ("differential", RefreshReferenceResolutionSymbolFactsFullSql, RefreshReferenceResolutionDifferentialSql),
+            ("scoped", RefreshScopedReferenceResolutionSymbolFactsSql, RefreshScopedReferenceResolutionSql),
+            ("retained", RefreshReferenceResolutionSymbolFactsFullSql, RefreshReferenceResolutionFullSql),
+        ];
+
     internal static IReadOnlyList<(string Scope, string Sql)>
         CSharpGraphFactEvaluationSqlForTesting
         =>
@@ -154,6 +194,7 @@ public partial class DbWriter
                 + RefreshCSharpSymbolFactsFullSql + "\n"
                 + RefreshCSharpTypeIdentityFactsSql + "\n"
                 + RefreshCSharpConstructorIdentityFactsSql + "\n"
+                + RefreshCSharpPropertyTargetFactsFullSql + "\n"
                 + NormalizeCSharpPropertyReceiverReferencesFullSql + "\n"
                 + RefreshReferenceCandidatesSql),
             (
@@ -162,6 +203,7 @@ public partial class DbWriter
                 + RefreshCSharpSymbolFactsScopedSql + "\n"
                 + RefreshCSharpTypeIdentityFactsSql + "\n"
                 + RefreshCSharpConstructorIdentityFactsSql + "\n"
+                + RefreshCSharpPropertyTargetFactsScopedSql + "\n"
                 + NormalizeCSharpPropertyReceiverReferencesScopedSql + "\n"
                 + RefreshScopedReferenceCandidatesSql),
             (
@@ -170,6 +212,7 @@ public partial class DbWriter
                 + RefreshCSharpSymbolFactsFullSql + "\n"
                 + RefreshCSharpTypeIdentityFactsSql + "\n"
                 + RefreshCSharpConstructorIdentityFactsSql + "\n"
+                + RefreshCSharpPropertyTargetFactsFullSql + "\n"
                 + NormalizeCSharpPropertyReceiverReferencesFullSql + "\n"
                 + RefreshReferenceCandidatesSql),
         ];
@@ -181,6 +224,26 @@ public partial class DbWriter
             ("full", RefreshReferenceCandidatesSql),
             ("scoped", RefreshScopedReferenceCandidatesSql),
             ("retained", RefreshReferenceCandidatesSql),
+        ];
+
+    internal static IReadOnlyList<(
+        string Scope,
+        string MaterializationSql,
+        string NormalizationSql)> CSharpPropertyReceiverFactSqlForTesting
+        =>
+        [
+            (
+                "full",
+                RefreshCSharpPropertyTargetFactsFullSql,
+                NormalizeCSharpPropertyReceiverReferencesFullSql),
+            (
+                "scoped",
+                RefreshCSharpPropertyTargetFactsScopedSql,
+                NormalizeCSharpPropertyReceiverReferencesScopedSql),
+            (
+                "retained",
+                RefreshCSharpPropertyTargetFactsFullSql,
+                NormalizeCSharpPropertyReceiverReferencesFullSql),
         ];
 
     internal static IReadOnlyList<string> ScopedReferenceGraphUpdateStatementsForTesting
@@ -227,6 +290,8 @@ public partial class DbWriter
         const string fullInstantiateNamePredicateSql = "AND s.name_folded IS NOT NULL";
         const string fullCSharpTypeSymbolSourceSql = "FROM symbols AS type_symbol";
         const string fullCSharpTypeNamePredicateSql = "AND type_symbol.name_folded IS NOT NULL";
+        const string fullLowerRankCandidateSourceSql =
+            "FROM symbol_reference_candidates AS lower_rank_candidate";
         const int expectedReferenceSourceCount = 14;
 
         if (CountOrdinalOccurrences(RefreshReferenceCandidatesSql, fullDeleteSql) != 1
@@ -235,7 +300,8 @@ public partial class DbWriter
             || CountOrdinalOccurrences(RefreshReferenceCandidatesSql, fullInstantiateSymbolSourceSql) != 1
             || CountOrdinalOccurrences(RefreshReferenceCandidatesSql, fullInstantiateNamePredicateSql) != 1
             || CountOrdinalOccurrences(RefreshReferenceCandidatesSql, fullCSharpTypeSymbolSourceSql) != 1
-            || CountOrdinalOccurrences(RefreshReferenceCandidatesSql, fullCSharpTypeNamePredicateSql) != 1)
+            || CountOrdinalOccurrences(RefreshReferenceCandidatesSql, fullCSharpTypeNamePredicateSql) != 1
+            || CountOrdinalOccurrences(RefreshReferenceCandidatesSql, fullLowerRankCandidateSourceSql) != 1)
         {
             throw new InvalidOperationException(
                 "The reference-candidate SQL shape changed without updating the dirty-scope projection.");
@@ -265,6 +331,10 @@ public partial class DbWriter
             .Replace(
                 fullCSharpTypeNamePredicateSql,
                 "AND type_lookup_name.lang = 'csharp'\n              AND type_symbol.name_folded = type_lookup_name.name_folded",
+                StringComparison.Ordinal)
+            .Replace(
+                fullLowerRankCandidateSourceSql,
+                $"FROM temp.{ReferenceGraphDirtyReferencesTable} AS dirty_lower_rank\n        CROSS JOIN symbol_reference_candidates AS lower_rank_candidate\n          ON lower_rank_candidate.reference_id = dirty_lower_rank.reference_id",
                 StringComparison.Ordinal);
     }
 

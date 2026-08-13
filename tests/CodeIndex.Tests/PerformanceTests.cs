@@ -55,7 +55,7 @@ public class PerformanceTests : IDisposable
                 atomicFileScope: true));
     }
 
-    [Fact(Skip = "Performance test — run manually with: dotnet test --filter Insert10KFiles")]
+    [ManualPerformanceFact]
     public void Insert10KFiles_CompletesInReasonableTime()
     {
         var writer = new DbWriter(_db.Connection);
@@ -86,8 +86,8 @@ public class PerformanceTests : IDisposable
         Assert.Equal(10_000, files);
     }
 
-    [Fact(Skip = "Performance test — run manually with: dotnet test --filter Search10KFileIndex")]
-    public void Search10KFileIndex_ReturnsInReasonableTime()
+    [ManualPerformanceFact]
+    public void Search1KFileIndex_ReturnsInReasonableTime()
     {
         var writer = new DbWriter(_db.Connection);
 
@@ -125,7 +125,7 @@ public class PerformanceTests : IDisposable
         Assert.True(results.Count > 0);
     }
 
-    [Fact(Skip = "Performance test — run manually with: dotnet test --filter ExtractLargeSameLineSymbolFixture_CompletesInReasonableTime")]
+    [ManualPerformanceFact]
     public void ExtractLargeSameLineSymbolFixture_CompletesInReasonableTime()
     {
         var content = string.Join(
@@ -345,6 +345,51 @@ public class PerformanceTests : IDisposable
 #else
     [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
 #endif
+    public void CSharpPrepassWorkspaceSegments_AvoidFlattenedReferenceBuffers()
+    {
+        const int segmentCount = 32;
+        const int symbolsPerSegment = 4_096;
+        IReadOnlyList<SymbolRecord>?[] segments = Enumerable.Range(0, segmentCount)
+            .Select(_ => (IReadOnlyList<SymbolRecord>)Enumerable.Repeat(
+                new SymbolRecord { Kind = "function", Name = "Ordinary" },
+                symbolsPerSegment).ToArray())
+            .ToArray();
+        var prefix = Array.Empty<SymbolRecord>();
+
+        var warmup = new CSharpStaticInterfacePrepass.CSharpWorkspaceSymbolSegments(
+            prefix,
+            segments,
+            segmentCount * symbolsPerSegment);
+        Assert.Equal(segmentCount * symbolsPerSegment, warmup.Count);
+        Assert.Equal(warmup.Count, warmup.Count(static _ => true));
+
+        CSharpStaticInterfacePrepass.CSharpWorkspaceSymbolSegments? view = null;
+        var observed = 0;
+        var allocatedBytes = MeasureAllocatedBytes(() =>
+        {
+            view = new CSharpStaticInterfacePrepass.CSharpWorkspaceSymbolSegments(
+                prefix,
+                segments,
+                segmentCount * symbolsPerSegment);
+            foreach (var symbol in view)
+            {
+                if (symbol.Kind == "function")
+                    observed++;
+            }
+        });
+
+        Assert.NotNull(view);
+        Assert.Equal(segmentCount * symbolsPerSegment, observed);
+        Assert.True(
+            allocatedBytes < 16_384,
+            $"Segmented C# prepass workspace allocated {allocatedBytes:N0} bytes");
+    }
+
+#if NET8_0
+    [Fact]
+#else
+    [Fact(Skip = PracticalBudgetTestTarget.SecondaryTargetSkipReason)]
+#endif
     public void CSharpStaticInterfaceLookup_UnrelatedInterfacesStayWithinAllocationBudget()
     {
         const int unrelatedInterfaceCount = 20_000;
@@ -355,6 +400,9 @@ public class PerformanceTests : IDisposable
             {
                 Kind = "interface",
                 Name = $"IUnrelated{index}",
+                ContainerKind = "namespace",
+                ContainerName = "Demo",
+                ContainerQualifiedName = "Demo",
                 Signature = $"public interface IUnrelated{index}<T>",
             });
         }
@@ -363,6 +411,9 @@ public class PerformanceTests : IDisposable
         {
             Kind = "interface",
             Name = "IContract",
+            ContainerKind = "namespace",
+            ContainerName = "Demo",
+            ContainerQualifiedName = "Demo",
             Signature = "public interface IContract<T>",
         });
         workspaceSymbols.Add(new SymbolRecord
@@ -376,15 +427,23 @@ public class PerformanceTests : IDisposable
         });
 
         _ = ReferenceExtractor.BuildCSharpStaticInterfaceMemberLookups(workspaceSymbols);
+        _ = ReferenceExtractor.BuildCSharpQualifiedPatternLookups(workspaceSymbols);
         ReferenceExtractor.CSharpStaticInterfaceMemberLookups? lookups = null;
+        ReferenceExtractor.CSharpQualifiedPatternLookups? qualifiedLookups = null;
         var allocatedBytes = MeasureAllocatedBytes(
             () => lookups = ReferenceExtractor.BuildCSharpStaticInterfaceMemberLookups(workspaceSymbols));
+        var qualifiedAllocatedBytes = MeasureAllocatedBytes(
+            () => qualifiedLookups = ReferenceExtractor.BuildCSharpQualifiedPatternLookups(workspaceSymbols));
 
         Assert.True(
             allocatedBytes < 64_000,
             $"C# static-interface lookup allocated {allocatedBytes:N0} bytes for unrelated interfaces");
         Assert.Single(lookups!.ContractsByType);
         Assert.Single(lookups.InterfaceGenericParameters);
+        Assert.Equal(unrelatedInterfaceCount + 1, qualifiedLookups!.TypePatternLookup.Count);
+        Assert.True(
+            qualifiedAllocatedBytes < 7_000_000,
+            $"C# qualified workspace lookup allocated {qualifiedAllocatedBytes:N0} bytes");
     }
 
 #if NET8_0
