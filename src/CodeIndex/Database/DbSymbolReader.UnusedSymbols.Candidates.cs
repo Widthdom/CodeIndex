@@ -126,13 +126,24 @@ public partial class DbReader
     {
         var graphLanguages = GetUnusedCandidateGraphLanguages(scope.Lang, resolveSqlReferences);
         var bucketSql = BuildUnusedCandidateBucketSql();
-        var sql = new StringBuilder(capacity: resolveSqlReferences ? 5_000 : 3_000);
+        var hasUsableUnusedChunks = HasUsableUnusedChunks();
+        var useCSharpPartialUseExclusion = CanApplyCSharpPartialUseExclusion(
+            scope,
+            hasUsableUnusedChunks);
+        var sql = new StringBuilder(
+            capacity: resolveSqlReferences || useCSharpPartialUseExclusion ? 5_000 : 3_000);
         if (resolveSqlReferences)
             sql.Append("\n            WITH unused_candidates AS (\n                SELECT ");
         else
             sql.Append("\n            SELECT ");
         sql.Append(BuildUnusedCandidateProjectionSql(bucketSql));
-        AppendUnusedCandidateSourceSql(sql, scope, graphLanguages, resolveSqlReferences);
+        AppendUnusedCandidateSourceSql(
+            sql,
+            scope,
+            graphLanguages,
+            resolveSqlReferences,
+            hasUsableUnusedChunks,
+            useCSharpPartialUseExclusion);
 
         if (resolveSqlReferences)
         {
@@ -153,10 +164,20 @@ public partial class DbReader
     private UnusedCandidateQueryPlan BuildUnusedCandidateCountQuery(UnusedCandidateScope scope)
     {
         var graphLanguages = GetUnusedCandidateGraphLanguages(scope.Lang, resolveSqlReferences: true);
-        var sql = new StringBuilder(capacity: 4_000);
+        var hasUsableUnusedChunks = HasUsableUnusedChunks();
+        var useCSharpPartialUseExclusion = CanApplyCSharpPartialUseExclusion(
+            scope,
+            hasUsableUnusedChunks);
+        var sql = new StringBuilder(capacity: useCSharpPartialUseExclusion ? 5_000 : 4_000);
         sql.Append(@"
             SELECT COUNT(*), COUNT(DISTINCT f.path), MAX(CASE WHEN f.lang = 'sql' THEN 1 ELSE 0 END)");
-        AppendUnusedCandidateSourceSql(sql, scope, graphLanguages, resolveSqlReferences: true);
+        AppendUnusedCandidateSourceSql(
+            sql,
+            scope,
+            graphLanguages,
+            resolveSqlReferences: true,
+            hasUsableUnusedChunks: hasUsableUnusedChunks,
+            useCSharpPartialUseExclusion: useCSharpPartialUseExclusion);
         return new UnusedCandidateQueryPlan(sql.ToString(), graphLanguages);
     }
 
@@ -181,27 +202,58 @@ public partial class DbReader
         StringBuilder sql,
         UnusedCandidateScope scope,
         IReadOnlyList<string> graphLanguages,
-        bool resolveSqlReferences)
+        bool resolveSqlReferences,
+        bool hasUsableUnusedChunks,
+        bool useCSharpPartialUseExclusion)
     {
         sql.Append(@"
             FROM symbols s
             JOIN files f ON s.file_id = f.id
             WHERE s.kind NOT IN ('import', 'namespace')");
         sql.Append(BuildUnusedReferenceAbsenceSql(resolveSqlReferences));
-        if (resolveSqlReferences && _hasChunksTable && HasTable("chunks"))
+        if (useCSharpPartialUseExclusion || (resolveSqlReferences && hasUsableUnusedChunks))
         {
             var visibilitySql = $"lower({GetSymbolColumnSql("visibility", "''")})";
-            sql.Append(BuildSameFilePrivateUseExclusionSql(
-                "s", "f", visibilitySql,
-                GetSymbolColumnSql("start_line", "s.line"),
-                GetSymbolColumnSql("end_line", "s.line")));
-            sql.Append(BuildCSharpPartialContainingTypeUseExclusionSql("s", "f", visibilitySql));
+            if (resolveSqlReferences && hasUsableUnusedChunks)
+            {
+                sql.Append(BuildSameFilePrivateUseExclusionSql(
+                    "s", "f", visibilitySql,
+                    GetSymbolColumnSql("start_line", "s.line"),
+                    GetSymbolColumnSql("end_line", "s.line")));
+            }
+            if (useCSharpPartialUseExclusion)
+                sql.Append(BuildCSharpPartialContainingTypeUseExclusionSql("s", "f", visibilitySql));
         }
         sql.Append("\n              AND ");
         sql.Append(BuildAmbiguousCSharpEnumMemberExclusionSql(
             "s", "f", scope.PathPatterns, scope.ExcludePathPatterns, scope.ExcludeTests));
         AppendUnusedCandidateScopeSql(sql, scope, graphLanguages);
     }
+
+    private bool CanApplyCSharpPartialUseExclusion(
+        UnusedCandidateScope scope,
+        bool hasUsableUnusedChunks)
+    {
+        if (scope.Lang != null
+            && !string.Equals(scope.Lang, "csharp", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return hasUsableUnusedChunks
+            && _symbolColumns.Contains("visibility")
+            && _symbolColumns.Contains("container_kind")
+            && _symbolColumns.Contains("container_name")
+            && _symbolColumns.Contains("signature");
+    }
+
+    private bool HasUsableUnusedChunks()
+        => _hasChunksTable
+           && _chunkColumns.Contains("file_id")
+           && _chunkColumns.Contains("start_line")
+           && _chunkColumns.Contains("end_line")
+           && _chunkColumns.Contains("content")
+           && HasTable("chunks");
 
     private string BuildUnusedReferenceAbsenceSql(bool resolveSqlReferences)
     {

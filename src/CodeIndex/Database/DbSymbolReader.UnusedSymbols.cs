@@ -362,13 +362,14 @@ public partial class DbReader
             UnusedPublicOverfetchMaximum);
         var publicOrExported = new List<UnusedSymbolResult>(targetCount);
         var fileContentByFileId = new Dictionary<long, string>();
-        var privateLike = CollectUnusedCandidateBucket(targetCount, batchSize, 0, fileContentByFileId,
+        var canInspectSameFileUse = CanInspectUnusedCandidateSameFileUse();
+        var privateLike = CollectUnusedCandidateBucket(targetCount, batchSize, 0, fileContentByFileId, canInspectSameFileUse,
             kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters);
-        var maybeNonPublic = CollectUnusedCandidateBucket(targetCount, batchSize, 1, fileContentByFileId,
+        var maybeNonPublic = CollectUnusedCandidateBucket(targetCount, batchSize, 1, fileContentByFileId, canInspectSameFileUse,
             kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters);
-        var reflectionOrConfig = CollectUnusedCandidateBucket(targetCount, batchSize, 3, fileContentByFileId,
+        var reflectionOrConfig = CollectUnusedCandidateBucket(targetCount, batchSize, 3, fileContentByFileId, canInspectSameFileUse,
             kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters);
-        CollectPublicUnusedCandidateBucket(targetCount, batchSize, publicFetchBudget, fileContentByFileId,
+        CollectPublicUnusedCandidateBucket(targetCount, batchSize, publicFetchBudget, fileContentByFileId, canInspectSameFileUse,
             publicOrExported, reflectionOrConfig, kind, lang, pathPatterns, excludePathPatterns, excludeTests, visibilityFilters, excludeVisibilityFilters);
 
         var merged = new List<UnusedSymbolResult>(privateLike.Count + maybeNonPublic.Count + publicOrExported.Count + reflectionOrConfig.Count);
@@ -390,6 +391,7 @@ public partial class DbReader
             return [];
 
         var fileContentByFileId = new Dictionary<long, string>();
+        var canInspectSameFileUse = CanInspectUnusedCandidateSameFileUse();
         var resultsByBucket = CreateUnusedBucketResultLists();
         const int batchSize = UnusedPublicOverfetchMaximum;
         foreach (var provisionalBucket in GetRelevantUnusedProvisionalBuckets(targetBuckets))
@@ -405,7 +407,7 @@ public partial class DbReader
                 offset += batch.Count;
                 foreach (var candidate in batch)
                 {
-                    if (HasPrivateCSharpUse(candidate, fileContentByFileId))
+                    if (HasSameFilePrivateUse(candidate, fileContentByFileId, canInspectSameFileUse))
                         continue;
 
                     var result = CreateUnusedSymbolResult(candidate);
@@ -424,7 +426,7 @@ public partial class DbReader
     }
 
     private List<UnusedSymbolResult> CollectUnusedCandidateBucket(int targetCount, int batchSize, int provisionalBucketOrder,
-        Dictionary<long, string> fileContentByFileId, string? kind, string? lang,
+        Dictionary<long, string> fileContentByFileId, bool canInspectSameFileUse, string? kind, string? lang,
         IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests,
         IReadOnlyList<string>? visibilityFilters, IReadOnlyList<string>? excludeVisibilityFilters)
     {
@@ -440,7 +442,7 @@ public partial class DbReader
             offset += batch.Count;
             foreach (var candidate in batch)
             {
-                if (HasPrivateCSharpUse(candidate, fileContentByFileId))
+                if (HasSameFilePrivateUse(candidate, fileContentByFileId, canInspectSameFileUse))
                     continue;
 
                 results.Add(CreateUnusedSymbolResult(candidate));
@@ -456,7 +458,7 @@ public partial class DbReader
     }
 
     private void CollectPublicUnusedCandidateBucket(int targetCount, int batchSize, int candidateBudget,
-        Dictionary<long, string> fileContentByFileId,
+        Dictionary<long, string> fileContentByFileId, bool canInspectSameFileUse,
         List<UnusedSymbolResult> publicOrExported, List<UnusedSymbolResult> reflectionOrConfig, string? kind, string? lang,
         IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests,
         IReadOnlyList<string>? visibilityFilters, IReadOnlyList<string>? excludeVisibilityFilters)
@@ -474,7 +476,7 @@ public partial class DbReader
             offset += batch.Count;
             foreach (var candidate in batch)
             {
-                if (HasPrivateCSharpUse(candidate, fileContentByFileId))
+                if (HasSameFilePrivateUse(candidate, fileContentByFileId, canInspectSameFileUse))
                     continue;
 
                 candidatesFetched++;
@@ -499,17 +501,15 @@ public partial class DbReader
         }
     }
 
-    private bool HasPrivateCSharpUse(UnusedCandidateSymbol candidate, Dictionary<long, string> fileContentByFileId)
-        => HasSameFilePrivateUse(candidate, fileContentByFileId)
-           || HasCSharpPartialContainingTypeUse(candidate);
-
-    private bool HasSameFilePrivateUse(UnusedCandidateSymbol candidate, Dictionary<long, string> fileContentByFileId)
+    private bool HasSameFilePrivateUse(
+        UnusedCandidateSymbol candidate,
+        Dictionary<long, string> fileContentByFileId,
+        bool canInspectSameFileUse)
     {
-        if (!string.Equals(candidate.Lang, "csharp", StringComparison.Ordinal)
+        if (!canInspectSameFileUse
+            || !string.Equals(candidate.Lang, "csharp", StringComparison.Ordinal)
             || !IsPrivateLikeVisibility(candidate.Visibility)
-            || candidate.Name.Length == 0
-            || !_hasChunksTable
-            || !HasTable("chunks"))
+            || candidate.Name.Length == 0)
             return false;
 
         var fileContent = GetUnusedCandidateFileContent(candidate.FileId, fileContentByFileId);
@@ -520,76 +520,9 @@ public partial class DbReader
             candidate.EndLine);
     }
 
-    private bool HasCSharpPartialContainingTypeUse(UnusedCandidateSymbol candidate)
-    {
-        if (!string.Equals(candidate.Lang, "csharp", StringComparison.Ordinal)
-            || !IsPrivateLikeVisibility(candidate.Visibility)
-            || candidate.Name.Length == 0
-            || !IsCSharpPartialContainerKind(candidate.ContainerKind)
-            || string.IsNullOrWhiteSpace(candidate.ContainerName)
-            || !_hasChunksTable
-            || !HasTable("chunks"))
-        {
-            return false;
-        }
-
-        var ownSignatureSql = GetSymbolColumnSql("signature", "''", "own_type");
-        var peerSignatureSql = GetSymbolColumnSql("signature", "''", "peer_type");
-        var ownQualifiedNameSql = BuildCSharpPartialTypeQualifiedNameSql("own_type");
-        var peerQualifiedNameSql = BuildCSharpPartialTypeQualifiedNameSql("peer_type");
-        var ownTypeShapeSql = BuildCSharpPartialTypeShapeSql("own_type", "own_ancestor");
-        var peerTypeShapeSql = BuildCSharpPartialTypeShapeSql("peer_type", "peer_ancestor");
-        var peerTypeStartLineSql = GetSymbolColumnSql("start_line", "peer_type.line", "peer_type");
-        var peerTypeEndLineSql = GetSymbolColumnSql("end_line", peerTypeStartLineSql, "peer_type");
-
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = $@"
-            SELECT 1
-            FROM symbols own_type
-            JOIN symbols peer_type
-              ON peer_type.file_id <> own_type.file_id
-             AND peer_type.kind = own_type.kind
-             AND peer_type.name = own_type.name
-            JOIN files peer_file ON peer_file.id = peer_type.file_id
-            JOIN chunks peer_chunk ON peer_chunk.file_id = peer_type.file_id
-            WHERE own_type.file_id = @fileId
-              AND own_type.kind = @containerKind
-              AND own_type.name = @containerName
-              AND lower({ownSignatureSql}) LIKE '%partial%'
-              AND lower({peerSignatureSql}) LIKE '%partial%'
-              AND peer_file.lang = 'csharp'
-              AND (
-                  @containerQualifiedName = ''
-                  OR @containerQualifiedName = own_type.name
-                  OR @containerQualifiedName = {ownQualifiedNameSql}
-              )
-              AND (
-                  @containerQualifiedName = ''
-                  OR @containerQualifiedName = peer_type.name
-                  OR @containerQualifiedName = {peerQualifiedNameSql}
-              )
-              AND {ownTypeShapeSql} = {peerTypeShapeSql}
-              AND peer_chunk.end_line >= {peerTypeStartLineSql}
-              AND peer_chunk.start_line <= {peerTypeEndLineSql}
-              AND csharp_identifier_occurrence_count_in_line_range(
-                      peer_chunk.content,
-                      peer_chunk.start_line,
-                      {peerTypeStartLineSql},
-                      {peerTypeEndLineSql},
-                      @symbolName) > 0
-            LIMIT 1";
-        SqliteCommandPolicy.Add(cmd, "@fileId", candidate.FileId);
-        SqliteCommandPolicy.Add(cmd, "@containerKind", candidate.ContainerKind);
-        SqliteCommandPolicy.Add(cmd, "@containerName", candidate.ContainerName);
-        SqliteCommandPolicy.Add(cmd, "@containerQualifiedName", candidate.ContainerQualifiedName ?? string.Empty);
-        SqliteCommandPolicy.Add(cmd, "@symbolName", candidate.Name);
-
-        using var reader = cmd.ExecuteTrackedReader();
-        return reader.TrackedRead();
-    }
-
-    private static bool IsCSharpPartialContainerKind(string? kind)
-        => kind is "class" or "struct" or "interface";
+    private bool CanInspectUnusedCandidateSameFileUse()
+        => HasUsableUnusedChunks()
+           && _chunkColumns.Contains("chunk_index");
 
     private string GetUnusedCandidateFileContent(long fileId, Dictionary<long, string> fileContentByFileId)
     {
@@ -1103,6 +1036,7 @@ public partial class DbReader
         var confidenceCounts = new Dictionary<string, int>(StringComparer.Ordinal);
         var contractDomainCounts = new Dictionary<string, int>(StringComparer.Ordinal);
         var fileContentByFileId = new Dictionary<long, string>();
+        var canInspectSameFileUse = CanInspectUnusedCandidateSameFileUse();
         const int batchSize = UnusedPublicOverfetchMaximum;
         for (var bucket = 0; bucket <= 3; bucket++)
         {
@@ -1117,7 +1051,7 @@ public partial class DbReader
                 offset += batch.Count;
                 foreach (var candidate in batch)
                 {
-                    if (HasPrivateCSharpUse(candidate, fileContentByFileId))
+                    if (HasSameFilePrivateUse(candidate, fileContentByFileId, canInspectSameFileUse))
                         continue;
 
                     var result = CreateUnusedSymbolResult(candidate);
@@ -1305,6 +1239,7 @@ public partial class DbReader
         var count = 0;
         var paths = new HashSet<string>(StringComparer.Ordinal);
         var fileContentByFileId = new Dictionary<long, string>();
+        var canInspectSameFileUse = CanInspectUnusedCandidateSameFileUse();
         const int batchSize = UnusedPublicOverfetchMaximum;
         for (var bucket = 0; bucket <= 3; bucket++)
         {
@@ -1319,7 +1254,7 @@ public partial class DbReader
                 offset += batch.Count;
                 foreach (var candidate in batch)
                 {
-                    if (HasPrivateCSharpUse(candidate, fileContentByFileId))
+                    if (HasSameFilePrivateUse(candidate, fileContentByFileId, canInspectSameFileUse))
                         continue;
 
                     count++;

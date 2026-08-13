@@ -26,6 +26,50 @@ public partial class DbReaderTests
         Assert.Equal(1, detailedCount.BucketCounts["maybe_unused_nonpublic"]);
     }
 
+    [Fact]
+    public void UnusedCandidateQueries_CSharpPartialMemberUseMatchesSqlResolverModes()
+    {
+        var paths = SeedMixedPartialFamilyCandidates();
+
+        // The mixed scope contains a public SQL function, so SQL scope probing selects
+        // the resolver-aware route before the private visibility filter removes that row.
+        Assert.True(_reader.ScopeMayIncludeSqlSymbols(
+            "function", null, paths, null, excludeTests: false));
+        Assert.False(_reader.ScopeMayIncludeSqlSymbols(
+            "function", "csharp", paths, null, excludeTests: false));
+        var mixedResults = _reader.GetUnusedSymbols(
+            1, "function", null, paths, null, excludeTests: false,
+            visibilityFilters: ["private"]);
+        var csharpResults = _reader.GetUnusedSymbols(
+            1, "function", "csharp", paths, null, excludeTests: false,
+            visibilityFilters: ["private"]);
+        var mixedCount = _reader.CountUnusedSymbols(
+            "function", null, paths, null, excludeTests: false,
+            visibilityFilters: ["private"]);
+        var csharpCount = _reader.CountUnusedSymbols(
+            "function", "csharp", paths, null, excludeTests: false,
+            visibilityFilters: ["private"]);
+        var mixedDetailedCount = _reader.CountUnusedSymbolsDetailed(
+            "function", null, paths, null, excludeTests: false,
+            visibilityFilters: ["private"]);
+        var csharpDetailedCount = _reader.CountUnusedSymbolsDetailed(
+            "function", "csharp", paths, null, excludeTests: false,
+            visibilityFilters: ["private"]);
+
+        AssertUnusedResultParity(csharpResults, mixedResults);
+        var candidate = Assert.Single(csharpResults);
+        Assert.Equal("VisibleUnusedHelper", candidate.Name);
+        Assert.DoesNotContain(mixedResults, result => result.Name == "HiddenPartialHandler");
+        Assert.DoesNotContain(mixedResults, result => result.Lang == "sql");
+        Assert.Equal(new QueryCountResult(1, 1, IncludesSql: false), csharpCount);
+        Assert.Equal(csharpCount, mixedCount);
+        AssertUnusedDetailedCountParity(csharpDetailedCount, mixedDetailedCount);
+        Assert.Equal(
+            (csharpCount.Count, csharpCount.FileCount, csharpCount.IncludesSql),
+            (csharpDetailedCount.Count, csharpDetailedCount.FileCount, csharpDetailedCount.IncludesSql));
+        Assert.False(mixedDetailedCount.IncludesSql);
+    }
+
     private string[] SeedMixedUnusedCandidates()
     {
         var csharpFileId = CreateMixedCandidateFile("src/mixed_unused_scope.cs", "csharp", 12);
@@ -56,6 +100,85 @@ public partial class DbReaderTests
         ]);
         return ["src/mixed_unused_scope.*"];
     }
+
+    private string[] SeedMixedPartialFamilyCandidates()
+    {
+        var ownerFileId = CreateMixedCandidateFile("src/mixed_partial_scope.owner.cs", "csharp", 6);
+        var peerFileId = CreateMixedCandidateFile("src/mixed_partial_scope.peer.cs", "csharp", 5);
+        var sqlFileId = CreateMixedCandidateFile("src/mixed_partial_scope.sql", "sql", 1);
+        _writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = ownerFileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 6,
+                Content = """
+                    namespace Fixtures;
+                    internal partial class MixedPartialHost
+                    {
+                        private void HiddenPartialHandler() { }
+                        private void VisibleUnusedHelper() { }
+                    }
+                    """,
+            },
+            new ChunkRecord
+            {
+                FileId = peerFileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 5,
+                Content = """
+                    namespace Fixtures;
+                    internal partial class MixedPartialHost
+                    {
+                        private void Wire() => HiddenPartialHandler();
+                    }
+                    """,
+            },
+            new ChunkRecord
+            {
+                FileId = sqlFileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 1,
+                Content = "CREATE PROCEDURE dbo.PublicPartialScope AS SELECT 1;",
+            },
+        ]);
+        _writer.InsertSymbols(
+        [
+            CreateMixedPartialType(ownerFileId, endLine: 6),
+            CreateMixedPartialType(peerFileId, endLine: 5),
+            CreateMixedCandidate(
+                ownerFileId, "HiddenPartialHandler", 4, 4,
+                "private void HiddenPartialHandler()", "private", "void",
+                "class", "MixedPartialHost", "Fixtures.MixedPartialHost"),
+            CreateMixedCandidate(
+                ownerFileId, "VisibleUnusedHelper", 5, 5,
+                "private void VisibleUnusedHelper()", "private", "void",
+                "class", "MixedPartialHost", "Fixtures.MixedPartialHost"),
+            CreateMixedCandidate(
+                sqlFileId, "dbo.PublicPartialScope", 1, 1,
+                "CREATE PROCEDURE dbo.PublicPartialScope", "public"),
+        ]);
+        return ["src/mixed_partial_scope.*"];
+    }
+
+    private static SymbolRecord CreateMixedPartialType(long fileId, int endLine) => new()
+    {
+        FileId = fileId,
+        Kind = "class",
+        Name = "MixedPartialHost",
+        Line = 2,
+        StartLine = 2,
+        EndLine = endLine,
+        Signature = "internal partial class MixedPartialHost",
+        Visibility = "internal",
+        ContainerKind = "namespace",
+        ContainerName = "Fixtures",
+        ContainerQualifiedName = "Fixtures",
+    };
 
     private void InsertMixedCandidateChunks(long csharpFileId, long sqlFileId) =>
         _writer.InsertChunks(
@@ -142,5 +265,52 @@ public partial class DbReaderTests
         Assert.Null(candidate.ContainerKind);
         Assert.Null(candidate.ContainerName);
         Assert.Equal("maybe_unused_nonpublic", candidate.UnusedBucket);
+    }
+
+    private static void AssertUnusedResultParity(
+        IReadOnlyList<UnusedSymbolResult> expected,
+        IReadOnlyList<UnusedSymbolResult> actual)
+    {
+        static object Project(UnusedSymbolResult result) => new
+        {
+            result.Path,
+            result.Lang,
+            result.Kind,
+            result.Name,
+            result.Line,
+            result.StartLine,
+            result.EndLine,
+            result.Signature,
+            result.Visibility,
+            result.ReturnType,
+            result.ContainerKind,
+            result.ContainerName,
+            result.UnusedBucket,
+            result.UnusedConfidence,
+            result.UnusedReason,
+            ReasonTags = string.Join('\n', result.UnusedReasonTags ?? []),
+            result.UnusedContractDomain,
+            ContractDomainTags = string.Join('\n', result.UnusedContractDomainTags ?? []),
+        };
+
+        Assert.Equal(expected.Select(Project), actual.Select(Project));
+    }
+
+    private static void AssertUnusedDetailedCountParity(
+        UnusedCountResult expected,
+        UnusedCountResult actual)
+    {
+        Assert.Equal(
+            (expected.Count, expected.FileCount, expected.IncludesSql),
+            (actual.Count, actual.FileCount, actual.IncludesSql));
+        Assert.Equal(
+            expected.BucketCounts.OrderBy(pair => pair.Key),
+            actual.BucketCounts.OrderBy(pair => pair.Key));
+        Assert.Equal(
+            expected.ConfidenceCounts.OrderBy(pair => pair.Key),
+            actual.ConfidenceCounts.OrderBy(pair => pair.Key));
+        Assert.Equal(
+            expected.ContractDomainCounts.OrderBy(pair => pair.Key),
+            actual.ContractDomainCounts.OrderBy(pair => pair.Key));
     }
 }

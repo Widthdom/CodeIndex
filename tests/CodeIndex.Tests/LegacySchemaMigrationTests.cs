@@ -792,7 +792,8 @@ public class LegacySchemaMigrationTests : IDisposable
                         body_start_line INTEGER,
                         body_end_line INTEGER,
                         end_line INTEGER,
-                        signature TEXT
+                        signature TEXT,
+                        visibility TEXT
                     )
                     """);
                 Exec(seed, """
@@ -809,6 +810,32 @@ public class LegacySchemaMigrationTests : IDisposable
                     )
                     """);
                 Exec(seed, "INSERT INTO files (id, path, lang) VALUES (1, 'src/LegacyGraph.cs', 'csharp')");
+                Exec(seed, """
+                    INSERT INTO symbols (
+                        id,
+                        file_id,
+                        name,
+                        kind,
+                        line,
+                        body_start_line,
+                        body_end_line,
+                        end_line,
+                        signature,
+                        visibility
+                    )
+                    VALUES (
+                        1,
+                        1,
+                        'LegacyUnused',
+                        'function',
+                        2,
+                        2,
+                        2,
+                        2,
+                        'private void LegacyUnused()',
+                        'private'
+                    )
+                    """);
                 Exec(seed, """
                     INSERT INTO symbol_references (
                         id,
@@ -842,6 +869,18 @@ public class LegacySchemaMigrationTests : IDisposable
             db.TryMigrateForRead();
 
             var reader = new DbReader(db);
+            Assert.Equal(
+                "LegacyUnused",
+                Assert.Single(reader.GetUnusedSymbols(
+                    10, "function", "csharp", null, null, excludeTests: false)).Name);
+            Assert.Equal(
+                new QueryCountResult(1, 1),
+                reader.CountUnusedSymbols(
+                    "function", "csharp", null, null, excludeTests: false));
+            Assert.Equal(
+                1,
+                reader.CountUnusedSymbolsDetailed(
+                    "function", "csharp", null, null, excludeTests: false).Count);
             var reference = Assert.Single(
                 reader.SearchReferences("GetString", lang: "csharp", exact: true));
             Assert.Equal("Run", reference.ContainerName);

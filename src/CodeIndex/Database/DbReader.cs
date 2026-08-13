@@ -80,6 +80,7 @@ public partial class DbReader : IDisposable
     private readonly IReadOnlySet<string> _fileColumns;
     private readonly IReadOnlySet<string> _symbolColumns;
     private readonly IReadOnlySet<string> _referenceColumns;
+    private readonly IReadOnlySet<string> _chunkColumns;
     private readonly IReadOnlySet<string> _chunkIndexes;
     private readonly IReadOnlySet<string> _symbolIndexes;
     private readonly IReadOnlySet<string> _referenceIndexes;
@@ -598,6 +599,7 @@ public partial class DbReader : IDisposable
         GeneratedColumnAvailableScope.Value = _fileColumns.Contains("generated");
         _symbolColumns = LoadColumns("symbols");
         _referenceColumns = LoadColumns("symbol_references");
+        _chunkColumns = LoadColumns("chunks");
         _chunkIndexes = LoadIndexes("chunks");
         _symbolIndexes = LoadIndexes("symbols");
         int userVersion;
