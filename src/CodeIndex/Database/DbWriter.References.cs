@@ -96,17 +96,18 @@ public partial class DbWriter
         END
         """;
 
-    private const string ReferenceSourceSymbolValueSql = """
+    private static string BuildReferenceSourceSymbolValueSql(string referenceAlias)
+        => $"""
         (
             SELECT s.id
             FROM symbols AS s
-            WHERE s.file_id = r.file_id
-              AND r.container_name IS NOT NULL
-              AND r.container_name <> ''
-              AND (s.name_folded = r.container_name_folded
-                   OR s.display_name_folded = r.container_name_folded
-                   OR (s.name_folded IS NULL AND s.name = r.container_name COLLATE NOCASE))
-              AND r.line BETWEEN COALESCE(s.start_line, s.line) AND COALESCE(s.end_line, s.line)
+            WHERE s.file_id = {referenceAlias}.file_id
+              AND {referenceAlias}.container_name IS NOT NULL
+              AND {referenceAlias}.container_name <> ''
+              AND (s.name_folded = {referenceAlias}.container_name_folded
+                   OR s.display_name_folded = {referenceAlias}.container_name_folded
+                   OR (s.name_folded IS NULL AND s.name = {referenceAlias}.container_name COLLATE NOCASE))
+              AND {referenceAlias}.line BETWEEN COALESCE(s.start_line, s.line) AND COALESCE(s.end_line, s.line)
             ORDER BY (COALESCE(s.end_line, s.line) - COALESCE(s.start_line, s.line)),
                      COALESCE(s.start_line, s.line) DESC,
                      s.id
@@ -116,16 +117,32 @@ public partial class DbWriter
 
     private static readonly string RefreshReferenceSourceSymbolsFullSql = $"""
         UPDATE symbol_references AS r
-        SET source_symbol_id = {ReferenceSourceSymbolValueSql}
+        SET source_symbol_id = {BuildReferenceSourceSymbolValueSql("r")}
         """;
 
     private static readonly string RefreshReferenceSourceSymbolsDifferentialSql = $"""
         UPDATE symbol_references AS r
-        SET source_symbol_id = {ReferenceSourceSymbolValueSql}
+        SET source_symbol_id = {BuildReferenceSourceSymbolValueSql("r")}
         -- IS NOT is null-safe: stable NULL identities must not be rewritten either.
         -- IS NOTはNULL-safeであり、安定したNULL identityも再書込みしない。
-        WHERE r.source_symbol_id IS NOT {ReferenceSourceSymbolValueSql}
+        WHERE r.source_symbol_id IS NOT {BuildReferenceSourceSymbolValueSql("r")}
         """;
+
+    private static string? SelectReferenceSourceRefreshSql(
+        bool useFreshReferenceResolutionDefaults,
+        bool hasPersistedReferenceResolutionState)
+        => useFreshReferenceResolutionDefaults
+            ? null
+            : hasPersistedReferenceResolutionState
+                ? RefreshReferenceSourceSymbolsDifferentialSql
+                : RefreshReferenceSourceSymbolsFullSql;
+
+    internal static string? SelectReferenceSourceRefreshSqlForTesting(
+        bool useFreshReferenceResolutionDefaults,
+        bool hasPersistedReferenceResolutionState)
+        => SelectReferenceSourceRefreshSql(
+            useFreshReferenceResolutionDefaults,
+            hasPersistedReferenceResolutionState);
 
     private static readonly string CreateReferenceUniqueFamiliesSql = $"""
         CREATE TEMP TABLE IF NOT EXISTS reference_unique_symbol_families (
@@ -2510,17 +2527,18 @@ public partial class DbWriter
             {
                 var hasPersistedReferenceResolutionState = !useFreshReferenceResolutionDefaults
                     && HasPersistedReferenceResolutionState(cancellationToken);
-                var refreshReferenceSourcesSql = useFreshReferenceResolutionDefaults
-                    ? RefreshReferenceSourceSymbolsFullSql
-                    : hasPersistedReferenceResolutionState
-                        ? RefreshReferenceSourceSymbolsDifferentialSql
-                        : RefreshReferenceSourceSymbolsFullSql;
+                var refreshReferenceSourcesSql = SelectReferenceSourceRefreshSql(
+                    useFreshReferenceResolutionDefaults,
+                    hasPersistedReferenceResolutionState);
                 var refreshReferenceResolutionSql = useFreshReferenceResolutionDefaults
                     ? RefreshReferenceResolutionFreshSparseSql
                     : hasPersistedReferenceResolutionState
                         ? RefreshReferenceResolutionDifferentialSql
                         : RefreshReferenceResolutionFullSql;
-                refreshIdentitySql = refreshReferenceSourcesSql + ";\n" +
+                refreshIdentitySql =
+                    (refreshReferenceSourcesSql == null
+                        ? string.Empty
+                        : refreshReferenceSourcesSql + ";\n") +
                                      RefreshCSharpReferenceFactsFullSql + "\n" +
                                      RefreshCSharpSymbolFactsFullSql + "\n" +
                                      RefreshCSharpTypeIdentityFactsSql + "\n" +

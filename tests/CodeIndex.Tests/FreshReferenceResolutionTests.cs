@@ -75,6 +75,7 @@ public sealed class FreshReferenceResolutionTests : IDisposable
     public void InsertReferences_FreshDefaultsKeepParameterShapeAndUseSeparateCachedSql()
     {
         var fileId = InsertFile("src/provisional.py", "python");
+        _writer.InsertSymbols([CreateSymbol(fileId, "Caller", line: 1)]);
         var observedWork = new List<DbWriter.ReferenceInsertBindingWork>();
         var previousHook = DbWriter.ReferenceInsertBindingWorkForTesting;
         try
@@ -128,6 +129,97 @@ public sealed class FreshReferenceResolutionTests : IDisposable
         Assert.Equal(
             new ProvisionalRow(null, 0, 1, 1),
             ReadProvisionalRow("Standard"));
+        Assert.Equal(
+            1,
+            ScalarLong("""
+                SELECT COUNT(*)
+                FROM symbol_references
+                WHERE symbol_name = 'Fresh'
+                  AND source_symbol_id IS NOT NULL
+                """));
+        Assert.Equal(
+            1,
+            ScalarLong("""
+                SELECT COUNT(*)
+                FROM symbol_references
+                WHERE symbol_name = 'Standard'
+                  AND source_symbol_id IS NULL
+                """));
+
+        var freshSql = DbWriter.BuildReferenceInsertSqlForTesting(
+            rowCount: 2,
+            useFreshReferenceResolutionDefaults: true);
+        var standardSql = DbWriter.BuildReferenceInsertSqlForTesting(
+            rowCount: 2,
+            useFreshReferenceResolutionDefaults: false);
+        Assert.Contains("WITH fresh_reference(", freshSql, StringComparison.Ordinal);
+        Assert.Contains("input_ordinal", freshSql, StringComparison.Ordinal);
+        Assert.Contains("source_symbol_id", freshSql, StringComparison.Ordinal);
+        Assert.Contains("FROM fresh_reference AS r", freshSql, StringComparison.Ordinal);
+        Assert.Contains("ORDER BY r.input_ordinal", freshSql, StringComparison.Ordinal);
+        Assert.Contains("ORDER BY (COALESCE(s.end_line", freshSql, StringComparison.Ordinal);
+        Assert.Equal(28, CountOccurrences(freshSql, "@p"));
+        Assert.DoesNotContain("WITH fresh_reference(", standardSql, StringComparison.Ordinal);
+        Assert.DoesNotContain("source_symbol_id", standardSql, StringComparison.Ordinal);
+        Assert.Equal(28, CountOccurrences(standardSql, "@p"));
+
+        var freshRefresh = DbWriter.SelectReferenceSourceRefreshSqlForTesting(
+            useFreshReferenceResolutionDefaults: true,
+            hasPersistedReferenceResolutionState: false);
+        var ordinaryFull = DbWriter.SelectReferenceSourceRefreshSqlForTesting(
+            useFreshReferenceResolutionDefaults: false,
+            hasPersistedReferenceResolutionState: false);
+        var differential = DbWriter.SelectReferenceSourceRefreshSqlForTesting(
+            useFreshReferenceResolutionDefaults: false,
+            hasPersistedReferenceResolutionState: true);
+        Assert.Null(freshRefresh);
+        Assert.DoesNotContain("r.source_symbol_id IS NOT", ordinaryFull, StringComparison.Ordinal);
+        Assert.Contains("r.source_symbol_id IS NOT", differential, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FreshReferenceInsert_AssignsCrossLanguageNestedSourcesWithoutFinalUpdate()
+    {
+        var csharpFileId = InsertFile("src/nested-source.cs", "csharp");
+        var pythonFileId = InsertFile("src/nested_source.py", "python");
+        _writer.InsertSymbols([
+            CreateRangedSymbol(csharpFileId, "Caller", startLine: 1, endLine: 30),
+            CreateRangedSymbol(csharpFileId, "Caller", startLine: 10, endLine: 20),
+            CreateRangedSymbol(pythonFileId, "Caller", startLine: 1, endLine: 30),
+            CreateRangedSymbol(pythonFileId, "Caller", startLine: 10, endLine: 20),
+        ]);
+
+        using var freshScope = _writer.BeginReferenceGraphRefreshScope(
+            forceFullRefresh: true,
+            useFreshReferenceResolutionDefaults: true);
+        _writer.InsertReferences([
+            CreateReference(csharpFileId, "CsOuter", line: 5),
+            CreateReference(csharpFileId, "CsNested", line: 15),
+            CreateReference(csharpFileId, "CsOutside", line: 31),
+            CreateReference(pythonFileId, "PyOuter", line: 5),
+            CreateReference(pythonFileId, "PyNested", line: 15),
+            CreateReference(pythonFileId, "PyOutside", line: 31),
+        ], refreshMutualRecursionFlags: false);
+
+        Assert.Equal(1, ReadSourceLine("CsOuter"));
+        Assert.Equal(10, ReadSourceLine("CsNested"));
+        Assert.Null(ReadSourceLine("CsOutside"));
+        Assert.Equal(1, ReadSourceLine("PyOuter"));
+        Assert.Equal(10, ReadSourceLine("PyNested"));
+        Assert.Null(ReadSourceLine("PyOutside"));
+        Execute("""
+            CREATE TEMP TRIGGER reject_fresh_source_rewrite
+            BEFORE UPDATE OF source_symbol_id ON symbol_references
+            BEGIN
+                SELECT RAISE(ABORT, 'fresh source identity must be insert-complete');
+            END;
+            """);
+
+        _writer.RefreshMutualRecursionFlags(stampReferenceIdentityContractReady: false);
+
+        Execute("DROP TRIGGER reject_fresh_source_rewrite;");
+        Assert.Equal(10, ReadSourceLine("CsNested"));
+        Assert.Equal(10, ReadSourceLine("PyNested"));
     }
 
     [Fact]
@@ -440,6 +532,22 @@ public sealed class FreshReferenceResolutionTests : IDisposable
             ContainerQualifiedName = container,
         };
 
+    private static SymbolRecord CreateRangedSymbol(
+        long fileId,
+        string name,
+        int startLine,
+        int endLine)
+        => new()
+        {
+            FileId = fileId,
+            Kind = "function",
+            Name = name,
+            Line = startLine,
+            StartLine = startLine,
+            EndLine = endLine,
+            Signature = $"function {name}()",
+        };
+
     private static ReferenceRecord CreateReference(
         long fileId,
         string symbolName,
@@ -479,6 +587,22 @@ public sealed class FreshReferenceResolutionTests : IDisposable
             reader.GetInt32(1),
             reader.GetInt32(2),
             reader.GetInt32(3));
+    }
+
+    private int? ReadSourceLine(string symbolName)
+    {
+        using var command = _db.Connection.CreateCommand();
+        command.CommandText = """
+            SELECT source.line
+            FROM symbol_references AS reference
+            LEFT JOIN symbols AS source ON source.id = reference.source_symbol_id
+            WHERE reference.symbol_name = @symbol_name
+            """;
+        command.Parameters.AddWithValue("@symbol_name", symbolName);
+        var value = command.ExecuteScalar();
+        return value == null || value == DBNull.Value
+            ? null
+            : Convert.ToInt32(value, CultureInfo.InvariantCulture);
     }
 
     private ResolutionRow ReadResolutionRow(string path, int line)

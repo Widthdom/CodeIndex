@@ -1604,6 +1604,11 @@ SQLite resolves referenced tables while preparing every statement in a command b
 A true empty-database ordinary CLI full scan (not `--rebuild` or `--symbols-only`) opts into a
 separate fresh-resolution contract. Reference inserts persist canonical provisional values
 (`unresolved`, candidate count zero, and zero self/mutual flags) without adding bind parameters.
+The fresh CTE also assigns `source_symbol_id` from the same-file symbols already persisted before
+each file's references, using the ordinary narrowest-containing-range tie-break and a literal input
+ordinal to preserve batch order. Finalization therefore omits the all-reference source-identity
+UPDATE on this authoritative path. Ordinary full, differential, scoped, rebuild, retained, and MCP
+paths keep their established source refreshes.
 The early empty observation is advisory: immediately after the authoritative outer write
 transaction begins, the CLI rechecks `files`, `symbols`, and `symbol_references` in that
 transaction. If another connection committed any row during the pre-write gap, the graph scope
@@ -5409,6 +5414,10 @@ prepared command で作成してください。SQLite は command batch の全st
 真に空のdatabaseから始める通常のCLI full scan（`--rebuild` と `--symbols-only` を除く）だけは、
 fresh resolution専用の契約をopt-inします。reference insertはbind parameterを増やさず、
 `unresolved`、candidate count 0、self/mutual flag 0というcanonicalな暫定値を永続化します。
+fresh CTEは各fileのreferenceより先に永続化済みの同一file symbolから`source_symbol_id`も設定し、
+通常経路と同じ最小包含rangeのtie-breakを使い、literalのinput ordinalでbatch順序を維持します。
+このauthoritative経路のfinalizationはreference全件のsource-identity UPDATEを省略します。通常full、
+differential、scoped、rebuild、retained、MCP経路は従来のsource refreshを維持します。
 早期のempty確認はadvisoryです。authoritativeなouter write transaction開始直後に、CLIは同じ
 transaction内で`files`、`symbols`、`symbol_references`を再確認します。write前のgapで別connectionが
 1行でもcommitしていた場合は、最初のrowを永続化する前にgraph scopeのfresh insert defaultを無効化し、

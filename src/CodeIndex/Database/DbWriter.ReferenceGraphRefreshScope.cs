@@ -39,12 +39,12 @@ public partial class DbWriter
 
     private static readonly string RefreshScopedReferenceSourceSymbolsSql = $"""
         UPDATE symbol_references AS r
-        SET source_symbol_id = {ReferenceSourceSymbolValueSql}
+        SET source_symbol_id = {BuildReferenceSourceSymbolValueSql("r")}
         WHERE r.id IN (
                   SELECT reference_id
                   FROM temp.{ReferenceGraphDirtyReferencesTable}
               )
-          AND r.source_symbol_id IS NOT {ReferenceSourceSymbolValueSql};
+          AND r.source_symbol_id IS NOT {BuildReferenceSourceSymbolValueSql("r")};
         """;
 
     private static string RefreshCSharpReferenceFactsScopedSql =>
