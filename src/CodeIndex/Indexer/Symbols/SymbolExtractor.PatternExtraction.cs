@@ -80,7 +80,7 @@ public static partial class SymbolExtractor
         public Func<CSharpDeclarationStartScope> GetCSharpDeclarationStartScope { get; }
         public SymbolExtractionList Symbols { get; }
         public SymbolExtractionState ExtractionState { get; }
-        public PatternScanState ScanState { get; }
+        public PatternScanState ScanState;
         public HashSet<SymbolLineIdentity>? CssSeenSymbols { get; }
         public HashSet<string>? DockerfileStageNames { get; }
         public List<PendingRecordPrimaryComponents>? PendingRecordPrimaryComponents;

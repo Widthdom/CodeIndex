@@ -40,7 +40,7 @@ public static partial class SymbolExtractor
         var extractionState = extraction.ExtractionState;
         var cssSeenSymbols = extraction.CssSeenSymbols;
         var dockerfileStageNames = extraction.DockerfileStageNames;
-        var scanState = extraction.ScanState;
+        ref var scanState = ref extraction.ScanState;
         ref var pendingRecordPrimaryComponents = ref extraction.PendingRecordPrimaryComponents;
         ref var recordPrimaryComponentParentIndex = ref extraction.RecordPrimaryComponentParentIndex;
         emittedKind = kind;

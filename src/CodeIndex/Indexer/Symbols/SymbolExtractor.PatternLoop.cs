@@ -17,7 +17,7 @@ public static partial class SymbolExtractor
         var scanInputs = context.ScanInputs;
         var symbols = context.Symbols;
         var extractionState = context.ExtractionState;
-        var scanState = context.ScanState;
+        ref var scanState = ref context.ScanState;
         var dockerfileStageNames = context.DockerfileStageNames;
         for (int i = 0; i < lines.Length; i++)
         {
@@ -34,7 +34,7 @@ public static partial class SymbolExtractor
                     projectRoot,
                     lines,
                     scanInputs,
-                    scanState,
+                    ref scanState,
                     symbols,
                     extractionState,
                     dockerfileStageNames,
