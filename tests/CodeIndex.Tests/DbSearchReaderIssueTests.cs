@@ -1,4 +1,5 @@
 using CodeIndex.Database;
+using CodeIndex.Indexer;
 using CodeIndex.Models;
 
 namespace CodeIndex.Tests;
@@ -186,6 +187,59 @@ public sealed class DbSearchReaderIssueTests : IDisposable
     }
 
     [Fact]
+    public void Search_RecoversAsciiSubstringInsideReportedOversizeFtsToken_Issue5080()
+    {
+        const string recoveredNeedle = "MiddleRecoveryNeedle";
+        const string ordinarySubstring = "OrdinarySubstring";
+        var longToken = new string('a', 520) + recoveredNeedle + new string('b', 520);
+        var content = $"<script>{longToken} Prefix{ordinarySubstring}Suffix</script>";
+        var fileId = InsertIndexedFile("reports/minified.html", "html", content);
+        var issues = FileIndexer.ValidateContent(
+            "reports/minified.html",
+            System.Text.Encoding.UTF8.GetBytes(content),
+            content);
+
+        Assert.Empty(_reader.Search(
+            recoveredNeedle,
+            pathPatterns: ["reports/minified.html"],
+            limit: 1));
+
+        _writer.InsertIssues(fileId, issues);
+
+        var results = _reader.Search(
+            recoveredNeedle,
+            pathPatterns: ["reports/minified.html"],
+            limit: 1);
+        var count = _reader.CountSearchResults(
+            recoveredNeedle,
+            pathPatterns: ["reports/minified.html"]);
+        var countsByFile = _reader.CountSearchResultsByFile(
+            recoveredNeedle,
+            pathPatterns: ["reports/minified.html"]);
+        var ordinarySubstringResults = _reader.Search(
+            ordinarySubstring,
+            pathPatterns: ["reports/minified.html"],
+            limit: 1);
+
+        var result = Assert.Single(results);
+        Assert.Equal("reports/minified.html", result.Path);
+        Assert.Contains(recoveredNeedle, result.Content, StringComparison.Ordinal);
+        Assert.Equal(new QueryCountResult(1, 1), count);
+        var fileCount = Assert.Single(countsByFile);
+        Assert.Equal("reports/minified.html", fileCount.Path);
+        Assert.Equal(1, fileCount.Count);
+        Assert.Empty(ordinarySubstringResults);
+
+        using var dropTrigger = _db.Connection.CreateCommand();
+        dropTrigger.CommandText = DbContext.DropFtsChunksTrigramInsertTriggerSql;
+        dropTrigger.ExecuteNonQuery();
+        Assert.Empty(_reader.Search(
+            recoveredNeedle,
+            pathPatterns: ["reports/minified.html"],
+            limit: 1));
+    }
+
+    [Fact]
     public void Search_LiteralQueryOverLengthLimitThrows_Issue3081()
     {
         var query = new string('a', DbReader.MaxLiteralSearchQueryLength + 1);
@@ -275,7 +329,7 @@ public sealed class DbSearchReaderIssueTests : IDisposable
         Assert.Contains(DbReader.MaxPathLikePatternWildcards.ToString(), ex.Message, StringComparison.Ordinal);
     }
 
-    private void InsertIndexedFile(string path, string lang, string content, DateTime? modified = null)
+    private long InsertIndexedFile(string path, string lang, string content, DateTime? modified = null)
     {
         var normalized = content.Replace("\r\n", "\n");
         var lines = normalized.Split('\n');
@@ -296,6 +350,7 @@ public sealed class DbSearchReaderIssueTests : IDisposable
             EndLine = lines.Length,
             Content = normalized,
         }]);
+        return fileId;
     }
 
     private static string BuildLiteralTermQuery(int termCount)

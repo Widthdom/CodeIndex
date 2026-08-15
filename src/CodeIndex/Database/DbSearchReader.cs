@@ -1,4 +1,5 @@
 using System.Text;
+using CodeIndex.Indexer;
 using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Database;
@@ -299,6 +300,26 @@ public partial class DbReader
             throw CreateRawFtsSqliteSyntaxException(ex);
         }
 
+        if (raw.Count == 0 &&
+            !hasCandidatePostProcessing &&
+            cursor == null &&
+            resultRanking == SearchResultRanking.Default)
+        {
+            raw = SearchLongFtsTokenFallback(
+                normalizedQuery,
+                limit,
+                lang,
+                rawQuery,
+                exactSearch,
+                prefix,
+                pathPatterns,
+                excludePathPatterns,
+                excludeTests,
+                since,
+                visibilityRank,
+                requiredPathPatterns);
+        }
+
         var results = deduplicate ? DeduplicateOverlappingResults(raw, SearchPrimaryMatchContext.Create(query, normalizedQuery, rawQuery, exactSearch, lang)) : raw;
         if (hasContextRanking)
             results = RankCredentialContextSearchResults(results, query, normalizedQuery, rawQuery, exactSearch, lang);
@@ -331,6 +352,179 @@ public partial class DbReader
         AttachSearchEnclosingSymbols(pagedResults, searchMatchLineContext);
         return pagedResults;
     }
+
+    private List<SearchResult> SearchLongFtsTokenFallback(
+        string normalizedQuery,
+        int limit,
+        string? lang,
+        bool rawQuery,
+        bool exactSearch,
+        bool prefix,
+        IReadOnlyList<string>? pathPatterns,
+        IReadOnlyList<string>? excludePathPatterns,
+        bool excludeTests,
+        DateTime? since,
+        bool visibilityRank,
+        IReadOnlyList<string>? requiredPathPatterns = null)
+    {
+        var literalToken = normalizedQuery.Trim();
+        if (limit <= 0 ||
+            rawQuery ||
+            exactSearch ||
+            prefix ||
+            literalToken.Length < 3 ||
+            literalToken.Any(character => character > 0x7f || !FileIndexer.IsLikelyUnicode61AsciiTokenChar(character)) ||
+            !_hasIssuesTable ||
+            !HasTable(DbContext.FtsChunksTrigramTableName) ||
+            DbWriter.IsFtsBulkLoadMarkerSet(GetMetaString(DbWriter.FtsBulkLoadInProgressMetaKey)) ||
+            !HasAllFtsChunksTrigramSyncTriggers())
+        {
+            return [];
+        }
+
+        using var cmd = _conn.CreateCommand();
+        var coverageTokens = GetSearchCoverageTokens(literalToken, rawQuery: false);
+        var sql = $@"
+            SELECT f.path, f.lang, c.start_line, c.end_line, c.content,
+                   0.0 AS rank,
+                   {GetSearchVisibilitySql()} AS visibility,
+                   c.id AS chunk_id,
+                   long_token_issue.line AS long_token_line
+            FROM {DbContext.FtsChunksTrigramTableName}
+            JOIN chunks c ON {DbContext.FtsChunksTrigramTableName}.rowid = c.id
+            JOIN files f ON c.file_id = f.id{SearchSymbolMatchJoinsSql}
+            JOIN (
+                SELECT file_id, MIN(line) AS line
+                FROM file_issues
+                WHERE kind = @longTokenIssueKind
+                GROUP BY file_id
+            ) long_token_issue ON long_token_issue.file_id = f.id
+            WHERE {DbContext.FtsChunksTrigramTableName} MATCH @trigramQuery
+              AND long_token_issue.line BETWEEN c.start_line AND c.end_line";
+        if (lang != null)
+            sql += " AND f.lang = @lang";
+        if (since != null && _fileColumns.Contains("modified"))
+            sql += " AND f.modified >= @since";
+        AppendPathFilters(ref sql, pathPatterns, excludePathPatterns, excludeTests);
+        AppendAdditionalPathIncludeFilters(ref sql, requiredPathPatterns, "requiredPathPattern");
+        sql += $" ORDER BY {GetSearchOrderSql(coverageTokens.Count, exactLiteralBoost: false)}";
+
+        cmd.CommandText = sql;
+        SqliteCommandPolicy.AddText(
+            cmd,
+            "@trigramQuery",
+            "\"" + literalToken.Replace("\"", "\"\"", StringComparison.Ordinal) + "\"");
+        SqliteCommandPolicy.AddText(cmd, "@longTokenIssueKind", "fts_token_too_long");
+        SqliteCommandPolicy.Add(cmd, "@rankingQuery", literalToken);
+        SqliteCommandPolicy.Add(cmd, "@rankingQueryPrefix", $"{EscapeLikeQuery(literalToken)}%");
+        SqliteCommandPolicy.Add(cmd, "@visibilityRank", visibilityRank ? 1 : 0);
+        AddSearchCoverageParameters(cmd, coverageTokens);
+        if (lang != null)
+            SqliteCommandPolicy.Add(cmd, "@lang", lang);
+        if (since != null && _fileColumns.Contains("modified"))
+            SqliteCommandPolicy.Add(cmd, "@since", since.Value);
+        AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
+        AddPathIncludeFilterParameters(cmd, requiredPathPatterns, "requiredPathPattern");
+
+        var results = new List<SearchResult>();
+        using var reader = cmd.ExecuteTrackedReader();
+        while (reader.TrackedRead())
+        {
+            var startLine = reader.GetInt32(2);
+            var endLine = reader.GetInt32(3);
+            var content = reader.GetString(4);
+            var longTokenLine = reader.GetInt32(8);
+            if (!ContainsOversizeFtsTokenMatch(content, startLine, endLine, longTokenLine, literalToken))
+                continue;
+
+            results.Add(new SearchResult
+            {
+                Path = reader.GetString(0),
+                Lang = GetNullableString(reader, 1),
+                StartLine = startLine,
+                EndLine = endLine,
+                Content = content,
+                Score = reader.GetDouble(5),
+                Visibility = GetNullableString(reader, 6),
+                ChunkId = reader.GetInt64(7),
+                NextOffset = results.Count + 1,
+            });
+            if (results.Count >= limit)
+                break;
+        }
+
+        return results;
+    }
+
+    private bool HasAllFtsChunksTrigramSyncTriggers()
+    {
+        using var command = _conn.CreateCommand();
+        command.CommandText = DbContext.CountFtsChunksTrigramSyncTriggersSql;
+        return SqliteCommandPolicy.ReadInt32Scalar(
+            command,
+            "search trigram FTS synchronization trigger count") == 3;
+    }
+
+    private static bool ContainsOversizeFtsTokenMatch(
+        string content,
+        int chunkStartLine,
+        int chunkEndLine,
+        int issueLine,
+        string query)
+    {
+        if (issueLine < chunkStartLine || issueLine > chunkEndLine)
+            return false;
+
+        var lineStart = 0;
+        for (var line = chunkStartLine; line < issueLine; line++)
+        {
+            var newline = content.IndexOf('\n', lineStart);
+            if (newline < 0)
+                return false;
+            lineStart = newline + 1;
+        }
+
+        var newlineIndex = content.IndexOf('\n', lineStart);
+        var lineEnd = newlineIndex < 0 ? content.Length : newlineIndex;
+        return ContainsOversizeFtsTokenMatch(content.AsSpan(lineStart, lineEnd - lineStart), query);
+    }
+
+    private static bool ContainsOversizeFtsTokenMatch(ReadOnlySpan<char> line, string query)
+    {
+        var tokenStart = -1;
+        var tokenRuneCount = 0;
+        var offset = 0;
+        foreach (var rune in line.EnumerateRunes())
+        {
+            if (FileIndexer.IsLikelyUnicode61TokenRune(rune))
+            {
+                if (tokenStart < 0)
+                    tokenStart = offset;
+                tokenRuneCount++;
+            }
+            else
+            {
+                if (OversizeTokenContainsQuery(line, query, tokenStart, offset, tokenRuneCount))
+                    return true;
+                tokenStart = -1;
+                tokenRuneCount = 0;
+            }
+
+            offset += rune.Utf16SequenceLength;
+        }
+
+        return OversizeTokenContainsQuery(line, query, tokenStart, offset, tokenRuneCount);
+    }
+
+    private static bool OversizeTokenContainsQuery(
+        ReadOnlySpan<char> line,
+        string query,
+        int tokenStart,
+        int tokenEnd,
+        int tokenRuneCount)
+        => tokenStart >= 0 &&
+           tokenRuneCount > FtsUnicode61MaxTokenLength &&
+           line[tokenStart..tokenEnd].IndexOf(query.AsSpan(), StringComparison.OrdinalIgnoreCase) >= 0;
 
     private static List<SearchResult> FilterSearchResultByTokenBoundary(SearchResult result, SearchMatchLineTerms terms)
     {
@@ -1043,6 +1237,30 @@ public partial class DbReader
             throw CreateRawFtsSqliteSyntaxException(ex);
         }
 
+        if (count == 0)
+        {
+            var fallback = SearchLongFtsTokenFallback(
+                normalizedQuery,
+                int.MaxValue,
+                lang,
+                rawQuery,
+                exact,
+                prefix,
+                pathPatterns,
+                excludePathPatterns,
+                excludeTests,
+                since,
+                visibilityRank);
+            if (deduplicate)
+                fallback = DeduplicateOverlappingResults(fallback, SearchPrimaryMatchContext.Create(query, normalizedQuery, rawQuery, exact, lang));
+            if (fallback.Count > 0)
+            {
+                return new QueryCountResult(
+                    fallback.Count,
+                    fallback.Select(result => result.Path).Distinct(StringComparer.Ordinal).Count());
+            }
+        }
+
         return new QueryCountResult(count, keptFiles.Count);
     }
 
@@ -1150,6 +1368,26 @@ public partial class DbReader
         catch (SqliteException ex) when (rawQuery && IsRawFtsSqliteSyntaxError(ex))
         {
             throw CreateRawFtsSqliteSyntaxException(ex);
+        }
+
+        if (countsByPath.Count == 0)
+        {
+            var fallback = SearchLongFtsTokenFallback(
+                normalizedQuery,
+                int.MaxValue,
+                lang,
+                rawQuery,
+                exact,
+                prefix,
+                pathPatterns,
+                excludePathPatterns,
+                excludeTests,
+                since,
+                visibilityRank);
+            if (deduplicate)
+                fallback = DeduplicateOverlappingResults(fallback, SearchPrimaryMatchContext.Create(query, normalizedQuery, rawQuery, exact, lang));
+            foreach (var group in fallback.GroupBy(result => result.Path, StringComparer.Ordinal))
+                countsByPath[group.Key] = group.Count();
         }
 
         return countsByPath

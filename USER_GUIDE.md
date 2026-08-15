@@ -1415,6 +1415,13 @@ Search normalizes literal FTS queries to Unicode NFC before matching. If every
 literal token exceeds SQLite FTS5 unicode61's 1000-character token cap,
 zero-result JSON includes `query_degraded_reason` and `tokens_dropped`. Index
 validation reports long unbroken FTS tokens as `fts_token_too_long`.
+When an ordinary literal search has no matches, an ASCII unicode61 token
+substring of at least three characters can be recovered from a reported
+overlong token through the synchronized trigram index. The candidate is
+rechecked against the greater-than-1000-rune unicode61 token before it is
+returned, so substrings in ordinary tokens remain non-matches. This bounded
+fallback is unavailable while the trigram index is missing, rebuilding, or
+lacks its synchronization triggers.
 Literal-safe `search` queries are capped at 1000 characters and 128 whitespace
 terms. Oversized generated input is rejected before FTS5 sanitization; split it
 into smaller searches or use narrower text.
@@ -4956,6 +4963,11 @@ literal FTS クエリは照合前に Unicode NFC へ正規化されます。す�
 token が SQLite FTS5 unicode61 の 1000 文字 token 上限を超える場合、0 件
 JSON には `query_degraded_reason` と `tokens_dropped` が含まれます。index
 validation は長い連続 FTS token を `fts_token_too_long` として報告します。
+通常の literal search が 0 件の場合、3 文字以上の ASCII unicode61 token の
+部分文字列は、同期済み trigram index を介して報告済みの長すぎる token 内から復旧できます。
+候補を返す前に 1000 rune 超の unicode61 token 内の一致を再検証するため、通常の
+token 内の部分文字列は一致になりません。この限定 fallback は trigram index が
+存在しない場合、再構築中の場合、または同期 trigger が欠落している場合は使われません。
 literal-safe な `search` query は 1000 文字、128 whitespace term までです。
 生成された大きすぎる入力は FTS5 sanitization 前に拒否されるため、小さな検索へ分割するか、
 より狭い text にしてください。

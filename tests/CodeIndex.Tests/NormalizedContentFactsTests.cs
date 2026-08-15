@@ -583,7 +583,7 @@ public sealed class NormalizedContentFactsTests
             yield return new IssueProjection(
                 "fts_token_too_long",
                 facts.FirstOversizeFtsTokenLine,
-                $"Line {facts.FirstOversizeFtsTokenLine} contains an FTS5 unicode61 token longer than {DbReader.FtsUnicode61MaxTokenLength} characters; that token is not searchable through FTS",
+                $"Line {facts.FirstOversizeFtsTokenLine} contains an FTS5 unicode61 token longer than {DbReader.FtsUnicode61MaxTokenLength} characters; unicode61 cannot index that token, but literal search can recover eligible ASCII substrings through the bounded long-token fallback",
                 null,
                 null);
         }
