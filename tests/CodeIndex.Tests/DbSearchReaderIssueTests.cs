@@ -288,6 +288,82 @@ public sealed class DbSearchReaderIssueTests : IDisposable
     }
 
     [Fact]
+    public void Search_PostProcessedCursorMissDoesNotProbeOffsetParameters_Issue5080()
+    {
+        var cursor = new SearchCursor(0, 0, 1);
+
+        var guardedResults = _reader.Search(
+            "NoGuardedCursorMatch",
+            limit: 1,
+            cursor: cursor,
+            guardFilters:
+            [
+                new SearchGuardFilter(
+                    SearchGuardRole.Require,
+                    SearchGuardDirection.Before,
+                    "guard"),
+            ]);
+        var contextRankedResults = _reader.Search(
+            "NoContextCursorMatch",
+            limit: 1,
+            cursor: cursor,
+            resultRanking: SearchResultRanking.CredentialContext);
+
+        Assert.Empty(guardedResults);
+        Assert.Empty(contextRankedResults);
+    }
+
+    [Fact]
+    public void Search_DeduplicatesOverlappingLongTokenChunksBeforeCursorPaging_Issue5080()
+    {
+        const string needle = "OverlapRecoveryNeedle";
+        var content = new string('a', 520) + needle + new string('b', 520);
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "reports/overlap-minified.js",
+            Lang = "javascript",
+            Size = content.Length,
+            Lines = 1,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 1,
+                Content = content,
+            },
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 1,
+                StartLine = 1,
+                EndLine = 1,
+                Content = content,
+            },
+        ]);
+        _writer.InsertIssues(
+            fileId,
+            FileIndexer.ValidateContent(
+                "reports/overlap-minified.js",
+                System.Text.Encoding.UTF8.GetBytes(content),
+                content));
+
+        var firstPage = _reader.Search(needle, limit: 1);
+        var firstResult = Assert.Single(firstPage);
+        var secondPage = _reader.Search(
+            needle,
+            limit: 1,
+            cursor: new SearchCursor(0, 0, firstResult.NextOffset));
+
+        Assert.Empty(secondPage);
+        Assert.Equal(new QueryCountResult(1, 1), _reader.CountSearchResults(needle));
+    }
+
+    [Fact]
     public void Search_LiteralQueryOverLengthLimitThrows_Issue3081()
     {
         var query = new string('a', DbReader.MaxLiteralSearchQueryLength + 1);

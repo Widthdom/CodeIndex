@@ -307,6 +307,7 @@ public partial class DbReader
             prefix);
         var primaryResultsExistBeforeCursor = raw.Count == 0 &&
                                               cursor != null &&
+                                              !hasCandidatePostProcessing &&
                                               fallbackQueryEligible &&
                                               HasPrimarySearchResultBeforeCursor(cmd);
         if (raw.Count == 0 &&
@@ -327,6 +328,10 @@ public partial class DbReader
                 excludeTests,
                 since,
                 visibilityRank,
+                deduplicate,
+                deduplicate
+                    ? SearchPrimaryMatchContext.Create(query, normalizedQuery, rawQuery, exactSearch, lang)
+                    : null,
                 requiredPathPatterns);
         }
 
@@ -376,6 +381,8 @@ public partial class DbReader
         bool excludeTests,
         DateTime? since,
         bool visibilityRank,
+        bool deduplicate,
+        SearchPrimaryMatchContext? matchContext,
         IReadOnlyList<string>? requiredPathPatterns = null)
     {
         if (limit <= 0)
@@ -383,6 +390,12 @@ public partial class DbReader
 
         var results = new List<SearchResult>();
         var matchedCount = 0;
+        var keptMatchLines = deduplicate
+            ? new Dictionary<string, HashSet<int>>(StringComparer.Ordinal)
+            : null;
+        var keptIntervals = deduplicate
+            ? new Dictionary<string, IntervalSet>(StringComparer.Ordinal)
+            : null;
         foreach (var result in EnumerateLongFtsTokenFallback(
                      normalizedQuery,
                      lang,
@@ -396,6 +409,16 @@ public partial class DbReader
                      visibilityRank,
                      requiredPathPatterns))
         {
+            if (deduplicate &&
+                !AddSearchResultDedupCoverage(
+                    result,
+                    matchContext!,
+                    keptMatchLines!,
+                    keptIntervals!))
+            {
+                continue;
+            }
+
             matchedCount++;
             if (matchedCount <= Math.Max(0, offset))
                 continue;
