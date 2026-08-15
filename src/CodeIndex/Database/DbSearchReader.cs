@@ -300,14 +300,24 @@ public partial class DbReader
             throw CreateRawFtsSqliteSyntaxException(ex);
         }
 
+        var fallbackQueryEligible = IsLongFtsTokenFallbackQueryEligible(
+            normalizedQuery,
+            rawQuery,
+            exactSearch,
+            prefix);
+        var primaryResultsExistBeforeCursor = raw.Count == 0 &&
+                                              cursor != null &&
+                                              fallbackQueryEligible &&
+                                              HasPrimarySearchResultBeforeCursor(cmd);
         if (raw.Count == 0 &&
             !hasCandidatePostProcessing &&
-            cursor == null &&
+            !primaryResultsExistBeforeCursor &&
             resultRanking == SearchResultRanking.Default)
         {
             raw = SearchLongFtsTokenFallback(
                 normalizedQuery,
                 limit,
+                cursor?.Offset ?? 0,
                 lang,
                 rawQuery,
                 exactSearch,
@@ -356,6 +366,51 @@ public partial class DbReader
     private List<SearchResult> SearchLongFtsTokenFallback(
         string normalizedQuery,
         int limit,
+        int offset,
+        string? lang,
+        bool rawQuery,
+        bool exactSearch,
+        bool prefix,
+        IReadOnlyList<string>? pathPatterns,
+        IReadOnlyList<string>? excludePathPatterns,
+        bool excludeTests,
+        DateTime? since,
+        bool visibilityRank,
+        IReadOnlyList<string>? requiredPathPatterns = null)
+    {
+        if (limit <= 0)
+            return [];
+
+        var results = new List<SearchResult>();
+        var matchedCount = 0;
+        foreach (var result in EnumerateLongFtsTokenFallback(
+                     normalizedQuery,
+                     lang,
+                     rawQuery,
+                     exactSearch,
+                     prefix,
+                     pathPatterns,
+                     excludePathPatterns,
+                     excludeTests,
+                     since,
+                     visibilityRank,
+                     requiredPathPatterns))
+        {
+            matchedCount++;
+            if (matchedCount <= Math.Max(0, offset))
+                continue;
+
+            result.NextOffset = matchedCount;
+            results.Add(result);
+            if (results.Count >= limit)
+                break;
+        }
+
+        return results;
+    }
+
+    private IEnumerable<SearchResult> EnumerateLongFtsTokenFallback(
+        string normalizedQuery,
         string? lang,
         bool rawQuery,
         bool exactSearch,
@@ -368,18 +423,13 @@ public partial class DbReader
         IReadOnlyList<string>? requiredPathPatterns = null)
     {
         var literalToken = normalizedQuery.Trim();
-        if (limit <= 0 ||
-            rawQuery ||
-            exactSearch ||
-            prefix ||
-            literalToken.Length < 3 ||
-            literalToken.Any(character => character > 0x7f || !FileIndexer.IsLikelyUnicode61AsciiTokenChar(character)) ||
+        if (!IsLongFtsTokenFallbackQueryEligible(normalizedQuery, rawQuery, exactSearch, prefix) ||
             !_hasIssuesTable ||
             !HasTable(DbContext.FtsChunksTrigramTableName) ||
             DbWriter.IsFtsBulkLoadMarkerSet(GetMetaString(DbWriter.FtsBulkLoadInProgressMetaKey)) ||
             !HasAllFtsChunksTrigramSyncTriggers())
         {
-            return [];
+            yield break;
         }
 
         using var cmd = _conn.CreateCommand();
@@ -426,7 +476,6 @@ public partial class DbReader
         AddPathFilterParameters(cmd, pathPatterns, excludePathPatterns);
         AddPathIncludeFilterParameters(cmd, requiredPathPatterns, "requiredPathPattern");
 
-        var results = new List<SearchResult>();
         using var reader = cmd.ExecuteTrackedReader();
         while (reader.TrackedRead())
         {
@@ -437,7 +486,7 @@ public partial class DbReader
             if (!ContainsOversizeFtsTokenMatch(content, startLine, endLine, longTokenLine, literalToken))
                 continue;
 
-            results.Add(new SearchResult
+            yield return new SearchResult
             {
                 Path = reader.GetString(0),
                 Lang = GetNullableString(reader, 1),
@@ -447,13 +496,42 @@ public partial class DbReader
                 Score = reader.GetDouble(5),
                 Visibility = GetNullableString(reader, 6),
                 ChunkId = reader.GetInt64(7),
-                NextOffset = results.Count + 1,
-            });
-            if (results.Count >= limit)
-                break;
+            };
         }
+    }
 
-        return results;
+    private static bool IsLongFtsTokenFallbackQueryEligible(
+        string normalizedQuery,
+        bool rawQuery,
+        bool exactSearch,
+        bool prefix)
+    {
+        var literalToken = normalizedQuery.Trim();
+        return !rawQuery &&
+               !exactSearch &&
+               !prefix &&
+               literalToken.Length >= 3 &&
+               literalToken.All(character => character <= 0x7f && FileIndexer.IsLikelyUnicode61AsciiTokenChar(character));
+    }
+
+    private static bool HasPrimarySearchResultBeforeCursor(SqliteCommand command)
+    {
+        var limitParameter = command.Parameters["@limit"];
+        var cursorParameter = command.Parameters["@cursorOffset"];
+        var originalLimit = limitParameter.Value;
+        var originalOffset = cursorParameter.Value;
+        try
+        {
+            limitParameter.Value = 1;
+            cursorParameter.Value = 0;
+            using var reader = command.ExecuteTrackedReader();
+            return reader.TrackedRead();
+        }
+        finally
+        {
+            limitParameter.Value = originalLimit;
+            cursorParameter.Value = originalOffset;
+        }
     }
 
     private bool HasAllFtsChunksTrigramSyncTriggers()
@@ -1239,25 +1317,30 @@ public partial class DbReader
 
         if (count == 0)
         {
-            var fallback = SearchLongFtsTokenFallback(
-                normalizedQuery,
-                int.MaxValue,
-                lang,
-                rawQuery,
-                exact,
-                prefix,
-                pathPatterns,
-                excludePathPatterns,
-                excludeTests,
-                since,
-                visibilityRank);
-            if (deduplicate)
-                fallback = DeduplicateOverlappingResults(fallback, SearchPrimaryMatchContext.Create(query, normalizedQuery, rawQuery, exact, lang));
-            if (fallback.Count > 0)
+            foreach (var result in EnumerateLongFtsTokenFallback(
+                         normalizedQuery,
+                         lang,
+                         rawQuery,
+                         exact,
+                         prefix,
+                         pathPatterns,
+                         excludePathPatterns,
+                         excludeTests,
+                         since,
+                         visibilityRank))
             {
-                return new QueryCountResult(
-                    fallback.Count,
-                    fallback.Select(result => result.Path).Distinct(StringComparer.Ordinal).Count());
+                if (deduplicate &&
+                    !AddSearchResultDedupCoverage(
+                        result,
+                        matchContext!,
+                        keptMatchLines,
+                        keptIntervals))
+                {
+                    continue;
+                }
+
+                count++;
+                keptFiles.Add(result.Path);
             }
         }
 
@@ -1372,22 +1455,32 @@ public partial class DbReader
 
         if (countsByPath.Count == 0)
         {
-            var fallback = SearchLongFtsTokenFallback(
-                normalizedQuery,
-                int.MaxValue,
-                lang,
-                rawQuery,
-                exact,
-                prefix,
-                pathPatterns,
-                excludePathPatterns,
-                excludeTests,
-                since,
-                visibilityRank);
-            if (deduplicate)
-                fallback = DeduplicateOverlappingResults(fallback, SearchPrimaryMatchContext.Create(query, normalizedQuery, rawQuery, exact, lang));
-            foreach (var group in fallback.GroupBy(result => result.Path, StringComparer.Ordinal))
-                countsByPath[group.Key] = group.Count();
+            foreach (var result in EnumerateLongFtsTokenFallback(
+                         normalizedQuery,
+                         lang,
+                         rawQuery,
+                         exact,
+                         prefix,
+                         pathPatterns,
+                         excludePathPatterns,
+                         excludeTests,
+                         since,
+                         visibilityRank))
+            {
+                if (deduplicate &&
+                    !AddSearchResultDedupCoverage(
+                        result,
+                        matchContext!,
+                        keptMatchLines,
+                        keptIntervals))
+                {
+                    continue;
+                }
+
+                countsByPath[result.Path] = countsByPath.TryGetValue(result.Path, out var fallbackCount)
+                    ? fallbackCount + 1
+                    : 1;
+            }
         }
 
         return countsByPath

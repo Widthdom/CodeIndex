@@ -205,30 +205,52 @@ public sealed class DbSearchReaderIssueTests : IDisposable
             limit: 1));
 
         _writer.InsertIssues(fileId, issues);
+        var secondLongToken = new string('c', 520) + recoveredNeedle + new string('d', 520);
+        var secondContent = $"const generated={secondLongToken};";
+        var secondFileId = InsertIndexedFile("reports/minified-second.js", "javascript", secondContent);
+        _writer.InsertIssues(
+            secondFileId,
+            FileIndexer.ValidateContent(
+                "reports/minified-second.js",
+                System.Text.Encoding.UTF8.GetBytes(secondContent),
+                secondContent));
 
         var results = _reader.Search(
             recoveredNeedle,
             pathPatterns: ["reports/minified.html"],
             limit: 1);
-        var count = _reader.CountSearchResults(
+        var scopedCount = _reader.CountSearchResults(
             recoveredNeedle,
             pathPatterns: ["reports/minified.html"]);
-        var countsByFile = _reader.CountSearchResultsByFile(
+        var scopedCountsByFile = _reader.CountSearchResultsByFile(
             recoveredNeedle,
             pathPatterns: ["reports/minified.html"]);
         var ordinarySubstringResults = _reader.Search(
             ordinarySubstring,
             pathPatterns: ["reports/minified.html"],
             limit: 1);
+        var firstPage = _reader.Search(recoveredNeedle, limit: 1);
+        var secondPage = _reader.Search(
+            recoveredNeedle,
+            limit: 1,
+            cursor: new SearchCursor(0, 0, firstPage[0].NextOffset));
+        var totalCount = _reader.CountSearchResults(recoveredNeedle);
+        var countsByFile = _reader.CountSearchResultsByFile(recoveredNeedle);
 
         var result = Assert.Single(results);
         Assert.Equal("reports/minified.html", result.Path);
         Assert.Contains(recoveredNeedle, result.Content, StringComparison.Ordinal);
-        Assert.Equal(new QueryCountResult(1, 1), count);
-        var fileCount = Assert.Single(countsByFile);
+        Assert.Equal(new QueryCountResult(1, 1), scopedCount);
+        var fileCount = Assert.Single(scopedCountsByFile);
         Assert.Equal("reports/minified.html", fileCount.Path);
         Assert.Equal(1, fileCount.Count);
         Assert.Empty(ordinarySubstringResults);
+        Assert.Single(firstPage);
+        Assert.Single(secondPage);
+        Assert.NotEqual(firstPage[0].Path, secondPage[0].Path);
+        Assert.Equal(new QueryCountResult(2, 2), totalCount);
+        Assert.Equal(2, countsByFile.Count);
+        Assert.All(countsByFile, countByFile => Assert.Equal(1, countByFile.Count));
 
         using var dropTrigger = _db.Connection.CreateCommand();
         dropTrigger.CommandText = DbContext.DropFtsChunksTrigramInsertTriggerSql;
@@ -237,6 +259,32 @@ public sealed class DbSearchReaderIssueTests : IDisposable
             recoveredNeedle,
             pathPatterns: ["reports/minified.html"],
             limit: 1));
+    }
+
+    [Fact]
+    public void Search_CursorPastOrdinaryMatchDoesNotSwitchToLongTokenFallback_Issue5080()
+    {
+        const string needle = "PrimaryMatchNeedle";
+        var longContent = new string('a', 520) + needle + new string('b', 520);
+        var longFileId = InsertIndexedFile("reports/long-primary-control.js", "javascript", longContent);
+        _writer.InsertIssues(
+            longFileId,
+            FileIndexer.ValidateContent(
+                "reports/long-primary-control.js",
+                System.Text.Encoding.UTF8.GetBytes(longContent),
+                longContent));
+        InsertIndexedFile("src/primary-control.js", "javascript", $"const value = {needle};");
+
+        var firstPage = _reader.Search(needle, limit: 1);
+        var firstResult = Assert.Single(firstPage);
+        Assert.Equal("src/primary-control.js", firstResult.Path);
+
+        var beyondPrimaryResults = _reader.Search(
+            needle,
+            limit: 1,
+            cursor: new SearchCursor(0, 0, firstResult.NextOffset));
+
+        Assert.Empty(beyondPrimaryResults);
     }
 
     [Fact]
