@@ -8011,7 +8011,7 @@ public partial class FileIndexerTests
 
         var issue = Assert.Single(issues, i => i.Kind == "fts_token_too_long");
         Assert.Equal(2, issue.Line);
-        Assert.Contains("not searchable through FTS", issue.Message);
+        Assert.Contains("bounded long-token fallback", issue.Message);
     }
 
     [Fact]
@@ -8025,7 +8025,7 @@ public partial class FileIndexerTests
 
         var issue = Assert.Single(issues, i => i.Kind == "fts_token_too_long");
         Assert.Equal(2, issue.Line);
-        Assert.Contains("not searchable through FTS", issue.Message);
+        Assert.Contains("bounded long-token fallback", issue.Message);
     }
 
     [Fact]

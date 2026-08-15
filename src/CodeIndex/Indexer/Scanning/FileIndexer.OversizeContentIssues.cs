@@ -50,7 +50,7 @@ public partial class FileIndexer
                 Path = relativePath,
                 Kind = "fts_token_too_long",
                 Line = longFtsTokenLine,
-                Message = $"Line {longFtsTokenLine} contains an FTS5 unicode61 token longer than {CodeIndex.Database.DbReader.FtsUnicode61MaxTokenLength} characters; that token is not searchable through FTS",
+                Message = $"Line {longFtsTokenLine} contains an FTS5 unicode61 token longer than {CodeIndex.Database.DbReader.FtsUnicode61MaxTokenLength} characters; unicode61 cannot index that token, but literal search can recover eligible ASCII substrings through the bounded long-token fallback",
             });
         }
     }

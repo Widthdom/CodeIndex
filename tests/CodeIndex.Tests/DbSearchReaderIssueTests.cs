@@ -1,4 +1,5 @@
 using CodeIndex.Database;
+using CodeIndex.Indexer;
 using CodeIndex.Models;
 
 namespace CodeIndex.Tests;
@@ -186,6 +187,183 @@ public sealed class DbSearchReaderIssueTests : IDisposable
     }
 
     [Fact]
+    public void Search_RecoversAsciiSubstringInsideReportedOversizeFtsToken_Issue5080()
+    {
+        const string recoveredNeedle = "MiddleRecoveryNeedle";
+        const string ordinarySubstring = "OrdinarySubstring";
+        var longToken = new string('a', 520) + recoveredNeedle + new string('b', 520);
+        var content = $"<script>{longToken} Prefix{ordinarySubstring}Suffix</script>";
+        var fileId = InsertIndexedFile("reports/minified.html", "html", content);
+        var issues = FileIndexer.ValidateContent(
+            "reports/minified.html",
+            System.Text.Encoding.UTF8.GetBytes(content),
+            content);
+
+        Assert.Empty(_reader.Search(
+            recoveredNeedle,
+            pathPatterns: ["reports/minified.html"],
+            limit: 1));
+
+        _writer.InsertIssues(fileId, issues);
+        var secondLongToken = new string('c', 520) + recoveredNeedle + new string('d', 520);
+        var secondContent = $"const generated={secondLongToken};";
+        var secondFileId = InsertIndexedFile("reports/minified-second.js", "javascript", secondContent);
+        _writer.InsertIssues(
+            secondFileId,
+            FileIndexer.ValidateContent(
+                "reports/minified-second.js",
+                System.Text.Encoding.UTF8.GetBytes(secondContent),
+                secondContent));
+
+        var results = _reader.Search(
+            recoveredNeedle,
+            pathPatterns: ["reports/minified.html"],
+            limit: 1);
+        var scopedCount = _reader.CountSearchResults(
+            recoveredNeedle,
+            pathPatterns: ["reports/minified.html"]);
+        var scopedCountsByFile = _reader.CountSearchResultsByFile(
+            recoveredNeedle,
+            pathPatterns: ["reports/minified.html"]);
+        var ordinarySubstringResults = _reader.Search(
+            ordinarySubstring,
+            pathPatterns: ["reports/minified.html"],
+            limit: 1);
+        var firstPage = _reader.Search(recoveredNeedle, limit: 1);
+        var secondPage = _reader.Search(
+            recoveredNeedle,
+            limit: 1,
+            cursor: new SearchCursor(0, 0, firstPage[0].NextOffset));
+        var totalCount = _reader.CountSearchResults(recoveredNeedle);
+        var countsByFile = _reader.CountSearchResultsByFile(recoveredNeedle);
+
+        var result = Assert.Single(results);
+        Assert.Equal("reports/minified.html", result.Path);
+        Assert.Contains(recoveredNeedle, result.Content, StringComparison.Ordinal);
+        Assert.Equal(new QueryCountResult(1, 1), scopedCount);
+        var fileCount = Assert.Single(scopedCountsByFile);
+        Assert.Equal("reports/minified.html", fileCount.Path);
+        Assert.Equal(1, fileCount.Count);
+        Assert.Empty(ordinarySubstringResults);
+        Assert.Single(firstPage);
+        Assert.Single(secondPage);
+        Assert.NotEqual(firstPage[0].Path, secondPage[0].Path);
+        Assert.Equal(new QueryCountResult(2, 2), totalCount);
+        Assert.Equal(2, countsByFile.Count);
+        Assert.All(countsByFile, countByFile => Assert.Equal(1, countByFile.Count));
+
+        using var dropTrigger = _db.Connection.CreateCommand();
+        dropTrigger.CommandText = DbContext.DropFtsChunksTrigramInsertTriggerSql;
+        dropTrigger.ExecuteNonQuery();
+        Assert.Empty(_reader.Search(
+            recoveredNeedle,
+            pathPatterns: ["reports/minified.html"],
+            limit: 1));
+    }
+
+    [Fact]
+    public void Search_CursorPastOrdinaryMatchDoesNotSwitchToLongTokenFallback_Issue5080()
+    {
+        const string needle = "PrimaryMatchNeedle";
+        var longContent = new string('a', 520) + needle + new string('b', 520);
+        var longFileId = InsertIndexedFile("reports/long-primary-control.js", "javascript", longContent);
+        _writer.InsertIssues(
+            longFileId,
+            FileIndexer.ValidateContent(
+                "reports/long-primary-control.js",
+                System.Text.Encoding.UTF8.GetBytes(longContent),
+                longContent));
+        InsertIndexedFile("src/primary-control.js", "javascript", $"const value = {needle};");
+
+        var firstPage = _reader.Search(needle, limit: 1);
+        var firstResult = Assert.Single(firstPage);
+        Assert.Equal("src/primary-control.js", firstResult.Path);
+
+        var beyondPrimaryResults = _reader.Search(
+            needle,
+            limit: 1,
+            cursor: new SearchCursor(0, 0, firstResult.NextOffset));
+
+        Assert.Empty(beyondPrimaryResults);
+    }
+
+    [Fact]
+    public void Search_PostProcessedCursorMissDoesNotProbeOffsetParameters_Issue5080()
+    {
+        var cursor = new SearchCursor(0, 0, 1);
+
+        var guardedResults = _reader.Search(
+            "NoGuardedCursorMatch",
+            limit: 1,
+            cursor: cursor,
+            guardFilters:
+            [
+                new SearchGuardFilter(
+                    SearchGuardRole.Require,
+                    SearchGuardDirection.Before,
+                    "guard"),
+            ]);
+        var contextRankedResults = _reader.Search(
+            "NoContextCursorMatch",
+            limit: 1,
+            cursor: cursor,
+            resultRanking: SearchResultRanking.CredentialContext);
+
+        Assert.Empty(guardedResults);
+        Assert.Empty(contextRankedResults);
+    }
+
+    [Fact]
+    public void Search_DeduplicatesOverlappingLongTokenChunksBeforeCursorPaging_Issue5080()
+    {
+        const string needle = "OverlapRecoveryNeedle";
+        var content = new string('a', 520) + needle + new string('b', 520);
+        var fileId = _writer.UpsertFile(new FileRecord
+        {
+            Path = "reports/overlap-minified.js",
+            Lang = "javascript",
+            Size = content.Length,
+            Lines = 1,
+            Modified = new DateTime(2025, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+        });
+        _writer.InsertChunks(
+        [
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 0,
+                StartLine = 1,
+                EndLine = 1,
+                Content = content,
+            },
+            new ChunkRecord
+            {
+                FileId = fileId,
+                ChunkIndex = 1,
+                StartLine = 1,
+                EndLine = 1,
+                Content = content,
+            },
+        ]);
+        _writer.InsertIssues(
+            fileId,
+            FileIndexer.ValidateContent(
+                "reports/overlap-minified.js",
+                System.Text.Encoding.UTF8.GetBytes(content),
+                content));
+
+        var firstPage = _reader.Search(needle, limit: 1);
+        var firstResult = Assert.Single(firstPage);
+        var secondPage = _reader.Search(
+            needle,
+            limit: 1,
+            cursor: new SearchCursor(0, 0, firstResult.NextOffset));
+
+        Assert.Empty(secondPage);
+        Assert.Equal(new QueryCountResult(1, 1), _reader.CountSearchResults(needle));
+    }
+
+    [Fact]
     public void Search_LiteralQueryOverLengthLimitThrows_Issue3081()
     {
         var query = new string('a', DbReader.MaxLiteralSearchQueryLength + 1);
@@ -275,7 +453,7 @@ public sealed class DbSearchReaderIssueTests : IDisposable
         Assert.Contains(DbReader.MaxPathLikePatternWildcards.ToString(), ex.Message, StringComparison.Ordinal);
     }
 
-    private void InsertIndexedFile(string path, string lang, string content, DateTime? modified = null)
+    private long InsertIndexedFile(string path, string lang, string content, DateTime? modified = null)
     {
         var normalized = content.Replace("\r\n", "\n");
         var lines = normalized.Split('\n');
@@ -296,6 +474,7 @@ public sealed class DbSearchReaderIssueTests : IDisposable
             EndLine = lines.Length,
             Content = normalized,
         }]);
+        return fileId;
     }
 
     private static string BuildLiteralTermQuery(int termCount)
