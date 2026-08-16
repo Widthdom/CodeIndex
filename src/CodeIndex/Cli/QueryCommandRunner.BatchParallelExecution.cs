@@ -473,9 +473,10 @@ public static partial class QueryCommandRunner
             }
             else
             {
-                s_batchReader = reader;
-                s_batchDbPath = dbPath;
-                s_batchDbPathExplicit = dbPathExplicit;
+                s_batchDatabaseContext = new BatchDatabaseContext(
+                    reader,
+                    dbPath,
+                    dbPathExplicit);
                 BatchParallelCommandStartedForTesting?.Invoke(lineNumber);
                 cancellationToken.ThrowIfCancellationRequested();
                 exitCode = RunBatchQueryCommand(commandName, subArgs, jsonOptions, appVersion, cancellationToken);
@@ -512,9 +513,7 @@ public static partial class QueryCommandRunner
         }
         finally
         {
-            s_batchReader = null;
-            s_batchDbPath = null;
-            s_batchDbPathExplicit = false;
+            s_batchDatabaseContext = null;
             s_activeQueryProjectRoot = null;
         }
 

@@ -18,8 +18,8 @@ public static partial class QueryCommandRunner
         CancellationToken cancellationToken = default)
     {
         var dbPath = options.DbPath;
-        var batchReader = s_batchReader != null && !options.DbPathExplicit
-            ? s_batchReader
+        var batchReader = s_batchDatabaseContext?.ReaderInheritedByCurrentChild == true
+            ? s_batchDatabaseContext.Reader
             : null;
         if (batchReader == null)
         {
@@ -91,9 +91,7 @@ public static partial class QueryCommandRunner
 
             reader.IncludeGenerated = options.IncludeGenerated;
             var previousProjectRoot = s_activeQueryProjectRoot;
-            var projectRootResolution = s_batchReader != null && options.DbPathExplicit
-                ? ResolveProjectRootForDbPath(dbPath, options.DbPathExplicit)
-                : ResolveProjectFilterRoot(dbPath, options.DbPathExplicit);
+            var projectRootResolution = ResolveProjectFilterRoot(dbPath, options.DbPathExplicit);
             s_activeQueryProjectRoot = projectRootResolution.Root;
             int exitCode;
             var previousDiagnosticsReader = ActiveSqliteDiagnosticsReader.Value;

@@ -320,7 +320,7 @@ public static partial class QueryCommandRunner
             }
 
             var input = rawLang.Trim();
-            var primaryRoot = s_batchReader != null && dbPathExplicit
+            var primaryRoot = s_batchDatabaseContext != null && dbPathExplicit
                 ? ResolveProjectRootForDbPath(resolvedDbPath, dbPathExplicit).Root
                 : ResolveProjectFilterRoot(resolvedDbPath, dbPathExplicit).Root;
             var queryRoots = workspaceDbPaths

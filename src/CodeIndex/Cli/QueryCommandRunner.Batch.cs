@@ -883,6 +883,18 @@ public static partial class QueryCommandRunner
         if (!CliCommandCatalog.IsBatchReadOnlyCommand(commandName))
             return WriteBatchUnsupportedCommand(commandName);
 
+        var batchContext = s_batchDatabaseContext;
+        var childDbPathExplicit = HasBatchChildDatabaseOption(
+            commandName,
+            subArgs,
+            out var databaseOptionInsertionIndex);
+        var effectiveSubArgs = batchContext != null
+                               && !childDbPathExplicit
+                               && CliFlagSchema.GetFlag(commandName, "--db") != null
+            ? InsertBatchDatabaseOption(subArgs, databaseOptionInsertionIndex, batchContext.DbPath)
+            : subArgs;
+        var previousReaderInheritance = batchContext?.ReaderInheritedByCurrentChild ?? false;
+
         Func<string[], int> runner = commandName switch
         {
             "search" => args => RunSearch(args, jsonOptions, cancellationToken),
@@ -910,9 +922,74 @@ public static partial class QueryCommandRunner
             _ => throw new InvalidOperationException($"Batch schema command '{commandName}' has no dispatcher."),
         };
 
-        return JsonEnvelopeWrapper.ShouldWrap(commandName, subArgs)
-            ? JsonEnvelopeWrapper.RunWrapped(commandName, subArgs, appVersion, jsonOptions, runner)
-            : runner(subArgs);
+        if (batchContext != null)
+            batchContext.ReaderInheritedByCurrentChild = !childDbPathExplicit;
+        try
+        {
+            return JsonEnvelopeWrapper.ShouldWrap(commandName, effectiveSubArgs)
+                ? JsonEnvelopeWrapper.RunWrapped(commandName, effectiveSubArgs, appVersion, jsonOptions, runner)
+                : runner(effectiveSubArgs);
+        }
+        finally
+        {
+            if (batchContext != null)
+                batchContext.ReaderInheritedByCurrentChild = previousReaderInheritance;
+        }
+    }
+
+    private static bool HasBatchChildDatabaseOption(
+        string commandName,
+        string[] args,
+        out int databaseOptionInsertionIndex)
+    {
+        databaseOptionInsertionIndex = args.Length;
+        var nextTokenIsValue = false;
+        for (var i = 0; i < args.Length; i++)
+        {
+            var arg = args[i];
+            if (nextTokenIsValue)
+            {
+                nextTokenIsValue = false;
+                continue;
+            }
+            if (string.Equals(arg, "--", StringComparison.Ordinal))
+            {
+                databaseOptionInsertionIndex = i;
+                return false;
+            }
+
+            var separator = arg.IndexOf('=', StringComparison.Ordinal);
+            var optionName = separator >= 0 ? arg[..separator] : arg;
+            if (string.Equals(optionName, "--db", StringComparison.Ordinal))
+                return true;
+
+            var flag = CliFlagSchema.All.FirstOrDefault(candidate =>
+                candidate.IsValueBearing
+                && candidate.IsAcceptedBy(commandName)
+                && (string.Equals(candidate.Name, optionName, StringComparison.Ordinal)
+                    || string.Equals(candidate.ShortName, optionName, StringComparison.Ordinal)));
+            nextTokenIsValue = separator < 0 && flag != null && i + 1 < args.Length;
+        }
+
+        return false;
+    }
+
+    private static string[] InsertBatchDatabaseOption(
+        string[] args,
+        int insertionIndex,
+        string dbPath)
+    {
+        var result = new string[args.Length + 2];
+        Array.Copy(args, 0, result, 0, insertionIndex);
+        result[insertionIndex] = "--db";
+        result[insertionIndex + 1] = dbPath;
+        Array.Copy(
+            args,
+            insertionIndex,
+            result,
+            insertionIndex + 2,
+            args.Length - insertionIndex);
+        return result;
     }
 
     private static int WriteBatchUnsupportedCommand(string commandName)
