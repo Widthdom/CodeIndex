@@ -235,7 +235,6 @@ public partial class DbReader
             return [candidateTargetSymbolId];
         if (!HasCurrentReferenceIdentityContractForRead()
             || !exact
-            || includeQualifiedCommonCalls
             || !SqlNameResolver.HasQualifier(query)
             || lang is not (null or "csharp"))
         {
@@ -246,11 +245,17 @@ public partial class DbReader
             query,
             DefaultImpactGraphStateEntryBudget,
             "csharp",
-            pathPatterns,
-            excludePathPatterns,
-            excludeTests);
+            pathPatterns: null,
+            excludePathPatterns: null,
+            excludeTests: false);
         if (resolution.Definitions.Count == 0)
-            return [];
+        {
+            var leafName = SqlNameResolver.GetLeafName(query);
+            return includeQualifiedCommonCalls
+                && CSharpReferenceExtractor.CommonQualifiedMemberCallNames.Contains(leafName)
+                    ? null
+                    : [];
+        }
 
         var isLogicalPartialFamily = IsLogicalPartialFamilyRoot(
             hasResolvedIdentityGraph: true,
@@ -261,17 +266,21 @@ public partial class DbReader
             isLogicalPartialFamily,
             resolution,
             resolution.Definitions);
+        // A safety-budget hit means identity resolution is incomplete, not that the
+        // qualified target has no callers. Preserve the legacy name fallback instead
+        // of returning an authoritative empty identity set.
+        // safety budget 到達は解決途中を意味するため、0 件と断定せず旧 name fallback を維持する。
         if (resolution.PhysicalSymbolIdsTruncated)
-            return [];
+            return null;
         symbolIds = ExpandCSharpPolymorphicDispatchSymbolIds(
             query,
             symbolIds,
-            pathPatterns,
-            excludePathPatterns,
-            excludeTests,
+            pathPatterns: null,
+            excludePathPatterns: null,
+            excludeTests: false,
             out var dispatchIdsTruncated);
         if (dispatchIdsTruncated)
-            return [];
+            return null;
         return symbolIds.Order().ToArray();
     }
 

@@ -182,29 +182,28 @@ public partial class DbReaderTests
             "external.Open5084",
             limit: 20,
             lang: "csharp",
-            pathPatterns: ["src/identity5084/*"],
+            pathPatterns: ["src/identity5084/Caller.cs"],
             exact: true));
         Assert.Empty(_reader.GetCallers(
             "external.Open5084",
             limit: 20,
             lang: null,
-            pathPatterns: ["src/identity5084/*"],
+            pathPatterns: ["src/identity5084/Caller.cs"],
             exact: true));
-        Assert.Equal("InvokeExternal", Assert.Single(_reader.GetCallers(
+        Assert.Empty(_reader.GetCallers(
             "external.Open5084",
             limit: 20,
             lang: "csharp",
-            pathPatterns: ["src/identity5084/*"],
+            pathPatterns: ["src/identity5084/Caller.cs"],
             exact: true,
-            includeQualifiedCommonCalls: true)).CallerName);
-        Assert.Equal("InvokeExternal", Assert.Single(_reader.GetCallers(
+            includeQualifiedCommonCalls: true));
+        Assert.Empty(_reader.GetCallers(
             "external.Open5084",
             limit: 20,
             lang: null,
-            pathPatterns: ["src/identity5084/*"],
+            pathPatterns: ["src/identity5084/Caller.cs"],
             exact: true,
-            includeQualifiedCommonCalls: true)).CallerName);
-
+            includeQualifiedCommonCalls: true));
         var primaryReferences = allReferences
             .Where(reference => reference.Context.Contains("Primary.Open5084", StringComparison.Ordinal))
             .ToList();
@@ -221,7 +220,7 @@ public partial class DbReaderTests
             "Primary.Open5084",
             limit: 20,
             lang: "csharp",
-            pathPatterns: ["src/identity5084/*"],
+            pathPatterns: ["src/identity5084/Caller.cs"],
             exact: true);
         var primaryCaller = Assert.Single(qualifiedCallers);
         Assert.Equal("InvokePrimary", primaryCaller.CallerName);
@@ -230,12 +229,12 @@ public partial class DbReaderTests
             "Primary.Open5084",
             limit: 20,
             lang: "csharp",
-            pathPatterns: ["src/identity5084/*"],
+            pathPatterns: ["src/identity5084/Caller.cs"],
             exact: true));
         var callerTotal = _reader.CountCallersTotal(
             "Primary.Open5084",
             lang: "csharp",
-            pathPatterns: ["src/identity5084/*"],
+            pathPatterns: ["src/identity5084/Caller.cs"],
             exact: true);
         Assert.Equal(1, callerTotal.Count);
         Assert.Equal(1, callerTotal.FileCount);
@@ -243,7 +242,7 @@ public partial class DbReaderTests
             "Primary.Open5084",
             limit: 20,
             lang: null,
-            pathPatterns: ["src/identity5084/*"],
+            pathPatterns: ["src/identity5084/Caller.cs"],
             exact: true)).CallerName);
 
         var impact = _reader.AnalyzeImpact(

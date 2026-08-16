@@ -117,7 +117,7 @@ public partial class DbReader
         var sql = candidatePlan.Sql + @"
             logical_references AS MATERIALIZED (
                 " + BuildHotspotLogicalReferenceRowsSql(includeLeafMetadata: false, boundedCandidates: candidatePlan.CandidateLimit.HasValue) + @"
-            )," + BuildCSharpIdentityHotspotReferenceCountsSql() + @"
+            ),
             file_reference_counts AS MATERIALIZED (
                 SELECT lang,
                        file_id,
@@ -489,23 +489,9 @@ public partial class DbReader
     private const int MaximumBoundedHotspotCandidateCount = 4096;
     private const int BoundedHotspotCandidatesPerResult = 64;
 
-    private int? GetBoundedHotspotCandidateLimit(
-        int? resultLimit,
-        string? kind,
-        string? lang)
+    private int? GetBoundedHotspotCandidateLimit(int? resultLimit)
     {
         if (!_hasHotspotReferenceCountsTable || !resultLimit.HasValue)
-            return null;
-
-        // The persisted name frontier is not authoritative for current C# callable
-        // hotspots, whose final rank is based on resolved logical target identities.
-        // Disable the legacy frontier whenever that identity-ranked result set can be
-        // selected; otherwise unresolved high-volume names can evict real targets.
-        // current C# callable hotspot の最終順位は resolved logical target identity
-        // に基づくため、旧 name frontier は使わず実 target の取りこぼしを防ぐ。
-        var canSelectCSharpCallable = (lang == null || lang == "csharp")
-            && (kind == null || kind is "function" or "test.method" or "property");
-        if (CanUseCSharpIdentityHotspotCounts() && canSelectCSharpCallable)
             return null;
 
         return Math.Clamp(
@@ -514,7 +500,9 @@ public partial class DbReader
             MaximumBoundedHotspotCandidateCount);
     }
 
-    private static string BuildBoundedHotspotCandidatePrefix(int? candidateLimit)
+    private static string BuildBoundedHotspotCandidatePrefix(
+        int? candidateLimit,
+        bool useCSharpIdentityFrontier)
         => candidateLimit.HasValue
             ? @"
             bounded_reference_names AS MATERIALIZED (
@@ -532,12 +520,63 @@ public partial class DbReader
                          raw_symbol_name
                 LIMIT @candidateReferenceLimit
             ),
+            " + (useCSharpIdentityFrontier
+                ? @"
+            bounded_csharp_identity_targets AS MATERIALIZED (
+                SELECT logical_target_key,
+                       target_name,
+                       target_kind
+                FROM csharp_identity_reference_counts
+                ORDER BY ref_score DESC,
+                         ref_count DESC,
+                         logical_target_key,
+                         target_name,
+                         target_kind
+                LIMIT @candidateReferenceLimit
+            ),
             "
+                : string.Empty)
             : string.Empty;
 
-    private static string BuildBoundedHotspotSymbolPredicate(int? candidateLimit)
+    private static string BuildBoundedHotspotSymbolPredicate(
+        int? candidateLimit,
+        bool useCSharpIdentityFrontier,
+        string logicalTargetKeySql)
         => candidateLimit.HasValue
-            ? @"
+            ? (useCSharpIdentityFrontier
+                ? $@"
+                  AND (
+                      (
+                          f.lang = 'csharp'
+                          AND s.kind IN ('function', 'test.method', 'property')
+                          AND EXISTS (
+                              SELECT 1
+                              FROM bounded_csharp_identity_targets identity_frontier
+                              WHERE identity_frontier.logical_target_key = {logicalTargetKeySql}
+                                AND identity_frontier.target_name = s.name
+                                AND identity_frontier.target_kind = s.kind
+                          )
+                      )
+                      OR (
+                          (f.lang != 'csharp' OR s.kind NOT IN ('function', 'test.method', 'property'))
+                          AND EXISTS (
+                              SELECT 1
+                              FROM bounded_reference_names brn
+                              WHERE brn.lang = f.lang
+                                AND (
+                                    (f.lang != 'sql' AND brn.symbol_name = s.name)
+                                    OR (f.lang = 'sql' AND (
+                                        (brn.symbol_segment_count = sql_segment_count(s.name)
+                                         AND brn.symbol_name = sql_normalize_name(s.name) COLLATE NOCASE)
+                                        OR (sql_segment_count(s.name) > 1
+                                            AND brn.allow_leaf_fallback = 1
+                                            AND brn.raw_symbol_name = sql_leaf_name(s.name) COLLATE NOCASE)
+                                    ))
+                                )
+                          )
+                      )
+                  )"
+                : @"
                   AND EXISTS (
                       SELECT 1
                       FROM bounded_reference_names brn
@@ -552,7 +591,7 @@ public partial class DbReader
                                     AND brn.raw_symbol_name = sql_leaf_name(s.name) COLLATE NOCASE)
                             ))
                         )
-                  )"
+                  )")
             : string.Empty;
 
     private string BuildHotspotLogicalReferenceRowsSql(bool includeLeafMetadata, bool boundedCandidates = false)
@@ -958,7 +997,7 @@ public partial class DbReader
             ),
             logical_references AS MATERIALIZED (
                 " + BuildHotspotLogicalReferenceRowsSql(includeLeafMetadata: true, boundedCandidates: candidatePlan.CandidateLimit.HasValue) + @"
-            )," + BuildCSharpIdentityHotspotReferenceCountsSql() + @"
+            ),
             file_reference_counts_exact AS MATERIALIZED (
                 SELECT lang,
                        file_id,
