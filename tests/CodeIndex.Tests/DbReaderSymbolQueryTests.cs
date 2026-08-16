@@ -73,11 +73,11 @@ public partial class DbReaderTests
             "function", "csharp", includedPaths, excludedPaths, excludeTests: true,
             includedVisibilities, excludedVisibilities);
 
-        Assert.Equal(6, sites.Count);
-        Assert.Equal(6, grouped.Count);
+        Assert.Equal(5, sites.Count);
+        Assert.Equal(5, grouped.Count);
         Assert.Equal(2, files.Count);
-        Assert.Equal(new HotspotCountResult(6, 2), siteCount);
-        Assert.Equal(new HotspotCountResult(6, 2, 7), groupedCount);
+        Assert.Equal(new HotspotCountResult(5, 2), siteCount);
+        Assert.Equal(new HotspotCountResult(5, 2, 5), groupedCount);
         Assert.Equal(new HotspotCountResult(2, 2), fileCount);
         Assert.Equal(
             sites.Select(result => result.Symbol.Name).Order(StringComparer.Ordinal),
@@ -85,21 +85,19 @@ public partial class DbReaderTests
         Assert.Equal(
             sites.Select(result => result.Symbol.Path).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal),
             files.Select(result => result.Path).Order(StringComparer.Ordinal));
-        Assert.Equal(3, Site("VisibilityAlignedHotspot").ReferenceCount);
+        // #5084: caller-file rows without a resolved target remain reference hints;
+        // only the identity-resolved in-target site contributes to hotspot counts.
+        Assert.Equal(1, Site("VisibilityAlignedHotspot").ReferenceCount);
         Assert.Equal(1, Site("PathAmbiguousHotspot").ReferenceCount);
         Assert.Equal(1, Site("ExcludedPathAmbiguousHotspot").ReferenceCount);
         Assert.Equal(1, Site("TestAmbiguousHotspot").ReferenceCount);
         Assert.Equal(2, Site("BetaUniqueHotspot").ReferenceCount);
-        Assert.Equal(3, Site("FamilyAlignedHotspot").ReferenceCount);
-        Assert.Equal(2, Group("FamilyAlignedHotspot").DefinitionSites);
+        Assert.DoesNotContain(sites, result => result.Symbol.Name == "FamilyAlignedHotspot");
+        Assert.DoesNotContain(grouped, result => result.Symbol.Name == "FamilyAlignedHotspot");
 
         SymbolHotspotResult Site(string name) => Assert.Single(
             sites,
             result => result.Symbol.Name == name);
-        GroupedHotspotResult Group(string name) => Assert.Single(
-            grouped,
-            result => result.Symbol.Name == name);
-
         long CreateFile(string path) => _writer.UpsertFile(new FileRecord
         {
             Path = path,
@@ -595,6 +593,19 @@ public partial class DbReaderTests
                 }
             }
             """);
+
+        var overloadReferences = _reader.SearchReferences(
+            "Run",
+            limit: 20,
+            lang: "csharp",
+            pathPatterns: ["src/Caller.cs"],
+            exact: true,
+            includeQualifiedCommonCalls: true);
+        Assert.All(overloadReferences, reference =>
+        {
+            Assert.Equal("ambiguous", reference.ResolutionState);
+            Assert.Equal(2, reference.ResolutionCandidateCount);
+        });
 
         var results = _reader.GetSymbolHotspots(
             limit: 10,
@@ -1160,7 +1171,7 @@ public partial class DbReaderTests
     }
 
     [Fact]
-    public void GetSymbolHotspots_DoesNotPromoteSameFileDifferentContainersToGlobalCounts()
+    public void GetSymbolHotspots_UsesResolvedSameFileContainerTarget_Issue5084()
     {
         InsertIndexedFile("src/Duplicate.cs", "csharp",
             """
@@ -1194,11 +1205,13 @@ public partial class DbReaderTests
             excludePathPatterns: null,
             excludeTests: false);
 
-        Assert.DoesNotContain(results, result => result.Symbol.Name == "Run");
+        var run = Assert.Single(results, result => result.Symbol.Name == "Run");
+        Assert.Equal("A", run.Symbol.ContainerName);
+        Assert.Equal(2, run.ReferenceCount);
     }
 
     [Fact]
-    public void GetSymbolHotspots_DoesNotCountAmbiguousSameFileSiblingContainerReferences()
+    public void GetSymbolHotspots_CountsResolvedSameFileSiblingContainerReference_Issue5084()
     {
         InsertIndexedFile("src/Duplicate.cs", "csharp",
             """
@@ -1226,7 +1239,9 @@ public partial class DbReaderTests
             excludePathPatterns: null,
             excludeTests: false);
 
-        Assert.DoesNotContain(results, result => result.Symbol.Name == "Run");
+        var run = Assert.Single(results, result => result.Symbol.Name == "Run");
+        Assert.Equal("A", run.Symbol.ContainerName);
+        Assert.Equal(1, run.ReferenceCount);
     }
 
     [Fact]

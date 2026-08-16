@@ -9,6 +9,94 @@ namespace CodeIndex.Database;
 
 public partial class DbReader
 {
+    private bool CanUseCSharpIdentityHotspotCounts()
+        => HasCurrentReferenceIdentityContractForRead()
+           && _referenceColumns.Contains("target_symbol_id")
+           && _referenceColumns.Contains("resolution_state")
+           && HasTable("symbol_reference_candidates");
+
+    private string BuildCSharpIdentityHotspotReferenceCountsSql()
+    {
+        if (!CanUseCSharpIdentityHotspotCounts())
+        {
+            return @"
+            csharp_identity_reference_counts AS (
+                SELECT NULL AS logical_target_key,
+                       NULL AS target_name,
+                       NULL AS target_kind,
+                       0 AS ref_count,
+                       0.0 AS ref_score
+                WHERE 1 = 0
+            ),";
+        }
+
+        var logicalKindSql = GetLogicalReferenceKindSql("identity_reference.reference_kind");
+        var referenceWeightSql = GetHotspotReferenceWeightSql("identity_reference.reference_kind");
+        return $@"
+            csharp_identity_reference_targets AS MATERIALIZED (
+                SELECT resolved_reference.id AS reference_id,
+                       resolved_target.logical_target_key,
+                       resolved_target.name AS target_name,
+                       resolved_target.kind AS target_kind
+                FROM symbol_references resolved_reference
+                JOIN all_candidate_symbols resolved_target
+                  ON resolved_target.id = resolved_reference.target_symbol_id
+                WHERE resolved_reference.resolution_state = 'resolved'
+                  AND resolved_target.lang = 'csharp'
+
+                UNION ALL
+
+                SELECT grouped_reference.id AS reference_id,
+                       MIN(grouped_target.logical_target_key) AS logical_target_key,
+                       MIN(grouped_target.name) AS target_name,
+                       MIN(grouped_target.kind) AS target_kind
+                FROM symbol_references grouped_reference
+                JOIN symbol_reference_candidates grouped_candidate
+                  ON grouped_candidate.reference_id = grouped_reference.id
+                JOIN all_candidate_symbols grouped_target
+                  ON grouped_target.id = grouped_candidate.symbol_id
+                WHERE grouped_reference.resolution_state IN ('resolved_group', 'ambiguous')
+                  AND grouped_target.lang = 'csharp'
+                GROUP BY grouped_reference.id
+                HAVING COUNT(DISTINCT grouped_target.logical_target_key) = 1
+                   AND COUNT(DISTINCT grouped_target.name) = 1
+                   AND COUNT(DISTINCT grouped_target.kind) = 1
+            ),
+            csharp_identity_reference_sites AS MATERIALIZED (
+                SELECT identity_target.logical_target_key,
+                       identity_target.target_name,
+                       identity_target.target_kind,
+                       identity_reference.file_id,
+                       identity_reference.line,
+                       identity_reference.column_number,
+                       {logicalKindSql} AS logical_reference_kind,
+                       MAX({referenceWeightSql}) AS reference_score
+                FROM symbol_references identity_reference
+                JOIN files identity_source_file
+                  ON identity_source_file.id = identity_reference.file_id
+                JOIN csharp_identity_reference_targets identity_target
+                  ON identity_target.reference_id = identity_reference.id
+                WHERE identity_source_file.lang = 'csharp'
+                  AND identity_reference.reference_kind IN {CallGraphReferenceKindsSql}
+                GROUP BY identity_target.logical_target_key,
+                         identity_target.target_name,
+                         identity_target.target_kind,
+                         identity_reference.file_id,
+                         identity_reference.line,
+                         identity_reference.column_number,
+                         logical_reference_kind
+            ),
+            csharp_identity_reference_counts AS (
+                SELECT logical_target_key,
+                       target_name,
+                       target_kind,
+                       COUNT(*) AS ref_count,
+                       SUM(reference_score) AS ref_score
+                FROM csharp_identity_reference_sites
+                GROUP BY logical_target_key, target_name, target_kind
+            ),";
+    }
+
     private SymbolHotspotRowsQuery BuildGroupedSymbolHotspotRowsQuery(int? resultLimit, string? kind, string? lang, IReadOnlyList<string>? pathPatterns, IReadOnlyList<string>? excludePathPatterns, bool excludeTests, IReadOnlyList<string>? visibilityFilters, IReadOnlyList<string>? excludeVisibilityFilters)
     {
         var candidatePlan = BuildSymbolHotspotCandidatePlan(
@@ -20,10 +108,16 @@ public partial class DbReader
             excludeTests,
             visibilityFilters,
             excludeVisibilityFilters);
+        var csharpIdentityCountSql = CanUseCSharpIdentityHotspotCounts()
+            ? "WHEN fc.lang = 'csharp' AND fc.kind IN ('function', 'test.method', 'property') THEN COALESCE(circ.ref_count, 0)"
+            : string.Empty;
+        var csharpIdentityScoreSql = CanUseCSharpIdentityHotspotCounts()
+            ? "WHEN fc.lang = 'csharp' AND fc.kind IN ('function', 'test.method', 'property') THEN COALESCE(circ.ref_score, 0.0)"
+            : string.Empty;
         var sql = candidatePlan.Sql + @"
             logical_references AS MATERIALIZED (
                 " + BuildHotspotLogicalReferenceRowsSql(includeLeafMetadata: false, boundedCandidates: candidatePlan.CandidateLimit.HasValue) + @"
-            ),
+            )," + BuildCSharpIdentityHotspotReferenceCountsSql() + @"
             file_reference_counts AS MATERIALIZED (
                 SELECT lang,
                        file_id,
@@ -102,6 +196,7 @@ public partial class DbReader
             site_reference_counts AS (
                 SELECT fc.id AS symbol_id,
                        CASE
+                           " + csharpIdentityCountSql + @"
                            WHEN (fc.lang != 'csharp' OR fc.kind != 'property')
                              AND (
                                  nc.defs = 1
@@ -113,6 +208,7 @@ public partial class DbReader
                            ELSE COALESCE(crc.ref_count, 0)
                        END AS ref_count,
                        CASE
+                           " + csharpIdentityScoreSql + @"
                            WHEN (fc.lang != 'csharp' OR fc.kind != 'property')
                              AND (
                                  nc.defs = 1
@@ -146,6 +242,10 @@ public partial class DbReader
                   ON crc.logical_target_key = fc.logical_target_key
                  AND crc.name = fc.name
                  AND crc.kind = fc.kind
+                LEFT JOIN csharp_identity_reference_counts circ
+                  ON circ.logical_target_key = fc.logical_target_key
+                 AND circ.target_name = fc.name
+                 AND circ.target_kind = fc.kind
             ),
             hotspot_sites AS (
                 SELECT fc.id AS symbol_id,
@@ -795,6 +895,12 @@ public partial class DbReader
             excludeTests,
             visibilityFilters,
             excludeVisibilityFilters);
+        var csharpIdentityCountSql = CanUseCSharpIdentityHotspotCounts()
+            ? "WHEN gr.lang = 'csharp' AND gr.kind IN ('function', 'test.method', 'property') THEN COALESCE(circ.ref_count, 0)"
+            : string.Empty;
+        var csharpIdentityScoreSql = CanUseCSharpIdentityHotspotCounts()
+            ? "WHEN gr.lang = 'csharp' AND gr.kind IN ('function', 'test.method', 'property') THEN COALESCE(circ.ref_score, 0.0)"
+            : string.Empty;
         var sql = candidatePlan.Sql + @"
             grouped_candidates AS (
                 SELECT MIN(id) AS symbol_id,
@@ -838,7 +944,7 @@ public partial class DbReader
             ),
             logical_references AS MATERIALIZED (
                 " + BuildHotspotLogicalReferenceRowsSql(includeLeafMetadata: true, boundedCandidates: candidatePlan.CandidateLimit.HasValue) + @"
-            ),
+            )," + BuildCSharpIdentityHotspotReferenceCountsSql() + @"
             file_reference_counts_exact AS MATERIALIZED (
                 SELECT lang,
                        file_id,
@@ -952,6 +1058,7 @@ public partial class DbReader
             reference_counts AS (
                 SELECT gr.symbol_id,
                        CASE
+                            " + csharpIdentityCountSql + @"
                             WHEN (gr.lang != 'csharp' OR gr.kind != 'property')
                               AND (
                                   nc.defs = 1
@@ -963,6 +1070,7 @@ public partial class DbReader
                             ELSE COALESCE(crc.ref_count, 0)
                         END AS ref_count,
                        CASE
+                            " + csharpIdentityScoreSql + @"
                             WHEN (gr.lang != 'csharp' OR gr.kind != 'property')
                               AND (
                                   nc.defs = 1
@@ -1009,6 +1117,10 @@ public partial class DbReader
                   ON crc.logical_target_key = gr.logical_target_key
                  AND crc.name = gr.name
                  AND crc.kind = gr.kind
+                LEFT JOIN csharp_identity_reference_counts circ
+                  ON circ.logical_target_key = gr.logical_target_key
+                 AND circ.target_name = gr.name
+                 AND circ.target_kind = gr.kind
             ),
             file_symbol_counts AS (
                 SELECT path,

@@ -317,7 +317,7 @@ public partial class DbReaderTests
     }
 
     [Fact]
-    public void AnalyzeImpact_UnresolvedUpstreamCallerRemainsVisibleButCannotCreateCanonicalCycle_Issue4847()
+    public void AnalyzeImpact_UnresolvedUpstreamCallerIsNotAConfirmedEdge_Issues4847And5084()
     {
         InsertIndexedFile("src/ImpactUnresolvedHop.cs", "csharp",
             """
@@ -355,13 +355,10 @@ public partial class DbReaderTests
 
         Assert.False(analysis.CycleDetected);
         Assert.Equal(ImpactTerminationReasons.Completed, analysis.TerminationReason);
-        Assert.Equal(2, analysis.Callers.Count);
-        var unresolvedCaller = Assert.Single(analysis.Callers.Where(caller => caller.Depth == 2));
-        Assert.Equal("Top", unresolvedCaller.CallerName);
-        Assert.NotNull(unresolvedCaller.CallerSymbolId);
-        Assert.Null(unresolvedCaller.CalleeSymbolId);
-        Assert.Equal([new List<string> { "Leaf", "Mid", "Top" }], unresolvedCaller.Paths);
-        Assert.All(Assert.Single(unresolvedCaller.PathDetails!), node => Assert.NotNull(node.SymbolId));
+        var confirmedCaller = Assert.Single(analysis.Callers);
+        Assert.Equal("Mid", confirmedCaller.CallerName);
+        Assert.Equal(1, confirmedCaller.Depth);
+        Assert.DoesNotContain(analysis.Callers, caller => caller.CallerName == "Top");
     }
 
     [Fact]

@@ -40,6 +40,7 @@ public partial class DbReader
         bool HasResolvedIdentityGraph,
         bool IsLogicalPartialFamily,
         HashSet<long> IdentitySymbolIds,
+        IReadOnlyList<long>? InitialTargetSymbolIds,
         bool IncludeAmbiguousMSource,
         bool InitiallyTruncated,
         string NodeKey,
@@ -111,7 +112,7 @@ public partial class DbReader
     private ImpactTraversalRoot? ResolveImpactTraversalRoot(ImpactTraversalRequest request)
     {
         var resolvedName = ResolveSymbolName(request.SymbolName, request.Lang);
-        var hasResolvedIdentityGraph = _referenceIdentityContractCurrent;
+        var hasResolvedIdentityGraph = HasCurrentReferenceIdentityContractForRead();
         var canResolveQualifiedCSharpIdentity =
             hasResolvedIdentityGraph
             && SqlNameResolver.HasQualifier(request.SymbolName)
@@ -133,6 +134,18 @@ public partial class DbReader
             isLogicalPartialFamily,
             resolution,
             definitions);
+        var traversalCSharpIds = qualifiedCSharpIds.ToHashSet();
+        var dispatchIdsTruncated = false;
+        if (canResolveQualifiedCSharpIdentity && qualifiedCSharpIds.Count > 0)
+        {
+            traversalCSharpIds = ExpandCSharpPolymorphicDispatchSymbolIds(
+                request.SymbolName,
+                traversalCSharpIds,
+                request.PathPatterns,
+                request.ExcludePathPatterns,
+                request.ExcludeTests,
+                out dispatchIdsTruncated);
+        }
 
         if (hasResolvedIdentityGraph && definitionPaths.Count > 1 && qualifiedCSharpIds.Count == 0)
             return null;
@@ -146,6 +159,9 @@ public partial class DbReader
             : ambiguousMRootId is long ambiguousId
                 ? new HashSet<long> { ambiguousId }
                 : [];
+        var initialTargetSymbolIds = traversalCSharpIds.Count > qualifiedCSharpIds.Count
+            ? traversalCSharpIds.Order().ToArray()
+            : null;
         var singleIdentityId = identityIds.Count == 1 ? identityIds.Single() : (long?)null;
         var rootNodeKey = identityIds.Count > 1
             ? $"identity:{NameFold.Fold(request.SymbolName) ?? request.SymbolName}"
@@ -165,10 +181,11 @@ public partial class DbReader
             hasResolvedIdentityGraph,
             isLogicalPartialFamily,
             identityIds,
+            initialTargetSymbolIds,
             ambiguousMRootId != null,
             !isLogicalPartialFamily
                 && qualifiedCSharpIds.Count > 0
-                && resolution.PhysicalSymbolIdsTruncated,
+                && (resolution.PhysicalSymbolIdsTruncated || dispatchIdsTruncated),
             rootNodeKey,
             pathNode);
     }

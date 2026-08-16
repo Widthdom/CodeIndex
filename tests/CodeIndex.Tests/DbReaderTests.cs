@@ -3881,7 +3881,9 @@ public partial class DbReaderTests : IDisposable
                 null,
                 false),
             result => result.Symbol.Name == "GetString");
-        Assert.Equal(2, hotspot.ReferenceCount);
+        // #5084: only the resolved self-call targets Caller.GetString. The resolved
+        // LocalApi call and unresolved JsonElement calls must not inflate this target.
+        Assert.Equal(1, hotspot.ReferenceCount);
     }
 
 

@@ -203,6 +203,18 @@ public partial class DbReader : IDisposable
     internal readonly bool _sqlGraphContractCurrent;
     internal readonly bool _hdlGraphContractCurrent;
     internal readonly bool _referenceIdentityContractCurrent;
+
+    // DbWriter clears the persisted identity marker before mutating symbols/references.
+    // Readers normally observe an immutable snapshot, but caller-owned connections and tests
+    // may write after construction; recheck the marker before trusting cached identity state.
+    // DbWriter は symbol/reference 変更前に identity marker を消す。通常 reader は不変 snapshot
+    // を読むが、外部所有 connection やテストは構築後に書けるため、identity 利用前に再確認する。
+    internal bool HasCurrentReferenceIdentityContractForRead()
+        => _referenceIdentityContractCurrent
+           && string.Equals(
+               TryGetMetaString(_conn, DbContext.ReferenceIdentityContractVersionMetaKey),
+               DbContext.ReferenceIdentityContractVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
+               StringComparison.Ordinal);
     // Tracks which languages have authoritative cross-file hotspot family semantics.
     // Mixed legacy/update states can therefore degrade only the affected language instead of
     // globally disabling families for unrelated marker types.

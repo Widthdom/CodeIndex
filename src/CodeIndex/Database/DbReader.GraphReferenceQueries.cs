@@ -25,6 +25,7 @@ public partial class DbReader
         bool IncludeQualifiedCommonCalls,
         bool IncludeMemberReads,
         long? IdentitySymbolId,
+        IReadOnlyList<long>? CallerIdentitySymbolIds,
         bool ExcludeSelfReferences,
         int Offset);
 
@@ -152,6 +153,7 @@ public partial class DbReader
         bool includeQualifiedCommonCalls,
         bool includeMemberReads,
         long? identitySymbolId = null,
+        IReadOnlyList<long>? callerIdentitySymbolIds = null,
         bool excludeSelfReferences = false,
         int offset = 0)
         => new(
@@ -167,6 +169,7 @@ public partial class DbReader
             includeQualifiedCommonCalls,
             includeMemberReads,
             identitySymbolId,
+            callerIdentitySymbolIds,
             excludeSelfReferences,
             offset);
 
@@ -441,6 +444,14 @@ public partial class DbReader
 
     private string BuildCallerQualifiedNameFilterSql(GraphReferenceQueryRequest request)
     {
+        // A current identity-scoped query has already proved the target through the
+        // reference candidate table. Reapplying the stored leaf spelling here would
+        // incorrectly reject qualified overload families whose rows store only the leaf.
+        // current な identity scope では candidate table が対象を証明済み。ここで保存済みの
+        // leaf spelling を再照合すると、leaf のみを持つ修飾済み overload family を誤って落とす。
+        if (request.CallerIdentitySymbolIds != null)
+            return string.Empty;
+
         var folded = _foldReady;
         var like = !request.Exact;
         var contextSql = ReferenceContextSql("r");
@@ -470,18 +481,24 @@ public partial class DbReader
 
     private string BuildCallerIdentityFilterSql(GraphReferenceQueryRequest request)
     {
-        if (request.IdentitySymbolId == null || !HasTable("symbol_reference_candidates"))
+        if (request.CallerIdentitySymbolIds == null || !HasTable("symbol_reference_candidates"))
             return string.Empty;
 
         var resolutionFilterSql = _referenceColumns.Contains("resolution_state")
             ? " AND r.resolution_state IN ('resolved', 'resolved_group')"
             : " AND 1 = 0";
+        if (request.CallerIdentitySymbolIds.Count == 0)
+            return resolutionFilterSql + " AND 1 = 0";
+
         return resolutionFilterSql + @"
                 AND EXISTS (
                     SELECT 1
                     FROM symbol_reference_candidates AS identity_candidate
                     WHERE identity_candidate.reference_id = r.id
-                      AND identity_candidate.symbol_id = @targetSymbolId
+                      AND identity_candidate.symbol_id IN (
+                          SELECT CAST(value AS INTEGER)
+                          FROM json_each(@callerTargetSymbolIdsJson)
+                      )
                 )";
     }
 
@@ -556,7 +573,22 @@ public partial class DbReader
             SqliteCommandPolicy.Add(command, "@lang", language);
         }
         if (plan.BindIdentityParameter)
-            SqliteCommandPolicy.Add(command, plan.Direction.IdentityParameterName, request.IdentitySymbolId!.Value);
+        {
+            if (request.CallerIdentitySymbolIds != null)
+            {
+                var symbolIdValues = request.CallerIdentitySymbolIds
+                    .Select(static symbolId => symbolId.ToString(System.Globalization.CultureInfo.InvariantCulture))
+                    .ToList();
+                SqliteCommandPolicy.Add(
+                    command,
+                    "@callerTargetSymbolIdsJson",
+                    JsonStringListCodec.Serialize(symbolIdValues));
+            }
+            else
+            {
+                SqliteCommandPolicy.Add(command, plan.Direction.IdentityParameterName, request.IdentitySymbolId!.Value);
+            }
+        }
         AddPathFilterParameters(command, request.PathPatterns, request.ExcludePathPatterns);
         if (plan.Shape != GraphReferenceQueryShape.TotalCount)
             SqliteCommandPolicy.Add(command, "@limit", request.Limit);

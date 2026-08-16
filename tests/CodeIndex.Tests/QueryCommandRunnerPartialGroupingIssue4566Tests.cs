@@ -2421,7 +2421,7 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, hotspotsExitCode);
             Assert.Equal(string.Empty, hotspotsStderr);
             Assert.Equal(2, methodHotspots.Count);
-            Assert.All(methodHotspots, hotspot => Assert.Equal(2, hotspot.GetProperty("reference_count").GetInt32()));
+            Assert.All(methodHotspots, hotspot => Assert.Equal(1, hotspot.GetProperty("reference_count").GetInt32()));
             Assert.Equal(
                 2,
                 methodHotspots

@@ -220,6 +220,67 @@ public partial class DbReader
         return names.ToList();
     }
 
+    private HashSet<long> ExpandCSharpPolymorphicDispatchSymbolIds(
+        string symbolName,
+        HashSet<long> selectedSymbolIds,
+        IReadOnlyList<string>? pathPatterns,
+        IReadOnlyList<string>? excludePathPatterns,
+        bool excludeTests,
+        out bool truncated)
+    {
+        truncated = false;
+        if (selectedSymbolIds.Count == 0)
+            return selectedSymbolIds;
+
+        foreach (var dispatchSymbolName in GetCSharpIdentityPolymorphicDispatchSymbolNames(symbolName))
+        {
+            var dispatchResolution = ResolveImpactDefinitions(
+                dispatchSymbolName,
+                DefaultImpactGraphStateEntryBudget,
+                "csharp",
+                pathPatterns,
+                excludePathPatterns,
+                excludeTests);
+            if (dispatchResolution.PhysicalSymbolIdsTruncated)
+            {
+                truncated = true;
+                continue;
+            }
+
+            if (dispatchResolution.Definitions.Count == 0
+                || dispatchResolution.Definitions.Any(static definition => definition.Lang != "csharp"))
+            {
+                continue;
+            }
+
+            selectedSymbolIds.UnionWith(dispatchResolution.PhysicalSymbolIds);
+        }
+
+        return selectedSymbolIds;
+    }
+
+    private List<string> GetCSharpIdentityPolymorphicDispatchSymbolNames(string symbolName)
+    {
+        var memberName = SqlNameResolver.GetLeafName(symbolName);
+        var lastDot = symbolName.LastIndexOf('.');
+        if (string.IsNullOrWhiteSpace(memberName) || lastDot <= 0)
+            return [];
+
+        var containingTypeScope = GetCSharpContainingTypeScope(symbolName[..lastDot]);
+        if (containingTypeScope == null)
+            return [];
+
+        var names = new List<string>();
+        foreach (var inheritedContainingType in GetPolymorphicCSharpContainingTypes(containingTypeScope))
+        {
+            var inheritedMemberName = CombineDbQualifiedName(inheritedContainingType, memberName);
+            if (!string.IsNullOrWhiteSpace(inheritedMemberName))
+                names.Add(inheritedMemberName);
+        }
+
+        return names;
+    }
+
     private void AddCSharpBaseListDispatchNames(string containingTypeName, string memberName, HashSet<string> names)
     {
         var signature = GetCSharpContainingTypeScope(containingTypeName)?.Signature;
