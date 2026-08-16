@@ -128,6 +128,167 @@ public partial class DbReaderTests
     }
 
     [Fact]
+    public void SymbolIdentity_QualifiedCSharpGraphUsesResolvedTargetsAcrossReaders_Issue5084()
+    {
+        InsertIndexedFile("src/identity5084/Primary.cs", "csharp", """
+            namespace Identity5084;
+            public static class Primary
+            {
+                public static void Open5084() { }
+                public static void Open5084(int mode) { }
+            }
+            """);
+        InsertIndexedFile("src/identity5084/Secondary.cs", "csharp", """
+            namespace Identity5084;
+            public static class Secondary
+            {
+                public static void Open5084() { }
+            }
+            """);
+        InsertIndexedFile("src/identity5084/Caller.cs", "csharp", """
+            namespace Identity5084;
+            public static class Caller
+            {
+                public static void InvokePrimary()
+                {
+                    Primary.Open5084();
+                    Primary.Open5084(1);
+                }
+
+                public static void InvokeSecondary() => Secondary.Open5084();
+                public static void InvokeExternal(dynamic external) => external.Open5084();
+            }
+            """);
+        _writer.RefreshMutualRecursionFlags();
+
+        var allReferences = _reader.SearchReferences(
+            "Open5084",
+            limit: 20,
+            lang: "csharp",
+            pathPatterns: ["src/identity5084/Caller.cs"],
+            exact: true,
+            includeQualifiedCommonCalls: true);
+        Assert.Equal(4, allReferences.Count);
+        Assert.Equal(
+            3,
+            allReferences.Count(reference => reference.ResolutionState is "resolved" or "resolved_group"));
+        var unresolvedReference = Assert.Single(
+            allReferences,
+            reference => reference.ResolutionState == "unresolved");
+        Assert.Contains("external.Open5084", unresolvedReference.Context, StringComparison.Ordinal);
+        Assert.Null(unresolvedReference.TargetSymbolId);
+
+        Assert.Empty(_reader.GetCallers(
+            "external.Open5084",
+            limit: 20,
+            lang: "csharp",
+            pathPatterns: ["src/identity5084/Caller.cs"],
+            exact: true));
+        Assert.Empty(_reader.GetCallers(
+            "external.Open5084",
+            limit: 20,
+            lang: null,
+            pathPatterns: ["src/identity5084/Caller.cs"],
+            exact: true));
+        Assert.Empty(_reader.GetCallers(
+            "external.Open5084",
+            limit: 20,
+            lang: "csharp",
+            pathPatterns: ["src/identity5084/Caller.cs"],
+            exact: true,
+            includeQualifiedCommonCalls: true));
+        Assert.Empty(_reader.GetCallers(
+            "external.Open5084",
+            limit: 20,
+            lang: null,
+            pathPatterns: ["src/identity5084/Caller.cs"],
+            exact: true,
+            includeQualifiedCommonCalls: true));
+        var primaryReferences = allReferences
+            .Where(reference => reference.Context.Contains("Primary.Open5084", StringComparison.Ordinal))
+            .ToList();
+        Assert.Equal(2, primaryReferences.Count);
+        Assert.All(primaryReferences, reference =>
+        {
+            Assert.Equal("resolved_group", reference.ResolutionState);
+            Assert.Null(reference.TargetSymbolId);
+            Assert.NotNull(reference.TargetSymbolKey);
+            Assert.Equal(2, reference.ResolutionCandidateCount);
+        });
+
+        var qualifiedCallers = _reader.GetCallers(
+            "Primary.Open5084",
+            limit: 20,
+            lang: "csharp",
+            pathPatterns: ["src/identity5084/Caller.cs"],
+            exact: true);
+        var primaryCaller = Assert.Single(qualifiedCallers);
+        Assert.Equal("InvokePrimary", primaryCaller.CallerName);
+        Assert.Equal(2, primaryCaller.ReferenceCount);
+        Assert.Equal(1, _reader.CountCallers(
+            "Primary.Open5084",
+            limit: 20,
+            lang: "csharp",
+            pathPatterns: ["src/identity5084/Caller.cs"],
+            exact: true));
+        var callerTotal = _reader.CountCallersTotal(
+            "Primary.Open5084",
+            lang: "csharp",
+            pathPatterns: ["src/identity5084/Caller.cs"],
+            exact: true);
+        Assert.Equal(1, callerTotal.Count);
+        Assert.Equal(1, callerTotal.FileCount);
+        Assert.Equal("InvokePrimary", Assert.Single(_reader.GetCallers(
+            "Primary.Open5084",
+            limit: 20,
+            lang: null,
+            pathPatterns: ["src/identity5084/Caller.cs"],
+            exact: true)).CallerName);
+
+        var impact = _reader.AnalyzeImpact(
+            "Primary.Open5084",
+            maxDepth: 1,
+            limit: 20,
+            lang: "csharp",
+            pathPatterns: ["src/identity5084/*"]);
+        var impactCaller = Assert.Single(impact.Callers);
+        Assert.Equal("InvokePrimary", impactCaller.CallerName);
+        Assert.False(impact.Truncated);
+        Assert.Equal(ImpactTerminationReasons.Completed, impact.TerminationReason);
+        Assert.Equal(0, impact.HintCount);
+
+        var hotspots = _reader.GetSymbolHotspots(
+            20,
+            "function",
+            "csharp",
+            ["src/identity5084/*"],
+            null,
+            false);
+        var primaryHotspot = Assert.Single(
+            hotspots,
+            result => result.Symbol.Name == "Open5084"
+                && result.Symbol.ContainerName == "Primary");
+        var secondaryHotspot = Assert.Single(
+            hotspots,
+            result => result.Symbol.Name == "Open5084"
+                && result.Symbol.ContainerName == "Secondary");
+        Assert.Equal(2, primaryHotspot.ReferenceCount);
+        Assert.Equal(1, secondaryHotspot.ReferenceCount);
+
+        var broadCallers = _reader.GetCallers(
+            "Open5084",
+            limit: 20,
+            lang: "csharp",
+            pathPatterns: ["src/identity5084/*"],
+            exact: true,
+            includeQualifiedCommonCalls: true);
+        Assert.Equal(3, broadCallers.Count);
+        Assert.Contains(broadCallers, caller => caller.CallerName == "InvokePrimary");
+        Assert.Contains(broadCallers, caller => caller.CallerName == "InvokeSecondary");
+        Assert.Contains(broadCallers, caller => caller.CallerName == "InvokeExternal");
+    }
+
+    [Fact]
     public void SymbolIdentity_TclNamespaceQualifiedCallResolvesMatchingProc_Issue4746()
     {
         const string path = "src/identity/namespaced.tcl";

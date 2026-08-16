@@ -94,7 +94,7 @@ public partial class DbReader
         private static Queue<ImpactTraversalFrontierNode> CreateInitialQueue(
             ImpactTraversalRoot root)
         {
-            var capacity = root.IsLogicalPartialFamily
+            var capacity = root.IsLogicalPartialFamily || root.InitialTargetSymbolIds is { Count: > 0 }
                 ? 1
                 : Math.Max(1, root.IdentitySymbolIds.Count);
             var queue = new Queue<ImpactTraversalFrontierNode>(capacity);
@@ -104,6 +104,15 @@ public partial class DbReader
                     root.ResolvedName,
                     SymbolId: null,
                     root.IdentitySymbolIds.Order().ToArray(),
+                    root.NodeKey,
+                    Depth: 0));
+            }
+            else if (root.InitialTargetSymbolIds is { Count: > 0 } initialTargetSymbolIds)
+            {
+                queue.Enqueue(new ImpactTraversalFrontierNode(
+                    root.ResolvedName,
+                    root.IdentitySymbolIds.Count == 1 ? root.IdentitySymbolIds.Single() : null,
+                    initialTargetSymbolIds,
                     root.NodeKey,
                     Depth: 0));
             }

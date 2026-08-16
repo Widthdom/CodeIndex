@@ -87,6 +87,15 @@ public partial class DbReader
         query = NormalizeSymbolSearchQuery(query, lang, exact) ?? query ?? string.Empty;
         if (!_hasReferencesTable)
             return new List<CallerResult>();
+        var callerIdentitySymbolIds = ResolveCallerIdentitySymbolIds(
+            query,
+            lang,
+            pathPatterns,
+            excludePathPatterns,
+            excludeTests,
+            exact,
+            includeQualifiedCommonCalls,
+            targetSymbolId);
 
         var request = CreateGraphReferenceQueryRequest(
             query,
@@ -101,6 +110,7 @@ public partial class DbReader
             includeQualifiedCommonCalls,
             includeMemberReads,
             identitySymbolId: targetSymbolId,
+            callerIdentitySymbolIds,
             excludeSelfReferences,
             offset);
         var plan = BuildGraphReferenceQueryPlan(
@@ -119,6 +129,15 @@ public partial class DbReader
         query = NormalizeSymbolSearchQuery(query, lang, exact) ?? query ?? string.Empty;
         if (!_hasReferencesTable)
             return 0;
+        var callerIdentitySymbolIds = ResolveCallerIdentitySymbolIds(
+            query,
+            lang,
+            pathPatterns,
+            excludePathPatterns,
+            excludeTests,
+            exact,
+            includeQualifiedCommonCalls,
+            targetSymbolId: null);
 
         var request = CreateGraphReferenceQueryRequest(
             query,
@@ -131,7 +150,8 @@ public partial class DbReader
             exact,
             rawKinds,
             includeQualifiedCommonCalls,
-            includeMemberReads);
+            includeMemberReads,
+            callerIdentitySymbolIds: callerIdentitySymbolIds);
         var plan = BuildGraphReferenceQueryPlan(
             CallerGraphReferenceDirection,
             request,
@@ -168,6 +188,17 @@ public partial class DbReader
     {
         if (!_hasReferencesTable)
             return new QueryCountResult(0, 0);
+        lang = NormalizeQueryLanguage(lang);
+        query = NormalizeSymbolSearchQuery(query, lang, exact) ?? query ?? string.Empty;
+        var callerIdentitySymbolIds = ResolveCallerIdentitySymbolIds(
+            query,
+            lang,
+            pathPatterns,
+            excludePathPatterns,
+            excludeTests,
+            exact,
+            includeQualifiedCommonCalls,
+            targetSymbolId);
 
         var request = CreateGraphReferenceQueryRequest(
             query,
@@ -181,12 +212,76 @@ public partial class DbReader
             rawKinds,
             includeQualifiedCommonCalls,
             includeMemberReads,
-            identitySymbolId: targetSymbolId);
+            identitySymbolId: targetSymbolId,
+            callerIdentitySymbolIds: callerIdentitySymbolIds);
         var plan = BuildGraphReferenceQueryPlan(
             CallerGraphReferenceDirection,
             request,
             GraphReferenceQueryShape.TotalCount);
         return ExecuteGraphReferenceTotalCount(plan);
+    }
+
+    private IReadOnlyList<long>? ResolveCallerIdentitySymbolIds(
+        string query,
+        string? lang,
+        IReadOnlyList<string>? pathPatterns,
+        IReadOnlyList<string>? excludePathPatterns,
+        bool excludeTests,
+        bool exact,
+        bool includeQualifiedCommonCalls,
+        long? targetSymbolId)
+    {
+        if (targetSymbolId is long candidateTargetSymbolId)
+            return [candidateTargetSymbolId];
+        if (!HasCurrentReferenceIdentityContractForRead()
+            || !exact
+            || !SqlNameResolver.HasQualifier(query)
+            || lang is not (null or "csharp"))
+        {
+            return null;
+        }
+
+        var resolution = ResolveImpactDefinitions(
+            query,
+            DefaultImpactGraphStateEntryBudget,
+            "csharp",
+            pathPatterns: null,
+            excludePathPatterns: null,
+            excludeTests: false);
+        if (resolution.Definitions.Count == 0)
+        {
+            var leafName = SqlNameResolver.GetLeafName(query);
+            return includeQualifiedCommonCalls
+                && CSharpReferenceExtractor.CommonQualifiedMemberCallNames.Contains(leafName)
+                    ? null
+                    : [];
+        }
+
+        var isLogicalPartialFamily = IsLogicalPartialFamilyRoot(
+            hasResolvedIdentityGraph: true,
+            resolution,
+            resolution.Definitions);
+        var symbolIds = ResolveQualifiedCSharpRootIds(
+            canResolveQualifiedCSharpIdentity: true,
+            isLogicalPartialFamily,
+            resolution,
+            resolution.Definitions);
+        // A safety-budget hit means identity resolution is incomplete, not that the
+        // qualified target has no callers. Preserve the legacy name fallback instead
+        // of returning an authoritative empty identity set.
+        // safety budget 到達は解決途中を意味するため、0 件と断定せず旧 name fallback を維持する。
+        if (resolution.PhysicalSymbolIdsTruncated)
+            return null;
+        symbolIds = ExpandCSharpPolymorphicDispatchSymbolIds(
+            query,
+            symbolIds,
+            pathPatterns: null,
+            excludePathPatterns: null,
+            excludeTests: false,
+            out var dispatchIdsTruncated);
+        if (dispatchIdsTruncated)
+            return null;
+        return symbolIds.Order().ToArray();
     }
 
     /// <summary>
@@ -447,9 +542,6 @@ public partial class DbReader
             : _foldReady
                 ? " OR (f.lang = 'csharp' AND r.symbol_name_folded IN (" + string.Join(", ", polymorphicCSharpSymbolNames.Select((_, i) => $"@polymorphicSymbolNameFolded{i}")) + "))"
                 : " OR (f.lang = 'csharp' AND r.symbol_name COLLATE NOCASE IN (" + string.Join(", ", polymorphicCSharpSymbolNames.Select((_, i) => $"@polymorphicSymbolName{i}")) + "))";
-        var unscopedPolymorphicNameCondition = hasIdentityTargetScope
-            ? string.Empty
-            : polymorphicNameCondition;
         var nameCondition = _foldReady
             ? allowSqlLeafFallback
                 ? @"
@@ -461,27 +553,20 @@ public partial class DbReader
               AND (r.symbol_name = @symbolName COLLATE NOCASE OR (f.lang = 'sql' AND r.symbol_name = sql_leaf_name(@symbolName) COLLATE NOCASE)" + polymorphicNameCondition + " OR (f.lang = 'solution' AND r.reference_kind = 'project_reference' AND r.container_name = @symbolName COLLATE NOCASE))"
                 : @"
               AND (((f.lang = 'sql') AND sql_context_has_name_at(" + contextSql + @", @symbolName, r.column_number) = 1) OR ((f.lang != 'sql') AND r.symbol_name = @symbolName COLLATE NOCASE) OR " + BuildCSharpQualifiedContextFallbackSql(BuildQualifiedContextMatchSql(contextSql, "r.column_number", folded: false, like: false)) + " OR " + BuildQualifiedLeafFallbackSql("r.symbol_name", "r.symbol_name_folded", folded: false) + polymorphicNameCondition + " OR (f.lang = 'solution' AND r.reference_kind = 'project_reference' AND r.container_name = @symbolName COLLATE NOCASE))";
-        // Resolved rows must match the requested canonical target. Resolution groups can match
-        // a candidate for conservative traversal, but only uniquely resolved rows project that
-        // candidate as an actual cycle edge. Unresolved/ambiguous rows retain the historical
-        // name-based traversal and likewise keep null target IDs.
-        // resolved 行は要求された正規 target と一致させる。resolution group は保守的 traversal
-        // の候補にはできるが、一意に resolved した行だけが実際の cycle edge として候補 ID を
-        // 公開する。unresolved/ambiguous 行も従来の名前ベース探索に残し、target ID は null にする。
+        // Identity-scoped traversal admits only references whose candidate set contains the
+        // requested canonical target. Unresolved/ambiguous same-leaf rows remain available to
+        // broad reference discovery, but they are not confirmed call-graph edges.
+        // identity scope の traversal は candidate set が要求 target を含む参照だけを採用する。
+        // unresolved/ambiguous な同名 leaf は広い reference 探索には残すが、確定 call graph edge
+        // としては扱わない。
         var targetCondition = hasIdentityTargetScope
             ? $@"
-              AND (
-                  EXISTS (
-                      SELECT 1
-                      FROM symbol_reference_candidates identity_candidate
-                      WHERE identity_candidate.reference_id = r.id
-                        AND identity_candidate.symbol_id IN ({targetSymbolIdsSql})
-                        AND r.resolution_state IN ('resolved', 'resolved_group')
-                  )
-                  OR (
-                      COALESCE(r.resolution_state, 'unresolved') NOT IN ('resolved', 'resolved_group')
-                      " + nameCondition + @"
-                  )" + unscopedPolymorphicNameCondition + @"
+              AND EXISTS (
+                  SELECT 1
+                  FROM symbol_reference_candidates identity_candidate
+                  WHERE identity_candidate.reference_id = r.id
+                    AND identity_candidate.symbol_id IN ({targetSymbolIdsSql})
+                    AND r.resolution_state IN ('resolved', 'resolved_group')
               )"
             : nameCondition;
         // impact BFS must share the call-graph contract with `callers`/`callees`/`hotspots`,
