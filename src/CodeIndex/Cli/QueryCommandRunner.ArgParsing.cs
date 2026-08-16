@@ -112,11 +112,14 @@ public static partial class QueryCommandRunner
 
     internal static ProjectFilterRootResolution ResolveProjectFilterRoot(string dbPath, bool dbPathExplicit)
     {
-        var effectiveDbPath = s_batchReader != null && !string.IsNullOrWhiteSpace(s_batchDbPath)
-            ? s_batchDbPath!
+        var inheritedBatchContext = s_batchDatabaseContext?.ReaderInheritedByCurrentChild == true
+            ? s_batchDatabaseContext
+            : null;
+        var effectiveDbPath = inheritedBatchContext != null
+            ? inheritedBatchContext.DbPath
             : dbPath;
-        var effectiveDbPathExplicit = s_batchReader != null && !string.IsNullOrWhiteSpace(s_batchDbPath)
-            ? s_batchDbPathExplicit
+        var effectiveDbPathExplicit = inheritedBatchContext != null
+            ? inheritedBatchContext.DbPathExplicit
             : dbPathExplicit;
         var projectRoot = DbPathResolver.ResolveProjectRootForQuery(effectiveDbPath, effectiveDbPathExplicit);
         if (!string.IsNullOrWhiteSpace(projectRoot))
