@@ -221,6 +221,7 @@ public static partial class ConsoleUi
         ("recipes-list", "Example: `cdidx recipes list --names --json`."),
         ("db", "schema defaults to the full sqlite_master dump for support bundles; use --summary-only, --limit, --max-sql-chars, and --exclude-internal for bounded diagnostics."),
         ("db", "checkpoint --dry-run separates source DB/WAL/SHM bytes from every planned output, including the versioned manifest, its SHA-256, estimated final bytes, destination/conflict policy, and uncertainty."),
+        ("db", "checkpoint names must be non-blank single file names of at most 128 characters and cannot contain C0 control characters, directory separators, or platform-invalid file-name characters."),
         ("db", "checkpoint creates a filesystem snapshot next to the DB; restore creates a verified managed rollback backup before replacing an existing DB unless --no-backup is explicit."),
         ("db", "restore --dry-run validates the checkpoint manifest, regular-file paths, rollback-backup policy, and destination free space without replacing the DB."),
         ("db", "checkpoints --delete and --prune remove snapshots; add --dry-run to report exact deleted/retained paths without mutation."),

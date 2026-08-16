@@ -385,6 +385,20 @@ public class ConsoleUiTests
     }
 
     [Fact]
+    public void PrintCommandUsage_DbDocumentsCheckpointNameControls_Issue5082()
+    {
+        var (_, stdout, stderr) = ConsoleCapture.Capture(() =>
+        {
+            ConsoleUi.PrintCommandUsage("db");
+            return 0;
+        });
+
+        Assert.Equal(string.Empty, stderr);
+        Assert.Contains("checkpoint names must be non-blank single file names", stdout);
+        Assert.Contains("cannot contain C0 control characters", stdout);
+    }
+
+    [Fact]
     public void PrintUsage_WithoutBanner_HidesAsciiArtAndEasterEggFlags()
     {
         var output = CaptureFullUsageOutput(showBanner: false);
