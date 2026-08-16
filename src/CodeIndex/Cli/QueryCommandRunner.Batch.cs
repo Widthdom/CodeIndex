@@ -955,8 +955,11 @@ public static partial class QueryCommandRunner
             }
             if (string.Equals(arg, "--", StringComparison.Ordinal))
             {
-                databaseOptionInsertionIndex = i;
-                return false;
+                if (databaseOptionInsertionIndex == args.Length)
+                    databaseOptionInsertionIndex = i;
+                if (i + 1 < args.Length)
+                    i++;
+                continue;
             }
 
             var separator = arg.IndexOf('=', StringComparison.Ordinal);
@@ -969,7 +972,17 @@ public static partial class QueryCommandRunner
                 && candidate.IsAcceptedBy(commandName)
                 && (string.Equals(candidate.Name, optionName, StringComparison.Ordinal)
                     || string.Equals(candidate.ShortName, optionName, StringComparison.Ordinal)));
-            nextTokenIsValue = separator < 0 && flag != null && i + 1 < args.Length;
+            if (separator < 0 && flag != null)
+            {
+                if (i + 1 < args.Length)
+                {
+                    nextTokenIsValue = true;
+                }
+                else if (databaseOptionInsertionIndex == args.Length)
+                {
+                    databaseOptionInsertionIndex = i;
+                }
+            }
         }
 
         return false;

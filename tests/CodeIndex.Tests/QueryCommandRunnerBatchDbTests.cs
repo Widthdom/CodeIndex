@@ -122,6 +122,50 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunBatch_ChildDbAfterPassThroughAndDanglingValuePreserveParsing_Issue5083()
+    {
+        var parentRoot = TestProjectHelper.CreateTempProject("cdidx_batch_parent_parser_db");
+        var childRoot = TestProjectHelper.CreateTempProject("cdidx_batch_child_parser_db");
+        try
+        {
+            var parentDbPath = TestProjectHelper.CreateProjectDb(parentRoot);
+            var childDbPath = TestProjectHelper.CreateProjectDb(childRoot);
+            TestProjectHelper.InsertIndexedFile(parentDbPath, "src/ParentA.cs", "csharp", "class ParentA { }\n");
+            TestProjectHelper.InsertIndexedFile(parentDbPath, "src/ParentB.cs", "csharp", "class ParentB { }\n");
+            TestProjectHelper.InsertIndexedFile(childDbPath, "src/Child.cs", "csharp", "class Child { }\n");
+
+            var input = string.Join(
+                "\n",
+                JsonSerializer.Serialize(
+                    new[] { "files", "--count", "--json", "--", "Child", "--db", childDbPath }),
+                JsonSerializer.Serialize(new[] { "search", "--query" }),
+                string.Empty);
+            var result = CaptureConsoleWithInput(
+                input,
+                () => QueryCommandRunner.RunBatch(
+                    ["--db", parentDbPath, "--json-summary"],
+                    _jsonOptions));
+            var lines = ParseJsonLines(result.Stdout);
+
+            Assert.Equal(CommandExitCodes.UsageError, result.Result);
+            Assert.Equal(string.Empty, result.Stderr);
+            Assert.Equal(3, lines.Count);
+            Assert.Equal("ok", lines[0].RootElement.GetProperty("status").GetString());
+            Assert.Equal(
+                1,
+                lines[0].RootElement.GetProperty("result").GetProperty("count").GetInt32());
+            Assert.Equal("error", lines[1].RootElement.GetProperty("status").GetString());
+            Assert.Equal(CommandExitCodes.UsageError, lines[1].RootElement.GetProperty("exit_code").GetInt32());
+            Assert.Equal(1, lines[2].RootElement.GetProperty("command_failures").GetInt32());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(parentRoot);
+            TestProjectHelper.DeleteDirectory(childRoot);
+        }
+    }
+
+    [Fact]
     public void RunBatch_ParentDbKeepsStatusProvenanceConsistentAcrossFormatsAndOverrides_Issue5083()
     {
         var parentRoot = TestProjectHelper.CreateTempProject("cdidx_batch_parent_status_db");
