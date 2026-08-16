@@ -78,9 +78,10 @@ public static partial class QueryCommandRunner
             if (!db.TryValidateIsCodeIndexDb(out var validationReason))
                 return WriteInvalidCodeIndexDbError(plan.DbPath, validationReason, json: false, jsonOptions);
 
-            s_batchReader = new DbReader(db);
-            s_batchDbPath = plan.DbPath;
-            s_batchDbPathExplicit = plan.DbPathExplicit;
+            s_batchDatabaseContext = new BatchDatabaseContext(
+                new DbReader(db),
+                plan.DbPath,
+                plan.DbPathExplicit);
             var jsonOutput = plan.JsonSummary
                 ? new BatchJsonOutputWriter(
                     Console.Out,
@@ -274,9 +275,7 @@ public static partial class QueryCommandRunner
         }
         finally
         {
-            s_batchReader = null;
-            s_batchDbPath = null;
-            s_batchDbPathExplicit = false;
+            s_batchDatabaseContext = null;
         }
     }
 
