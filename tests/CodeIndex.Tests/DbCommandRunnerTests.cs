@@ -881,26 +881,39 @@ public class DbCommandRunnerTests
         }
     }
 
-    [Fact]
-    public void Run_CheckpointHyphenatedName_DryRunAndWriteUseSameName_Issue4337()
+    [Theory]
+    [InlineData("round7-real")]
+    [InlineData("checkpoint 01")]
+    [InlineData("checkpoint_01")]
+    [InlineData("チェックポイント")]
+    public void Run_CheckpointAcceptedNames_RoundTripThroughRestoreDryRun_Issues4337And5082(string name)
     {
-        var root = TestProjectHelper.CreateTempProject("cdidx_db_checkpoint_hyphen_4337");
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_checkpoint_name_roundtrip_5082");
         var dbPath = Path.Combine(root, "codeindex.db");
         try
         {
             InitializeEmptyDb(dbPath);
+            DbCommandRunner.AvailableFreeSpaceForTesting = _ => long.MaxValue;
 
-            var (dryRunExit, dryRunJson) = RunAndCaptureJson(["checkpoint", "round7-real", "--dry-run", "--db", dbPath, "--json"]);
-            var (writeExit, writeJson) = RunAndCaptureJson(["checkpoint", "round7-real", "--db", dbPath, "--json"]);
+            var (dryRunExit, dryRunJson) = RunAndCaptureJson(["checkpoint", name, "--dry-run", "--db", dbPath, "--json"]);
+            var (writeExit, writeJson) = RunAndCaptureJson(["checkpoint", name, "--db", dbPath, "--json"]);
+            var (restoreExit, restoreJson) = RunAndCaptureJson(["restore", name, "--dry-run", "--db", dbPath, "--json"]);
 
             Assert.Equal(CommandExitCodes.Success, dryRunExit);
             Assert.Equal(CommandExitCodes.Success, writeExit);
-            Assert.Equal("round7-real", dryRunJson.GetProperty("name").GetString());
-            Assert.Equal("round7-real", writeJson.GetProperty("name").GetString());
-            Assert.True(Directory.Exists(writeJson.GetProperty("checkpoint_path").GetString()));
+            Assert.Equal(CommandExitCodes.Success, restoreExit);
+            Assert.Equal(name, dryRunJson.GetProperty("name").GetString());
+            Assert.Equal(name, writeJson.GetProperty("name").GetString());
+            Assert.Equal(name, restoreJson.GetProperty("name").GetString());
+            Assert.True(restoreJson.GetProperty("ready").GetBoolean());
+            Assert.True(restoreJson.GetProperty("manifest_valid").GetBoolean());
+            var checkpointPath = writeJson.GetProperty("checkpoint_path").GetString()!;
+            Assert.True(Directory.Exists(checkpointPath));
+            Assert.Contains($"name={name}{Environment.NewLine}", File.ReadAllText(Path.Combine(checkpointPath, "manifest.txt")), StringComparison.Ordinal);
         }
         finally
         {
+            DbCommandRunner.AvailableFreeSpaceForTesting = null;
             DeleteWorkDirectory(root);
         }
     }
@@ -1181,6 +1194,46 @@ public class DbCommandRunnerTests
             Assert.Contains("non-blank single file name", json.GetProperty("hint").GetString(), StringComparison.Ordinal);
             Assert.DoesNotContain("writable", json.GetProperty("hint").GetString(), StringComparison.OrdinalIgnoreCase);
             Assert.False(Directory.Exists(dbPath + ".checkpoints"));
+        }
+        finally
+        {
+            DeleteWorkDirectory(root);
+        }
+    }
+
+    [Theory]
+    [InlineData("\r")]
+    [InlineData("\n")]
+    [InlineData("\r\n")]
+    [InlineData("\0")]
+    [InlineData("\u001f")]
+    public void Run_CheckpointNameEntryPoints_RejectC0ControlsBeforeCreatingArtifacts_Issue5082(string controlCharacter)
+    {
+        var root = TestProjectHelper.CreateTempProject("cdidx_db_checkpoint_control_name_5082");
+        var dbPath = Path.Combine(root, "codeindex.db");
+        var checkpointRoot = dbPath + ".checkpoints";
+        var name = "before" + controlCharacter + "after";
+        try
+        {
+            InitializeEmptyDb(dbPath);
+
+            foreach (var command in new[]
+            {
+                new[] { "checkpoint", name, "--db", dbPath, "--json" },
+                new[] { "restore", name, "--dry-run", "--db", dbPath, "--json" },
+                new[] { "checkpoints", "--delete", name, "--dry-run", "--db", dbPath, "--json" },
+            })
+            {
+                var (exitCode, json) = RunAndCaptureJson(command);
+
+                Assert.Equal(CommandExitCodes.UsageError, exitCode);
+                Assert.Equal("error", json.GetProperty("status").GetString());
+                Assert.Equal(CommandErrorCodes.UsageError, json.GetProperty("error_code").GetString());
+                Assert.Equal("usage", json.GetProperty("category").GetString());
+                Assert.Contains("invalid checkpoint name", json.GetProperty("message").GetString(), StringComparison.Ordinal);
+                Assert.Contains("C0 control characters", json.GetProperty("hint").GetString(), StringComparison.Ordinal);
+                Assert.False(Directory.Exists(checkpointRoot));
+            }
         }
         finally
         {

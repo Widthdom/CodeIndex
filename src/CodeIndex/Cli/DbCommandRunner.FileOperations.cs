@@ -16,6 +16,7 @@ public static partial class DbCommandRunner
     {
         if (string.IsNullOrWhiteSpace(name)
             || name is "." or ".."
+            || ContainsC0ControlCharacter(name)
             || name.IndexOfAny(InvalidCheckpointNameChars) >= 0
             || name.Contains(Path.DirectorySeparatorChar)
             || (Path.AltDirectorySeparatorChar != '\0' && name.Contains(Path.AltDirectorySeparatorChar)))
@@ -24,6 +25,20 @@ public static partial class DbCommandRunner
         if (name.Length > MaxCheckpointNameLength)
             throw new ArgumentException($"checkpoint name is too long ({name.Length} characters; max {MaxCheckpointNameLength}): {FormatCheckpointNameForDiagnostic(name)}");
     }
+
+    private static bool ContainsC0ControlCharacter(string name)
+    {
+        foreach (var character in name)
+        {
+            if (character <= '\u001f')
+                return true;
+        }
+
+        return false;
+    }
+
+    private static string CheckpointNameUsageHint
+        => $"Use a non-blank single file name of at most {MaxCheckpointNameLength} characters; do not use `.` or `..`, directory separators, C0 control characters, or characters invalid in file names on this operating system.";
 
     private static string FormatCheckpointNameForDiagnostic(string name)
         => ConsoleUi.FormatBoundedValue(name, CheckpointNameDiagnosticTextLimit);

@@ -217,7 +217,7 @@ public static partial class DbCommandRunner
                 safeMessage,
                 isInputError ? CommandExitCodes.UsageError : CommandExitCodes.DatabaseError,
                 isInputError
-                    ? $"Use a non-blank single file name of at most {MaxCheckpointNameLength} characters; do not use `.` or `..`, directory separators, or characters invalid in file names on this operating system."
+                    ? CheckpointNameUsageHint
                     : "Ensure the database and checkpoint directory are writable, then retry `cdidx db checkpoint`.",
                 isInputError ? CommandErrorCodes.UsageError : CommandErrorCodes.DbError,
                 category: isInputError ? null : DiagnosticRedactor.ClassifyException(ex));
@@ -346,7 +346,7 @@ public static partial class DbCommandRunner
                 jsonOptions,
                 CommandErrorWriter.FormatSanitizedExceptionMessage(ex),
                 CommandExitCodes.UsageError,
-                $"Use a non-blank single file name of at most {MaxCheckpointNameLength} characters.",
+                CheckpointNameUsageHint,
                 CommandErrorCodes.UsageError);
         }
 

@@ -17,6 +17,21 @@ public static partial class DbCommandRunner
     {
         if (string.IsNullOrWhiteSpace(options.Name))
             return WriteCommandError(options.Json, jsonOptions, "restore requires a checkpoint name", CommandExitCodes.UsageError, "Use `cdidx db restore <name> --db <path>`.", CommandErrorCodes.UsageError);
+        try
+        {
+            ValidateCheckpointName(options.Name);
+        }
+        catch (ArgumentException ex)
+        {
+            return WriteCommandError(
+                options.Json,
+                jsonOptions,
+                CommandErrorWriter.FormatSanitizedExceptionMessage(ex),
+                CommandExitCodes.UsageError,
+                CheckpointNameUsageHint,
+                CommandErrorCodes.UsageError);
+        }
+
         if (!ValidateWritableFileDb(options, jsonOptions, "restore", out var fullDbPath, out var validationExitCode))
             return validationExitCode;
 
