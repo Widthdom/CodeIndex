@@ -8,6 +8,120 @@ namespace CodeIndex.Tests;
 public partial class QueryCommandRunnerTests
 {
     [Fact]
+    public void RunBatch_ImplicitDefaultDbPreservesAbsolutePathResolution_Issue5083()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_batch_implicit_db");
+        try
+        {
+            var sourceDirectory = Path.Combine(projectRoot, "src");
+            var sourcePath = Path.Combine(sourceDirectory, "Sample.cs");
+            Directory.CreateDirectory(sourceDirectory);
+            File.WriteAllText(sourcePath, "class Sample { void Method() { } }\n");
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Sample.cs",
+                "csharp",
+                "class Sample { void Method() { } }\n");
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            using (var command = db.Connection.CreateCommand())
+            {
+                command.CommandText = "DELETE FROM codeindex_meta WHERE key = $key;";
+                command.Parameters.AddWithValue("$key", DbContext.IndexedProjectRootMetaKey);
+                command.ExecuteNonQuery();
+            }
+
+            lock (TestConsoleLock.Gate)
+            {
+                var previousCurrentDirectory = Environment.CurrentDirectory;
+                try
+                {
+                    Environment.CurrentDirectory = projectRoot;
+                    var canonicalSourcePath = Path.Combine(
+                        Path.GetFullPath(Environment.CurrentDirectory),
+                        "src",
+                        "Sample.cs");
+                    var input = JsonSerializer.Serialize(
+                        new[] { "excerpt", canonicalSourcePath, "--start", "1", "--json" }) + "\n";
+                    var result = CaptureConsoleWithInput(
+                        input,
+                        () => QueryCommandRunner.RunBatch(["--json-summary"], _jsonOptions));
+                    var lines = ParseJsonLines(result.Stdout);
+
+                    Assert.True(
+                        result.Result == CommandExitCodes.Success,
+                        $"stdout: {result.Stdout}{Environment.NewLine}stderr: {result.Stderr}");
+                    Assert.Equal(string.Empty, result.Stderr);
+                    Assert.Equal("ok", lines[0].RootElement.GetProperty("status").GetString());
+                    Assert.Equal(
+                        "src/Sample.cs",
+                        lines[0].RootElement.GetProperty("result").GetProperty("path").GetString());
+                }
+                finally
+                {
+                    Environment.CurrentDirectory = previousCurrentDirectory;
+                }
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunBatch_ParentDbPathStartingWithDashesRemainsOneOptionToken_Issue5083()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_batch_dash_db");
+        try
+        {
+            var dbPath = Path.Combine(projectRoot, "--batch.db");
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                db.InitializeSchema();
+                var writer = new DbWriter(db.Connection);
+                writer.SetMeta(DbContext.IndexedProjectRootMetaKey, Path.GetFullPath(projectRoot));
+            }
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Dash.cs",
+                "csharp",
+                "class Dash { }\n");
+
+            lock (TestConsoleLock.Gate)
+            {
+                var previousCurrentDirectory = Environment.CurrentDirectory;
+                try
+                {
+                    Environment.CurrentDirectory = projectRoot;
+                    var input = JsonSerializer.Serialize(new[] { "files", "--count", "--json" }) + "\n";
+                    var result = CaptureConsoleWithInput(
+                        input,
+                        () => QueryCommandRunner.RunBatch(
+                            ["--db=--batch.db", "--json-summary"],
+                            _jsonOptions));
+                    var lines = ParseJsonLines(result.Stdout);
+
+                    Assert.Equal(CommandExitCodes.Success, result.Result);
+                    Assert.Equal(string.Empty, result.Stderr);
+                    Assert.Equal("ok", lines[0].RootElement.GetProperty("status").GetString());
+                    Assert.Equal(
+                        1,
+                        lines[0].RootElement.GetProperty("result").GetProperty("count").GetInt32());
+                }
+                finally
+                {
+                    Environment.CurrentDirectory = previousCurrentDirectory;
+                }
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunBatch_ParentDbKeepsStatusProvenanceConsistentAcrossFormatsAndOverrides_Issue5083()
     {
         var parentRoot = TestProjectHelper.CreateTempProject("cdidx_batch_parent_status_db");

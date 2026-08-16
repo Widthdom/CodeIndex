@@ -889,6 +889,7 @@ public static partial class QueryCommandRunner
             subArgs,
             out var databaseOptionInsertionIndex);
         var effectiveSubArgs = batchContext != null
+                               && batchContext.DbPathExplicit
                                && !childDbPathExplicit
                                && CliFlagSchema.GetFlag(commandName, "--db") != null
             ? InsertBatchDatabaseOption(subArgs, databaseOptionInsertionIndex, batchContext.DbPath)
@@ -979,15 +980,14 @@ public static partial class QueryCommandRunner
         int insertionIndex,
         string dbPath)
     {
-        var result = new string[args.Length + 2];
+        var result = new string[args.Length + 1];
         Array.Copy(args, 0, result, 0, insertionIndex);
-        result[insertionIndex] = "--db";
-        result[insertionIndex + 1] = dbPath;
+        result[insertionIndex] = $"--db={dbPath}";
         Array.Copy(
             args,
             insertionIndex,
             result,
-            insertionIndex + 2,
+            insertionIndex + 1,
             args.Length - insertionIndex);
         return result;
     }
