@@ -39,7 +39,7 @@ public partial class DbReader
                        resolved_target.name AS target_name,
                        resolved_target.kind AS target_kind
                 FROM symbol_references resolved_reference
-                JOIN all_candidate_symbols resolved_target
+                JOIN csharp_identity_candidate_symbols resolved_target
                   ON resolved_target.id = resolved_reference.target_symbol_id
                 WHERE resolved_reference.resolution_state = 'resolved'
                   AND resolved_target.lang = 'csharp'
@@ -53,7 +53,7 @@ public partial class DbReader
                 FROM symbol_references grouped_reference
                 JOIN symbol_reference_candidates grouped_candidate
                   ON grouped_candidate.reference_id = grouped_reference.id
-                JOIN all_candidate_symbols grouped_target
+                JOIN csharp_identity_candidate_symbols grouped_target
                   ON grouped_target.id = grouped_candidate.symbol_id
                 WHERE grouped_reference.resolution_state IN ('resolved_group', 'ambiguous')
                   AND grouped_target.lang = 'csharp'
@@ -489,9 +489,23 @@ public partial class DbReader
     private const int MaximumBoundedHotspotCandidateCount = 4096;
     private const int BoundedHotspotCandidatesPerResult = 64;
 
-    private int? GetBoundedHotspotCandidateLimit(int? resultLimit)
+    private int? GetBoundedHotspotCandidateLimit(
+        int? resultLimit,
+        string? kind,
+        string? lang)
     {
         if (!_hasHotspotReferenceCountsTable || !resultLimit.HasValue)
+            return null;
+
+        // The persisted name frontier is not authoritative for current C# callable
+        // hotspots, whose final rank is based on resolved logical target identities.
+        // Disable the legacy frontier whenever that identity-ranked result set can be
+        // selected; otherwise unresolved high-volume names can evict real targets.
+        // current C# callable hotspot の最終順位は resolved logical target identity
+        // に基づくため、旧 name frontier は使わず実 target の取りこぼしを防ぐ。
+        var canSelectCSharpCallable = (lang == null || lang == "csharp")
+            && (kind == null || kind is "function" or "test.method" or "property");
+        if (CanUseCSharpIdentityHotspotCounts() && canSelectCSharpCallable)
             return null;
 
         return Math.Clamp(

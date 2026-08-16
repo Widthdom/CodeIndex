@@ -94,6 +94,7 @@ public partial class DbReader
             excludePathPatterns,
             excludeTests,
             exact,
+            includeQualifiedCommonCalls,
             targetSymbolId);
 
         var request = CreateGraphReferenceQueryRequest(
@@ -135,6 +136,7 @@ public partial class DbReader
             excludePathPatterns,
             excludeTests,
             exact,
+            includeQualifiedCommonCalls,
             targetSymbolId: null);
 
         var request = CreateGraphReferenceQueryRequest(
@@ -195,6 +197,7 @@ public partial class DbReader
             excludePathPatterns,
             excludeTests,
             exact,
+            includeQualifiedCommonCalls,
             targetSymbolId);
 
         var request = CreateGraphReferenceQueryRequest(
@@ -225,12 +228,14 @@ public partial class DbReader
         IReadOnlyList<string>? excludePathPatterns,
         bool excludeTests,
         bool exact,
+        bool includeQualifiedCommonCalls,
         long? targetSymbolId)
     {
         if (targetSymbolId is long candidateTargetSymbolId)
             return [candidateTargetSymbolId];
         if (!HasCurrentReferenceIdentityContractForRead()
             || !exact
+            || includeQualifiedCommonCalls
             || !SqlNameResolver.HasQualifier(query)
             || lang is not (null or "csharp"))
         {
@@ -240,14 +245,12 @@ public partial class DbReader
         var resolution = ResolveImpactDefinitions(
             query,
             DefaultImpactGraphStateEntryBudget,
-            lang,
+            "csharp",
             pathPatterns,
             excludePathPatterns,
             excludeTests);
         if (resolution.Definitions.Count == 0)
-            return lang == "csharp" ? [] : null;
-        if (resolution.Definitions.Any(static definition => definition.Lang != "csharp"))
-            return null;
+            return [];
 
         var isLogicalPartialFamily = IsLogicalPartialFamilyRoot(
             hasResolvedIdentityGraph: true,

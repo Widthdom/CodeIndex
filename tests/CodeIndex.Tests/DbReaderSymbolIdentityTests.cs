@@ -178,6 +178,33 @@ public partial class DbReaderTests
         Assert.Contains("external.Open5084", unresolvedReference.Context, StringComparison.Ordinal);
         Assert.Null(unresolvedReference.TargetSymbolId);
 
+        Assert.Empty(_reader.GetCallers(
+            "external.Open5084",
+            limit: 20,
+            lang: "csharp",
+            pathPatterns: ["src/identity5084/*"],
+            exact: true));
+        Assert.Empty(_reader.GetCallers(
+            "external.Open5084",
+            limit: 20,
+            lang: null,
+            pathPatterns: ["src/identity5084/*"],
+            exact: true));
+        Assert.Equal("InvokeExternal", Assert.Single(_reader.GetCallers(
+            "external.Open5084",
+            limit: 20,
+            lang: "csharp",
+            pathPatterns: ["src/identity5084/*"],
+            exact: true,
+            includeQualifiedCommonCalls: true)).CallerName);
+        Assert.Equal("InvokeExternal", Assert.Single(_reader.GetCallers(
+            "external.Open5084",
+            limit: 20,
+            lang: null,
+            pathPatterns: ["src/identity5084/*"],
+            exact: true,
+            includeQualifiedCommonCalls: true)).CallerName);
+
         var primaryReferences = allReferences
             .Where(reference => reference.Context.Contains("Primary.Open5084", StringComparison.Ordinal))
             .ToList();
@@ -195,8 +222,7 @@ public partial class DbReaderTests
             limit: 20,
             lang: "csharp",
             pathPatterns: ["src/identity5084/*"],
-            exact: true,
-            includeQualifiedCommonCalls: true);
+            exact: true);
         var primaryCaller = Assert.Single(qualifiedCallers);
         Assert.Equal("InvokePrimary", primaryCaller.CallerName);
         Assert.Equal(2, primaryCaller.ReferenceCount);
@@ -205,16 +231,20 @@ public partial class DbReaderTests
             limit: 20,
             lang: "csharp",
             pathPatterns: ["src/identity5084/*"],
-            exact: true,
-            includeQualifiedCommonCalls: true));
+            exact: true));
         var callerTotal = _reader.CountCallersTotal(
             "Primary.Open5084",
             lang: "csharp",
             pathPatterns: ["src/identity5084/*"],
-            exact: true,
-            includeQualifiedCommonCalls: true);
+            exact: true);
         Assert.Equal(1, callerTotal.Count);
         Assert.Equal(1, callerTotal.FileCount);
+        Assert.Equal("InvokePrimary", Assert.Single(_reader.GetCallers(
+            "Primary.Open5084",
+            limit: 20,
+            lang: null,
+            pathPatterns: ["src/identity5084/*"],
+            exact: true)).CallerName);
 
         var impact = _reader.AnalyzeImpact(
             "Primary.Open5084",

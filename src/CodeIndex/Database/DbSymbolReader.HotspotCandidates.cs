@@ -48,10 +48,27 @@ public partial class DbReader
                         THEN 'container|' || CAST(s.file_id AS TEXT) || '|' || COALESCE(s.kind, '') || '|' || {containerQualifiedNameSql}
                     ELSE NULL
                 END";
-        var candidateLimit = GetBoundedHotspotCandidateLimit(resultLimit);
+        var candidateLimit = GetBoundedHotspotCandidateLimit(resultLimit, kind, lang);
         var sql = new StringBuilder(capacity: 5_000);
         sql.Append($@"
-            WITH {BuildBoundedHotspotCandidatePrefix(candidateLimit)}all_candidate_symbols AS MATERIALIZED (
+            WITH {BuildBoundedHotspotCandidatePrefix(candidateLimit)}csharp_identity_candidate_symbols AS MATERIALIZED (
+                SELECT s.id, s.file_id, s.name, s.kind, f.path, f.lang, s.line,
+                       {GetSymbolColumnSql("visibility")} AS visibility,
+                       {GetSymbolColumnSql("container_name")} AS container_name,
+                       CASE
+                           WHEN {familyTargetKeySql} IS NOT NULL
+                               THEN {familyTargetKeySql}
+                           WHEN {containerTargetKeySql} IS NOT NULL
+                               THEN {containerTargetKeySql}
+                           ELSE 'file|' || CAST(s.file_id AS TEXT)
+                       END AS logical_target_key,
+                       COALESCE({familyTargetKeySql}, {containerTargetKeySql}) AS count_safe_key
+                FROM symbols s
+                JOIN files f ON s.file_id = f.id
+                WHERE f.lang = 'csharp'
+                  AND s.kind NOT IN ('import', 'namespace')
+            ),
+            all_candidate_symbols AS MATERIALIZED (
                 SELECT s.id, s.file_id, s.name, s.kind, f.path, f.lang, s.line,
                        {GetSymbolColumnSql("visibility")} AS visibility,
                        {GetSymbolColumnSql("container_name")} AS container_name,

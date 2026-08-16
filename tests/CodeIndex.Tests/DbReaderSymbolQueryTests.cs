@@ -1245,6 +1245,93 @@ public partial class DbReaderTests
     }
 
     [Fact]
+    public void GetSymbolHotspots_BoundedResultsUseIdentityRankedCandidates_Issue5084()
+    {
+        var source = new StringBuilder();
+        source.AppendLine("public class RealTarget { public void ZRealHit5084() { } }");
+        for (var i = 0; i < 513; i++)
+        {
+            source.AppendLine($"public class Left{i} {{ public void A5084{i:D3}() {{ }} }}");
+            source.AppendLine($"public class Right{i} {{ public void A5084{i:D3}() {{ }} }}");
+        }
+        source.AppendLine("public class Caller { public void Call(RealTarget real, dynamic noise) {");
+        source.AppendLine("real.ZRealHit5084();");
+        for (var i = 0; i < 513; i++)
+            source.AppendLine($"noise.A5084{i:D3}();");
+        source.AppendLine("} }");
+
+        InsertIndexedFile("src/identity5084/BoundedHotspot.cs", "csharp", source.ToString());
+
+        var rows = _reader.GetSymbolHotspots(
+            1,
+            "function",
+            "csharp",
+            ["src/identity5084/BoundedHotspot.cs"],
+            null,
+            false);
+        var row = Assert.Single(rows);
+        Assert.Equal("ZRealHit5084", row.Symbol.Name);
+        Assert.Equal(1, row.ReferenceCount);
+    }
+
+    [Fact]
+    public void GetSymbolHotspots_EvaluatesAmbiguityBeforeVisibilityFilters_Issue5084()
+    {
+        InsertIndexedFile("src/identity5084/VisibilityHotspot.cs", "csharp", """
+            public class PublicTarget { public void ProbeRun5084() { } }
+            public class PrivateTarget { private void ProbeRun5084() { } }
+            public class ProbeCaller { public void Call(dynamic value) { value.ProbeRun5084(); } }
+            """);
+
+        using var select = _db.Connection.CreateCommand();
+        select.CommandText = """
+            SELECT r.id,
+                   MIN(CASE WHEN s.visibility = 'public' THEN s.id END),
+                   MIN(CASE WHEN s.visibility = 'private' THEN s.id END)
+            FROM symbol_references r
+            CROSS JOIN symbols s
+            WHERE r.symbol_name = 'ProbeRun5084'
+              AND s.name = 'ProbeRun5084'
+            GROUP BY r.id
+            """;
+        long referenceId;
+        long publicId;
+        long privateId;
+        using (var reader = select.ExecuteReader())
+        {
+            Assert.True(reader.Read());
+            referenceId = reader.GetInt64(0);
+            publicId = reader.GetInt64(1);
+            privateId = reader.GetInt64(2);
+        }
+
+        using var update = _db.Connection.CreateCommand();
+        update.CommandText = """
+            DELETE FROM symbol_reference_candidates WHERE reference_id = $reference;
+            INSERT INTO symbol_reference_candidates(reference_id, symbol_id, scope_rank) VALUES ($reference, $public, 0);
+            INSERT INTO symbol_reference_candidates(reference_id, symbol_id, scope_rank) VALUES ($reference, $private, 0);
+            UPDATE symbol_references
+            SET resolution_state = 'ambiguous', target_symbol_id = NULL
+            WHERE id = $reference;
+            """;
+        update.Parameters.AddWithValue("$reference", referenceId);
+        update.Parameters.AddWithValue("$public", publicId);
+        update.Parameters.AddWithValue("$private", privateId);
+        update.ExecuteNonQuery();
+
+        var rows = _reader.GetSymbolHotspots(
+            10,
+            "function",
+            "csharp",
+            ["src/identity5084/VisibilityHotspot.cs"],
+            null,
+            false,
+            visibilityFilters: ["public"]);
+
+        Assert.DoesNotContain(rows, row => row.Symbol.Name == "ProbeRun5084");
+    }
+
+    [Fact]
     public void GetSymbolHotspots_LangFilterIgnoresCrossLanguageReferences()
     {
         InsertIndexedFile("src/App.cs", "csharp",
