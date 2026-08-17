@@ -658,6 +658,44 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharpSwitchExpressionReturnedLambda_IndexesBodyCall_Issue5085()
+    {
+        const string content = """
+            using System;
+
+            public static class Routes
+            {
+                public static Func<int, int> Resolve(string key) =>
+                    key switch
+                    {
+                        "single" => value => Targets.Expression(value),
+                        "block" => value =>
+                        {
+                            return Targets.Block(value);
+                        },
+                        _ => value => 0,
+                    };
+            }
+
+            public static class Targets
+            {
+                public static int Expression(int value) => value;
+                public static int Block(int value) => value;
+            }
+            """;
+
+        var (_, references) = ExtractSymbolsAndReferences("csharp", content);
+
+        var reference = Assert.Single(references.Where(reference =>
+            reference.SymbolName == "Expression"
+            && reference.ReferenceKind == "call"));
+        Assert.Equal("function", reference.ContainerKind);
+        Assert.Equal("Resolve", reference.ContainerName);
+        Assert.Equal(8, reference.Line);
+        Assert.Equal(42, reference.Column);
+    }
+
+    [Fact]
     public void Extract_CSharpMultilinePrimaryCtorAttribute_UsesDeclaredTypeContainer_Issue4840Review()
     {
         // A primary-constructor declaration can begin before its body range. Attribute calls on

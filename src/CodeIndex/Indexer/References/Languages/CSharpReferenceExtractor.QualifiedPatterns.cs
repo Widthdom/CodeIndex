@@ -244,6 +244,13 @@ public static partial class ReferenceExtractor
                             return true;
                         }
 
+                        // Only continue onto the next line when the pattern head itself ended
+                        // at this close parenthesis. A comma terminates a switch-expression
+                        // result, and the next arm can otherwise look like a standalone `=>`
+                        // after its string literal is removed from the prepared source.
+                        if (afterClose < preparedLine.Length)
+                            return false;
+
                         for (var next = lineIndex + 1; next < preparedLines.Length; next++)
                         {
                             var nextLine = preparedLines[next];

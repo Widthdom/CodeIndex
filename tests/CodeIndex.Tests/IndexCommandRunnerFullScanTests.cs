@@ -3575,6 +3575,188 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void Run_Rebuild_CSharpSwitchExpressionReturnedLambdasRemainInGraph_Issue5085()
+    {
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "Routes.cs"),
+                """
+                using System;
+                using System.Threading.Tasks;
+
+                public enum ResultKind { None }
+                public readonly record struct Point(int X, int Y);
+
+                public static class Routes
+                {
+                    public static Func<int, int> Resolve(string key) =>
+                        key switch
+                        {
+                            "expression" => value => Targets.Expression(value),
+                            "block" => value =>
+                            {
+                                return Targets.Block(value);
+                            },
+                            "parenthesized" => (value) => Targets.Parenthesized(value),
+                            "unqualified" => value => Unqualified(value),
+                            "multiline" => value => Targets.Multiline(
+                                value),
+                            "nested" => value => value switch
+                            {
+                                > 0 => Targets.NestedPositive(value),
+                                _ => Targets.NestedOther(value),
+                            },
+                            _ => value => value,
+                        };
+
+                    public static Func<int, Task<int>> ResolveAsync(string key) =>
+                        key switch
+                        {
+                            "async" => async value => await Targets.Async(value),
+                            _ => async value => value,
+                        };
+
+                    public static object ResolveValue(string key) =>
+                        key switch
+                        {
+                            "plain" => Targets.Value,
+                            _ => ResultKind.None,
+                        };
+
+                    public static int Match(Point point) => point switch
+                    {
+                        Point(0, 0) => 0,
+                        Point(var x, var y) => x + y,
+                    };
+
+                    private static int Unqualified(int value) => value;
+                }
+
+                public static class Targets
+                {
+                    public static int Value { get; } = 1;
+                    public static int Expression(int value) => value;
+                    public static int Block(int value) => value;
+                    public static int Parenthesized(int value) => value;
+                    public static int Multiline(int value) => value;
+                    public static int NestedPositive(int value) => value;
+                    public static int NestedOther(int value) => value;
+                    public static Task<int> Async(int value) => Task.FromResult(value);
+                }
+                """);
+
+            var (exitCode, json) = RunAndCaptureJson(
+                [projectRoot, "--rebuild", "--yes", "--json", "--quiet"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.True(json.GetProperty("index_complete").GetBoolean());
+            Assert.True(json.GetProperty("reference_graph_complete").GetBoolean());
+            Assert.True(json.GetProperty("graph_data_current").GetBoolean());
+
+            using var db = new DbContext(DbOpenIntent.QueryOnly, dbPath);
+            using (var command = db.Connection.CreateCommand())
+            {
+                command.CommandText =
+                    """
+                    SELECT reference.symbol_name,
+                           reference.line,
+                           reference.column_number,
+                           reference.container_name,
+                           COALESCE(reference.target_qualifier, '')
+                    FROM symbol_references AS reference
+                    JOIN files AS source_file ON source_file.id = reference.file_id
+                    WHERE source_file.path = 'Routes.cs'
+                      AND reference.reference_kind = 'call'
+                      AND reference.container_name IN ('Resolve', 'ResolveAsync', 'ResolveValue', 'Match')
+                    ORDER BY reference.line,
+                             reference.column_number
+                    """;
+                using var rowReader = command.ExecuteReader();
+                var calls = new List<(string Name, long Line, long Column, string Container, string Qualifier)>();
+                while (rowReader.Read())
+                {
+                    calls.Add((
+                        rowReader.GetString(0),
+                        rowReader.GetInt64(1),
+                        rowReader.GetInt64(2),
+                        rowReader.GetString(3),
+                        rowReader.GetString(4)));
+                }
+
+                Assert.Equal(
+                    [
+                        ("Expression", 12L, 46L, "Resolve", "Targets"),
+                        ("Block", 15L, 32L, "Resolve", "Targets"),
+                        ("Parenthesized", 17L, 51L, "Resolve", "Targets"),
+                        ("Unqualified", 18L, 39L, "Resolve", ""),
+                        ("Multiline", 19L, 45L, "Resolve", "Targets"),
+                        ("NestedPositive", 23L, 32L, "Resolve", "Targets"),
+                        ("NestedOther", 24L, 30L, "Resolve", "Targets"),
+                        ("Async", 32L, 53L, "ResolveAsync", "Targets"),
+                    ],
+                    calls);
+            }
+
+            using var graphReader = new DbReader(db.Connection);
+            var resolveCallees = graphReader.GetCallees(
+                "Resolve",
+                limit: 50,
+                lang: "csharp",
+                exact: true,
+                includeQualifiedCommonCalls: true);
+            Assert.Equal(
+                [
+                    "Block",
+                    "Expression",
+                    "Multiline",
+                    "NestedOther",
+                    "NestedPositive",
+                    "Parenthesized",
+                    "Unqualified",
+                ],
+                resolveCallees.Select(result => result.CalleeName).Order(StringComparer.Ordinal));
+
+            foreach (var calleeName in resolveCallees.Select(result => result.CalleeName))
+            {
+                var callers = graphReader.GetCallers(
+                    calleeName,
+                    limit: 20,
+                    lang: "csharp",
+                    exact: true,
+                    includeQualifiedCommonCalls: true);
+                Assert.Contains(callers, result => result.CallerName == "Resolve");
+            }
+
+            var expressionCaller = Assert.Single(graphReader.GetCallers(
+                "Expression",
+                limit: 20,
+                lang: "csharp",
+                exact: true,
+                includeQualifiedCommonCalls: true));
+            Assert.Equal("Resolve", expressionCaller.CallerName);
+            Assert.Equal(12, expressionCaller.FirstLine);
+            Assert.Equal(46, expressionCaller.FirstColumn);
+
+            var asyncCaller = Assert.Single(graphReader.GetCallers(
+                "Async",
+                limit: 20,
+                lang: "csharp",
+                exact: true,
+                includeQualifiedCommonCalls: true));
+            Assert.Equal("ResolveAsync", asyncCaller.CallerName);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+            SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Fact]
     public void Run_FullScan_FreshSnapshotAbortRetainsDiscoveredLanguageFailuresWithoutRows()
     {
         var projectRoot = CreateTempProject();
@@ -5899,7 +6081,7 @@ public partial class IndexCommandRunnerTests
                 SymbolExtractor.CSharpContractVersion.ToString(
                     System.Globalization.CultureInfo.InvariantCulture),
                 versionCmd.ExecuteScalar() as string);
-            Assert.Equal(9, SymbolExtractor.CSharpContractVersion);
+            Assert.Equal(10, SymbolExtractor.CSharpContractVersion);
         }
         finally
         {
@@ -6165,7 +6347,7 @@ public partial class IndexCommandRunnerTests
                 SymbolExtractor.CSharpContractVersion.ToString(
                     System.Globalization.CultureInfo.InvariantCulture),
                 versionCmd.ExecuteScalar() as string);
-            Assert.Equal(9, SymbolExtractor.CSharpContractVersion);
+            Assert.Equal(10, SymbolExtractor.CSharpContractVersion);
         }
         finally
         {
