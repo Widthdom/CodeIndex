@@ -972,8 +972,9 @@ internal static class GitHubIssueReporter
     {
         var isRateLimited = response.StatusCode == (HttpStatusCode)429
             || (response.StatusCode == HttpStatusCode.Forbidden
-                && response.Headers.TryGetValues("x-ratelimit-remaining", out var remainingValues)
-                && remainingValues.Any(value => string.Equals(value, "0", StringComparison.Ordinal)));
+                && (response.Headers.RetryAfter is not null
+                    || (response.Headers.TryGetValues("x-ratelimit-remaining", out var remainingValues)
+                        && remainingValues.Any(value => string.Equals(value, "0", StringComparison.Ordinal)))));
         if (!isRateLimited)
             return null;
 

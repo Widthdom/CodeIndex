@@ -103,7 +103,7 @@ public static partial class QueryCommandRunner
             {
                 var preflightResult = IssueDuplicatePreflight.TryLoadAsync(options.OpenIssuesPath, options.OpenIssuesRepository, issueState: options.IssueState).GetAwaiter().GetResult();
                 if (!preflightResult.Loaded)
-                    return CommandErrorWriter.Write(preflightResult.Error!, CommandExitCodes.UsageError, usage: ConsoleUi.GetUsageLine("map"));
+                    return WriteIssueDuplicatePreflightFailure(preflightResult, options, jsonOptions, "map");
                 var issueDraftsJson = BuildRepoMapIssueDraftsPayload(
                     map,
                     options,

@@ -617,7 +617,7 @@ internal static partial class SuggestionsCommandRunner
             .GetAwaiter()
             .GetResult();
         if (!preflightResult.Loaded)
-            return WriteUsageError(preflightResult.Error!, options.Json, jsonOptions);
+            return WritePreflightError(preflightResult, options.Json, jsonOptions);
         var preflight = preflightResult.Preflight;
 
         var drafts = records.Select(record => ToIssueDraft(record, preflight, options)).ToList();
@@ -1286,6 +1286,25 @@ internal static partial class SuggestionsCommandRunner
             CommandExitCodes.UsageError,
             hint ?? CommandErrorWriter.DefaultHint,
             Usage);
+
+    private static int WritePreflightError(
+        IssueDuplicatePreflight.IssueDuplicatePreflightLoadResult result,
+        bool json,
+        JsonSerializerOptions jsonOptions)
+    {
+        var usageFailure = result.ExitCode == CommandExitCodes.UsageError;
+        return CommandErrorWriter.WriteJsonOrHuman(
+            json,
+            jsonOptions,
+            result.Error!,
+            result.ExitCode,
+            usageFailure
+                ? CommandErrorWriter.DefaultHint
+                : "Retry the GitHub lookup after resolving the reported remote failure; duplicate preflight is indeterminate and no issue drafts were exported.",
+            usageFailure ? Usage : null,
+            category: result.ErrorCategory,
+            command: "suggestions export");
+    }
 
     private static string StripErrorPrefix(string message)
         => message.StartsWith("Error: ", StringComparison.Ordinal)

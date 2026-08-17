@@ -189,6 +189,7 @@ public sealed class GitHubHttpCancellationTests : IDisposable
     [Fact]
     public async Task IssueDuplicatePreflight_TryLoadAsync_CallerCancellationCancelsPendingSend_Issue3684()
     {
+        env.Set("CDIDX_GITHUB_TOKEN", "test-token");
         var handler = new BlockingHttpMessageHandler();
         using var client = new HttpClient(handler)
         {

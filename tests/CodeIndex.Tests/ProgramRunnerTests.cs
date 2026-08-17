@@ -312,7 +312,8 @@ public class ProgramRunnerTests
         Assert.Equal(CommandExitCodes.Success, exportExitCode);
         Assert.Contains("--format <json|markdown|issue-drafts>", exportStdout, StringComparison.Ordinal);
         Assert.Contains("--open-issues <path|github|github:owner/name>", exportStdout, StringComparison.Ordinal);
-        Assert.Contains("read-only GitHub API GETs", exportStdout, StringComparison.Ordinal);
+        Assert.Contains("read-only GitHub API requests with GraphQL cursor pagination", exportStdout, StringComparison.Ordinal);
+        Assert.Contains("requires CDIDX_GITHUB_TOKEN", exportStdout, StringComparison.Ordinal);
         Assert.Contains("CDIDX_GITHUB_TOKEN", exportStdout, StringComparison.Ordinal);
         Assert.Contains("export never submits or opens GitHub issues", exportStdout, StringComparison.Ordinal);
         Assert.Empty(exportStderr);
@@ -348,6 +349,132 @@ public class ProgramRunnerTests
             "--issue-state can only be used with `suggestions export --format issue-drafts --open-issues github`",
             stderr,
             StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Run_SuggestionsRemoteDuplicatePreflightFailureIsIndeterminateRuntimeError_Issue5090()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_issue5090_command");
+        using var env = EnvironmentVariableScope.Capture("CDIDX_GITHUB_TOKEN");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var store = new SuggestionStore(
+                Path.GetDirectoryName(dbPath)!,
+                Path.GetFileNameWithoutExtension(dbPath));
+            const string candidateTitle = "Cursor lookup must fail closed";
+            var record = new SuggestionRecord
+            {
+                Category = "bug",
+                Language = "csharp",
+                Description = "Remote duplicate preflight must not turn partial evidence into a non-duplicate result.",
+                SampledTitle = candidateTitle,
+                Hash = SuggestionStore.ComputeHash(
+                    "bug",
+                    "csharp",
+                    "Remote duplicate preflight must not turn partial evidence into a non-duplicate result."),
+                CreatedAt = new DateTime(2026, 8, 18, 0, 0, 0, DateTimeKind.Utc),
+            };
+            Assert.True(store.TryAdd(record));
+
+            var handler = new FakeHttpMessageHandler();
+            handler.QueueJson(
+                HttpStatusCode.OK,
+                """
+                {
+                  "data": {
+                    "repository": {
+                      "issues": {
+                        "nodes": [
+                          {
+                            "id": "I_issue5090_command",
+                            "number": 5090,
+                            "title": "[AI Suggestion] bug: Cursor lookup must fail closed",
+                            "url": "https://github.com/Widthdom/CodeIndex/issues/5090",
+                            "body": "",
+                            "state": "OPEN",
+                            "labels": { "nodes": [{ "name": "bug" }] }
+                          }
+                        ],
+                        "pageInfo": { "hasNextPage": true, "endCursor": "cursor-5090" }
+                      }
+                    }
+                  }
+                }
+                """);
+            handler.QueueJson(
+                HttpStatusCode.UnprocessableEntity,
+                """{"message":"cursor rejected","token":"issue5090-secret"}""");
+            using var client = new HttpClient(handler);
+            IssueDuplicatePreflight.s_httpClientOverride = client;
+            env.Set("CDIDX_GITHUB_TOKEN", "issue5090-token");
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                [
+                    "suggestions", "export",
+                    "--db", dbPath,
+                    "--format", "issue-drafts",
+                    "--open-issues", "github:Widthdom/CodeIndex",
+                    "--issue-state", "all",
+                    "--json",
+                ],
+                appVersion: "1.10.0",
+                configStartDirectory: projectRoot));
+
+            Assert.Equal(CommandExitCodes.RuntimeError, exitCode);
+            Assert.NotEqual(CommandExitCodes.UsageError, exitCode);
+            Assert.Empty(stderr);
+            using var document = JsonDocument.Parse(stdout);
+            var root = document.RootElement;
+            Assert.Equal("error", root.GetProperty("status").GetString());
+            Assert.Equal("E023_COMMAND_FAILED", root.GetProperty("error_code").GetString());
+            Assert.Equal(
+                IssueDuplicatePreflight.GitHubValidationFailureCategory,
+                root.GetProperty("category").GetString());
+            Assert.Contains("indeterminate", root.GetProperty("hint").GetString(), StringComparison.Ordinal);
+            Assert.False(root.TryGetProperty("drafts", out _));
+            Assert.DoesNotContain(candidateTitle, stdout, StringComparison.Ordinal);
+            Assert.DoesNotContain("No duplicate candidates were found", stdout, StringComparison.Ordinal);
+            Assert.DoesNotContain("issue5090-secret", stdout, StringComparison.Ordinal);
+            Assert.Equal(2, handler.RequestCount);
+            using var secondRequest = JsonDocument.Parse(handler.Requests[1].Body!);
+            Assert.Equal(
+                "cursor-5090",
+                secondRequest.RootElement.GetProperty("variables").GetProperty("after").GetString());
+        }
+        finally
+        {
+            IssueDuplicatePreflight.s_httpClientOverride = null;
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_AuditRemoteDuplicatePreflightFailurePreservesAuditCommandIdentity_Issue5090()
+    {
+        using var env = EnvironmentVariableScope.Capture("CDIDX_GITHUB_TOKEN");
+        env.Set("CDIDX_GITHUB_TOKEN", null);
+
+        var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+            [
+                "audit", "risky-code",
+                "--format", "issue-drafts",
+                "--open-issues", "github:Widthdom/CodeIndex",
+                "--json",
+            ],
+            appVersion: "1.10.0"));
+
+        Assert.Equal(CommandExitCodes.RuntimeError, exitCode);
+        Assert.Empty(stderr);
+        using var document = JsonDocument.Parse(stdout);
+        var root = document.RootElement;
+        Assert.Equal("error", root.GetProperty("status").GetString());
+        Assert.Equal("E023_COMMAND_FAILED", root.GetProperty("error_code").GetString());
+        Assert.Equal(
+            IssueDuplicatePreflight.GitHubAuthenticationFailureCategory,
+            root.GetProperty("category").GetString());
+        Assert.Equal("audit", root.GetProperty("command").GetString());
+        Assert.Equal(CommandExitCodes.RuntimeError, root.GetProperty("exit_code").GetInt32());
     }
 
     [Theory]

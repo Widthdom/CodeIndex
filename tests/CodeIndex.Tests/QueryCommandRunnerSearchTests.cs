@@ -12027,6 +12027,8 @@ public partial class QueryCommandRunnerTests
     public void RunSearch_RecipeIssueDraftsWarnForMissingRepositoryLabels_Issue3926()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_recipe_issue_drafts_labels");
+        using var env = EnvironmentVariableScope.Capture("CDIDX_GITHUB_TOKEN");
+        env.Set("CDIDX_GITHUB_TOKEN", "issue-draft-label-test-token");
         var handler = new IssueDraftRepositoryLabelsHandler();
         var httpClient = new HttpClient(handler);
         IssueDuplicatePreflight.s_httpClientOverride = httpClient;
@@ -12072,7 +12074,7 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(
                 "Repository label validation against github:Widthdom/CodeIndex found missing label(s): audit.",
                 draft.GetProperty("label_warning").GetString());
-            Assert.Contains(handler.RequestUris, uri => uri == "https://api.github.com/repos/Widthdom/CodeIndex/issues?state=open&per_page=100&page=1");
+            Assert.Contains(handler.RequestUris, uri => uri == "https://api.github.com/graphql");
             Assert.Contains(handler.RequestUris, uri => uri == "https://api.github.com/repos/Widthdom/CodeIndex/labels?per_page=100&page=1");
         }
         finally
@@ -17920,7 +17922,18 @@ public partial class QueryCommandRunnerTests
                     {"name":"bug"}
                   ]
                   """
-                : "[]";
+                : """
+                  {
+                    "data": {
+                      "repository": {
+                        "issues": {
+                          "nodes": [],
+                          "pageInfo": { "hasNextPage": false, "endCursor": null }
+                        }
+                      }
+                    }
+                  }
+                  """;
             return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
             {
                 Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json"),
