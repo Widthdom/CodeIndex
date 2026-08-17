@@ -3037,6 +3037,51 @@ public class LspServerTests
     }
 
     [Fact]
+    public async Task RunAsync_ShutdownThenExit_CompletesWithoutEofOrAnotherRead_Issue5086()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_shutdown_exit_pending_5086");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
+            const string initializeRequest = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}";
+            const string initializedNotification = "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}";
+            const string shutdownRequest = "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"shutdown\"}";
+            const string exitNotification = "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}";
+            using var input = new StagedReadStream(
+                Encoding.UTF8.GetBytes(Frame(initializeRequest)),
+                Encoding.UTF8.GetBytes(
+                    Frame(initializedNotification)
+                    + Frame(shutdownRequest)
+                    + Frame(exitNotification)),
+                leaveFinalReadPending: true);
+            using var output = new SignalingMemoryStream();
+
+            var runTask = server.RunAsync(input, output);
+            await output.WaitForWriteAsync().WaitAsync(TestDeterminism.DefaultTimeout);
+            input.ReleaseSuffix();
+            var exitCode = await runTask.WaitAsync(TestDeterminism.DefaultTimeout);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.False(input.FinalReadStarted);
+            output.Position = 0;
+            Assert.True(LspServer.TryReadMessage(output, out var initializePayload));
+            using var initialize = JsonDocument.Parse(initializePayload);
+            Assert.Equal(1, initialize.RootElement.GetProperty("id").GetInt32());
+            Assert.True(LspServer.TryReadMessage(output, out var shutdownPayload));
+            using var shutdown = JsonDocument.Parse(shutdownPayload);
+            Assert.Equal(2, shutdown.RootElement.GetProperty("id").GetInt32());
+            Assert.Equal(JsonValueKind.Null, shutdown.RootElement.GetProperty("result").ValueKind);
+            Assert.False(LspServer.TryReadMessage(output, out _));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public async Task RunAsync_ShutdownThenExit_StopsBeforeLaterFrames_Issue4849()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_shutdown_exit");
@@ -3090,7 +3135,7 @@ public class LspServerTests
     }
 
     [Fact]
-    public void Run_ExitBeforeShutdown_ReturnsUsageError()
+    public async Task RunAsync_ExitWithoutShutdown_CompletesWithoutEofAndReturnsUsageError_Issue5086()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_lsp_exit_without_shutdown");
         try
@@ -3100,13 +3145,24 @@ public class LspServerTests
             using var server = new LspServer(new DbReader(db), "1.2.3", ProgramRunner.CreateDefaultJsonOptions(), projectRoot);
             const string exitNotification = "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}";
             const string initializeRequest = "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"initialize\",\"params\":{}}";
-            using var input = new MemoryStream(Encoding.UTF8.GetBytes(Frame(exitNotification) + Frame(initializeRequest)));
-            using var output = new MemoryStream();
+            const string initializedNotification = "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}";
+            using var input = new StagedReadStream(
+                Encoding.UTF8.GetBytes(Frame(initializeRequest)),
+                Encoding.UTF8.GetBytes(Frame(initializedNotification) + Frame(exitNotification)),
+                leaveFinalReadPending: true);
+            using var output = new SignalingMemoryStream();
 
-            var exitCode = server.Run(input, output);
+            var runTask = server.RunAsync(input, output);
+            await output.WaitForWriteAsync().WaitAsync(TestDeterminism.DefaultTimeout);
+            input.ReleaseSuffix();
+            var exitCode = await runTask.WaitAsync(TestDeterminism.DefaultTimeout);
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.False(input.FinalReadStarted);
             output.Position = 0;
+            Assert.True(LspServer.TryReadMessage(output, out var initializePayload));
+            using var initialize = JsonDocument.Parse(initializePayload);
+            Assert.Equal(3, initialize.RootElement.GetProperty("id").GetInt32());
             Assert.False(LspServer.TryReadMessage(output, out _));
         }
         finally
@@ -6015,12 +6071,21 @@ public class LspServerTests
         }
     }
 
-    private sealed class StagedReadStream(byte[] prefix, byte[] suffix) : Stream
+    private sealed class StagedReadStream(
+        byte[] prefix,
+        byte[] suffix,
+        bool leaveFinalReadPending = false) : Stream
     {
         private readonly TaskCompletionSource suffixRelease =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource finalReadStarted =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource finalReadRelease =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int prefixOffset;
         private int suffixOffset;
+
+        internal bool FinalReadStarted => finalReadStarted.Task.IsCompleted;
 
         internal void ReleaseSuffix() => suffixRelease.TrySetResult();
 
@@ -6055,7 +6120,14 @@ public class LspServerTests
 
             await suffixRelease.Task.WaitAsync(cancellationToken);
             if (suffixOffset >= suffix.Length)
+            {
+                if (!leaveFinalReadPending)
+                    return 0;
+
+                finalReadStarted.TrySetResult();
+                await finalReadRelease.Task;
                 return 0;
+            }
 
             var suffixCount = Math.Min(buffer.Length, suffix.Length - suffixOffset);
             suffix.AsMemory(suffixOffset, suffixCount).CopyTo(buffer);
@@ -6071,6 +6143,13 @@ public class LspServerTests
 
         public override void Write(byte[] buffer, int offset, int count)
             => throw new NotSupportedException();
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+                finalReadRelease.TrySetResult();
+            base.Dispose(disposing);
+        }
     }
 
     private sealed class PrefixThenPendingReadStream(byte[] prefix) : Stream
