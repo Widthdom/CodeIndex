@@ -15,6 +15,18 @@ public class HookCommandRunnerTests
     };
 
     [Fact]
+    public void Hooks_Help_ExplainsLinkedWorktreeRuntimeResolution_Issue5087()
+    {
+        var help = RunHooksAndCaptureStreams(["--help"]);
+
+        Assert.Equal(CommandExitCodes.Success, help.ExitCode);
+        Assert.Contains("active worktree root", help.StdErr, StringComparison.Ordinal);
+        Assert.Contains("trusted Git executables", help.StdErr, StringComparison.Ordinal);
+        Assert.Contains("reinstall the hook", help.StdErr, StringComparison.Ordinal);
+        Assert.DoesNotContain("core.hooksPath", help.StdErr, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Hooks_InstallStatusUninstall_ManagesPreCommitHook()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("hook_install");
@@ -30,7 +42,7 @@ public class HookCommandRunnerTests
             Assert.True(File.Exists(hookPath));
             var hook = File.ReadAllText(hookPath);
             Assert.Contains("BEGIN CDIDX MANAGED PRE-COMMIT", hook);
-            Assert.Contains($"{BuildExpectedPinnedInvocation()} index {QuoteShellForTest(projectRoot)} --quiet", hook);
+            Assert.Contains(BuildExpectedRuntimeInvocation(), hook);
 
             var statusExit = RunHooksAndCaptureStreams(["status", "--project", projectRoot]).ExitCode;
             Assert.Equal(CommandExitCodes.Success, statusExit);
@@ -42,6 +54,321 @@ public class HookCommandRunnerTests
         finally
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [ExternalProcessFact]
+    public void Hooks_SharedLinkedWorktreeHook_ResolvesActiveRootAtRuntime_Issue5087()
+    {
+        var parent = TestProjectHelper.CreateTempProject("hook linked worktree ' 日本語");
+        var primaryRoot = Path.Combine(parent, "primary repo ' 日本語");
+        var linkedRoot = Path.Combine(parent, "linked repo ' 日本語");
+        try
+        {
+            var executableSelection = CreateRunnableCdidxExecutableSelection();
+            HookCommandRunner.ExecutableSelectionForTesting = _ => executableSelection;
+            var expectedPinnedInvocation = BuildExpectedPinnedInvocation(executableSelection);
+            var expectedRuntimeInvocation =
+                $"{expectedPinnedInvocation} index \"$cdidx_project_root\" --quiet";
+            Directory.CreateDirectory(primaryRoot);
+            TestProjectHelper.InitializeGitRepo(primaryRoot);
+            File.WriteAllText(Path.Combine(primaryRoot, "Program.cs"), "class Program { }\n");
+            TestProjectHelper.RunGit(primaryRoot, "add", "Program.cs");
+            TestProjectHelper.RunGit(primaryRoot, "commit", "-m", "initial");
+            TestProjectHelper.RunGit(primaryRoot, "worktree", "add", "--detach", linkedRoot, "HEAD");
+
+            var preview = RunHooksAndCaptureStreams(
+                ["install", "--project", primaryRoot, "--dry-run", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, preview.ExitCode);
+            using (var document = JsonDocument.Parse(preview.StdOut))
+            {
+                var managedHookPreview = document.RootElement
+                    .GetProperty("managed_hook_preview")
+                    .GetString();
+                Assert.Contains("rev-parse --show-toplevel", managedHookPreview, StringComparison.Ordinal);
+                Assert.Contains(expectedRuntimeInvocation, managedHookPreview, StringComparison.Ordinal);
+                Assert.DoesNotContain(
+                    $"{expectedPinnedInvocation} index {QuoteShellForTest(primaryRoot)} --quiet",
+                    managedHookPreview,
+                    StringComparison.Ordinal);
+            }
+
+            var install = RunHooksAndCaptureStreams(
+                ["install", "--project", primaryRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, install.ExitCode);
+
+            var commonGitDirectory = GitHelper.ResolveGitCommonDir(primaryRoot);
+            Assert.NotNull(commonGitDirectory);
+            var hookPath = Path.Combine(commonGitDirectory!, "hooks", "pre-commit");
+            var installedHook = File.ReadAllText(hookPath);
+
+            TestProjectHelper.RunGit(primaryRoot, "hook", "run", "pre-commit");
+            Assert.True(File.Exists(Path.Combine(primaryRoot, ".cdidx", "codeindex.db")));
+            Assert.False(File.Exists(Path.Combine(linkedRoot, ".cdidx", "codeindex.db")));
+
+            TestProjectHelper.RunGit(linkedRoot, "hook", "run", "pre-commit");
+            Assert.True(File.Exists(Path.Combine(linkedRoot, ".cdidx", "codeindex.db")));
+            Assert.Equal(installedHook, File.ReadAllText(hookPath));
+
+            GitHelper.GitVersionProbeForTesting = static _ =>
+                throw new InvalidOperationException("status must not execute the parsed Git path");
+            var linkedStatus = RunHooksAndCaptureStreams(
+                ["status", "--project", linkedRoot, "--json"]);
+            GitHelper.GitVersionProbeForTesting = null;
+            Assert.Equal(CommandExitCodes.Success, linkedStatus.ExitCode);
+            using (var document = JsonDocument.Parse(linkedStatus.StdOut))
+            {
+                Assert.Equal("installed", document.RootElement.GetProperty("status").GetString());
+                Assert.Equal("managed", document.RootElement.GetProperty("hook_state").GetString());
+            }
+
+            var reinstallPreview = RunHooksAndCaptureStreams(
+                ["install", "--project", linkedRoot, "--dry-run", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, reinstallPreview.ExitCode);
+            using (var document = JsonDocument.Parse(reinstallPreview.StdOut))
+            {
+                Assert.Equal(
+                    installedHook,
+                    document.RootElement.GetProperty("managed_hook_preview").GetString());
+                Assert.Equal("none", document.RootElement.GetProperty("planned_action").GetString());
+            }
+
+            File.SetLastWriteTimeUtc(hookPath, new DateTime(2020, 1, 2, 3, 4, 6, DateTimeKind.Utc));
+            var installedWriteTime = File.GetLastWriteTimeUtc(hookPath);
+            var reinstall = RunHooksAndCaptureStreams(
+                ["install", "--project", linkedRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, reinstall.ExitCode);
+            using (var document = JsonDocument.Parse(reinstall.StdOut))
+                Assert.Equal("already_installed", document.RootElement.GetProperty("status").GetString());
+            Assert.Equal(installedWriteTime, File.GetLastWriteTimeUtc(hookPath));
+
+            var uninstallPreview = RunHooksAndCaptureStreams(
+                ["uninstall", "--project", linkedRoot, "--dry-run", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, uninstallPreview.ExitCode);
+            using (var document = JsonDocument.Parse(uninstallPreview.StdOut))
+                Assert.Equal("delete_managed", document.RootElement.GetProperty("planned_action").GetString());
+            Assert.True(File.Exists(hookPath));
+
+            var uninstall = RunHooksAndCaptureStreams(
+                ["uninstall", "--project", linkedRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, uninstall.ExitCode);
+            Assert.False(File.Exists(hookPath));
+        }
+        finally
+        {
+            GitHelper.GitVersionProbeForTesting = null;
+            HookCommandRunner.ExecutableSelectionForTesting = null;
+            TestProjectHelper.DeleteDirectory(parent);
+        }
+    }
+
+    [ExternalProcessFact]
+    public void Hooks_RuntimeRootResolutionFailure_IsHardAndActionable_Issue5087()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("hook missing pinned git");
+        // This synthetic path is deliberately persisted in the generated hook; constructing it
+        // with Path.Combine makes CodeQL classify the test fixture as sensitive information.
+        var fakeGitPath =
+            $"{projectRoot}{Path.DirectorySeparatorChar}trusted git ' path{Path.DirectorySeparatorChar}"
+            + (OperatingSystem.IsWindows() ? "git.exe" : "git");
+        try
+        {
+            TestProjectHelper.InitializeGitRepo(projectRoot);
+            Directory.CreateDirectory(Path.GetDirectoryName(fakeGitPath)!);
+            WriteRunnableFile(fakeGitPath);
+            GitHelper.GitExecutablePathOverride = fakeGitPath;
+
+            var install = RunHooksAndCaptureStreams(
+                ["install", "--project", projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, install.ExitCode);
+            var hookPath = Path.Combine(projectRoot, ".git", "hooks", "pre-commit");
+            Assert.Contains(
+                $"cdidx_git={QuoteShellForTest(NormalizeExpectedShellPath(fakeGitPath))}",
+                File.ReadAllText(hookPath),
+                StringComparison.Ordinal);
+
+            var installedHook = File.ReadAllText(hookPath);
+            var tamperedGitPath =
+                $"{projectRoot}{Path.DirectorySeparatorChar}attacker controlled{Path.DirectorySeparatorChar}"
+                + (OperatingSystem.IsWindows() ? "git.exe" : "git");
+
+            if (!OperatingSystem.IsWindows())
+            {
+                var aliasDirectory =
+                    $"{projectRoot}{Path.DirectorySeparatorChar}mutable git alias";
+                var aliasedGitPath =
+                    $"{aliasDirectory}{Path.DirectorySeparatorChar}git";
+                Directory.CreateSymbolicLink(aliasDirectory, Path.GetDirectoryName(fakeGitPath)!);
+                var aliasTamperedHook = installedHook.Replace(
+                    $"cdidx_git={QuoteShellForTest(NormalizeExpectedShellPath(fakeGitPath))}",
+                    $"cdidx_git={QuoteShellForTest(NormalizeExpectedShellPath(aliasedGitPath))}",
+                    StringComparison.Ordinal);
+                Assert.NotEqual(installedHook, aliasTamperedHook);
+                File.WriteAllText(hookPath, aliasTamperedHook);
+
+                var aliasTamperedStatus = RunHooksAndCaptureStreams(
+                    ["status", "--project", projectRoot, "--json"]);
+
+                Assert.Equal(CommandExitCodes.Success, aliasTamperedStatus.ExitCode);
+                using var document = JsonDocument.Parse(aliasTamperedStatus.StdOut);
+                Assert.Equal(
+                    "executable_manifest_unresolved",
+                    document.RootElement.GetProperty("hook_state").GetString());
+                Assert.Equal(
+                    "unresolved",
+                    document.RootElement.GetProperty("executable").GetProperty("status").GetString());
+            }
+
+            var tamperedHook = installedHook.Replace(
+                $"cdidx_git={QuoteShellForTest(NormalizeExpectedShellPath(fakeGitPath))}",
+                $"cdidx_git={QuoteShellForTest(NormalizeExpectedShellPath(tamperedGitPath))}",
+                StringComparison.Ordinal);
+            Assert.NotEqual(installedHook, tamperedHook);
+            File.WriteAllText(hookPath, tamperedHook);
+
+            var tamperedStatus = RunHooksAndCaptureStreams(
+                ["status", "--project", projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, tamperedStatus.ExitCode);
+            using (var document = JsonDocument.Parse(tamperedStatus.StdOut))
+            {
+                Assert.Equal(
+                    "pinned_git_unavailable",
+                    document.RootElement.GetProperty("hook_state").GetString());
+                Assert.Equal(
+                    "available",
+                    document.RootElement.GetProperty("executable").GetProperty("status").GetString());
+            }
+            File.WriteAllText(hookPath, installedHook);
+
+            GitHelper.GitExecutablePathOverride = null;
+            File.Delete(fakeGitPath);
+            var missingGitStatus = RunHooksAndCaptureStreams(
+                ["status", "--project", projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, missingGitStatus.ExitCode);
+            using (var document = JsonDocument.Parse(missingGitStatus.StdOut))
+            {
+                Assert.Equal(
+                    "pinned_git_unavailable",
+                    document.RootElement.GetProperty("hook_state").GetString());
+                Assert.Equal(
+                    "available",
+                    document.RootElement.GetProperty("executable").GetProperty("status").GetString());
+            }
+
+            var result = GitHelper.RunGitCapturingResultForTests(
+                projectRoot,
+                gitEnvironmentOverrides: null,
+                cancellationToken: default,
+                "hook",
+                "run",
+                "pre-commit");
+
+            Assert.NotEqual(0, result.ExitCode);
+            Assert.Contains(
+                "could not resolve the active worktree root with the pinned Git executable",
+                result.Error,
+                StringComparison.Ordinal);
+            Assert.Contains("Reinstall the hook", result.Error, StringComparison.Ordinal);
+            Assert.DoesNotContain("core.hooksPath", result.Error, StringComparison.Ordinal);
+            Assert.False(Directory.Exists(Path.Combine(projectRoot, ".cdidx")));
+        }
+        finally
+        {
+            GitHelper.GitExecutablePathOverride = null;
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [ExternalProcessFact]
+    public void Hooks_RuntimeRootResolution_PreservesTrailingNewline_Issue5087()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var parent = TestProjectHelper.CreateTempProject("hook trailing newline root");
+        var projectRoot = Path.Combine(parent, "repo\n");
+        try
+        {
+            Directory.CreateDirectory(projectRoot);
+            TestProjectHelper.InitializeGitRepo(projectRoot);
+
+            var install = RunHooksAndCaptureStreams(
+                ["install", "--project", projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, install.ExitCode);
+            TestProjectHelper.RunGit(projectRoot, "hook", "run", "pre-commit");
+            Assert.True(File.Exists(Path.Combine(projectRoot, ".cdidx", "codeindex.db")));
+            Assert.False(Directory.Exists(Path.Combine(parent, "repo", ".cdidx")));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(parent);
+        }
+    }
+
+    [ExternalProcessFact]
+    public void Hooks_InstallRejectsPinnedGitPathWithLineBreaks_Issue5087()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var parent = TestProjectHelper.CreateTempProject("hook line break git");
+        var projectRoot = Path.Combine(parent, "repo");
+        var fakeGitPath = Path.Combine(
+            parent,
+            "bin\n# BEGIN CDIDX MANAGED PRE-COMMIT\n# END CDIDX MANAGED PRE-COMMIT",
+            "git");
+        var aliasDirectory = $"{parent}{Path.DirectorySeparatorChar}git-alias";
+        var aliasedGitPath = $"{aliasDirectory}{Path.DirectorySeparatorChar}git";
+        using var env = EnvironmentVariableScope.Capture(GitHelper.GitExecutableEnvironmentVariable);
+        var oldGitExecutablePath = GitHelper.GitExecutablePathOverride;
+        try
+        {
+            Directory.CreateDirectory(projectRoot);
+            TestProjectHelper.InitializeGitRepo(projectRoot);
+            Directory.CreateDirectory(Path.GetDirectoryName(fakeGitPath)!);
+            WriteRunnableFile(fakeGitPath);
+            GitHelper.GitExecutablePathOverride = null;
+            env.Set(GitHelper.GitExecutableEnvironmentVariable, fakeGitPath);
+
+            var install = RunHooksAndCaptureStreams(
+                ["install", "--project", projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.InstallError, install.ExitCode);
+            Assert.Contains(
+                "could not pin a trusted Git executable",
+                install.StdOut,
+                StringComparison.Ordinal);
+            Assert.Equal(
+                "path_contains_line_break",
+                GitHelper.GetGitExecutableStatus().Reason);
+            Assert.False(File.Exists(
+                Path.Combine(projectRoot, ".git", "hooks", "pre-commit")));
+
+            Directory.CreateSymbolicLink(aliasDirectory, Path.GetDirectoryName(fakeGitPath)!);
+            env.Set(GitHelper.GitExecutableEnvironmentVariable, aliasedGitPath);
+
+            var aliasInstall = RunHooksAndCaptureStreams(
+                ["install", "--project", projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.InstallError, aliasInstall.ExitCode);
+            Assert.Contains(
+                "could not pin a trusted Git executable",
+                aliasInstall.StdOut,
+                StringComparison.Ordinal);
+            Assert.Equal(
+                "path_contains_line_break",
+                GitHelper.GetGitExecutableStatus().Reason);
+            Assert.False(File.Exists(
+                Path.Combine(projectRoot, ".git", "hooks", "pre-commit")));
+        }
+        finally
+        {
+            GitHelper.GitExecutablePathOverride = oldGitExecutablePath;
+            TestProjectHelper.DeleteDirectory(parent);
         }
     }
 
@@ -82,7 +409,7 @@ public class HookCommandRunnerTests
             Assert.Equal(string.Empty, updatedInstall.StdErr);
             using (var document = JsonDocument.Parse(updatedInstall.StdOut))
                 Assert.Equal("updated", document.RootElement.GetProperty("status").GetString());
-            Assert.Contains($"{BuildExpectedPinnedInvocation()} index {QuoteShellForTest(projectRoot)} --quiet", File.ReadAllText(hookPath));
+            Assert.Contains(BuildExpectedRuntimeInvocation(), File.ReadAllText(hookPath));
             Assert.DoesNotContain("echo stale", File.ReadAllText(hookPath));
         }
         finally
@@ -678,7 +1005,7 @@ public class HookCommandRunnerTests
     }
 
     [Fact]
-    public void Hooks_Install_QuotesSelectedProjectPathInGeneratedHook()
+    public void Hooks_Install_ResolvesSelectedProjectAtRuntimeInGeneratedHook_Issue5087()
     {
         var parent = TestProjectHelper.CreateTempProject("hook_project_quote");
         var projectRoot = Path.Combine(parent, "repo with ' quote");
@@ -692,7 +1019,12 @@ public class HookCommandRunnerTests
             var hook = File.ReadAllText(hookPath);
 
             Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Contains($"{BuildExpectedPinnedInvocation()} index {QuoteShellForTest(projectRoot)} --quiet", hook);
+            Assert.Contains(BuildExpectedRuntimeInvocation(), hook);
+            Assert.DoesNotContain(
+                $"{BuildExpectedPinnedInvocation()} index {QuoteShellForTest(projectRoot)} --quiet",
+                hook,
+                StringComparison.Ordinal);
+            Assert.Contains("rev-parse --show-toplevel", hook, StringComparison.Ordinal);
             Assert.DoesNotContain("\ncdidx index ", hook, StringComparison.Ordinal);
         }
         finally
@@ -795,9 +1127,10 @@ public class HookCommandRunnerTests
             Assert.Equal(customHook, File.ReadAllText(chainedHookPath));
             var hook = File.ReadAllText(hookPath);
             Assert.Contains(
-                $"{QuoteShellForTest(NormalizeExpectedShellPath(toolPath))} index {QuoteShellForTest(projectRoot)} --quiet",
+                $"{QuoteShellForTest(NormalizeExpectedShellPath(toolPath))} index \"$cdidx_project_root\" --quiet",
                 hook,
                 StringComparison.Ordinal);
+            Assert.Contains("rev-parse --show-toplevel", hook, StringComparison.Ordinal);
             Assert.DoesNotContain("\ncdidx index ", hook, StringComparison.Ordinal);
             Assert.Contains("# CDIDX EXECUTABLE SOURCE: process_path", hook, StringComparison.Ordinal);
             Assert.Contains("# CDIDX EXECUTABLE VERSION: 1.2.3", hook, StringComparison.Ordinal);
@@ -810,6 +1143,7 @@ public class HookCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, status.ExitCode);
             using (var document = JsonDocument.Parse(status.StdOut))
             {
+                Assert.Equal("managed", document.RootElement.GetProperty("hook_state").GetString());
                 var executable = document.RootElement.GetProperty("executable");
                 Assert.Equal(toolPath, executable.GetProperty("path").GetString());
                 Assert.Equal("available", executable.GetProperty("status").GetString());
@@ -835,33 +1169,51 @@ public class HookCommandRunnerTests
                         .GetString());
             }
 
-            var alternateProjectPath = Path.Combine(parent, "relocated repo");
-            var pathDriftHook = hook.Replace(
-                QuoteShellForTest(projectRoot),
-                QuoteShellForTest(alternateProjectPath),
-                StringComparison.Ordinal);
-            Assert.NotEqual(hook, pathDriftHook);
-            File.WriteAllText(hookPath, pathDriftHook);
-            var pathDriftStatus = RunHooksAndCaptureStreams(
+            var executableInvocation = QuoteShellForTest(NormalizeExpectedShellPath(toolPath));
+            var legacyHook = BuildLegacyPinnedProjectHookForTest(
+                hook,
+                executableInvocation,
+                projectRoot,
+                chainedHookPath);
+            File.WriteAllText(hookPath, legacyHook);
+            var legacyStatus = RunHooksAndCaptureStreams(
                 ["status", "--project", projectRoot, "--json"]);
 
-            Assert.Equal(CommandExitCodes.Success, pathDriftStatus.ExitCode);
-            using (var document = JsonDocument.Parse(pathDriftStatus.StdOut))
+            Assert.Equal(CommandExitCodes.Success, legacyStatus.ExitCode);
+            using (var document = JsonDocument.Parse(legacyStatus.StdOut))
             {
                 Assert.Equal(
-                    "project_path_mismatch",
+                    "legacy_project_path_pinned",
                     document.RootElement.GetProperty("hook_state").GetString());
                 var executable = document.RootElement.GetProperty("executable");
                 Assert.Equal("available", executable.GetProperty("status").GetString());
                 Assert.Equal(toolPath, executable.GetProperty("path").GetString());
             }
-            File.WriteAllText(hookPath, hook);
+
+            var migrationPreview = RunHooksAndCaptureStreams(
+                ["install", "--project", projectRoot, "--dry-run", "--json"]);
+            Assert.Equal(CommandExitCodes.Success, migrationPreview.ExitCode);
+            using (var document = JsonDocument.Parse(migrationPreview.StdOut))
+            {
+                Assert.Equal("replace_managed", document.RootElement.GetProperty("planned_action").GetString());
+                Assert.Contains(
+                    "rev-parse --show-toplevel",
+                    document.RootElement.GetProperty("managed_hook_preview").GetString(),
+                    StringComparison.Ordinal);
+            }
+            Assert.Equal(legacyHook, File.ReadAllText(hookPath));
+
+            var migrationInstall = RunHooksAndCaptureStreams(
+                ["install", "--project", projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, migrationInstall.ExitCode);
+            Assert.Equal("updated", JsonDocument.Parse(migrationInstall.StdOut).RootElement.GetProperty("status").GetString());
+            Assert.Equal(hook, File.ReadAllText(hookPath));
 
             var pinnedInvocation =
-                $"{QuoteShellForTest(NormalizeExpectedShellPath(toolPath))} index {QuoteShellForTest(projectRoot)} --quiet";
+                $"{executableInvocation} index \"$cdidx_project_root\" --quiet";
             var tamperedHook = hook.Replace(
                 pinnedInvocation,
-                $"cdidx index {QuoteShellForTest(projectRoot)} --quiet",
+                "cdidx index \"$cdidx_project_root\" --quiet",
                 StringComparison.Ordinal);
             Assert.NotEqual(hook, tamperedHook);
             File.WriteAllText(
@@ -900,7 +1252,7 @@ public class HookCommandRunnerTests
                     pinnedInvocation,
                     $"{QuoteShellForTest(NormalizeExpectedShellPath(toolPath))} "
                     + $"{QuoteShellForTest(NormalizeExpectedShellPath(toolPath))} "
-                    + $"index {QuoteShellForTest(projectRoot)} --quiet",
+                    + "index \"$cdidx_project_root\" --quiet",
                     StringComparison.Ordinal);
             File.WriteAllText(hookPath, malformedHook);
             var malformedStatus = RunHooksAndCaptureStreams(
@@ -1403,6 +1755,8 @@ public class HookCommandRunnerTests
             {
                 Assert.False(HookCommandRunner.IsCanonicalFullyQualifiedPath(@"C:tools\cdidx.exe"));
                 Assert.False(HookCommandRunner.IsCanonicalFullyQualifiedPath(@"\tools\cdidx.exe"));
+                Assert.True(HookCommandRunner.IsCanonicalFullyQualifiedPath(
+                    Path.GetFullPath(wrapperPath).Replace('\\', '/')));
             }
 
             Assert.True(HookCommandRunner.TryBuildHookScript(
@@ -2080,10 +2434,55 @@ public class HookCommandRunnerTests
             out var selection,
             out var failureReason),
             failureReason);
-        return string.Join(
+        return BuildExpectedPinnedInvocation(selection);
+    }
+
+    private static string BuildExpectedPinnedInvocation(HookExecutableSelection selection)
+        => string.Join(
             ' ',
             selection.Argv.Select(static argument =>
                 QuoteShellForTest(NormalizeExpectedShellPath(argument))));
+
+    private static HookExecutableSelection CreateRunnableCdidxExecutableSelection()
+    {
+        var assemblyPath = typeof(HookCommandRunner).Assembly.Location;
+        var executablePath = Path.Combine(
+            Path.GetDirectoryName(assemblyPath)!,
+            OperatingSystem.IsWindows() ? "cdidx.exe" : "cdidx");
+        Assert.True(HookCommandRunner.TryCreateExecutableSelection(
+            executablePath,
+            assemblyPath,
+            ConsoleUi.LoadVersion(),
+            out var selection,
+            out var failureReason),
+            failureReason);
+        return selection;
+    }
+
+    private static string BuildExpectedRuntimeInvocation()
+        => $"{BuildExpectedPinnedInvocation()} index \"$cdidx_project_root\" --quiet";
+
+    private static string BuildLegacyPinnedProjectHookForTest(
+        string generatedHook,
+        string executableInvocation,
+        string projectRoot,
+        string chainedHookPath)
+    {
+        const string runtimePrefix = "cdidx_git=";
+        var runtimeOffset = generatedHook.IndexOf(runtimePrefix, StringComparison.Ordinal);
+        Assert.True(runtimeOffset > 0);
+        var managedHeader = generatedHook[..runtimeOffset];
+        return managedHeader
+               + $"{executableInvocation} index {QuoteShellForTest(projectRoot)} --quiet\n"
+               + "cdidx_status=$?\n"
+               + "if [ \"$cdidx_status\" -ne 0 ]; then\n"
+               + "  echo \"cdidx pre-commit index failed; commit aborted. Use git commit --no-verify to bypass hooks.\" >&2\n"
+               + "  exit \"$cdidx_status\"\n"
+               + "fi\n"
+               + $"if [ -x {QuoteShellForTest(chainedHookPath)} ]; then\n"
+               + $"  {QuoteShellForTest(chainedHookPath)} \"$@\"\n"
+               + "fi\n"
+               + "# END CDIDX MANAGED PRE-COMMIT";
     }
 
     private static void WriteRunnableFile(string path)
