@@ -3,6 +3,7 @@ using System.Text.Json;
 using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Diagnostics;
+using CodeIndex.Indexer;
 using CodeIndex.Models;
 using Microsoft.Data.Sqlite;
 using static CodeIndex.Tests.QueryCommandTestSupport;
@@ -2719,6 +2720,9 @@ public partial class QueryCommandRunnerTests
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var boundaryPayload = string.Join(
+                Environment.NewLine,
+                Enumerable.Range(1, 90).Select(index => $"raw payload line {index}"));
             TestProjectHelper.InsertIndexedFile(
                 dbPath,
                 "src/Primary/Writer.Fields.cs",
@@ -2729,11 +2733,18 @@ public partial class QueryCommandRunnerTests
                 public partial class Writer
                 {
                     private bool? _hasIssueMetadataColumns;
+                    private static readonly string[] PascalReadItems = ["read"];
+                    private static readonly string[] PascalWrittenItems = [""];
+                    private static readonly string[] lowerCamelReadItems = ["camel"];
+                    private static readonly string[] _underscoreReadItems = ["underscore"];
+                    private static readonly string[] PascalOnlyUsedByOtherFamily = ["primary"];
+                    private static readonly string[] PascalActuallyUnused = ["unused"];
 
                     private sealed partial class Parser
                     {
                         private bool endLineExplicit;
                         private bool outputFormatExplicit;
+                        private static readonly string[] PascalNestedItems = ["nested"];
                         private bool ActuallyUnused;
                         private bool OnlyUsedByOtherFamily;
                         private bool OnlyUsedByOtherGenericArity;
@@ -2744,20 +2755,24 @@ public partial class QueryCommandRunnerTests
                     }
                 }
                 """);
-            TestProjectHelper.InsertIndexedFile(
-                dbPath,
-                "src/Primary/Writer.Usage.cs",
-                "csharp",
-                """
+            var partialUsage = $$""""
                 namespace Demo.Primary;
 
                 public partial class Writer
                 {
+                    public static string ReadBoundaryPayload() => """
+                {{boundaryPayload}}
+                        """;
+
                     public bool HasIssueMetadataColumns() => _hasIssueMetadataColumns == true;
+                    public string ReadPascalItem() => PascalReadItems[0];
+                    public void WritePascalItem(string value) => PascalWrittenItems[0] = value;
+                    public string ReadNamingControls() => lowerCamelReadItems[0] + _underscoreReadItems[0];
 
                     private sealed partial class Parser
                     {
                         public bool HasExplicitOptions() => endLineExplicit || outputFormatExplicit;
+                        public string ReadNestedPascalItem() => PascalNestedItems[0];
                     }
                 }
 
@@ -2767,7 +2782,12 @@ public partial class QueryCommandRunnerTests
 
                     public bool ReadOutsidePartialRange() => OnlyUsedOutsidePartialRange;
                 }
-                """);
+                """";
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Primary/Writer.Usage.cs",
+                "csharp",
+                partialUsage);
             TestProjectHelper.InsertIndexedFile(
                 dbPath,
                 "src/Unrelated/Writer.cs",
@@ -2777,6 +2797,10 @@ public partial class QueryCommandRunnerTests
                 {
                     public partial class Writer
                     {
+                        private static readonly string[] PascalOnlyUsedByOtherFamily = ["unrelated"];
+
+                        public string ReadPascalOnlyUsedByOtherFamily() => PascalOnlyUsedByOtherFamily[0];
+
                         private sealed partial class Parser
                         {
                             private bool OnlyUsedByOtherFamily;
@@ -2802,12 +2826,28 @@ public partial class QueryCommandRunnerTests
             using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 using var cmd = db.Connection.CreateCommand();
+                cmd.CommandText = "SELECT id FROM files WHERE path = 'src/Primary/Writer.Usage.cs'";
+                var partialUsageFileId = Convert.ToInt64(cmd.ExecuteScalar());
+                cmd.CommandText = "DELETE FROM chunks WHERE file_id = $fileId";
+                cmd.Parameters.AddWithValue("$fileId", partialUsageFileId);
+                cmd.ExecuteNonQuery();
+                cmd.Parameters.Clear();
+                var writer = new DbWriter(db.Connection);
+                writer.InsertChunks(ChunkSplitter.Split(partialUsageFileId, partialUsage));
+
                 cmd.CommandText = """
                     DELETE FROM symbol_references
                     WHERE symbol_name IN (
                         '_hasIssueMetadataColumns',
+                        'PascalReadItems',
+                        'PascalWrittenItems',
+                        'lowerCamelReadItems',
+                        '_underscoreReadItems',
+                        'PascalOnlyUsedByOtherFamily',
+                        'PascalActuallyUnused',
                         'endLineExplicit',
                         'outputFormatExplicit',
+                        'PascalNestedItems',
                         'ActuallyUnused',
                         'OnlyUsedByOtherFamily',
                         'OnlyUsedByOtherGenericArity',
@@ -2817,7 +2857,6 @@ public partial class QueryCommandRunnerTests
                     """;
                 cmd.ExecuteNonQuery();
 
-                var writer = new DbWriter(db.Connection);
                 writer.MarkGraphReady();
             }
 
@@ -2841,8 +2880,29 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, jsonExitCode);
             Assert.Equal(string.Empty, jsonStderr);
             Assert.DoesNotContain("_hasIssueMetadataColumns", jsonNames);
+            Assert.DoesNotContain("PascalReadItems", jsonNames);
+            Assert.DoesNotContain("PascalWrittenItems", jsonNames);
+            Assert.DoesNotContain("lowerCamelReadItems", jsonNames);
+            Assert.DoesNotContain("_underscoreReadItems", jsonNames);
+            Assert.DoesNotContain("PascalNestedItems", jsonNames);
             Assert.DoesNotContain("endLineExplicit", jsonNames);
             Assert.DoesNotContain("outputFormatExplicit", jsonNames);
+            Assert.Equal(
+                "likely_unused_private",
+                jsonSymbols.Single(symbol => symbol.GetProperty("name").GetString() == "PascalActuallyUnused")
+                    .GetProperty("unused_bucket").GetString());
+            Assert.Equal(
+                "medium",
+                jsonSymbols.Single(symbol => symbol.GetProperty("name").GetString() == "PascalActuallyUnused")
+                    .GetProperty("unused_confidence").GetString());
+            Assert.Equal(
+                "likely_unused_private",
+                jsonSymbols.Single(symbol => symbol.GetProperty("name").GetString() == "PascalOnlyUsedByOtherFamily")
+                    .GetProperty("unused_bucket").GetString());
+            Assert.Equal(
+                "medium",
+                jsonSymbols.Single(symbol => symbol.GetProperty("name").GetString() == "PascalOnlyUsedByOtherFamily")
+                    .GetProperty("unused_confidence").GetString());
             Assert.Equal(
                 "likely_unused_private",
                 jsonSymbols.Single(symbol => symbol.GetProperty("name").GetString() == "ActuallyUnused")
@@ -2873,16 +2933,17 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(string.Empty, compactStderr);
             Assert.True(compactDocument.RootElement.GetProperty("compact").GetBoolean());
             Assert.Equal(
-                4,
+                6,
                 compactDocument.RootElement.GetProperty("returned_bucket_counts")
                     .GetProperty("likely_unused_private").GetInt32());
             Assert.DoesNotContain("_hasIssueMetadataColumns", compactStdout, StringComparison.Ordinal);
+            Assert.DoesNotContain("PascalReadItems", compactStdout, StringComparison.Ordinal);
+            Assert.DoesNotContain("PascalWrittenItems", compactStdout, StringComparison.Ordinal);
+            Assert.DoesNotContain("lowerCamelReadItems", compactStdout, StringComparison.Ordinal);
+            Assert.DoesNotContain("_underscoreReadItems", compactStdout, StringComparison.Ordinal);
+            Assert.DoesNotContain("PascalNestedItems", compactStdout, StringComparison.Ordinal);
             Assert.DoesNotContain("endLineExplicit", compactStdout, StringComparison.Ordinal);
             Assert.DoesNotContain("outputFormatExplicit", compactStdout, StringComparison.Ordinal);
-            Assert.Contains("ActuallyUnused", compactStdout, StringComparison.Ordinal);
-            Assert.Contains("OnlyUsedByOtherFamily", compactStdout, StringComparison.Ordinal);
-            Assert.Contains("OnlyUsedByOtherGenericArity", compactStdout, StringComparison.Ordinal);
-            Assert.Contains("ConnectionString", compactStdout, StringComparison.Ordinal);
 
             var (bucketExitCode, bucketStdout, bucketStderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
                 [.. commonArgs, "--json", "--all", "--by-bucket"],
@@ -2899,11 +2960,18 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, bucketExitCode);
             Assert.Equal(string.Empty, bucketStderr);
             Assert.Contains("ActuallyUnused", likelyUnusedNames);
+            Assert.Contains("PascalActuallyUnused", likelyUnusedNames);
+            Assert.Contains("PascalOnlyUsedByOtherFamily", likelyUnusedNames);
             Assert.Contains("OnlyUsedByOtherFamily", likelyUnusedNames);
             Assert.Contains("OnlyUsedByOtherGenericArity", likelyUnusedNames);
             Assert.Contains("OnlyUsedOutsidePartialRange", likelyUnusedNames);
             Assert.Contains("ConnectionString", contractSuspectNames);
             Assert.DoesNotContain("_hasIssueMetadataColumns", likelyUnusedNames);
+            Assert.DoesNotContain("PascalReadItems", likelyUnusedNames);
+            Assert.DoesNotContain("PascalWrittenItems", likelyUnusedNames);
+            Assert.DoesNotContain("lowerCamelReadItems", likelyUnusedNames);
+            Assert.DoesNotContain("_underscoreReadItems", likelyUnusedNames);
+            Assert.DoesNotContain("PascalNestedItems", likelyUnusedNames);
             Assert.DoesNotContain("endLineExplicit", likelyUnusedNames);
             Assert.DoesNotContain("outputFormatExplicit", likelyUnusedNames);
 
@@ -2918,11 +2986,18 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, actionableExitCode);
             Assert.Equal(string.Empty, actionableStderr);
             Assert.Contains("ActuallyUnused", actionableNames);
+            Assert.Contains("PascalActuallyUnused", actionableNames);
+            Assert.Contains("PascalOnlyUsedByOtherFamily", actionableNames);
             Assert.Contains("OnlyUsedByOtherFamily", actionableNames);
             Assert.Contains("OnlyUsedByOtherGenericArity", actionableNames);
             Assert.Contains("OnlyUsedOutsidePartialRange", actionableNames);
             Assert.DoesNotContain("ConnectionString", actionableNames);
             Assert.DoesNotContain("_hasIssueMetadataColumns", actionableNames);
+            Assert.DoesNotContain("PascalReadItems", actionableNames);
+            Assert.DoesNotContain("PascalWrittenItems", actionableNames);
+            Assert.DoesNotContain("lowerCamelReadItems", actionableNames);
+            Assert.DoesNotContain("_underscoreReadItems", actionableNames);
+            Assert.DoesNotContain("PascalNestedItems", actionableNames);
             Assert.DoesNotContain("endLineExplicit", actionableNames);
             Assert.DoesNotContain("outputFormatExplicit", actionableNames);
         }

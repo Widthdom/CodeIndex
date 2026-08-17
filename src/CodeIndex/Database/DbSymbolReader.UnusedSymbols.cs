@@ -59,7 +59,6 @@ public partial class DbReader
                        AND partial_peer_type.kind = partial_own_type.kind
                        AND partial_peer_type.name = partial_own_type.name
                       JOIN files partial_peer_file ON partial_peer_file.id = partial_peer_type.file_id
-                      JOIN chunks partial_peer_chunk ON partial_peer_chunk.file_id = partial_peer_type.file_id
                       WHERE partial_own_type.file_id = {symbolAlias}.file_id
                         AND partial_own_type.kind = {containerKindSql}
                         AND partial_own_type.name = {containerNameSql}
@@ -77,14 +76,28 @@ public partial class DbReader
                             OR {containerQualifiedNameSql} = {peerQualifiedNameSql}
                         )
                         AND {ownTypeShapeSql} = {peerTypeShapeSql}
-                        AND partial_peer_chunk.end_line >= {peerTypeStartLineSql}
-                        AND partial_peer_chunk.start_line <= {peerTypeEndLineSql}
-                        AND csharp_identifier_occurrence_count_in_line_range(
-                                partial_peer_chunk.content,
-                                partial_peer_chunk.start_line,
-                                {peerTypeStartLineSql},
-                                {peerTypeEndLineSql},
-                                {symbolAlias}.name) > 0
+                        AND (
+                            SELECT csharp_identifier_occurrence_count(
+                                GROUP_CONCAT(
+                                    csharp_text_in_line_range(
+                                        partial_peer_chunk.content,
+                                        partial_peer_chunk.start_line,
+                                        MAX(
+                                            {peerTypeStartLineSql},
+                                            COALESCE((
+                                                SELECT MAX(partial_prior_chunk.end_line) + 1
+                                                FROM chunks partial_prior_chunk
+                                                WHERE partial_prior_chunk.file_id = partial_peer_chunk.file_id
+                                                  AND partial_prior_chunk.chunk_index < partial_peer_chunk.chunk_index
+                                            ), {peerTypeStartLineSql})),
+                                        MIN({peerTypeEndLineSql}, partial_peer_chunk.end_line)),
+                                    char(10) ORDER BY partial_peer_chunk.chunk_index),
+                                {symbolAlias}.name)
+                            FROM chunks partial_peer_chunk
+                            WHERE partial_peer_chunk.file_id = partial_peer_type.file_id
+                              AND partial_peer_chunk.end_line >= {peerTypeStartLineSql}
+                              AND partial_peer_chunk.start_line <= {peerTypeEndLineSql}
+                        ) > 0
                       LIMIT 1
                   )
               )";

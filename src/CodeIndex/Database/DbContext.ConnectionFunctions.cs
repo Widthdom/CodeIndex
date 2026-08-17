@@ -72,8 +72,20 @@ public partial class DbContext : IDisposable
         long? rangeEndLine,
         string? identifier)
     {
+        if (string.IsNullOrEmpty(identifier))
+            return 0;
+
+        var scopedText = GetTextInLineRange(text, chunkStartLine, rangeStartLine, rangeEndLine);
+        return CountCSharpIdentifierOccurrences(scopedText, identifier);
+    }
+
+    internal static string GetTextInLineRange(
+        string? text,
+        long? chunkStartLine,
+        long? rangeStartLine,
+        long? rangeEndLine)
+    {
         if (string.IsNullOrEmpty(text)
-            || string.IsNullOrEmpty(identifier)
             || chunkStartLine is null
             || rangeStartLine is null
             || rangeEndLine is null
@@ -81,7 +93,7 @@ public partial class DbContext : IDisposable
             || rangeStartLine <= 0
             || rangeEndLine < rangeStartLine)
         {
-            return 0;
+            return string.Empty;
         }
 
         var relativeStartLine = Math.Max(0, rangeStartLine.Value - chunkStartLine.Value);
@@ -90,18 +102,14 @@ public partial class DbContext : IDisposable
             || relativeStartLine > int.MaxValue
             || relativeEndLineExclusive > int.MaxValue)
         {
-            return 0;
+            return string.Empty;
         }
 
         var startOffset = FindTextLineStartOffset(text, (int)relativeStartLine);
         var endOffset = FindTextLineStartOffset(text, (int)relativeEndLineExclusive);
-        if (startOffset >= endOffset)
-            return 0;
-
-        var scopedText = startOffset == 0 && endOffset == text.Length
-            ? text
+        return startOffset >= endOffset
+            ? string.Empty
             : text.Substring(startOffset, endOffset - startOffset);
-        return CountCSharpIdentifierOccurrences(scopedText, identifier);
     }
 
     private static int FindTextLineStartOffset(string text, int zeroBasedLine)
