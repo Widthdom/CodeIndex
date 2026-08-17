@@ -80,23 +80,37 @@ public partial class DbReader
                             SELECT csharp_identifier_occurrence_count(
                                 GROUP_CONCAT(
                                     csharp_text_in_line_range(
-                                        partial_peer_chunk.content,
-                                        partial_peer_chunk.start_line,
+                                        partial_peer_piece.content,
+                                        partial_peer_piece.start_line,
                                         MAX(
                                             {peerTypeStartLineSql},
-                                            COALESCE((
-                                                SELECT MAX(partial_prior_chunk.end_line) + 1
-                                                FROM chunks partial_prior_chunk
-                                                WHERE partial_prior_chunk.file_id = partial_peer_chunk.file_id
-                                                  AND partial_prior_chunk.chunk_index < partial_peer_chunk.chunk_index
-                                            ), {peerTypeStartLineSql})),
-                                        MIN({peerTypeEndLineSql}, partial_peer_chunk.end_line)),
-                                    char(10) ORDER BY partial_peer_chunk.chunk_index),
+                                            COALESCE(
+                                                partial_peer_piece.prior_content_end_line + 1,
+                                                {peerTypeStartLineSql})),
+                                        MIN({peerTypeEndLineSql}, partial_peer_piece.end_line)),
+                                    char(10) ORDER BY partial_peer_piece.chunk_index),
                                 {symbolAlias}.name)
-                            FROM chunks partial_peer_chunk
-                            WHERE partial_peer_chunk.file_id = partial_peer_type.file_id
-                              AND partial_peer_chunk.end_line >= {peerTypeStartLineSql}
-                              AND partial_peer_chunk.start_line <= {peerTypeEndLineSql}
+                            FROM (
+                                SELECT
+                                    partial_peer_chunk.file_id,
+                                    partial_peer_chunk.chunk_index,
+                                    partial_peer_chunk.start_line,
+                                    partial_peer_chunk.end_line,
+                                    partial_peer_chunk.content,
+                                    MAX(CASE
+                                            WHEN partial_peer_chunk.content IS NOT NULL
+                                             AND partial_peer_chunk.content <> ''
+                                            THEN partial_peer_chunk.end_line
+                                        END) OVER (
+                                            PARTITION BY partial_peer_chunk.file_id
+                                            ORDER BY partial_peer_chunk.chunk_index
+                                            ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+                                        ) AS prior_content_end_line
+                                FROM chunks partial_peer_chunk
+                            ) partial_peer_piece
+                            WHERE partial_peer_piece.file_id = partial_peer_type.file_id
+                              AND partial_peer_piece.end_line >= {peerTypeStartLineSql}
+                              AND partial_peer_piece.start_line <= {peerTypeEndLineSql}
                         ) > 0
                       LIMIT 1
                   )

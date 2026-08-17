@@ -3007,6 +3007,96 @@ public partial class QueryCommandRunnerTests
         }
     }
 
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public void RunUnused_CSharpPartialFamilyMissingChunkContentDoesNotCoverRetainedOverlap_Issue5089(
+        string? missingContent)
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_csharp_partial_missing_chunk_5089");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/MissingChunkHost.Fields.cs",
+                "csharp",
+                """
+                namespace Demo;
+
+                public partial class MissingChunkHost
+                {
+                    private static readonly int ValueRetainedByOverlap = 1;
+                }
+                """);
+
+            var usageLines = Enumerable.Repeat("    // padding", 150).ToArray();
+            usageLines[0] = "namespace Demo;";
+            usageLines[1] = "public partial class MissingChunkHost";
+            usageLines[2] = "{";
+            usageLines[74] = "    public int ReadValue() => ValueRetainedByOverlap;";
+            usageLines[149] = "}";
+            var usageSource = string.Join(Environment.NewLine, usageLines);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/MissingChunkHost.Usage.cs",
+                "csharp",
+                usageSource);
+
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                using var cmd = db.Connection.CreateCommand();
+                cmd.CommandText = "SELECT id FROM files WHERE path = 'src/MissingChunkHost.Usage.cs'";
+                var usageFileId = Convert.ToInt64(cmd.ExecuteScalar());
+
+                cmd.CommandText = "DELETE FROM symbol_references WHERE symbol_name = 'ValueRetainedByOverlap'";
+                cmd.ExecuteNonQuery();
+                cmd.CommandText = "DELETE FROM chunks WHERE file_id = $fileId";
+                cmd.Parameters.AddWithValue("$fileId", usageFileId);
+                cmd.ExecuteNonQuery();
+                cmd.Parameters.Clear();
+
+                cmd.CommandText = """
+                    INSERT INTO chunks (file_id, chunk_index, start_line, end_line, content)
+                    VALUES ($fileId, 0, 1, 80, $missingContent),
+                           ($fileId, 1, 71, 150, $retainedContent)
+                    """;
+                cmd.Parameters.AddWithValue("$fileId", usageFileId);
+                cmd.Parameters.AddWithValue("$missingContent", (object?)missingContent ?? DBNull.Value);
+                cmd.Parameters.AddWithValue(
+                    "$retainedContent",
+                    string.Join(Environment.NewLine, usageLines.Skip(70)));
+                cmd.ExecuteNonQuery();
+
+                new DbWriter(db.Connection).MarkGraphReady();
+            }
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunUnused(
+                [
+                    "--db", dbPath,
+                    "--lang", "csharp",
+                    "--kind", "field",
+                    "--path", "src/MissingChunkHost.Fields.cs",
+                    "--limit", "10",
+                    "--json",
+                    "--all",
+                ],
+                _jsonOptions));
+            using var document = ParseJsonOutput(stdout);
+            var names = document.RootElement.GetProperty("symbols").EnumerateArray()
+                .Select(symbol => symbol.GetProperty("name").GetString())
+                .ToHashSet(StringComparer.Ordinal);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.DoesNotContain("ValueRetainedByOverlap", names);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
     [Fact]
     public void RunUnused_CSharpFieldsAndConstantsUseSpecificKinds_Issue3673()
     {
