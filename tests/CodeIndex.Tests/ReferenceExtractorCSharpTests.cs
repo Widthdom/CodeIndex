@@ -658,6 +658,63 @@ public partial class ReferenceExtractorTests
     }
 
     [Fact]
+    public void Extract_CSharpSwitchExpressionReturnedLambda_IndexesBodyCall_Issue5085()
+    {
+        const string content = """
+            using System;
+
+            public static class Routes
+            {
+                public static Func<int, int> Resolve(string key) =>
+                    key switch
+                    {
+                        "single" => value => Targets.Expression(value),
+                        "block" => value =>
+                        {
+                            return Targets.Block(value);
+                        },
+                        "nested-call" => value => Targets.Wrap(Targets.Inner(value)),
+                        "with-expression" => value => Targets.Create(value) with { Value = value },
+                        _ => value => 0,
+                    };
+            }
+
+            public sealed record Result(int Value);
+
+            public static class Targets
+            {
+                public static int Expression(int value) => value;
+                public static int Block(int value) => value;
+                public static int Wrap(int value) => value;
+                public static int Inner(int value) => value;
+                public static Result Create(int value) => new(value);
+            }
+            """;
+
+        var (_, references) = ExtractSymbolsAndReferences("csharp", content);
+
+        var reference = Assert.Single(references.Where(reference =>
+            reference.SymbolName == "Expression"
+            && reference.ReferenceKind == "call"));
+        Assert.Equal("function", reference.ContainerKind);
+        Assert.Equal("Resolve", reference.ContainerName);
+        Assert.Equal(8, reference.Line);
+        Assert.Equal(42, reference.Column);
+        Assert.Contains(references, candidate =>
+            candidate.SymbolName == "Wrap"
+            && candidate.ReferenceKind == "call"
+            && candidate.ContainerName == "Resolve");
+        Assert.Contains(references, candidate =>
+            candidate.SymbolName == "Inner"
+            && candidate.ReferenceKind == "call"
+            && candidate.ContainerName == "Resolve");
+        Assert.Contains(references, candidate =>
+            candidate.SymbolName == "Create"
+            && candidate.ReferenceKind == "call"
+            && candidate.ContainerName == "Resolve");
+    }
+
+    [Fact]
     public void Extract_CSharpMultilinePrimaryCtorAttribute_UsesDeclaredTypeContainer_Issue4840Review()
     {
         // A primary-constructor declaration can begin before its body range. Attribute calls on
@@ -5106,6 +5163,16 @@ public partial class ReferenceExtractorTests
                     Point(var x, var y) => 1,
                     Point(var c, var d)
                         => 2,
+                    Point(var e, var f) when e > 0
+                        => 3,
+                    Point(var g, var h) designated
+                        => 4,
+                    Point(var i, var j) { X: > 0 }
+                        => 5,
+                    Outer(Inner(var nested), var other)
+                        => 6,
+                    Point(var withValue, _) with
+                        => 7,
                     _ => 0,
                 };
             }
@@ -5115,9 +5182,11 @@ public partial class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
         var pointRefs = references.Where(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference").ToList();
-        Assert.Equal(2, pointRefs.Count);
+        Assert.Equal(6, pointRefs.Count);
         Assert.All(pointRefs, r => Assert.Equal("Match", r.ContainerName));
-        Assert.DoesNotContain(references, r => r.SymbolName == "Point" && r.ReferenceKind == "call");
+        Assert.DoesNotContain(references, r =>
+            (r.SymbolName is "Point" or "Outer" or "Inner")
+            && r.ReferenceKind == "call");
     }
 
     [Fact]
