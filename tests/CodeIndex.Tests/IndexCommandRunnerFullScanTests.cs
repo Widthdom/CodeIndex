@@ -3632,6 +3632,10 @@ public partial class IndexCommandRunnerTests
                         Point(var x, var y) when x > 0
                             => x + y,
                         Point(var x, var y) => x + y,
+                        Point(Point(var nested, _), var y)
+                            => nested + y,
+                        Point(var withValue, _) with
+                            => withValue,
                     };
 
                     private static int Unqualified(int value) => value;

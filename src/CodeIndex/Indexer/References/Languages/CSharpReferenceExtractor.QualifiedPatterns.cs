@@ -235,42 +235,124 @@ public static partial class ReferenceExtractor
                 case ')':
                     parenDepth--;
                     if (parenDepth == 0)
-                    {
-                        var afterClose = SkipCSharpTriviaForward(preparedLine, i + 1);
-                        if (afterClose + 1 < preparedLine.Length
-                            && preparedLine[afterClose] == '='
-                            && preparedLine[afterClose + 1] == '>')
-                        {
-                            return true;
-                        }
-
-                        // A result terminator or expression continuation must not borrow the next
-                        // arm's `=>` after its string literal is removed from prepared source.
-                        // Keep valid pattern suffixes such as designations, property clauses, and
-                        // `when` guards eligible for a following-line arrow.
-                        if (afterClose < preparedLine.Length
-                            && !IsCSharpSwitchPatternSuffix(preparedLine, afterClose))
-                            return false;
-
-                        for (var next = lineIndex + 1; next < preparedLines.Length; next++)
-                        {
-                            var nextLine = preparedLines[next];
-                            if (string.IsNullOrWhiteSpace(nextLine))
-                                continue;
-
-                            var nextCursor = SkipCSharpTriviaForward(nextLine, 0);
-                            return nextCursor + 1 < nextLine.Length
-                                && nextLine[nextCursor] == '='
-                                && nextLine[nextCursor + 1] == '>';
-                        }
-
-                        return false;
-                    }
+                        return IsCSharpSwitchPatternBoundary(
+                            preparedLines,
+                            lineIndex,
+                            preparedLine,
+                            openParenIndex,
+                            i);
                     break;
             }
         }
 
         return false;
+    }
+
+    private static bool IsCSharpSwitchPatternBoundary(
+        string[] preparedLines,
+        int lineIndex,
+        string preparedLine,
+        int openParenIndex,
+        int closeParenIndex)
+    {
+        while (true)
+        {
+            var afterClose = SkipCSharpTriviaForward(preparedLine, closeParenIndex + 1);
+            if (afterClose + 1 < preparedLine.Length
+                && preparedLine[afterClose] == '='
+                && preparedLine[afterClose + 1] == '>')
+            {
+                return true;
+            }
+
+            // A result terminator or expression continuation must not borrow the next
+            // arm's `=>` after its string literal is removed from prepared source.
+            // Keep valid pattern suffixes such as designations, property clauses, and
+            // `when` guards eligible for a following-line arrow.
+            if (afterClose >= preparedLine.Length
+                || IsCSharpSwitchPatternSuffix(preparedLine, afterClose))
+            {
+                return IsNextCSharpLineSwitchArmArrow(preparedLines, lineIndex);
+            }
+
+            // A nested positional pattern can be followed by `,` or `)` inside its
+            // enclosing positional clause. Move to that enclosing clause's boundary
+            // before deciding whether the following physical line owns this arm's arrow.
+            var enclosingOpen = FindEnclosingCSharpOpenParenthesis(preparedLine, openParenIndex);
+            if (enclosingOpen < 0)
+                return false;
+
+            var enclosingClose = FindMatchingCSharpCloseParenthesis(preparedLine, enclosingOpen);
+            if (enclosingClose <= closeParenIndex)
+                return false;
+
+            openParenIndex = enclosingOpen;
+            closeParenIndex = enclosingClose;
+        }
+    }
+
+    private static bool IsNextCSharpLineSwitchArmArrow(string[] preparedLines, int lineIndex)
+    {
+        for (var next = lineIndex + 1; next < preparedLines.Length; next++)
+        {
+            var nextLine = preparedLines[next];
+            if (string.IsNullOrWhiteSpace(nextLine))
+                continue;
+
+            var nextCursor = SkipCSharpTriviaForward(nextLine, 0);
+            return nextCursor + 1 < nextLine.Length
+                && nextLine[nextCursor] == '='
+                && nextLine[nextCursor + 1] == '>';
+        }
+
+        return false;
+    }
+
+    private static int FindEnclosingCSharpOpenParenthesis(string text, int nestedOpenIndex)
+    {
+        var depth = 0;
+        for (var i = nestedOpenIndex - 1; i >= 0; i--)
+        {
+            switch (text[i])
+            {
+                case ')':
+                    depth++;
+                    break;
+                case '(':
+                    if (depth == 0)
+                        return i;
+                    depth--;
+                    break;
+                case '{':
+                case ';':
+                    if (depth == 0)
+                        return -1;
+                    break;
+            }
+        }
+
+        return -1;
+    }
+
+    private static int FindMatchingCSharpCloseParenthesis(string text, int openParenIndex)
+    {
+        var depth = 0;
+        for (var i = openParenIndex; i < text.Length; i++)
+        {
+            switch (text[i])
+            {
+                case '(':
+                    depth++;
+                    break;
+                case ')':
+                    depth--;
+                    if (depth == 0)
+                        return i;
+                    break;
+            }
+        }
+
+        return -1;
     }
 
     private static bool IsCSharpSwitchPatternSuffix(string text, int startIndex)
@@ -291,10 +373,15 @@ public static partial class ReferenceExtractor
             return true;
 
         var token = text.AsSpan(tokenStart, tokenEnd - tokenStart);
+        if (token.SequenceEqual("with"))
+        {
+            var afterToken = SkipCSharpTriviaForward(text, tokenEnd);
+            return afterToken >= text.Length || text[afterToken] != '{';
+        }
+
         return !token.SequenceEqual("as")
             && !token.SequenceEqual("is")
-            && !token.SequenceEqual("switch")
-            && !token.SequenceEqual("with");
+            && !token.SequenceEqual("switch");
     }
 
     private static bool LineEndsWithCSharpToken(string text, string token)
