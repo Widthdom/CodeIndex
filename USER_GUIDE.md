@@ -768,7 +768,9 @@ nested partial types. Same-named types in other namespaces or containing types
 do not share evidence; containing-type kind and generic arity also remain part
 of the logical identity. Genuinely unreferenced members in the family remain
 actionable candidates. Regular JSON, compact, `--by-bucket`, and
-`--actionable` all use the same family-aware classification.
+`--actionable` all use the same family-aware classification. Reads and writes
+in sibling declarations are recognized regardless of member naming convention,
+including when raw strings cross overlapping production chunk boundaries.
 Public APIs, framework entrypoints, DTOs, serialization contracts, generated
 hooks, test-only hooks, Markdown headings and fenced-code language markers,
 reflection, and configuration-based usage can be false positives and are
@@ -4293,6 +4295,8 @@ C# の partial type で宣言された private member について、`unused` �
 containing type の kind と generic arity も logical identity の一部として維持します。family 内で
 本当に参照されていない member は actionable candidate のまま残ります。通常の JSON、compact、
 `--by-bucket`、`--actionable` はすべて同じ family-aware classification を使います。
+sibling declaration 内の read / write は member の命名規則にかかわらず認識され、raw string が
+重複する本番 chunk 境界をまたぐ場合も同様です。
 Public API、framework entrypoint、DTO、serialization contract、generated hook、test-only hook、Markdown heading と fenced-code の
 language marker、reflection、config 経由の使用は false positive になりうるため、
 低 confidence bucket に寄せられます。

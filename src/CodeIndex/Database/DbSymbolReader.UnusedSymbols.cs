@@ -43,6 +43,17 @@ public partial class DbReader
         var peerTypeShapeSql = BuildCSharpPartialTypeShapeSql("partial_peer_type", "partial_peer_ancestor");
         var peerTypeStartLineSql = GetSymbolColumnSql("start_line", "partial_peer_type.line", "partial_peer_type");
         var peerTypeEndLineSql = GetSymbolColumnSql("end_line", peerTypeStartLineSql, "partial_peer_type");
+        var peerChunkOrdinalSql = _chunkColumns.Contains("chunk_index")
+            ? "partial_peer_chunk.chunk_index"
+            : _chunkColumns.Contains("id")
+                ? "partial_peer_chunk.id"
+                : "partial_peer_chunk.end_line";
+        var peerChunkWindowOrderSql = _chunkColumns.Contains("chunk_index")
+            ? "partial_peer_chunk.chunk_index"
+            : $"partial_peer_chunk.start_line, {peerChunkOrdinalSql}";
+        var peerPieceConcatOrderSql = _chunkColumns.Contains("chunk_index")
+            ? "partial_peer_piece.reconstruction_ordinal"
+            : "partial_peer_piece.start_line, partial_peer_piece.reconstruction_ordinal";
 
         return $@"
               AND NOT (
@@ -59,7 +70,6 @@ public partial class DbReader
                        AND partial_peer_type.kind = partial_own_type.kind
                        AND partial_peer_type.name = partial_own_type.name
                       JOIN files partial_peer_file ON partial_peer_file.id = partial_peer_type.file_id
-                      JOIN chunks partial_peer_chunk ON partial_peer_chunk.file_id = partial_peer_type.file_id
                       WHERE partial_own_type.file_id = {symbolAlias}.file_id
                         AND partial_own_type.kind = {containerKindSql}
                         AND partial_own_type.name = {containerNameSql}
@@ -77,14 +87,42 @@ public partial class DbReader
                             OR {containerQualifiedNameSql} = {peerQualifiedNameSql}
                         )
                         AND {ownTypeShapeSql} = {peerTypeShapeSql}
-                        AND partial_peer_chunk.end_line >= {peerTypeStartLineSql}
-                        AND partial_peer_chunk.start_line <= {peerTypeEndLineSql}
-                        AND csharp_identifier_occurrence_count_in_line_range(
-                                partial_peer_chunk.content,
-                                partial_peer_chunk.start_line,
-                                {peerTypeStartLineSql},
-                                {peerTypeEndLineSql},
-                                {symbolAlias}.name) > 0
+                        AND (
+                            SELECT csharp_identifier_occurrence_count(
+                                GROUP_CONCAT(
+                                    csharp_text_in_line_range(
+                                        partial_peer_piece.content,
+                                        partial_peer_piece.start_line,
+                                        MAX(
+                                            {peerTypeStartLineSql},
+                                            COALESCE(
+                                                partial_peer_piece.prior_content_end_line + 1,
+                                                {peerTypeStartLineSql})),
+                                        MIN({peerTypeEndLineSql}, partial_peer_piece.end_line)),
+                                    char(10) ORDER BY {peerPieceConcatOrderSql}),
+                                {symbolAlias}.name)
+                            FROM (
+                                SELECT
+                                    partial_peer_chunk.file_id,
+                                    {peerChunkOrdinalSql} AS reconstruction_ordinal,
+                                    partial_peer_chunk.start_line,
+                                    partial_peer_chunk.end_line,
+                                    partial_peer_chunk.content,
+                                    MAX(CASE
+                                            WHEN partial_peer_chunk.content IS NOT NULL
+                                             AND partial_peer_chunk.content <> ''
+                                            THEN partial_peer_chunk.end_line
+                                        END) OVER (
+                                            PARTITION BY partial_peer_chunk.file_id
+                                            ORDER BY {peerChunkWindowOrderSql}
+                                            ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+                                        ) AS prior_content_end_line
+                                FROM chunks partial_peer_chunk
+                                WHERE partial_peer_chunk.file_id = partial_peer_type.file_id
+                            ) partial_peer_piece
+                            WHERE partial_peer_piece.end_line >= {peerTypeStartLineSql}
+                              AND partial_peer_piece.start_line <= {peerTypeEndLineSql}
+                        ) > 0
                       LIMIT 1
                   )
               )";

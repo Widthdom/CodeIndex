@@ -98,6 +98,10 @@ public partial class DbContext
                 (string? text, long? chunkStartLine, long? rangeStartLine, long? rangeEndLine, string? identifier) =>
                     CountCSharpIdentifierOccurrencesInLineRange(text, chunkStartLine, rangeStartLine, rangeEndLine, identifier));
             connection.CreateFunction(
+                "csharp_text_in_line_range",
+                (string? text, long? chunkStartLine, long? rangeStartLine, long? rangeEndLine) =>
+                    GetTextInLineRange(text, chunkStartLine, rangeStartLine, rangeEndLine));
+            connection.CreateFunction(
                 "csharp_reference_type_arity",
                 (string? context, string? identifier, long? columnNumber) =>
                     CSharpTypeReferenceArity.GetReferenceArity(context, identifier, columnNumber));
