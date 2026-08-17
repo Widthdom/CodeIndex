@@ -1770,9 +1770,12 @@ public static class HookCommandRunner
             return false;
         }
 
+        var pinnedGitAvailable = GitHelper.TryValidatePinnedGitExecutablePathForHook(
+            installedGitExecutablePath,
+            out var trustedGitExecutablePath);
         if (!TryBuildHookScript(
                 installedChainedHookPath,
-                installedGitExecutablePath,
+                pinnedGitAvailable ? trustedGitExecutablePath : installedGitExecutablePath,
                 selection,
                 out var expectedText)
             || !TryExtractManagedBlock(expectedText, out var expectedBlock)
@@ -1781,9 +1784,7 @@ public static class HookCommandRunner
             return false;
         }
 
-        if (!GitHelper.TryValidatePinnedGitExecutablePathForHook(
-                installedGitExecutablePath,
-                out _))
+        if (!pinnedGitAvailable)
         {
             hookState = "pinned_git_unavailable";
             return true;

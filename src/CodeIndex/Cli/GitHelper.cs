@@ -366,6 +366,8 @@ public static partial class GitHelper
         if (!TryResolveRealUnixPath(fullPath, out fullPath))
             return RejectedGitExecutable(source, "canonicalization_failed", diagnosticPath, null, null, null, null, null, null);
         diagnosticPath = DiagnosticSanitizer.ForPath(fullPath);
+        if (fullPath.IndexOfAny(['\r', '\n']) >= 0)
+            return RejectedGitExecutable(source, "path_contains_line_break", diagnosticPath, null, null, null, null, null, null);
 
         UnixFileMode mode;
         try

@@ -190,10 +190,37 @@ public class HookCommandRunnerTests
                 StringComparison.Ordinal);
 
             var installedHook = File.ReadAllText(hookPath);
-            var tamperedGitPath = Path.Combine(
-                projectRoot,
-                "attacker controlled",
-                OperatingSystem.IsWindows() ? "git.exe" : "git");
+            var tamperedGitPath =
+                $"{projectRoot}{Path.DirectorySeparatorChar}attacker controlled{Path.DirectorySeparatorChar}"
+                + (OperatingSystem.IsWindows() ? "git.exe" : "git");
+
+            if (!OperatingSystem.IsWindows())
+            {
+                var aliasDirectory =
+                    $"{projectRoot}{Path.DirectorySeparatorChar}mutable git alias";
+                var aliasedGitPath =
+                    $"{aliasDirectory}{Path.DirectorySeparatorChar}git";
+                Directory.CreateSymbolicLink(aliasDirectory, Path.GetDirectoryName(fakeGitPath)!);
+                var aliasTamperedHook = installedHook.Replace(
+                    $"cdidx_git={QuoteShellForTest(NormalizeExpectedShellPath(fakeGitPath))}",
+                    $"cdidx_git={QuoteShellForTest(NormalizeExpectedShellPath(aliasedGitPath))}",
+                    StringComparison.Ordinal);
+                Assert.NotEqual(installedHook, aliasTamperedHook);
+                File.WriteAllText(hookPath, aliasTamperedHook);
+
+                var aliasTamperedStatus = RunHooksAndCaptureStreams(
+                    ["status", "--project", projectRoot, "--json"]);
+
+                Assert.Equal(CommandExitCodes.Success, aliasTamperedStatus.ExitCode);
+                using var document = JsonDocument.Parse(aliasTamperedStatus.StdOut);
+                Assert.Equal(
+                    "executable_manifest_unresolved",
+                    document.RootElement.GetProperty("hook_state").GetString());
+                Assert.Equal(
+                    "unresolved",
+                    document.RootElement.GetProperty("executable").GetProperty("status").GetString());
+            }
+
             var tamperedHook = installedHook.Replace(
                 $"cdidx_git={QuoteShellForTest(NormalizeExpectedShellPath(fakeGitPath))}",
                 $"cdidx_git={QuoteShellForTest(NormalizeExpectedShellPath(tamperedGitPath))}",
@@ -294,6 +321,8 @@ public class HookCommandRunnerTests
             parent,
             "bin\n# BEGIN CDIDX MANAGED PRE-COMMIT\n# END CDIDX MANAGED PRE-COMMIT",
             "git");
+        var aliasDirectory = $"{parent}{Path.DirectorySeparatorChar}git-alias";
+        var aliasedGitPath = $"{aliasDirectory}{Path.DirectorySeparatorChar}git";
         using var env = EnvironmentVariableScope.Capture(GitHelper.GitExecutableEnvironmentVariable);
         var oldGitExecutablePath = GitHelper.GitExecutablePathOverride;
         try
@@ -312,6 +341,23 @@ public class HookCommandRunnerTests
             Assert.Contains(
                 "could not pin a trusted Git executable",
                 install.StdOut,
+                StringComparison.Ordinal);
+            Assert.Equal(
+                "path_contains_line_break",
+                GitHelper.GetGitExecutableStatus().Reason);
+            Assert.False(File.Exists(
+                Path.Combine(projectRoot, ".git", "hooks", "pre-commit")));
+
+            Directory.CreateSymbolicLink(aliasDirectory, Path.GetDirectoryName(fakeGitPath)!);
+            env.Set(GitHelper.GitExecutableEnvironmentVariable, aliasedGitPath);
+
+            var aliasInstall = RunHooksAndCaptureStreams(
+                ["install", "--project", projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.InstallError, aliasInstall.ExitCode);
+            Assert.Contains(
+                "could not pin a trusted Git executable",
+                aliasInstall.StdOut,
                 StringComparison.Ordinal);
             Assert.Equal(
                 "path_contains_line_break",
