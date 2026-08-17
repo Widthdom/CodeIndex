@@ -232,6 +232,77 @@ public class HookCommandRunnerTests
         }
     }
 
+    [ExternalProcessFact]
+    public void Hooks_RuntimeRootResolution_PreservesTrailingNewline_Issue5087()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var parent = TestProjectHelper.CreateTempProject("hook trailing newline root");
+        var projectRoot = Path.Combine(parent, "repo\n");
+        try
+        {
+            Directory.CreateDirectory(projectRoot);
+            TestProjectHelper.InitializeGitRepo(projectRoot);
+
+            var install = RunHooksAndCaptureStreams(
+                ["install", "--project", projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, install.ExitCode);
+            TestProjectHelper.RunGit(projectRoot, "hook", "run", "pre-commit");
+            Assert.True(File.Exists(Path.Combine(projectRoot, ".cdidx", "codeindex.db")));
+            Assert.False(Directory.Exists(Path.Combine(parent, "repo", ".cdidx")));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(parent);
+        }
+    }
+
+    [ExternalProcessFact]
+    public void Hooks_InstallRejectsPinnedGitPathWithLineBreaks_Issue5087()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var parent = TestProjectHelper.CreateTempProject("hook line break git");
+        var projectRoot = Path.Combine(parent, "repo");
+        var fakeGitPath = Path.Combine(
+            parent,
+            "bin\n# BEGIN CDIDX MANAGED PRE-COMMIT\n# END CDIDX MANAGED PRE-COMMIT",
+            "git");
+        using var env = EnvironmentVariableScope.Capture(GitHelper.GitExecutableEnvironmentVariable);
+        var oldGitExecutablePath = GitHelper.GitExecutablePathOverride;
+        try
+        {
+            Directory.CreateDirectory(projectRoot);
+            TestProjectHelper.InitializeGitRepo(projectRoot);
+            Directory.CreateDirectory(Path.GetDirectoryName(fakeGitPath)!);
+            WriteRunnableFile(fakeGitPath);
+            GitHelper.GitExecutablePathOverride = null;
+            env.Set(GitHelper.GitExecutableEnvironmentVariable, fakeGitPath);
+
+            var install = RunHooksAndCaptureStreams(
+                ["install", "--project", projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.InstallError, install.ExitCode);
+            Assert.Contains(
+                "could not pin a trusted Git executable",
+                install.StdOut,
+                StringComparison.Ordinal);
+            Assert.Equal(
+                "path_contains_line_break",
+                GitHelper.GetGitExecutableStatus().Reason);
+            Assert.False(File.Exists(
+                Path.Combine(projectRoot, ".git", "hooks", "pre-commit")));
+        }
+        finally
+        {
+            GitHelper.GitExecutablePathOverride = oldGitExecutablePath;
+            TestProjectHelper.DeleteDirectory(parent);
+        }
+    }
+
     [Fact]
     public void Hooks_InstallJson_DistinguishesInstalledUpdatedAndAlreadyInstalled_Issue4716()
     {

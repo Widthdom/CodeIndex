@@ -269,6 +269,8 @@ public static partial class GitHelper
                 return null;
 
             var fullPath = Path.GetFullPath(path);
+            if (fullPath.IndexOfAny(['\r', '\n']) >= 0)
+                return null;
             if (!HasExpectedGitExecutableName(fullPath))
                 return null;
 
@@ -301,6 +303,8 @@ public static partial class GitHelper
         }
 
         var diagnosticPath = DiagnosticSanitizer.ForPath(fullPath);
+        if (fullPath.IndexOfAny(['\r', '\n']) >= 0)
+            return RejectedGitExecutable(source, "path_contains_line_break", diagnosticPath, null, null, null, null, null, null);
         if (!HasExpectedGitExecutableName(fullPath))
             return RejectedGitExecutable(source, "unexpected_filename", diagnosticPath, null, null, null, null, null, null);
 

@@ -2220,24 +2220,33 @@ if [ -x
             executableSelection.Argv.Select(static argument => QuoteShell(NormalizeShellPath(argument))));
         return "#!/bin/sh\n"
                + BuildManagedHeader(executableSelection)
-               + $"""
-cdidx_git={quotedGitExecutable}
-cdidx_project_root=$("$cdidx_git" rev-parse --show-toplevel 2>/dev/null)
+               + $$"""
+cdidx_git={{quotedGitExecutable}}
+cdidx_project_root=$("$cdidx_git" rev-parse --show-toplevel 2>/dev/null; cdidx_git_status=$?; printf x; exit "$cdidx_git_status")
 cdidx_git_status=$?
+if [ "$cdidx_git_status" -eq 0 ]; then
+  cdidx_project_root=${cdidx_project_root%?}
+  cdidx_output_newline='
+'
+  case "$cdidx_project_root" in
+    *"$cdidx_output_newline") cdidx_project_root=${cdidx_project_root%"$cdidx_output_newline"} ;;
+    *) cdidx_git_status=1 ;;
+  esac
+fi
 if [ "$cdidx_git_status" -ne 0 ] || [ -z "$cdidx_project_root" ]; then
   echo "cdidx pre-commit hook could not resolve the active worktree root with the pinned Git executable; commit aborted. Reinstall the hook or configure a per-worktree core.hooksPath. Use git commit --no-verify to bypass hooks." >&2
   exit 1
 fi
-{invocation} index "$cdidx_project_root" --quiet
+{{invocation}} index "$cdidx_project_root" --quiet
 cdidx_status=$?
 if [ "$cdidx_status" -ne 0 ]; then
   echo "cdidx pre-commit index failed; commit aborted. Use git commit --no-verify to bypass hooks." >&2
   exit "$cdidx_status"
 fi
-if [ -x {quotedChainedHook} ]; then
-  {quotedChainedHook} "$@"
+if [ -x {{quotedChainedHook}} ]; then
+  {{quotedChainedHook}} "$@"
 fi
-{EndMarker}
+{{EndMarker}}
 """;
     }
 
