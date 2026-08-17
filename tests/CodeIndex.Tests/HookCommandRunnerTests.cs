@@ -22,7 +22,8 @@ public class HookCommandRunnerTests
         Assert.Equal(CommandExitCodes.Success, help.ExitCode);
         Assert.Contains("active worktree root", help.StdErr, StringComparison.Ordinal);
         Assert.Contains("trusted Git executables", help.StdErr, StringComparison.Ordinal);
-        Assert.Contains("core.hooksPath", help.StdErr, StringComparison.Ordinal);
+        Assert.Contains("reinstall the hook", help.StdErr, StringComparison.Ordinal);
+        Assert.DoesNotContain("core.hooksPath", help.StdErr, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -206,16 +207,30 @@ public class HookCommandRunnerTests
             using (var document = JsonDocument.Parse(tamperedStatus.StdOut))
             {
                 Assert.Equal(
-                    "executable_manifest_unresolved",
+                    "pinned_git_unavailable",
                     document.RootElement.GetProperty("hook_state").GetString());
                 Assert.Equal(
-                    "unresolved",
+                    "available",
                     document.RootElement.GetProperty("executable").GetProperty("status").GetString());
             }
             File.WriteAllText(hookPath, installedHook);
 
             GitHelper.GitExecutablePathOverride = null;
             File.Delete(fakeGitPath);
+            var missingGitStatus = RunHooksAndCaptureStreams(
+                ["status", "--project", projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, missingGitStatus.ExitCode);
+            using (var document = JsonDocument.Parse(missingGitStatus.StdOut))
+            {
+                Assert.Equal(
+                    "pinned_git_unavailable",
+                    document.RootElement.GetProperty("hook_state").GetString());
+                Assert.Equal(
+                    "available",
+                    document.RootElement.GetProperty("executable").GetProperty("status").GetString());
+            }
+
             var result = GitHelper.RunGitCapturingResultForTests(
                 projectRoot,
                 gitEnvironmentOverrides: null,
@@ -229,7 +244,8 @@ public class HookCommandRunnerTests
                 "could not resolve the active worktree root with the pinned Git executable",
                 result.Error,
                 StringComparison.Ordinal);
-            Assert.Contains("core.hooksPath", result.Error, StringComparison.Ordinal);
+            Assert.Contains("Reinstall the hook", result.Error, StringComparison.Ordinal);
+            Assert.DoesNotContain("core.hooksPath", result.Error, StringComparison.Ordinal);
             Assert.False(Directory.Exists(Path.Combine(projectRoot, ".cdidx")));
         }
         finally

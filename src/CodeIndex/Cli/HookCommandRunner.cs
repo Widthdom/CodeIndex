@@ -1770,22 +1770,23 @@ public static class HookCommandRunner
             return false;
         }
 
-        if (!GitHelper.TryValidatePinnedGitExecutablePathForHook(
-                installedGitExecutablePath,
-                out var trustedGitExecutablePath))
-        {
-            return false;
-        }
-
         if (!TryBuildHookScript(
                 installedChainedHookPath,
-                trustedGitExecutablePath,
+                installedGitExecutablePath,
                 selection,
                 out var expectedText)
             || !TryExtractManagedBlock(expectedText, out var expectedBlock)
             || !string.Equals(actualBlock, expectedBlock, StringComparison.Ordinal))
         {
             return false;
+        }
+
+        if (!GitHelper.TryValidatePinnedGitExecutablePathForHook(
+                installedGitExecutablePath,
+                out _))
+        {
+            hookState = "pinned_git_unavailable";
+            return true;
         }
 
         try
@@ -2234,7 +2235,7 @@ if [ "$cdidx_git_status" -eq 0 ]; then
   esac
 fi
 if [ "$cdidx_git_status" -ne 0 ] || [ -z "$cdidx_project_root" ]; then
-  echo "cdidx pre-commit hook could not resolve the active worktree root with the pinned Git executable; commit aborted. Reinstall the hook or configure a per-worktree core.hooksPath. Use git commit --no-verify to bypass hooks." >&2
+  echo "cdidx pre-commit hook could not resolve the active worktree root with the pinned Git executable; commit aborted. Reinstall the hook with a working trusted Git executable. Use git commit --no-verify to bypass hooks." >&2
   exit 1
 fi
 {{invocation}} index "$cdidx_project_root" --quiet
@@ -2683,7 +2684,7 @@ fi
         CommandErrorWriter.WriteStderr(
             "Installed hooks pin the current cdidx and trusted Git executables, then resolve the active worktree root at hook execution time.");
         CommandErrorWriter.WriteStderr(
-            "Root-resolution failures abort the commit; reinstall the hook or configure a per-worktree core.hooksPath.");
+            "Root-resolution failures abort the commit; reinstall the hook with a working trusted Git executable.");
     }
 
     private sealed record ManagedHookAnalysis(
