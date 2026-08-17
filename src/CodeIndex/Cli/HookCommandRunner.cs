@@ -1400,10 +1400,14 @@ public static class HookCommandRunner
 
         try
         {
-            var comparison = OperatingSystem.IsWindows()
-                ? StringComparison.OrdinalIgnoreCase
-                : StringComparison.Ordinal;
-            return string.Equals(path, Path.GetFullPath(path), comparison);
+            var fullPath = Path.GetFullPath(path);
+            if (!OperatingSystem.IsWindows())
+                return string.Equals(path, fullPath, StringComparison.Ordinal);
+
+            return string.Equals(
+                path.Replace('\\', '/'),
+                fullPath.Replace('\\', '/'),
+                StringComparison.OrdinalIgnoreCase);
         }
         catch (Exception ex) when (IsHookFileOperationException(ex))
         {
@@ -1766,9 +1770,16 @@ public static class HookCommandRunner
             return false;
         }
 
+        if (!GitHelper.TryValidatePinnedGitExecutablePathForHook(
+                installedGitExecutablePath,
+                out var trustedGitExecutablePath))
+        {
+            return false;
+        }
+
         if (!TryBuildHookScript(
                 installedChainedHookPath,
-                installedGitExecutablePath,
+                trustedGitExecutablePath,
                 selection,
                 out var expectedText)
             || !TryExtractManagedBlock(expectedText, out var expectedBlock)

@@ -105,8 +105,11 @@ public class HookCommandRunnerTests
             Assert.True(File.Exists(Path.Combine(linkedRoot, ".cdidx", "codeindex.db")));
             Assert.Equal(installedHook, File.ReadAllText(hookPath));
 
+            GitHelper.GitVersionProbeForTesting = static _ =>
+                throw new InvalidOperationException("status must not execute the parsed Git path");
             var linkedStatus = RunHooksAndCaptureStreams(
                 ["status", "--project", linkedRoot, "--json"]);
+            GitHelper.GitVersionProbeForTesting = null;
             Assert.Equal(CommandExitCodes.Success, linkedStatus.ExitCode);
             using (var document = JsonDocument.Parse(linkedStatus.StdOut))
             {
@@ -148,6 +151,7 @@ public class HookCommandRunnerTests
         }
         finally
         {
+            GitHelper.GitVersionProbeForTesting = null;
             TestProjectHelper.DeleteDirectory(parent);
         }
     }
@@ -176,6 +180,32 @@ public class HookCommandRunnerTests
                 $"cdidx_git={QuoteShellForTest(NormalizeExpectedShellPath(fakeGitPath))}",
                 File.ReadAllText(hookPath),
                 StringComparison.Ordinal);
+
+            var installedHook = File.ReadAllText(hookPath);
+            var tamperedGitPath = Path.Combine(
+                projectRoot,
+                "attacker controlled",
+                OperatingSystem.IsWindows() ? "git.exe" : "git");
+            var tamperedHook = installedHook.Replace(
+                $"cdidx_git={QuoteShellForTest(NormalizeExpectedShellPath(fakeGitPath))}",
+                $"cdidx_git={QuoteShellForTest(NormalizeExpectedShellPath(tamperedGitPath))}",
+                StringComparison.Ordinal);
+            Assert.NotEqual(installedHook, tamperedHook);
+            File.WriteAllText(hookPath, tamperedHook);
+
+            var tamperedStatus = RunHooksAndCaptureStreams(
+                ["status", "--project", projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, tamperedStatus.ExitCode);
+            using (var document = JsonDocument.Parse(tamperedStatus.StdOut))
+            {
+                Assert.Equal(
+                    "executable_manifest_unresolved",
+                    document.RootElement.GetProperty("hook_state").GetString());
+                Assert.Equal(
+                    "unresolved",
+                    document.RootElement.GetProperty("executable").GetProperty("status").GetString());
+            }
+            File.WriteAllText(hookPath, installedHook);
 
             GitHelper.GitExecutablePathOverride = null;
             File.Delete(fakeGitPath);
@@ -1585,6 +1615,8 @@ public class HookCommandRunnerTests
             {
                 Assert.False(HookCommandRunner.IsCanonicalFullyQualifiedPath(@"C:tools\cdidx.exe"));
                 Assert.False(HookCommandRunner.IsCanonicalFullyQualifiedPath(@"\tools\cdidx.exe"));
+                Assert.True(HookCommandRunner.IsCanonicalFullyQualifiedPath(
+                    Path.GetFullPath(wrapperPath).Replace('\\', '/')));
             }
 
             Assert.True(HookCommandRunner.TryBuildHookScript(

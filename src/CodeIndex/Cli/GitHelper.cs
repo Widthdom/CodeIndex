@@ -144,6 +144,18 @@ public static partial class GitHelper
     internal static string? TryResolveGitExecutablePathForHook()
         => TryResolveGitExecutablePath();
 
+    internal static bool TryValidatePinnedGitExecutablePathForHook(
+        string path,
+        out string canonicalPath)
+    {
+        var resolution = EvaluateGitExecutableCandidate(
+            path,
+            "hook_manifest",
+            probeVersion: false);
+        canonicalPath = resolution.Path ?? string.Empty;
+        return resolution.Path != null;
+    }
+
     public static GitExecutableStatus GetGitExecutableStatus()
     {
         var overridePath = NormalizeTrustedGitExecutablePath(GitExecutablePathOverrideValue.Value);
@@ -268,7 +280,10 @@ public static partial class GitHelper
         }
     }
 
-    private static GitExecutableResolution EvaluateGitExecutableCandidate(string path, string source)
+    private static GitExecutableResolution EvaluateGitExecutableCandidate(
+        string path,
+        string source,
+        bool probeVersion = true)
     {
         if (string.IsNullOrWhiteSpace(path))
             return RejectedGitExecutable(source, "path_empty", null, null, null, null, null, null, null);
@@ -335,6 +350,9 @@ public static partial class GitHelper
             if (!TryValidateWindowsExecutableImage(fullPath))
                 return RejectedGitExecutable(source, "invalid_executable_format", diagnosticPath, null, null, false, windowsOwner, windowsOwnerTrusted, windowsAncestorsTrusted);
 
+            if (!probeVersion)
+                return AcceptedGitExecutable(source, fullPath, diagnosticPath, null, null, null, windowsOwner, windowsOwnerTrusted, windowsAncestorsTrusted);
+
             var windowsExecutable = TryProbeGitVersion(fullPath);
             return windowsExecutable
                 ? AcceptedGitExecutable(source, fullPath, diagnosticPath, null, null, windowsExecutable, windowsOwner, windowsOwnerTrusted, windowsAncestorsTrusted)
@@ -378,6 +396,9 @@ public static partial class GitHelper
         var executable = TryAccessUnixExecutable(fullPath);
         if (!executable)
             return RejectedGitExecutable(source, "not_executable", diagnosticPath, ownerOnlyWritable, unixMode, executable, owner, ownerTrusted, ancestorsTrusted);
+
+        if (!probeVersion)
+            return AcceptedGitExecutable(source, fullPath, diagnosticPath, ownerOnlyWritable, unixMode, executable, owner, ownerTrusted, ancestorsTrusted);
 
         executable = TryProbeGitVersion(fullPath);
         if (!executable)
