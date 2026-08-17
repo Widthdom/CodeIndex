@@ -64,6 +64,11 @@ public class HookCommandRunnerTests
         var linkedRoot = Path.Combine(parent, "linked repo ' 日本語");
         try
         {
+            var executableSelection = CreateRunnableCdidxExecutableSelection();
+            HookCommandRunner.ExecutableSelectionForTesting = _ => executableSelection;
+            var expectedPinnedInvocation = BuildExpectedPinnedInvocation(executableSelection);
+            var expectedRuntimeInvocation =
+                $"{expectedPinnedInvocation} index \"$cdidx_project_root\" --quiet";
             Directory.CreateDirectory(primaryRoot);
             TestProjectHelper.InitializeGitRepo(primaryRoot);
             File.WriteAllText(Path.Combine(primaryRoot, "Program.cs"), "class Program { }\n");
@@ -81,9 +86,9 @@ public class HookCommandRunnerTests
                     .GetProperty("managed_hook_preview")
                     .GetString();
                 Assert.Contains("rev-parse --show-toplevel", managedHookPreview, StringComparison.Ordinal);
-                Assert.Contains(BuildExpectedRuntimeInvocation(), managedHookPreview, StringComparison.Ordinal);
+                Assert.Contains(expectedRuntimeInvocation, managedHookPreview, StringComparison.Ordinal);
                 Assert.DoesNotContain(
-                    $"{BuildExpectedPinnedInvocation()} index {QuoteShellForTest(primaryRoot)} --quiet",
+                    $"{expectedPinnedInvocation} index {QuoteShellForTest(primaryRoot)} --quiet",
                     managedHookPreview,
                     StringComparison.Ordinal);
             }
@@ -152,6 +157,7 @@ public class HookCommandRunnerTests
         finally
         {
             GitHelper.GitVersionProbeForTesting = null;
+            HookCommandRunner.ExecutableSelectionForTesting = null;
             TestProjectHelper.DeleteDirectory(parent);
         }
     }
@@ -2365,10 +2371,29 @@ public class HookCommandRunnerTests
             out var selection,
             out var failureReason),
             failureReason);
-        return string.Join(
+        return BuildExpectedPinnedInvocation(selection);
+    }
+
+    private static string BuildExpectedPinnedInvocation(HookExecutableSelection selection)
+        => string.Join(
             ' ',
             selection.Argv.Select(static argument =>
                 QuoteShellForTest(NormalizeExpectedShellPath(argument))));
+
+    private static HookExecutableSelection CreateRunnableCdidxExecutableSelection()
+    {
+        var assemblyPath = typeof(HookCommandRunner).Assembly.Location;
+        var executablePath = Path.Combine(
+            Path.GetDirectoryName(assemblyPath)!,
+            OperatingSystem.IsWindows() ? "cdidx.exe" : "cdidx");
+        Assert.True(HookCommandRunner.TryCreateExecutableSelection(
+            executablePath,
+            assemblyPath,
+            ConsoleUi.LoadVersion(),
+            out var selection,
+            out var failureReason),
+            failureReason);
+        return selection;
     }
 
     private static string BuildExpectedRuntimeInvocation()
