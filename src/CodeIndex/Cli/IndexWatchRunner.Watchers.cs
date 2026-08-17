@@ -331,21 +331,24 @@ internal static partial class IndexWatchRunner
             return true;
         }
 
-        if (IsSamePath(normalizedPath, normalizedDbPath, comparison))
-            return true;
-
-        foreach (var suffix in new[] { "-wal", "-shm", "-journal" })
-        {
-            if (IsSamePath(normalizedPath, normalizedDbPath + suffix, comparison))
-                return true;
-        }
-
         var lockPath = IndexLock.GetLockPath(normalizedDbPath);
-        if (IsSamePath(normalizedPath, lockPath, comparison)
-            || IsSamePath(normalizedPath, IndexLock.GetInfoPath(lockPath), comparison)
-            || normalizedPath.StartsWith(lockPath + ".", comparison))
+        var internalTargets = new[]
         {
-            return true;
+            normalizedDbPath,
+            normalizedDbPath + "-wal",
+            normalizedDbPath + "-shm",
+            normalizedDbPath + "-journal",
+            lockPath,
+            IndexLock.GetInfoPath(lockPath),
+        };
+
+        foreach (var targetPath in internalTargets)
+        {
+            if (IsSamePath(normalizedPath, targetPath, comparison)
+                || AtomicFileWriter.IsTempPathForTarget(targetPath, normalizedPath, comparison))
+            {
+                return true;
+            }
         }
 
         return false;
