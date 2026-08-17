@@ -141,6 +141,9 @@ public static partial class GitHelper
         return TrustedGitExecutable.Value.Path;
     }
 
+    internal static string? TryResolveGitExecutablePathForHook()
+        => TryResolveGitExecutablePath();
+
     public static GitExecutableStatus GetGitExecutableStatus()
     {
         var overridePath = NormalizeTrustedGitExecutablePath(GitExecutablePathOverrideValue.Value);

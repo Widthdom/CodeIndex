@@ -236,10 +236,42 @@ public static class HookCommandRunner
         }
 
         var executable = InspectExecutable(executableSelection, executableSelection);
+        var gitExecutablePath = GitHelper.TryResolveGitExecutablePathForHook();
+        if (string.IsNullOrWhiteSpace(gitExecutablePath))
+        {
+            const string message = "could not pin a trusted Git executable for active-worktree resolution";
+            if (options.DryRun)
+            {
+                var preflightPlan = BuildInstallPreflightFailurePlan(
+                    hookPath,
+                    chainedHookPath,
+                    message);
+                return WriteDryRunResult(
+                    options,
+                    jsonOptions,
+                    projectPath,
+                    hookPath,
+                    chainedHookPath,
+                    preflightPlan,
+                    executable);
+            }
+
+            return WriteResult(
+                options.Json,
+                jsonOptions,
+                "error",
+                message,
+                projectPath,
+                hookPath,
+                null,
+                CommandExitCodes.InstallError,
+                executable: executable);
+        }
+
         var warnings = new List<HookCommandWarningJsonResult>();
         if (!TryBuildHookScript(
                 chainedHookPath,
-                projectPath,
+                gitExecutablePath,
                 executableSelection,
                 out var hookScript))
         {
@@ -264,7 +296,7 @@ public static class HookCommandRunner
 
         if (!TryBuildHookScript(
                 chainedHookPath,
-                projectPath,
+                gitExecutablePath,
                 executableSelection,
                 out hookScript))
         {
@@ -302,7 +334,7 @@ public static class HookCommandRunner
                     return WriteResult(options.Json, jsonOptions, "error", "Git hook file path became unsafe before write", projectPath, null, null, CommandExitCodes.InstallError, executable: executable);
                 if (!TryBuildHookScript(
                         chainedHookPath,
-                        projectPath,
+                        gitExecutablePath,
                         executableSelection,
                         out hookScript))
                 {
@@ -336,7 +368,7 @@ public static class HookCommandRunner
 
         if (!TryBuildHookScript(
                 chainedHookPath,
-                projectPath,
+                gitExecutablePath,
                 executableSelection,
                 out hookScript))
         {
@@ -1684,16 +1716,93 @@ public static class HookCommandRunner
         if (!TryExtractManagedBlock(actualText, out var actualBlock))
             return false;
 
+        if (TryAnalyzeRuntimeWorktreeInvocation(
+                actualBlock,
+                chainedHookPath,
+                selection,
+                out hookState))
+        {
+            return true;
+        }
+
+        return TryAnalyzeLegacyPinnedProjectInvocation(
+            actualBlock,
+            projectPath,
+            chainedHookPath,
+            selection,
+            out hookState);
+    }
+
+    private static bool TryAnalyzeRuntimeWorktreeInvocation(
+        string actualBlock,
+        string chainedHookPath,
+        HookExecutableSelection selection,
+        out string hookState)
+    {
+        hookState = "executable_manifest_unresolved";
+        var header = BuildManagedHeader(selection) + "cdidx_git=";
+        if (!actualBlock.StartsWith(header, StringComparison.Ordinal))
+            return false;
+
+        var offset = header.Length;
+        if (!TryReadQuotedShellValue(actualBlock, ref offset, out var installedGitExecutablePath))
+            return false;
+        const string chainedHookPrefix = "\nif [ -x ";
+        var chainedHookOffset = actualBlock.IndexOf(
+            chainedHookPrefix,
+            offset,
+            StringComparison.Ordinal);
+        if (chainedHookOffset < 0)
+            return false;
+        chainedHookOffset += chainedHookPrefix.Length;
+        if (!TryReadQuotedShellValue(
+                actualBlock,
+                ref chainedHookOffset,
+                out var installedChainedHookPath))
+            return false;
+        if (!IsCanonicalFullyQualifiedPath(installedGitExecutablePath)
+            || !IsCanonicalFullyQualifiedPath(installedChainedHookPath))
+        {
+            return false;
+        }
+
+        if (!TryBuildHookScript(
+                installedChainedHookPath,
+                installedGitExecutablePath,
+                selection,
+                out var expectedText)
+            || !TryExtractManagedBlock(expectedText, out var expectedBlock)
+            || !string.Equals(actualBlock, expectedBlock, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        try
+        {
+            hookState = RepositoryPathsEqual(chainedHookPath, installedChainedHookPath)
+                ? "managed"
+                : "chained_hook_path_mismatch";
+            return true;
+        }
+        catch (Exception ex) when (IsHookFileOperationException(ex) || ex is CodeIndexException)
+        {
+            return false;
+        }
+    }
+
+    private static bool TryAnalyzeLegacyPinnedProjectInvocation(
+        string actualBlock,
+        string projectPath,
+        string chainedHookPath,
+        HookExecutableSelection selection,
+        out string hookState)
+    {
+        hookState = "executable_manifest_unresolved";
+
         var invocation = string.Join(
             ' ',
             selection.Argv.Select(static argument => QuoteShell(NormalizeShellPath(argument))));
-        var header = $"""
-{BeginMarker}
-# CDIDX EXECUTABLE SOURCE: {FormatManifestComment(selection.Source)}
-# CDIDX EXECUTABLE VERSION: {FormatManifestComment(selection.Version)}
-{ExecutableManifestPrefix}{EncodeExecutableManifest(selection)}
-{invocation} index
-""" + " ";
+        var header = BuildManagedHeader(selection) + $"{invocation} index ";
         if (!actualBlock.StartsWith(header, StringComparison.Ordinal))
             return false;
 
@@ -1720,12 +1829,11 @@ if [ -x
             return false;
         }
 
-        if (!TryBuildHookScript(
+        var expectedText = BuildLegacyHookScript(
                 installedChainedHookPath,
                 installedProjectPath,
-                selection,
-                out var expectedText)
-            || !TryExtractManagedBlock(expectedText, out var expectedBlock)
+                selection);
+        if (!TryExtractManagedBlock(expectedText, out var expectedBlock)
             || !string.Equals(actualBlock, expectedBlock, StringComparison.Ordinal))
         {
             return false;
@@ -1747,7 +1855,7 @@ if [ -x
 
         hookState = (projectPathMatches, chainedHookPathMatches) switch
         {
-            (true, true) => "managed",
+            (true, true) => "legacy_project_path_pinned",
             (false, true) => "project_path_mismatch",
             (true, false) => "chained_hook_path_mismatch",
             _ => "repository_path_mismatch",
@@ -2070,11 +2178,11 @@ if [ -x
 
     internal static bool TryBuildHookScript(
         string chainedHookPath,
-        string projectPath,
+        string gitExecutablePath,
         HookExecutableSelection executableSelection,
         out string hookScript)
     {
-        hookScript = BuildHookScript(chainedHookPath, projectPath, executableSelection);
+        hookScript = BuildHookScript(chainedHookPath, gitExecutablePath, executableSelection);
         if (Encoding.UTF8.GetByteCount(hookScript) <= MaxHookMarkerBytes)
             return true;
 
@@ -2084,6 +2192,46 @@ if [ -x
 
     private static string BuildHookScript(
         string chainedHookPath,
+        string gitExecutablePath,
+        HookExecutableSelection executableSelection)
+    {
+        var stableChainedHookPath = chainedHookPath;
+        if (!OperatingSystem.IsWindows()
+            && TryResolveRepositoryPathAliases(chainedHookPath, out var resolvedChainedHookPath))
+        {
+            stableChainedHookPath = resolvedChainedHookPath;
+        }
+
+        var quotedChainedHook = QuoteShell(stableChainedHookPath);
+        var quotedGitExecutable = QuoteShell(NormalizeShellPath(gitExecutablePath));
+        var invocation = string.Join(
+            ' ',
+            executableSelection.Argv.Select(static argument => QuoteShell(NormalizeShellPath(argument))));
+        return "#!/bin/sh\n"
+               + BuildManagedHeader(executableSelection)
+               + $"""
+cdidx_git={quotedGitExecutable}
+cdidx_project_root=$("$cdidx_git" rev-parse --show-toplevel 2>/dev/null)
+cdidx_git_status=$?
+if [ "$cdidx_git_status" -ne 0 ] || [ -z "$cdidx_project_root" ]; then
+  echo "cdidx pre-commit hook could not resolve the active worktree root with the pinned Git executable; commit aborted. Reinstall the hook or configure a per-worktree core.hooksPath. Use git commit --no-verify to bypass hooks." >&2
+  exit 1
+fi
+{invocation} index "$cdidx_project_root" --quiet
+cdidx_status=$?
+if [ "$cdidx_status" -ne 0 ]; then
+  echo "cdidx pre-commit index failed; commit aborted. Use git commit --no-verify to bypass hooks." >&2
+  exit "$cdidx_status"
+fi
+if [ -x {quotedChainedHook} ]; then
+  {quotedChainedHook} "$@"
+fi
+{EndMarker}
+""";
+    }
+
+    private static string BuildLegacyHookScript(
+        string chainedHookPath,
         string projectPath,
         HookExecutableSelection executableSelection)
     {
@@ -2092,13 +2240,9 @@ if [ -x
         var invocation = string.Join(
             ' ',
             executableSelection.Argv.Select(static argument => QuoteShell(NormalizeShellPath(argument))));
-        var manifest = EncodeExecutableManifest(executableSelection);
-        return $"""
-#!/bin/sh
-{BeginMarker}
-# CDIDX EXECUTABLE SOURCE: {FormatManifestComment(executableSelection.Source)}
-# CDIDX EXECUTABLE VERSION: {FormatManifestComment(executableSelection.Version)}
-{ExecutableManifestPrefix}{manifest}
+        return "#!/bin/sh\n"
+               + BuildManagedHeader(executableSelection)
+               + $"""
 {invocation} index {quotedProjectPath} --quiet
 cdidx_status=$?
 if [ "$cdidx_status" -ne 0 ]; then
@@ -2111,6 +2255,12 @@ fi
 {EndMarker}
 """;
     }
+
+    private static string BuildManagedHeader(HookExecutableSelection executableSelection)
+        => $"{BeginMarker}\n"
+           + $"# CDIDX EXECUTABLE SOURCE: {FormatManifestComment(executableSelection.Source)}\n"
+           + $"# CDIDX EXECUTABLE VERSION: {FormatManifestComment(executableSelection.Version)}\n"
+           + $"{ExecutableManifestPrefix}{EncodeExecutableManifest(executableSelection)}\n";
 
     private static string QuoteShell(string value)
         => "'" + value.Replace("'", "'\"'\"'", StringComparison.Ordinal) + "'";
@@ -2508,7 +2658,13 @@ fi
         => "cdidx hooks <install|uninstall|status> [--project <path>] [--force] [--dry-run] [--json]";
 
     private static void PrintUsage()
-        => CommandErrorWriter.WriteStderr($"Usage: {GetUsage()}");
+    {
+        CommandErrorWriter.WriteStderr($"Usage: {GetUsage()}");
+        CommandErrorWriter.WriteStderr(
+            "Installed hooks pin the current cdidx and trusted Git executables, then resolve the active worktree root at hook execution time.");
+        CommandErrorWriter.WriteStderr(
+            "Root-resolution failures abort the commit; reinstall the hook or configure a per-worktree core.hooksPath.");
+    }
 
     private sealed record ManagedHookAnalysis(
         string State,
