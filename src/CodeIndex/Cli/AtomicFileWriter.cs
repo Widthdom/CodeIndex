@@ -9,6 +9,8 @@ internal static class AtomicFileWriter
 {
     internal const int MaxTempFileNameChars = 120;
     private const int MaxTempStemChars = 48;
+    private const int TempPathNonceChars = 32;
+    private const string TempPathSuffix = ".tmp";
     private const int AtCurrentWorkingDirectory = -100;
     private const uint LinuxRenameNoReplace = 1;
     private const uint MacRenameExclusiveFlag = 0x00000004;
@@ -473,7 +475,54 @@ internal static class AtomicFileWriter
 
     internal static string BuildTempPathForTesting(string path) => BuildTempPath(path);
 
+    internal static bool IsTempPathForTarget(
+        string targetPath,
+        string candidatePath,
+        StringComparison comparison)
+    {
+        var pattern = BuildTempPathPattern(Path.GetFullPath(targetPath));
+        var normalizedCandidatePath = Path.GetFullPath(candidatePath);
+        if (!string.Equals(
+                pattern.Directory,
+                Path.GetDirectoryName(normalizedCandidatePath),
+                comparison))
+        {
+            return false;
+        }
+
+        var candidateFileName = Path.GetFileName(normalizedCandidatePath);
+        if (candidateFileName.Length != pattern.FileNamePrefix.Length + TempPathNonceChars + TempPathSuffix.Length
+            || !candidateFileName.StartsWith(pattern.FileNamePrefix, comparison)
+            || !candidateFileName.EndsWith(TempPathSuffix, comparison))
+        {
+            return false;
+        }
+
+        var nonce = candidateFileName.AsSpan(pattern.FileNamePrefix.Length, TempPathNonceChars);
+        var allowUppercaseHex = comparison == StringComparison.OrdinalIgnoreCase;
+        foreach (var value in nonce)
+        {
+            if (value is >= '0' and <= '9' or >= 'a' and <= 'f')
+                continue;
+            if (allowUppercaseHex && value is >= 'A' and <= 'F')
+                continue;
+            return false;
+        }
+
+        return true;
+    }
+
     private static string BuildTempPath(string path)
+    {
+        var pattern = BuildTempPathPattern(path);
+        var tempFileName = $"{pattern.FileNamePrefix}{Guid.NewGuid():N}{TempPathSuffix}";
+
+        return string.IsNullOrEmpty(pattern.Directory)
+            ? tempFileName
+            : Path.Combine(pattern.Directory, tempFileName);
+    }
+
+    private static TempPathPattern BuildTempPathPattern(string path)
     {
         var directory = Path.GetDirectoryName(path);
         var fileName = Path.GetFileName(path);
@@ -483,14 +532,14 @@ internal static class AtomicFileWriter
         if (stem.Length > MaxTempStemChars)
             stem = stem[..MaxTempStemChars];
 
-        var tempFileName = $".cdidx-{stem}.{Guid.NewGuid():N}.tmp";
-        if (tempFileName.Length > MaxTempFileNameChars)
-            tempFileName = $".cdidx-{Guid.NewGuid():N}.tmp";
+        var fileNamePrefix = $".cdidx-{stem}.";
+        if (fileNamePrefix.Length + TempPathNonceChars + TempPathSuffix.Length > MaxTempFileNameChars)
+            fileNamePrefix = ".cdidx-";
 
-        return string.IsNullOrEmpty(directory)
-            ? tempFileName
-            : Path.Combine(directory, tempFileName);
+        return new TempPathPattern(directory, fileNamePrefix);
     }
+
+    private readonly record struct TempPathPattern(string? Directory, string FileNamePrefix);
 
     private static void ReportCleanupFailure(Action<Exception>? failureSink, Exception exception)
     {
