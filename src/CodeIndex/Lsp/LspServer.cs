@@ -317,8 +317,19 @@ internal sealed partial class LspServer : IDisposable
                     read.Payload,
                     cancellationToken,
                     reservedSessionAction);
+                var completesInput = reservedSessionAction is SessionDispatchAction.Exit
+                    or SessionDispatchAction.ExitBeforeShutdown;
                 if (messages.Writer.TryWrite(inbound))
+                {
+                    if (completesInput)
+                    {
+                        // Do not depend on cancellation interrupting a pending stdio read.
+                        // pending stdio read が cancellation で中断されることに依存しない。
+                        break;
+                    }
+
                     continue;
+                }
 
                 var busyResponse = CreateOverloadResponse(read.Payload, reservedSessionAction);
                 if (busyResponse != null)
@@ -335,6 +346,9 @@ internal sealed partial class LspServer : IDisposable
                     await messages.Writer
                         .WriteAsync(inbound, readCancellation.Token)
                         .ConfigureAwait(false);
+
+                    if (completesInput)
+                        break;
                 }
                 catch
                 {

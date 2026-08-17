@@ -821,6 +821,12 @@ phase before waiting for active dispatches, then disposes an owned query context
 and reader exactly once.
 After shutdown, requests receive `-32600`, notifications are ignored, and only
 the `exit` notification completes the normal lifecycle.
+After an ordered `exit` notification is accepted, the stdio transport does not
+start another input read: it drains the already queued frames, publishes the
+shutdown response first, and then returns without waiting for stdin EOF. A valid
+shutdown/exit sequence returns process status 0, while exit before shutdown
+returns process status 1. The input stream remains caller-owned and is not
+closed to force completion.
 Disk-backed position-line caching must enforce its 4 MiB input limit while
 streaming, not only through a pre-read `Length` check. Bytes beyond the limit
 must never reach text decoding, including when a shared file grows concurrently,
@@ -4635,6 +4641,11 @@ serialize 済み initialize response と running への遷移は 1 つの公開�
 変更し、その後に所有する query context と reader を正確に 1 回だけ破棄する。shutdown 後の
 request は `-32600` を返し、notification は無視し、`exit` notification だけが正常な lifecycle を
 完了させる。
+順序どおりの `exit` notification を受理した後、stdio transport は次の input read を開始しない。
+すでに queue に入った frame を drain し、shutdown response を先に公開してから、stdin EOF を待たずに
+return する。正当な shutdown/exit sequence は process status 0 で返し、shutdown 前の exit は
+process status 1 で返す。input stream は caller 所有のままとし、完了を強制するために close しては
+ならない。
 disk 上の position-line cache は、事前の `Length` check だけでなく streaming 中も 4 MiB の
 input 上限を強制する必要がある。共有 file が同時に増大する場合も上限超過 byte を text decode に
 渡してはならず、bounded な failure reason は `position_file_too_large` のままとする。
