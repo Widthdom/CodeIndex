@@ -64,7 +64,8 @@ internal static class GitHubHttpClientFactory
         HttpClient client,
         Func<HttpRequestMessage> requestFactory,
         HttpCompletionOption completionOption,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool requestIsIdempotent = false)
     {
         ArgumentNullException.ThrowIfNull(client);
         ArgumentNullException.ThrowIfNull(requestFactory);
@@ -72,7 +73,7 @@ internal static class GitHubHttpClientFactory
         for (var attempt = 1; ; attempt++)
         {
             using var request = requestFactory();
-            var canRetry = IsRetryableRequestMethod(request.Method);
+            var canRetry = requestIsIdempotent || IsRetryableRequestMethod(request.Method);
             try
             {
                 var response = await client.SendAsync(request, completionOption, cancellationToken).ConfigureAwait(false);

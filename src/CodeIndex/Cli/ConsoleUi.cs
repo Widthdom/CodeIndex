@@ -249,7 +249,7 @@ public static partial class ConsoleUi
         ("suggestions-show", "Requires a full suggestion id or an unambiguous id prefix; filters are applied before id resolution and the store is not changed."),
         ("suggestions-show", "Example: `cdidx suggestions show <id> --json`."),
         ("suggestions-export", "--format defaults to json. --output is supported only for markdown and issue-drafts, and --overwrite replaces an existing export atomically; export never submits or opens GitHub issues."),
-        ("suggestions-export", "--open-issues is available only with --format issue-drafts. A JSON file performs offline duplicate preflight; `github:owner/name` or `github` plus --repo performs bounded read-only GitHub API GETs and may read CDIDX_GITHUB_TOKEN from the process environment."),
+        ("suggestions-export", "--open-issues is available only with --format issue-drafts. A JSON file performs offline duplicate preflight; `github:owner/name` or `github` plus --repo performs bounded read-only GitHub API requests with GraphQL cursor pagination and requires CDIDX_GITHUB_TOKEN in the process environment."),
         ("suggestions-export", "--issue-state is limited to live GitHub preflight. Choose either --duplicate-confidence or --duplicate-threshold, not both."),
         ("suggestions-export", "Example: `cdidx suggestions export --format issue-drafts --open-issues github:owner/repo --issue-state open --output drafts.json`."),
         ("suggestions-add", "Writes one local draft to the selected suggestion store; normalized category, language, and description duplicates succeed without adding another record."),

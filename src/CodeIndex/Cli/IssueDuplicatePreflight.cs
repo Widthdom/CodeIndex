@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Net;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -33,16 +34,63 @@ internal sealed class IssueDuplicatePreflight
     internal const string CustomDuplicateConfidence = "custom";
     internal const string DefaultIssueState = "open";
     private const int GitHubOpenIssuesPerPage = 100;
-    private const int MaxGitHubOpenIssuePages = (MaxOpenIssueCount / GitHubOpenIssuesPerPage) + 1;
+    private const int MaxGitHubCursorLength = 2048;
     private const int GitHubLabelsPerPage = 100;
     private const int MaxGitHubLabelPages = (MaxRepositoryLabelCount / GitHubLabelsPerPage) + 1;
     private const string GitHubSourceName = "github";
     private const string GitHubSourcePrefix = "github:";
     private const string GitHubTokenEnvironmentVariable = "CDIDX_GITHUB_TOKEN";
     private const string GitHubApiBase = "https://api.github.com";
+    private const string GitHubGraphQlEndpoint = $"{GitHubApiBase}/graphql";
+    private const string GitHubIssuesGraphQlQuery = """
+        query CodeIndexIssueDuplicatePreflight(
+          $owner: String!
+          $name: String!
+          $first: Int!
+          $after: String
+          $states: [IssueState!]
+        ) {
+          repository(owner: $owner, name: $name) {
+            issues(
+              first: $first
+              after: $after
+              states: $states
+              orderBy: {field: CREATED_AT, direction: DESC}
+            ) {
+              nodes {
+                id
+                number
+                title
+                url
+                body
+                state
+                labels(first: 32) {
+                  nodes {
+                    name
+                  }
+                }
+              }
+              pageInfo {
+                hasNextPage
+                endCursor
+              }
+            }
+          }
+        }
+        """;
     private const string InvalidPreflightFileErrorCode = "invalid-preflight-file";
     private const int MaxPreflightErrorPathLength = 160;
     private const int MaxPreflightErrorDetailLength = 300;
+
+    internal const string GitHubAuthenticationFailureCategory = "github_preflight_authentication";
+    internal const string GitHubPermissionFailureCategory = "github_preflight_permission";
+    internal const string GitHubRateLimitFailureCategory = "github_preflight_rate_limit";
+    internal const string GitHubValidationFailureCategory = "github_preflight_validation";
+    internal const string GitHubTransientFailureCategory = "github_preflight_transient";
+    internal const string GitHubTimeoutFailureCategory = "github_preflight_timeout";
+    internal const string GitHubTransportFailureCategory = "github_preflight_transport";
+    internal const string GitHubResponseFailureCategory = "github_preflight_response";
+    internal const string GitHubPaginationFailureCategory = "github_preflight_pagination";
 
     private static readonly HashSet<string> StopTitleTokens = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -146,7 +194,8 @@ internal sealed class IssueDuplicatePreflight
         string? source,
         string? repository,
         CancellationToken cancellationToken = default,
-        string issueState = DefaultIssueState)
+        string issueState = DefaultIssueState,
+        int maximumIssueCount = MaxOpenIssueCount)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (!IsGitHubOpenIssuesSource(source))
@@ -165,7 +214,9 @@ internal sealed class IssueDuplicatePreflight
 
         if (issueState is not ("open" or "closed" or "all"))
             return IssueDuplicatePreflightLoadResult.Failure("--issue-state must be one of open, closed, or all.");
-        return await TryLoadFromGitHubAsync(normalizedRepository, issueState, cancellationToken).ConfigureAwait(false);
+        maximumIssueCount = Math.Clamp(maximumIssueCount, 1, MaxOpenIssueCount);
+        return await TryLoadFromGitHubAsync(normalizedRepository, issueState, maximumIssueCount, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     public static bool TryNormalizeDuplicateConfidence(string value, out string confidence)
@@ -417,18 +468,92 @@ internal sealed class IssueDuplicatePreflight
     private static async Task<IssueDuplicatePreflightLoadResult> TryLoadFromGitHubAsync(
         string repository,
         string issueState,
+        int maximumIssueCount,
         CancellationToken cancellationToken)
     {
         var issues = new List<OpenIssue>();
         try
         {
-            for (var page = 1; page <= MaxGitHubOpenIssuePages && issues.Count < MaxOpenIssueCount; page++)
+            if (string.IsNullOrWhiteSpace(CdidxEnvironment.GetProcessEnvironmentVariable(GitHubTokenEnvironmentVariable)))
             {
-                var pageResult = await FetchGitHubOpenIssuePageAsync(repository, issueState, page, cancellationToken)
+                throw new GitHubPreflightException(
+                    GitHubAuthenticationFailureCategory,
+                    $"{GitHubTokenEnvironmentVariable} is required for live GitHub duplicate preflight cursor pagination.");
+            }
+
+            var seenIssueNodeIds = new HashSet<string>(StringComparer.Ordinal);
+            var seenIssueNumbers = new HashSet<int>();
+            var issueNumberByNodeId = new Dictionary<string, int>(StringComparer.Ordinal);
+            var issueNodeIdByNumber = new Dictionary<int, string>();
+            var seenCursors = new HashSet<string>(StringComparer.Ordinal);
+            var rawEntryCount = 0;
+            var maximumPageCount = ((maximumIssueCount + GitHubOpenIssuesPerPage - 1) / GitHubOpenIssuesPerPage) + 1;
+            string? after = null;
+            for (var page = 1; page <= maximumPageCount && rawEntryCount < maximumIssueCount; page++)
+            {
+                var pageSize = Math.Min(GitHubOpenIssuesPerPage, maximumIssueCount - rawEntryCount);
+                var pageResult = await FetchGitHubOpenIssuePageAsync(
+                        repository,
+                        issueState,
+                        pageSize,
+                        after,
+                        cancellationToken)
                     .ConfigureAwait(false);
-                issues.AddRange(pageResult.Issues);
-                if (pageResult.RawEntryCount == 0 || pageResult.RawEntryCount < GitHubOpenIssuesPerPage)
+
+                rawEntryCount += pageResult.RawEntryCount;
+                foreach (var node in pageResult.Issues)
+                {
+                    if (issueNumberByNodeId.TryGetValue(node.NodeId, out var knownNumber)
+                        && knownNumber != node.Number)
+                    {
+                        throw new GitHubPreflightException(
+                            GitHubResponseFailureCategory,
+                            "GitHub GraphQL issue response mapped one node ID to multiple issue numbers.");
+                    }
+
+                    if (issueNodeIdByNumber.TryGetValue(node.Number, out var knownNodeId)
+                        && !string.Equals(knownNodeId, node.NodeId, StringComparison.Ordinal))
+                    {
+                        throw new GitHubPreflightException(
+                            GitHubResponseFailureCategory,
+                            "GitHub GraphQL issue response mapped one issue number to multiple node IDs.");
+                    }
+
+                    issueNumberByNodeId[node.NodeId] = node.Number;
+                    issueNodeIdByNumber[node.Number] = node.NodeId;
+                    if (seenIssueNodeIds.Add(node.NodeId) && seenIssueNumbers.Add(node.Number))
+                        issues.Add(node.Issue);
+                }
+
+                if (rawEntryCount >= maximumIssueCount)
                     break;
+
+                if (!string.IsNullOrWhiteSpace(pageResult.EndCursor)
+                    && !seenCursors.Add(pageResult.EndCursor))
+                {
+                    throw new GitHubPreflightException(
+                        GitHubPaginationFailureCategory,
+                        "GitHub issue pagination returned a repeated cursor.");
+                }
+
+                if (!pageResult.HasNextPage)
+                    break;
+
+                if (string.IsNullOrWhiteSpace(pageResult.EndCursor))
+                {
+                    throw new GitHubPreflightException(
+                        GitHubPaginationFailureCategory,
+                        "GitHub issue pagination reported another page without an end cursor.");
+                }
+
+                if (page == maximumPageCount)
+                {
+                    throw new GitHubPreflightException(
+                        GitHubPaginationFailureCategory,
+                        "GitHub issue pagination exceeded the bounded page limit.");
+                }
+
+                after = pageResult.EndCursor;
             }
 
             var labels = await FetchGitHubRepositoryLabelsAsync(repository, cancellationToken)
@@ -438,7 +563,7 @@ internal sealed class IssueDuplicatePreflight
                 new IssueDuplicatePreflight(
                     true,
                     $"{GitHubSourcePrefix}{repository}",
-                    issues.Take(MaxOpenIssueCount).ToList(),
+                    issues.Take(maximumIssueCount).ToList(),
                     labels,
                     repositoryLabelsChecked: true));
         }
@@ -448,8 +573,11 @@ internal sealed class IssueDuplicatePreflight
         }
         catch (Exception ex) when (IsRecoverableGitHubPreflightException(ex))
         {
+            var category = ClassifyGitHubPreflightFailure(ex);
             return IssueDuplicatePreflightLoadResult.Failure(
-                $"could not fetch --open-issues github for repository '{repository}': {FormatPreflightFailureDetail(ex)}");
+                $"could not fetch --open-issues github for repository '{repository}' [{category}]: {FormatPreflightFailureDetail(ex)}",
+                CommandExitCodes.RuntimeError,
+                category);
         }
     }
 
@@ -478,13 +606,14 @@ internal sealed class IssueDuplicatePreflight
     private static async Task<GitHubOpenIssuePageResult> FetchGitHubOpenIssuePageAsync(
         string repository,
         string issueState,
-        int page,
+        int pageSize,
+        string? after,
         CancellationToken cancellationToken)
     {
         var slash = repository.IndexOf('/');
         var owner = repository[..slash];
         var name = repository[(slash + 1)..];
-        var url = $"{GitHubApiBase}/repos/{Uri.EscapeDataString(owner)}/{Uri.EscapeDataString(name)}/issues?state={issueState}&per_page={GitHubOpenIssuesPerPage.ToString(CultureInfo.InvariantCulture)}&page={page.ToString(CultureInfo.InvariantCulture)}";
+        var requestBody = BuildGitHubIssuesGraphQlRequest(owner, name, issueState, pageSize, after);
         var timeout = GitHubIssueReporter.ResolveSubmitTimeout();
         using var requestCancellation = GitHubHttpClientFactory.CreateRequestCancellationScope(timeout, cancellationToken);
         var token = CdidxEnvironment.GetProcessEnvironmentVariable(GitHubTokenEnvironmentVariable);
@@ -496,12 +625,16 @@ internal sealed class IssueDuplicatePreflight
                 HttpClient,
                 () =>
                 {
-                    var request = new HttpRequestMessage(HttpMethod.Get, url);
+                    var request = new HttpRequestMessage(HttpMethod.Post, GitHubGraphQlEndpoint)
+                    {
+                        Content = new StringContent(requestBody, Encoding.UTF8, "application/json"),
+                    };
                     GitHubHttpClientFactory.ApplyAuthenticatedGitHubApiHeaders(request, token);
                     return request;
                 },
                 HttpCompletionOption.ResponseHeadersRead,
-                requestCancellation.Token).ConfigureAwait(false);
+                requestCancellation.Token,
+                requestIsIdempotent: true).ConfigureAwait(false);
         }
         catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested && requestCancellation.IsTimeoutCancellationRequested)
         {
@@ -510,19 +643,188 @@ internal sealed class IssueDuplicatePreflight
                 ex);
         }
 
-        using (response)
+        try
         {
-            if (!response.IsSuccessStatusCode)
-                throw new GitHubPreflightException(
-                    await BuildGitHubApiErrorDetailAsync(response, requestCancellation.Token).ConfigureAwait(false));
+            using (response)
+            {
+                if (!response.IsSuccessStatusCode)
+                    throw await BuildGitHubApiExceptionAsync(response, requestCancellation.Token).ConfigureAwait(false);
 
-            var json = await ReadContentWithinLimitAsync(response.Content, MaxOpenIssuesJsonBytes, requestCancellation.Token)
-                .ConfigureAwait(false)
-                ?? throw new IOException($"GitHub open-issues response exceeds maximum supported size of {MaxOpenIssuesJsonBytes} bytes.");
-            var root = BoundedJson.ParseNode(json, MaxOpenIssuesJsonBytes, MaxOpenIssuesJsonDepth);
-            var rawEntryCount = root is JsonArray array ? array.Count : 0;
-            return new GitHubOpenIssuePageResult(ParseOpenIssues(root, skipPullRequests: true), rawEntryCount);
+                var json = await ReadContentWithinLimitAsync(response.Content, MaxOpenIssuesJsonBytes, requestCancellation.Token)
+                    .ConfigureAwait(false)
+                    ?? throw new GitHubPreflightException(
+                        GitHubResponseFailureCategory,
+                        $"GitHub open-issues response exceeds maximum supported size of {MaxOpenIssuesJsonBytes} bytes.");
+                var root = BoundedJson.ParseNode(json, MaxOpenIssuesJsonBytes, MaxOpenIssuesJsonDepth);
+                return ParseGitHubIssuesGraphQlPage(root, pageSize);
+            }
         }
+        catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested && requestCancellation.IsTimeoutCancellationRequested)
+        {
+            throw new TimeoutException(
+                $"GitHub open-issues preflight timed out after {timeout.TotalSeconds:0} seconds.",
+                ex);
+        }
+    }
+
+    private static string BuildGitHubIssuesGraphQlRequest(
+        string owner,
+        string name,
+        string issueState,
+        int pageSize,
+        string? after)
+    {
+        JsonNode states = issueState == "all"
+            ? new JsonArray(JsonValue.Create("OPEN"), JsonValue.Create("CLOSED"))
+            : new JsonArray(JsonValue.Create(issueState == "open" ? "OPEN" : "CLOSED"));
+        var request = new JsonObject
+        {
+            ["query"] = GitHubIssuesGraphQlQuery,
+            ["variables"] = new JsonObject
+            {
+                ["owner"] = owner,
+                ["name"] = name,
+                ["first"] = pageSize,
+                ["after"] = after,
+                ["states"] = states,
+            },
+        };
+        return request.ToJsonString();
+    }
+
+    private static GitHubOpenIssuePageResult ParseGitHubIssuesGraphQlPage(JsonNode? root, int requestedPageSize)
+    {
+        if (root is JsonObject rootObject && rootObject.TryGetPropertyValue("errors", out var errorsNode))
+        {
+            if (errorsNode is not JsonArray errors)
+            {
+                throw new GitHubPreflightException(
+                    GitHubResponseFailureCategory,
+                    "GitHub GraphQL response contained an invalid errors field.");
+            }
+            if (errors.Count > 0)
+                throw BuildGitHubGraphQlError(errors);
+        }
+
+        var connection = root?["data"]?["repository"]?["issues"] as JsonObject
+            ?? throw new GitHubPreflightException(
+                GitHubResponseFailureCategory,
+                "GitHub GraphQL issue response did not contain the expected repository issue connection.");
+        var nodes = connection["nodes"] as JsonArray
+            ?? throw new GitHubPreflightException(
+                GitHubResponseFailureCategory,
+                "GitHub GraphQL issue response did not contain an issue node array.");
+        if (nodes.Count > requestedPageSize)
+        {
+            throw new GitHubPreflightException(
+                GitHubResponseFailureCategory,
+                "GitHub GraphQL issue response exceeded the requested page size.");
+        }
+
+        var issues = new List<GitHubOpenIssueNode>();
+        foreach (var node in nodes)
+        {
+            var nodeId = TryReadString(node?["id"], MaxGitHubCursorLength, truncate: false, fieldName: "GitHub issue node ID");
+            var number = TryReadInt(node?["number"]);
+            var title = TryReadString(node?["title"], MaxOpenIssueTitleLength);
+            if (string.IsNullOrWhiteSpace(nodeId) || number is not > 0 || string.IsNullOrWhiteSpace(title))
+            {
+                throw new GitHubPreflightException(
+                    GitHubResponseFailureCategory,
+                    "GitHub GraphQL issue response contained an invalid issue node.");
+            }
+
+            issues.Add(new GitHubOpenIssueNode(
+                nodeId,
+                number.Value,
+                new OpenIssue(
+                    number.Value,
+                    title,
+                    TryReadString(node?["url"], MaxOpenIssueUrlLength),
+                    ReadLabels(node?["labels"]?["nodes"]),
+                    TryReadString(node?["body"], MaxOpenIssueBodyLength),
+                    TryReadString(node?["state"], 16)?.ToLowerInvariant() ?? "open")));
+        }
+
+        var pageInfo = connection["pageInfo"] as JsonObject
+            ?? throw new GitHubPreflightException(
+                GitHubResponseFailureCategory,
+                "GitHub GraphQL issue response did not contain page information.");
+        var hasNextPage = TryReadBoolean(pageInfo["hasNextPage"])
+            ?? throw new GitHubPreflightException(
+                GitHubResponseFailureCategory,
+                "GitHub GraphQL issue response contained invalid page information.");
+        var endCursor = TryReadGitHubCursor(pageInfo["endCursor"]);
+        if (hasNextPage && nodes.Count == 0)
+        {
+            throw new GitHubPreflightException(
+                GitHubPaginationFailureCategory,
+                "GitHub issue pagination returned an empty page while reporting another page.");
+        }
+        return new GitHubOpenIssuePageResult(issues, nodes.Count, hasNextPage, endCursor);
+    }
+
+    private static string? TryReadGitHubCursor(JsonNode? node)
+    {
+        if (node is null)
+            return null;
+
+        string? cursor;
+        try
+        {
+            cursor = node.GetValue<string>();
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
+
+        if (cursor.Length > MaxGitHubCursorLength)
+        {
+            throw new GitHubPreflightException(
+                GitHubPaginationFailureCategory,
+                $"GitHub issue pagination returned a cursor longer than {MaxGitHubCursorLength.ToString(CultureInfo.InvariantCulture)} characters.");
+        }
+        if (cursor.Any(char.IsControl))
+        {
+            throw new GitHubPreflightException(
+                GitHubPaginationFailureCategory,
+                "GitHub issue pagination returned an invalid cursor.");
+        }
+
+        return cursor;
+    }
+
+    private static GitHubPreflightException BuildGitHubGraphQlError(JsonArray errors)
+    {
+        var categories = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var error in errors)
+        {
+            var type = TryReadString(error?["type"], 64)?.ToUpperInvariant();
+            categories.Add(type switch
+            {
+                "UNAUTHORIZED" or "UNAUTHENTICATED" => GitHubAuthenticationFailureCategory,
+                "FORBIDDEN" or "INSUFFICIENT_SCOPES" or "NOT_FOUND" => GitHubPermissionFailureCategory,
+                "RATE_LIMITED" => GitHubRateLimitFailureCategory,
+                "BAD_USER_INPUT" or "GRAPHQL_VALIDATION_FAILED" or "UNPROCESSABLE" => GitHubValidationFailureCategory,
+                "TIMEOUT" => GitHubTimeoutFailureCategory,
+                "INTERNAL" or "SERVICE_UNAVAILABLE" => GitHubTransientFailureCategory,
+                _ => GitHubResponseFailureCategory,
+            });
+        }
+
+        var category = new[]
+        {
+            GitHubRateLimitFailureCategory,
+            GitHubAuthenticationFailureCategory,
+            GitHubPermissionFailureCategory,
+            GitHubTimeoutFailureCategory,
+            GitHubTransientFailureCategory,
+            GitHubValidationFailureCategory,
+            GitHubResponseFailureCategory,
+        }.First(categories.Contains);
+        var detail = $"GitHub GraphQL returned a {category} error.";
+        return new GitHubPreflightException(category, detail);
     }
 
     private static async Task<GitHubRepositoryLabelPageResult> FetchGitHubRepositoryLabelPageAsync(
@@ -559,18 +861,28 @@ internal sealed class IssueDuplicatePreflight
                 ex);
         }
 
-        using (response)
+        try
         {
-            if (!response.IsSuccessStatusCode)
-                throw new GitHubPreflightException(
-                    await BuildGitHubApiErrorDetailAsync(response, requestCancellation.Token).ConfigureAwait(false));
+            using (response)
+            {
+                if (!response.IsSuccessStatusCode)
+                    throw await BuildGitHubApiExceptionAsync(response, requestCancellation.Token).ConfigureAwait(false);
 
-            var json = await ReadContentWithinLimitAsync(response.Content, MaxOpenIssuesJsonBytes, requestCancellation.Token)
-                .ConfigureAwait(false)
-                ?? throw new IOException($"GitHub labels response exceeds maximum supported size of {MaxOpenIssuesJsonBytes} bytes.");
-            var root = BoundedJson.ParseNode(json, MaxOpenIssuesJsonBytes, MaxOpenIssuesJsonDepth);
-            var rawEntryCount = root is JsonArray array ? array.Count : 0;
-            return new GitHubRepositoryLabelPageResult(ParseRepositoryLabels(root), rawEntryCount);
+                var json = await ReadContentWithinLimitAsync(response.Content, MaxOpenIssuesJsonBytes, requestCancellation.Token)
+                    .ConfigureAwait(false)
+                    ?? throw new GitHubPreflightException(
+                        GitHubResponseFailureCategory,
+                        $"GitHub labels response exceeds maximum supported size of {MaxOpenIssuesJsonBytes} bytes.");
+                var root = BoundedJson.ParseNode(json, MaxOpenIssuesJsonBytes, MaxOpenIssuesJsonDepth);
+                var rawEntryCount = root is JsonArray array ? array.Count : 0;
+                return new GitHubRepositoryLabelPageResult(ParseRepositoryLabels(root), rawEntryCount);
+            }
+        }
+        catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested && requestCancellation.IsTimeoutCancellationRequested)
+        {
+            throw new TimeoutException(
+                $"GitHub labels preflight timed out after {timeout.TotalSeconds:0} seconds.",
+                ex);
         }
     }
 
@@ -594,7 +906,7 @@ internal sealed class IssueDuplicatePreflight
         return result;
     }
 
-    private static async Task<string> BuildGitHubApiErrorDetailAsync(
+    private static async Task<GitHubPreflightException> BuildGitHubApiExceptionAsync(
         HttpResponseMessage response,
         CancellationToken cancellationToken)
     {
@@ -604,9 +916,22 @@ internal sealed class IssueDuplicatePreflight
         var retryAt = GitHubIssueReporter.GetRateLimitRetryAt(
             response,
             GitHubIssueReporter.TimeProvider.GetUtcNow().UtcDateTime);
-        return retryAt is null
+        var detail = retryAt is null
             ? GitHubIssueReporter.BuildApiErrorDetail((int)response.StatusCode, errorBody)
             : GitHubIssueReporter.BuildRateLimitErrorDetail((int)response.StatusCode, errorBody, retryAt.Value);
+        var category = retryAt is not null
+            ? GitHubRateLimitFailureCategory
+            : response.StatusCode switch
+            {
+                HttpStatusCode.TooManyRequests => GitHubRateLimitFailureCategory,
+                HttpStatusCode.Unauthorized => GitHubAuthenticationFailureCategory,
+                HttpStatusCode.Forbidden or HttpStatusCode.NotFound => GitHubPermissionFailureCategory,
+                HttpStatusCode.UnprocessableEntity => GitHubValidationFailureCategory,
+                HttpStatusCode.RequestTimeout => GitHubTimeoutFailureCategory,
+                _ when (int)response.StatusCode >= 500 => GitHubTransientFailureCategory,
+                _ => GitHubResponseFailureCategory,
+            };
+        return new GitHubPreflightException(category, detail);
     }
 
     private static string? ExtractGitHubRepository(string? source, string? repository)
@@ -693,13 +1018,28 @@ internal sealed class IssueDuplicatePreflight
             or InvalidOpenIssuesFileException
             or GitHubPreflightException;
 
+    private static string ClassifyGitHubPreflightFailure(Exception ex)
+        => ex switch
+        {
+            GitHubPreflightException githubPreflight => githubPreflight.Category,
+            TimeoutException => GitHubTimeoutFailureCategory,
+            HttpRequestException or OperationCanceledException or IOException => GitHubTransportFailureCategory,
+            JsonException or InvalidDataException or InvalidOperationException or InvalidOpenIssuesFileException
+                => GitHubResponseFailureCategory,
+            _ => GitHubTransportFailureCategory,
+        };
+
     private static string FormatPreflightFailureDetail(Exception ex)
         => ex is GitHubPreflightException githubPreflight
             ? githubPreflight.Message
             : CommandErrorWriter.FormatSanitizedException(ex);
 
     private static HttpClient CreateDefaultHttpClient()
-        => GitHubHttpClientFactory.CreateDefaultHttpClient(TimeSpan.FromSeconds(10));
+    {
+        var client = GitHubHttpClientFactory.CreateDefaultHttpClient(GitHubHttpClientFactory.MaxRequestTimeout);
+        client.Timeout = Timeout.InfiniteTimeSpan;
+        return client;
+    }
 
     private static string? TryReadString(JsonNode? node, int maxLength)
         => TryReadString(node, maxLength, truncate: true, fieldName: null);
@@ -738,6 +1078,20 @@ internal sealed class IssueDuplicatePreflight
             return int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed)
                 ? parsed
                 : null;
+        }
+    }
+
+    private static bool? TryReadBoolean(JsonNode? node)
+    {
+        if (node == null)
+            return null;
+        try
+        {
+            return node.GetValue<bool>();
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
         }
     }
 
@@ -896,15 +1250,27 @@ internal sealed class IssueDuplicatePreflight
     internal sealed record IssueDuplicatePreflightLoadResult(
         bool Loaded,
         IssueDuplicatePreflight Preflight,
-        string? Error)
+        string? Error,
+        int ExitCode,
+        string? ErrorCategory)
     {
-        internal static IssueDuplicatePreflightLoadResult Success(IssueDuplicatePreflight preflight) => new(true, preflight, null);
+        internal static IssueDuplicatePreflightLoadResult Success(IssueDuplicatePreflight preflight) =>
+            new(true, preflight, null, CommandExitCodes.Success, null);
 
-        internal static IssueDuplicatePreflightLoadResult Failure(string error) =>
-            new(false, new IssueDuplicatePreflight(false, null, []), error);
+        internal static IssueDuplicatePreflightLoadResult Failure(
+            string error,
+            int exitCode = CommandExitCodes.UsageError,
+            string? errorCategory = null) =>
+            new(false, new IssueDuplicatePreflight(false, null, []), error, exitCode, errorCategory);
     }
 
-    private sealed record GitHubOpenIssuePageResult(List<OpenIssue> Issues, int RawEntryCount);
+    private sealed record GitHubOpenIssuePageResult(
+        List<GitHubOpenIssueNode> Issues,
+        int RawEntryCount,
+        bool HasNextPage,
+        string? EndCursor);
+
+    private sealed record GitHubOpenIssueNode(string NodeId, int Number, OpenIssue Issue);
 
     private sealed record GitHubRepositoryLabelPageResult(List<string> Labels, int RawEntryCount);
 
@@ -912,5 +1278,8 @@ internal sealed class IssueDuplicatePreflight
 
     private sealed class InvalidOpenIssuesFileException(string message) : Exception(message);
 
-    private sealed class GitHubPreflightException(string message) : Exception(message);
+    private sealed class GitHubPreflightException(string category, string message) : Exception(message)
+    {
+        internal string Category { get; } = category;
+    }
 }

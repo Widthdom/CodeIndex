@@ -1823,13 +1823,11 @@ public static partial class QueryCommandRunner
             .GetAwaiter()
             .GetResult();
         if (!preflightResult.Loaded)
-        {
-            WriteUsageError(
-                preflightResult.Error!,
+            return WriteIssueDuplicatePreflightFailure(
+                preflightResult,
                 options,
-                "Pass a readable JSON array from `gh issue list --state open --json number,title,labels,url`, or use `--open-issues github --repo owner/name`.");
-            return CommandExitCodes.UsageError;
-        }
+                jsonOptions,
+                options.InvocationContext.CommandName);
         var preflight = preflightResult.Preflight;
 
         return WithDb(options, jsonOptions, reader =>
@@ -2133,13 +2131,11 @@ public static partial class QueryCommandRunner
             .GetAwaiter()
             .GetResult();
         if (!preflightResult.Loaded)
-        {
-            WriteUsageError(
-                preflightResult.Error!,
+            return WriteIssueDuplicatePreflightFailure(
+                preflightResult,
                 options,
-                "Pass a readable JSON array from `gh issue list --state open --json number,title,labels,url`, or use `--open-issues github --repo owner/name`.");
-            return CommandExitCodes.UsageError;
-        }
+                jsonOptions,
+                options.InvocationContext.CommandName);
         var preflight = preflightResult.Preflight;
 
         return WithDb(options, jsonOptions, reader =>

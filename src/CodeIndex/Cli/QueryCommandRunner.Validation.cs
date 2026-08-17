@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 
 namespace CodeIndex.Cli;
 
@@ -142,6 +143,32 @@ public static partial class QueryCommandRunner
 
     private static void WriteUsageError(string message, QueryCommandOptions options, string hint)
         => WriteInvocationUsageError(message, options, hint);
+
+    private static int WriteIssueDuplicatePreflightFailure(
+        IssueDuplicatePreflight.IssueDuplicatePreflightLoadResult result,
+        QueryCommandOptions options,
+        JsonSerializerOptions jsonOptions,
+        string commandName)
+    {
+        if (result.ExitCode == CommandExitCodes.UsageError)
+        {
+            WriteUsageError(
+                result.Error!,
+                options,
+                "Pass a readable JSON array from `gh issue list --state open --json number,title,labels,url`, or use `--open-issues github --repo owner/name`.");
+            return CommandExitCodes.UsageError;
+        }
+
+        return CommandErrorWriter.WriteJsonOrHuman(
+            options.Json,
+            jsonOptions,
+            result.Error!,
+            result.ExitCode,
+            "Retry the GitHub lookup after resolving the reported remote failure; duplicate preflight is indeterminate and no issue drafts were emitted.",
+            errorCode: null,
+            category: result.ErrorCategory,
+            command: commandName);
+    }
 
     private static void WriteInvocationUsageError(
         string message,

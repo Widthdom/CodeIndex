@@ -28,6 +28,7 @@ public sealed class IssueDuplicatePreflightTests : IDisposable
     public IssueDuplicatePreflightTests()
     {
         _tempDir = TestProjectHelper.CreateTempProject("cdidx_issue_preflight");
+        _env.Set("CDIDX_GITHUB_TOKEN", "test-token");
     }
 
     [Fact]
@@ -195,26 +196,18 @@ public sealed class IssueDuplicatePreflightTests : IDisposable
     {
         _env.Set("CDIDX_GITHUB_TOKEN", "explicit-token");
         _env.Set("GITHUB_TOKEN", "ignored-token");
-        var handler = new RecordingOpenIssuesHandler(
-            """
-            [
-              {
-                "number": 3449,
-                "title": "Issue-draft duplicate preflight should fetch open GitHub issues directly",
-                "labels": [{"name": "enhancement"}],
-                "url": "https://api.github.example.test/repos/Widthdom/CodeIndex/issues/3449",
-                "html_url": "https://github.example.test/Widthdom/CodeIndex/issues/3449"
-              },
-              {
-                "number": 1,
-                "title": "Pull request entry should be ignored",
-                "labels": [{"name": "enhancement"}],
-                "url": "https://api.github.example.test/repos/Widthdom/CodeIndex/issues/1",
-                "html_url": "https://github.example.test/Widthdom/CodeIndex/pull/1",
-                "pull_request": {}
-              }
-            ]
-            """);
+        var handler = new FakeHttpMessageHandler();
+        handler.QueueJson(
+            HttpStatusCode.OK,
+            BuildGraphQlIssuePage(
+                hasNextPage: false,
+                endCursor: null,
+                new GraphQlIssueFixture(
+                    3449,
+                    "Issue-draft duplicate preflight should fetch open GitHub issues directly",
+                    "issue-node-3449",
+                    Labels: ["enhancement"])));
+        handler.QueueJson(HttpStatusCode.OK, "[]");
         IssueDuplicatePreflight.s_httpClientOverride = new HttpClient(handler);
 
         var loaded = IssueDuplicatePreflight.TryLoad("github", "Widthdom/CodeIndex", out var preflight, out var error);
@@ -225,13 +218,19 @@ public sealed class IssueDuplicatePreflightTests : IDisposable
         Assert.Equal(1, preflight.OpenIssueCount);
         Assert.True(preflight.RepositoryLabelsChecked);
         Assert.Empty(preflight.RepositoryLabels);
-        Assert.Equal(2, handler.Requests.Count);
+        Assert.Equal(2, handler.RequestCount);
         var request = handler.Requests[0];
-        Assert.Equal("https://api.github.com/repos/Widthdom/CodeIndex/issues?state=open&per_page=100&page=1", request.Uri);
+        var variables = ReadGraphQlVariables(request);
+        Assert.Equal("Widthdom", variables.GetProperty("owner").GetString());
+        Assert.Equal("CodeIndex", variables.GetProperty("name").GetString());
+        Assert.Equal(100, variables.GetProperty("first").GetInt32());
+        Assert.Equal(JsonValueKind.Null, variables.GetProperty("after").ValueKind);
+        Assert.Equal(["OPEN"], ReadGraphQlStates(variables));
         Assert.Equal("Bearer", request.AuthorizationScheme);
         Assert.Equal("explicit-token", request.AuthorizationParameter);
         var labelsRequest = handler.Requests[1];
-        Assert.Equal("https://api.github.com/repos/Widthdom/CodeIndex/labels?per_page=100&page=1", labelsRequest.Uri);
+        Assert.Equal(HttpMethod.Get, labelsRequest.Method);
+        Assert.Equal("https://api.github.com/repos/Widthdom/CodeIndex/labels?per_page=100&page=1", labelsRequest.RequestUri?.ToString());
         Assert.Equal("Bearer", labelsRequest.AuthorizationScheme);
         Assert.Equal("explicit-token", labelsRequest.AuthorizationParameter);
         var match = Assert.Single(preflight.FindMatches(
@@ -244,23 +243,18 @@ public sealed class IssueDuplicatePreflightTests : IDisposable
     [Fact]
     public void TryLoad_GitHubSourceFetchesRepositoryLabels_Issue3926()
     {
-        IssueDuplicatePreflight.s_httpClientOverride = new HttpClient(new SingleResponseHandler(request =>
-        {
-            var path = request.RequestUri!.AbsolutePath;
-            var json = path.EndsWith("/labels", StringComparison.Ordinal)
-                ? """
-                  [
-                    {"name":"bug"},
-                    {"name":"Security"},
-                    {"name":"bug"}
-                  ]
-                  """
-                : "[]";
-            return new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent(json, Encoding.UTF8, "application/json"),
-            };
-        }));
+        var handler = new FakeHttpMessageHandler();
+        handler.QueueJson(HttpStatusCode.OK, BuildGraphQlIssuePage(hasNextPage: false, endCursor: null));
+        handler.QueueJson(
+            HttpStatusCode.OK,
+            """
+            [
+              {"name":"bug"},
+              {"name":"Security"},
+              {"name":"bug"}
+            ]
+            """);
+        IssueDuplicatePreflight.s_httpClientOverride = new HttpClient(handler);
 
         var loaded = IssueDuplicatePreflight.TryLoad("github", "Widthdom/CodeIndex", out var preflight, out var error);
 
@@ -271,6 +265,284 @@ public sealed class IssueDuplicatePreflightTests : IDisposable
     }
 
     [Fact]
+    public async Task TryLoadAsync_GitHubGraphQlTraversesThreeCursorPagesAndDeduplicatesExactlyOnce_Issue5090()
+    {
+        var handler = new FakeHttpMessageHandler();
+        handler.QueueJson(
+            HttpStatusCode.OK,
+            BuildGraphQlIssuePage(
+                hasNextPage: true,
+                endCursor: "cursor-1",
+                new GraphQlIssueFixture(1001, "Cursor first alpha", "issue-node-1001", Labels: ["bug"]),
+                new GraphQlIssueFixture(1002, "Canonical duplicate beta", "issue-node-1002", Labels: ["bug"])));
+        handler.QueueJson(
+            HttpStatusCode.OK,
+            BuildGraphQlIssuePage(
+                hasNextPage: true,
+                endCursor: "cursor-2",
+                new GraphQlIssueFixture(1002, "Replacement duplicate omega", "issue-node-1002", Labels: ["bug"]),
+                new GraphQlIssueFixture(1003, "Cursor second gamma", "issue-node-1003", Labels: ["bug"])));
+        handler.QueueJson(
+            HttpStatusCode.OK,
+            BuildGraphQlIssuePage(
+                hasNextPage: false,
+                endCursor: null,
+                new GraphQlIssueFixture(1004, "Cursor third delta", "issue-node-1004", Labels: ["bug"])));
+        handler.QueueJson(HttpStatusCode.OK, "[]");
+        IssueDuplicatePreflight.s_httpClientOverride = new HttpClient(handler);
+
+        var result = await IssueDuplicatePreflight.TryLoadAsync(
+            "github",
+            "Widthdom/CodeIndex",
+            issueState: "all",
+            maximumIssueCount: 201);
+
+        Assert.True(result.Loaded, result.Error);
+        Assert.True(result.Preflight.Checked);
+        Assert.Equal(4, result.Preflight.OpenIssueCount);
+        var canonical = Assert.Single(result.Preflight.FindMatches("Canonical duplicate beta", ["bug"])
+            .Where(match => match.Number == 1002));
+        Assert.Equal("Canonical duplicate beta", canonical.Title);
+        Assert.DoesNotContain(
+            result.Preflight.FindMatches("Replacement duplicate omega", ["bug"]),
+            match => match.Number == 1002);
+        Assert.Equal(4, handler.RequestCount);
+
+        var expectedCursors = new string?[] { null, "cursor-1", "cursor-2" };
+        for (var i = 0; i < expectedCursors.Length; i++)
+        {
+            var variables = ReadGraphQlVariables(handler.Requests[i]);
+            Assert.Equal(100, variables.GetProperty("first").GetInt32());
+            Assert.Equal(["OPEN", "CLOSED"], ReadGraphQlStates(variables));
+            if (expectedCursors[i] is null)
+                Assert.Equal(JsonValueKind.Null, variables.GetProperty("after").ValueKind);
+            else
+                Assert.Equal(expectedCursors[i], variables.GetProperty("after").GetString());
+        }
+
+        Assert.Equal(HttpMethod.Get, handler.Requests[3].Method);
+        Assert.Equal(
+            "https://api.github.com/repos/Widthdom/CodeIndex/labels?per_page=100&page=1",
+            handler.Requests[3].RequestUri?.ToString());
+    }
+
+    [Theory]
+    [InlineData("open", "OPEN")]
+    [InlineData("closed", "CLOSED")]
+    [InlineData("all", "OPEN,CLOSED")]
+    public async Task TryLoadAsync_GitHubGraphQlPassesRequestedIssueStates_Issue5090(
+        string issueState,
+        string expectedStates)
+    {
+        var handler = new FakeHttpMessageHandler();
+        handler.QueueJson(HttpStatusCode.OK, BuildGraphQlIssuePage(hasNextPage: false, endCursor: null));
+        handler.QueueJson(HttpStatusCode.OK, "[]");
+        IssueDuplicatePreflight.s_httpClientOverride = new HttpClient(handler);
+
+        var result = await IssueDuplicatePreflight.TryLoadAsync(
+            "github",
+            "Widthdom/CodeIndex",
+            issueState: issueState);
+
+        Assert.True(result.Loaded, result.Error);
+        var variables = ReadGraphQlVariables(handler.Requests[0]);
+        Assert.Equal(expectedStates.Split(','), ReadGraphQlStates(variables));
+    }
+
+    [Fact]
+    public async Task TryLoadAsync_GitHubGraphQlHonorsMaximumIssueBoundAcrossPages_Issue5090()
+    {
+        var handler = new FakeHttpMessageHandler();
+        handler.QueueJson(
+            HttpStatusCode.OK,
+            BuildGraphQlIssuePage(
+                hasNextPage: true,
+                endCursor: "cursor-bound-1",
+                new GraphQlIssueFixture(2001, "Bound first alpha", "issue-node-2001"),
+                new GraphQlIssueFixture(2002, "Bound second beta", "issue-node-2002")));
+        handler.QueueJson(
+            HttpStatusCode.OK,
+            BuildGraphQlIssuePage(
+                hasNextPage: true,
+                endCursor: "cursor-bound-2",
+                new GraphQlIssueFixture(2003, "Bound third gamma", "issue-node-2003")));
+        handler.QueueJson(HttpStatusCode.OK, "[]");
+        IssueDuplicatePreflight.s_httpClientOverride = new HttpClient(handler);
+
+        var result = await IssueDuplicatePreflight.TryLoadAsync(
+            "github",
+            "Widthdom/CodeIndex",
+            maximumIssueCount: 3);
+
+        Assert.True(result.Loaded, result.Error);
+        Assert.Equal(3, result.Preflight.OpenIssueCount);
+        Assert.Equal(3, handler.RequestCount);
+        Assert.Equal(3, ReadGraphQlVariables(handler.Requests[0]).GetProperty("first").GetInt32());
+        var secondPageVariables = ReadGraphQlVariables(handler.Requests[1]);
+        Assert.Equal(1, secondPageVariables.GetProperty("first").GetInt32());
+        Assert.Equal("cursor-bound-1", secondPageVariables.GetProperty("after").GetString());
+        Assert.Equal(HttpMethod.Get, handler.Requests[2].Method);
+    }
+
+    [Theory]
+    [InlineData(false, true, "repeated cursor", 2)]
+    [InlineData(false, false, "repeated cursor", 2)]
+    [InlineData(true, true, "without an end cursor", 1)]
+    public async Task TryLoadAsync_GitHubGraphQlRejectsMissingOrRepeatedCursor_Issue5090(
+        bool omitFirstCursor,
+        bool repeatedPageHasNextPage,
+        string expectedDetail,
+        int expectedRequestCount)
+    {
+        var handler = new FakeHttpMessageHandler();
+        handler.QueueJson(
+            HttpStatusCode.OK,
+            BuildGraphQlIssuePage(
+                hasNextPage: true,
+                endCursor: omitFirstCursor ? null : "cursor-repeat",
+                new GraphQlIssueFixture(3001, "Cursor validation alpha", "issue-node-3001")));
+        if (!omitFirstCursor)
+        {
+            handler.QueueJson(
+                HttpStatusCode.OK,
+                BuildGraphQlIssuePage(
+                    hasNextPage: repeatedPageHasNextPage,
+                    endCursor: "cursor-repeat",
+                    new GraphQlIssueFixture(3002, "Cursor validation beta", "issue-node-3002")));
+        }
+        IssueDuplicatePreflight.s_httpClientOverride = new HttpClient(handler);
+
+        var result = await IssueDuplicatePreflight.TryLoadAsync(
+            "github",
+            "Widthdom/CodeIndex",
+            maximumIssueCount: 201);
+
+        Assert.False(result.Loaded);
+        Assert.False(result.Preflight.Checked);
+        Assert.Equal(CommandExitCodes.RuntimeError, result.ExitCode);
+        Assert.Equal(IssueDuplicatePreflight.GitHubPaginationFailureCategory, result.ErrorCategory);
+        Assert.Contains(expectedDetail, result.Error);
+        Assert.Equal(expectedRequestCount, handler.RequestCount);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.Unauthorized, IssueDuplicatePreflight.GitHubAuthenticationFailureCategory, 1)]
+    [InlineData(HttpStatusCode.Forbidden, IssueDuplicatePreflight.GitHubPermissionFailureCategory, 1)]
+    [InlineData(HttpStatusCode.TooManyRequests, IssueDuplicatePreflight.GitHubRateLimitFailureCategory, 1)]
+    [InlineData(HttpStatusCode.UnprocessableEntity, IssueDuplicatePreflight.GitHubValidationFailureCategory, 1)]
+    [InlineData(HttpStatusCode.RequestTimeout, IssueDuplicatePreflight.GitHubTimeoutFailureCategory, 3)]
+    [InlineData(HttpStatusCode.InternalServerError, IssueDuplicatePreflight.GitHubTransientFailureCategory, 3)]
+    [InlineData(HttpStatusCode.BadRequest, IssueDuplicatePreflight.GitHubResponseFailureCategory, 1)]
+    public async Task TryLoadAsync_GitHubGraphQlClassifiesHttpFailures_Issue5090(
+        HttpStatusCode statusCode,
+        string expectedCategory,
+        int expectedRequestCount)
+    {
+        var handler = new FakeHttpMessageHandler();
+        for (var i = 0; i < expectedRequestCount; i++)
+        {
+            handler.QueueJson(
+                statusCode,
+                """{"message":"classified failure","token":"secret-http-status"}""");
+        }
+        IssueDuplicatePreflight.s_httpClientOverride = new HttpClient(handler);
+
+        var result = await IssueDuplicatePreflight.TryLoadAsync("github", "Widthdom/CodeIndex");
+
+        Assert.False(result.Loaded);
+        Assert.False(result.Preflight.Checked);
+        Assert.Equal(CommandExitCodes.RuntimeError, result.ExitCode);
+        Assert.Equal(expectedCategory, result.ErrorCategory);
+        Assert.Contains(((int)statusCode).ToString(System.Globalization.CultureInfo.InvariantCulture), result.Error);
+        Assert.DoesNotContain("secret-http-status", result.Error);
+        Assert.Equal(expectedRequestCount, handler.RequestCount);
+    }
+
+    [Theory]
+    [InlineData("UNAUTHENTICATED", IssueDuplicatePreflight.GitHubAuthenticationFailureCategory)]
+    [InlineData("NOT_FOUND", IssueDuplicatePreflight.GitHubPermissionFailureCategory)]
+    [InlineData("RATE_LIMITED", IssueDuplicatePreflight.GitHubRateLimitFailureCategory)]
+    [InlineData("BAD_USER_INPUT", IssueDuplicatePreflight.GitHubValidationFailureCategory)]
+    [InlineData("TIMEOUT", IssueDuplicatePreflight.GitHubTimeoutFailureCategory)]
+    [InlineData("INTERNAL", IssueDuplicatePreflight.GitHubTransientFailureCategory)]
+    [InlineData("UNKNOWN", IssueDuplicatePreflight.GitHubResponseFailureCategory)]
+    public async Task TryLoadAsync_GitHubGraphQlClassifiesTopLevelErrors_Issue5090(
+        string errorType,
+        string expectedCategory)
+    {
+        var handler = new FakeHttpMessageHandler();
+        handler.QueueJson(
+            HttpStatusCode.OK,
+            JsonSerializer.Serialize(new
+            {
+                errors = new[]
+                {
+                    new { type = errorType, message = "secret-graphql-error" },
+                },
+            }));
+        IssueDuplicatePreflight.s_httpClientOverride = new HttpClient(handler);
+
+        var result = await IssueDuplicatePreflight.TryLoadAsync("github", "Widthdom/CodeIndex");
+
+        Assert.False(result.Loaded);
+        Assert.False(result.Preflight.Checked);
+        Assert.Equal(CommandExitCodes.RuntimeError, result.ExitCode);
+        Assert.Equal(expectedCategory, result.ErrorCategory);
+        Assert.DoesNotContain("secret-graphql-error", result.Error, StringComparison.Ordinal);
+        Assert.Equal(1, handler.RequestCount);
+    }
+
+    [Fact]
+    public async Task TryLoadAsync_GitHubGraphQlRejectsMalformedErrorsField_Issue5090()
+    {
+        var handler = new FakeHttpMessageHandler();
+        handler.QueueJson(
+            HttpStatusCode.OK,
+            """
+            {
+              "errors": { "type": "BAD_USER_INPUT" },
+              "data": {
+                "repository": {
+                  "issues": {
+                    "nodes": [],
+                    "pageInfo": { "hasNextPage": false, "endCursor": null }
+                  }
+                }
+              }
+            }
+            """);
+        IssueDuplicatePreflight.s_httpClientOverride = new HttpClient(handler);
+
+        var result = await IssueDuplicatePreflight.TryLoadAsync("github", "Widthdom/CodeIndex");
+
+        Assert.False(result.Loaded);
+        Assert.False(result.Preflight.Checked);
+        Assert.Equal(CommandExitCodes.RuntimeError, result.ExitCode);
+        Assert.Equal(IssueDuplicatePreflight.GitHubResponseFailureCategory, result.ErrorCategory);
+        Assert.Equal(1, handler.RequestCount);
+    }
+
+    [Fact]
+    public async Task TryLoadAsync_GitHubGraphQlClassifiesResponseBodyIoFailureAsTransport_Issue5090()
+    {
+        var handler = new FakeHttpMessageHandler();
+        handler.QueueResponse(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StreamContent(new ThrowingReadStream(new IOException("secret-body-read"))),
+        });
+        IssueDuplicatePreflight.s_httpClientOverride = new HttpClient(handler);
+
+        var result = await IssueDuplicatePreflight.TryLoadAsync("github", "Widthdom/CodeIndex");
+
+        Assert.False(result.Loaded);
+        Assert.False(result.Preflight.Checked);
+        Assert.Equal(CommandExitCodes.RuntimeError, result.ExitCode);
+        Assert.Equal(IssueDuplicatePreflight.GitHubTransportFailureCategory, result.ErrorCategory);
+        Assert.DoesNotContain("secret-body-read", result.Error, StringComparison.Ordinal);
+        Assert.Equal(1, handler.RequestCount);
+    }
+
+    [Fact]
     public void TryLoad_GitHubSourceRequiresRepository_Issue3449()
     {
         var loaded = IssueDuplicatePreflight.TryLoad("github", repository: null, out var preflight, out var error);
@@ -278,6 +550,54 @@ public sealed class IssueDuplicatePreflightTests : IDisposable
         Assert.False(loaded);
         Assert.False(preflight.Checked);
         Assert.Contains("--open-issues github requires --repo", error);
+    }
+
+    [Fact]
+    public async Task TryLoadAsync_GitHubGraphQlRequiresExplicitToken_Issue5090()
+    {
+        _env.Set("CDIDX_GITHUB_TOKEN", null);
+        _env.Set("GITHUB_TOKEN", "must-not-be-used");
+        var handler = new FakeHttpMessageHandler();
+        IssueDuplicatePreflight.s_httpClientOverride = new HttpClient(handler);
+
+        var result = await IssueDuplicatePreflight.TryLoadAsync("github", "Widthdom/CodeIndex");
+
+        Assert.False(result.Loaded);
+        Assert.False(result.Preflight.Checked);
+        Assert.Equal(CommandExitCodes.RuntimeError, result.ExitCode);
+        Assert.Equal(IssueDuplicatePreflight.GitHubAuthenticationFailureCategory, result.ErrorCategory);
+        Assert.Contains("CDIDX_GITHUB_TOKEN is required", result.Error, StringComparison.Ordinal);
+        Assert.Equal(0, handler.RequestCount);
+    }
+
+    [Fact]
+    public async Task TryLoadAsync_GitHubSecondaryRateLimitRetryAfterIsCategorized_Issue5090()
+    {
+        var fixedNow = new DateTimeOffset(2026, 8, 18, 1, 2, 3, TimeSpan.Zero);
+        var previousTimeProvider = GitHubIssueReporter.TimeProvider;
+        GitHubIssueReporter.TimeProvider = new ManualTimeProvider(fixedNow);
+        var response = new HttpResponseMessage(HttpStatusCode.Forbidden)
+        {
+            Content = new StringContent("{}", Encoding.UTF8, "application/json"),
+        };
+        response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.FromSeconds(30));
+        var handler = new FakeHttpMessageHandler();
+        handler.QueueResponse(response);
+        IssueDuplicatePreflight.s_httpClientOverride = new HttpClient(handler);
+        try
+        {
+            var result = await IssueDuplicatePreflight.TryLoadAsync("github", "Widthdom/CodeIndex");
+
+            Assert.False(result.Loaded);
+            Assert.Equal(CommandExitCodes.RuntimeError, result.ExitCode);
+            Assert.Equal(IssueDuplicatePreflight.GitHubRateLimitFailureCategory, result.ErrorCategory);
+            Assert.Contains("next_retry_at=", result.Error, StringComparison.Ordinal);
+            Assert.Contains(fixedNow.AddSeconds(30).UtcDateTime.ToString("O"), result.Error, StringComparison.Ordinal);
+        }
+        finally
+        {
+            GitHubIssueReporter.TimeProvider = previousTimeProvider;
+        }
     }
 
     [Fact]
@@ -310,6 +630,9 @@ public sealed class IssueDuplicatePreflightTests : IDisposable
             var result = await IssueDuplicatePreflight.TryLoadAsync("github", "Widthdom/CodeIndex");
 
             Assert.False(result.Loaded);
+            Assert.False(result.Preflight.Checked);
+            Assert.Equal(CommandExitCodes.RuntimeError, result.ExitCode);
+            Assert.Equal(IssueDuplicatePreflight.GitHubRateLimitFailureCategory, result.ErrorCategory);
             Assert.Contains("429", result.Error);
             Assert.Contains("next_retry_at=", result.Error);
             Assert.Contains(fixedNow.UtcDateTime.AddSeconds(45).ToString("O", System.Globalization.CultureInfo.InvariantCulture), result.Error);
@@ -330,6 +653,9 @@ public sealed class IssueDuplicatePreflightTests : IDisposable
         var result = await IssueDuplicatePreflight.TryLoadAsync("github", "Widthdom/CodeIndex");
 
         Assert.False(result.Loaded);
+        Assert.False(result.Preflight.Checked);
+        Assert.Equal(CommandExitCodes.RuntimeError, result.ExitCode);
+        Assert.Equal(IssueDuplicatePreflight.GitHubTransportFailureCategory, result.ErrorCategory);
         Assert.Contains("HttpRequestException", result.Error);
         Assert.DoesNotContain("secret host detail", result.Error);
     }
@@ -350,6 +676,8 @@ public sealed class IssueDuplicatePreflightTests : IDisposable
 
         Assert.False(result.Loaded);
         Assert.False(result.Preflight.Checked);
+        Assert.Equal(CommandExitCodes.RuntimeError, result.ExitCode);
+        Assert.Equal(IssueDuplicatePreflight.GitHubResponseFailureCategory, result.ErrorCategory);
         Assert.Contains(nameof(InvalidDataException), result.Error);
         Assert.Contains("could not fetch --open-issues github", result.Error);
     }
@@ -363,6 +691,9 @@ public sealed class IssueDuplicatePreflightTests : IDisposable
         var result = await IssueDuplicatePreflight.TryLoadAsync("github", "Widthdom/CodeIndex");
 
         Assert.False(result.Loaded);
+        Assert.False(result.Preflight.Checked);
+        Assert.Equal(CommandExitCodes.RuntimeError, result.ExitCode);
+        Assert.Equal(IssueDuplicatePreflight.GitHubTransportFailureCategory, result.ErrorCategory);
         Assert.Contains("OperationCanceledException", result.Error);
         Assert.DoesNotContain("secret timeout detail", result.Error);
     }
@@ -424,34 +755,66 @@ public sealed class IssueDuplicatePreflightTests : IDisposable
         builder.Append("]}");
     }
 
+    private static string BuildGraphQlIssuePage(
+        bool hasNextPage,
+        string? endCursor,
+        params GraphQlIssueFixture[] issues)
+        => JsonSerializer.Serialize(new
+        {
+            data = new
+            {
+                repository = new
+                {
+                    issues = new
+                    {
+                        nodes = issues.Select(issue => new
+                        {
+                            id = issue.NodeId,
+                            number = issue.Number,
+                            title = issue.Title,
+                            url = issue.Url ?? $"https://github.example.test/Widthdom/CodeIndex/issues/{issue.Number}",
+                            body = issue.Body ?? string.Empty,
+                            state = issue.State,
+                            labels = new
+                            {
+                                nodes = (issue.Labels ?? Array.Empty<string>())
+                                    .Select(label => new { name = label })
+                                    .ToArray(),
+                            },
+                        }).ToArray(),
+                        pageInfo = new
+                        {
+                            hasNextPage,
+                            endCursor,
+                        },
+                    },
+                },
+            },
+        });
+
+    private static JsonElement ReadGraphQlVariables(RecordedHttpRequest request)
+    {
+        Assert.Equal(HttpMethod.Post, request.Method);
+        Assert.Equal("https://api.github.com/graphql", request.RequestUri?.ToString());
+        Assert.NotNull(request.Body);
+        using var document = JsonDocument.Parse(request.Body);
+        Assert.Contains(
+            "query CodeIndexIssueDuplicatePreflight",
+            document.RootElement.GetProperty("query").GetString());
+        return document.RootElement.GetProperty("variables").Clone();
+    }
+
+    private static string[] ReadGraphQlStates(JsonElement variables)
+        => variables.GetProperty("states")
+            .EnumerateArray()
+            .Select(state => state.GetString()!)
+            .ToArray();
+
     public void Dispose()
     {
         IssueDuplicatePreflight.s_httpClientOverride = null;
         _env.Dispose();
         TestProjectHelper.DeleteDirectory(_tempDir);
-    }
-
-    private sealed class RecordingOpenIssuesHandler(string json) : HttpMessageHandler
-    {
-        internal List<RecordedOpenIssuesRequest> Requests { get; } = [];
-
-        protected override HttpResponseMessage Send(HttpRequestMessage request, CancellationToken cancellationToken)
-            => BuildResponse(request);
-
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-            => Task.FromResult(BuildResponse(request));
-
-        private HttpResponseMessage BuildResponse(HttpRequestMessage request)
-        {
-            Requests.Add(new RecordedOpenIssuesRequest(
-                request.RequestUri!.ToString(),
-                request.Headers.Authorization?.Scheme,
-                request.Headers.Authorization?.Parameter));
-            return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
-            {
-                Content = new StringContent(json, Encoding.UTF8, "application/json"),
-            };
-        }
     }
 
     private sealed class SingleResponseHandler(Func<HttpRequestMessage, HttpResponseMessage> responseFactory) : HttpMessageHandler
@@ -466,8 +829,47 @@ public sealed class IssueDuplicatePreflightTests : IDisposable
             => Task.FromException<HttpResponseMessage>(exception);
     }
 
-    private sealed record RecordedOpenIssuesRequest(
-        string Uri,
-        string? AuthorizationScheme,
-        string? AuthorizationParameter);
+    private sealed class ThrowingReadStream(Exception exception) : Stream
+    {
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) => throw exception;
+
+        public override Task<int> ReadAsync(
+            byte[] buffer,
+            int offset,
+            int count,
+            CancellationToken cancellationToken)
+            => Task.FromException<int>(exception);
+
+        public override ValueTask<int> ReadAsync(
+            Memory<byte> buffer,
+            CancellationToken cancellationToken = default)
+            => ValueTask.FromException<int>(exception);
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    private sealed record GraphQlIssueFixture(
+        int Number,
+        string Title,
+        string NodeId,
+        string State = "OPEN",
+        string? Url = null,
+        string? Body = null,
+        IReadOnlyList<string>? Labels = null);
 }
