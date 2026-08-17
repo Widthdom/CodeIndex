@@ -64,14 +64,19 @@ public partial class DbContext
         out bool isSchemaTooNew,
         out ExistingCodeIndexDbValidationFailure validationFailure,
         out Exception? validationException,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool useConnectionPooling = true)
         => TryValidateExistingCodeIndexDb(
             dbPath,
             openTarget =>
             {
                 var mode = requireWritable
-                    ? SqliteConnectionPolicyMode.ReadWrite
-                    : SqliteConnectionPolicyMode.ReadOnly;
+                    ? useConnectionPooling
+                        ? SqliteConnectionPolicyMode.ReadWrite
+                        : SqliteConnectionPolicyMode.ReadWriteUnpooled
+                    : useConnectionPooling
+                        ? SqliteConnectionPolicyMode.ReadOnly
+                        : SqliteConnectionPolicyMode.ReadOnlyUnpooled;
                 return new SqliteConnection(SqliteConnectionPolicy.BuildConnectionString(openTarget, mode));
             },
             static connection => connection.Open(),

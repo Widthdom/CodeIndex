@@ -430,12 +430,25 @@ public partial class DbContext : IDisposable
     {
     }
 
+    internal static DbContext CreateUnpooled(
+        DbOpenIntent openIntent,
+        string dbPath,
+        CancellationToken cancellationToken = default)
+        => new(
+            openIntent,
+            dbPath,
+            DatabasePermissionPolicy.Resolve(),
+            SystemDatabaseFileModeProvider.Instance,
+            cancellationToken,
+            useConnectionPooling: false);
+
     internal DbContext(
         DbOpenIntent openIntent,
         string dbPath,
         DatabasePermissionPolicyMode databasePermissionPolicy,
         IDatabaseFileModeProvider databaseFileModeProvider,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool useConnectionPooling = true)
     {
         if (!Enum.IsDefined(openIntent))
             throw new ArgumentOutOfRangeException(nameof(openIntent), openIntent, "Unknown database open intent.");
@@ -446,6 +459,7 @@ public partial class DbContext : IDisposable
         cancellationToken.ThrowIfCancellationRequested();
         _openIntent = openIntent;
         _schemaCacheKey = TryCreateSchemaCacheKey(dbPath);
+        _connectionPooling = useConnectionPooling;
 
         if (openIntent == DbOpenIntent.QueryOnly)
         {
@@ -486,7 +500,10 @@ public partial class DbContext : IDisposable
         // Route through the shared SQLite connection policy so mode/pooling/timeout
         // assumptions stay consistent across CLI and MCP callers.
         // mode/pooling/timeout の前提を CLI/MCP で揃えるため共有ポリシーを通す。
-        var connectionString = SqliteConnectionPolicy.BuildConnectionString(dbPath, SqliteConnectionPolicyMode.Default);
+        var connectionMode = useConnectionPooling
+            ? SqliteConnectionPolicyMode.Default
+            : SqliteConnectionPolicyMode.Unpooled;
+        var connectionString = SqliteConnectionPolicy.BuildConnectionString(dbPath, connectionMode);
 
         try
         {
@@ -524,7 +541,10 @@ public partial class DbContext : IDisposable
             // 自動経路は Mode=ReadOnly のみとし、immutable=1 は stale risk を受け入れる明示指定に限る。
             _connection?.Dispose();
             var checkpointResult = _walCheckpointSkippedReason == null
-                ? CheckpointWalBeforeReadOnlyFallback(dbPath, cancellationToken)
+                ? CheckpointWalBeforeReadOnlyFallback(
+                    dbPath,
+                    cancellationToken,
+                    useConnectionPooling)
                 : WalCheckpointResult.SkippedAfterAttempt(_walCheckpointSkippedReason);
             ApplyWalCheckpointResult(checkpointResult);
             if (_walCheckpointSucceeded)

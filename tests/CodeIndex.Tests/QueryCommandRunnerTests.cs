@@ -36,6 +36,8 @@ public partial class QueryCommandRunnerTests
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
     };
+    private CancellationTokenSource? _vacuumCheckpointCancellationForTesting;
+    private bool _vacuumCheckpointCompletedForTesting;
     private const string SearchOnlyTestLanguage = "searchonlytest";
     private const string SearchOnlyTestExtension = ".searchonly";
 
@@ -1010,9 +1012,7 @@ public partial class QueryCommandRunnerTests
             command.ExecuteNonQuery();
         }
 
-        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunVacuum(
-            ["--db", dbPath, "--dry-run", "--json"],
-            _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureVacuum(["--db", dbPath, "--dry-run", "--json"]);
 
         Assert.Equal(CommandExitCodes.Success, exitCode);
         Assert.Equal(string.Empty, stderr);
@@ -1024,6 +1024,17 @@ public partial class QueryCommandRunnerTests
         Assert.True(root.GetProperty("estimated_bytes_reclaimable").GetInt64() > 0);
         Assert.Equal(0, root.GetProperty("pages_reclaimed").GetInt64());
         Assert.Equal(root.GetProperty("page_count_before").GetInt64(), root.GetProperty("page_count_after").GetInt64());
+        Assert.Equal(
+            root.GetProperty("logical_database_bytes_before").GetInt64(),
+            root.GetProperty("logical_database_bytes_after").GetInt64());
+        Assert.Equal(root.GetProperty("db_size_bytes_before").GetInt64(), root.GetProperty("db_size_bytes_after").GetInt64());
+        Assert.Equal(root.GetProperty("wal_size_bytes_before").GetInt64(), root.GetProperty("wal_size_bytes_after").GetInt64());
+        Assert.Equal(root.GetProperty("main_file_bytes_before").GetInt64(), root.GetProperty("main_file_bytes_after").GetInt64());
+        Assert.Equal(root.GetProperty("wal_file_bytes_before").GetInt64(), root.GetProperty("wal_file_bytes_after").GetInt64());
+        Assert.Equal(root.GetProperty("shm_file_bytes_before").GetInt64(), root.GetProperty("shm_file_bytes_after").GetInt64());
+        Assert.Equal(
+            root.GetProperty("physical_file_set_bytes_before").GetInt64(),
+            root.GetProperty("physical_file_set_bytes_after").GetInt64());
         Assert.Equal("incremental", root.GetProperty("auto_vacuum_mode_after_name").GetString());
         var guidance = root.GetProperty("maintenance_guidance");
         Assert.Equal("vacuum_recommended", guidance.GetProperty("freelist_state").GetString());
@@ -1036,6 +1047,59 @@ public partial class QueryCommandRunnerTests
             DbWriter.DefaultFtsOptimizeIncrementalWriteThreshold,
             ftsOptimization.GetProperty("observed_writes").GetInt64());
         Assert.Equal("current", ftsOptimization.GetProperty("state").GetString());
+    }
+
+    [Fact]
+    public void RunVacuum_DryRunJsonPreservesNonWalNoOpFileMetrics_Issue5092()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_vacuum_non_wal_dry_run");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        SqliteConnection.ClearAllPools();
+        using (var connection = new SqliteConnection(SqliteConnectionPolicy.BuildConnectionString(
+            dbPath,
+            SqliteConnectionPolicyMode.ReadWriteUnpooled)))
+        {
+            connection.Open();
+            using var journalMode = connection.CreateCommand();
+            journalMode.CommandText = "PRAGMA journal_mode=DELETE";
+            Assert.Equal(
+                "delete",
+                Convert.ToString(journalMode.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture));
+        }
+        var mainBytesBefore = File.ReadAllBytes(dbPath);
+        Assert.False(File.Exists(dbPath + "-wal"));
+        Assert.False(File.Exists(dbPath + "-shm"));
+
+        var (exitCode, stdout, stderr) = CaptureVacuum(["--db", dbPath, "--dry-run", "--json"]);
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Equal(mainBytesBefore, File.ReadAllBytes(dbPath));
+        Assert.False(File.Exists(dbPath + "-wal"));
+        Assert.False(File.Exists(dbPath + "-shm"));
+        using var document = ParseJsonOutput(stdout);
+        var root = document.RootElement;
+        var mainFileBytes = new FileInfo(dbPath).Length;
+        Assert.Equal("dry_run", root.GetProperty("status").GetString());
+        Assert.True(root.GetProperty("dry_run").GetBoolean());
+        Assert.Equal(0, root.GetProperty("pages_reclaimed").GetInt64());
+        Assert.Equal(0, root.GetProperty("bytes_reclaimed").GetInt64());
+        Assert.Equal(root.GetProperty("page_count_before").GetInt64(), root.GetProperty("page_count_after").GetInt64());
+        Assert.Equal(
+            root.GetProperty("logical_database_bytes_before").GetInt64(),
+            root.GetProperty("logical_database_bytes_after").GetInt64());
+        Assert.Equal(mainFileBytes, root.GetProperty("main_file_bytes_before").GetInt64());
+        Assert.Equal(mainFileBytes, root.GetProperty("main_file_bytes_after").GetInt64());
+        Assert.Equal(mainFileBytes, root.GetProperty("db_size_bytes_before").GetInt64());
+        Assert.Equal(mainFileBytes, root.GetProperty("db_size_bytes_after").GetInt64());
+        Assert.Equal(0, root.GetProperty("wal_file_bytes_before").GetInt64());
+        Assert.Equal(0, root.GetProperty("wal_file_bytes_after").GetInt64());
+        Assert.Equal(0, root.GetProperty("wal_size_bytes_before").GetInt64());
+        Assert.Equal(0, root.GetProperty("wal_size_bytes_after").GetInt64());
+        Assert.Equal(0, root.GetProperty("shm_file_bytes_before").GetInt64());
+        Assert.Equal(0, root.GetProperty("shm_file_bytes_after").GetInt64());
+        Assert.Equal(mainFileBytes, root.GetProperty("physical_file_set_bytes_before").GetInt64());
+        Assert.Equal(mainFileBytes, root.GetProperty("physical_file_set_bytes_after").GetInt64());
     }
 
     [Fact]
@@ -1059,9 +1123,7 @@ public partial class QueryCommandRunnerTests
             command.ExecuteNonQuery();
         }
 
-        var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunVacuum(
-            ["--db", dbPath, "--json"],
-            _jsonOptions));
+        var (exitCode, stdout, stderr) = CaptureVacuum(["--db", dbPath, "--json"]);
 
         Assert.Equal(CommandExitCodes.Success, exitCode);
         Assert.Equal(string.Empty, stderr);
@@ -1071,8 +1133,334 @@ public partial class QueryCommandRunnerTests
         Assert.Equal("ok", root.GetProperty("status").GetString());
         Assert.False(root.GetProperty("dry_run").GetBoolean());
         var timingNote = root.GetProperty("wal_checkpoint_timing_note").GetString();
-        Assert.Contains("wal_size_bytes_after", timingNote, StringComparison.Ordinal);
+        Assert.Contains("after", timingNote, StringComparison.Ordinal);
+        Assert.Contains("connection closes", timingNote, StringComparison.Ordinal);
         Assert.Contains("checkpoint", timingNote, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RunVacuum_JsonReportsPostCloseMainFileSize_Issue5092()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_vacuum_post_close_size");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+        {
+            using var command = db.Connection.CreateCommand();
+            command.CommandText = @"
+                CREATE TABLE vacuum_payload (id INTEGER PRIMARY KEY, payload BLOB);
+                WITH RECURSIVE n(value) AS (
+                    SELECT 1
+                    UNION ALL
+                    SELECT value + 1 FROM n WHERE value < 128
+                )
+                INSERT INTO vacuum_payload (payload)
+                SELECT randomblob(4096) FROM n;
+                DELETE FROM vacuum_payload;";
+            command.ExecuteNonQuery();
+        }
+        SqliteConnection.ClearAllPools();
+
+        var (exitCode, stdout, stderr) = CaptureVacuum(["--db", dbPath, "--json"]);
+        var finalMainFile = new FileInfo(dbPath);
+        finalMainFile.Refresh();
+        var finalWalFile = new FileInfo(dbPath + "-wal");
+        finalWalFile.Refresh();
+        var finalWalFileExists = finalWalFile.Exists;
+        var finalWalFileBytes = finalWalFile.Exists ? finalWalFile.Length : 0;
+        var finalShmFile = new FileInfo(dbPath + "-shm");
+        finalShmFile.Refresh();
+        var finalShmFileBytes = finalShmFile.Exists ? finalShmFile.Length : 0;
+        SqliteConnection.ClearAllPools();
+
+        Assert.Equal(CommandExitCodes.Success, exitCode);
+        Assert.Equal(string.Empty, stderr);
+        using var document = ParseJsonOutput(stdout);
+        var root = document.RootElement;
+        var pageSize = root.GetProperty("page_size").GetInt64();
+        var pageCountBefore = root.GetProperty("page_count_before").GetInt64();
+        var pageCountAfter = root.GetProperty("page_count_after").GetInt64();
+        var mainFileBytesBefore = root.GetProperty("main_file_bytes_before").GetInt64();
+        var walFileBytesBefore = root.GetProperty("wal_file_bytes_before").GetInt64();
+        var shmFileBytesBefore = root.GetProperty("shm_file_bytes_before").GetInt64();
+        Assert.Equal(pageCountBefore * pageSize, root.GetProperty("logical_database_bytes_before").GetInt64());
+        Assert.Equal(pageCountAfter * pageSize, root.GetProperty("logical_database_bytes_after").GetInt64());
+        Assert.Equal(mainFileBytesBefore, root.GetProperty("db_size_bytes_before").GetInt64());
+        Assert.Equal(walFileBytesBefore, root.GetProperty("wal_size_bytes_before").GetInt64());
+        Assert.Equal(
+            mainFileBytesBefore + walFileBytesBefore + shmFileBytesBefore,
+            root.GetProperty("physical_file_set_bytes_before").GetInt64());
+        Assert.Equal(finalMainFile.Length, root.GetProperty("main_file_bytes_after").GetInt64());
+        Assert.Equal(finalMainFile.Length, root.GetProperty("db_size_bytes_after").GetInt64());
+        Assert.Equal(pageCountAfter * pageSize, root.GetProperty("main_file_bytes_after").GetInt64());
+        Assert.False(finalWalFileExists);
+        Assert.Equal(finalWalFileBytes, root.GetProperty("wal_file_bytes_after").GetInt64());
+        Assert.Equal(finalWalFileBytes, root.GetProperty("wal_size_bytes_after").GetInt64());
+        Assert.Equal(finalShmFileBytes, root.GetProperty("shm_file_bytes_after").GetInt64());
+        Assert.Equal(
+            finalMainFile.Length + finalWalFileBytes + finalShmFileBytes,
+            root.GetProperty("physical_file_set_bytes_after").GetInt64());
+        var guidance = root.GetProperty("maintenance_guidance");
+        Assert.Equal(
+            finalWalFileBytes >= guidance.GetProperty("wal_threshold_bytes").GetInt64()
+                ? "checkpoint_recommended"
+                : "ok",
+            guidance.GetProperty("wal_state").GetString());
+        Assert.Equal(
+            root.GetProperty("pages_reclaimed").GetInt64() * pageSize,
+            root.GetProperty("bytes_reclaimed").GetInt64());
+        var timingNote = root.GetProperty("wal_checkpoint_timing_note").GetString()!;
+        Assert.Contains("after", timingNote, StringComparison.Ordinal);
+        Assert.Contains("connection closes", timingNote, StringComparison.Ordinal);
+        Assert.Contains("checkpoint", timingNote, StringComparison.Ordinal);
+        Assert.False(File.Exists(dbPath + "-wal"));
+
+        var (repeatExitCode, repeatStdout, repeatStderr) = CaptureVacuum(["--db", dbPath, "--json"]);
+        Assert.Equal(CommandExitCodes.Success, repeatExitCode);
+        Assert.Equal(string.Empty, repeatStderr);
+        using var repeatDocument = ParseJsonOutput(repeatStdout);
+        var repeatRoot = repeatDocument.RootElement;
+        Assert.Equal(0, repeatRoot.GetProperty("pages_reclaimed").GetInt64());
+        Assert.Equal(0, repeatRoot.GetProperty("bytes_reclaimed").GetInt64());
+        Assert.Equal(
+            repeatRoot.GetProperty("page_count_before").GetInt64(),
+            repeatRoot.GetProperty("page_count_after").GetInt64());
+        Assert.Equal(
+            repeatRoot.GetProperty("logical_database_bytes_before").GetInt64(),
+            repeatRoot.GetProperty("logical_database_bytes_after").GetInt64());
+        Assert.Equal(
+            repeatRoot.GetProperty("main_file_bytes_before").GetInt64(),
+            repeatRoot.GetProperty("main_file_bytes_after").GetInt64());
+        Assert.Equal(
+            repeatRoot.GetProperty("main_file_bytes_before").GetInt64(),
+            repeatRoot.GetProperty("db_size_bytes_before").GetInt64());
+        Assert.Equal(
+            repeatRoot.GetProperty("main_file_bytes_after").GetInt64(),
+            repeatRoot.GetProperty("db_size_bytes_after").GetInt64());
+        Assert.Equal(
+            repeatRoot.GetProperty("main_file_bytes_after").GetInt64()
+                + repeatRoot.GetProperty("wal_file_bytes_after").GetInt64()
+                + repeatRoot.GetProperty("shm_file_bytes_after").GetInt64(),
+            repeatRoot.GetProperty("physical_file_set_bytes_after").GetInt64());
+        finalMainFile.Refresh();
+        Assert.Equal(finalMainFile.Length, repeatRoot.GetProperty("main_file_bytes_after").GetInt64());
+
+        var (humanExitCode, humanStdout, humanStderr) = CaptureVacuum(["--db", dbPath]);
+        Assert.Equal(CommandExitCodes.Success, humanExitCode);
+        Assert.Equal(string.Empty, humanStderr);
+        AssertVacuumHumanTransition(
+            humanStdout,
+            "Logical DB",
+            repeatRoot,
+            "logical_database_bytes_before",
+            "logical_database_bytes_after");
+        AssertVacuumHumanTransition(humanStdout, "Main file", repeatRoot, "main_file_bytes_before", "main_file_bytes_after");
+        AssertVacuumHumanTransition(humanStdout, "WAL", repeatRoot, "wal_file_bytes_before", "wal_file_bytes_after");
+        AssertVacuumHumanTransition(humanStdout, "SHM", repeatRoot, "shm_file_bytes_before", "shm_file_bytes_after");
+        AssertVacuumHumanTransition(
+            humanStdout,
+            "File set",
+            repeatRoot,
+            "physical_file_set_bytes_before",
+            "physical_file_set_bytes_after");
+    }
+
+    [Fact]
+    public void RunVacuum_JsonReportsWalFileSetHeldByConcurrentReader_Issue5092()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_vacuum_reader_wal");
+        using var env = EnvironmentVariableScope.Capture(DbContext.BusyTimeoutEnvironmentVariable);
+        env.Set(DbContext.BusyTimeoutEnvironmentVariable, "50");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        CreateReclaimableVacuumPayload(dbPath);
+        SqliteConnection.ClearAllPools();
+
+        try
+        {
+            using var readerConnection = new SqliteConnection(SqliteConnectionPolicy.BuildConnectionString(
+                dbPath,
+                SqliteConnectionPolicyMode.ReadOnlyUnpooled));
+            readerConnection.Open();
+            using var readerTransaction = readerConnection.BeginTransaction();
+            using (var readerCommand = readerConnection.CreateCommand())
+            {
+                readerCommand.Transaction = readerTransaction;
+                readerCommand.CommandText = "SELECT COUNT(*) FROM vacuum_payload";
+                Assert.Equal(0L, Convert.ToInt64(readerCommand.ExecuteScalar()));
+            }
+
+            var (exitCode, stdout, stderr) = CaptureVacuum(["--db", dbPath, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = ParseJsonOutput(stdout);
+            var root = document.RootElement;
+            var mainFile = new FileInfo(dbPath);
+            var walFile = new FileInfo(dbPath + "-wal");
+            var shmFile = new FileInfo(dbPath + "-shm");
+            mainFile.Refresh();
+            walFile.Refresh();
+            shmFile.Refresh();
+            var walFileBytes = walFile.Exists ? walFile.Length : 0;
+            var shmFileBytes = shmFile.Exists ? shmFile.Length : 0;
+
+            Assert.True(walFileBytes > 0);
+            Assert.Equal(
+                root.GetProperty("page_count_after").GetInt64() * root.GetProperty("page_size").GetInt64(),
+                root.GetProperty("logical_database_bytes_after").GetInt64());
+            Assert.Equal(mainFile.Length, root.GetProperty("main_file_bytes_after").GetInt64());
+            Assert.Equal(mainFile.Length, root.GetProperty("db_size_bytes_after").GetInt64());
+            Assert.Equal(walFileBytes, root.GetProperty("wal_file_bytes_after").GetInt64());
+            Assert.Equal(walFileBytes, root.GetProperty("wal_size_bytes_after").GetInt64());
+            Assert.Equal(shmFileBytes, root.GetProperty("shm_file_bytes_after").GetInt64());
+            Assert.Equal(
+                mainFile.Length + walFileBytes + shmFileBytes,
+                root.GetProperty("physical_file_set_bytes_after").GetInt64());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Fact]
+    public void RunVacuum_CancellationAfterCommittedVacuumEmitsOnlyErrorAndAllowsRetry_Issue5092()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_vacuum_cancel_after_commit");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        CreateReclaimableVacuumPayload(dbPath);
+        SqliteConnection.ClearAllPools();
+        using var cancellation = new CancellationTokenSource();
+        _vacuumCheckpointCancellationForTesting = cancellation;
+        _vacuumCheckpointCompletedForTesting = false;
+
+        try
+        {
+            DbContext.MaintenanceProgressForTesting = CancelVacuumCheckpointForTesting;
+
+            var (exitCode, stdout, stderr) = CaptureVacuum(
+                ["--db", dbPath, "--json"],
+                cancellation.Token);
+            DbContext.MaintenanceProgressForTesting = null;
+
+            Assert.Equal(CommandExitCodes.CancelledBySignal, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var errorDocument = ParseJsonOutput(stdout);
+            var error = errorDocument.RootElement;
+            Assert.Equal("error", error.GetProperty("status").GetString());
+            Assert.Equal(CommandErrorCodes.Interrupted, error.GetProperty("error_code").GetString());
+            Assert.False(error.TryGetProperty("main_file_bytes_after", out _));
+            Assert.False(_vacuumCheckpointCompletedForTesting);
+
+            var (retryExitCode, retryStdout, retryStderr) = CaptureVacuum(["--db", dbPath, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, retryExitCode);
+            Assert.Equal(string.Empty, retryStderr);
+            using var retryDocument = ParseJsonOutput(retryStdout);
+            Assert.Equal(0, retryDocument.RootElement.GetProperty("pages_reclaimed").GetInt64());
+        }
+        finally
+        {
+            DbContext.MaintenanceProgressForTesting = null;
+            _vacuumCheckpointCancellationForTesting = null;
+            _vacuumCheckpointCompletedForTesting = false;
+            SqliteConnection.ClearAllPools();
+        }
+    }
+
+    [Fact]
+    public void RunVacuum_MetricsFailureEmitsOnlyErrorAndAllowsRetry_Issue5092()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_vacuum_metrics_failure");
+        var dbPath = TestProjectHelper.CreateProjectDb(project.Root);
+        CreateReclaimableVacuumPayload(dbPath);
+        SqliteConnection.ClearAllPools();
+
+        try
+        {
+            DbContext.MaintenanceProgressForTesting = ThrowVacuumMetricsFailureForTesting;
+
+            var (exitCode, stdout, stderr) = CaptureVacuum(["--db", dbPath, "--json"]);
+            DbContext.MaintenanceProgressForTesting = null;
+
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            Assert.DoesNotContain("injected vacuum metrics failure", stdout, StringComparison.Ordinal);
+            using var errorDocument = ParseJsonOutput(stdout);
+            var error = errorDocument.RootElement;
+            Assert.Equal("error", error.GetProperty("status").GetString());
+            Assert.False(error.TryGetProperty("main_file_bytes_after", out _));
+
+            var (retryExitCode, retryStdout, retryStderr) = CaptureVacuum(["--db", dbPath, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, retryExitCode);
+            Assert.Equal(string.Empty, retryStderr);
+            using var retryDocument = ParseJsonOutput(retryStdout);
+            Assert.Equal(0, retryDocument.RootElement.GetProperty("pages_reclaimed").GetInt64());
+        }
+        finally
+        {
+            DbContext.MaintenanceProgressForTesting = null;
+            SqliteConnection.ClearAllPools();
+        }
+    }
+
+    private static void CreateReclaimableVacuumPayload(string dbPath)
+    {
+        using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+        using var command = db.Connection.CreateCommand();
+        command.CommandText = @"
+            CREATE TABLE vacuum_payload (id INTEGER PRIMARY KEY, payload BLOB);
+            WITH RECURSIVE n(value) AS (
+                SELECT 1
+                UNION ALL
+                SELECT value + 1 FROM n WHERE value < 128
+            )
+            INSERT INTO vacuum_payload (payload)
+            SELECT randomblob(4096) FROM n;
+            DELETE FROM vacuum_payload;";
+        command.ExecuteNonQuery();
+    }
+
+    private static void AssertVacuumHumanTransition(
+        string stdout,
+        string label,
+        JsonElement json,
+        string beforeProperty,
+        string afterProperty)
+    {
+        string? line = null;
+        foreach (var candidate in stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (!candidate.Contains(label, StringComparison.Ordinal))
+                continue;
+            Assert.Null(line);
+            line = candidate;
+        }
+        Assert.NotNull(line);
+        var before = json.GetProperty(beforeProperty).GetInt64();
+        var after = json.GetProperty(afterProperty).GetInt64();
+        Assert.Contains($"{before:N0} -> {after:N0} bytes", line!, StringComparison.Ordinal);
+    }
+
+    private (int Result, string Stdout, string Stderr) CaptureVacuum(
+        string[] args,
+        CancellationToken cancellationToken = default)
+    {
+        using var capture = ConsoleCapture.Start(captureOut: true, captureError: true);
+        var result = QueryCommandRunner.RunVacuum(args, _jsonOptions, cancellationToken);
+        return (result, capture.Out!.ToString()!, capture.Error!.ToString()!);
+    }
+
+    private void CancelVacuumCheckpointForTesting(string operation, string phase)
+    {
+        if (operation == "wal_checkpoint" && phase == "truncate_start")
+            _vacuumCheckpointCancellationForTesting!.Cancel();
+        if (operation == "wal_checkpoint" && phase == "truncate_complete")
+            _vacuumCheckpointCompletedForTesting = true;
+    }
+
+    private static void ThrowVacuumMetricsFailureForTesting(string operation, string phase)
+    {
+        if (operation == "vacuum" && phase == "metrics_after")
+            throw new IOException("injected vacuum metrics failure");
     }
 
 
