@@ -3629,6 +3629,8 @@ public partial class IndexCommandRunnerTests
                     public static int Match(Point point) => point switch
                     {
                         Point(0, 0) => 0,
+                        Point(var x, var y) when x > 0
+                            => x + y,
                         Point(var x, var y) => x + y,
                     };
 

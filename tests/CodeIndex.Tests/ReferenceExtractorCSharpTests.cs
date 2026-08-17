@@ -5144,6 +5144,12 @@ public partial class ReferenceExtractorTests
                     Point(var x, var y) => 1,
                     Point(var c, var d)
                         => 2,
+                    Point(var e, var f) when e > 0
+                        => 3,
+                    Point(var g, var h) designated
+                        => 4,
+                    Point(var i, var j) { X: > 0 }
+                        => 5,
                     _ => 0,
                 };
             }
@@ -5153,7 +5159,7 @@ public partial class ReferenceExtractorTests
         var references = ReferenceExtractor.Extract(1, "csharp", content, symbols);
 
         var pointRefs = references.Where(r => r.SymbolName == "Point" && r.ReferenceKind == "type_reference").ToList();
-        Assert.Equal(2, pointRefs.Count);
+        Assert.Equal(5, pointRefs.Count);
         Assert.All(pointRefs, r => Assert.Equal("Match", r.ContainerName));
         Assert.DoesNotContain(references, r => r.SymbolName == "Point" && r.ReferenceKind == "call");
     }

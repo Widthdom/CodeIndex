@@ -244,11 +244,12 @@ public static partial class ReferenceExtractor
                             return true;
                         }
 
-                        // Only continue onto the next line when the pattern head itself ended
-                        // at this close parenthesis. A comma terminates a switch-expression
-                        // result, and the next arm can otherwise look like a standalone `=>`
-                        // after its string literal is removed from the prepared source.
-                        if (afterClose < preparedLine.Length)
+                        // A result terminator or expression continuation must not borrow the next
+                        // arm's `=>` after its string literal is removed from prepared source.
+                        // Keep valid pattern suffixes such as designations, property clauses, and
+                        // `when` guards eligible for a following-line arrow.
+                        if (afterClose < preparedLine.Length
+                            && !IsCSharpSwitchPatternSuffix(preparedLine, afterClose))
                             return false;
 
                         for (var next = lineIndex + 1; next < preparedLines.Length; next++)
@@ -270,6 +271,30 @@ public static partial class ReferenceExtractor
         }
 
         return false;
+    }
+
+    private static bool IsCSharpSwitchPatternSuffix(string text, int startIndex)
+    {
+        if (text[startIndex] == '{')
+            return true;
+
+        var escaped = text[startIndex] == '@';
+        var tokenStart = escaped ? startIndex + 1 : startIndex;
+        if (tokenStart >= text.Length || !IsCSharpIdentifierStart(text[tokenStart]))
+            return false;
+
+        var tokenEnd = tokenStart + 1;
+        while (tokenEnd < text.Length && IsCSharpIdentifierPart(text[tokenEnd]))
+            tokenEnd++;
+
+        if (escaped)
+            return true;
+
+        var token = text.AsSpan(tokenStart, tokenEnd - tokenStart);
+        return !token.SequenceEqual("as")
+            && !token.SequenceEqual("is")
+            && !token.SequenceEqual("switch")
+            && !token.SequenceEqual("with");
     }
 
     private static bool LineEndsWithCSharpToken(string text, string token)
