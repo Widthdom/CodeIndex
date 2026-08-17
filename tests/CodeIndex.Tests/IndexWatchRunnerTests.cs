@@ -194,15 +194,19 @@ public class IndexWatchRunnerTests
         try
         {
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
-            var internalPaths = new[]
+            var lockPath = IndexLock.GetLockPath(dbPath);
+            var internalTargets = new[]
             {
                 dbPath,
                 dbPath + "-wal",
                 dbPath + "-shm",
-                dbPath + ".lock",
-                dbPath + ".lock.info",
-                dbPath + ".lock.tmp",
+                dbPath + "-journal",
+                lockPath,
+                IndexLock.GetInfoPath(lockPath),
             };
+            var internalPaths = internalTargets
+                .Concat(internalTargets.Select(AtomicFileWriter.BuildTempPathForTesting))
+                .ToArray();
 
             Assert.All(internalPaths, path =>
                 Assert.True(IndexWatchRunner.ShouldIgnoreWatchInternalPathForTesting(
@@ -244,19 +248,24 @@ public class IndexWatchRunnerTests
         {
             var dbPath = Path.Combine(projectRoot, "src", "watch.db");
             Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
-
-            Assert.True(IndexWatchRunner.ShouldIgnoreWatchInternalPathForTesting(
-                projectRoot,
+            var lockPath = IndexLock.GetLockPath(dbPath);
+            var internalTargets = new[]
+            {
                 dbPath,
                 dbPath + "-wal",
-                ignoreCase: false,
-                dbPathExplicit: true));
-            Assert.True(IndexWatchRunner.ShouldIgnoreWatchInternalPathForTesting(
-                projectRoot,
-                dbPath,
-                dbPath + ".lock.info",
-                ignoreCase: false,
-                dbPathExplicit: true));
+                dbPath + "-shm",
+                dbPath + "-journal",
+                lockPath,
+                IndexLock.GetInfoPath(lockPath),
+            };
+
+            Assert.All(internalTargets.Concat(internalTargets.Select(AtomicFileWriter.BuildTempPathForTesting)), path =>
+                Assert.True(IndexWatchRunner.ShouldIgnoreWatchInternalPathForTesting(
+                    projectRoot,
+                    dbPath,
+                    path,
+                    ignoreCase: false,
+                    dbPathExplicit: true)));
             Assert.False(IndexWatchRunner.ShouldIgnoreWatchInternalPathForTesting(
                 projectRoot,
                 dbPath,
@@ -269,9 +278,136 @@ public class IndexWatchRunnerTests
                 Path.Combine(projectRoot, "src", "app.cs"),
                 ignoreCase: false,
                 dbPathExplicit: true));
+            Assert.False(IndexWatchRunner.ShouldIgnoreWatchInternalPathForTesting(
+                projectRoot,
+                dbPath,
+                Path.Combine(projectRoot, "src", "notes.tmp"),
+                ignoreCase: false,
+                dbPathExplicit: true));
+            Assert.False(IndexWatchRunner.ShouldIgnoreWatchInternalPathForTesting(
+                projectRoot,
+                dbPath,
+                Path.Combine(projectRoot, "src", $".cdidx-user.{Guid.NewGuid():N}.tmp"),
+                ignoreCase: false,
+                dbPathExplicit: true));
         }
         finally
         {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ShouldIgnoreWatchInternalPath_ExplicitDbOutsideProject_NormalizesAndUsesPlatformComparison_Issue5088()
+    {
+        var projectRoot = CreateTempProject();
+        var dbRoot = TestProjectHelper.CreateTempProject("watch_external_db");
+        try
+        {
+            var dbPath = Path.Combine(dbRoot, "state", "codeindex.db");
+            var lockPath = IndexLock.GetLockPath(dbPath);
+            var infoPath = IndexLock.GetInfoPath(lockPath);
+            var internalTargets = new[]
+            {
+                dbPath,
+                dbPath + "-wal",
+                dbPath + "-shm",
+                dbPath + "-journal",
+                lockPath,
+                infoPath,
+            };
+            Assert.All(internalTargets.Concat(internalTargets.Select(AtomicFileWriter.BuildTempPathForTesting)), path =>
+                Assert.True(IndexWatchRunner.ShouldIgnoreWatchInternalPathForTesting(
+                    projectRoot,
+                    dbPath,
+                    path,
+                    ignoreCase: false,
+                    dbPathExplicit: true)));
+
+            var tempPath = AtomicFileWriter.BuildTempPathForTesting(infoPath);
+            var normalizedEquivalent = Path.Combine(
+                Path.GetDirectoryName(tempPath)!,
+                ".",
+                Path.GetFileName(tempPath));
+
+            Assert.True(IndexWatchRunner.ShouldIgnoreWatchInternalPathForTesting(
+                projectRoot,
+                dbPath,
+                normalizedEquivalent,
+                ignoreCase: false,
+                dbPathExplicit: true));
+
+            var caseChangedPath = Path.Combine(
+                Path.GetDirectoryName(tempPath)!,
+                Path.GetFileName(tempPath).ToUpperInvariant());
+            Assert.True(IndexWatchRunner.ShouldIgnoreWatchInternalPathForTesting(
+                projectRoot,
+                dbPath,
+                caseChangedPath,
+                ignoreCase: true,
+                dbPathExplicit: true));
+            Assert.False(IndexWatchRunner.ShouldIgnoreWatchInternalPathForTesting(
+                projectRoot,
+                dbPath,
+                caseChangedPath,
+                ignoreCase: false,
+                dbPathExplicit: true));
+            Assert.False(IndexWatchRunner.ShouldIgnoreWatchInternalPathForTesting(
+                projectRoot,
+                dbPath,
+                Path.Combine(Path.GetDirectoryName(tempPath)!, $".cdidx-unrelated.{Guid.NewGuid():N}.tmp"),
+                ignoreCase: false,
+                dbPathExplicit: true));
+        }
+        finally
+        {
+            DeleteDirectory(dbRoot);
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData("fsevents")]
+    [InlineData("polling")]
+    public void RunCore_AtomicLockInfoReplacementEvents_DoNotScheduleIndexCycle_Issue5088(string backendName)
+    {
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(projectRoot, "state", "codeindex.db");
+        using var cts = new CancellationTokenSource();
+        var backend = new FakeWatchBackend(backendName);
+        var baselineScans = 0;
+        try
+        {
+            var infoPath = IndexLock.GetInfoPath(IndexLock.GetLockPath(dbPath));
+            var tempPath = AtomicFileWriter.BuildTempPathForTesting(infoPath);
+            var options = CreateIssue4858WatchOptions(projectRoot, dbPath);
+            IndexWatchRunner.WatchBackendFactoryForTesting = (_, _, _) => backend;
+            IndexWatchRunner.WatchReadyForTesting = _ => cts.Cancel();
+
+            var capturedOut = RunWatchCoreAndCapture(
+                options,
+                projectRoot,
+                dbPath,
+                cts,
+                baselineScan: () =>
+                {
+                    baselineScans++;
+                    backend.Enqueue(tempPath);
+                    backend.Enqueue(infoPath);
+                    return CommandExitCodes.Success;
+                },
+                recoveryScan: _ => CommandExitCodes.Success,
+                out var exitCode);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(1, baselineScans);
+            Assert.DoesNotContain("\"status\":\"updated\"", capturedOut, StringComparison.Ordinal);
+            Assert.DoesNotContain("\"status\":\"rescanned\"", capturedOut, StringComparison.Ordinal);
+        }
+        finally
+        {
+            IndexWatchRunner.WatchBackendFactoryForTesting = null;
+            IndexWatchRunner.WatchReadyForTesting = null;
             DeleteDirectory(projectRoot);
         }
     }
@@ -2438,6 +2574,7 @@ public class IndexWatchRunnerTests
     {
         private readonly Exception? _startException;
         private readonly Action? _onStart;
+        private Action<string>? _enqueue;
         private Action<Exception?>? _reportError;
 
         internal FakeWatchBackend(
@@ -2462,11 +2599,18 @@ public class IndexWatchRunnerTests
             CancellationToken cancellationToken)
         {
             StartCount++;
+            _enqueue = enqueue;
             _reportError = reportError;
             _onStart?.Invoke();
             if (_startException != null)
                 return Task.FromException(_startException);
             return Task.CompletedTask;
+        }
+
+        internal void Enqueue(string path)
+        {
+            Assert.NotNull(_enqueue);
+            _enqueue(path);
         }
 
         internal void ReportError(Exception exception)
