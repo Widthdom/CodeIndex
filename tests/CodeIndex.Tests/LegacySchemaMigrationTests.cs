@@ -898,6 +898,125 @@ public class LegacySchemaMigrationTests : IDisposable
     }
 
     [Fact]
+    public void UnusedQueries_ReadOnlyLegacyChunksWithoutChunkIndex_PreserveFallback_Issue5089()
+    {
+        var dir = TestProjectHelper.CreateTempProject("codeindex_legacy_unused_chunks_5089");
+        var dbPath = Path.Combine(dir, "codeindex.db");
+        try
+        {
+            using (var seed = new SqliteConnection(
+                       new SqliteConnectionStringBuilder { DataSource = dbPath }.ConnectionString))
+            {
+                seed.Open();
+                Exec(seed, $"PRAGMA application_id = {DbContext.ApplicationId}");
+                Exec(seed, $"PRAGMA user_version = {DbContext.GraphReadyFlag}");
+                Exec(seed, """
+                    CREATE TABLE files (
+                        id INTEGER PRIMARY KEY,
+                        path TEXT NOT NULL,
+                        lang TEXT,
+                        lines INTEGER
+                    )
+                    """);
+                Exec(seed, """
+                    CREATE TABLE chunks (
+                        id INTEGER PRIMARY KEY,
+                        file_id INTEGER,
+                        start_line INTEGER,
+                        end_line INTEGER,
+                        content TEXT
+                    )
+                    """);
+                Exec(seed, """
+                    CREATE TABLE symbols (
+                        id INTEGER PRIMARY KEY,
+                        file_id INTEGER,
+                        name TEXT,
+                        kind TEXT,
+                        line INTEGER,
+                        start_line INTEGER,
+                        end_line INTEGER,
+                        body_start_line INTEGER,
+                        body_end_line INTEGER,
+                        signature TEXT,
+                        visibility TEXT,
+                        container_kind TEXT,
+                        container_name TEXT,
+                        container_qualified_name TEXT
+                    )
+                    """);
+                Exec(seed, """
+                    CREATE TABLE symbol_references (
+                        id INTEGER PRIMARY KEY,
+                        file_id INTEGER,
+                        symbol_name TEXT,
+                        reference_kind TEXT,
+                        line INTEGER,
+                        column_number INTEGER,
+                        context TEXT,
+                        container_kind TEXT,
+                        container_name TEXT
+                    )
+                    """);
+                Exec(seed, """
+                    INSERT INTO files (id, path, lang, lines) VALUES
+                        (1, 'src/LegacyPartial.Fields.cs', 'csharp', 7),
+                        (2, 'src/LegacyPartial.Usage.cs', 'csharp', 7)
+                    """);
+                Exec(seed, """
+                    INSERT INTO chunks (id, file_id, start_line, end_line, content) VALUES
+                        (1, 1, 1, 7,
+                         'namespace Demo;' || char(10) || char(10) ||
+                         'public partial class LegacyPartialHost' || char(10) ||
+                         '{' || char(10) ||
+                         '    private static readonly int LegacyValue = 1;' || char(10) ||
+                         '}' || char(10)),
+                        (2, 2, 1, 7,
+                         'namespace Demo;' || char(10) || char(10) ||
+                         'public partial class LegacyPartialHost' || char(10) ||
+                         '{' || char(10) ||
+                         '    public int ReadValue() => LegacyValue;' || char(10) ||
+                         '}' || char(10))
+                    """);
+                Exec(seed, """
+                    INSERT INTO symbols (
+                        id, file_id, name, kind, line, start_line, end_line,
+                        body_start_line, body_end_line, signature, visibility,
+                        container_kind, container_name, container_qualified_name
+                    ) VALUES
+                        (1, 1, 'LegacyPartialHost', 'class', 3, 3, 6,
+                         4, 6, 'public partial class LegacyPartialHost', 'public',
+                         '', '', ''),
+                        (2, 1, 'LegacyValue', 'field', 5, 5, 5,
+                         5, 5, 'private static readonly int LegacyValue = 1', 'private',
+                         'class', 'LegacyPartialHost', 'LegacyPartialHost'),
+                        (3, 2, 'LegacyPartialHost', 'class', 3, 3, 6,
+                         4, 6, 'public partial class LegacyPartialHost', 'public',
+                         '', '', '')
+                    """);
+            }
+
+            SqliteConnection.ClearAllPools();
+            var fileUri = new Uri(dbPath).AbsoluteUri + "?immutable=1";
+            using var db = new DbContext(DbOpenIntent.QueryOnly, fileUri);
+            Assert.True(db.IsReadOnly);
+            db.TryMigrateForRead();
+
+            var reader = new DbReader(db);
+            Assert.Empty(reader.GetUnusedSymbols(
+                10, "field", "csharp", null, null, excludeTests: false));
+            Assert.Equal(
+                new QueryCountResult(0, 0),
+                reader.CountUnusedSymbols(
+                    "field", "csharp", null, null, excludeTests: false));
+        }
+        finally
+        {
+            DeleteDirectoryAfterClearingPools(dir);
+        }
+    }
+
+    [Fact]
     public void ReadOnlyFallbackDiagnostics_AddsStaleWalRiskToQueryPayload()
     {
         using var db = new DbContext(DbOpenIntent.WriteIndex, _dbPath);
