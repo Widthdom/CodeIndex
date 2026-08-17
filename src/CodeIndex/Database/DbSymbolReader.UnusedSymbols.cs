@@ -43,6 +43,17 @@ public partial class DbReader
         var peerTypeShapeSql = BuildCSharpPartialTypeShapeSql("partial_peer_type", "partial_peer_ancestor");
         var peerTypeStartLineSql = GetSymbolColumnSql("start_line", "partial_peer_type.line", "partial_peer_type");
         var peerTypeEndLineSql = GetSymbolColumnSql("end_line", peerTypeStartLineSql, "partial_peer_type");
+        var peerChunkOrdinalSql = _chunkColumns.Contains("chunk_index")
+            ? "partial_peer_chunk.chunk_index"
+            : _chunkColumns.Contains("id")
+                ? "partial_peer_chunk.id"
+                : "partial_peer_chunk.end_line";
+        var peerChunkWindowOrderSql = _chunkColumns.Contains("chunk_index")
+            ? "partial_peer_chunk.chunk_index"
+            : $"partial_peer_chunk.start_line, {peerChunkOrdinalSql}";
+        var peerPieceConcatOrderSql = _chunkColumns.Contains("chunk_index")
+            ? "partial_peer_piece.reconstruction_ordinal"
+            : "partial_peer_piece.start_line, partial_peer_piece.reconstruction_ordinal";
 
         return $@"
               AND NOT (
@@ -88,12 +99,12 @@ public partial class DbReader
                                                 partial_peer_piece.prior_content_end_line + 1,
                                                 {peerTypeStartLineSql})),
                                         MIN({peerTypeEndLineSql}, partial_peer_piece.end_line)),
-                                    char(10) ORDER BY partial_peer_piece.chunk_index),
+                                    char(10) ORDER BY {peerPieceConcatOrderSql}),
                                 {symbolAlias}.name)
                             FROM (
                                 SELECT
                                     partial_peer_chunk.file_id,
-                                    partial_peer_chunk.chunk_index,
+                                    {peerChunkOrdinalSql} AS reconstruction_ordinal,
                                     partial_peer_chunk.start_line,
                                     partial_peer_chunk.end_line,
                                     partial_peer_chunk.content,
@@ -103,13 +114,13 @@ public partial class DbReader
                                             THEN partial_peer_chunk.end_line
                                         END) OVER (
                                             PARTITION BY partial_peer_chunk.file_id
-                                            ORDER BY partial_peer_chunk.chunk_index
+                                            ORDER BY {peerChunkWindowOrderSql}
                                             ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
                                         ) AS prior_content_end_line
                                 FROM chunks partial_peer_chunk
+                                WHERE partial_peer_chunk.file_id = partial_peer_type.file_id
                             ) partial_peer_piece
-                            WHERE partial_peer_piece.file_id = partial_peer_type.file_id
-                              AND partial_peer_piece.end_line >= {peerTypeStartLineSql}
+                            WHERE partial_peer_piece.end_line >= {peerTypeStartLineSql}
                               AND partial_peer_piece.start_line <= {peerTypeEndLineSql}
                         ) > 0
                       LIMIT 1

@@ -3098,6 +3098,135 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunUnused_CSharpPartialFamilyReconstructionScopesUnrelatedChunks_Issue5089()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_csharp_partial_linear_5089");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var fieldNames = Enumerable.Range(1, 24)
+                .Select(index => $"LinearValue{index}")
+                .ToArray();
+            var declarations = string.Join(
+                Environment.NewLine,
+                fieldNames.Select(name => $"    private static readonly int {name} = 1;"));
+            var uses = string.Join(" + ", fieldNames);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/LinearPartial.Fields.cs",
+                "csharp",
+                $$"""
+                namespace Demo;
+
+                public partial class LinearPartialHost
+                {
+                {{declarations}}
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/LinearPartial.Usage.cs",
+                "csharp",
+                $$"""
+                namespace Demo;
+
+                public partial class LinearPartialHost
+                {
+                    public int ReadAll() => {{uses}};
+                }
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/UnrelatedChunks.cs",
+                "csharp",
+                "namespace Demo; public class UnrelatedChunks { }");
+
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            using (var cmd = db.Connection.CreateCommand())
+            {
+                cmd.CommandText = "DELETE FROM symbol_references WHERE symbol_name LIKE 'LinearValue%'";
+                cmd.ExecuteNonQuery();
+                cmd.CommandText = "SELECT id FROM files WHERE path = 'src/UnrelatedChunks.cs'";
+                var unrelatedFileId = Convert.ToInt64(cmd.ExecuteScalar());
+                cmd.CommandText = "DELETE FROM chunks WHERE file_id = $fileId";
+                cmd.Parameters.AddWithValue("$fileId", unrelatedFileId);
+                cmd.ExecuteNonQuery();
+
+                void InsertUnrelatedChunks(int first, int last)
+                {
+                    cmd.CommandText = """
+                        WITH digits(value) AS (
+                            VALUES (0), (1), (2), (3), (4), (5), (6), (7), (8), (9)
+                        ), numbered(line) AS (
+                            SELECT 1 + ones.value + (10 * tens.value) + (100 * hundreds.value) + (1000 * thousands.value)
+                            FROM digits ones
+                            CROSS JOIN digits tens
+                            CROSS JOIN digits hundreds
+                            CROSS JOIN digits thousands
+                        )
+                        INSERT INTO chunks(file_id, chunk_index, start_line, end_line, content)
+                        SELECT $fileId, line, line, line, '// unrelated'
+                        FROM numbered
+                        WHERE line BETWEEN $first AND $last
+                        """;
+                    cmd.Parameters.AddWithValue("$first", first);
+                    cmd.Parameters.AddWithValue("$last", last);
+                    cmd.ExecuteNonQuery();
+                    cmd.Parameters.RemoveAt("$first");
+                    cmd.Parameters.RemoveAt("$last");
+                }
+
+                InsertUnrelatedChunks(1, 500);
+                new DbWriter(db.Connection).MarkGraphReady();
+                cmd.CommandText = "ANALYZE; DELETE FROM sqlite_stat1; ANALYZE sqlite_schema";
+                cmd.ExecuteNonQuery();
+
+                int MeasureUnusedVmCallbacks()
+                {
+                    using var reader = new DbReader(db);
+                    var callbackCount = 0;
+                    SQLitePCL.delegate_progress progress = _ =>
+                    {
+                        callbackCount++;
+                        return 0;
+                    };
+                    SQLitePCL.raw.sqlite3_progress_handler(db.Connection.Handle, 100, progress, null!);
+                    try
+                    {
+                        Assert.Empty(reader.GetUnusedSymbols(
+                            100,
+                            "field",
+                            "csharp",
+                            ["src/LinearPartial.Fields.cs"],
+                            null,
+                            excludeTests: false));
+                    }
+                    finally
+                    {
+                        SQLitePCL.raw.sqlite3_progress_handler(db.Connection.Handle, 0, null!, null!);
+                        GC.KeepAlive(progress);
+                    }
+
+                    return callbackCount;
+                }
+
+                var callbacksWithFiveHundredUnrelatedChunks = MeasureUnusedVmCallbacks();
+                InsertUnrelatedChunks(501, 5000);
+                var callbacksWithFiveThousandUnrelatedChunks = MeasureUnusedVmCallbacks();
+
+                Assert.InRange(
+                    callbacksWithFiveThousandUnrelatedChunks,
+                    0,
+                    callbacksWithFiveHundredUnrelatedChunks + 50);
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunUnused_CSharpFieldsAndConstantsUseSpecificKinds_Issue3673()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_unused_csharp_field_kinds_3673");

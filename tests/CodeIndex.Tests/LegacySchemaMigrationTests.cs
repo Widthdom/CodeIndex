@@ -1003,12 +1003,10 @@ public class LegacySchemaMigrationTests : IDisposable
             db.TryMigrateForRead();
 
             var reader = new DbReader(db);
+            Assert.Empty(reader.GetUnusedSymbols(
+                10, "field", "csharp", null, null, excludeTests: false));
             Assert.Equal(
-                "LegacyValue",
-                Assert.Single(reader.GetUnusedSymbols(
-                    10, "field", "csharp", null, null, excludeTests: false)).Name);
-            Assert.Equal(
-                new QueryCountResult(1, 1),
+                new QueryCountResult(0, 0),
                 reader.CountUnusedSymbols(
                     "field", "csharp", null, null, excludeTests: false));
         }

@@ -241,7 +241,6 @@ public partial class DbReader
         }
 
         return hasUsableUnusedChunks
-            && _chunkColumns.Contains("chunk_index")
             && _symbolColumns.Contains("visibility")
             && _symbolColumns.Contains("container_kind")
             && _symbolColumns.Contains("container_name")
