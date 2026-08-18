@@ -1153,9 +1153,7 @@ public partial class QueryCommandRunnerTests
         var source = ReadVacuumFileSetForTesting(dbPath);
         Assert.True(source.Shm > 0);
         Assert.Equal(0, source.Wal);
-        var mainBefore = File.ReadAllBytes(dbPath);
-        var walBefore = File.Exists(dbPath + "-wal") ? File.ReadAllBytes(dbPath + "-wal") : null;
-        var shmBefore = File.ReadAllBytes(dbPath + "-shm");
+        var artifactsBefore = CaptureDatabaseArtifacts(dbPath);
         _vacuumSnapshotDirectoriesForTesting.Clear();
         var originalDirectoryHook = DbConnectionFactory.QueryOnlySnapshotDirectoryCreatedForTesting;
 
@@ -1173,9 +1171,7 @@ public partial class QueryCommandRunnerTests
 
         Assert.Equal(CommandExitCodes.Success, capture.ExitCode);
         Assert.Equal(string.Empty, capture.Stderr);
-        Assert.Equal(mainBefore, File.ReadAllBytes(dbPath));
-        Assert.Equal(walBefore, File.Exists(dbPath + "-wal") ? File.ReadAllBytes(dbPath + "-wal") : null);
-        Assert.Equal(shmBefore, File.ReadAllBytes(dbPath + "-shm"));
+        Assert.Equal(artifactsBefore, CaptureDatabaseArtifacts(dbPath));
         Assert.NotEmpty(_vacuumSnapshotDirectoriesForTesting);
         foreach (var snapshotDirectory in _vacuumSnapshotDirectoriesForTesting)
             Assert.False(Directory.Exists(snapshotDirectory));
@@ -1213,9 +1209,7 @@ public partial class QueryCommandRunnerTests
         var source = ReadVacuumFileSetForTesting(dbPath);
         Assert.True(source.Wal > 0);
         Assert.True(source.Shm > 0);
-        var mainBefore = File.ReadAllBytes(dbPath);
-        var walBefore = File.ReadAllBytes(dbPath + "-wal");
-        var shmBefore = File.ReadAllBytes(dbPath + "-shm");
+        var artifactsBefore = CaptureDatabaseArtifacts(dbPath);
         _vacuumSnapshotDirectoriesForTesting.Clear();
         _vacuumFileSetSampledPathForTesting = null;
         var originalDirectoryHook = DbConnectionFactory.QueryOnlySnapshotDirectoryCreatedForTesting;
@@ -1238,9 +1232,7 @@ public partial class QueryCommandRunnerTests
 
         Assert.Equal(CommandExitCodes.Success, capture.ExitCode);
         Assert.Equal(string.Empty, capture.Stderr);
-        Assert.Equal(mainBefore, File.ReadAllBytes(dbPath));
-        Assert.Equal(walBefore, File.ReadAllBytes(dbPath + "-wal"));
-        Assert.Equal(shmBefore, File.ReadAllBytes(dbPath + "-shm"));
+        Assert.Equal(artifactsBefore, CaptureDatabaseArtifacts(dbPath));
         Assert.Equal(Path.GetFullPath(dbPath), Path.GetFullPath(_vacuumFileSetSampledPathForTesting!));
         Assert.NotEmpty(_vacuumSnapshotDirectoriesForTesting);
         foreach (var snapshotDirectory in _vacuumSnapshotDirectoriesForTesting)
