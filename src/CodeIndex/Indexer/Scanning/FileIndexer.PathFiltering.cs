@@ -65,17 +65,61 @@ public partial class FileIndexer
             return CreatePathFilterResult(PathFilterKind.ExcludedByDefaultFile, errors);
         }
 
-        fullPath = Path.GetFullPath(absolutePath);
-        if (!IsLexicalPathEqualOrParent(_projectRoot, fullPath)
-            || (_symlinkPolicy != SymlinkPolicy.All
-                && !IsPathEqualOrParent(_projectRoot, fullPath)))
+        var selectedFullPath = Path.GetFullPath(absolutePath);
+        if (!TryGetNativeEquivalentProjectRelativePath(
+                _projectRoot,
+                selectedFullPath,
+                out NativeProjectPathMatch pathMatch))
+        {
             return CreatePathFilterResult(PathFilterKind.OutsideProjectRoot, errors);
+        }
 
-        relativePath = NormalizeIgnorePath(GetRelativePathFromProjectRoot(_projectRoot, fullPath));
-        if (relativePath.StartsWith("../", StringComparison.Ordinal))
-            return CreatePathFilterResult(PathFilterKind.None, errors);
+        fullPath = pathMatch.CanonicalLexicalPath;
+        relativePath = NormalizeIgnorePath(pathMatch.RelativePath);
+
+        if (_symlinkPolicy != SymlinkPolicy.All)
+        {
+            var resolvedProjectRoot = ResolveFileReadPath(_projectRoot, out _);
+            var resolvedFullPath = ResolveFileReadPath(fullPath, out _);
+            if (!CodeIndex.Cli.PathCasing.IsPathEqualOrParentByDirectoryNamespace(
+                    resolvedProjectRoot,
+                    resolvedFullPath))
+                return CreatePathFilterResult(PathFilterKind.OutsideProjectRoot, errors);
+
+            if (_symlinkPolicy == SymlinkPolicy.None
+                && ContainsSymlinkOrReparsePointBelowProjectRoot(relativePath))
+            {
+                return CreatePathFilterResult(PathFilterKind.SymlinkDisallowed, errors);
+            }
+        }
 
         return null;
+    }
+
+    private bool ContainsSymlinkOrReparsePointBelowProjectRoot(string relativePath)
+    {
+        // Inspect the actual lexical components below the configured root instead of
+        // inferring a link from differences between an input spelling and the native
+        // final path. macOS may canonicalize NFC/NFD spellings and Windows may expand
+        // aliases (for example 8.3 names) even when no component is a link. The root
+        // itself is intentionally excluded so a workspace opened through a symlinked
+        // root remains valid under the default policy.
+        // 入力表記と native final path の差から link を推測せず、設定 root より下の実際の
+        // lexical component を検査する。macOS の NFC/NFD 正規化や Windows の alias 展開
+        // （8.3 名など）は link が無くても表記を変えるためである。root 自体は意図的に
+        // 対象外とし、symlink 経由で開いた workspace は既定 policy でも許可する。
+        var currentPath = _projectRoot;
+        foreach (var segment in relativePath.Split('/'))
+        {
+            if (segment.Length == 0)
+                continue;
+
+            currentPath = Path.Combine(currentPath, segment);
+            if (IsSymlinkOrReparsePointPath(currentPath))
+                return true;
+        }
+
+        return false;
     }
 
     private PathFilterResult? TryLoadRootPathFilterRules(

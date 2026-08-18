@@ -146,6 +146,7 @@ public static partial class IndexCommandRunner
                 item.HasOversizeLine,
                 item.ConflictMarkerLine,
                 context.SymbolExtractionWorker,
+                options.SymlinkPolicy,
                 cancellationToken);
             symbols = symbolExtraction.Symbols;
         }

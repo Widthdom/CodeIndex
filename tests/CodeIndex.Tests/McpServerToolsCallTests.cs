@@ -13473,6 +13473,109 @@ public partial class McpServerTests
         }
     }
 
+    [Theory]
+    [InlineData(null, false, false)]
+    [InlineData("none", true, false)]
+    [InlineData("internal", false, false)]
+    [InlineData("internal", true, true)]
+    [InlineData("all", false, true)]
+    public void ToolsCall_Index_TypeScriptConfigSymlinkHonorsFollowPolicy_Issue5091(
+        string? followSymlinks,
+        bool targetInsideProject,
+        bool expectConfigRead)
+    {
+        var fixtureDir = Path.Combine(
+            Path.GetFullPath("."),
+            $"mcp_index_ts_alias_policy_{Guid.NewGuid():N}");
+        var outsideDir = Path.Combine(
+            Path.GetFullPath("."),
+            $"mcp_index_ts_alias_policy_outside_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(fixtureDir);
+        Directory.CreateDirectory(outsideDir);
+        var dbPath = TestProjectHelper.CreateTempDbPath("cdidx_mcp_index_ts_alias_policy");
+        var previousConfigReadHook = SymbolExtractor.TypeScriptPathAliasConfigContentReadForTesting;
+        try
+        {
+            var targetDir = targetInsideProject
+                ? Path.Combine(fixtureDir, "config-target")
+                : outsideDir;
+            Directory.CreateDirectory(targetDir);
+            var moduleTarget = Path.Combine(targetDir, "sentinel-target.ts");
+            var configTarget = Path.Combine(targetDir, "real-tsconfig.json");
+            var configPath = Path.Combine(fixtureDir, "tsconfig.json");
+            File.WriteAllText(moduleTarget, "export const sentinel = 1;\n");
+            File.WriteAllText(
+                configTarget,
+                JsonSerializer.Serialize(new
+                {
+                    compilerOptions = new
+                    {
+                        baseUrl = ".",
+                        paths = new Dictionary<string, string[]>
+                        {
+                            ["sentinel-alias"] = [moduleTarget],
+                        },
+                    },
+                }));
+            File.WriteAllText(
+                Path.Combine(fixtureDir, "app.ts"),
+                "import { sentinel } from \"sentinel-alias\";\nexport const value = sentinel;\n");
+            try
+            {
+                File.CreateSymbolicLink(configPath, configTarget);
+            }
+            catch (Exception ex) when (ex is IOException
+                                       or UnauthorizedAccessException
+                                       or PlatformNotSupportedException
+                                       or NotSupportedException)
+            {
+                return;
+            }
+
+            var configReads = new List<string>();
+            SymbolExtractor.TypeScriptPathAliasConfigContentReadForTesting = configReads.Add;
+            using var server = new McpServer(dbPath, ConsoleUi.LoadVersion());
+            var response = CallIndex(
+                server,
+                fixtureDir,
+                arguments =>
+                {
+                    if (followSymlinks != null)
+                        arguments["followSymlinks"] = followSymlinks;
+                });
+
+            Assert.False(
+                response["result"]?["isError"]?.GetValue<bool>() ?? false,
+                response.ToJsonString());
+            if (expectConfigRead)
+                Assert.Contains(configPath, configReads);
+            else
+                Assert.DoesNotContain(configPath, configReads);
+
+            using var connection = new SqliteConnection($"Data Source={dbPath}");
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT s.name
+                FROM symbols s
+                JOIN files f ON f.id = s.file_id
+                WHERE f.path = 'app.ts'
+                  AND s.kind = 'import'
+                """;
+            var expectedImportName = expectConfigRead
+                ? FileIndexer.NormalizePathSeparators(Path.GetRelativePath(fixtureDir, moduleTarget))
+                : "sentinel-alias";
+            Assert.Equal(expectedImportName, command.ExecuteScalar() as string);
+        }
+        finally
+        {
+            SymbolExtractor.TypeScriptPathAliasConfigContentReadForTesting = previousConfigReadHook;
+            TestProjectHelper.DeleteSqliteDatabaseFiles(dbPath);
+            TestProjectHelper.DeleteDirectory(fixtureDir);
+            TestProjectHelper.DeleteDirectory(outsideDir);
+        }
+    }
+
     [Fact]
     public void ToolsCall_Index_RestampsHotspotFamilyReadyWhenMarkerFingerprintChanges()
     {

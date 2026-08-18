@@ -65,6 +65,8 @@ public static partial class IndexCommandRunner
         var changedBetweenRefs = new List<string>();
         var changedBetweenSpecified = false;
         var updateFiles = new List<string>();
+        var explicitFiles = new List<string>();
+        var explicitFilesSpecified = false;
         var projectFilters = new List<string>();
         string? solutionPath = null;
         string? projectFilterError = null;
@@ -276,13 +278,26 @@ public static partial class IndexCommandRunner
                     AddSymbolKindFilterValues("--exclude-symbol-kind", option["--exclude-symbol-kind=".Length..], excludeSymbolKinds, ref symbolKindFilterError);
                     break;
                 case "--files":
-                    while (i + 1 < args.Length && !args[i + 1].StartsWith('-'))
-                        updateFiles.Add(args[++i]);
-                    if (updateFiles.Count == 0)
-                        CommandErrorWriter.WriteStderr("Warning: --files specified but no file paths provided / --files が指定されましたがファイルパスがありません");
-                    break;
+                    {
+                        explicitFilesSpecified = true;
+                        var explicitFileCountBefore = explicitFiles.Count;
+                        while (i + 1 < args.Length && !args[i + 1].StartsWith('-'))
+                        {
+                            var file = args[++i];
+                            explicitFiles.Add(file);
+                            updateFiles.Add(file);
+                        }
+                        if (explicitFiles.Count == explicitFileCountBefore)
+                            parseError ??= "--files requires at least one file path";
+                        break;
+                    }
                 case "--help" or "-h":
-                    return new IndexCommandOptions { ShowHelp = true };
+                    return new IndexCommandOptions
+                    {
+                        ShowHelp = true,
+                        ExplicitFilesSpecified = explicitFilesSpecified,
+                        ExplicitFiles = explicitFiles,
+                    };
                 case "--sushi" or "--coffee" or "--ramen" or "--wine" or "--beer" or "--matcha" or "--whisky":
                     easterEgg = args[i];
                     spinnerFlagCount++;
@@ -346,6 +361,8 @@ public static partial class IndexCommandRunner
             ChangedBetweenSpecified = changedBetweenSpecified,
             ChangedBetweenRefs = changedBetweenRefs,
             UpdateFiles = updateFiles,
+            ExplicitFilesSpecified = explicitFilesSpecified,
+            ExplicitFiles = explicitFiles,
             ProjectFilters = projectFilters,
             SolutionPath = solutionPath,
             ProjectFilterError = projectFilterError,

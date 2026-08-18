@@ -339,6 +339,54 @@ public static partial class IndexCommandRunner
                 jsonContext,
                 indexCancellation.Token);
 
+        int? RunExplicitFilesPreflightBeforeMutation(bool writerLockHeld)
+        {
+            try
+            {
+                return RunExplicitFilesPreflight(
+                    options,
+                    resolvedDbPath,
+                    ignoreCase,
+                    ignoreRuleRoot,
+                    jsonOptions,
+                    indexCancellation.Token,
+                    writerLockHeld);
+            }
+            catch (OperationCanceledException) when (indexCancellation.IsCancellationRequested)
+            {
+                return WriteInterruptedResult(
+                    options.Json,
+                    jsonOptions,
+                    filesProcessed: 0,
+                    filesTotal: null,
+                    mode,
+                    progressPersisted: false);
+            }
+        }
+
+        // Preserve validation-before-artifact creation for a database that did not exist
+        // when the command started. The same selection is validated again under the writer
+        // lock in case another process creates the database before we acquire it.
+        // command 開始時に DB が存在しなかった場合は artifact 作成前に検証し、別 process が
+        // lock 取得前に DB を作成する race に備えて writer lock 内でも同じ selection を再検証する。
+        if (!databaseExistedBeforeIndex)
+        {
+            var preLockExitCode = RunExplicitFilesPreflightBeforeMutation(writerLockHeld: false);
+            if (preLockExitCode is { } exitCode)
+                return exitCode;
+        }
+
+        if (indexCancellation.IsCancellationRequested)
+        {
+            return WriteInterruptedResult(
+                options.Json,
+                jsonOptions,
+                filesProcessed: 0,
+                filesTotal: null,
+                mode,
+                progressPersisted: false);
+        }
+
         int initialExitCode;
         try
         {
@@ -381,6 +429,11 @@ public static partial class IndexCommandRunner
 
             using (indexLock)
             {
+                var explicitFilesPreflightExitCode = RunExplicitFilesPreflightBeforeMutation(
+                    writerLockHeld: indexLock != null);
+                if (explicitFilesPreflightExitCode is { } preflightExitCode)
+                    return preflightExitCode;
+
                 using var db = new DbContext(
                     options.Rebuild ? DbOpenIntent.Repair : DbOpenIntent.WriteIndex,
                     dbPath,
@@ -633,6 +686,14 @@ public sealed class IndexCommandOptions
     public bool ChangedBetweenSpecified { get; init; }
     public List<string> ChangedBetweenRefs { get; init; } = [];
     public List<string> UpdateFiles { get; init; } = [];
+    // Parsed CLI options keep the exact --files tokens separate from project-filter
+    // expansion. Programmatic callers from before this property existed leave it null,
+    // so their UpdateFiles remain the compatibility fallback.
+    // CLI 解析では --files の生 token を project filter 展開と分離する。従来の
+    // programmatic caller は null のままなので、互換 fallback として UpdateFiles を使う。
+    public bool ExplicitFilesSpecified { get; init; }
+    public List<string>? ExplicitFiles { get; init; }
+    public IReadOnlyList<string> ExplicitFileInputs => ExplicitFiles ?? UpdateFiles;
     public List<string> ProjectFilters { get; init; } = [];
     public string? SolutionPath { get; init; }
     public string? ProjectFilterError { get; init; }

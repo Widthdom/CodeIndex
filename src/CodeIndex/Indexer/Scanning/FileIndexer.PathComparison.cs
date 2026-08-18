@@ -13,9 +13,11 @@ public partial class FileIndexer
 
     private static bool IsPathEqualOrParent(string candidateParent, string candidateChild)
     {
-        var normalizedParent = NormalizePathForComparison(candidateParent);
-        var normalizedChild = NormalizePathForComparison(candidateChild);
-        return CodeIndex.Cli.PathCasing.IsPathEqualOrParent(normalizedParent, normalizedChild);
+        var normalizedParent = ResolveFileReadPath(candidateParent);
+        var normalizedChild = ResolveFileReadPath(candidateChild);
+        return CodeIndex.Cli.PathCasing.IsPathEqualOrParentByDirectoryNamespace(
+            normalizedParent,
+            normalizedChild);
     }
 
     private static bool IsLexicalPathEqualOrParent(string candidateParent, string candidateChild)
@@ -26,11 +28,19 @@ public partial class FileIndexer
     }
 
     internal static string ResolveFileReadPath(string path)
+        => ResolveFileReadPath(path, out _);
+
+    private static string ResolveFileReadPath(string path, out bool nativeFinalResolved)
     {
         var fullPath = Path.GetFullPath(path);
-        return TryResolveNativeFinalFilePath(fullPath, out var resolvedPath)
-            ? Path.TrimEndingDirectorySeparator(resolvedPath)
-            : NormalizePathForComparison(fullPath);
+        if (TryResolveNativeFinalFilePath(fullPath, out var resolvedPath))
+        {
+            nativeFinalResolved = true;
+            return Path.TrimEndingDirectorySeparator(resolvedPath);
+        }
+
+        nativeFinalResolved = false;
+        return NormalizePathForComparison(fullPath);
     }
 
     internal bool ResolvesSymlinkTargets
@@ -167,6 +177,9 @@ public partial class FileIndexer
         return Path.TrimEndingDirectorySeparator(Path.GetFullPath(current));
     }
 
+    internal static string NormalizePathForIdentityComparison(string path)
+        => ResolveFileReadPath(path);
+
     private static bool IsCurrentDirectorySegment(ReadOnlySpan<char> segment)
         => segment.Length == 1 && segment[0] == '.';
 
@@ -180,7 +193,12 @@ public partial class FileIndexer
                 : new FileInfo(fullPath);
             var target = info?.ResolveLinkTarget(returnFinalTarget: true);
             if (target?.FullName is { Length: > 0 } resolvedPath)
-                return resolvedPath;
+            {
+                var fullResolvedPath = Path.GetFullPath(resolvedPath);
+                return TryResolveNativeFinalFilePath(fullResolvedPath, out var nativeResolvedPath)
+                    ? nativeResolvedPath
+                    : fullResolvedPath;
+            }
         }
         catch (IOException)
         {

@@ -826,6 +826,7 @@ public partial class McpServer
             CancellationToken = requestToken,
             MaxSymbolsPerFile = maxSymbolsPerFile,
             MaxReferencesPerFile = maxReferencesPerFile,
+            SymlinkPolicy = symlinkPolicy,
             Rebuild = rebuild,
             StartedWithNoIndexedFiles = startedWithNoIndexedFiles,
             UseFullRunBatchMarker = useFullRunBatchMarker,

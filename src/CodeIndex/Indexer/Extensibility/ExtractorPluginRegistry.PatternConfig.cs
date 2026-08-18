@@ -374,6 +374,120 @@ public static partial class ExtractorPluginRegistry
         return TryReadBoundedPatternConfigText(state, path, stream, observeInput, size);
     }
 
+    /// <summary>
+    /// Opens an existing regular file without following a symbolic link or reparse point.
+    /// POSIX opens are non-blocking so a FIFO can be inspected and rejected without waiting
+    /// for a writer. The returned stream owns the validated native handle.
+    /// symbolic link / reparse point を追跡せず、既存の regular file を open する。
+    /// POSIX では non-blocking open により FIFO を writer 待ちせず検査・拒否し、返却 stream
+    /// が検証済み native handle を所有する。
+    /// </summary>
+    internal static bool TryOpenSecureRegularFile(
+        string path,
+        out FileStream stream,
+        out long length)
+    {
+        stream = null!;
+        length = 0;
+
+        return OperatingSystem.IsWindows()
+            ? TryOpenSecureWindowsRegularFile(path, out stream, out length)
+            : TryOpenSecureUnixRegularFile(path, out stream, out length);
+    }
+
+    private static bool TryOpenSecureWindowsRegularFile(
+        string path,
+        out FileStream stream,
+        out long length)
+    {
+        stream = null!;
+        length = 0;
+        SafeFileHandle? handle = null;
+        try
+        {
+            handle = CreateFile(
+                LongPath.EnsureWindowsPrefix(path),
+                GenericRead,
+                FileShare.ReadWrite | FileShare.Delete,
+                securityAttributes: IntPtr.Zero,
+                creationDisposition: FileMode.Open,
+                flagsAndAttributes: FileAttributes.Normal | FileFlagOpenReparsePoint,
+                templateFile: IntPtr.Zero);
+            if (handle.IsInvalid || !GetFileInformationByHandle(handle, out var info))
+                return false;
+
+            var attributes = (FileAttributes)info.FileAttributes;
+            if ((attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
+                return false;
+
+            length = ((long)info.FileSizeHigh << 32) | info.FileSizeLow;
+            stream = new FileStream(handle, FileAccess.Read, bufferSize: 8192, isAsync: false);
+            handle = null;
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException
+                                   or UnauthorizedAccessException
+                                   or ArgumentException
+                                   or NotSupportedException
+                                   or DllNotFoundException
+                                   or EntryPointNotFoundException
+                                   or System.Security.SecurityException)
+        {
+            return false;
+        }
+        finally
+        {
+            handle?.Dispose();
+        }
+    }
+
+    private static bool TryOpenSecureUnixRegularFile(
+        string path,
+        out FileStream stream,
+        out long length)
+    {
+        stream = null!;
+        length = 0;
+        var fd = -1;
+        SafeFileHandle? handle = null;
+        try
+        {
+            fd = UnixOpen(path, GetUnixOpenFlags());
+            if (fd < 0
+                || !TryGetUnixFileType(fd, out var mode)
+                || !IsRegularUnixFile(mode))
+            {
+                return false;
+            }
+
+            handle = new SafeFileHandle((IntPtr)fd, ownsHandle: true);
+            fd = -1;
+            stream = new FileStream(handle, FileAccess.Read, bufferSize: 8192, isAsync: false);
+            length = stream.Length;
+            handle = null;
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException
+                                   or UnauthorizedAccessException
+                                   or ArgumentException
+                                   or NotSupportedException
+                                   or DllNotFoundException
+                                   or EntryPointNotFoundException
+                                   or System.Security.SecurityException)
+        {
+            stream?.Dispose();
+            stream = null!;
+            length = 0;
+            return false;
+        }
+        finally
+        {
+            handle?.Dispose();
+            if (fd >= 0)
+                _ = UnixClose(fd);
+        }
+    }
+
     private static string? TryReadUnixPatternConfigText(
         PatternWorkspaceState state,
         string path,

@@ -50,7 +50,32 @@ public static partial class IndexCommandRunner
         var warningCount = 0;
         var dryScanErrorKeys = new HashSet<string>(StringComparer.Ordinal);
         DryRunScanMetadata dryScanMetadata;
-        var dbSnapshot = ReadDryRunDbSnapshot(resolvedDbPath, options);
+        DryRunDbSnapshot dbSnapshot;
+        try
+        {
+            dbSnapshot = ReadDryRunDbSnapshot(resolvedDbPath, options, cancellationToken);
+            if (options.ExplicitFileInputs.Count > 0)
+            {
+                var indexedPaths = CreateExplicitFilesIndexedPathSnapshot(
+                    dbSnapshot.Files.Keys,
+                    dbSnapshot.ReadFailed);
+                var explicitFilesPreflightExitCode = RunExplicitFilesPreflight(
+                    options,
+                    resolvedDbPath,
+                    ignoreCase,
+                    ignoreRuleRoot,
+                    jsonOptions,
+                    cancellationToken,
+                    writerLockHeld: false,
+                    providedIndexedPaths: indexedPaths);
+                if (explicitFilesPreflightExitCode is { } preflightExitCode)
+                    return preflightExitCode;
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return WriteDryRunInterrupted(options, jsonOptions);
+        }
         var scopedUpdateSymbolKindFilterMatchesPrior = string.Equals(
                 dbSnapshot.SymbolKindFilterSignature,
                 options.SymbolKindFilter.Signature,
@@ -99,28 +124,6 @@ public static partial class IndexCommandRunner
         var normalizedUpdatePaths = options.UpdateFiles.Count > 0
             ? NormalizeUpdateFileTargets(projectPath, options.UpdateFiles, options.Json)
             : [];
-
-        if (options.UpdateFiles.Count > 0)
-        {
-            var hasExistingCandidate = normalizedUpdatePaths.Any(path =>
-            {
-                var absolutePath = Path.Combine(projectPath, path.Replace('/', Path.DirectorySeparatorChar));
-                return File.Exists(LongPath.EnsureWindowsPrefix(absolutePath))
-                    && !dryIndexer.EvaluatePathFilter(absolutePath).ShouldSkip;
-            });
-            var hasIndexedCandidate = normalizedUpdatePaths.Any(path =>
-                dbSnapshot.Files.ContainsKey(FileIndexer.NormalizeIndexPath(path)));
-            if (!hasExistingCandidate && !hasIndexedCandidate)
-            {
-                return WriteCommandError(
-                    options.Json,
-                    jsonOptions,
-                    "none of the paths supplied to --files resolved to an existing in-project file or an indexed path",
-                    CommandExitCodes.UsageError,
-                    "Check each path and rerun `cdidx index <projectPath> --files <path> [path ...] --dry-run`.",
-                    CommandErrorCodes.UsageError);
-            }
-        }
 
         void RecordDryRunError(string file, string message)
         {
@@ -637,6 +640,24 @@ public static partial class IndexCommandRunner
                     return false;
                 }
                 dryCandidates = scanResult.Files;
+                // A supported control input still requires the authoritative refresh above.
+                // Preserve an explicitly selected missing/unsupported indexed control as a
+                // tombstone candidate as well, so dry-run reports the direct cleanup as a
+                // delete instead of folding it into an incidental full-scan purge. Attribute
+                // probing does not open, parse, or follow the unsupported object.
+                // supported control input は上記の authoritative refresh を引き続き必要とする。
+                // 明示選択された missing/unsupported の indexed control は tombstone 候補にも
+                // 保持し、dry-run で偶発的な full-scan purge ではなく直接 delete として報告する。
+                // attribute probe は unsupported object を open/parse/follow しない。
+                dryDeleteCandidates = normalizedUpdatePaths.Where(path =>
+                {
+                    var absolutePath = Path.Combine(
+                        projectPath,
+                        path.Replace('/', Path.DirectorySeparatorChar));
+                    return dryIndexer.GetFileIndexabilityForIndexing(absolutePath)
+                        is FileIndexer.FileProbeStatus.Missing
+                            or FileIndexer.FileProbeStatus.Unsupported;
+                });
                 authoritativeFullScan = true;
                 scanMetadata = DryRunScanMetadata.FromScanResult(scanResult);
                 recordDryRunScanErrors(scanResult.Errors);
@@ -1069,6 +1090,7 @@ public static partial class IndexCommandRunner
             loaded.HasOversizeLine,
             loaded.ConflictMarkerLine,
             symbolExtractionWorker,
+            options.SymlinkPolicy,
             cancellationToken);
         var symbols = symbolExtraction.Symbols;
         var csharpStaticInterfaceContract =
@@ -1455,10 +1477,12 @@ public static partial class IndexCommandRunner
 
     private static DryRunDbSnapshot ReadDryRunDbSnapshot(
         string dbPath,
-        IndexCommandOptions options)
+        IndexCommandOptions options,
+        CancellationToken cancellationToken)
     {
         try
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (!dbPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase)
                 && !File.Exists(LongPath.EnsureWindowsPrefix(dbPath)))
             {
@@ -1469,8 +1493,13 @@ public static partial class IndexCommandRunner
                 dbPath,
                 pooling: false,
                 out _,
-                out _);
+                out _,
+                out _,
+                out _,
+                cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
             connection.Open();
+            cancellationToken.ThrowIfCancellationRequested();
             if (!DryRunTableExists(connection, "files"))
                 return DryRunDbSnapshot.Empty;
 
@@ -1571,6 +1600,7 @@ public static partial class IndexCommandRunner
             using var reader = command.ExecuteReader();
             while (reader.Read())
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var language = reader.IsDBNull(2)
                     ? null
                     : reader.GetString(2);
@@ -1648,11 +1678,27 @@ public static partial class IndexCommandRunner
         {
             return DryRunDbSnapshot.ReadFailure;
         }
+        catch (global::CodeIndex.CodeIndexException)
+        {
+            return DryRunDbSnapshot.ReadFailure;
+        }
         catch (IOException)
         {
             return DryRunDbSnapshot.ReadFailure;
         }
         catch (UnauthorizedAccessException)
+        {
+            return DryRunDbSnapshot.ReadFailure;
+        }
+        catch (ArgumentException)
+        {
+            return DryRunDbSnapshot.ReadFailure;
+        }
+        catch (NotSupportedException)
+        {
+            return DryRunDbSnapshot.ReadFailure;
+        }
+        catch (System.Security.SecurityException)
         {
             return DryRunDbSnapshot.ReadFailure;
         }

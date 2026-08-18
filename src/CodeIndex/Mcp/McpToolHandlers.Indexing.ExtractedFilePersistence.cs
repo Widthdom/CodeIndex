@@ -86,6 +86,10 @@ public partial class McpServer
         using var regexTimeouts = BoundedRegex.CaptureTimeouts(
             record.Lang,
             "symbol_extraction");
+        using var typeScriptPathAliasFileSystemPolicy =
+            SymbolExtractor.EnterTypeScriptPathAliasFileSystemPolicy(
+                context.SymlinkPolicy,
+                context.ProjectPath);
         var symbols = SymbolExtractor.ExtractNormalized(
             fileId,
             record.Lang,

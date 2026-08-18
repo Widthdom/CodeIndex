@@ -487,14 +487,27 @@ public class ConsoleUiTests
     }
 
     [Fact]
-    public void PrintUsage_ShowsCommitUpdateWorkflowClearly()
+    public void PrintUsage_ShowsCommitUpdateWorkflowClearly_Issue5091()
     {
         var output = CaptureFullUsageOutput(showBanner: false);
+        var filesFlag = Assert.Single(
+            CliFlagSchema.GetCompletionFlagsForCommand("index"),
+            static flag => flag.Name == "--files");
 
         Assert.Contains("Update workflows:", output);
         Assert.Contains("Use --commits with a project path after normal commits", output);
         Assert.Contains("Use --changed-between <old-ref> <new-ref> after switching branches", output);
-        Assert.Contains("Use --files only for known in-place edits or new files", output);
+        Assert.Contains(
+            "Use --files for known in-place edits, new files, or indexed paths deleted from disk.",
+            output,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "The complete --files selection is validated before DB writes; any invalid or duplicate path rejects the request atomically.",
+            output,
+            StringComparison.Ordinal);
+        Assert.Equal(
+            "Update explicit files after validating the full selection atomically; invalid or duplicate paths reject before writes, while indexed missing paths remain deletion targets",
+            filesFlag.Description);
         Assert.Contains("cdidx index ./myproject --commits abc123", output);
         Assert.Contains("cdidx index ./myproject --changed-between main feature", output);
     }

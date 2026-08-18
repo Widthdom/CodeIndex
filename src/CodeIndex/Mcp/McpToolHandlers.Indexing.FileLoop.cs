@@ -24,6 +24,7 @@ public partial class McpServer
         internal required CancellationToken CancellationToken { get; init; }
         internal required int MaxSymbolsPerFile { get; init; }
         internal required int MaxReferencesPerFile { get; init; }
+        internal required FileIndexer.SymlinkPolicy SymlinkPolicy { get; init; }
         internal required bool Rebuild { get; init; }
         internal required bool StartedWithNoIndexedFiles { get; init; }
         internal required bool UseFullRunBatchMarker { get; init; }

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using CodeIndex.Indexer.Hooks;
@@ -8,6 +9,9 @@ namespace CodeIndex.HookIsolationFixture;
 public static class HookIsolationFixtureEnvironment
 {
     public const string ModuleInitializerPidPath = "CDIDX_TEST_HOOK_MODULE_INITIALIZER_PID_PATH";
+    public const string ModuleInitializerDelayMilliseconds = "CDIDX_TEST_HOOK_MODULE_INITIALIZER_DELAY_MS";
+    public const string PersistentDiscoveryWorkerPidPath = "CDIDX_TEST_HOOK_DISCOVERY_PERSISTENT_PID_PATH";
+    public const string PersistentDiscoveryDescendantPidPath = "CDIDX_TEST_HOOK_DISCOVERY_DESCENDANT_PID_PATH";
     public const string SelectiveSlowHookAssembly = "CDIDX_TEST_SELECTIVE_SLOW_HOOK_ASSEMBLY";
     public const string MutateCSharpPartialFamily = "CDIDX_TEST_MUTATE_CSHARP_PARTIAL_FAMILY";
     public const string RemoveCSharpStaticInterfaceMemberMarkerFileName =
@@ -16,9 +20,65 @@ public static class HookIsolationFixtureEnvironment
     [ModuleInitializer]
     public static void Initialize()
     {
+        var delay = Environment.GetEnvironmentVariable(ModuleInitializerDelayMilliseconds);
+        if (int.TryParse(delay, NumberStyles.None, CultureInfo.InvariantCulture, out var delayMilliseconds)
+            && delayMilliseconds > 0)
+        {
+            Thread.Sleep(delayMilliseconds);
+        }
+
         var pidPath = Environment.GetEnvironmentVariable(ModuleInitializerPidPath);
         if (!string.IsNullOrWhiteSpace(pidPath))
             File.WriteAllText(pidPath, Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
+
+        var persistentWorkerPidPath = Environment.GetEnvironmentVariable(PersistentDiscoveryWorkerPidPath);
+        if (!string.IsNullOrWhiteSpace(persistentWorkerPidPath))
+        {
+            File.WriteAllText(
+                persistentWorkerPidPath,
+                Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
+            var persistentThread = new Thread(static () => Thread.Sleep(Timeout.Infinite))
+            {
+                IsBackground = false,
+                Name = "cdidx-hook-discovery-persistent-fixture",
+            };
+            persistentThread.Start();
+        }
+
+        var descendantPidPath = Environment.GetEnvironmentVariable(PersistentDiscoveryDescendantPidPath);
+        if (!string.IsNullOrWhiteSpace(descendantPidPath))
+            StartPersistentDescendant(descendantPidPath);
+    }
+
+    private static Process? persistentDiscoveryDescendant;
+
+    private static void StartPersistentDescendant(string descendantPidPath)
+    {
+        var processPath = Environment.ProcessPath
+                          ?? throw new InvalidOperationException("The current process path is unavailable.");
+        var startInfo = new ProcessStartInfo(processPath)
+        {
+            UseShellExecute = false,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+        };
+        if (string.Equals(
+                Path.GetFileNameWithoutExtension(processPath),
+                "dotnet",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            startInfo.ArgumentList.Add(typeof(IPostExtractionHook).Assembly.Location);
+        }
+        startInfo.ArgumentList.Add("__cdidx-symbol-extraction");
+
+        persistentDiscoveryDescendant = Process.Start(startInfo)
+                                        ?? throw new InvalidOperationException(
+                                            "Failed to start the hook discovery descendant fixture.");
+        File.WriteAllText(
+            descendantPidPath,
+            persistentDiscoveryDescendant.Id.ToString(CultureInfo.InvariantCulture));
     }
 }
 

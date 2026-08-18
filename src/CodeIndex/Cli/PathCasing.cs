@@ -63,6 +63,219 @@ internal static class PathCasing
         return string.Equals(left, right, ComparisonFor(left));
     }
 
+    /// <summary>
+    /// Compare absolute path membership component-by-component. A case-only component is
+    /// equivalent only when both parent directory namespaces are case-insensitive and their
+    /// directory identities agree. Existing intermediate components must also identify the
+    /// same directory; a missing leaf may use its proven parent namespace, while a missing
+    /// intermediate path fails closed.
+    /// absolute path の membership を component 単位で比較する。case-only component は、
+    /// 両側の親 directory namespace が case-insensitive で親 identity も一致する場合だけ
+    /// 同値とする。既存の中間 component も同一 directory identity を必須とし、missing leaf
+    /// は証明済みの親 namespace を利用できるが、missing 中間 path は fail closed とする。
+    /// </summary>
+    internal static bool PathsEqualByDirectoryNamespace(string left, string right)
+        => PathsEqualByDirectoryNamespace(
+            left,
+            right,
+            IsIgnoreCase,
+            TryGetDirectoryIdentity);
+
+    internal static bool PathsEqualByDirectoryNamespaceForTesting(
+        string left,
+        string right,
+        Func<string, bool> directoryIgnoreCase,
+        Func<string, FileIndexer.FileIdentity?> directoryIdentity)
+        => PathsEqualByDirectoryNamespace(
+            left,
+            right,
+            directoryIgnoreCase,
+            directoryIdentity);
+
+    /// <summary>
+    /// Return true when <paramref name="parent"/> is the same path as
+    /// <paramref name="child"/> or an ancestor of it. Case-only prefix components are
+    /// accepted only when their parent directory namespaces are the same case-insensitive
+    /// namespace and both spellings identify the same child directory. This prevents a
+    /// case-insensitive project mount from making a distinct case-only sibling in its
+    /// case-sensitive parent namespace appear internal.
+    /// <paramref name="parent"/> が <paramref name="child"/> と同一、または祖先なら true を
+    /// 返す。case-only な prefix component は、その親が同一の case-insensitive directory
+    /// namespace で、両表記が同一 child directory を指す場合だけ受理する。これにより、
+    /// case-insensitive な project mount の policy で、case-sensitive な親 namespace にある
+    /// case-only sibling を内部 path と誤認しない。
+    /// </summary>
+    internal static bool IsPathEqualOrParentByDirectoryNamespace(string parent, string child)
+        => IsPathEqualOrParentByDirectoryNamespace(
+            parent,
+            child,
+            IsIgnoreCase,
+            TryGetDirectoryIdentity);
+
+    internal static bool IsPathEqualOrParentByDirectoryNamespaceForTesting(
+        string parent,
+        string child,
+        Func<string, bool> directoryIgnoreCase,
+        Func<string, FileIndexer.FileIdentity?> directoryIdentity)
+        => IsPathEqualOrParentByDirectoryNamespace(
+            parent,
+            child,
+            directoryIgnoreCase,
+            directoryIdentity);
+
+    private static bool IsPathEqualOrParentByDirectoryNamespace(
+        string parent,
+        string child,
+        Func<string, bool> directoryIgnoreCase,
+        Func<string, FileIndexer.FileIdentity?> directoryIdentity)
+    {
+        var fullParent = NormalizeBoundaryPath(parent);
+        var fullChild = NormalizeBoundaryPath(child);
+        if (string.Equals(fullParent, fullChild, StringComparison.Ordinal))
+            return true;
+
+        var parentRoot = Path.GetPathRoot(fullParent);
+        var childRoot = Path.GetPathRoot(fullChild);
+        if (string.IsNullOrEmpty(parentRoot)
+            || string.IsNullOrEmpty(childRoot)
+            || !string.Equals(
+                parentRoot,
+                childRoot,
+                OperatingSystem.IsWindows()
+                    ? StringComparison.OrdinalIgnoreCase
+                    : StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var parentComponents = SplitPathComponents(fullParent, parentRoot.Length);
+        var childComponents = SplitPathComponents(fullChild, childRoot.Length);
+        if (parentComponents.Length > childComponents.Length)
+            return false;
+
+        var parentNamespace = parentRoot;
+        var childNamespace = childRoot;
+        for (var index = 0; index < parentComponents.Length; index++)
+        {
+            var parentComponent = parentComponents[index];
+            var childComponent = childComponents[index];
+            var parentEntry = Path.Combine(parentNamespace, parentComponent);
+            var childEntry = Path.Combine(childNamespace, childComponent);
+            if (!string.Equals(parentComponent, childComponent, StringComparison.Ordinal))
+            {
+                if (!string.Equals(parentComponent, childComponent, StringComparison.OrdinalIgnoreCase))
+                    return false;
+
+                var parentNamespaceIdentity = directoryIdentity(parentNamespace);
+                var childNamespaceIdentity = directoryIdentity(childNamespace);
+                var parentEntryIdentity = directoryIdentity(parentEntry);
+                var childEntryIdentity = directoryIdentity(childEntry);
+                if (parentNamespaceIdentity == null
+                    || childNamespaceIdentity == null
+                    || parentNamespaceIdentity != childNamespaceIdentity
+                    || parentEntryIdentity == null
+                    || childEntryIdentity == null
+                    || parentEntryIdentity != childEntryIdentity
+                    || !directoryIgnoreCase(parentNamespace)
+                    || !directoryIgnoreCase(childNamespace))
+                {
+                    return false;
+                }
+            }
+
+            parentNamespace = parentEntry;
+            childNamespace = childEntry;
+        }
+
+        return true;
+    }
+
+    private static bool PathsEqualByDirectoryNamespace(
+        string left,
+        string right,
+        Func<string, bool> directoryIgnoreCase,
+        Func<string, FileIndexer.FileIdentity?> directoryIdentity)
+    {
+        var fullLeft = NormalizeBoundaryPath(left);
+        var fullRight = NormalizeBoundaryPath(right);
+        if (string.Equals(fullLeft, fullRight, StringComparison.Ordinal))
+            return true;
+
+        var leftRoot = Path.GetPathRoot(fullLeft);
+        var rightRoot = Path.GetPathRoot(fullRight);
+        if (string.IsNullOrEmpty(leftRoot)
+            || string.IsNullOrEmpty(rightRoot)
+            || !string.Equals(
+                leftRoot,
+                rightRoot,
+                OperatingSystem.IsWindows()
+                    ? StringComparison.OrdinalIgnoreCase
+                    : StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var leftComponents = SplitPathComponents(fullLeft, leftRoot.Length);
+        var rightComponents = SplitPathComponents(fullRight, rightRoot.Length);
+        if (leftComponents.Length != rightComponents.Length)
+            return false;
+
+        var leftParent = leftRoot;
+        var rightParent = rightRoot;
+        for (var index = 0; index < leftComponents.Length; index++)
+        {
+            var leftComponent = leftComponents[index];
+            var rightComponent = rightComponents[index];
+            var leftEntry = Path.Combine(leftParent, leftComponent);
+            var rightEntry = Path.Combine(rightParent, rightComponent);
+            if (!string.Equals(leftComponent, rightComponent, StringComparison.Ordinal))
+            {
+                if (!string.Equals(leftComponent, rightComponent, StringComparison.OrdinalIgnoreCase))
+                    return false;
+
+                var leftParentIdentity = directoryIdentity(leftParent);
+                var rightParentIdentity = directoryIdentity(rightParent);
+                if (leftParentIdentity == null
+                    || rightParentIdentity == null
+                    || leftParentIdentity != rightParentIdentity
+                    || !directoryIgnoreCase(leftParent)
+                    || !directoryIgnoreCase(rightParent))
+                {
+                    return false;
+                }
+
+                if (index < leftComponents.Length - 1)
+                {
+                    var leftEntryIdentity = directoryIdentity(leftEntry);
+                    var rightEntryIdentity = directoryIdentity(rightEntry);
+                    if (leftEntryIdentity == null
+                        || rightEntryIdentity == null
+                        || leftEntryIdentity != rightEntryIdentity)
+                    {
+                        return false;
+                    }
+                }
+            }
+
+            leftParent = leftEntry;
+            rightParent = rightEntry;
+        }
+
+        return true;
+    }
+
+    private static string[] SplitPathComponents(string path, int rootLength)
+        => path[rootLength..].Split(
+            [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+            StringSplitOptions.RemoveEmptyEntries);
+
+    private static FileIndexer.FileIdentity? TryGetDirectoryIdentity(string path)
+    {
+        if (!Directory.Exists(path))
+            return null;
+        return FileIndexer.TryGetFileIdentity(path, out var identity) ? identity : null;
+    }
+
     public static string NormalizeBoundaryPath(string path)
     {
         var fullPath = Path.GetFullPath(path);

@@ -674,7 +674,7 @@ internal static class CliFlagSchema
             new() { Name = "--memory-trace", Description = "Include phase memory samples in index JSON output", PrimaryCommands = Set("index") },
             new() { Name = "--commits", ValuePlaceholder = "<commit-ref>", Description = "Update files changed in given git commits", PrimaryCommands = Set("index") },
             new() { Name = "--changed-between", ValuePlaceholder = "<old-ref> <new-ref>", Description = "Update files changed between two git refs", PrimaryCommands = Set("index") },
-            new() { Name = "--files", ValuePlaceholder = "<path>", ValueKind = CliOptionValueKind.FilePath, Description = "Update only the specified files", PrimaryCommands = Set("index") },
+            new() { Name = "--files", ValuePlaceholder = "<path>", ValueKind = CliOptionValueKind.FilePath, Description = "Update explicit files after validating the full selection atomically; invalid or duplicate paths reject before writes, while indexed missing paths remain deletion targets", PrimaryCommands = Set("index") },
             new() { Name = "--watch", Description = "Continuous reindex on file changes (rejects --commits / --changed-between / --files / --dry-run)", PrimaryCommands = Set("index") },
             new() { Name = "--debounce", ValuePlaceholder = "<ms>", Description = "Watch only: coalesce file events into one update after <ms> of quiet (default 500)", PrimaryCommands = Set("index") },
             new() { Name = "--watch-pending-path-limit", ValuePlaceholder = "<n>", Description = "Watch only: changed-path queue limit before full-rescan fallback", PrimaryCommands = Set("index") },

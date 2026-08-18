@@ -31,6 +31,7 @@ internal static partial class IndexWatchRunner
         string resolvedDbPath,
         bool ignoreCase,
         bool dbPathExplicit,
+        FileIndexer.SymlinkPolicy symlinkPolicy = FileIndexer.SymlinkPolicy.None,
         CancellationToken cancellationToken = default)
     {
         using var backend = new PollingWatchBackend(
@@ -38,8 +39,29 @@ internal static partial class IndexWatchRunner
             ignoreRuleRoot,
             resolvedDbPath,
             ignoreCase,
-            dbPathExplicit);
+            dbPathExplicit,
+            symlinkPolicy);
         return backend.CaptureSnapshotPaths(cancellationToken);
+    }
+
+    internal static IReadOnlyCollection<string> CapturePollingUpdatePathsForTesting(
+        string projectRoot,
+        string ignoreRuleRoot,
+        string resolvedDbPath,
+        bool ignoreCase,
+        bool dbPathExplicit,
+        FileIndexer.SymlinkPolicy symlinkPolicy,
+        Action update,
+        CancellationToken cancellationToken = default)
+    {
+        using var backend = new PollingWatchBackend(
+            projectRoot,
+            ignoreRuleRoot,
+            resolvedDbPath,
+            ignoreCase,
+            dbPathExplicit,
+            symlinkPolicy);
+        return backend.CaptureUpdatePaths(update, cancellationToken);
     }
 
     internal static IReadOnlyCollection<string> CaptureAncestorIgnorePollingPathsForTesting(
@@ -48,12 +70,27 @@ internal static partial class IndexWatchRunner
         bool ignoreCase)
         => EnumerateAncestorIgnorePaths(projectRoot, ignoreRuleRoot, ignoreCase).ToArray();
 
+    internal static bool PollingInternalTargetPathsMatchForTesting(
+        string candidatePath,
+        string targetPath)
+        => PollingWatchBackend.MatchesInternalTarget(candidatePath, targetPath);
+
+    internal static bool PollingTargetPathEqualOrParentForTesting(
+        string parentPath,
+        string candidatePath,
+        Func<string, string, bool> pathsEqualByDirectoryNamespace)
+        => PollingWatchBackend.IsTargetPathEqualOrParent(
+            parentPath,
+            candidatePath,
+            pathsEqualByDirectoryNamespace);
+
     private static IWatchBackend CreateWatchBackend(
         string projectRoot,
         string ignoreRuleRoot,
         string resolvedDbPath,
         bool ignoreCase,
         bool dbPathExplicit,
+        FileIndexer.SymlinkPolicy symlinkPolicy,
         int attempt)
     {
         var backendOverride = WatchBackendFactoryForTesting?.Invoke(projectRoot, ignoreRuleRoot, ignoreCase);
@@ -67,7 +104,8 @@ internal static partial class IndexWatchRunner
                 ignoreRuleRoot,
                 resolvedDbPath,
                 ignoreCase,
-                dbPathExplicit);
+                dbPathExplicit,
+                symlinkPolicy);
         }
 
         return new FileSystemWatchBackend(
@@ -241,7 +279,29 @@ internal static partial class IndexWatchRunner
             args.Add("--files");
             args.AddRange(batch);
 
-            var subRunExitCode = InvokeSubRunAndEmit(baseOptions, jsonOptions, args, stopwatch, "updated", batch.Count, phase, batch, cancellationToken);
+            var subRunExitCode = InvokeSubRunAndEmitCore(
+                baseOptions,
+                jsonOptions,
+                args,
+                stopwatch,
+                "updated",
+                batch.Count,
+                phase,
+                batch,
+                cancellationToken,
+                suppressUsageErrorOutput: true);
+            if (subRunExitCode == CommandExitCodes.UsageError)
+            {
+                var rescanExitCode = RunFullRescan(
+                    baseOptions,
+                    jsonOptions,
+                    resolvedDbPath,
+                    cancellationToken,
+                    phase);
+                RecordSubRunExitCode(ref exitCode, rescanExitCode);
+                return exitCode;
+            }
+
             RecordSubRunExitCode(ref exitCode, subRunExitCode);
             if (cancellationToken.IsCancellationRequested)
                 break;
@@ -323,6 +383,9 @@ internal static partial class IndexWatchRunner
         var normalizedDbPath = Path.GetFullPath(DbPathResolver.NormalizeDbPath(resolvedDbPath));
 
         var defaultDataDir = Path.Combine(normalizedProjectRoot, ".cdidx");
+        if (IsSamePath(defaultDataDir, normalizedPath, comparison))
+            return Directory.Exists(LongPath.EnsureWindowsPrefix(normalizedPath));
+
         var dbDirectory = Path.GetDirectoryName(normalizedDbPath);
         if (!dbPathExplicit && !string.IsNullOrEmpty(dbDirectory)
             && !IsSamePath(defaultDataDir, dbDirectory, comparison)
@@ -331,18 +394,7 @@ internal static partial class IndexWatchRunner
             return true;
         }
 
-        var lockPath = IndexLock.GetLockPath(normalizedDbPath);
-        var internalTargets = new[]
-        {
-            normalizedDbPath,
-            normalizedDbPath + "-wal",
-            normalizedDbPath + "-shm",
-            normalizedDbPath + "-journal",
-            lockPath,
-            IndexLock.GetInfoPath(lockPath),
-        };
-
-        foreach (var targetPath in internalTargets)
+        foreach (var targetPath in GetWatchInternalTargetPaths(normalizedDbPath))
         {
             if (IsSamePath(normalizedPath, targetPath, comparison)
                 || AtomicFileWriter.IsTempPathForTarget(targetPath, normalizedPath, comparison))
@@ -353,6 +405,26 @@ internal static partial class IndexWatchRunner
 
         return false;
     }
+
+    private static string[] GetWatchInternalTargetPaths(string normalizedDbPath)
+    {
+        var lockPath = IndexLock.GetLockPath(normalizedDbPath);
+        return
+        [
+            .. GetSqliteInternalTargetPaths(normalizedDbPath),
+            lockPath,
+            IndexLock.GetInfoPath(lockPath),
+        ];
+    }
+
+    private static string[] GetSqliteInternalTargetPaths(string normalizedDbPath)
+        =>
+        [
+            normalizedDbPath,
+            normalizedDbPath + "-wal",
+            normalizedDbPath + "-shm",
+            normalizedDbPath + "-journal",
+        ];
 
     private static WatchPathDisposition ClassifyWatchPath(
         string projectRoot,
@@ -365,6 +437,16 @@ internal static partial class IndexWatchRunner
         var invalidation = FileIndexer.ClassifyIndexInputInvalidation(projectRoot, fullPath);
         if (invalidation != FileIndexer.IndexInputInvalidationKind.None)
             return WatchPathDisposition.Reconcile;
+
+        var comparison = ignoreCase ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        var normalizedPath = Path.GetFullPath(fullPath);
+        var defaultDataDir = Path.Combine(Path.GetFullPath(projectRoot), ".cdidx");
+        if (IsSamePath(defaultDataDir, normalizedPath, comparison))
+        {
+            return Directory.Exists(LongPath.EnsureWindowsPrefix(normalizedPath))
+                ? WatchPathDisposition.Ignore
+                : WatchPathDisposition.Reconcile;
+        }
 
         if (ShouldIgnoreWatchInternalPath(projectRoot, resolvedDbPath, fullPath, ignoreCase, dbPathExplicit)
             || fileIndexer.ShouldSkipPath(fullPath))
@@ -655,7 +737,8 @@ internal static partial class IndexWatchRunner
         private readonly record struct FileStamp(
             long Length,
             long LastWriteUtcTicks,
-            long CreationUtcTicks);
+            long CreationUtcTicks,
+            string? LinkTarget);
 
         private readonly string _projectRoot;
         private readonly string _ignoreRuleRoot;
@@ -676,7 +759,8 @@ internal static partial class IndexWatchRunner
             string ignoreRuleRoot,
             string resolvedDbPath,
             bool ignoreCase,
-            bool dbPathExplicit)
+            bool dbPathExplicit,
+            FileIndexer.SymlinkPolicy symlinkPolicy)
         {
             _projectRoot = Path.GetFullPath(projectRoot);
             _ignoreRuleRoot = Path.GetFullPath(ignoreRuleRoot);
@@ -690,6 +774,7 @@ internal static partial class IndexWatchRunner
                 _ignoreRuleRoot,
                 maxFileSizeBytes: null,
                 directoryIgnoreCaseProbe: null,
+                symlinkPolicy: symlinkPolicy,
                 internalIndexDatabasePath: _resolvedDbPath);
         }
 
@@ -765,6 +850,18 @@ internal static partial class IndexWatchRunner
         internal IReadOnlyCollection<string> CaptureSnapshotPaths(CancellationToken cancellationToken)
             => CaptureSnapshot(cancellationToken).Keys.ToArray();
 
+        internal IReadOnlyCollection<string> CaptureUpdatePaths(
+            Action update,
+            CancellationToken cancellationToken)
+        {
+            var updatedPaths = new HashSet<string>(_pathComparer);
+            _snapshot = CaptureSnapshot(cancellationToken);
+            _enqueue = path => updatedPaths.Add(path);
+            update();
+            PollOnce(cancellationToken);
+            return updatedPaths.ToArray();
+        }
+
         private Dictionary<string, FileStamp> CaptureSnapshot(CancellationToken cancellationToken)
         {
             var snapshot = new Dictionary<string, FileStamp>(_pathComparer);
@@ -803,13 +900,19 @@ internal static partial class IndexWatchRunner
                          _projectRoot,
                          _ignoreRuleRoot,
                          _ignoreCase))
-                AddFileStamp(snapshot, ignorePath);
+            {
+                if (!ResolvesToWatchInternalPath(ignorePath))
+                    AddFileStamp(snapshot, ignorePath);
+            }
 
             return snapshot;
         }
 
         private bool ShouldTrackFile(string path)
         {
+            if (ResolvesToWatchInternalPath(path))
+                return false;
+
             if (FileIndexer.ClassifyIndexInputInvalidation(_projectRoot, path)
                 != FileIndexer.IndexInputInvalidationKind.None)
             {
@@ -825,6 +928,273 @@ internal static partial class IndexWatchRunner
                 && !_fileIndexer.ShouldSkipPath(path);
         }
 
+        private bool ResolvesToWatchInternalPath(string path)
+        {
+            if (!TryResolveReparsePointPaths(path, out var immediatePath, out var finalPath))
+                return false;
+
+            return IsResolvedWatchInternalPath(immediatePath)
+                || IsResolvedWatchInternalPath(finalPath);
+        }
+
+        private bool IsResolvedWatchInternalPath(string resolvedPath)
+        {
+            var normalizedProjectRoot = Path.GetFullPath(_projectRoot);
+            var normalizedDbPath = Path.GetFullPath(_resolvedDbPath);
+            var defaultDataDir = Path.Combine(normalizedProjectRoot, ".cdidx");
+            if (PathCasing.PathsEqualByDirectoryNamespace(defaultDataDir, resolvedPath))
+                return Directory.Exists(LongPath.EnsureWindowsPrefix(resolvedPath));
+
+            var dbDirectory = Path.GetDirectoryName(normalizedDbPath);
+            if (!_dbPathExplicit
+                && !string.IsNullOrEmpty(dbDirectory)
+                && !PathCasing.PathsEqualByDirectoryNamespace(defaultDataDir, dbDirectory)
+                && IsTargetPathEqualOrParent(dbDirectory, resolvedPath))
+            {
+                return true;
+            }
+
+            if (MatchesDatabaseOwnedInternalPath(normalizedDbPath, resolvedPath))
+                return true;
+
+            var lockPath = IndexLock.GetLockPath(normalizedDbPath);
+            foreach (var targetPath in new[] { lockPath, IndexLock.GetInfoPath(lockPath) })
+            {
+                if (MatchesInternalTarget(resolvedPath, targetPath))
+                    return true;
+            }
+
+            var canonicalDbPath = FileIndexer.NormalizePathForIdentityComparison(normalizedDbPath);
+            return MatchesDatabaseOwnedInternalPath(canonicalDbPath, resolvedPath);
+        }
+
+        private static bool MatchesDatabaseOwnedInternalPath(string dbPath, string candidatePath)
+        {
+            foreach (var targetPath in GetSqliteInternalTargetPaths(dbPath))
+            {
+                if (MatchesInternalTarget(candidatePath, targetPath))
+                    return true;
+            }
+
+            if (IsTargetPathEqualOrParent(dbPath + ".checkpoints", candidatePath))
+                return true;
+
+            var dbDirectory = Path.GetDirectoryName(dbPath);
+            if (string.IsNullOrEmpty(dbDirectory)
+                || !TryGetTargetRelativePath(
+                    dbDirectory,
+                    candidatePath,
+                    PathCasing.PathsEqualByDirectoryNamespace,
+                    out var candidateRelativePath)
+                || candidateRelativePath.Length == 0)
+            {
+                return false;
+            }
+
+            var dbFileName = Path.GetFileName(dbPath);
+            var separatorIndex = candidateRelativePath.IndexOf(Path.DirectorySeparatorChar);
+            if (separatorIndex < 0 && Path.AltDirectorySeparatorChar != Path.DirectorySeparatorChar)
+                separatorIndex = candidateRelativePath.IndexOf(Path.AltDirectorySeparatorChar);
+            var candidateFileName = separatorIndex >= 0
+                ? candidateRelativePath[..separatorIndex]
+                : candidateRelativePath;
+            var restoreTempPrefix = dbFileName + ".restore-tmp-";
+            var restoreBackupPrefix = dbFileName + ".restore-backup-";
+            if (candidateFileName.StartsWith(restoreTempPrefix, StringComparison.Ordinal)
+                || candidateFileName.StartsWith(restoreBackupPrefix, StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            if (!candidateFileName.StartsWith(restoreTempPrefix, StringComparison.OrdinalIgnoreCase)
+                && !candidateFileName.StartsWith(restoreBackupPrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            return PathCasing.IsIgnoreCase(dbDirectory);
+        }
+
+        internal static bool MatchesInternalTarget(
+            string resolvedPath,
+            string targetPath)
+        {
+            if (FileIndexer.TryGetFileIdentity(resolvedPath, out var resolvedIdentity)
+                && FileIndexer.TryGetFileIdentity(targetPath, out var targetIdentity)
+                && resolvedIdentity == targetIdentity)
+            {
+                return true;
+            }
+
+            if (MatchesInternalTargetPath(resolvedPath, targetPath))
+                return true;
+
+            var canonicalResolvedPath = FileIndexer.NormalizePathForIdentityComparison(resolvedPath);
+            var canonicalTargetPath = FileIndexer.NormalizePathForIdentityComparison(targetPath);
+            return MatchesInternalTargetPath(canonicalResolvedPath, canonicalTargetPath);
+        }
+
+        private static bool MatchesInternalTargetPath(
+            string resolvedPath,
+            string targetPath)
+        {
+            if (PathCasing.PathsEqualByDirectoryNamespace(resolvedPath, targetPath))
+                return true;
+
+            var targetDirectory = Path.GetDirectoryName(targetPath);
+            var resolvedDirectory = Path.GetDirectoryName(resolvedPath);
+            if (string.IsNullOrEmpty(targetDirectory)
+                || string.IsNullOrEmpty(resolvedDirectory)
+                || !PathCasing.PathsEqualByDirectoryNamespace(targetDirectory, resolvedDirectory))
+            {
+                return false;
+            }
+
+            var candidateInTargetDirectory = Path.Combine(targetDirectory, Path.GetFileName(resolvedPath));
+            if (AtomicFileWriter.IsTempPathForTarget(
+                    targetPath,
+                    candidateInTargetDirectory,
+                    StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            if (!AtomicFileWriter.IsTempPathForTarget(
+                    targetPath,
+                    candidateInTargetDirectory,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            return PathCasing.IsIgnoreCase(targetDirectory);
+        }
+
+        private static bool IsTargetPathEqualOrParent(string parentPath, string candidatePath)
+            => IsTargetPathEqualOrParent(
+                parentPath,
+                candidatePath,
+                PathCasing.PathsEqualByDirectoryNamespace);
+
+        internal static bool IsTargetPathEqualOrParent(
+            string parentPath,
+            string candidatePath,
+            Func<string, string, bool> pathsEqualByDirectoryNamespace)
+            => TryGetTargetRelativePath(
+                parentPath,
+                candidatePath,
+                pathsEqualByDirectoryNamespace,
+                out _);
+
+        private static bool TryGetTargetRelativePath(
+            string parentPath,
+            string candidatePath,
+            Func<string, string, bool> pathsEqualByDirectoryNamespace,
+            out string relativePath)
+        {
+            var normalizedParent = PathCasing.NormalizeBoundaryPath(parentPath);
+            var normalizedCandidate = PathCasing.NormalizeBoundaryPath(candidatePath);
+            if (TryGetTargetRelativePathCore(
+                normalizedParent,
+                normalizedCandidate,
+                pathsEqualByDirectoryNamespace,
+                out relativePath))
+            {
+                return true;
+            }
+
+            normalizedParent = PathCasing.NormalizeBoundaryPath(
+                FileIndexer.NormalizePathForIdentityComparison(normalizedParent));
+            normalizedCandidate = PathCasing.NormalizeBoundaryPath(
+                FileIndexer.NormalizePathForIdentityComparison(normalizedCandidate));
+            return TryGetTargetRelativePathCore(
+                normalizedParent,
+                normalizedCandidate,
+                pathsEqualByDirectoryNamespace,
+                out relativePath);
+        }
+
+        private static bool TryGetTargetRelativePathCore(
+            string normalizedParent,
+            string normalizedCandidate,
+            Func<string, string, bool> pathsEqualByDirectoryNamespace,
+            out string relativePath)
+        {
+            relativePath = string.Empty;
+            if (string.Equals(normalizedParent, normalizedCandidate, StringComparison.Ordinal))
+                return true;
+
+            var parentPrefix = Path.EndsInDirectorySeparator(normalizedParent)
+                ? normalizedParent
+                : normalizedParent + Path.DirectorySeparatorChar;
+            var alternateParentPrefix = Path.EndsInDirectorySeparator(normalizedParent)
+                ? normalizedParent
+                : normalizedParent + Path.AltDirectorySeparatorChar;
+            var ordinalPrefix = normalizedCandidate.StartsWith(parentPrefix, StringComparison.Ordinal)
+                || normalizedCandidate.StartsWith(alternateParentPrefix, StringComparison.Ordinal);
+            if (!ordinalPrefix)
+            {
+                var ignoreCaseEqual = string.Equals(
+                    normalizedParent,
+                    normalizedCandidate,
+                    StringComparison.OrdinalIgnoreCase);
+                var ignoreCasePrefix = normalizedCandidate.StartsWith(
+                        parentPrefix,
+                        StringComparison.OrdinalIgnoreCase)
+                    || normalizedCandidate.StartsWith(
+                        alternateParentPrefix,
+                        StringComparison.OrdinalIgnoreCase);
+                if (!ignoreCaseEqual && !ignoreCasePrefix)
+                    return false;
+
+                var candidateAncestor = normalizedCandidate[..normalizedParent.Length];
+                if (!pathsEqualByDirectoryNamespace(normalizedParent, candidateAncestor))
+                    return false;
+                if (ignoreCaseEqual)
+                    return true;
+            }
+
+            var suffixStart = Path.EndsInDirectorySeparator(normalizedParent)
+                ? normalizedParent.Length
+                : normalizedParent.Length + 1;
+            relativePath = normalizedCandidate[suffixStart..];
+            return true;
+        }
+
+        private static bool TryResolveReparsePointPaths(
+            string path,
+            out string immediatePath,
+            out string finalPath)
+        {
+            immediatePath = string.Empty;
+            finalPath = string.Empty;
+            try
+            {
+                var attributes = File.GetAttributes(path);
+                FileSystemInfo info = (attributes & FileAttributes.Directory) != 0
+                    ? new DirectoryInfo(path)
+                    : new FileInfo(path);
+                if ((attributes & FileAttributes.ReparsePoint) == 0
+                    && info.LinkTarget is null)
+                {
+                    return false;
+                }
+
+                var immediateTarget = info.ResolveLinkTarget(returnFinalTarget: false);
+                var finalTarget = info.ResolveLinkTarget(returnFinalTarget: true);
+                if (immediateTarget?.Exists != true || finalTarget?.Exists != true)
+                    return false;
+
+                immediatePath = Path.GetFullPath(immediateTarget.FullName);
+                finalPath = FileIndexer.NormalizePathForIdentityComparison(path);
+                return true;
+            }
+            catch (Exception ex) when (CodeIndex.FileSystemTraversalPolicy.IsExpectedTraversalException(ex))
+            {
+                return false;
+            }
+        }
+
         private static void AddFileStamp(Dictionary<string, FileStamp> snapshot, string path)
         {
             try
@@ -832,10 +1202,18 @@ internal static partial class IndexWatchRunner
                 var info = new FileInfo(path);
                 if (info.Exists)
                 {
+                    var linkTarget = info.LinkTarget;
+                    var contentInfo = linkTarget is null
+                        ? info
+                        : info.ResolveLinkTarget(returnFinalTarget: true) as FileInfo;
+                    if (contentInfo?.Exists != true)
+                        return;
+
                     snapshot[path] = new FileStamp(
-                        info.Length,
-                        info.LastWriteTimeUtc.Ticks,
-                        info.CreationTimeUtc.Ticks);
+                        contentInfo.Length,
+                        contentInfo.LastWriteTimeUtc.Ticks,
+                        contentInfo.CreationTimeUtc.Ticks,
+                        linkTarget);
                 }
             }
             catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)

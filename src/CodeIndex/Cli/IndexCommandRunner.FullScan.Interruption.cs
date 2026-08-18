@@ -114,6 +114,7 @@ public static partial class IndexCommandRunner
         bool? hasOversizeLine,
         int? conflictMarkerLine,
         SymbolExtractionWorkerClient worker,
+        FileIndexer.SymlinkPolicy symlinkPolicy,
         CancellationToken cancellationToken,
         TimeSpan? stallTimeoutOverride = null)
     {
@@ -123,6 +124,10 @@ public static partial class IndexCommandRunner
         if (timeout <= TimeSpan.Zero)
         {
             using var regexTimeouts = BoundedRegex.CaptureTimeouts(lang, "symbol_extraction");
+            using var typeScriptPathAliasFileSystemPolicy =
+                SymbolExtractor.EnterTypeScriptPathAliasFileSystemPolicy(
+                    symlinkPolicy,
+                    projectRoot);
             var symbols = contentIsNormalized && hasOversizeLine is { } knownHasOversizeLine
                 ? SymbolExtractor.ExtractNormalized(fileId, lang, content, knownHasOversizeLine, filePath, projectRoot, cancellationToken, conflictMarkerLine, patternConfigsAlreadyLoaded: true)
                 : SymbolExtractor.ExtractWithPatternConfigsLoaded(fileId, lang, content, filePath, projectRoot, cancellationToken);
@@ -140,7 +145,8 @@ public static partial class IndexCommandRunner
             hasOversizeLine,
             conflictMarkerLine,
             timeout,
-            cancellationToken);
+            cancellationToken,
+            symlinkPolicy);
         cancellationToken.ThrowIfCancellationRequested();
         if (result.TimedOut)
             throw new IndexExtractionStalledException(0, null, timeout, phasePath, result.WorkerError);

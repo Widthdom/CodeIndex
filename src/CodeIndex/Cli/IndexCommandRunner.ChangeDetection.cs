@@ -234,6 +234,7 @@ public static partial class IndexCommandRunner
             FileIndexer.PathFilterKind.ExcludedByDefaultDirectory => "excluded by default directory rules",
             FileIndexer.PathFilterKind.ExcludedByDefaultFile => "excluded by default file rules",
             FileIndexer.PathFilterKind.OutsideProjectRoot => "outside the project root",
+            FileIndexer.PathFilterKind.SymlinkDisallowed => "excluded because symbolic links are disabled",
             FileIndexer.PathFilterKind.IgnoreRulesUnavailable => "ignore rules unavailable",
             _ => "filtered",
         };
@@ -244,16 +245,17 @@ public static partial class IndexCommandRunner
         foreach (var file in updateFiles)
         {
             var absPath = Path.IsPathRooted(file) ? file : Path.GetFullPath(Path.Combine(projectRoot, file));
-            var relPath = FileIndexer.NormalizePathSeparators(
-                FileIndexer.GetRelativePathFromProjectRoot(projectRoot, absPath));
-            if (IsOutsideProjectRoot(relPath))
+            if (!FileIndexer.TryGetNativeEquivalentProjectRelativePath(
+                    projectRoot,
+                    absPath,
+                    out FileIndexer.NativeProjectPathMatch pathMatch))
             {
                 if (!json)
                     CommandErrorWriter.WriteStderr($"  [WARN] Skipping file outside project root: {file}. Use a path under the indexed project root or run `cdidx index` from the correct workspace.");
                 continue;
             }
 
-            normalized.Add(relPath);
+            normalized.Add(pathMatch.RelativePath);
         }
 
         return normalized;

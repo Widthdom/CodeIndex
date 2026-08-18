@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Security.Cryptography;
 using CodeIndex.Cli;
 using CodeIndex.Database;
+using CodeIndex.HookIsolationFixture;
 using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Indexer.Hooks;
 using CodeIndex.Models;
@@ -702,7 +703,7 @@ public partial class QueryCommandRunnerTests
                 var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
                 var hooksDir = Path.Combine(extensionProject.Root, "hooks");
                 Directory.CreateDirectory(hooksDir);
-                File.Copy(typeof(SamplePostExtractionHook).Assembly.Location, Path.Combine(hooksDir, "status-hook.dll"));
+                File.Copy(typeof(PathSelectivePostExtractionHook).Assembly.Location, Path.Combine(hooksDir, "status-hook.dll"));
                 env.Set(PostExtractionHookRunner.HooksDirectoryEnvironmentVariable, hooksDir);
 
                 var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunStatus(
@@ -714,7 +715,7 @@ public partial class QueryCommandRunnerTests
                 using var document = JsonDocument.Parse(stdout);
                 var hook = Assert.Single(
                     document.RootElement.GetProperty("hooks").EnumerateArray(),
-                    item => item.GetProperty("type_name").GetString() == typeof(SamplePostExtractionHook).FullName);
+                    item => item.GetProperty("type_name").GetString() == typeof(PathSelectivePostExtractionHook).FullName);
                 Assert.StartsWith("hook:", hook.GetProperty("id").GetString(), StringComparison.Ordinal);
                 Assert.Equal(
                     PostExtractionHookRunner.HookLoadContextLifecycle,

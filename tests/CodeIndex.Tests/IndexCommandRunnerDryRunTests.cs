@@ -980,7 +980,7 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_DryRun_WithFiles_ReportsProjectedUpdatesDeletesAndUnknowns()
+    public void Run_DryRun_WithFiles_ReportsProjectedUpdatesAndDeletes_Issue5091()
     {
         var projectRoot = CreateTempProject();
         try
@@ -995,14 +995,12 @@ public partial class IndexCommandRunnerTests
 
             File.AppendAllText(Path.Combine(projectRoot, "changed.cs"), "public class ChangedAgain { }\n");
             File.Delete(Path.Combine(projectRoot, "deleted.cs"));
-            File.WriteAllText(Path.Combine(projectRoot, "notes.unknownext"), "plain text\n");
 
             var (exitCode, json) = RunAndCaptureJson([
                 projectRoot,
                 "--files",
                 "changed.cs",
                 "deleted.cs",
-                "notes.unknownext",
                 "--dry-run",
                 "--json",
             ]);
@@ -1014,7 +1012,7 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(1, json.GetProperty("projected_file_updates").GetInt32());
             Assert.Equal(1, json.GetProperty("projected_file_deletes").GetInt32());
             Assert.Equal(0, json.GetProperty("projected_file_purges").GetInt32());
-            Assert.Equal(1, json.GetProperty("unknown_extension_total").GetInt32());
+            Assert.Equal(0, json.GetProperty("unknown_extension_total").GetInt32());
             Assert.Equal(0, json.GetProperty("unsupported_total").GetInt32());
             var mutations = json.GetProperty("estimated_table_mutations");
             Assert.True(mutations.GetProperty("files").GetInt64() >= 2);
@@ -1022,6 +1020,43 @@ public partial class IndexCommandRunnerTests
             Assert.True(mutations.GetProperty("symbols").GetInt64() > 0);
             Assert.True(mutations.TryGetProperty("file_issues", out _));
             Assert.Equal(2, CountRows(dbPath, "files"));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRun_WithFiles_RejectsUnsupportedLanguageAtomically_Issue5091()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "changed.cs");
+            File.WriteAllText(sourcePath, "public class StableDryRun5091 { }\n");
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var databaseFilesBefore = ReadDatabaseFileSetFingerprint(dbPath);
+            File.AppendAllText(sourcePath, "public class ChangedDryRun5091 { }\n");
+            File.WriteAllText(Path.Combine(projectRoot, "notes.unknownext"), "plain text\n");
+
+            var (exitCode, json) = RunAndCaptureJson([
+                projectRoot,
+                "--files",
+                "changed.cs",
+                "notes.unknownext",
+                "--dry-run",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            AssertRejectedFilesError(
+                json,
+                (InputIndex: 1, Path: "notes.unknownext", Reason: "unsupported_language"));
+            Assert.Equal(databaseFilesBefore, ReadDatabaseFileSetFingerprint(dbPath));
         }
         finally
         {
@@ -1339,7 +1374,7 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_DryRun_WithFiles_ReportsUnsupportedExtensionRenamePurgeWithoutWriting()
+    public void Run_DryRun_WithFiles_RejectsUnsupportedExtensionRenameAtomically_Issue5091()
     {
         var projectRoot = CreateTempProject();
         try
@@ -1353,17 +1388,17 @@ public partial class IndexCommandRunnerTests
 
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             Assert.Equal(1, CountRows(dbPath, "files"));
+            var databaseFilesBefore = ReadDatabaseFileSetFingerprint(dbPath);
 
             File.Move(oldPath, newPath);
 
             var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "foo.bin", "--dry-run", "--json"]);
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal("dry_run", json.GetProperty("status").GetString());
-            Assert.Equal(0, json.GetProperty("files_total").GetInt32());
-            Assert.Equal(0, json.GetProperty("projected_file_deletes").GetInt32());
-            Assert.Equal(1, json.GetProperty("projected_file_purges").GetInt32());
-            Assert.True(json.GetProperty("estimated_table_mutations").GetProperty("files").GetInt64() >= 1);
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            AssertRejectedFilesError(
+                json,
+                (InputIndex: 0, Path: "foo.bin", Reason: "unsupported_language"));
+            Assert.Equal(databaseFilesBefore, ReadDatabaseFileSetFingerprint(dbPath));
             Assert.Equal(1, CountRows(dbPath, "files"));
         }
         finally
@@ -1479,8 +1514,11 @@ public partial class IndexCommandRunnerTests
         }
     }
 
-    [ProductionRuntimeFact]
-    public void Run_DryRun_WithFiles_IgnoresUnixFifoKnownFilename()
+    [ProductionRuntimeTheory]
+    [InlineData("Dockerfile")]
+    [InlineData(".gitignore")]
+    public void Run_DryRun_WithFiles_RejectsUnixFifoSelectionAtomically_Issue5091(
+        string fileName)
     {
         if (OperatingSystem.IsWindows())
             return;
@@ -1488,16 +1526,18 @@ public partial class IndexCommandRunnerTests
         var projectRoot = CreateTempProject();
         try
         {
-            CreateUnixFifo(Path.Combine(projectRoot, "Dockerfile"));
+            CreateUnixFifo(Path.Combine(projectRoot, fileName));
 
-            var result = RunCliInSubprocessWithTimeout([projectRoot, "--files", "Dockerfile", "--dry-run", "--json"], projectRoot, TimeSpan.FromSeconds(10));
+            var result = RunCliInSubprocessWithTimeout([projectRoot, "--files", fileName, "--dry-run", "--json"], projectRoot, TimeSpan.FromSeconds(10));
 
             Assert.False(result.TimedOut, "cdidx index --dry-run --files hung on a FIFO entry.");
-            Assert.Equal(CommandExitCodes.Success, result.ExitCode);
+            Assert.Equal(CommandExitCodes.UsageError, result.ExitCode);
 
             using var document = JsonDocument.Parse(result.StdOut);
-            Assert.Equal("dry_run", document.RootElement.GetProperty("status").GetString());
-            Assert.Equal(0, document.RootElement.GetProperty("files_total").GetInt32());
+            AssertRejectedFilesError(
+                document.RootElement,
+                (InputIndex: 0, Path: fileName, Reason: "unsupported_file"));
+            Assert.False(File.Exists(Path.Combine(projectRoot, ".cdidx", "codeindex.db")));
         }
         finally
         {
@@ -1506,7 +1546,7 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_DryRun_WithFiles_RejectsAbsolutePathOutsideProjectRoot_4471()
+    public void Run_DryRun_WithFiles_RejectsAbsolutePathOutsideProjectRoot_Issue4471_Issue5091()
     {
         var projectRoot = CreateTempProject();
         var outsidePath = Path.Combine(Path.GetTempPath(), $"cdidx_dryrun_outside_{Guid.NewGuid():N}.cs");
@@ -1517,8 +1557,10 @@ public partial class IndexCommandRunnerTests
             var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", outsidePath, "--dry-run", "--json"]);
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Equal("error", json.GetProperty("status").GetString());
-            Assert.Contains("none of the paths supplied to --files resolved", json.GetProperty("message").GetString());
+            AssertRejectedFilesError(
+                json,
+                (InputIndex: 0, Path: "<outside-project-root>", Reason: "outside_project_root"));
+            Assert.DoesNotContain(outsidePath, json.ToString(), StringComparison.Ordinal);
         }
         finally
         {
@@ -1528,7 +1570,7 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_DryRun_WithFiles_RejectsTraversalOutsideProjectRoot_4471()
+    public void Run_DryRun_WithFiles_RejectsTraversalOutsideProjectRoot_Issue4471_Issue5091()
     {
         var parentDir = TestProjectHelper.CreateTempProject("cdidx_dryrun_parent");
         var projectRoot = Path.Combine(parentDir, "project");
@@ -1541,8 +1583,9 @@ public partial class IndexCommandRunnerTests
             var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", "../outside.cs", "--dry-run", "--json"]);
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Equal("error", json.GetProperty("status").GetString());
-            Assert.Contains("none of the paths supplied to --files resolved", json.GetProperty("message").GetString());
+            AssertRejectedFilesError(
+                json,
+                (InputIndex: 0, Path: "<outside-project-root>", Reason: "outside_project_root"));
         }
         finally
         {
@@ -1551,7 +1594,7 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_DryRun_WithFiles_RejectsNonexistentUnindexedProjectPath_4471()
+    public void Run_DryRun_WithFiles_RejectsNonexistentUnindexedProjectPath_Issue4471_Issue5091()
     {
         var projectRoot = CreateTempProject();
         try
@@ -1565,8 +1608,9 @@ public partial class IndexCommandRunnerTests
             ]);
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Equal("error", json.GetProperty("status").GetString());
-            Assert.Contains("none of the paths supplied to --files resolved", json.GetProperty("message").GetString());
+            AssertRejectedFilesError(
+                json,
+                (InputIndex: 0, Path: "missing.cs", Reason: "not_found"));
             Assert.Contains("--files <path>", json.GetProperty("hint").GetString());
         }
         finally
@@ -1576,7 +1620,7 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_DryRun_WithFiles_RejectsNonexistentUnindexedIgnoreFile_4471()
+    public void Run_DryRun_WithFiles_RejectsNonexistentUnindexedIgnoreFile_Issue4471_Issue5091()
     {
         var projectRoot = CreateTempProject();
         try
@@ -1592,8 +1636,9 @@ public partial class IndexCommandRunnerTests
             ]);
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Equal("error", json.GetProperty("status").GetString());
-            Assert.Contains("none of the paths supplied to --files resolved", json.GetProperty("message").GetString());
+            AssertRejectedFilesError(
+                json,
+                (InputIndex: 0, Path: "missing/.gitignore", Reason: "not_found"));
         }
         finally
         {
@@ -1602,7 +1647,7 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_DryRun_WithFiles_RejectsSymlinkSkippedByPolicy_4471()
+    public void Run_DryRun_WithFiles_RejectsSymlinkEscape_Issue4471_Issue5091()
     {
         var projectRoot = CreateTempProject();
         var outsidePath = Path.Combine(Path.GetTempPath(), $"cdidx_dryrun_symlink_{Guid.NewGuid():N}.cs");
@@ -1613,7 +1658,7 @@ public partial class IndexCommandRunnerTests
             {
                 File.CreateSymbolicLink(Path.Combine(projectRoot, "link.cs"), outsidePath);
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+            catch (Exception ex) when (ShouldSkipSymlinkFixtureFailure(ex))
             {
                 return;
             }
@@ -1627,13 +1672,203 @@ public partial class IndexCommandRunnerTests
             ]);
 
             Assert.Equal(CommandExitCodes.UsageError, exitCode);
-            Assert.Equal("error", json.GetProperty("status").GetString());
-            Assert.Contains("none of the paths supplied to --files resolved", json.GetProperty("message").GetString());
+            AssertRejectedFilesError(
+                json,
+                (InputIndex: 0, Path: "<symlink-outside-project-root>", Reason: "symlink_escape"));
         }
         finally
         {
             DeleteDirectory(projectRoot);
             DeleteFile(outsidePath);
+        }
+    }
+
+    [Theory]
+    [InlineData("none", false, false)]
+    [InlineData("none", true, false)]
+    [InlineData("internal", false, true)]
+    [InlineData("internal", true, true)]
+    [InlineData("all", false, true)]
+    [InlineData("all", true, true)]
+    public void Run_WithFiles_DirectorySymlinkSelectionHonorsFollowPolicy_Issue5091(
+        string followPolicy,
+        bool dryRun,
+        bool expectedSuccess)
+    {
+        const string selectedPath = "linkdir/app.cs";
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var realDirectory = Path.Combine(projectRoot, "real");
+            Directory.CreateDirectory(realDirectory);
+            File.WriteAllText(
+                Path.Combine(realDirectory, "app.cs"),
+                "public class DirectoryLink5091 { }\n");
+            try
+            {
+                Directory.CreateSymbolicLink(
+                    Path.Combine(projectRoot, "linkdir"),
+                    realDirectory);
+            }
+            catch (Exception ex) when (ShouldSkipSymlinkFixtureFailure(ex))
+            {
+                return;
+            }
+
+            var arguments = new List<string>
+            {
+                projectRoot,
+                "--files",
+                selectedPath,
+                "--follow-symlinks",
+                followPolicy,
+            };
+            if (dryRun)
+                arguments.Add("--dry-run");
+            arguments.Add("--json");
+
+            var (exitCode, json) = RunAndCaptureJson([.. arguments]);
+
+            if (!expectedSuccess)
+            {
+                Assert.Equal(CommandExitCodes.UsageError, exitCode);
+                AssertRejectedFilesError(
+                    json,
+                    (InputIndex: 0, Path: selectedPath, Reason: "symlink_disallowed"));
+                Assert.False(File.Exists(Path.Combine(projectRoot, ".cdidx", "codeindex.db")));
+            }
+            else if (dryRun)
+            {
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal("dry_run", json.GetProperty("status").GetString());
+                Assert.Equal(1, json.GetProperty("projected_file_updates").GetInt32());
+                Assert.False(File.Exists(Path.Combine(projectRoot, ".cdidx", "codeindex.db")));
+            }
+            else
+            {
+                Assert.Equal(CommandExitCodes.Success, exitCode);
+                Assert.Equal("success", json.GetProperty("status").GetString());
+                Assert.True(IndexedFileExists(projectRoot, selectedPath));
+            }
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Run_WithFiles_NonePolicyAllowsSymlinkedProjectRoot_Issue5091(
+        bool dryRun)
+    {
+        var parentRoot = CreateTempProject();
+        try
+        {
+            var realProjectRoot = Path.Combine(parentRoot, "real-project");
+            var linkedProjectRoot = Path.Combine(parentRoot, "linked-project");
+            Directory.CreateDirectory(realProjectRoot);
+            File.WriteAllText(
+                Path.Combine(realProjectRoot, "app.cs"),
+                "public class SymlinkedRoot5091 { }\n");
+            try
+            {
+                Directory.CreateSymbolicLink(linkedProjectRoot, realProjectRoot);
+            }
+            catch (Exception ex) when (ShouldSkipSymlinkFixtureFailure(ex))
+            {
+                return;
+            }
+
+            var arguments = new List<string>
+            {
+                linkedProjectRoot,
+                "--files",
+                "app.cs",
+                "--follow-symlinks",
+                "none",
+            };
+            if (dryRun)
+                arguments.Add("--dry-run");
+            arguments.Add("--json");
+
+            var (exitCode, json) = RunAndCaptureJson([.. arguments]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(dryRun ? "dry_run" : "success", json.GetProperty("status").GetString());
+            if (dryRun)
+            {
+                Assert.Equal(1, json.GetProperty("projected_file_updates").GetInt32());
+                Assert.False(File.Exists(Path.Combine(realProjectRoot, ".cdidx", "codeindex.db")));
+            }
+            else
+            {
+                Assert.True(IndexedFileExists(linkedProjectRoot, "app.cs"));
+            }
+        }
+        finally
+        {
+            DeleteDirectory(parentRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Run_WithFiles_FollowSymlinksAllAllowsExternalSupportedFileLink_Issue4829_Issue5091(
+        bool dryRun)
+    {
+        var projectRoot = CreateTempProject();
+        var outsideRoot = CreateTempProject();
+        try
+        {
+            var targetPath = Path.Combine(outsideRoot, "Outside.cs");
+            var linkPath = Path.Combine(projectRoot, "OutsideLink.cs");
+            File.WriteAllText(targetPath, "public class Outside5091 { }\n");
+            try
+            {
+                File.CreateSymbolicLink(linkPath, targetPath);
+            }
+            catch (Exception ex) when (ShouldSkipSymlinkFixtureFailure(ex))
+            {
+                return;
+            }
+
+            var arguments = new List<string>
+            {
+                projectRoot,
+                "--files",
+                "OutsideLink.cs",
+                "--follow-symlinks",
+                "all",
+            };
+            if (dryRun)
+                arguments.Add("--dry-run");
+            arguments.Add("--json");
+
+            var (exitCode, json) = RunAndCaptureJson([.. arguments]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            if (dryRun)
+            {
+                Assert.Equal("dry_run", json.GetProperty("status").GetString());
+                Assert.Equal(1, json.GetProperty("files_total").GetInt32());
+                Assert.Equal(1, json.GetProperty("projected_file_updates").GetInt32());
+                Assert.False(File.Exists(Path.Combine(projectRoot, ".cdidx", "codeindex.db")));
+            }
+            else
+            {
+                Assert.Equal("success", json.GetProperty("status").GetString());
+                Assert.Contains(
+                    "OutsideLink.cs",
+                    ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db")));
+            }
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+            DeleteDirectory(outsideRoot);
         }
     }
 
@@ -1752,7 +1987,7 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_DryRun_WithFiles_AllowsDeletedIndexedProjectPath_4471()
+    public void Run_DryRun_WithFiles_AllowsDeletedIndexedProjectPath_Issue4471_Issue5091()
     {
         var projectRoot = CreateTempProject();
         try
@@ -1782,7 +2017,7 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_DryRun_WithFiles_DoesNotCountUnreadableKnownExtensionFile()
+    public void Run_DryRun_WithFiles_DoesNotCountUnreadableKnownExtensionFile_Issue5091()
     {
         if (OperatingSystem.IsWindows())
             return;

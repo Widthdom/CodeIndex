@@ -94,6 +94,7 @@ public static partial class IndexCommandRunner
                 loaded.HasOversizeLine,
                 loaded.ConflictMarkerLine,
                 symbolExtractionWorker,
+                options.SymlinkPolicy,
                 cancellationToken);
             var symbols = symbolExtraction.Symbols;
             var symbolRegexTimeoutIssue = symbolExtraction.RegexTimeoutIssue;

@@ -134,6 +134,7 @@ internal static partial class IndexWatchRunner
             ignoreRuleRoot,
             maxFileSizeBytes: null,
             directoryIgnoreCaseProbe: null,
+            symlinkPolicy: baseOptions.SymlinkPolicy,
             internalIndexDatabasePath: resolvedDbPath);
         var watchExitCode = CommandExitCodes.Success;
 
@@ -235,6 +236,7 @@ internal static partial class IndexWatchRunner
                         resolvedDbPath,
                         ignoreCase,
                         dbPathExplicit,
+                        baseOptions.SymlinkPolicy,
                         attempt);
                     backend = candidate;
                     backendName = candidate.Name;
