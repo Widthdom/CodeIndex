@@ -93,7 +93,10 @@ public static partial class QueryCommandRunner
             cancellationToken.ThrowIfCancellationRequested();
             if (!options.DryRun)
             {
-                result = DbContext.FinalizeVacuumFileMetricsAfterConnectionClose(result, vacuumDataSource);
+                result = DbContext.FinalizeVacuumFileMetricsAfterConnectionClose(
+                    result,
+                    vacuumDataSource,
+                    cancellationToken);
                 cancellationToken.ThrowIfCancellationRequested();
             }
             if (options.Json)

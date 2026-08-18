@@ -489,7 +489,7 @@ public partial class DbContext : IDisposable
 
         cancellationToken.ThrowIfCancellationRequested();
         ReportMaintenanceProgress("vacuum", "metrics_before", _connection.DataSource);
-        var before = ReadVacuumMetrics();
+        var before = ReadVacuumMetrics(cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         if (!dryRun && before.AutoVacuumMode == 2)
         {
@@ -506,7 +506,7 @@ public partial class DbContext : IDisposable
         }
         cancellationToken.ThrowIfCancellationRequested();
         ReportMaintenanceProgress("vacuum", "metrics_after", _connection.DataSource);
-        var after = dryRun ? before : ReadVacuumMetrics();
+        var after = dryRun ? before : ReadVacuumMetrics(cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         var pagesReclaimed = dryRun ? 0 : Math.Max(0, before.PageCount - after.PageCount);
         var bytesReclaimed = pagesReclaimed * after.PageSize;
@@ -564,7 +564,7 @@ public partial class DbContext : IDisposable
         {
             cancellationToken.ThrowIfCancellationRequested();
             ReportMaintenanceProgress("rebuild_reclaim", "metrics_before", _connection.DataSource);
-            var beforeMetrics = ReadVacuumMetrics();
+            var beforeMetrics = ReadVacuumMetrics(cancellationToken);
             before = beforeMetrics;
             guidanceBefore = MaintenanceGuidanceBuilder.Build(new MaintenanceMetrics(
                 beforeMetrics.PageCount,
@@ -605,7 +605,7 @@ public partial class DbContext : IDisposable
             Execute(DbPragmaPolicy.IncrementalVacuumPragmaSql(beforeMetrics.FreelistCount));
             cancellationToken.ThrowIfCancellationRequested();
             ReportMaintenanceProgress("rebuild_reclaim", "metrics_after", _connection.DataSource);
-            var after = ReadVacuumMetrics();
+            var after = ReadVacuumMetrics(cancellationToken);
             var guidanceAfter = MaintenanceGuidanceBuilder.Build(new MaintenanceMetrics(
                 after.PageCount,
                 after.FreelistCount,
@@ -701,9 +701,13 @@ public partial class DbContext : IDisposable
 
     internal static VacuumResult FinalizeVacuumFileMetricsAfterConnectionClose(
         VacuumResult result,
-        string dbPath)
+        string dbPath,
+        CancellationToken cancellationToken = default)
     {
-        var after = ReadVacuumFileSetMetrics(dbPath);
+        var after = ReadVacuumFileSetMetrics(
+            dbPath,
+            "post_close",
+            cancellationToken);
         var guidance = MaintenanceGuidanceBuilder.Build(
             new MaintenanceMetrics(
                 result.PageCountAfter,
@@ -724,7 +728,7 @@ public partial class DbContext : IDisposable
             MaintenanceGuidance = guidance,
             WalCheckpointTimingNote = result.DryRun
                 ? null
-                : "File-size after fields are sampled after the command-owned vacuum connection closes. WAL and SHM can remain when another connection prevents checkpoint or truncation.",
+                : "File-size after fields are sampled from a stable observation after the command-owned vacuum connection closes. WAL and SHM can remain when another connection prevents checkpoint or truncation; unstable or inaccessible physical fields are omitted from CLI JSON.",
         };
     }
 
@@ -734,13 +738,23 @@ public partial class DbContext : IDisposable
         MaintenanceProgressForTesting?.Invoke(operation, phase);
     }
 
-    private VacuumMetrics ReadVacuumMetrics()
+    private VacuumMetrics ReadVacuumMetrics(CancellationToken cancellationToken = default)
     {
         var pageCount = ReadPragmaLong("page_count");
         var freelistCount = ReadPragmaLong("freelist_count");
         var pageSize = ReadPragmaLong("page_size");
         var autoVacuumMode = ReadAutoVacuumMode();
-        var fileSet = ReadVacuumFileSetMetrics(_connection.DataSource);
+        var fileSet = _queryOnlySnapshotSourcePath is { } sourcePath
+            && _queryOnlySnapshotSourceState is { } sourceState
+            ? ReadVacuumFileSetMetrics(
+                sourcePath,
+                "query_snapshot_source",
+                cancellationToken,
+                sourceState)
+            : ReadVacuumFileSetMetrics(
+                _connection.DataSource,
+                "connection",
+                cancellationToken);
         return new(
             pageCount,
             freelistCount,
@@ -760,7 +774,11 @@ public partial class DbContext : IDisposable
         Execute(DbPragmaPolicy.BusyTimeoutPragmaSql(busyTimeoutMs));
     }
 
-    private static VacuumFileSetMetrics ReadVacuumFileSetMetrics(string dbPath)
+    private static VacuumFileSetMetrics ReadVacuumFileSetMetrics(
+        string dbPath,
+        string phase,
+        CancellationToken cancellationToken,
+        DbConnectionFactory.QueryOnlySnapshotSourceState? expectedSourceState = null)
     {
         var path = dbPath;
         if (string.IsNullOrWhiteSpace(path))
@@ -770,23 +788,95 @@ public partial class DbContext : IDisposable
         if (string.IsNullOrWhiteSpace(path))
             return default;
 
-        var mainFileBytes = TryGetRefreshedFileSize(path, missingValue: null);
-        var walFileBytes = TryGetRefreshedFileSize(path + "-wal", missingValue: 0);
-        var shmFileBytes = TryGetRefreshedFileSize(path + "-shm", missingValue: 0);
-        return new VacuumFileSetMetrics(
-            mainFileBytes,
-            walFileBytes,
-            shmFileBytes,
-            TryAddNonNegative(mainFileBytes, walFileBytes, shmFileBytes));
+        for (var attempt = 1; attempt <= VacuumFileSetCaptureMaxAttempts; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!DbConnectionFactory.TryCaptureQuerySourceState(
+                    path,
+                    cancellationToken,
+                    out var sourceStateBefore)
+                || (expectedSourceState is { } expectedBefore && sourceStateBefore != expectedBefore)
+                || !TryReadVacuumFileSetState(path, out var fileSetBefore)
+                || !FileSetMatchesSourceState(fileSetBefore, sourceStateBefore))
+            {
+                continue;
+            }
+
+            VacuumFileSetCaptureForTesting?.Invoke(phase, attempt, path);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!DbConnectionFactory.TryCaptureQuerySourceState(
+                    path,
+                    cancellationToken,
+                    out var sourceStateAfter)
+                || sourceStateBefore != sourceStateAfter
+                || (expectedSourceState is { } expectedAfter && sourceStateAfter != expectedAfter)
+                || !TryReadVacuumFileSetState(path, out var fileSetAfter)
+                || fileSetBefore != fileSetAfter
+                || !FileSetMatchesSourceState(fileSetAfter, sourceStateAfter))
+            {
+                continue;
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            var mainFileBytes = fileSetAfter.MainFile.Length;
+            var walFileBytes = fileSetAfter.WalFile.Exists ? fileSetAfter.WalFile.Length : 0;
+            var shmFileBytes = fileSetAfter.ShmFile.Exists ? fileSetAfter.ShmFile.Length : 0;
+            return new VacuumFileSetMetrics(
+                mainFileBytes,
+                walFileBytes,
+                shmFileBytes,
+                TryAddNonNegative(mainFileBytes, walFileBytes, shmFileBytes));
+        }
+
+        return default;
     }
 
-    private static long? TryGetRefreshedFileSize(string path, long? missingValue)
+    private static bool TryReadVacuumFileSetState(
+        string dbPath,
+        out VacuumFileSetState fileSet)
+    {
+        if (!TryReadVacuumFileState(dbPath, required: true, out var mainFile)
+            || !TryReadVacuumFileState(dbPath + "-wal", required: false, out var walFile)
+            || !TryReadVacuumFileState(dbPath + "-shm", required: false, out var shmFile))
+        {
+            fileSet = default;
+            return false;
+        }
+
+        fileSet = new VacuumFileSetState(mainFile, walFile, shmFile);
+        return true;
+    }
+
+    private static bool TryReadVacuumFileState(
+        string path,
+        bool required,
+        out VacuumFileState state)
     {
         try
         {
-            var info = new FileInfo(LongPath.EnsureWindowsPrefix(path));
+            var normalizedPath = LongPath.EnsureWindowsPrefix(path);
+            _ = VacuumFileMetadataProbeForTesting is { } metadataProbe
+                ? metadataProbe(normalizedPath)
+                : File.GetAttributes(normalizedPath);
+            var info = new FileInfo(normalizedPath);
             info.Refresh();
-            return info.Exists ? info.Length : missingValue;
+            if (!info.Exists)
+            {
+                state = default;
+                return false;
+            }
+
+            state = new VacuumFileState(
+                true,
+                info.Length,
+                info.CreationTimeUtc.Ticks,
+                info.LastWriteTimeUtc.Ticks);
+            return true;
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            state = default;
+            return !required;
         }
         catch (Exception ex) when (ex is IOException
             or UnauthorizedAccessException
@@ -794,8 +884,24 @@ public partial class DbContext : IDisposable
             or ArgumentException
             or System.Security.SecurityException)
         {
-            return null;
+            state = default;
+            return false;
         }
+    }
+
+    private static bool FileSetMatchesSourceState(
+        VacuumFileSetState fileSet,
+        DbConnectionFactory.QueryOnlySnapshotSourceState sourceState)
+    {
+        if (!fileSet.MainFile.Exists
+            || fileSet.MainFile.ToSourceIdentity() != sourceState.DatabaseFile)
+        {
+            return false;
+        }
+
+        return sourceState.WalFile is { } walFile
+            ? fileSet.WalFile.Exists && fileSet.WalFile.ToSourceIdentity() == walFile
+            : !fileSet.WalFile.Exists;
     }
 
     private static long? TryAddNonNegative(params long?[] values)
@@ -840,6 +946,21 @@ public partial class DbContext : IDisposable
         long? WalFileBytes,
         long? ShmFileBytes,
         long? PhysicalFileSetBytes);
+
+    private readonly record struct VacuumFileSetState(
+        VacuumFileState MainFile,
+        VacuumFileState WalFile,
+        VacuumFileState ShmFile);
+
+    private readonly record struct VacuumFileState(
+        bool Exists,
+        long Length,
+        long CreationTimeUtcTicks,
+        long LastWriteTimeUtcTicks)
+    {
+        internal DbConnectionFactory.QuerySourceFileIdentity ToSourceIdentity()
+            => new(Length, CreationTimeUtcTicks, LastWriteTimeUtcTicks);
+    }
 
     private void EnsureWritableUserVersionSupported(string dbPath)
     {

@@ -20,6 +20,7 @@ public partial class DbContext : IDisposable
     public const string MmapSizeEnvironmentVariable = "CDIDX_SQLITE_MMAP_BYTES";
     public const string BusyTimeoutEnvironmentVariable = "CDIDX_SQLITE_BUSY_TIMEOUT_MS";
     public const int DefaultWalAutocheckpointPages = 1000;
+    internal const int VacuumFileSetCaptureMaxAttempts = 3;
     public const string DefaultSynchronousMode = "NORMAL";
     public const string SymbolExtractorVersionMetaPrefix = "symbol_extractor_version_";
     internal const string FtsChunksTrigramTableName = "fts_chunks_trigram";
@@ -265,6 +266,8 @@ public partial class DbContext : IDisposable
     private static readonly AsyncLocal<Action<string, string>?> ScopedPlannerStatisticsCommandExecutedForTesting = new();
     private static readonly AsyncLocal<Action<string>?> ScopedWalCheckpointTruncateExecutedForTesting = new();
     private static readonly AsyncLocal<Action<string, string>?> ScopedMaintenanceProgressForTesting = new();
+    private static readonly AsyncLocal<Action<string, int, string>?> ScopedVacuumFileSetCaptureForTesting = new();
+    private static readonly AsyncLocal<Func<string, FileAttributes>?> ScopedVacuumFileMetadataProbeForTesting = new();
     private static readonly AsyncLocal<Action<string>?> ScopedForeignKeysDisabledForTesting = new();
     private static readonly AsyncLocal<Action<string, long>?> ScopedForeignKeysRestoringForTesting = new();
     private static readonly AsyncLocal<Action<SqliteConnection, string>?> ScopedForeignKeyValidationBeforeCheckForTesting = new();
@@ -305,6 +308,18 @@ public partial class DbContext : IDisposable
     {
         get => ScopedMaintenanceProgressForTesting.Value;
         set => ScopedMaintenanceProgressForTesting.Value = value;
+    }
+
+    internal static Action<string, int, string>? VacuumFileSetCaptureForTesting
+    {
+        get => ScopedVacuumFileSetCaptureForTesting.Value;
+        set => ScopedVacuumFileSetCaptureForTesting.Value = value;
+    }
+
+    internal static Func<string, FileAttributes>? VacuumFileMetadataProbeForTesting
+    {
+        get => ScopedVacuumFileMetadataProbeForTesting.Value;
+        set => ScopedVacuumFileMetadataProbeForTesting.Value = value;
     }
 
     internal static Action<string>? ForeignKeysDisabledForTesting
