@@ -79,6 +79,7 @@ public static partial class QueryCommandRunner
 
             VacuumResult result;
             string vacuumDataSource;
+            DbContext.VacuumGenerationWitness? vacuumGenerationWitness;
             using (var db = DbContext.CreateUnpooled(
                 options.DryRun ? DbOpenIntent.QueryOnly : DbOpenIntent.Repair,
                 options.DbPath,
@@ -89,6 +90,9 @@ public static partial class QueryCommandRunner
                 if (!options.DryRun)
                     db.CheckpointWalTruncate(cancellationToken);
                 vacuumDataSource = db.Connection.DataSource;
+                vacuumGenerationWitness = options.DryRun
+                    ? null
+                    : db.CaptureVacuumGenerationWitness(cancellationToken);
             }
             cancellationToken.ThrowIfCancellationRequested();
             if (!options.DryRun)
@@ -96,6 +100,7 @@ public static partial class QueryCommandRunner
                 result = DbContext.FinalizeVacuumFileMetricsAfterConnectionClose(
                     result,
                     vacuumDataSource,
+                    vacuumGenerationWitness,
                     cancellationToken);
                 cancellationToken.ThrowIfCancellationRequested();
             }

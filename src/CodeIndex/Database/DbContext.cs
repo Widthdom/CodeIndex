@@ -236,6 +236,7 @@ public partial class DbContext : IDisposable
     private bool _queryOnlySnapshotRequiresRefresh;
     private string? _queryOnlySnapshotSourcePath;
     private DbConnectionFactory.QueryOnlySnapshotSourceState? _queryOnlySnapshotSourceState;
+    private long? _vacuumLogicalAfterDataVersion;
     private string? _walCheckpointSkippedReason;
     private string? _walCheckpointFailureReason;
     private long? _walCheckpointBusy;
