@@ -63,7 +63,8 @@ public static partial class QueryCommandRunner
                     out _,
                     out var validationFailure,
                     out var validationException,
-                    cancellationToken))
+                    cancellationToken,
+                    useConnectionPooling: false))
             {
                 return MaintenanceDatabaseErrorWriter.Write(
                     options.Json,
@@ -76,11 +77,33 @@ public static partial class QueryCommandRunner
                         validationException));
             }
 
-            using var db = new DbContext(
+            VacuumResult result;
+            string vacuumDataSource;
+            DbContext.VacuumGenerationWitness? vacuumGenerationWitness;
+            using (var db = DbContext.CreateUnpooled(
                 options.DryRun ? DbOpenIntent.QueryOnly : DbOpenIntent.Repair,
                 options.DbPath,
-                cancellationToken);
-            var result = db.RunIncrementalVacuum(options.DryRun, cancellationToken);
+                cancellationToken))
+            {
+                db.SuppressPlannerStatisticsMaintenanceOnClose();
+                result = db.RunIncrementalVacuum(options.DryRun, cancellationToken);
+                if (!options.DryRun)
+                    db.CheckpointWalTruncate(cancellationToken);
+                vacuumDataSource = db.Connection.DataSource;
+                vacuumGenerationWitness = options.DryRun
+                    ? null
+                    : db.CaptureVacuumGenerationWitness(cancellationToken);
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!options.DryRun)
+            {
+                result = DbContext.FinalizeVacuumFileMetricsAfterConnectionClose(
+                    result,
+                    vacuumDataSource,
+                    vacuumGenerationWitness,
+                    cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+            }
             if (options.Json)
             {
                 Console.WriteLine(JsonSerializer.Serialize(
@@ -96,6 +119,11 @@ public static partial class QueryCommandRunner
                 Console.WriteLine(ConsoleUi.FormatSummaryLine("Pages", $"{result.PageCountBefore:N0} -> {result.PageCountAfter:N0}"));
                 Console.WriteLine(ConsoleUi.FormatSummaryLine("Freelist", $"{result.FreelistCountBefore:N0} -> {result.FreelistCountAfter:N0}"));
                 Console.WriteLine(ConsoleUi.FormatSummaryLine("AutoVac", $"{result.AutoVacuumModeBeforeName} -> {result.AutoVacuumModeAfterName}"));
+                WriteVacuumByteTransition("Logical DB", result.LogicalDatabaseBytesBefore, result.LogicalDatabaseBytesAfter);
+                WriteVacuumByteTransition("Main file", result.MainFileBytesBefore, result.MainFileBytesAfter);
+                WriteVacuumByteTransition("WAL", result.WalFileBytesBefore, result.WalFileBytesAfter);
+                WriteVacuumByteTransition("SHM", result.ShmFileBytesBefore, result.ShmFileBytesAfter);
+                WriteVacuumByteTransition("File set", result.PhysicalFileSetBytesBefore, result.PhysicalFileSetBytesAfter);
                 if (result.MaintenanceGuidance.RecommendedCommand != "none")
                     Console.WriteLine(ConsoleUi.FormatSummaryLine("Recommend", result.MaintenanceGuidance.RecommendedCommand));
                 if (!string.IsNullOrWhiteSpace(result.MaintenanceGuidance.PostMaintenanceFollowUp))
@@ -128,5 +156,11 @@ public static partial class QueryCommandRunner
                     options.ShowPaths,
                     ex));
         }
+    }
+
+    private static void WriteVacuumByteTransition(string label, long? before, long? after)
+    {
+        if (before.HasValue && after.HasValue)
+            Console.WriteLine(ConsoleUi.FormatSummaryLine(label, $"{before.Value:N0} -> {after.Value:N0} bytes"));
     }
 }

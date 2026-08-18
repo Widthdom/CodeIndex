@@ -6,6 +6,7 @@ internal enum SqliteConnectionPolicyMode
 {
     Default,
     ReadWrite,
+    ReadWriteUnpooled,
     ReadOnly,
     ImmutableReadOnlyUri,
     ImmutableReadOnlyUriUnpooled,
@@ -19,6 +20,7 @@ internal static class SqliteConnectionPolicy
     public const bool LongRunningCommandsRequireCancellation = true;
     public const string DefaultModeName = "default";
     public const string ReadWriteModeName = "read_write";
+    public const string ReadWriteUnpooledModeName = "read_write_unpooled";
     public const string ReadOnlyModeName = "read_only";
     public const string ImmutableReadOnlyUriModeName = "immutable_read_only_uri";
     public const string UnpooledModeName = "unpooled";
@@ -40,6 +42,7 @@ internal static class SqliteConnectionPolicy
         {
             SqliteConnectionPolicyMode.Default => BuildBuilder(dbPath).ConnectionString,
             SqliteConnectionPolicyMode.ReadWrite => BuildBuilder(dbPath, SqliteOpenMode.ReadWrite).ConnectionString,
+            SqliteConnectionPolicyMode.ReadWriteUnpooled => BuildBuilder(dbPath, SqliteOpenMode.ReadWrite, pooling: false).ConnectionString,
             SqliteConnectionPolicyMode.ReadOnly => BuildBuilder(dbPath, SqliteOpenMode.ReadOnly).ConnectionString,
             SqliteConnectionPolicyMode.ImmutableReadOnlyUri => $"Data Source={ToReadOnlyUri(dbPath)};Mode=ReadOnly",
             SqliteConnectionPolicyMode.ImmutableReadOnlyUriUnpooled => $"Data Source={ToReadOnlyUri(dbPath)};Mode=ReadOnly;Pooling=False",

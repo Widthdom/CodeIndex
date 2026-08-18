@@ -43,6 +43,8 @@ public class SqliteConnectionPolicyTests
             SqliteConnectionPolicy.BuildConnectionString(dbPath, SqliteConnectionPolicyMode.ReadOnly));
         var readWrite = new SqliteConnectionStringBuilder(
             SqliteConnectionPolicy.BuildConnectionString(dbPath, SqliteConnectionPolicyMode.ReadWrite));
+        var readWriteUnpooled = new SqliteConnectionStringBuilder(
+            SqliteConnectionPolicy.BuildConnectionString(dbPath, SqliteConnectionPolicyMode.ReadWriteUnpooled));
         var unpooled = new SqliteConnectionStringBuilder(
             SqliteConnectionPolicy.BuildConnectionString(dbPath, SqliteConnectionPolicyMode.Unpooled));
         var readOnlyUnpooled = new SqliteConnectionStringBuilder(
@@ -52,6 +54,8 @@ public class SqliteConnectionPolicyTests
         Assert.Equal(SqliteOpenMode.ReadOnly, readOnly.Mode);
         Assert.True(readOnly.Pooling);
         Assert.Equal(SqliteOpenMode.ReadWrite, readWrite.Mode);
+        Assert.Equal(SqliteOpenMode.ReadWrite, readWriteUnpooled.Mode);
+        Assert.False(readWriteUnpooled.Pooling);
         Assert.False(unpooled.Pooling);
         Assert.Equal(SqliteOpenMode.ReadOnly, readOnlyUnpooled.Mode);
         Assert.False(readOnlyUnpooled.Pooling);

@@ -5327,6 +5327,7 @@ public class DatabaseTests : IDisposable
             Assert.False(result.DryRun);
             Assert.True(result.EstimatedBytesReclaimable > 0);
             Assert.True(result.DbSizeBytesBefore > 0);
+            Assert.Equal(result.PagesReclaimed * result.PageSize, result.BytesReclaimed);
             Assert.Equal(2, result.AutoVacuumModeAfter);
             Assert.Equal("incremental", result.AutoVacuumModeAfterName);
         }

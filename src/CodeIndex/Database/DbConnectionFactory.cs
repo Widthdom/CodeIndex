@@ -195,7 +195,10 @@ internal static class DbConnectionFactory
     internal static SqliteConnection OpenReadOnly(string dbPath)
         => OpenReadOnly(dbPath, out _);
 
-    internal static SqliteConnection OpenReadOnly(string dbPath, out bool usedImmutableFallback)
+    internal static SqliteConnection OpenReadOnly(
+        string dbPath,
+        out bool usedImmutableFallback,
+        bool pooling = true)
     {
         if (OpenReadOnlyForTesting is { } openReadOnlyForTesting)
         {
@@ -208,7 +211,10 @@ internal static class DbConnectionFactory
         // still reads hot -wal state so nothing committed but not yet checkpointed is lost.
         // 第一段: Mode=ReadOnly。多くの read-only 環境で動作し、hot -wal の未チェックポイント
         // 済みコミットも正しく読める。
-        var conn = new SqliteConnection(SqliteConnectionPolicy.BuildConnectionString(dbPath, SqliteConnectionPolicyMode.ReadOnly));
+        var mode = pooling
+            ? SqliteConnectionPolicyMode.ReadOnly
+            : SqliteConnectionPolicyMode.ReadOnlyUnpooled;
+        var conn = new SqliteConnection(SqliteConnectionPolicy.BuildConnectionString(dbPath, mode));
         conn.Open();
         return conn;
     }

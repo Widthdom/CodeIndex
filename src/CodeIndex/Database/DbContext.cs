@@ -20,6 +20,7 @@ public partial class DbContext : IDisposable
     public const string MmapSizeEnvironmentVariable = "CDIDX_SQLITE_MMAP_BYTES";
     public const string BusyTimeoutEnvironmentVariable = "CDIDX_SQLITE_BUSY_TIMEOUT_MS";
     public const int DefaultWalAutocheckpointPages = 1000;
+    internal const int VacuumFileSetCaptureMaxAttempts = 3;
     public const string DefaultSynchronousMode = "NORMAL";
     public const string SymbolExtractorVersionMetaPrefix = "symbol_extractor_version_";
     internal const string FtsChunksTrigramTableName = "fts_chunks_trigram";
@@ -235,6 +236,7 @@ public partial class DbContext : IDisposable
     private bool _queryOnlySnapshotRequiresRefresh;
     private string? _queryOnlySnapshotSourcePath;
     private DbConnectionFactory.QueryOnlySnapshotSourceState? _queryOnlySnapshotSourceState;
+    private long? _vacuumLogicalAfterDataVersion;
     private string? _walCheckpointSkippedReason;
     private string? _walCheckpointFailureReason;
     private long? _walCheckpointBusy;
@@ -265,6 +267,8 @@ public partial class DbContext : IDisposable
     private static readonly AsyncLocal<Action<string, string>?> ScopedPlannerStatisticsCommandExecutedForTesting = new();
     private static readonly AsyncLocal<Action<string>?> ScopedWalCheckpointTruncateExecutedForTesting = new();
     private static readonly AsyncLocal<Action<string, string>?> ScopedMaintenanceProgressForTesting = new();
+    private static readonly AsyncLocal<Action<string, int, string>?> ScopedVacuumFileSetCaptureForTesting = new();
+    private static readonly AsyncLocal<Func<string, FileAttributes>?> ScopedVacuumFileMetadataProbeForTesting = new();
     private static readonly AsyncLocal<Action<string>?> ScopedForeignKeysDisabledForTesting = new();
     private static readonly AsyncLocal<Action<string, long>?> ScopedForeignKeysRestoringForTesting = new();
     private static readonly AsyncLocal<Action<SqliteConnection, string>?> ScopedForeignKeyValidationBeforeCheckForTesting = new();
@@ -305,6 +309,18 @@ public partial class DbContext : IDisposable
     {
         get => ScopedMaintenanceProgressForTesting.Value;
         set => ScopedMaintenanceProgressForTesting.Value = value;
+    }
+
+    internal static Action<string, int, string>? VacuumFileSetCaptureForTesting
+    {
+        get => ScopedVacuumFileSetCaptureForTesting.Value;
+        set => ScopedVacuumFileSetCaptureForTesting.Value = value;
+    }
+
+    internal static Func<string, FileAttributes>? VacuumFileMetadataProbeForTesting
+    {
+        get => ScopedVacuumFileMetadataProbeForTesting.Value;
+        set => ScopedVacuumFileMetadataProbeForTesting.Value = value;
     }
 
     internal static Action<string>? ForeignKeysDisabledForTesting
@@ -430,12 +446,25 @@ public partial class DbContext : IDisposable
     {
     }
 
+    internal static DbContext CreateUnpooled(
+        DbOpenIntent openIntent,
+        string dbPath,
+        CancellationToken cancellationToken = default)
+        => new(
+            openIntent,
+            dbPath,
+            DatabasePermissionPolicy.Resolve(),
+            SystemDatabaseFileModeProvider.Instance,
+            cancellationToken,
+            useConnectionPooling: false);
+
     internal DbContext(
         DbOpenIntent openIntent,
         string dbPath,
         DatabasePermissionPolicyMode databasePermissionPolicy,
         IDatabaseFileModeProvider databaseFileModeProvider,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool useConnectionPooling = true)
     {
         if (!Enum.IsDefined(openIntent))
             throw new ArgumentOutOfRangeException(nameof(openIntent), openIntent, "Unknown database open intent.");
@@ -446,6 +475,7 @@ public partial class DbContext : IDisposable
         cancellationToken.ThrowIfCancellationRequested();
         _openIntent = openIntent;
         _schemaCacheKey = TryCreateSchemaCacheKey(dbPath);
+        _connectionPooling = useConnectionPooling;
 
         if (openIntent == DbOpenIntent.QueryOnly)
         {
@@ -486,7 +516,10 @@ public partial class DbContext : IDisposable
         // Route through the shared SQLite connection policy so mode/pooling/timeout
         // assumptions stay consistent across CLI and MCP callers.
         // mode/pooling/timeout の前提を CLI/MCP で揃えるため共有ポリシーを通す。
-        var connectionString = SqliteConnectionPolicy.BuildConnectionString(dbPath, SqliteConnectionPolicyMode.Default);
+        var connectionMode = useConnectionPooling
+            ? SqliteConnectionPolicyMode.Default
+            : SqliteConnectionPolicyMode.Unpooled;
+        var connectionString = SqliteConnectionPolicy.BuildConnectionString(dbPath, connectionMode);
 
         try
         {
@@ -524,7 +557,10 @@ public partial class DbContext : IDisposable
             // 自動経路は Mode=ReadOnly のみとし、immutable=1 は stale risk を受け入れる明示指定に限る。
             _connection?.Dispose();
             var checkpointResult = _walCheckpointSkippedReason == null
-                ? CheckpointWalBeforeReadOnlyFallback(dbPath, cancellationToken)
+                ? CheckpointWalBeforeReadOnlyFallback(
+                    dbPath,
+                    cancellationToken,
+                    useConnectionPooling)
                 : WalCheckpointResult.SkippedAfterAttempt(_walCheckpointSkippedReason);
             ApplyWalCheckpointResult(checkpointResult);
             if (_walCheckpointSucceeded)

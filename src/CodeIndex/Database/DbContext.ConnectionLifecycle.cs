@@ -60,7 +60,10 @@ public partial class DbContext : IDisposable
     private void OpenReadOnlyFallback(string dbPath, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        _connection = OpenReadOnly(dbPath, out _readOnlyImmutableFallback);
+        _connection = OpenReadOnly(
+            dbPath,
+            out _readOnlyImmutableFallback,
+            pooling: _connectionPooling);
         _immutableReadOnly = _readOnlyImmutableFallback;
         ApplyBusyTimeoutPragma();
         ApplyConnectionPerformancePragmas();
@@ -71,11 +74,15 @@ public partial class DbContext : IDisposable
 
     internal static WalCheckpointResult CheckpointWalBeforeReadOnlyFallback(
         string dbPath,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool useConnectionPooling = true)
     {
         try
         {
-            var connectionString = SqliteConnectionPolicy.BuildConnectionString(dbPath, SqliteConnectionPolicyMode.ReadWrite);
+            var mode = useConnectionPooling
+                ? SqliteConnectionPolicyMode.ReadWrite
+                : SqliteConnectionPolicyMode.ReadWriteUnpooled;
+            var connectionString = SqliteConnectionPolicy.BuildConnectionString(dbPath, mode);
             using var connection = OpenSqliteConnectionWithRetry(
                 () => new SqliteConnection(connectionString),
                 static connection => connection.Open(),
@@ -87,6 +94,10 @@ public partial class DbContext : IDisposable
         catch (OperationCanceledException)
         {
             throw;
+        }
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
+        {
+            throw new OperationCanceledException(cancellationToken);
         }
         catch (Exception ex)
         {
@@ -155,6 +166,12 @@ public partial class DbContext : IDisposable
 
             cancellationToken.ThrowIfCancellationRequested();
             ReportMaintenanceProgress("wal_checkpoint", "truncate_start", connection.DataSource);
+            cancellationToken.ThrowIfCancellationRequested();
+            using var cancellationRegistration = cancellationToken.CanBeCanceled
+                ? cancellationToken.UnsafeRegister(
+                    static state => SQLitePCL.raw.sqlite3_interrupt(((SqliteConnection)state!).Handle),
+                    connection)
+                : default;
             using var reader = cmd.ExecuteReader();
             if (!reader.Read())
                 return WalCheckpointResult.Failed(WalCheckpointResult.MissingResultFailureReason);
@@ -214,6 +231,10 @@ public partial class DbContext : IDisposable
         catch (OperationCanceledException)
         {
             throw;
+        }
+        catch (Exception ex) when (cancellationToken.IsCancellationRequested)
+        {
+            throw new OperationCanceledException("SQLite WAL checkpoint was interrupted.", ex, cancellationToken);
         }
         catch (Exception ex)
         {
@@ -456,6 +477,7 @@ public partial class DbContext : IDisposable
 
     public VacuumResult RunIncrementalVacuum(bool dryRun, CancellationToken cancellationToken)
     {
+        _vacuumLogicalAfterDataVersion = null;
         if (_isReadOnly && !dryRun)
         {
             throw new CodeIndexException(
@@ -468,7 +490,9 @@ public partial class DbContext : IDisposable
 
         cancellationToken.ThrowIfCancellationRequested();
         ReportMaintenanceProgress("vacuum", "metrics_before", _connection.DataSource);
-        var before = ReadVacuumMetrics();
+        var before = ReadVacuumMetricsInSnapshot(
+            cancellationToken,
+            stableDataVersion: out _);
         cancellationToken.ThrowIfCancellationRequested();
         if (!dryRun && before.AutoVacuumMode == 2)
         {
@@ -485,7 +509,14 @@ public partial class DbContext : IDisposable
         }
         cancellationToken.ThrowIfCancellationRequested();
         ReportMaintenanceProgress("vacuum", "metrics_after", _connection.DataSource);
-        var after = dryRun ? before : ReadVacuumMetrics();
+        long? afterDataVersion = null;
+        var after = dryRun
+            ? before
+            : ReadVacuumMetricsInSnapshot(
+                cancellationToken,
+                stableDataVersion: out afterDataVersion,
+                afterFirstPragmaPhase: "metrics_after_page_count");
+        _vacuumLogicalAfterDataVersion = afterDataVersion;
         cancellationToken.ThrowIfCancellationRequested();
         var pagesReclaimed = dryRun ? 0 : Math.Max(0, before.PageCount - after.PageCount);
         var bytesReclaimed = pagesReclaimed * after.PageSize;
@@ -516,6 +547,16 @@ public partial class DbContext : IDisposable
             WalSizeBytesBefore: before.WalSizeBytes,
             DbSizeBytesAfter: after.DbSizeBytes,
             WalSizeBytesAfter: after.WalSizeBytes,
+            LogicalDatabaseBytesBefore: before.PageCount * before.PageSize,
+            LogicalDatabaseBytesAfter: after.PageCount * after.PageSize,
+            MainFileBytesBefore: before.DbSizeBytes,
+            MainFileBytesAfter: after.DbSizeBytes,
+            WalFileBytesBefore: before.WalSizeBytes,
+            WalFileBytesAfter: after.WalSizeBytes,
+            ShmFileBytesBefore: before.ShmSizeBytes,
+            ShmFileBytesAfter: after.ShmSizeBytes,
+            PhysicalFileSetBytesBefore: before.PhysicalFileSetBytes,
+            PhysicalFileSetBytesAfter: after.PhysicalFileSetBytes,
             WalCheckpointTimingNote: BuildWalCheckpointTimingNote(dryRun),
             AutoVacuumModeBefore: before.AutoVacuumMode,
             AutoVacuumModeBeforeName: MaintenanceGuidanceBuilder.FormatAutoVacuumMode(before.AutoVacuumMode) ?? "unknown",
@@ -533,7 +574,7 @@ public partial class DbContext : IDisposable
         {
             cancellationToken.ThrowIfCancellationRequested();
             ReportMaintenanceProgress("rebuild_reclaim", "metrics_before", _connection.DataSource);
-            var beforeMetrics = ReadVacuumMetrics();
+            var beforeMetrics = ReadVacuumMetrics(cancellationToken);
             before = beforeMetrics;
             guidanceBefore = MaintenanceGuidanceBuilder.Build(new MaintenanceMetrics(
                 beforeMetrics.PageCount,
@@ -574,7 +615,7 @@ public partial class DbContext : IDisposable
             Execute(DbPragmaPolicy.IncrementalVacuumPragmaSql(beforeMetrics.FreelistCount));
             cancellationToken.ThrowIfCancellationRequested();
             ReportMaintenanceProgress("rebuild_reclaim", "metrics_after", _connection.DataSource);
-            var after = ReadVacuumMetrics();
+            var after = ReadVacuumMetrics(cancellationToken);
             var guidanceAfter = MaintenanceGuidanceBuilder.Build(new MaintenanceMetrics(
                 after.PageCount,
                 after.FreelistCount,
@@ -668,20 +709,258 @@ public partial class DbContext : IDisposable
             ? null
             : "wal_size_bytes_after is sampled before the vacuum connection closes; SQLite may checkpoint or truncate WAL pages after command cleanup, so a later status call can report a smaller wal_size_bytes value.";
 
+    internal static VacuumResult FinalizeVacuumFileMetricsAfterConnectionClose(
+        VacuumResult result,
+        string dbPath,
+        VacuumGenerationWitness? expectedWitness,
+        CancellationToken cancellationToken = default)
+    {
+        VacuumFileSetMetrics after = default;
+        if (expectedWitness.HasValue)
+        {
+            for (var attempt = 1; attempt <= VacuumFileSetCaptureMaxAttempts; attempt++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!TryReadPostCloseVacuumMetrics(
+                        dbPath,
+                        cancellationToken,
+                        out var observed))
+                {
+                    continue;
+                }
+
+                if (!MatchesVacuumLogicalAfter(result, observed))
+                    break;
+                if (!HasCompleteVacuumFileSet(observed))
+                    continue;
+                if (!IsCompatiblePostCloseVacuumGeneration(
+                        expectedWitness.Value.SourceState,
+                        observed.SourceState!.Value))
+                {
+                    break;
+                }
+
+                after = new VacuumFileSetMetrics(
+                    observed.DbSizeBytes,
+                    observed.WalSizeBytes,
+                    observed.ShmSizeBytes,
+                    observed.PhysicalFileSetBytes,
+                    SourceState: null);
+                break;
+            }
+        }
+
+        var guidance = MaintenanceGuidanceBuilder.Build(
+            new MaintenanceMetrics(
+                result.PageCountAfter,
+                result.FreelistCountAfter,
+                result.PageSize,
+                after.WalFileBytes,
+                after.MainFileBytes,
+                result.AutoVacuumModeAfter),
+            ftsOptimization: result.MaintenanceGuidance.FtsOptimization);
+        return result with
+        {
+            DbSizeBytesAfter = after.MainFileBytes,
+            WalSizeBytesAfter = after.WalFileBytes,
+            MainFileBytesAfter = after.MainFileBytes,
+            WalFileBytesAfter = after.WalFileBytes,
+            ShmFileBytesAfter = after.ShmFileBytes,
+            PhysicalFileSetBytesAfter = after.PhysicalFileSetBytes,
+            MaintenanceGuidance = guidance,
+            WalCheckpointTimingNote = result.DryRun
+                ? null
+                : "File-size after fields are sampled from a stable observation after the command-owned vacuum connection closes. WAL and SHM can remain when another connection prevents checkpoint or truncation; unstable or inaccessible physical fields are omitted from CLI JSON.",
+        };
+    }
+
+    private static bool TryReadPostCloseVacuumMetrics(
+        string dbPath,
+        CancellationToken cancellationToken,
+        out VacuumMetrics metrics)
+    {
+        try
+        {
+            using var observer = CreateUnpooled(
+                DbOpenIntent.QueryOnly,
+                dbPath,
+                cancellationToken);
+            observer.SuppressPlannerStatisticsMaintenanceOnClose();
+            using var transaction = observer.Connection.BeginTransaction(deferred: true);
+            metrics = observer.ReadVacuumMetrics(
+                cancellationToken,
+                fileSetPhase: "post_close",
+                fileSetMaxAttempts: 1);
+            transaction.Commit();
+            return true;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is CodeIndexException
+            or SqliteException
+            or IOException
+            or UnauthorizedAccessException
+            or NotSupportedException
+            or ArgumentException
+            or System.Security.SecurityException)
+        {
+            metrics = default;
+            return false;
+        }
+    }
+
+    private static bool MatchesVacuumLogicalAfter(
+        VacuumResult result,
+        VacuumMetrics observed)
+        => observed.PageCount == result.PageCountAfter
+           && observed.FreelistCount == result.FreelistCountAfter
+           && observed.PageSize == result.PageSize
+           && observed.AutoVacuumMode == result.AutoVacuumModeAfter;
+
+    private static bool HasCompleteVacuumFileSet(VacuumMetrics metrics)
+        => metrics.DbSizeBytes.HasValue
+           && metrics.WalSizeBytes.HasValue
+           && metrics.ShmSizeBytes.HasValue
+           && metrics.PhysicalFileSetBytes.HasValue
+           && metrics.SourceState.HasValue;
+
+    private static bool IsCompatiblePostCloseVacuumGeneration(
+        DbConnectionFactory.QueryOnlySnapshotSourceState expected,
+        DbConnectionFactory.QueryOnlySnapshotSourceState observed)
+    {
+        if (SameVacuumGeneration(expected, observed))
+            return true;
+
+        // A reader can keep committed WAL frames alive through the pre-close witness.
+        // A later checkpoint may fold those frames into the main file and remove the WAL.
+        // A matching logical size signature keeps the public size metrics coherent across
+        // that transition; other raw-generation changes fail closed.
+        return expected.WalLength > 0 && observed.WalLength == 0;
+    }
+
+    private static bool SameVacuumGeneration(
+        DbConnectionFactory.QueryOnlySnapshotSourceState expected,
+        DbConnectionFactory.QueryOnlySnapshotSourceState observed)
+    {
+        if (observed.DbLength != expected.DbLength
+            || observed.DbHeaderFingerprint != expected.DbHeaderFingerprint
+            || observed.DatabaseFile != expected.DatabaseFile
+            || observed.WalLength != expected.WalLength)
+        {
+            return false;
+        }
+
+        if (observed.WalLength == 0)
+            return true;
+
+        return observed.WalHeaderFingerprint == expected.WalHeaderFingerprint
+            && observed.WalLastFrameFingerprint == expected.WalLastFrameFingerprint
+            && observed.WalFile == expected.WalFile;
+    }
+
+    internal VacuumGenerationWitness? CaptureVacuumGenerationWitness(
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (_vacuumLogicalAfterDataVersion is not { } expectedDataVersion
+            || ReadPragmaLong("data_version") != expectedDataVersion)
+        {
+            return null;
+        }
+
+        var fileSet = ReadVacuumFileSetMetrics(
+            _connection.DataSource,
+            "pre_close_generation",
+            cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (fileSet.SourceState is not { } sourceState
+            || ReadPragmaLong("data_version") != expectedDataVersion)
+        {
+            return null;
+        }
+
+        return new VacuumGenerationWitness(sourceState);
+    }
+
     private static void ReportMaintenanceProgress(string operation, string phase, string dbPath)
     {
         GlobalToolLog.Info($"db_maintenance_progress operation={operation} phase={phase} db_path={ConsoleUi.FormatBoundedValue(dbPath)}");
         MaintenanceProgressForTesting?.Invoke(operation, phase);
     }
 
-    private VacuumMetrics ReadVacuumMetrics()
-        => new(
-            ReadPragmaLong("page_count"),
-            ReadPragmaLong("freelist_count"),
-            ReadPragmaLong("page_size"),
-            ReadAutoVacuumMode(),
-            TryGetDatabaseFileSize(),
-            TryGetWalFileSize());
+    private VacuumMetrics ReadVacuumMetrics(
+        CancellationToken cancellationToken = default,
+        string? fileSetPhase = null,
+        int fileSetMaxAttempts = VacuumFileSetCaptureMaxAttempts,
+        string? afterFirstPragmaPhase = null)
+    {
+        var pageCount = ReadPragmaLong("page_count");
+        if (afterFirstPragmaPhase != null)
+        {
+            MaintenanceProgressForTesting?.Invoke("vacuum", afterFirstPragmaPhase);
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+        var freelistCount = ReadPragmaLong("freelist_count");
+        var pageSize = ReadPragmaLong("page_size");
+        var autoVacuumMode = ReadAutoVacuumMode();
+        var fileSet = _queryOnlySnapshotSourcePath is { } sourcePath
+            && _queryOnlySnapshotSourceState is { } sourceState
+            ? ReadVacuumFileSetMetrics(
+                sourcePath,
+                fileSetPhase ?? "query_snapshot_source",
+                cancellationToken,
+                sourceState,
+                fileSetMaxAttempts)
+            : ReadVacuumFileSetMetrics(
+                _connection.DataSource,
+                fileSetPhase ?? "connection",
+                cancellationToken,
+                maxAttempts: fileSetMaxAttempts);
+        return new(
+            pageCount,
+            freelistCount,
+            pageSize,
+            autoVacuumMode,
+            fileSet.MainFileBytes,
+            fileSet.WalFileBytes,
+            fileSet.ShmFileBytes,
+            fileSet.PhysicalFileSetBytes,
+            fileSet.SourceState);
+    }
+
+    private VacuumMetrics ReadVacuumMetricsInSnapshot(
+        CancellationToken cancellationToken,
+        out long? stableDataVersion,
+        string? afterFirstPragmaPhase = null)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var dataVersionBefore = ReadPragmaLong("data_version");
+        using var transaction = _connection.BeginTransaction(deferred: true);
+        var metrics = ReadVacuumMetrics(
+            cancellationToken,
+            afterFirstPragmaPhase: afterFirstPragmaPhase);
+        transaction.Commit();
+        cancellationToken.ThrowIfCancellationRequested();
+        var dataVersionAfter = ReadPragmaLong("data_version");
+        stableDataVersion = dataVersionBefore == dataVersionAfter
+            ? dataVersionAfter
+            : null;
+        if (!stableDataVersion.HasValue)
+        {
+            metrics = metrics with
+            {
+                DbSizeBytes = null,
+                WalSizeBytes = null,
+                ShmSizeBytes = null,
+                PhysicalFileSetBytes = null,
+                SourceState = null,
+            };
+        }
+
+        return metrics;
+    }
 
     private long ReadAutoVacuumMode() => ReadPragmaLong("auto_vacuum");
 
@@ -691,35 +970,153 @@ public partial class DbContext : IDisposable
         Execute(DbPragmaPolicy.BusyTimeoutPragmaSql(busyTimeoutMs));
     }
 
-    private long? TryGetDatabaseFileSize()
+    private static VacuumFileSetMetrics ReadVacuumFileSetMetrics(
+        string dbPath,
+        string phase,
+        CancellationToken cancellationToken,
+        DbConnectionFactory.QueryOnlySnapshotSourceState? expectedSourceState = null,
+        int maxAttempts = VacuumFileSetCaptureMaxAttempts)
     {
-        var path = _connection.DataSource;
-        if (string.IsNullOrWhiteSpace(path) || path.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
-            return null;
+        var path = dbPath;
+        if (string.IsNullOrWhiteSpace(path))
+            return default;
+        if (path.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+            path = DbConnectionFactory.TryGetLocalPath(path);
+        if (string.IsNullOrWhiteSpace(path))
+            return default;
 
+        for (var attempt = 1; attempt <= maxAttempts; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!DbConnectionFactory.TryCaptureQuerySourceState(
+                    path,
+                    cancellationToken,
+                    out var sourceStateBefore)
+                || (expectedSourceState is { } expectedBefore && sourceStateBefore != expectedBefore)
+                || !TryReadVacuumFileSetState(path, out var fileSetBefore)
+                || !FileSetMatchesSourceState(fileSetBefore, sourceStateBefore))
+            {
+                continue;
+            }
+
+            VacuumFileSetCaptureForTesting?.Invoke(phase, attempt, path);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!DbConnectionFactory.TryCaptureQuerySourceState(
+                    path,
+                    cancellationToken,
+                    out var sourceStateAfter)
+                || sourceStateBefore != sourceStateAfter
+                || (expectedSourceState is { } expectedAfter && sourceStateAfter != expectedAfter)
+                || !TryReadVacuumFileSetState(path, out var fileSetAfter)
+                || fileSetBefore != fileSetAfter
+                || !FileSetMatchesSourceState(fileSetAfter, sourceStateAfter))
+            {
+                continue;
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            var mainFileBytes = fileSetAfter.MainFile.Length;
+            var walFileBytes = fileSetAfter.WalFile.Exists ? fileSetAfter.WalFile.Length : 0;
+            var shmFileBytes = fileSetAfter.ShmFile.Exists ? fileSetAfter.ShmFile.Length : 0;
+            return new VacuumFileSetMetrics(
+                mainFileBytes,
+                walFileBytes,
+                shmFileBytes,
+                TryAddNonNegative(mainFileBytes, walFileBytes, shmFileBytes),
+                sourceStateAfter);
+        }
+
+        return default;
+    }
+
+    private static bool TryReadVacuumFileSetState(
+        string dbPath,
+        out VacuumFileSetState fileSet)
+    {
+        if (!TryReadVacuumFileState(dbPath, required: true, out var mainFile)
+            || !TryReadVacuumFileState(dbPath + "-wal", required: false, out var walFile)
+            || !TryReadVacuumFileState(dbPath + "-shm", required: false, out var shmFile))
+        {
+            fileSet = default;
+            return false;
+        }
+
+        fileSet = new VacuumFileSetState(mainFile, walFile, shmFile);
+        return true;
+    }
+
+    private static bool TryReadVacuumFileState(
+        string path,
+        bool required,
+        out VacuumFileState state)
+    {
         try
         {
-            var info = new FileInfo(path);
-            return info.Exists ? info.Length : null;
+            var normalizedPath = LongPath.EnsureWindowsPrefix(path);
+            _ = VacuumFileMetadataProbeForTesting is { } metadataProbe
+                ? metadataProbe(normalizedPath)
+                : File.GetAttributes(normalizedPath);
+            var info = new FileInfo(normalizedPath);
+            info.Refresh();
+            if (!info.Exists)
+            {
+                state = default;
+                return false;
+            }
+
+            state = new VacuumFileState(
+                true,
+                info.Length,
+                info.CreationTimeUtc.Ticks,
+                info.LastWriteTimeUtc.Ticks);
+            return true;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
         {
-            return null;
+            state = default;
+            return !required;
+        }
+        catch (Exception ex) when (ex is IOException
+            or UnauthorizedAccessException
+            or NotSupportedException
+            or ArgumentException
+            or System.Security.SecurityException)
+        {
+            state = default;
+            return false;
         }
     }
 
-    private long? TryGetWalFileSize()
+    private static bool FileSetMatchesSourceState(
+        VacuumFileSetState fileSet,
+        DbConnectionFactory.QueryOnlySnapshotSourceState sourceState)
     {
-        var path = _connection.DataSource;
-        if (string.IsNullOrWhiteSpace(path) || path.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
-            return null;
+        if (!fileSet.MainFile.Exists
+            || fileSet.MainFile.ToSourceIdentity() != sourceState.DatabaseFile)
+        {
+            return false;
+        }
 
+        return sourceState.WalFile is { } walFile
+            ? fileSet.WalFile.Exists && fileSet.WalFile.ToSourceIdentity() == walFile
+            : !fileSet.WalFile.Exists;
+    }
+
+    private static long? TryAddNonNegative(params long?[] values)
+    {
         try
         {
-            var info = new FileInfo(path + "-wal");
-            return info.Exists ? info.Length : 0;
+            long total = 0;
+            foreach (var value in values)
+            {
+                if (value is null or < 0)
+                    return null;
+                total = checked(total + value.Value);
+            }
+
+            return total;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
+        catch (OverflowException)
         {
             return null;
         }
@@ -738,7 +1135,35 @@ public partial class DbContext : IDisposable
         long PageSize,
         long AutoVacuumMode,
         long? DbSizeBytes,
-        long? WalSizeBytes);
+        long? WalSizeBytes,
+        long? ShmSizeBytes,
+        long? PhysicalFileSetBytes,
+        DbConnectionFactory.QueryOnlySnapshotSourceState? SourceState);
+
+    private readonly record struct VacuumFileSetMetrics(
+        long? MainFileBytes,
+        long? WalFileBytes,
+        long? ShmFileBytes,
+        long? PhysicalFileSetBytes,
+        DbConnectionFactory.QueryOnlySnapshotSourceState? SourceState);
+
+    internal readonly record struct VacuumGenerationWitness(
+        DbConnectionFactory.QueryOnlySnapshotSourceState SourceState);
+
+    private readonly record struct VacuumFileSetState(
+        VacuumFileState MainFile,
+        VacuumFileState WalFile,
+        VacuumFileState ShmFile);
+
+    private readonly record struct VacuumFileState(
+        bool Exists,
+        long Length,
+        long CreationTimeUtcTicks,
+        long LastWriteTimeUtcTicks)
+    {
+        internal DbConnectionFactory.QuerySourceFileIdentity ToSourceIdentity()
+            => new(Length, CreationTimeUtcTicks, LastWriteTimeUtcTicks);
+    }
 
     private void EnsureWritableUserVersionSupported(string dbPath)
     {
@@ -789,8 +1214,11 @@ public partial class DbContext : IDisposable
     private static SqliteConnection OpenReadOnly(string dbPath)
         => DbConnectionFactory.OpenReadOnly(dbPath);
 
-    private static SqliteConnection OpenReadOnly(string dbPath, out bool usedImmutableFallback)
-        => DbConnectionFactory.OpenReadOnly(dbPath, out usedImmutableFallback);
+    private static SqliteConnection OpenReadOnly(
+        string dbPath,
+        out bool usedImmutableFallback,
+        bool pooling = true)
+        => DbConnectionFactory.OpenReadOnly(dbPath, out usedImmutableFallback, pooling);
 
     private static SqliteConnection CreateArtifactPreservingQueryOnlyConnection(
         string dbPath,
