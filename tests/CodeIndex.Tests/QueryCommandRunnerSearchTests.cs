@@ -1877,6 +1877,25 @@ public partial class QueryCommandRunnerTests
                 "csharp",
                 """
                 public record Person([property: Obsolete] string First, string Last);
+                public record Generic<@T>(string @Value);
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/MultiHit.cs",
+                "csharp",
+                """
+                public class FocusMismatch
+                {
+                    public void First()
+                    {
+                        var alphaOnlyMarker = 1;
+                    }
+
+                    public void Second()
+                    {
+                        var alphaOnlyMarker = betaOnlyMarker;
+                    }
+                }
                 """);
 
             var keyword = CaptureConsole(() => QueryCommandRunner.RunSearch(
@@ -1887,6 +1906,15 @@ public partial class QueryCommandRunnerTests
                 _jsonOptions));
             var grouped = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 ["string First", "--db", dbPath, "--exact-substring", "--group-by", "symbol", "--count", "--json"],
+                _jsonOptions));
+            var normalizedColumn = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["string Value", "--db", dbPath, "--exact-substring", "--path", "src/Records.cs", "--json=array"],
+                _jsonOptions));
+            var multiHit = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["alphaOnlyMarker betaOnlyMarker", "--db", dbPath, "--path", "src/MultiHit.cs", "--json=array"],
+                _jsonOptions));
+            var multiHitGrouped = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["alphaOnlyMarker betaOnlyMarker", "--db", dbPath, "--path", "src/MultiHit.cs", "--group-by", "symbol", "--count", "--json"],
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, keyword.Result);
@@ -1914,6 +1942,30 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("src/Records.cs", group.GetProperty("file").GetString());
             Assert.Equal("First", group.GetProperty("symbol_name").GetString());
             Assert.Equal("property", group.GetProperty("symbol_kind").GetString());
+
+            Assert.Equal(CommandExitCodes.Success, normalizedColumn.Result);
+            Assert.Equal(string.Empty, normalizedColumn.Stderr);
+            using var normalizedColumnDocument = ParseJsonOutput(normalizedColumn.Stdout);
+            var normalizedColumnRow = Assert.Single(normalizedColumnDocument.RootElement.EnumerateArray());
+            Assert.Equal(2, normalizedColumnRow.GetProperty("focus_line").GetInt32());
+            Assert.Equal(27, normalizedColumnRow.GetProperty("focus_column").GetInt32());
+            Assert.Equal("Value", normalizedColumnRow.GetProperty("enclosing_symbol_name").GetString());
+            Assert.Equal("property", normalizedColumnRow.GetProperty("enclosing_symbol_kind").GetString());
+
+            Assert.Equal(CommandExitCodes.Success, multiHit.Result);
+            Assert.Equal(string.Empty, multiHit.Stderr);
+            using var multiHitDocument = ParseJsonOutput(multiHit.Stdout);
+            var multiHitRow = Assert.Single(multiHitDocument.RootElement.EnumerateArray());
+            Assert.Equal(5, multiHitRow.GetProperty("focus_line").GetInt32());
+            Assert.Equal("First", multiHitRow.GetProperty("enclosing_symbol_name").GetString());
+            Assert.Equal("function", multiHitRow.GetProperty("enclosing_symbol_kind").GetString());
+
+            Assert.Equal(CommandExitCodes.Success, multiHitGrouped.Result);
+            Assert.Equal(string.Empty, multiHitGrouped.Stderr);
+            using var multiHitGroupedDocument = ParseJsonOutput(multiHitGrouped.Stdout);
+            var multiHitGroup = Assert.Single(multiHitGroupedDocument.RootElement.GetProperty("groups").EnumerateArray());
+            Assert.Equal("First", multiHitGroup.GetProperty("symbol_name").GetString());
+            Assert.Equal("function", multiHitGroup.GetProperty("symbol_kind").GetString());
         }
         finally
         {

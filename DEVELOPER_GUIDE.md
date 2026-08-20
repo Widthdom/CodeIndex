@@ -1946,7 +1946,9 @@ store the span from the component's first attribute or type token through its
 identifier, so record keywords, record type names, base arguments, and body
 members remain attributed to their actual enclosing symbols even when they
 share a physical line with a positional component. Legacy rows without column
-metadata retain the line-based fallback.
+metadata retain the line-based fallback. Primary-match selection mirrors the
+displayed focus line, and normalized C# verbatim identifiers map back to raw
+source columns before symbol containment is evaluated.
 
 When you run:
 ```sql
@@ -5802,7 +5804,9 @@ CLI は exact-mode alias を正規化してから、raw `--fts` と `--exact`、
 判定します。C# の位置 record property は、component の最初の attribute または型 token から
 識別子までの範囲を保持します。これにより、同じ物理行に位置 component があっても、
 record keyword、record 型名、base 引数、body member は実際の囲みシンボルに帰属します。
-列 metadata がない旧 row では行ベースの fallback を維持します。
+列 metadata がない旧 row では行ベースの fallback を維持します。主要一致の選択は表示される
+focus 行と一致し、正規化された C# verbatim identifier は、symbol の包含判定前に raw source の
+列へ戻されます。
 
 以下のクエリを実行すると:
 ```sql

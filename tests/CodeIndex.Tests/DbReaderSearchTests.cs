@@ -27,6 +27,8 @@ public partial class DbReaderTests
             public readonly record struct Point(
                 int X,
                 int Y);
+
+            public record Generic<@T>(string @Value);
             """);
 
         AssertEnclosing("record Person", "Person", "class");
@@ -40,6 +42,31 @@ public partial class DbReaderTests
         AssertEnclosing("record struct Point", "Point", "struct");
         AssertEnclosing("int X", "X", "property");
         AssertEnclosing("int Y", "Y", "property");
+        AssertEnclosing("string Value", "Value", "property");
+
+        InsertIndexedFile(
+            "src/MultiHit.cs",
+            "csharp",
+            """
+            public class FocusMismatch
+            {
+                public void First()
+                {
+                    var alphaOnlyMarker = 1;
+                }
+
+                public void Second()
+                {
+                    var alphaOnlyMarker = betaOnlyMarker;
+                }
+            }
+            """);
+        var multiHit = Assert.Single(_reader.Search(
+            "alphaOnlyMarker betaOnlyMarker",
+            lang: "csharp",
+            pathPatterns: ["src/MultiHit.cs"]));
+        Assert.Equal("First", multiHit.EnclosingSymbolName);
+        Assert.Equal("function", multiHit.EnclosingSymbolKind);
 
         void AssertEnclosing(string query, string expectedName, string expectedKind)
         {

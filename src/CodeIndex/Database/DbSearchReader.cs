@@ -1627,36 +1627,91 @@ public partial class DbReader
         }
 
         var normalizeCSharp = context.ShouldNormalizeCSharp(result);
-        var matches = new List<SearchPrimaryMatch>();
+        var preferredMatches = new List<SearchPrimaryMatch>();
+        var fallbackMatches = new List<SearchPrimaryMatch>();
         foreach (var (lineIndex, text) in EnumerateContentLines(result.Content))
         {
-            var line = normalizeCSharp ? CSharpVerbatimNameNormalizer.Normalize(text) : text;
-            var lineMatches = context.RequireAllTermsOnLine
-                ? context.Terms.All(term => line.Contains(term, context.Comparison))
-                : context.Terms.Any(term => line.Contains(term, context.Comparison));
-            if (lineMatches && TryFindPrimaryMatchSpan(text, line, context, out var column, out var length))
-                matches.Add(new SearchPrimaryMatch(result.StartLine + lineIndex, text, column, length));
+            var line = text;
+            int[]? rawIndexMap = null;
+            if (normalizeCSharp)
+                line = CSharpVerbatimNameNormalizer.Normalize(text, out rawIndexMap);
+
+            if (TryFindPrimaryMatchSpan(
+                    text,
+                    line,
+                    rawIndexMap,
+                    [context.PreferredQuery],
+                    context.Comparison,
+                    out var preferredColumn,
+                    out var preferredLength))
+            {
+                preferredMatches.Add(new SearchPrimaryMatch(
+                    result.StartLine + lineIndex,
+                    text,
+                    preferredColumn,
+                    preferredLength));
+            }
+
+            if (TryFindPrimaryMatchSpan(
+                    text,
+                    line,
+                    rawIndexMap,
+                    context.Terms,
+                    context.Comparison,
+                    out var fallbackColumn,
+                    out var fallbackLength))
+            {
+                fallbackMatches.Add(new SearchPrimaryMatch(
+                    result.StartLine + lineIndex,
+                    text,
+                    fallbackColumn,
+                    fallbackLength));
+            }
         }
 
-        return matches;
+        return preferredMatches.Count > 0 ? preferredMatches : fallbackMatches;
     }
 
     private sealed record SearchPrimaryMatch(int LineNumber, string Text, int Column, int Length);
 
-    private static bool TryFindPrimaryMatchSpan(string text, string normalizedLine, SearchPrimaryMatchContext context, out int column, out int length)
+    private static bool TryFindPrimaryMatchSpan(
+        string text,
+        string normalizedLine,
+        int[]? rawIndexMap,
+        IReadOnlyList<string> terms,
+        StringComparison comparison,
+        out int column,
+        out int length)
     {
         var bestIndex = int.MaxValue;
         var bestLength = 0;
-        foreach (var term in context.Terms)
+        foreach (var term in terms)
         {
-            var index = text.IndexOf(term, context.Comparison);
-            if (index < 0)
-                index = normalizedLine.IndexOf(term, context.Comparison);
-            if (index < 0 || index >= bestIndex)
+            if (term.Length == 0)
                 continue;
 
-            bestIndex = index;
-            bestLength = term.Length;
+            var rawIndex = text.IndexOf(term, comparison);
+            var rawLength = term.Length;
+            if (rawIndex < 0)
+            {
+                var normalizedIndex = normalizedLine.IndexOf(term, comparison);
+                if (normalizedIndex < 0)
+                    continue;
+
+                rawIndex = normalizedIndex;
+                if (rawIndexMap != null
+                    && TryMapNormalizedSearchSpan(rawIndexMap, normalizedIndex, term.Length, out var mappedIndex, out var mappedLength))
+                {
+                    rawIndex = mappedIndex;
+                    rawLength = mappedLength;
+                }
+            }
+
+            if (rawIndex >= bestIndex)
+                continue;
+
+            bestIndex = rawIndex;
+            bestLength = rawLength;
         }
 
         if (bestIndex == int.MaxValue)
@@ -1671,18 +1726,45 @@ public partial class DbReader
         return true;
     }
 
+    private static bool TryMapNormalizedSearchSpan(
+        int[] rawIndexMap,
+        int normalizedStart,
+        int normalizedLength,
+        out int rawStart,
+        out int rawLength)
+    {
+        rawStart = 0;
+        rawLength = 0;
+        if (normalizedStart < 0 || normalizedLength <= 0)
+            return false;
+
+        var normalizedEnd = normalizedStart + normalizedLength - 1;
+        if (normalizedEnd < normalizedStart || normalizedEnd >= rawIndexMap.Length)
+            return false;
+
+        rawStart = rawIndexMap[normalizedStart];
+        var rawEnd = rawIndexMap[normalizedEnd];
+        if (rawStart < 0 || rawEnd < rawStart)
+            return false;
+
+        rawLength = rawEnd - rawStart + 1;
+        return true;
+    }
+
     private sealed record SearchPrimaryMatchContext(
+        string PreferredQuery,
         string[] Terms,
-        bool RawQuery,
         bool Exact,
         string? QueryLang)
     {
         public StringComparison Comparison => Exact ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
 
-        public bool RequireAllTermsOnLine => !RawQuery && !Exact && Terms.Length > 1;
-
         public static SearchPrimaryMatchContext Create(string query, string normalizedQuery, bool rawQuery, bool exact, string? queryLang)
-            => new(BuildPrimarySearchMatchTerms(query, normalizedQuery, rawQuery, exact), rawQuery, exact, queryLang);
+            => new(
+                NormalizeGuardSearchTerm(rawQuery ? query : normalizedQuery),
+                BuildPrimarySearchMatchTerms(query, normalizedQuery, rawQuery, exact),
+                exact,
+                queryLang);
 
         public string? GetEffectiveLang(SearchResult result) => QueryLang ?? result.Lang;
 
