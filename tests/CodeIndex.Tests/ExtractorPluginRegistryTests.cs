@@ -792,7 +792,7 @@ public class ExtractorPluginRegistryTests
                 var stagedXunitDependency = Path.Combine(
                     Path.GetDirectoryName(stagedMainAssembly)!,
                     Path.GetFileName(typeof(Xunit.FactAttribute).Assembly.Location));
-                Assert.True(File.Exists(stagedXunitDependency));
+                Assert.False(File.Exists(stagedXunitDependency));
                 var status = ExtractorPluginRegistry.GetStatusSnapshot();
                 Assert.Equal(0, status.RetainedLoadContextCount);
                 Assert.Equal(ExtractorPluginRegistry.PluginLoadContextLifecycle, status.LoadContextLifecycle);
@@ -2224,7 +2224,7 @@ public class ExtractorPluginRegistryTests
     }
 
     private static void CopyPluginFixture(string pluginPath)
-        => File.Copy(typeof(CollectiblePluginSymbolExtractor).Assembly.Location, pluginPath);
+        => File.Copy(typeof(CollectiblePluginSymbolExtractor).Assembly.Location, pluginPath, overwrite: true);
 
     private static string BuildPatternConfigWithOverlongScalar(string scalarName)
     {
