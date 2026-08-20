@@ -2220,9 +2220,19 @@ the DTO evolves. Dotted paths resolve against the same source-generated nested
 metadata (including collection element DTOs), while unknown paths receive
 bounded valid candidates. Explain responses contain static contract metadata
 only, cap known fields and dependencies, sanitize unknown input, and never
-include runtime field values or paths. Bounded `--fields` /
-`--max-json-bytes` envelopes also omit database paths, timings, indexed HEADs,
-and stable-at timestamps.
+include runtime field values or paths. Regular JSON retains that full payload.
+`--compact`, `--format compact`, and bounded output without explicit `--fields`
+project the typed explanation to `api_version`, `field`, `meaning`,
+`interpretation`, and `remediation` before applying the global byte bound. The
+envelope sets `explanation_schema=compact`, publishes
+`explanation_required_fields`, and accounts for removed optional content with
+`explanation_omitted_optional_field_count` and
+`explanation_omitted_optional_fields`. Explicit `--fields` remains an
+operator-selected projection. If the complete envelope plus one compact
+explanation cannot fit, the command returns `E028_RESPONSE_BUDGET_TOO_SMALL`
+with measured minimum-size and retry guidance instead of an empty success.
+Bounded envelopes also omit database paths, timings, indexed HEADs, and
+stable-at timestamps.
 
 `head_freshness` is a compact summary for machine consumers. `state=fresh`
 requires a successful complete `status --check` workspace comparison,
@@ -6095,9 +6105,16 @@ serialized scalar field も、DTO 拡張時に unknown へ戻らず上限付き 
 dot 区切り path は collection element DTO を含む同じ source-generated nested metadata で解決し、
 unknown path には上限付きの有効な candidate を返します。explain response は static contract
 metadata だけを含み、known field と dependency の件数を制限し、unknown input を sanitize し、
-runtime field value や path を含めません。bounded `--fields` /
-`--max-json-bytes` envelope も database path、timing、indexed HEAD、
-stable-at timestamp を省略します。
+runtime field value や path を含めません。通常の JSON はこの完全な payload を維持します。
+`--compact`、`--format compact`、および明示的な `--fields` を伴わない bounded output は、
+typed explanation を `api_version`、`field`、`meaning`、`interpretation`、
+`remediation` へ投影してから global byte 上限を適用します。envelope は
+`explanation_schema=compact` と `explanation_required_fields` を返し、省略した任意内容を
+`explanation_omitted_optional_field_count` と `explanation_omitted_optional_fields` で
+集計します。明示的な `--fields` は operator が選択した投影のままです。完全な envelope と
+compact explanation 1件を収められない場合、空の成功ではなく、計測済み必要最小 size と
+retry guidance を含む `E028_RESPONSE_BUDGET_TOO_SMALL` を返します。bounded envelope は
+database path、timing、indexed HEAD、stable-at timestamp も省略します。
 
 `head_freshness` は machine consumer 向けの compact summary です。
 `state=fresh` は complete な index に対する `status --check` の workspace 比較成功が必要で、

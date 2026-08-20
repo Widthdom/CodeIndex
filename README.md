@@ -182,6 +182,12 @@ Use `cdidx status --explain <field>` for bounded field guidance. Detailed
 semantics, repair-action structure, readiness degradation, SQLite/WAL handling,
 and MCP diagnostics live in the [Developer Guide](DEVELOPER_GUIDE.md#ai-integration);
 the everyday status workflow is in [Check status](USER_GUIDE.md#check-status).
+Regular JSON keeps the full explanation. `--compact`, `--format compact`, and a
+byte-bounded explanation without explicit `--fields` use the minimum compact
+schema `api_version`, `field`, `meaning`, `interpretation`, and `remediation`.
+Envelope metadata reports that schema plus the names and count of omitted
+optional fields; a budget too small for the envelope and one compact row returns
+an explicit response-budget error with minimum-size and retry guidance.
 Selecting one of these lists through `--fields` also retains its count and
 truncation signals. Compact output keeps the signals without the paths, and a
 JSON byte budget may shorten a path sample while increasing its omitted count.
@@ -387,6 +393,12 @@ field group を表に残します。
 repair action、readiness degradation、SQLite/WAL、MCP diagnostic の詳細は
 [開発者ガイド](DEVELOPER_GUIDE.md#ai連携)、日常的な使い方は
 [クイックスタート](USER_GUIDE.md#クイックスタート)を参照してください。
+通常の JSON は完全な説明を維持します。`--compact`、`--format compact`、および
+明示的な `--fields` を伴わない byte 上限付き説明は、`api_version`、`field`、
+`meaning`、`interpretation`、`remediation` の最小 compact schema を使います。
+envelope metadata は schema と省略した任意 field の名前・件数を返し、envelope と
+compact row 1件を収められない上限では、必要最小 size と retry guidance を含む
+明示的な response-budget error を返します。
 これらの一覧を `--fields` で選択した場合も count と truncation signal は残ります。
 compact 出力は path を省いて signal を維持し、JSON byte budget で path sample が
 さらに短縮された場合は omitted count が増加します。
