@@ -18,6 +18,15 @@ internal static class ProjectionFieldRegistry
 {
     private const string DiscoveryValue = "list";
 
+    private static readonly IReadOnlyList<string> StatusExplainCompactFields =
+    [
+        "api_version",
+        "field",
+        "meaning",
+        "interpretation",
+        "remediation",
+    ];
+
     private static readonly IReadOnlyDictionary<string, ProjectionCommandFieldSchema> Schemas =
         new Dictionary<string, ProjectionCommandFieldSchema>(StringComparer.Ordinal)
         {
@@ -47,6 +56,9 @@ internal static class ProjectionFieldRegistry
 
     internal static IReadOnlyList<string>? GetCompactFields(string command)
         => Schemas.TryGetValue(command, out var schema) ? schema.CompactFields : null;
+
+    internal static IReadOnlyList<string> GetStatusExplainCompactFields()
+        => StatusExplainCompactFields;
 
     internal static JsonObject ProjectCompactStatusWorkspaceCheck(
         JsonObject workspaceCheck)
