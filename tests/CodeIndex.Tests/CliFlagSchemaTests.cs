@@ -129,6 +129,67 @@ public class CliFlagSchemaTests
     }
 
     [Fact]
+    public void McpPublicOptionInventoryMatchesParserAndAuthoritativeHelp_Issue5096()
+    {
+        string[] expectedOptions =
+        [
+            "--db",
+            "--quiet",
+            "--silent",
+            "--no-progress",
+            "--transport",
+            "--http-listen",
+            "--allow-unauthenticated-http",
+            "--audit-log",
+            "--audit-log-include-values",
+            "--audit-log-max-bytes",
+            "--audit-log-strict",
+            "--suggestion-dedup-threshold",
+        ];
+        var inventory = CliFlagSchema.GetCompletionFlagsForCommand("mcp")
+            .Select(flag => flag.Name)
+            .ToArray();
+
+        Assert.Equal(expectedOptions, inventory);
+        Assert.Equal(
+            expectedOptions.OrderBy(option => option, StringComparer.Ordinal),
+            CliFlagSchema.GetAcceptedFlagNamesForCommand("mcp").OrderBy(option => option, StringComparer.Ordinal));
+
+        var parserProbes = new Dictionary<string, string[]>(StringComparer.Ordinal)
+        {
+            ["--db"] = ["mcp", "--db"],
+            ["--quiet"] = ["--quiet", "mcp", "--audit-log-strict"],
+            ["--silent"] = ["--silent", "mcp", "--audit-log-strict"],
+            ["--no-progress"] = ["--no-progress", "mcp", "--audit-log-strict"],
+            ["--transport"] = ["mcp", "--transport"],
+            ["--http-listen"] = ["mcp", "--http-listen"],
+            ["--allow-unauthenticated-http"] = ["mcp", "--allow-unauthenticated-http"],
+            ["--audit-log"] = ["mcp", "--audit-log"],
+            ["--audit-log-include-values"] = ["mcp", "--audit-log-include-values"],
+            ["--audit-log-max-bytes"] = ["mcp", "--audit-log-max-bytes"],
+            ["--audit-log-strict"] = ["mcp", "--audit-log-strict"],
+            ["--suggestion-dedup-threshold"] = ["mcp", "--suggestion-dedup-threshold"],
+        };
+        Assert.Equal(
+            expectedOptions.OrderBy(option => option, StringComparer.Ordinal),
+            parserProbes.Keys.OrderBy(option => option, StringComparer.Ordinal));
+        foreach (var (option, args) in parserProbes)
+        {
+            var (exitCode, _, stderr) = ConsoleCapture.Capture(() =>
+                ProgramRunner.Run(args, appVersion: "1.10.0"));
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.DoesNotContain($"{option} is not supported for mcp", stderr, StringComparison.Ordinal);
+        }
+
+        var (printed, helpOutput, helpError) = ConsoleCapture.Capture(() =>
+            ConsoleUi.PrintCommandUsage("mcp") ? 1 : 0);
+        Assert.Equal(1, printed);
+        Assert.Empty(helpError);
+        foreach (var option in expectedOptions)
+            Assert.Contains(option, helpOutput, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Goto_AcceptsDocumentedExcludeFilters_Issue3934()
     {
         var accepted = CliFlagSchema.GetAcceptedFlagNamesForCommand("goto");

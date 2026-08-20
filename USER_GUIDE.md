@@ -2532,6 +2532,8 @@ three request-id fields.
 
 `cdidx mcp` can opt in to a per-tool-call audit log so compliance reviewers can answer *"who called which tool with what shape of arguments and when did it fail?"* without re-running the index. Audit emission is off by default; pass `--audit-log <path>` to the `cdidx mcp` invocation to enable it. The destination file is opened append-only and rotated through `<path>.1` and `<path>.2` when the active file exceeds the configured size cap, dropping the oldest slot rather than spilling further.
 
+Run `cdidx help mcp` to review every public MCP option and its dependencies. The same option inventory drives the generated Bash, Zsh, Fish, and PowerShell completions.
+
 | Flag | Default | Effect |
 |---|---|---|
 | `--audit-log <path>` | (off) | Enable audit emission and write JSONL records to `<path>`. The parent directory is created if missing. |
@@ -6029,6 +6031,8 @@ CLI metrics には JSON-RPC id がないため、この 3 field をすべて省�
 ### MCP 監査ログ
 
 `cdidx mcp` に `--audit-log <path>` を渡すと、ツール呼び出しごとに 1 レコードの JSONL 監査ログを出力できます。「誰が・どんな引数形で・いつ呼び出して失敗したか」を後追いするためのコンプライアンス用途を想定しており、既定では無効です。出力先は append 専用で開かれ、サイズ上限を超えると `<path>.1` → `<path>.2` の順にローテーションされ、最古スロットは破棄されます（`<path>.3` 以降は決して残りません）。
+
+すべての公開 MCP オプションと依存関係は `cdidx help mcp` で確認できます。同じオプション一覧から Bash、Zsh、Fish、PowerShell の補完も生成されます。
 
 | フラグ | 既定 | 効果 |
 |---|---|---|

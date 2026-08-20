@@ -150,7 +150,7 @@ public static partial class ConsoleUi
         ("hooks-install", "cdidx hooks install [--project <path>] [--force] [--dry-run] [--json]"),
         ("hooks-uninstall", "cdidx hooks uninstall [--project <path>] [--force] [--json]"),
         ("hooks-status", "cdidx hooks status [--project <path>] [--json]"),
-        ("mcp", "cdidx mcp [--db <path>] [--transport stdio|http] [--http-listen <host:port>] [--allow-unauthenticated-http] [--audit-log <path>] [--audit-log-include-values] [--audit-log-max-bytes <n>] [--suggestion-dedup-threshold <0..1>]"),
+        ("mcp", "cdidx mcp [--db <path>] [--transport stdio|http] [--http-listen <host:port>] [--allow-unauthenticated-http] [--audit-log <path>] [--audit-log-include-values] [--audit-log-max-bytes <n>] [--audit-log-strict] [--suggestion-dedup-threshold <0..1>]"),
         ("lsp", "cdidx lsp [--db <path>]"),
         ("completions", "cdidx completions <shell>"),
         ("--completions", "cdidx --completions <shell>"),

@@ -519,7 +519,7 @@ internal static partial class ProgramRunner
 
     private static void PrintMcpUsage()
     {
-        CommandErrorWriter.WriteStderr($"Usage: cdidx mcp [--db <path>] [--transport stdio|http] [--http-listen <host:port>] [{AllowUnauthenticatedHttpFlag}] [--audit-log <path>] [--audit-log-include-values] [--audit-log-max-bytes <n>] [--audit-log-strict] [--suggestion-dedup-threshold <0..1>]");
+        CommandErrorWriter.WriteStderr($"Usage: {ConsoleUi.GetUsageLine("mcp") ?? "cdidx mcp"}");
         CommandErrorWriter.WriteStderr("Note: --json is not supported; MCP requests and responses are JSON-RPC over the selected transport.");
         CommandErrorWriter.WriteStderr("stdio transport: one UTF-8 JSON-RPC object per LF-delimited line, not LSP Content-Length framing; lifecycle diagnostics are written to stderr.");
         CommandErrorWriter.WriteStderr($"HTTP security: bearer auth is required by default; {AllowUnauthenticatedHttpFlag} is an explicit unsafe loopback-only opt-in. Native clients omit Origin; POST requires UTF-8 application/json.");
