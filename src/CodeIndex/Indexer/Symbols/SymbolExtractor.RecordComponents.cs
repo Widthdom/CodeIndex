@@ -145,8 +145,10 @@ public static partial class SymbolExtractor
                     Kind = "property",
                     Name = component.Name,
                     Line = component.Line,
-                    StartLine = component.Line,
+                    StartLine = component.StartLine ?? component.Line,
+                    StartColumn = component.StartColumn,
                     EndLine = component.Line,
+                    IdentifierStartColumn = component.IdentifierStartColumn,
                     Signature = component.Signature,
                     ContainerKind = pending.Kind,
                     ContainerName = pending.RecordName,
@@ -223,12 +225,40 @@ public static partial class SymbolExtractor
         var declarationLineSpanEnd = declarationTerminatorIndex >= 0 ? declarationTerminatorIndex + 1 : parameterCloseIndex + 1;
         declarationEndLine = declarationLineIndex + 1 + declaration[..declarationLineSpanEnd].Count(ch => ch == '\n');
 
-        var rawParameterList = StripRecordComponentComments(declaration[(parameterOpenIndex + 1)..parameterCloseIndex]);
+        var parameterListStartIndex = parameterOpenIndex + 1;
+        var rawParameterList = StripRecordComponentComments(declaration[parameterListStartIndex..parameterCloseIndex]);
+        var parameterListFirstLine = lang == "csharp"
+            ? declarationLineIndex + 1 + declaration[..parameterListStartIndex].Count(ch => ch == '\n')
+            : declarationLineIndex + 1;
         components = [];
-        foreach (var rawComponent in SplitTopLevelRecordPrimaryComponents(rawParameterList, declarationLineIndex + 1))
+        foreach (var rawComponent in SplitTopLevelRecordPrimaryComponents(rawParameterList, parameterListFirstLine))
         {
             if (TryParseRecordPrimaryComponent(lang, rawComponent, out var component))
+            {
+                if (lang == "csharp"
+                    && TryGetCSharpRecordPrimaryComponentCoordinates(
+                        declaration,
+                        declarationLineIndex,
+                        declarationStartColumn,
+                        parameterListStartIndex,
+                        rawComponent,
+                        component.Name,
+                        out var startLine,
+                        out var startColumn,
+                        out var identifierLine,
+                        out var identifierStartColumn))
+                {
+                    component = component with
+                    {
+                        Line = identifierLine,
+                        StartLine = startLine,
+                        StartColumn = startColumn,
+                        IdentifierStartColumn = identifierStartColumn,
+                    };
+                }
+
                 components.Add(component);
+            }
         }
 
         return true;
@@ -651,6 +681,7 @@ public static partial class SymbolExtractor
         var escapeNext = false;
         var currentLineNumber = firstLineNumber;
         var componentLineNumber = firstLineNumber;
+        var componentStartIndex = 0;
         var componentHasToken = false;
 
         for (int index = 0; index < parameterList.Length; index++)
@@ -660,6 +691,7 @@ public static partial class SymbolExtractor
             {
                 componentHasToken = true;
                 componentLineNumber = currentLineNumber;
+                componentStartIndex = index;
             }
 
             if (escapeNext)
@@ -744,7 +776,7 @@ public static partial class SymbolExtractor
                 case ',' when parenDepth == 0 && angleDepth == 0 && bracketDepth == 0 && braceDepth == 0:
                     var component = builder.ToString().Trim();
                     if (component.Length > 0)
-                        yield return new RecordPrimaryComponentSlice(component, componentLineNumber);
+                        yield return new RecordPrimaryComponentSlice(component, componentLineNumber, componentStartIndex);
                     builder.Clear();
                     componentHasToken = false;
                     componentLineNumber = currentLineNumber;
@@ -759,7 +791,7 @@ public static partial class SymbolExtractor
 
         var trailingComponent = builder.ToString().Trim();
         if (trailingComponent.Length > 0)
-            yield return new RecordPrimaryComponentSlice(trailingComponent, componentLineNumber);
+            yield return new RecordPrimaryComponentSlice(trailingComponent, componentLineNumber, componentStartIndex);
     }
 
     private static string StripRecordComponentComments(string text)
@@ -783,6 +815,10 @@ public static partial class SymbolExtractor
                     inLineComment = false;
                     builder.Append(ch);
                 }
+                else
+                {
+                    builder.Append(' ');
+                }
 
                 continue;
             }
@@ -792,12 +828,16 @@ public static partial class SymbolExtractor
                 if (ch == '*' && next == '/')
                 {
                     inBlockComment = false;
+                    builder.Append("  ");
                     i++;
-                    builder.Append(' ');
                 }
                 else if (ch == '\n')
                 {
                     builder.Append(ch);
+                }
+                else
+                {
+                    builder.Append(' ');
                 }
 
                 continue;
@@ -847,6 +887,7 @@ public static partial class SymbolExtractor
             if (ch == '/' && next == '/')
             {
                 inLineComment = true;
+                builder.Append("  ");
                 i++;
                 continue;
             }
@@ -854,6 +895,7 @@ public static partial class SymbolExtractor
             if (ch == '/' && next == '*')
             {
                 inBlockComment = true;
+                builder.Append("  ");
                 i++;
                 continue;
             }
@@ -862,6 +904,72 @@ public static partial class SymbolExtractor
         }
 
         return builder.ToString();
+    }
+
+    private static bool TryGetCSharpRecordPrimaryComponentCoordinates(
+        string declaration,
+        int declarationLineIndex,
+        int declarationStartColumn,
+        int parameterListStartIndex,
+        RecordPrimaryComponentSlice rawComponent,
+        string componentName,
+        out int startLine,
+        out int startColumn,
+        out int identifierLine,
+        out int identifierStartColumn)
+    {
+        startLine = 0;
+        startColumn = 0;
+        identifierLine = 0;
+        identifierStartColumn = 0;
+
+        var componentWithoutDefault = TrimAfterTopLevelEquals(rawComponent.Text);
+        var nameMatch = Regex.Match(
+            componentWithoutDefault,
+            @"(?<name>@?" + Regex.Escape(componentName) + @")\s*$",
+            RegexOptions.CultureInvariant);
+        if (!nameMatch.Success)
+            return false;
+
+        var componentStartIndex = parameterListStartIndex + rawComponent.StartIndex;
+        var identifierIndex = componentStartIndex + nameMatch.Groups["name"].Index;
+        if (declaration[identifierIndex] == '@')
+            identifierIndex++;
+
+        (startLine, startColumn) = GetRecordPrimaryComponentSourcePosition(
+            declaration,
+            declarationLineIndex,
+            declarationStartColumn,
+            componentStartIndex);
+        (identifierLine, identifierStartColumn) = GetRecordPrimaryComponentSourcePosition(
+            declaration,
+            declarationLineIndex,
+            declarationStartColumn,
+            identifierIndex);
+        return true;
+    }
+
+    private static (int Line, int Column) GetRecordPrimaryComponentSourcePosition(
+        string declaration,
+        int declarationLineIndex,
+        int declarationStartColumn,
+        int declarationIndex)
+    {
+        var line = declarationLineIndex + 1;
+        var lastNewlineIndex = -1;
+        for (var index = 0; index < declarationIndex; index++)
+        {
+            if (declaration[index] != '\n')
+                continue;
+
+            line++;
+            lastNewlineIndex = index;
+        }
+
+        var column = lastNewlineIndex < 0
+            ? declarationStartColumn + declarationIndex
+            : declarationIndex - lastNewlineIndex - 1;
+        return (line, column);
     }
 
     private static bool TryParseRecordPrimaryComponent(string lang, RecordPrimaryComponentSlice rawComponent, out RecordPrimaryComponent component)

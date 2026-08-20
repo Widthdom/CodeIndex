@@ -1865,6 +1865,63 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_CSharpPositionalRecordFocusAndGroupingUsePreciseSymbol_Issue5095()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_record_component_5095");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Records.cs",
+                "csharp",
+                """
+                public record Person([property: Obsolete] string First, string Last);
+                """);
+
+            var keyword = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["record Person", "--db", dbPath, "--exact-substring", "--json=array"],
+                _jsonOptions));
+            var component = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["string First", "--db", dbPath, "--exact-substring", "--json=array"],
+                _jsonOptions));
+            var grouped = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["string First", "--db", dbPath, "--exact-substring", "--group-by", "symbol", "--count", "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, keyword.Result);
+            Assert.Equal(string.Empty, keyword.Stderr);
+            using var keywordDocument = ParseJsonOutput(keyword.Stdout);
+            var keywordRow = Assert.Single(keywordDocument.RootElement.EnumerateArray());
+            Assert.Equal(1, keywordRow.GetProperty("focus_line").GetInt32());
+            Assert.Equal(8, keywordRow.GetProperty("focus_column").GetInt32());
+            Assert.Equal("Person", keywordRow.GetProperty("enclosing_symbol_name").GetString());
+            Assert.Equal("class", keywordRow.GetProperty("enclosing_symbol_kind").GetString());
+
+            Assert.Equal(CommandExitCodes.Success, component.Result);
+            Assert.Equal(string.Empty, component.Stderr);
+            using var componentDocument = ParseJsonOutput(component.Stdout);
+            var componentRow = Assert.Single(componentDocument.RootElement.EnumerateArray());
+            Assert.Equal(1, componentRow.GetProperty("focus_line").GetInt32());
+            Assert.Equal(43, componentRow.GetProperty("focus_column").GetInt32());
+            Assert.Equal("First", componentRow.GetProperty("enclosing_symbol_name").GetString());
+            Assert.Equal("property", componentRow.GetProperty("enclosing_symbol_kind").GetString());
+
+            Assert.Equal(CommandExitCodes.Success, grouped.Result);
+            Assert.Equal(string.Empty, grouped.Stderr);
+            using var groupedDocument = ParseJsonOutput(grouped.Stdout);
+            var group = Assert.Single(groupedDocument.RootElement.GetProperty("groups").EnumerateArray());
+            Assert.Equal("src/Records.cs", group.GetProperty("file").GetString());
+            Assert.Equal("First", group.GetProperty("symbol_name").GetString());
+            Assert.Equal("property", group.GetProperty("symbol_kind").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_NullableRecipeGroupByReturnTypeCountsEnclosingReturnTypes_Issue4301()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_nullable_return_type_4301");

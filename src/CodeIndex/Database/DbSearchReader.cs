@@ -151,6 +151,12 @@ public partial class DbReader
         var hasContextRanking = resultRanking == SearchResultRanking.CredentialContext;
         var hasCandidatePostProcessing = hasGuardFilters || tokenBoundary || hasContextRanking;
         var searchMatchLineContext = SearchMatchLineContext.Create(query, lang, exactSearch);
+        var searchPrimaryMatchContext = SearchPrimaryMatchContext.Create(
+            query,
+            normalizedQuery,
+            rawQuery,
+            exactSearch,
+            lang);
         var exactLiteralBoost = !exactSearch && !rawQuery && ShouldBoostExactLiteralSearch(query);
         var guardedRequestedLimit = Math.Max(0, guardRequestedLimit ?? limit);
         var guardedCandidateLimit = hasGuardFilters
@@ -364,7 +370,7 @@ public partial class DbReader
                 limit: candidatePostProcessingLimit);
         }
 
-        AttachSearchEnclosingSymbols(pagedResults, searchMatchLineContext);
+        AttachSearchEnclosingSymbols(pagedResults, searchPrimaryMatchContext);
         return pagedResults;
     }
 
@@ -756,12 +762,16 @@ public partial class DbReader
                     result,
                     index,
                     lineScore.Score,
-                    lineScore.MatchLine);
+                    lineScore.MatchLine,
+                    lineScore.MatchColumn);
             })
             .ToList();
         AttachSearchEnclosingSymbols(candidates
             .Where(candidate => candidate.MatchLine.HasValue)
-            .Select(candidate => new SearchEnclosingSymbolRequest(candidate.Result, candidate.MatchLine!.Value))
+            .Select(candidate => new SearchEnclosingSymbolRequest(
+                candidate.Result,
+                candidate.MatchLine!.Value,
+                candidate.MatchColumn))
             .ToList());
 
         return candidates
@@ -779,6 +789,7 @@ public partial class DbReader
         if (matches.Count == 0)
             return new SearchCredentialContextLineScore(
                 ContainsStructuralTokenMarker(result.Content) ? -800 : -600,
+                null,
                 null);
 
         return matches
@@ -792,7 +803,8 @@ public partial class DbReader
             .ThenBy(candidate => candidate.Index)
             .Select(candidate => new SearchCredentialContextLineScore(
                 candidate.Score,
-                candidate.Match.LineNumber))
+                candidate.Match.LineNumber,
+                candidate.Match.Column))
             .First();
     }
 
@@ -1045,13 +1057,17 @@ public partial class DbReader
         SearchResult Result,
         int OriginalIndex,
         int LineScore,
-        int? MatchLine);
+        int? MatchLine,
+        int? MatchColumn);
 
     private sealed record SearchCredentialContextLineScore(
         int Score,
-        int? MatchLine);
+        int? MatchLine,
+        int? MatchColumn);
 
-    private void AttachSearchEnclosingSymbols(IReadOnlyList<SearchResult> results, SearchMatchLineContext matchLineContext)
+    private void AttachSearchEnclosingSymbols(
+        IReadOnlyList<SearchResult> results,
+        SearchPrimaryMatchContext primaryMatchContext)
     {
         var requests = new List<SearchEnclosingSymbolRequest>();
         foreach (var result in results)
@@ -1059,9 +1075,9 @@ public partial class DbReader
             if (!string.IsNullOrWhiteSpace(result.EnclosingSymbolKind))
                 continue;
 
-            var matchLine = GetFirstSearchMatchLine(result, matchLineContext);
-            if (matchLine.HasValue)
-                requests.Add(new SearchEnclosingSymbolRequest(result, matchLine.Value));
+            var primaryMatch = FindPrimarySearchMatchLines(result, primaryMatchContext).FirstOrDefault();
+            if (primaryMatch != null)
+                requests.Add(new SearchEnclosingSymbolRequest(result, primaryMatch.LineNumber, primaryMatch.Column));
         }
 
         AttachSearchEnclosingSymbols(requests);
@@ -1070,7 +1086,10 @@ public partial class DbReader
     private void AttachSearchEnclosingSymbols(IReadOnlyList<SearchEnclosingSymbolRequest> requests)
     {
         var startLineSql = GetSymbolColumnSql("start_line", "s.line", "s");
+        var startColumnSql = GetSymbolColumnSql("start_column", "NULL", "s");
         var endLineSql = GetSymbolColumnSql("end_line", "s.line", "s");
+        var bodyStartLineSql = GetSymbolColumnSql("body_start_line", "NULL", "s");
+        var identifierStartColumnSql = GetSymbolColumnSql("identifier_start_column", "NULL", "s");
         var containerNameSql = GetSymbolColumnSql("container_name", symbolAlias: "s");
         var returnTypeSql = GetSymbolColumnSql("return_type", symbolAlias: "s");
         for (var offset = 0; offset < requests.Count; offset += SearchEnclosingSymbolBatchSize)
@@ -1078,9 +1097,9 @@ public partial class DbReader
             var batch = requests.Skip(offset).Take(SearchEnclosingSymbolBatchSize).ToList();
             using var cmd = _conn.CreateCommand();
             var requestedValues = string.Join(", ", Enumerable.Range(0, batch.Count)
-                .Select(index => $"(@symbolPath{index}, @symbolLine{index}, {index})"));
+                .Select(index => $"(@symbolPath{index}, @symbolLine{index}, @symbolColumn{index}, {index})"));
             cmd.CommandText = $@"
-                WITH requested(path, match_line, request_index) AS (
+                WITH requested(path, match_line, match_column, request_index) AS (
                     VALUES {requestedValues}
                 ),
                 ranked AS (
@@ -1115,6 +1134,14 @@ public partial class DbReader
                     LEFT JOIN symbols s ON s.file_id = f.id
                                        AND {startLineSql} <= requested.match_line
                                        AND {endLineSql} >= requested.match_line
+                                       AND (requested.match_column IS NULL
+                                            OR s.kind <> 'property'
+                                            OR {bodyStartLineSql} IS NOT NULL
+                                            OR {identifierStartColumnSql} IS NULL
+                                            OR (({startLineSql} < requested.match_line
+                                                 OR COALESCE({startColumnSql}, {identifierStartColumnSql}) <= requested.match_column - 1)
+                                                AND ({endLineSql} > requested.match_line
+                                                     OR {identifierStartColumnSql} + length(s.name) > requested.match_column - 1)))
                 )
                 SELECT request_index,
                        symbol_name,
@@ -1131,6 +1158,7 @@ public partial class DbReader
             {
                 SqliteCommandPolicy.Add(cmd, $"@symbolPath{index}", batch[index].Result.Path);
                 SqliteCommandPolicy.Add(cmd, $"@symbolLine{index}", batch[index].MatchLine);
+                SqliteCommandPolicy.Add(cmd, $"@symbolColumn{index}", batch[index].MatchColumn);
             }
 
             using var reader = cmd.ExecuteTrackedReader();
@@ -1147,31 +1175,7 @@ public partial class DbReader
         }
     }
 
-    private sealed record SearchEnclosingSymbolRequest(SearchResult Result, int MatchLine);
-
-    private static int? GetFirstSearchMatchLine(SearchResult result, SearchMatchLineContext context)
-    {
-        var prepared = context.ForResult(result);
-        int? firstTokenMatchLine = null;
-
-        foreach (var (lineIndex, text) in EnumerateContentLines(result.Content))
-        {
-            var line = prepared.NormalizeLine(text);
-            if (!string.IsNullOrWhiteSpace(prepared.NormalizedQuery) &&
-                line.Contains(prepared.NormalizedQuery, prepared.Comparison))
-            {
-                return result.StartLine + lineIndex;
-            }
-
-            if (firstTokenMatchLine.HasValue || prepared.Tokens.Length == 0)
-                continue;
-
-            if (prepared.Tokens.Any(token => line.Contains(token, prepared.Comparison)))
-                firstTokenMatchLine = result.StartLine + lineIndex;
-        }
-
-        return firstTokenMatchLine;
-    }
+    private sealed record SearchEnclosingSymbolRequest(SearchResult Result, int MatchLine, int? MatchColumn);
 
     private sealed class SearchMatchLineContext
     {

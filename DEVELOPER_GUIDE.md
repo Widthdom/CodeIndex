@@ -1940,6 +1940,14 @@ The CLI normalizes exact-mode aliases and then rejects raw `--fts` combined with
 `--exact`, `--exact-substring`, or `--token-boundary` before database dispatch.
 This keeps query context and replay output on one matching model.
 
+Search-result symbol attribution uses the primary match line and column when
+the index provides declaration coordinates. C# positional-record properties
+store the span from the component's first attribute or type token through its
+identifier, so record keywords, record type names, base arguments, and body
+members remain attributed to their actual enclosing symbols even when they
+share a physical line with a positional component. Legacy rows without column
+metadata retain the line-based fallback.
+
 When you run:
 ```sql
 SELECT f.path, c.start_line, c.content
@@ -5789,6 +5797,12 @@ CLI は exact-mode alias を正規化してから、raw `--fts` と `--exact`、
 `--exact-substring`、`--token-boundary` の組み合わせを database dispatch 前に
 拒否します。これにより query context と replay output は 1 つの一致モデルだけを
 保持します。
+
+検索結果の囲みシンボルは、index が宣言座標を持つ場合、主要一致の行と列を使って
+判定します。C# の位置 record property は、component の最初の attribute または型 token から
+識別子までの範囲を保持します。これにより、同じ物理行に位置 component があっても、
+record keyword、record 型名、base 引数、body member は実際の囲みシンボルに帰属します。
+列 metadata がない旧 row では行ベースの fallback を維持します。
 
 以下のクエリを実行すると:
 ```sql

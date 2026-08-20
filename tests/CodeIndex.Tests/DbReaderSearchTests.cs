@@ -11,6 +11,45 @@ namespace CodeIndex.Tests;
 public partial class DbReaderTests
 {
     [Fact]
+    public void Search_UsesColumnsToAttributeCSharpPositionalRecordMatches_Issue5095()
+    {
+        InsertIndexedFile(
+            "src/Records.cs",
+            "csharp",
+            """
+            public record Base(string BaseValue);
+            public record Person([property: Obsolete] string First, string Last) : Base("base-marker")
+            {
+                public string Ordinary { get; init; } = "ordinary-marker";
+                public string Describe() => "body-marker";
+            }
+
+            public readonly record struct Point(
+                int X,
+                int Y);
+            """);
+
+        AssertEnclosing("record Person", "Person", "class");
+        AssertEnclosing("Person(", "Person", "class");
+        AssertEnclosing("Obsolete", "First", "property");
+        AssertEnclosing("string First", "First", "property");
+        AssertEnclosing("string Last", "Last", "property");
+        AssertEnclosing("base-marker", "Person", "class");
+        AssertEnclosing("ordinary-marker", "Ordinary", "property");
+        AssertEnclosing("body-marker", "Describe", "function");
+        AssertEnclosing("record struct Point", "Point", "struct");
+        AssertEnclosing("int X", "X", "property");
+        AssertEnclosing("int Y", "Y", "property");
+
+        void AssertEnclosing(string query, string expectedName, string expectedKind)
+        {
+            var result = Assert.Single(_reader.Search(query, exact: true));
+            Assert.Equal(expectedName, result.EnclosingSymbolName);
+            Assert.Equal(expectedKind, result.EnclosingSymbolKind);
+        }
+    }
+
+    [Fact]
     public void Search_ExplicitPrefixMatchesLatinDiacriticToken()
     {
         InsertIndexedFile("src/cafe.md", "markdown", "menu café_au_lait\n");
