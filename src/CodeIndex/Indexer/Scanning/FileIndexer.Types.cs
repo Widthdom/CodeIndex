@@ -141,6 +141,7 @@ public partial class FileIndexer
         ExcludedByDefaultDirectory,
         ExcludedByDefaultFile,
         OutsideProjectRoot,
+        SymlinkDisallowed,
         IgnoreRulesUnavailable,
     }
 
@@ -153,7 +154,8 @@ public partial class FileIndexer
             PathFilterKind.IgnoredByRules or
             PathFilterKind.ExcludedByDefaultDirectory or
             PathFilterKind.ExcludedByDefaultFile or
-            PathFilterKind.OutsideProjectRoot;
+            PathFilterKind.OutsideProjectRoot or
+            PathFilterKind.SymlinkDisallowed;
     }
 
     internal readonly record struct ProjectMarkerFingerprintBudget(

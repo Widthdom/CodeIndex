@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using CodeIndex.Cli;
+using CodeIndex.PluginIsolationFixture;
 
 namespace CodeIndex.Tests;
 
@@ -22,10 +23,8 @@ public sealed class TrustedPluginAssemblyFixture : IDisposable
         root = OperatingSystem.IsWindows()
             ? TestProjectHelper.CreateTrustedWindowsGitDirectory("cdidx_plugin_fixture")
             : TestProjectHelper.CreateTempProject("cdidx_plugin_fixture");
-        PluginPath = Path.Combine(root, "CodeIndex.Tests.dll");
-        TestProjectHelper.CopyAssemblyFixtureWithDependencies(
-            typeof(ExtractorPluginRegistryTests).Assembly.Location,
-            PluginPath);
+        PluginPath = Path.Combine(root, "CodeIndex.PluginIsolationFixture.dll");
+        File.Copy(typeof(CollectiblePluginSymbolExtractor).Assembly.Location, PluginPath);
     }
 
     internal string PluginPath { get; }

@@ -20,6 +20,7 @@ public class PackagesLockTests
     [
         "src/CodeIndex/packages.lock.json",
         "tests/CodeIndex.HookIsolationFixture/packages.lock.json",
+        "tests/CodeIndex.PluginIsolationFixture/packages.lock.json",
         "tests/CodeIndex.Tests/packages.lock.json",
         "tools/CodeIndex.Changelog/packages.lock.json",
         "tools/CodeIndex.PackageNormalize/packages.lock.json",
@@ -27,7 +28,7 @@ public class PackagesLockTests
     ];
 
     private const string SolutionRestoreLockHashExpression =
-        "${{ hashFiles('src/CodeIndex/packages.lock.json', 'tests/CodeIndex.HookIsolationFixture/packages.lock.json', 'tests/CodeIndex.Tests/packages.lock.json', 'tools/CodeIndex.Changelog/packages.lock.json', 'tools/CodeIndex.PackageNormalize/packages.lock.json', 'tools/CodeIndex.TestTelemetry/packages.lock.json') }}";
+        "${{ hashFiles('src/CodeIndex/packages.lock.json', 'tests/CodeIndex.HookIsolationFixture/packages.lock.json', 'tests/CodeIndex.PluginIsolationFixture/packages.lock.json', 'tests/CodeIndex.Tests/packages.lock.json', 'tools/CodeIndex.Changelog/packages.lock.json', 'tools/CodeIndex.PackageNormalize/packages.lock.json', 'tools/CodeIndex.TestTelemetry/packages.lock.json') }}";
 
     private static readonly string SolutionRestoreCacheDependencyPath =
         "cache-dependency-path: |\n" +

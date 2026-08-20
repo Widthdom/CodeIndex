@@ -6,6 +6,7 @@ using CodeIndex.Cli;
 using CodeIndex.Database;
 using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Models;
+using CodeIndex.PluginIsolationFixture;
 
 [assembly: CdidxPlugin(ExtractorPluginRegistry.CurrentApiVersion, ExtractorPluginRegistry.CurrentApiVersion)]
 
@@ -21,9 +22,9 @@ public class ExtractorPluginRegistryTests
         pluginAssemblyFixturePath = trustedPluginAssembly.PluginPath;
     }
 
-    internal const string ThrowingPluginConstructorEnvironmentVariable = "CDIDX_TEST_THROWING_PLUGIN_CTOR";
-    internal const string SlowPluginConstructorEnvironmentVariable = "CDIDX_TEST_SLOW_PLUGIN_CTOR";
-    internal const string CrashingPluginConstructorEnvironmentVariable = "CDIDX_TEST_CRASHING_PLUGIN_CTOR";
+    internal const string ThrowingPluginConstructorEnvironmentVariable = PluginIsolationFixtureEnvironment.ThrowingConstructor;
+    internal const string SlowPluginConstructorEnvironmentVariable = PluginIsolationFixtureEnvironment.SlowConstructor;
+    internal const string CrashingPluginConstructorEnvironmentVariable = PluginIsolationFixtureEnvironment.CrashingConstructor;
 
     [Fact]
     public void GetAcceptedTrustOverrides_ReportsWorkspacePluginTrust_3735()
@@ -674,7 +675,7 @@ public class ExtractorPluginRegistryTests
             {
                 slow.Set(SlowPluginConstructorEnvironmentVariable, "1");
                 using (var memoryBounded = new ExtractorPluginWorkerClient(
-                           Assembly.GetExecutingAssembly().Location,
+                           typeof(CollectiblePluginSymbolExtractor).Assembly.Location,
                            ExtractorPluginRegistry.MaxExtensionAssemblyTypes,
                            operationBudget: TimeSpan.FromSeconds(5),
                            memoryLimitBytes: 1))
@@ -686,7 +687,7 @@ public class ExtractorPluginRegistryTests
 
                 slow.Set(SlowPluginConstructorEnvironmentVariable, null);
                 using var outputBounded = new ExtractorPluginWorkerClient(
-                    Assembly.GetExecutingAssembly().Location,
+                    typeof(CollectiblePluginSymbolExtractor).Assembly.Location,
                     ExtractorPluginRegistry.MaxExtensionAssemblyTypes,
                     maxProtocolLineBytes: 256);
                 var outputResult = outputBounded.LoadManifest();
@@ -791,7 +792,7 @@ public class ExtractorPluginRegistryTests
                 var stagedXunitDependency = Path.Combine(
                     Path.GetDirectoryName(stagedMainAssembly)!,
                     Path.GetFileName(typeof(Xunit.FactAttribute).Assembly.Location));
-                Assert.True(File.Exists(stagedXunitDependency));
+                Assert.False(File.Exists(stagedXunitDependency));
                 var status = ExtractorPluginRegistry.GetStatusSnapshot();
                 Assert.Equal(0, status.RetainedLoadContextCount);
                 Assert.Equal(ExtractorPluginRegistry.PluginLoadContextLifecycle, status.LoadContextLifecycle);
@@ -2223,7 +2224,7 @@ public class ExtractorPluginRegistryTests
     }
 
     private static void CopyPluginFixture(string pluginPath)
-        => TestProjectHelper.CopyAssemblyFixtureWithDependencies(Assembly.GetExecutingAssembly().Location, pluginPath);
+        => File.Copy(typeof(CollectiblePluginSymbolExtractor).Assembly.Location, pluginPath, overwrite: true);
 
     private static string BuildPatternConfigWithOverlongScalar(string scalarName)
     {
@@ -2282,97 +2283,4 @@ public class ExtractorPluginRegistryTests
                 },
             ];
     }
-}
-
-public sealed class CollectiblePluginSymbolExtractor : ISymbolExtractor
-{
-    public string Language => "collectibledsl";
-
-    public IReadOnlyCollection<string> FileExtensions => [".collectible"];
-
-    public IReadOnlyList<SymbolRecord> Extract(long fileId, string source, ExtractionContext context)
-        => [new SymbolRecord { FileId = fileId, Kind = "class", Name = "worker-symbol", Line = 1 }];
-}
-
-public sealed class SlowPluginSymbolExtractor : ISymbolExtractor
-{
-    public SlowPluginSymbolExtractor()
-    {
-        if (Environment.GetEnvironmentVariable(ExtractorPluginRegistryTests.SlowPluginConstructorEnvironmentVariable) == "1")
-            Thread.Sleep(TimeSpan.FromSeconds(30));
-    }
-
-    public string Language => "slowplugindsl";
-
-    public IReadOnlyList<SymbolRecord> Extract(long fileId, string source, ExtractionContext context) => [];
-}
-
-public sealed class CrashingPluginSymbolExtractor : ISymbolExtractor
-{
-    public CrashingPluginSymbolExtractor()
-    {
-        if (Environment.GetEnvironmentVariable(ExtractorPluginRegistryTests.CrashingPluginConstructorEnvironmentVariable) == "1")
-            Environment.FailFast("plugin worker crash fixture");
-    }
-
-    public string Language => "crashingplugindsl";
-
-    public IReadOnlyList<SymbolRecord> Extract(long fileId, string source, ExtractionContext context) => [];
-}
-
-public sealed class CollectiblePluginReferenceExtractor : IReferenceExtractor
-{
-    public string Language => "collectibledsl";
-
-    public IReadOnlyCollection<string> FileExtensions => [".collectible"];
-
-    public IReadOnlyList<ReferenceRecord> Extract(long fileId, string source, ExtractionContext context)
-        =>
-        [
-            new ReferenceRecord
-            {
-                FileId = fileId,
-                SymbolName = "WorkspacePluginTarget",
-                ReferenceKind = "call",
-                Line = 1,
-                Column = 1,
-                Context = source,
-            },
-        ];
-}
-
-public sealed class ThrowingPluginSymbolExtractor : ISymbolExtractor
-{
-    public ThrowingPluginSymbolExtractor()
-    {
-        if (Environment.GetEnvironmentVariable(ExtractorPluginRegistryTests.ThrowingPluginConstructorEnvironmentVariable) == "1")
-            throw new InvalidOperationException("plugin ctor boom");
-    }
-
-    public string Language => "throwingplugindsl";
-
-    public IReadOnlyCollection<string> FileExtensions => [".throwingplugin"];
-
-    public IReadOnlyList<SymbolRecord> Extract(long fileId, string source, ExtractionContext context)
-        => [];
-}
-
-public sealed class DualRolePluginExtractor : ISymbolExtractor, IReferenceExtractor
-{
-    public DualRolePluginExtractor()
-    {
-        ConstructorCount++;
-    }
-
-    public static int ConstructorCount { get; private set; }
-
-    public string Language => "dualroleplugindsl";
-
-    public IReadOnlyCollection<string> FileExtensions => [".dualroleplugin"];
-
-    IReadOnlyList<SymbolRecord> ISymbolExtractor.Extract(long fileId, string source, ExtractionContext context)
-        => [];
-
-    IReadOnlyList<ReferenceRecord> IReferenceExtractor.Extract(long fileId, string source, ExtractionContext context)
-        => [];
 }

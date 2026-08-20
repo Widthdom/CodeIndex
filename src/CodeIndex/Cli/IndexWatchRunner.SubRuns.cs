@@ -75,6 +75,29 @@ internal static partial class IndexWatchRunner
         string phase,
         IReadOnlyList<string>? batchPaths,
         CancellationToken cancellationToken)
+        => InvokeSubRunAndEmitCore(
+            baseOptions,
+            jsonOptions,
+            args,
+            stopwatch,
+            status,
+            batchSize,
+            phase,
+            batchPaths,
+            cancellationToken,
+            suppressUsageErrorOutput: false);
+
+    private static int InvokeSubRunAndEmitCore(
+        IndexCommandOptions baseOptions,
+        JsonSerializerOptions jsonOptions,
+        List<string> args,
+        Stopwatch stopwatch,
+        string status,
+        int? batchSize,
+        string phase,
+        IReadOnlyList<string>? batchPaths,
+        CancellationToken cancellationToken,
+        bool suppressUsageErrorOutput)
     {
         string capturedJson;
         string? spoolPath = null;
@@ -103,6 +126,12 @@ internal static partial class IndexWatchRunner
             captureWriter?.Dispose();
         }
         stopwatch.Stop();
+        if (suppressUsageErrorOutput && subRunExitCode == CommandExitCodes.UsageError)
+        {
+            DeleteSpoolFile(spoolPath);
+            return subRunExitCode;
+        }
+
         var eventStatus = subRunExitCode == CommandExitCodes.Success ? status : "failed";
         var failureReason = subRunExitCode == CommandExitCodes.Success
             ? null

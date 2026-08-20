@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Runtime.Versioning;
 using System.Text;
@@ -94,6 +95,61 @@ public partial class FileIndexerTests
             Assert.Equal("nested/file.cs", normalized);
         else
             Assert.Equal(@"nested\file.cs", normalized);
+    }
+
+    [Fact]
+    public void EvaluatePathFilter_InternalSymlinkRejectsCaseOnlyExternalSibling_Issue5091()
+    {
+        lock (PathCasingTestLock.Gate)
+        {
+            using var parent = TestProjectHelper.CreateTempProjectScope("cdidx-case-prefix-containment");
+            var parentRoot = Path.GetFullPath(parent.Root);
+            var projectRoot = Path.Combine(parentRoot, "Project");
+            var externalRoot = Path.Combine(parentRoot, "project");
+            Directory.CreateDirectory(projectRoot);
+            if (Directory.Exists(externalRoot))
+                return;
+
+            Directory.CreateDirectory(externalRoot);
+            var externalPath = Path.Combine(externalRoot, "outside.cs");
+            File.WriteAllText(externalPath, "public class Outside5091 { }\n");
+            var selectedPath = Path.Combine(projectRoot, "link.cs");
+            try
+            {
+                File.CreateSymbolicLink(selectedPath, externalPath);
+            }
+            catch (Exception ex) when (ex is IOException
+                                       or UnauthorizedAccessException
+                                       or NotSupportedException)
+            {
+                return;
+            }
+
+            var previousProbe = PathCasing.IgnoreCaseProbeForTesting;
+            PathCasing.ResetCacheForTests();
+            PathCasing.IgnoreCaseProbeForTesting = path =>
+                !string.Equals(Path.GetFullPath(path), parentRoot, StringComparison.Ordinal);
+            try
+            {
+                var indexer = new FileIndexer(
+                    projectRoot,
+                    ignoreCase: true,
+                    ignoreRuleRoot: projectRoot,
+                    maxFileSizeBytes: null,
+                    directoryIgnoreCaseProbe: _ => true,
+                    symlinkPolicy: FileIndexer.SymlinkPolicy.Internal);
+
+                var result = indexer.EvaluatePathFilter(selectedPath);
+
+                Assert.True(result.ShouldSkip);
+                Assert.Equal(FileIndexer.PathFilterKind.OutsideProjectRoot, result.FilterKind);
+            }
+            finally
+            {
+                PathCasing.IgnoreCaseProbeForTesting = previousProbe;
+                PathCasing.ResetCacheForTests();
+            }
+        }
     }
 
     [Fact]
@@ -3801,9 +3857,239 @@ public partial class FileIndexerTests
         var linkedFile = Path.Combine(linkDir, "outside.cs");
 
         var filter = new FileIndexer(tempDir).EvaluatePathFilter(linkedFile);
+        var internalFilter = new FileIndexer(
+            tempDir,
+            ignoreCase: false,
+            ignoreRuleRoot: null,
+            maxFileSizeBytes: null,
+            directoryIgnoreCaseProbe: null,
+            symlinkPolicy: FileIndexer.SymlinkPolicy.Internal).EvaluatePathFilter(linkedFile);
+        var allFilter = new FileIndexer(
+            tempDir,
+            ignoreCase: false,
+            ignoreRuleRoot: null,
+            maxFileSizeBytes: null,
+            directoryIgnoreCaseProbe: null,
+            symlinkPolicy: FileIndexer.SymlinkPolicy.All).EvaluatePathFilter(linkedFile);
 
         Assert.Equal(FileIndexer.PathFilterKind.OutsideProjectRoot, filter.FilterKind);
         Assert.True(filter.ShouldDeleteExisting);
+        Assert.Equal(FileIndexer.PathFilterKind.OutsideProjectRoot, internalFilter.FilterKind);
+        Assert.Equal(FileIndexer.PathFilterKind.None, allFilter.FilterKind);
+    }
+
+    [Fact]
+    public void EvaluatePathFilter_DefaultPolicyRejectsActualSymlinkComponentsBelowProjectRoot()
+    {
+        if (OperatingSystem.IsWindows())
+            return; // Creating symlinks on Windows requires admin/developer mode / Windows で symlink 作成には管理者権限が必要
+
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var tempDir = project.Root;
+        var targetDirectory = Path.Combine(tempDir, "target");
+        Directory.CreateDirectory(targetDirectory);
+        var targetFile = Path.Combine(targetDirectory, "target.cs");
+        File.WriteAllText(targetFile, "class Target { }\n");
+        var directoryLink = Path.Combine(tempDir, "directory_alias");
+        Directory.CreateSymbolicLink(directoryLink, targetDirectory);
+        var fileLink = Path.Combine(tempDir, "file_alias.cs");
+        File.CreateSymbolicLink(fileLink, targetFile);
+
+        var defaultIndexer = new FileIndexer(tempDir, ignoreCase: false);
+        var internalIndexer = new FileIndexer(
+            tempDir,
+            ignoreCase: false,
+            ignoreRuleRoot: null,
+            maxFileSizeBytes: null,
+            directoryIgnoreCaseProbe: null,
+            symlinkPolicy: FileIndexer.SymlinkPolicy.Internal);
+
+        Assert.Equal(
+            FileIndexer.PathFilterKind.SymlinkDisallowed,
+            defaultIndexer.EvaluatePathFilter(Path.Combine(directoryLink, "target.cs")).FilterKind);
+        Assert.Equal(
+            FileIndexer.PathFilterKind.SymlinkDisallowed,
+            defaultIndexer.EvaluatePathFilter(fileLink).FilterKind);
+        Assert.Equal(
+            FileIndexer.PathFilterKind.None,
+            internalIndexer.EvaluatePathFilter(Path.Combine(directoryLink, "target.cs")).FilterKind);
+        Assert.Equal(
+            FileIndexer.PathFilterKind.None,
+            internalIndexer.EvaluatePathFilter(fileLink).FilterKind);
+    }
+
+    [Fact]
+    public void EvaluatePathFilter_DefaultPolicyAllowsSymlinkedProjectRoot()
+    {
+        if (OperatingSystem.IsWindows())
+            return; // Creating symlinks on Windows requires admin/developer mode / Windows で symlink 作成には管理者権限が必要
+
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var realRoot = Path.Combine(project.Root, "real_root");
+        Directory.CreateDirectory(realRoot);
+        File.WriteAllText(Path.Combine(realRoot, "sample.cs"), "class Sample { }\n");
+        var linkedRoot = Path.Combine(project.Root, "linked_root");
+        Directory.CreateSymbolicLink(linkedRoot, realRoot);
+
+        var filter = new FileIndexer(linkedRoot, ignoreCase: false)
+            .EvaluatePathFilter(Path.Combine(linkedRoot, "sample.cs"));
+
+        Assert.Equal(FileIndexer.PathFilterKind.None, filter.FilterKind);
+    }
+
+    [Fact]
+    public void EvaluatePathFilter_DefaultPolicyAllowsMacUnicodeAliasSpelling()
+    {
+        if (!OperatingSystem.IsMacOS())
+            return;
+
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var decomposedPath = Path.Combine(project.Root, "Cafe\u0301.cs");
+        var composedAliasPath = Path.Combine(project.Root, "Caf\u00e9.cs");
+        File.WriteAllText(decomposedPath, "class Cafe { }\n");
+        if (!File.Exists(composedAliasPath))
+            return; // The hosting volume is Unicode-normalization-sensitive. / この volume は Unicode 正規化を区別する。
+
+        var filter = new FileIndexer(project.Root, ignoreCase: false)
+            .EvaluatePathFilter(composedAliasPath);
+
+        Assert.Equal(FileIndexer.PathFilterKind.None, filter.FilterKind);
+    }
+
+    [Fact]
+    public void EvaluatePathFilter_DefaultPolicyAllowsMacUnicodeAliasProjectRootSpelling()
+    {
+        if (!OperatingSystem.IsMacOS())
+            return;
+
+        using var fixture = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var projectRoot = Path.Combine(fixture.Root, "Cafe\u0301 Project");
+        var projectRootAlias = Path.Combine(fixture.Root, "Caf\u00e9 Project");
+        Directory.CreateDirectory(projectRoot);
+        var sourcePath = Path.Combine(projectRoot, "sample.cs");
+        var sourceAliasPath = Path.Combine(projectRootAlias, "sample.cs");
+        File.WriteAllText(sourcePath, "class Sample { }\n");
+        if (!File.Exists(sourceAliasPath)
+            || !FileIndexer.TryGetFileIdentity(projectRoot, out var projectRootIdentity)
+            || !FileIndexer.TryGetFileIdentity(projectRootAlias, out var aliasIdentity)
+            || projectRootIdentity != aliasIdentity)
+        {
+            return; // The hosting volume distinguishes Unicode normalization. / この volume は Unicode 正規化を区別する。
+        }
+
+        var defaultIndexer = new FileIndexer(projectRoot, ignoreCase: false);
+        Assert.Equal(
+            FileIndexer.PathFilterKind.None,
+            defaultIndexer.EvaluatePathFilter(sourceAliasPath).FilterKind);
+
+        var targetDirectory = Path.Combine(projectRoot, "target");
+        Directory.CreateDirectory(targetDirectory);
+        File.WriteAllText(Path.Combine(targetDirectory, "linked.cs"), "class Linked { }\n");
+        Directory.CreateSymbolicLink(Path.Combine(projectRoot, "directory_alias"), targetDirectory);
+        var linkedAliasPath = Path.Combine(projectRootAlias, "directory_alias", "linked.cs");
+        var internalIndexer = new FileIndexer(
+            projectRoot,
+            ignoreCase: false,
+            ignoreRuleRoot: null,
+            maxFileSizeBytes: null,
+            directoryIgnoreCaseProbe: null,
+            symlinkPolicy: FileIndexer.SymlinkPolicy.Internal);
+
+        Assert.Equal(
+            FileIndexer.PathFilterKind.SymlinkDisallowed,
+            defaultIndexer.EvaluatePathFilter(linkedAliasPath).FilterKind);
+        Assert.Equal(
+            FileIndexer.PathFilterKind.None,
+            internalIndexer.EvaluatePathFilter(linkedAliasPath).FilterKind);
+    }
+
+    [Fact]
+    public void EvaluatePathFilter_DefaultPolicyAllowsWindowsShortNameAliasSpelling()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        const string longDirectoryName = "Long Directory Name For Alias";
+        var longDirectoryPath = Path.Combine(project.Root, longDirectoryName);
+        Directory.CreateDirectory(longDirectoryPath);
+        File.WriteAllText(Path.Combine(longDirectoryPath, "sample.cs"), "class Sample { }\n");
+        if (!TryGetWindowsShortPath(longDirectoryPath, out var shortDirectoryPath))
+            return;
+
+        var shortDirectoryName = Path.GetFileName(Path.TrimEndingDirectorySeparator(shortDirectoryPath));
+        if (string.Equals(shortDirectoryName, longDirectoryName, StringComparison.OrdinalIgnoreCase))
+            return; // 8.3 aliases are disabled on this volume. / この volume では 8.3 alias が無効。
+
+        var aliasPath = Path.Combine(project.Root, shortDirectoryName, "sample.cs");
+        Assert.True(File.Exists(aliasPath));
+
+        var filter = new FileIndexer(project.Root, ignoreCase: true).EvaluatePathFilter(aliasPath);
+
+        Assert.Equal(FileIndexer.PathFilterKind.None, filter.FilterKind);
+    }
+
+    [Fact]
+    public void EvaluatePathFilter_DefaultPolicyAllowsWindowsShortProjectRootAliasSpelling()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        using var fixture = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var projectRoot = Path.Combine(fixture.Root, "Long Project Root Name For Alias");
+        Directory.CreateDirectory(projectRoot);
+        File.WriteAllText(Path.Combine(projectRoot, "sample.cs"), "class Sample { }\n");
+        if (!TryGetWindowsShortPath(projectRoot, out var projectRootAlias)
+            || string.Equals(projectRootAlias, projectRoot, StringComparison.OrdinalIgnoreCase))
+        {
+            return; // 8.3 aliases are disabled on this volume. / この volume では 8.3 alias が無効。
+        }
+
+        var aliasPath = Path.Combine(projectRootAlias, "sample.cs");
+        Assert.True(File.Exists(aliasPath));
+
+        var filter = new FileIndexer(projectRoot, ignoreCase: true).EvaluatePathFilter(aliasPath);
+
+        Assert.Equal(FileIndexer.PathFilterKind.None, filter.FilterKind);
+    }
+
+    [Fact]
+    public void EvaluatePathFilter_RejectsCaseOnlySiblingRootAcrossMixedNamespaces_Issue5091()
+    {
+        using var fixture = TestProjectHelper.CreateTempProjectScope("codeindex_mixed_root_namespace");
+        var upperRoot = Path.Combine(fixture.Root, "Foo");
+        var lowerRoot = Path.Combine(fixture.Root, "foo");
+        Directory.CreateDirectory(upperRoot);
+        Directory.CreateDirectory(lowerRoot);
+        if (!FileIndexer.TryGetFileIdentity(upperRoot, out var upperIdentity)
+            || !FileIndexer.TryGetFileIdentity(lowerRoot, out var lowerIdentity)
+            || upperIdentity == lowerIdentity)
+        {
+            return; // The hosting filesystem aliases the two spellings. / この filesystem では2表記が同一 path。
+        }
+
+        var lowerFile = Path.Combine(lowerRoot, "sample.cs");
+        File.WriteAllText(lowerFile, "class LowerNamespace { }\n");
+        var previousProbe = PathCasing.IgnoreCaseProbeForTesting;
+        PathCasing.IgnoreCaseProbeForTesting = path =>
+        {
+            var fullPath = Path.GetFullPath(path);
+            return string.Equals(fullPath, upperRoot, StringComparison.Ordinal)
+                || fullPath.StartsWith(upperRoot + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+                || string.Equals(fullPath, lowerRoot, StringComparison.Ordinal)
+                || fullPath.StartsWith(lowerRoot + Path.DirectorySeparatorChar, StringComparison.Ordinal);
+        };
+        try
+        {
+            var filter = new FileIndexer(upperRoot, ignoreCase: true)
+                .EvaluatePathFilter(lowerFile);
+
+            Assert.Equal(FileIndexer.PathFilterKind.OutsideProjectRoot, filter.FilterKind);
+        }
+        finally
+        {
+            PathCasing.IgnoreCaseProbeForTesting = previousProbe;
+        }
     }
 
     [Fact]
@@ -3941,6 +4227,19 @@ public partial class FileIndexerTests
         Assert.Equal(
             FileIndexer.FileProbeStatus.Supported,
             FileIndexer.GetFileIndexability(externalLinkPath, FileIndexer.SymlinkPolicy.All, tempDir));
+    }
+
+    [Fact]
+    public void GetFileIndexability_RejectsDirectoriesOnEveryPlatform()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
+        var directory = Path.Combine(project.Root, "directory.cs");
+        Directory.CreateDirectory(directory);
+
+        Assert.Equal(
+            FileIndexer.FileProbeStatus.Unsupported,
+            FileIndexer.GetFileIndexability(directory));
+        Assert.False(FileIndexer.CanIndexFile(directory));
     }
 
     [Fact]
@@ -8130,6 +8429,28 @@ public partial class FileIndexerTests
             out var checksum));
         Assert.Equal(FileIndexer.ComputeChecksum(bytes), checksum);
     }
+
+    [SupportedOSPlatform("windows")]
+    private static bool TryGetWindowsShortPath(string path, out string shortPath)
+    {
+        var buffer = new StringBuilder(1024);
+        var length = GetShortPathName(path, buffer, (uint)buffer.Capacity);
+        if (length == 0 || length >= buffer.Capacity)
+        {
+            shortPath = string.Empty;
+            return false;
+        }
+
+        shortPath = buffer.ToString();
+        return shortPath.Length > 0;
+    }
+
+    [SupportedOSPlatform("windows")]
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern uint GetShortPathName(
+        string longPath,
+        StringBuilder shortPath,
+        uint bufferLength);
 
     private sealed class CountingCSharpPrepassFileStream : FileStream
     {

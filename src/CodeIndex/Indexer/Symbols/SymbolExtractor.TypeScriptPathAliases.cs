@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using CodeIndex.Cli;
 using CodeIndex.Diagnostics;
+using CodeIndex.Indexer.Extensibility;
 
 namespace CodeIndex.Indexer;
 
@@ -44,6 +45,45 @@ public static partial class SymbolExtractor
     ];
     private static readonly object TypeScriptPathAliasWarningLock = new();
     private static readonly HashSet<string> TypeScriptPathAliasReportedWarnings = new(StringComparer.Ordinal);
+    private static readonly AsyncLocal<Action<string>?> TypeScriptPathAliasConfigContentReadHook = new();
+    private static readonly AsyncLocal<TypeScriptPathAliasFileSystemPolicy?> TypeScriptPathAliasFileSystemPolicyContext = new();
+    internal static Action<string>? TypeScriptPathAliasConfigContentReadForTesting
+    {
+        get => TypeScriptPathAliasConfigContentReadHook.Value;
+        set => TypeScriptPathAliasConfigContentReadHook.Value = value;
+    }
+    private sealed record TypeScriptPathAliasFileSystemPolicy(
+        FileIndexer.SymlinkPolicy SymlinkPolicy,
+        string ProjectRoot);
+
+    internal static IDisposable EnterTypeScriptPathAliasFileSystemPolicy(
+        FileIndexer.SymlinkPolicy symlinkPolicy,
+        string projectRoot)
+    {
+        if (!Enum.IsDefined(symlinkPolicy))
+            symlinkPolicy = FileIndexer.SymlinkPolicy.None;
+
+        var previous = TypeScriptPathAliasFileSystemPolicyContext.Value;
+        TypeScriptPathAliasFileSystemPolicyContext.Value = new(
+            symlinkPolicy,
+            Path.GetFullPath(projectRoot));
+        return new TypeScriptPathAliasFileSystemPolicyScope(previous);
+    }
+
+    private sealed class TypeScriptPathAliasFileSystemPolicyScope(
+        TypeScriptPathAliasFileSystemPolicy? previous) : IDisposable
+    {
+        private bool disposed;
+
+        public void Dispose()
+        {
+            if (disposed)
+                return;
+
+            TypeScriptPathAliasFileSystemPolicyContext.Value = previous;
+            disposed = true;
+        }
+    }
     private sealed record TypeScriptPathAliasConfig(string ConfigPath, string ProjectDirectory, string BaseDirectory, bool HasBaseUrl, IReadOnlyList<TypeScriptPathAliasRule> Rules);
 
     private sealed record TypeScriptPathAliasRule(string Pattern, string BaseDirectory, IReadOnlyList<string> Targets);
@@ -363,59 +403,166 @@ public static partial class SymbolExtractor
 
         try
         {
-            using var stream = new FileStream(
-                configPath,
-                FileMode.Open,
-                FileAccess.Read,
-                FileShare.ReadWrite | FileShare.Delete,
-                bufferSize: 8192,
-                useAsync: false);
-
-            if (stream.Length > MaxTypeScriptPathAliasConfigBytes)
+            if (!TryOpenTypeScriptPathAliasConfig(
+                    configPath,
+                    out var stream,
+                    out var observedLength))
             {
-                skippedReason = new(TypeScriptPathAliasDiagnosticSizeLimit, $"it exceeds {MaxTypeScriptPathAliasConfigBytes} bytes");
+                skippedReason = new(
+                    TypeScriptPathAliasDiagnosticReadFailed,
+                    "it could not be read safely as a regular file");
                 return false;
             }
 
-            if (totalConfigBytesRead + stream.Length > MaxTypeScriptPathAliasTotalConfigBytes)
+            using (stream)
             {
-                skippedReason = new(TypeScriptPathAliasDiagnosticSizeLimit, $"the extends chain exceeds {MaxTypeScriptPathAliasTotalConfigBytes} bytes");
-                return false;
-            }
-
-            using var accumulator = new MemoryStream((int)Math.Min(stream.Length, MaxTypeScriptPathAliasConfigBytes));
-            var buffer = new byte[8192];
-            long fileBytesRead = 0;
-            int read;
-            while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
-            {
-                fileBytesRead += read;
-                if (fileBytesRead > MaxTypeScriptPathAliasConfigBytes)
+                if (observedLength > MaxTypeScriptPathAliasConfigBytes)
                 {
                     skippedReason = new(TypeScriptPathAliasDiagnosticSizeLimit, $"it exceeds {MaxTypeScriptPathAliasConfigBytes} bytes");
                     return false;
                 }
 
-                totalConfigBytesRead += read;
-                if (totalConfigBytesRead > MaxTypeScriptPathAliasTotalConfigBytes)
+                if (totalConfigBytesRead + observedLength > MaxTypeScriptPathAliasTotalConfigBytes)
                 {
                     skippedReason = new(TypeScriptPathAliasDiagnosticSizeLimit, $"the extends chain exceeds {MaxTypeScriptPathAliasTotalConfigBytes} bytes");
                     return false;
                 }
 
-                accumulator.Write(buffer, 0, read);
-            }
+                TypeScriptPathAliasConfigContentReadForTesting?.Invoke(configPath);
+                using var accumulator = new MemoryStream((int)Math.Min(observedLength, MaxTypeScriptPathAliasConfigBytes));
+                var buffer = new byte[8192];
+                long fileBytesRead = 0;
+                int read;
+                while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
+                {
+                    fileBytesRead += read;
+                    if (fileBytesRead > MaxTypeScriptPathAliasConfigBytes)
+                    {
+                        skippedReason = new(TypeScriptPathAliasDiagnosticSizeLimit, $"it exceeds {MaxTypeScriptPathAliasConfigBytes} bytes");
+                        return false;
+                    }
 
-            text = DecodeTypeScriptPathAliasConfigText(accumulator);
-            if (text.Length > 0 && text[0] == '\uFEFF')
-                text = text[1..];
-            return true;
+                    totalConfigBytesRead += read;
+                    if (totalConfigBytesRead > MaxTypeScriptPathAliasTotalConfigBytes)
+                    {
+                        skippedReason = new(TypeScriptPathAliasDiagnosticSizeLimit, $"the extends chain exceeds {MaxTypeScriptPathAliasTotalConfigBytes} bytes");
+                        return false;
+                    }
+
+                    accumulator.Write(buffer, 0, read);
+                }
+
+                text = DecodeTypeScriptPathAliasConfigText(accumulator);
+                if (text.Length > 0 && text[0] == '\uFEFF')
+                    text = text[1..];
+                return true;
+            }
         }
         catch (Exception ex) when (IsTypeScriptPathAliasConfigReadException(ex))
         {
             skippedReason = new(TypeScriptPathAliasDiagnosticReadFailed, "it could not be read");
             return false;
         }
+    }
+
+    private static bool TryOpenTypeScriptPathAliasConfig(
+        string configPath,
+        out FileStream stream,
+        out long length)
+    {
+        stream = null!;
+        length = 0;
+        var fileSystemPolicy = TypeScriptPathAliasFileSystemPolicyContext.Value;
+        if (fileSystemPolicy == null)
+        {
+            if (ExtractorPluginRegistry.TryOpenSecureRegularFile(configPath, out stream, out length))
+                return true;
+
+            var legacyResolvedConfigPath = FileIndexer.ResolveFileReadPath(configPath);
+            return ExtractorPluginRegistry.TryOpenSecureRegularFile(
+                legacyResolvedConfigPath,
+                out stream,
+                out length);
+        }
+
+        if (!ContainsSymlinkOrReparsePointBeyondProjectRootAnchor(
+                fileSystemPolicy.ProjectRoot,
+                configPath))
+        {
+            return ExtractorPluginRegistry.TryOpenSecureRegularFile(
+                configPath,
+                out stream,
+                out length);
+        }
+
+        var symlinkPolicy = fileSystemPolicy.SymlinkPolicy;
+        if (symlinkPolicy == FileIndexer.SymlinkPolicy.None)
+            return false;
+
+        var resolvedConfigPath = FileIndexer.ResolveFileReadPath(configPath);
+        if (symlinkPolicy == FileIndexer.SymlinkPolicy.Internal)
+        {
+            var resolvedProjectRoot = FileIndexer.ResolveFileReadPath(fileSystemPolicy.ProjectRoot);
+            if (!FileIndexer.TryGetNativeEquivalentProjectRelativePath(
+                    resolvedProjectRoot,
+                    resolvedConfigPath,
+                    out _))
+                return false;
+        }
+
+        return ExtractorPluginRegistry.TryOpenSecureRegularFile(
+            resolvedConfigPath,
+            out stream,
+            out length);
+    }
+
+    private static bool ContainsSymlinkOrReparsePointBeyondProjectRootAnchor(
+        string projectRoot,
+        string candidatePath)
+    {
+        var fullProjectRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(projectRoot));
+        var fullCandidatePath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(candidatePath));
+        var candidateRoot = Path.GetPathRoot(fullCandidatePath);
+        if (string.IsNullOrEmpty(candidateRoot))
+            return true;
+
+        var currentPath = candidateRoot;
+        var remaining = fullCandidatePath.AsSpan(candidateRoot.Length);
+        while (!remaining.IsEmpty)
+        {
+            var separatorIndex = remaining.IndexOfAny(
+                Path.DirectorySeparatorChar,
+                Path.AltDirectorySeparatorChar);
+            var segment = separatorIndex >= 0 ? remaining[..separatorIndex] : remaining;
+            if (!segment.IsEmpty)
+            {
+                currentPath = Path.Join(currentPath.AsSpan(), segment);
+                if (!IsOrdinalPathEqualOrParent(currentPath, fullProjectRoot)
+                    && FileIndexer.IsSymlinkOrReparsePointPath(currentPath))
+                {
+                    return true;
+                }
+            }
+
+            if (separatorIndex < 0)
+                break;
+            remaining = remaining[(separatorIndex + 1)..];
+        }
+
+        return false;
+    }
+
+    private static bool IsOrdinalPathEqualOrParent(string candidateParent, string candidateChild)
+    {
+        var normalizedParent = Path.TrimEndingDirectorySeparator(Path.GetFullPath(candidateParent));
+        var normalizedChild = Path.TrimEndingDirectorySeparator(Path.GetFullPath(candidateChild));
+        if (string.Equals(normalizedParent, normalizedChild, StringComparison.Ordinal))
+            return true;
+
+        var parentPrefix = Path.EndsInDirectorySeparator(normalizedParent)
+            ? normalizedParent
+            : normalizedParent + Path.DirectorySeparatorChar;
+        return normalizedChild.StartsWith(parentPrefix, StringComparison.Ordinal);
     }
 
     private static string DecodeTypeScriptPathAliasConfigText(MemoryStream accumulator)

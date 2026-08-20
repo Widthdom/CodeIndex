@@ -14,6 +14,7 @@ using CodeIndex.Indexer;
 using CodeIndex.Indexer.Extensibility;
 using CodeIndex.Indexer.Hooks;
 using CodeIndex.Models;
+using CodeIndex.PluginIsolationFixture;
 using Microsoft.Data.Sqlite;
 
 namespace CodeIndex.Tests;
@@ -84,7 +85,7 @@ public partial class IndexCommandRunnerTests
     {
         var pluginPath = Path.Combine(projectRoot, ".cdidx", "plugins", "workspace-plugin.dll");
         Directory.CreateDirectory(Path.GetDirectoryName(pluginPath)!);
-        TestProjectHelper.CopyAssemblyFixtureWithDependencies(Assembly.GetExecutingAssembly().Location, pluginPath);
+        File.Copy(typeof(CollectiblePluginSymbolExtractor).Assembly.Location, pluginPath);
         File.WriteAllText(Path.Combine(projectRoot, "stable.collectible"), "workspace reference\n");
         var changedPath = Path.Combine(projectRoot, "changed.cs");
         File.WriteAllText(changedPath, "public class Changed { }\n");
@@ -931,14 +932,17 @@ public partial class IndexCommandRunnerTests
         var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_shared_root_{Guid.NewGuid():N}.db");
         try
         {
-            File.WriteAllText(Path.Combine(projectRootA, "readme.md"), "# from a\n");
+            var sourcePathA = Path.Combine(projectRootA, "readme.md");
+            const string sourceContent = "# from a\n";
+            File.WriteAllText(sourcePathA, sourceContent);
             var initialExitCode = IndexCommandRunner.Run([projectRootA, "--db", dbPath, "--json"], _jsonOptions);
             Assert.Equal(CommandExitCodes.Success, initialExitCode);
 
-            Directory.CreateDirectory(Path.Combine(projectRootB, "docs"));
-            File.WriteAllText(Path.Combine(projectRootB, "docs", "readme.txt"), "not indexable\n");
+            var sourcePathB = Path.Combine(projectRootB, "readme.md");
+            File.WriteAllText(sourcePathB, sourceContent);
+            File.SetLastWriteTimeUtc(sourcePathB, File.GetLastWriteTimeUtc(sourcePathA));
 
-            var (updateExitCode, updateJson) = RunAndCaptureJson([projectRootB, "--db", dbPath, "--files", "docs/readme.txt", "--json"]);
+            var (updateExitCode, updateJson) = RunAndCaptureJson([projectRootB, "--db", dbPath, "--files", "readme.md", "--json"]);
             Assert.Equal(CommandExitCodes.Success, updateExitCode);
             Assert.Equal("success", updateJson.GetProperty("status").GetString());
             Assert.Equal(0, updateJson.GetProperty("summary").GetProperty("updated").GetInt32());
@@ -991,7 +995,9 @@ public partial class IndexCommandRunnerTests
         var dbPath = Path.Combine(Path.GetTempPath(), $"cdidx_shared_stale_refs_{Guid.NewGuid():N}.db");
         try
         {
-            File.WriteAllText(Path.Combine(projectRootA, "app.py"), "print('from a')\n");
+            var sourcePathA = Path.Combine(projectRootA, "app.py");
+            const string sourceContent = "print('from a')\n";
+            File.WriteAllText(sourcePathA, sourceContent);
             var initialExitCode = IndexCommandRunner.Run([projectRootA, "--db", dbPath, "--json"], _jsonOptions);
             Assert.Equal(CommandExitCodes.Success, initialExitCode);
 
@@ -1030,10 +1036,11 @@ public partial class IndexCommandRunnerTests
             }
             Assert.Equal(baselineReferenceCount + 1, CountReferences());
 
-            Directory.CreateDirectory(Path.Combine(projectRootB, "docs"));
-            File.WriteAllText(Path.Combine(projectRootB, "docs", "readme.txt"), "not indexable\n");
+            var sourcePathB = Path.Combine(projectRootB, "app.py");
+            File.WriteAllText(sourcePathB, sourceContent);
+            File.SetLastWriteTimeUtc(sourcePathB, File.GetLastWriteTimeUtc(sourcePathA));
 
-            var (updateExitCode, updateJson) = RunAndCaptureJson([projectRootB, "--db", dbPath, "--files", "docs/readme.txt", "--json"]);
+            var (updateExitCode, updateJson) = RunAndCaptureJson([projectRootB, "--db", dbPath, "--files", "app.py", "--json"]);
             Assert.Equal(CommandExitCodes.Success, updateExitCode);
             Assert.Equal("success", updateJson.GetProperty("status").GetString());
             Assert.Equal(0, updateJson.GetProperty("summary").GetProperty("updated").GetInt32());
@@ -1143,8 +1150,12 @@ public partial class IndexCommandRunnerTests
                 command.ExecuteNonQuery();
             }
 
+            var sourcePath = Path.Combine(projectRoot, "app.py");
+            File.WriteAllText(sourcePath, "print('changed')\n");
+            File.SetLastWriteTimeUtc(sourcePath, DateTime.UtcNow.AddSeconds(2));
+
             Assert.Throws<SqliteException>(() =>
-                IndexCommandRunner.Run([projectRoot, "--db", dbPath, "--files", "missing.txt", "--json"], _jsonOptions));
+                IndexCommandRunner.Run([projectRoot, "--db", dbPath, "--files", "app.py", "--json"], _jsonOptions));
 
             Assert.Equal(readyVersion, ReadScalar("PRAGMA user_version"));
             Assert.Equal(1, ReadScalar("SELECT COUNT(*) FROM symbol_references WHERE symbol_name = 'LegacyLink'"));
@@ -1221,7 +1232,9 @@ public partial class IndexCommandRunnerTests
         try
         {
             RunGit(projectRootA, "init");
-            File.WriteAllText(Path.Combine(projectRootA, "app.py"), "print('hello')\n");
+            var sourcePathA = Path.Combine(projectRootA, "app.py");
+            const string sourceContent = "print('hello')\n";
+            File.WriteAllText(sourcePathA, sourceContent);
             RunGit(projectRootA, "add", ".");
             RunGit(projectRootA, "commit", "-m", "init");
 
@@ -1230,10 +1243,11 @@ public partial class IndexCommandRunnerTests
 
             DeleteIndexedProjectRootMetadata(dbPath);
 
-            Directory.CreateDirectory(Path.Combine(projectRootB, "docs"));
-            File.WriteAllText(Path.Combine(projectRootB, "docs", "readme.txt"), "not indexable\n");
+            var sourcePathB = Path.Combine(projectRootB, "app.py");
+            File.WriteAllText(sourcePathB, sourceContent);
+            File.SetLastWriteTimeUtc(sourcePathB, File.GetLastWriteTimeUtc(sourcePathA));
 
-            var (updateExitCode, updateJson) = RunAndCaptureJson([projectRootB, "--db", dbPath, "--files", "docs/readme.txt", "--json"]);
+            var (updateExitCode, updateJson) = RunAndCaptureJson([projectRootB, "--db", dbPath, "--files", "app.py", "--json"]);
             Assert.Equal(CommandExitCodes.Success, updateExitCode);
             Assert.Equal("success", updateJson.GetProperty("status").GetString());
             Assert.Equal(0, updateJson.GetProperty("summary").GetProperty("updated").GetInt32());
@@ -1351,10 +1365,7 @@ public partial class IndexCommandRunnerTests
             }
             Assert.Equal(baselineReferenceCount + 1, CountReferences());
 
-            Directory.CreateDirectory(Path.Combine(projectRoot, "docs"));
-            File.WriteAllText(Path.Combine(projectRoot, "docs", "readme.txt"), "not indexable\n");
-
-            var (updateExitCode, updateJson) = RunAndCaptureJson([projectRoot, "--db", dbPath, "--files", "docs/readme.txt", "--json"]);
+            var (updateExitCode, updateJson) = RunAndCaptureJson([projectRoot, "--db", dbPath, "--files", "readme.md", "--json"]);
             Assert.Equal(CommandExitCodes.Success, updateExitCode);
             Assert.Equal("success", updateJson.GetProperty("status").GetString());
             Assert.Equal(0, updateJson.GetProperty("summary").GetProperty("updated").GetInt32());
@@ -1503,7 +1514,7 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_UpdateFiles_RemovesOldPathWhenExtensionChangesToUnsupported()
+    public void Run_UpdateFiles_RejectsExtensionChangeToUnsupportedAtomically_Issue5091()
     {
         var projectRoot = CreateTempProject();
         try
@@ -1515,13 +1526,19 @@ public partial class IndexCommandRunnerTests
             var initialExitCode = IndexCommandRunner.Run([projectRoot, "--files", "foo.py", "--json"], _jsonOptions);
             Assert.Equal(CommandExitCodes.Success, initialExitCode);
             Assert.True(IndexedFileExists(projectRoot, "foo.py"));
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var databaseFilesBefore = ReadDatabaseFileSetFingerprint(dbPath);
 
             File.Move(oldPath, newPath);
 
-            var (updateExitCode, _) = RunAndCaptureJson([projectRoot, "--files", "foo.bin", "--json"]);
+            var (updateExitCode, json) = RunAndCaptureJson([projectRoot, "--files", "foo.bin", "--json"]);
 
-            Assert.Equal(CommandExitCodes.Success, updateExitCode);
-            Assert.False(IndexedFileExists(projectRoot, "foo.py"));
+            Assert.Equal(CommandExitCodes.UsageError, updateExitCode);
+            AssertRejectedFilesError(
+                json,
+                (InputIndex: 0, Path: "foo.bin", Reason: "unsupported_language"));
+            Assert.Equal(databaseFilesBefore, ReadDatabaseFileSetFingerprint(dbPath));
+            Assert.True(IndexedFileExists(projectRoot, "foo.py"));
             Assert.False(IndexedFileExists(projectRoot, "foo.bin"));
         }
         finally
@@ -1731,27 +1748,2198 @@ public partial class IndexCommandRunnerTests
         }
     }
 
-    [Fact]
-    public void Run_UpdateFiles_SkipsPathsOutsideProjectRoot()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Run_UpdateFiles_RejectsPathsOutsideProjectRootBeforeCreatingDatabase_Issue5091(
+        bool useAbsolutePath)
     {
-        var projectRoot = CreateTempProject();
-        var outsideFile = Path.Combine(Directory.GetParent(projectRoot)!.FullName, $"outside_{Guid.NewGuid():N}.cs");
+        var parentRoot = TestProjectHelper.CreateTempProject("cdidx_files_scope_5091");
+        var projectRoot = Path.Combine(parentRoot, "project");
+        var outsideFile = Path.Combine(parentRoot, "outside.cs");
         try
         {
-            File.WriteAllText(outsideFile, "class Outside {}\n");
+            Directory.CreateDirectory(projectRoot);
+            File.WriteAllText(outsideFile, "class Outside { }\n");
+            var suppliedPath = useAbsolutePath ? outsideFile : "../outside.cs";
 
-            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--files", $"../{Path.GetFileName(outsideFile)}", "--json"]);
+            var (exitCode, json) = RunAndCaptureJson(
+                [projectRoot, "--files", suppliedPath, "--json"]);
 
-            Assert.Equal(CommandExitCodes.Success, exitCode);
-            Assert.Equal("success", json.GetProperty("status").GetString());
-            Assert.Equal(0, json.GetProperty("summary").GetProperty("updated").GetInt32());
-            Assert.Equal(0, json.GetProperty("summary").GetProperty("errors").GetInt32());
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            AssertRejectedFilesError(
+                json,
+                (InputIndex: 0, Path: "<outside-project-root>", Reason: "outside_project_root"));
+            Assert.DoesNotContain(suppliedPath, json.ToString(), StringComparison.Ordinal);
+            Assert.False(File.Exists(Path.Combine(projectRoot, ".cdidx", "codeindex.db")));
         }
         finally
         {
-            DeleteFile(outsideFile);
+            DeleteDirectory(parentRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateFiles_TextRejectsNonexistentPathBeforeCreatingDatabase_Issue5091()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var (exitCode, stdout, stderr) = RunAndCaptureStreams(
+                [projectRoot, "--files", "missing.cs"]);
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            var output = stdout + stderr;
+            Assert.Contains("paths supplied to --files were rejected", output, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("missing.cs", output, StringComparison.Ordinal);
+            Assert.Contains("not_found", output, StringComparison.Ordinal);
+            Assert.False(File.Exists(Path.Combine(projectRoot, ".cdidx", "codeindex.db")));
+        }
+        finally
+        {
             DeleteDirectory(projectRoot);
         }
+    }
+
+    [Theory]
+    [InlineData("ignored.cs", "ignored_by_rules")]
+    [InlineData("node_modules/app.cs", "excluded_by_default_directory")]
+    [InlineData(".DS_Store", "excluded_by_default_file")]
+    public void Run_UpdateFiles_RejectsUnindexedFilteredPathBeforeCreatingDatabase_Issue5091(
+        string selectedPath,
+        string expectedReason)
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            if (expectedReason == "ignored_by_rules")
+                File.WriteAllText(Path.Combine(projectRoot, ".gitignore"), "ignored.cs\n");
+
+            var absolutePath = Path.Combine(
+                projectRoot,
+                selectedPath.Replace('/', Path.DirectorySeparatorChar));
+            var parentDirectory = Path.GetDirectoryName(absolutePath);
+            if (!string.IsNullOrEmpty(parentDirectory))
+                Directory.CreateDirectory(parentDirectory);
+            File.WriteAllText(absolutePath, "public class Filtered5091 { }\n");
+
+            var (exitCode, json) = RunAndCaptureJson([
+                projectRoot,
+                "--files",
+                selectedPath,
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            AssertRejectedFilesError(
+                json,
+                (InputIndex: 0, Path: selectedPath, Reason: expectedReason));
+            Assert.False(File.Exists(Path.Combine(projectRoot, ".cdidx", "codeindex.db")));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateFiles_MixedValidAndInvalidSelectionDoesNotMutateDatabase_Issue5091()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "valid.cs");
+            File.WriteAllText(sourcePath, "public class Stable5091 { }\n");
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var checksumBefore = ReadIndexedChecksum(dbPath, "valid.cs");
+            var databaseFilesBefore = ReadDatabaseFileSetFingerprint(dbPath);
+            File.WriteAllText(sourcePath, "public class Mutated5091 { public void Changed() { } }\n");
+            File.SetLastWriteTimeUtc(sourcePath, DateTime.UtcNow.AddSeconds(2));
+
+            var (exitCode, json) = RunAndCaptureJson([
+                projectRoot,
+                "--files",
+                "valid.cs",
+                "missing.cs",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            AssertRejectedFilesError(
+                json,
+                (InputIndex: 1, Path: "missing.cs", Reason: "not_found"));
+            Assert.Equal(databaseFilesBefore, ReadDatabaseFileSetFingerprint(dbPath));
+            Assert.Equal(checksumBefore, ReadIndexedChecksum(dbPath, "valid.cs"));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateFiles_RejectsCanonicalDuplicateSpellingsBeforeCreatingDatabase_Issue5091()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "valid.cs");
+            File.WriteAllText(sourcePath, "public class Duplicate5091 { }\n");
+
+            var (exitCode, json) = RunAndCaptureJson([
+                projectRoot,
+                "--files",
+                "valid.cs",
+                $".{Path.DirectorySeparatorChar}valid.cs",
+                sourcePath,
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            AssertRejectedFilesError(
+                json,
+                (InputIndex: 1, Path: "valid.cs", Reason: "duplicate"),
+                (InputIndex: 2, Path: "valid.cs", Reason: "duplicate"));
+            Assert.DoesNotContain(sourcePath, json.ToString(), StringComparison.Ordinal);
+            Assert.False(File.Exists(Path.Combine(projectRoot, ".cdidx", "codeindex.db")));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateFiles_RejectsSymlinkEscapeWithSameJsonContractAsDryRun_Issue5091()
+    {
+        var projectRoot = CreateTempProject();
+        var outsideRoot = CreateTempProject();
+        try
+        {
+            var outsidePath = Path.Combine(outsideRoot, "outside.cs");
+            File.WriteAllText(outsidePath, "public class Outside5091 { }\n");
+            try
+            {
+                File.CreateSymbolicLink(Path.Combine(projectRoot, "link.cs"), outsidePath);
+            }
+            catch (Exception ex) when (ShouldSkipSymlinkFixtureFailure(ex))
+            {
+                return;
+            }
+
+            var (exitCode, json) = RunAndCaptureJson(
+                [projectRoot, "--files", "link.cs", "--json"]);
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            AssertRejectedFilesError(
+                json,
+                (InputIndex: 0, Path: "<symlink-outside-project-root>", Reason: "symlink_escape"));
+            Assert.False(File.Exists(Path.Combine(projectRoot, ".cdidx", "codeindex.db")));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+            DeleteDirectory(outsideRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateFiles_AllowsGeneratedFileSelection_Issue5091()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(projectRoot, "Generated.g.cs"),
+                "// <auto-generated/>\npublic class Generated5091 { }\n");
+
+            var (exitCode, json) = RunAndCaptureJson(
+                [projectRoot, "--files", "Generated.g.cs", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.True(IndexedFileExists(projectRoot, "Generated.g.cs"));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData(".gitignore")]
+    [InlineData(".cdidxignore")]
+    public void Run_UpdateFiles_AllowsExistingIgnoreControlFileSelection_Issue5091(
+        string ignoreFileName)
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "public class App5091 { }\n");
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            File.WriteAllText(Path.Combine(projectRoot, ignoreFileName), "ignored.cs\n");
+            var (exitCode, json) = RunAndCaptureJson(
+                [projectRoot, "--files", ignoreFileName, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.True(IndexedFileExists(projectRoot, "app.cs"));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateFiles_AllowsDeletionOfPreviouslyIndexedMissingPath_Issue5091()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "deleted.cs");
+            File.WriteAllText(sourcePath, "public class Deleted5091 { }\n");
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.True(IndexedFileExists(projectRoot, "deleted.cs"));
+            File.Delete(sourcePath);
+
+            var (exitCode, json) = RunAndCaptureJson(
+                [projectRoot, "--files", "deleted.cs", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(1, json.GetProperty("summary").GetProperty("removed").GetInt32());
+            Assert.False(IndexedFileExists(projectRoot, "deleted.cs"));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Run_WithFiles_AllowsCleanupOfIndexedPathThatIsNowUnsupportedLanguage_Issue5091(
+        bool dryRun)
+    {
+        const string selectedPath = "legacy.unknownext";
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "seed.cs"), "public class Seed5091 { }\n");
+            var unsupportedPath = Path.Combine(projectRoot, selectedPath);
+            File.WriteAllText(unsupportedPath, "plain text\n");
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var fileInfo = new FileInfo(unsupportedPath);
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.UpsertFile(new FileRecord
+                {
+                    Path = selectedPath,
+                    Lang = "legacy",
+                    Size = fileInfo.Length,
+                    Lines = 1,
+                    Modified = fileInfo.LastWriteTimeUtc,
+                    Checksum = "legacy-unsupported-5091",
+                });
+            }
+            Assert.True(IndexedFileExists(projectRoot, selectedPath));
+            var databaseFilesBefore = ReadDatabaseFileSetFingerprint(dbPath);
+
+            var arguments = new List<string>
+            {
+                projectRoot,
+                "--files",
+                selectedPath,
+            };
+            if (dryRun)
+                arguments.Add("--dry-run");
+            arguments.Add("--json");
+
+            var (exitCode, json) = RunAndCaptureJson([.. arguments]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            if (dryRun)
+            {
+                Assert.Equal("dry_run", json.GetProperty("status").GetString());
+                Assert.Equal(1, json.GetProperty("projected_file_deletes").GetInt32());
+                Assert.Equal(0, json.GetProperty("projected_file_purges").GetInt32());
+                Assert.Equal(databaseFilesBefore, ReadDatabaseFileSetFingerprint(dbPath));
+                Assert.True(IndexedFileExists(projectRoot, selectedPath));
+            }
+            else
+            {
+                Assert.Equal("success", json.GetProperty("status").GetString());
+                Assert.False(IndexedFileExists(projectRoot, selectedPath));
+                Assert.True(IndexedFileExists(projectRoot, "seed.cs"));
+            }
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_FullScan_EmptyProjectRetainsSuccessfulZeroFileContract_Issue5091()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.Equal(0, json.GetProperty("summary").GetProperty("files_total").GetInt32());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Run_FilesFlagWithoutPathRejectsBeforeFullScan_Issue5091(bool dryRun)
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "would-be-scanned.cs"), "class BareFiles5091 { }\n");
+            var arguments = new List<string> { projectRoot, "--files" };
+            if (dryRun)
+                arguments.Add("--dry-run");
+            arguments.Add("--json");
+
+            var (exitCode, json) = RunAndCaptureJson([.. arguments]);
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal("error", json.GetProperty("status").GetString());
+            Assert.Equal(CommandErrorCodes.UsageError, json.GetProperty("error_code").GetString());
+            Assert.Contains(
+                "--files requires at least one file path",
+                json.GetProperty("message").GetString(),
+                StringComparison.Ordinal);
+            Assert.False(File.Exists(Path.Combine(projectRoot, ".cdidx", "codeindex.db")));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void Run_ProjectSelectionKeepsDerivedUnsupportedPathsOutOfExplicitPreflight_Issue5091(
+        bool dryRun,
+        bool overlapWithExplicitFile)
+    {
+        const string sourcePath = "src/Lib/Class1.cs";
+        const string unsupportedPath = "src/Lib/logo.png";
+        var projectRoot = CreateTempProject();
+        try
+        {
+            WriteIssue5091SolutionProject(projectRoot);
+            var arguments = new List<string>
+            {
+                projectRoot,
+                "--solution",
+                "Repo.sln",
+                "--project",
+                "Lib",
+            };
+            if (overlapWithExplicitFile)
+            {
+                arguments.Add("--files");
+                arguments.Add(sourcePath);
+            }
+            if (dryRun)
+                arguments.Add("--dry-run");
+            arguments.Add("--json");
+
+            var (exitCode, json) = RunAndCaptureJson([.. arguments]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(dryRun ? "dry_run" : "success", json.GetProperty("status").GetString());
+            Assert.False(json.TryGetProperty("rejected_paths", out _));
+            if (dryRun)
+            {
+                Assert.True(json.GetProperty("projected_file_updates").GetInt32() >= 1);
+                Assert.False(File.Exists(Path.Combine(projectRoot, ".cdidx", "codeindex.db")));
+            }
+            else
+            {
+                Assert.True(IndexedFileExists(projectRoot, sourcePath));
+                Assert.False(IndexedFileExists(projectRoot, unsupportedPath));
+            }
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Run_ProjectSelectionStillAtomicallyRejectsInvalidDirectFileToken_Issue5091(bool dryRun)
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            WriteIssue5091SolutionProject(projectRoot);
+            var arguments = new List<string>
+            {
+                projectRoot,
+                "--solution",
+                "Repo.sln",
+                "--project",
+                "Lib",
+                "--files",
+                "missing.cs",
+            };
+            if (dryRun)
+                arguments.Add("--dry-run");
+            arguments.Add("--json");
+
+            var (exitCode, json) = RunAndCaptureJson([.. arguments]);
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            AssertRejectedFilesError(
+                json,
+                (InputIndex: 0, Path: "missing.cs", Reason: "not_found"));
+            Assert.False(File.Exists(Path.Combine(projectRoot, ".cdidx", "codeindex.db")));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Run_WithFiles_RejectsDirectoryBeforeDatabaseMutation_Issue5091(bool dryRun)
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, "folder.cs"));
+            var arguments = new List<string> { projectRoot, "--files", "folder.cs" };
+            if (dryRun)
+                arguments.Add("--dry-run");
+            arguments.Add("--json");
+
+            var (exitCode, json) = RunAndCaptureJson([.. arguments]);
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            AssertRejectedFilesError(
+                json,
+                (InputIndex: 0, Path: "folder.cs", Reason: "unsupported_file"));
+            Assert.False(File.Exists(Path.Combine(projectRoot, ".cdidx", "codeindex.db")));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData("nested/bad*.cs", true, false)]
+    [InlineData("nested/bad?.cs", true, false)]
+    [InlineData("nested/bad|name.cs", true, false)]
+    [InlineData("nested/CON.cs", true, false)]
+    [InlineData("nested/lpt1.log", true, false)]
+    [InlineData("nested/COM\u00b9.cs", true, false)]
+    [InlineData("nested/lpt\u00b3.log", true, false)]
+    [InlineData("nested/name.cs.", true, false)]
+    [InlineData("nested/name.cs ", true, false)]
+    [InlineData("nested/name.cs:stream", true, false)]
+    [InlineData("nested/bad*.cs", false, true)]
+    [InlineData("nested/CON.cs", false, true)]
+    [InlineData("nested/name.cs.", false, true)]
+    [InlineData(@"C:\repo\good.cs", true, true)]
+    [InlineData(@"\\server\share\good.cs", true, true)]
+    [InlineData("nested/COM10.cs", true, true)]
+    [InlineData("nested/good.cs", true, true)]
+    public void ExplicitFilePathComponentSyntaxValidation_UsesWindowsRulesOnly_Issue5091(
+        string path,
+        bool useWindowsRules,
+        bool expected)
+    {
+        Assert.Equal(
+            expected,
+            IndexCommandRunner.IsExplicitFilePathComponentSyntaxValid(
+                path,
+                useWindowsRules));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Run_WithFiles_WindowsInvalidComponentRejectsSelectionAtomically_Issue5091(
+        bool dryRun)
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "valid.cs");
+            File.WriteAllText(sourcePath, "public class ValidBeforeInvalidPath5091 { }\n");
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var checksumBefore = ReadIndexedChecksum(dbPath, "valid.cs");
+            var databaseFilesBefore = ReadDatabaseFileSetFingerprint(dbPath);
+            File.WriteAllText(
+                sourcePath,
+                "public class ValidMustNotMutateForInvalidPath5091 { public void Changed() { } }\n");
+            File.SetLastWriteTimeUtc(sourcePath, DateTime.UtcNow.AddSeconds(2));
+            var arguments = new List<string>
+            {
+                projectRoot,
+                "--files",
+                "valid.cs",
+                "bad*.cs",
+            };
+            if (dryRun)
+                arguments.Add("--dry-run");
+            arguments.Add("--json");
+
+            var (exitCode, json) = RunAndCaptureJson([.. arguments]);
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            AssertRejectedFilesError(
+                json,
+                (InputIndex: 1, Path: "bad*.cs", Reason: "invalid_path"));
+            Assert.Equal(databaseFilesBefore, ReadDatabaseFileSetFingerprint(dbPath));
+            Assert.Equal(checksumBefore, ReadIndexedChecksum(dbPath, "valid.cs"));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ExplicitFilesIndexedPathLookup_ScansCaseFoldCandidatesOnlyOnce_Issue5091()
+    {
+        const int candidateCount = 600;
+        const int unrelatedRowCount = 100;
+        using var connection = new SqliteConnection("Data Source=:memory:");
+        connection.Open();
+        using (var create = connection.CreateCommand())
+        {
+            create.CommandText = "CREATE TABLE files (path TEXT NOT NULL PRIMARY KEY)";
+            create.ExecuteNonQuery();
+        }
+
+        using (var transaction = connection.BeginTransaction())
+        using (var insert = connection.CreateCommand())
+        {
+            insert.Transaction = transaction;
+            insert.CommandText = "INSERT INTO files(path) VALUES (@path)";
+            var parameter = insert.Parameters.Add("@path", SqliteType.Text);
+            for (var index = 0; index < candidateCount; index++)
+            {
+                parameter.Value = $"Stored{index:D4}.cs";
+                insert.ExecuteNonQuery();
+            }
+            for (var index = 0; index < unrelatedRowCount; index++)
+            {
+                parameter.Value = $"Unrelated{index:D4}.cs";
+                insert.ExecuteNonQuery();
+            }
+
+            transaction.Commit();
+        }
+
+        var candidates = Enumerable.Range(0, candidateCount)
+            .Select(index => $"stored{index:D4}.cs")
+            .ToArray();
+
+        var result = IndexCommandRunner.ReadExplicitFilesIndexedPathMatchesForTesting(
+            connection,
+            candidates);
+
+        Assert.Equal(candidateCount, result.Paths.Count);
+        Assert.Equal(3, result.Metrics.ExactQueryCount);
+        Assert.Equal(1, result.Metrics.CaseFoldScanCount);
+        Assert.Equal(
+            candidateCount + unrelatedRowCount,
+            result.Metrics.CaseFoldScannedRowCount);
+        Assert.Contains("Stored0000.cs", result.Paths);
+        Assert.Contains("Stored0599.cs", result.Paths);
+
+        var exactResult = IndexCommandRunner.ReadExplicitFilesIndexedPathMatchesForTesting(
+            connection,
+            ["Stored0000.cs"]);
+        Assert.Equal("Stored0000.cs", Assert.Single(exactResult.Paths));
+        Assert.Equal(1, exactResult.Metrics.ExactQueryCount);
+        Assert.Equal(0, exactResult.Metrics.CaseFoldScanCount);
+        Assert.Equal(0, exactResult.Metrics.CaseFoldScannedRowCount);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Run_WithFiles_CleansIndexedControlReplacedByDirectory_Issue5091(bool dryRun)
+    {
+        const string controlPath = "tsconfig.json";
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, controlPath), "{}\n");
+            File.WriteAllText(
+                Path.Combine(projectRoot, "app.ts"),
+                "import \"bare-module\";\nexport const value = 1;\n");
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.True(IndexedFileExists(projectRoot, controlPath));
+
+            File.Delete(Path.Combine(projectRoot, controlPath));
+            Directory.CreateDirectory(Path.Combine(projectRoot, controlPath));
+            var arguments = new List<string> { projectRoot, "--files", controlPath };
+            if (dryRun)
+                arguments.Add("--dry-run");
+            arguments.Add("--json");
+
+            var (exitCode, json) = RunAndCaptureJson([.. arguments]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(dryRun ? "dry_run" : "success", json.GetProperty("status").GetString());
+            Assert.False(json.TryGetProperty("rejected_paths", out _));
+            if (dryRun)
+            {
+                Assert.Equal(1, json.GetProperty("projected_file_deletes").GetInt32());
+                Assert.True(json.GetProperty("projected_file_updates").GetInt32() >= 1);
+                Assert.True(IndexedFileExists(projectRoot, controlPath));
+            }
+            else
+            {
+                Assert.False(IndexedFileExists(projectRoot, controlPath));
+            }
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [ProductionRuntimeTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Run_WithFiles_CleansIndexedControlReplacedByUnixFifoWithoutOpening_Issue5091(
+        bool dryRun)
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        const string controlPath = "tsconfig.json";
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, controlPath), "{}\n");
+            File.WriteAllText(
+                Path.Combine(projectRoot, "app.ts"),
+                "import \"bare-module\";\nexport const value = 1;\n");
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.True(IndexedFileExists(projectRoot, controlPath));
+
+            File.Delete(Path.Combine(projectRoot, controlPath));
+            CreateUnixFifo(Path.Combine(projectRoot, controlPath));
+            var arguments = new List<string> { projectRoot, "--files", controlPath };
+            if (dryRun)
+                arguments.Add("--dry-run");
+            arguments.Add("--json");
+
+            var result = RunCliInSubprocessWithTimeout(
+                [.. arguments],
+                projectRoot,
+                TimeSpan.FromSeconds(10));
+
+            Assert.False(result.TimedOut, "cdidx index --files hung on an indexed control FIFO entry.");
+            Assert.Equal(CommandExitCodes.Success, result.ExitCode);
+            using var document = JsonDocument.Parse(result.StdOut);
+            var json = document.RootElement;
+            Assert.Equal(dryRun ? "dry_run" : "success", json.GetProperty("status").GetString());
+            Assert.False(json.TryGetProperty("rejected_paths", out _));
+            if (dryRun)
+            {
+                Assert.Equal(1, json.GetProperty("projected_file_deletes").GetInt32());
+                Assert.True(IndexedFileExists(projectRoot, controlPath));
+            }
+            else
+            {
+                Assert.False(IndexedFileExists(projectRoot, controlPath));
+            }
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Run_WithFiles_NonePolicyCleansIndexedControlSymlinkWithoutReadingTarget_Issue5091(
+        bool dryRun)
+    {
+        const string controlPath = "tsconfig.json";
+        var projectRoot = CreateTempProject();
+        var outsideRoot = CreateTempProject();
+        var previousConfigReadHook = SymbolExtractor.TypeScriptPathAliasConfigContentReadForTesting;
+        var previousExtractionTimeout = IndexCommandRunner.IndexExtractionStallTimeoutForTesting;
+        try
+        {
+            var controlAbsolutePath = Path.Combine(projectRoot, controlPath);
+            File.WriteAllText(controlAbsolutePath, "{}\n");
+            File.WriteAllText(
+                Path.Combine(projectRoot, "app.ts"),
+                "import \"sentinel-alias\";\nexport const value = 1;\n");
+            var configReads = new List<string>();
+            SymbolExtractor.TypeScriptPathAliasConfigContentReadForTesting = configReads.Add;
+            IndexCommandRunner.IndexExtractionStallTimeoutForTesting = () => TimeSpan.Zero;
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.True(IndexedFileExists(projectRoot, controlPath));
+            Assert.Contains(controlAbsolutePath, configReads);
+            configReads.Clear();
+
+            var outsideTarget = Path.Combine(outsideRoot, "outside-tsconfig.json");
+            var outsideModuleTarget = Path.Combine(outsideRoot, "sentinel-target.ts");
+            var outsideConfigJson = JsonSerializer.Serialize(new
+            {
+                compilerOptions = new
+                {
+                    baseUrl = ".",
+                    paths = new Dictionary<string, string[]>
+                    {
+                        ["sentinel-alias"] = [outsideModuleTarget],
+                    },
+                },
+            });
+            File.WriteAllText(outsideTarget, outsideConfigJson);
+            File.WriteAllText(
+                outsideModuleTarget,
+                "throw new Error(\"the symlink target config must not be read\");\n");
+            File.Delete(controlAbsolutePath);
+            try
+            {
+                File.CreateSymbolicLink(controlAbsolutePath, outsideTarget);
+            }
+            catch (Exception ex) when (ShouldSkipSymlinkFixtureFailure(ex))
+            {
+                return;
+            }
+
+            if (!dryRun)
+                IndexCommandRunner.IndexExtractionStallTimeoutForTesting = previousExtractionTimeout;
+            var arguments = new List<string>
+            {
+                projectRoot,
+                "--files",
+                controlPath,
+                "--follow-symlinks",
+                "none",
+            };
+            if (dryRun)
+                arguments.Add("--dry-run");
+            arguments.Add("--json");
+
+            var (exitCode, json) = RunAndCaptureJson([.. arguments]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(dryRun ? "dry_run" : "success", json.GetProperty("status").GetString());
+            Assert.False(json.TryGetProperty("rejected_paths", out _));
+            if (dryRun)
+                Assert.Empty(configReads);
+            if (dryRun)
+            {
+                Assert.Equal(1, json.GetProperty("projected_file_deletes").GetInt32());
+                Assert.True(IndexedFileExists(projectRoot, controlPath));
+            }
+            else
+            {
+                Assert.False(IndexedFileExists(projectRoot, controlPath));
+                Assert.Equal(
+                    "sentinel-alias",
+                    ReadFirstIndexedImportName(
+                        Path.Combine(projectRoot, ".cdidx", "codeindex.db"),
+                        "app.ts"));
+            }
+        }
+        finally
+        {
+            SymbolExtractor.TypeScriptPathAliasConfigContentReadForTesting = previousConfigReadHook;
+            IndexCommandRunner.IndexExtractionStallTimeoutForTesting = previousExtractionTimeout;
+            DeleteDirectory(projectRoot);
+            DeleteDirectory(outsideRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData(false, FileIndexer.SymlinkPolicy.Internal, true, true)]
+    [InlineData(true, FileIndexer.SymlinkPolicy.Internal, true, true)]
+    [InlineData(false, FileIndexer.SymlinkPolicy.Internal, false, false)]
+    [InlineData(true, FileIndexer.SymlinkPolicy.Internal, false, false)]
+    [InlineData(false, FileIndexer.SymlinkPolicy.All, false, true)]
+    [InlineData(true, FileIndexer.SymlinkPolicy.All, false, true)]
+    public void Run_WithFiles_TypeScriptConfigSymlinkHonorsActivePolicy_Issue5091(
+        bool dryRun,
+        FileIndexer.SymlinkPolicy symlinkPolicy,
+        bool targetInsideProject,
+        bool expectConfigRead)
+    {
+        var projectRoot = CreateTempProject();
+        var outsideRoot = CreateTempProject();
+        var previousConfigReadHook = SymbolExtractor.TypeScriptPathAliasConfigContentReadForTesting;
+        var previousExtractionTimeout = IndexCommandRunner.IndexExtractionStallTimeoutForTesting;
+        try
+        {
+            var targetRoot = targetInsideProject
+                ? Path.Combine(projectRoot, "config-target")
+                : outsideRoot;
+            Directory.CreateDirectory(targetRoot);
+            var configTarget = Path.Combine(targetRoot, "real-tsconfig.json");
+            var moduleTarget = Path.Combine(targetRoot, "sentinel-target.ts");
+            var configJson = JsonSerializer.Serialize(new
+            {
+                compilerOptions = new
+                {
+                    baseUrl = ".",
+                    paths = new Dictionary<string, string[]>
+                    {
+                        ["sentinel-alias"] = [moduleTarget],
+                    },
+                },
+            });
+            File.WriteAllText(
+                configTarget,
+                configJson);
+            File.WriteAllText(moduleTarget, "export const sentinel = 1;\n");
+            File.WriteAllText(
+                Path.Combine(projectRoot, "app.ts"),
+                "import { sentinel } from \"sentinel-alias\";\nexport const value = sentinel;\n");
+            var configPath = Path.Combine(projectRoot, "tsconfig.json");
+            try
+            {
+                File.CreateSymbolicLink(configPath, configTarget);
+            }
+            catch (Exception ex) when (ShouldSkipSymlinkFixtureFailure(ex))
+            {
+                return;
+            }
+
+            var configReads = new List<string>();
+            SymbolExtractor.TypeScriptPathAliasConfigContentReadForTesting = configReads.Add;
+            if (dryRun)
+                IndexCommandRunner.IndexExtractionStallTimeoutForTesting = () => TimeSpan.Zero;
+            var arguments = new List<string>
+            {
+                projectRoot,
+                "--files",
+                "app.ts",
+                "--follow-symlinks",
+                symlinkPolicy.ToString().ToLowerInvariant(),
+            };
+            if (dryRun)
+                arguments.Add("--dry-run");
+            arguments.Add("--json");
+
+            var (exitCode, json) = RunAndCaptureJson([.. arguments]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(dryRun ? "dry_run" : "success", json.GetProperty("status").GetString());
+            Assert.False(json.TryGetProperty("rejected_paths", out _));
+            if (dryRun)
+            {
+                if (expectConfigRead)
+                    Assert.Contains(configPath, configReads);
+                else
+                    Assert.Empty(configReads);
+                Assert.False(File.Exists(Path.Combine(projectRoot, ".cdidx", "codeindex.db")));
+            }
+            else
+            {
+                var expectedReferenceName = expectConfigRead
+                    ? FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectRoot, moduleTarget))
+                    : "sentinel-alias";
+                Assert.Equal(
+                    expectedReferenceName,
+                    ReadFirstIndexedImportName(
+                        Path.Combine(projectRoot, ".cdidx", "codeindex.db"),
+                        "app.ts"));
+            }
+        }
+        finally
+        {
+            SymbolExtractor.TypeScriptPathAliasConfigContentReadForTesting = previousConfigReadHook;
+            IndexCommandRunner.IndexExtractionStallTimeoutForTesting = previousExtractionTimeout;
+            DeleteDirectory(projectRoot);
+            DeleteDirectory(outsideRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData(FileIndexer.SymlinkPolicy.None, true, true, false)]
+    [InlineData(FileIndexer.SymlinkPolicy.Internal, false, true, false)]
+    [InlineData(FileIndexer.SymlinkPolicy.Internal, true, true, true)]
+    [InlineData(FileIndexer.SymlinkPolicy.All, false, true, true)]
+    [InlineData(FileIndexer.SymlinkPolicy.None, false, false, true)]
+    public void Extract_TypeScript_ExtendsDirectorySymlinkHonorsActivePolicy_Issue5091(
+        FileIndexer.SymlinkPolicy symlinkPolicy,
+        bool targetInsideProject,
+        bool useDirectorySymlink,
+        bool expectConfigRead)
+    {
+        var projectRoot = CreateTempProject();
+        var outsideRoot = CreateTempProject();
+        var previousConfigReadHook = SymbolExtractor.TypeScriptPathAliasConfigContentReadForTesting;
+        try
+        {
+            var targetRoot = targetInsideProject
+                ? Path.Combine(projectRoot, "config-target")
+                : outsideRoot;
+            Directory.CreateDirectory(targetRoot);
+            var configTarget = Path.Combine(targetRoot, "base.json");
+            var moduleTarget = Path.Combine(targetRoot, "sentinel-target.ts");
+            var baseConfigJson = JsonSerializer.Serialize(new
+            {
+                compilerOptions = new
+                {
+                    baseUrl = ".",
+                    paths = new Dictionary<string, string[]>
+                    {
+                        ["sentinel-alias"] = [moduleTarget],
+                    },
+                },
+            });
+            File.WriteAllText(configTarget, baseConfigJson);
+            File.WriteAllText(moduleTarget, "export const sentinel = 1;\n");
+
+            string extendsPath;
+            string expectedConfigReadPath;
+            if (useDirectorySymlink)
+            {
+                var configLink = Path.Combine(projectRoot, "config-link");
+                try
+                {
+                    Directory.CreateSymbolicLink(configLink, targetRoot);
+                }
+                catch (Exception ex) when (ShouldSkipSymlinkFixtureFailure(ex))
+                {
+                    return;
+                }
+
+                extendsPath = "./config-link/base.json";
+                expectedConfigReadPath = Path.Combine(configLink, "base.json");
+            }
+            else
+            {
+                extendsPath = configTarget;
+                expectedConfigReadPath = configTarget;
+            }
+
+            var rootConfigPath = Path.Combine(projectRoot, "tsconfig.json");
+            File.WriteAllText(
+                rootConfigPath,
+                JsonSerializer.Serialize(new { extends = extendsPath }));
+            var sourcePath = Path.Combine(projectRoot, "app.ts");
+            var sourceContent = "import { sentinel } from \"sentinel-alias\";\nexport const value = sentinel;\n";
+            File.WriteAllText(sourcePath, sourceContent);
+            var configReads = new List<string>();
+            SymbolExtractor.TypeScriptPathAliasConfigContentReadForTesting = configReads.Add;
+
+            List<SymbolRecord> symbols;
+            using (SymbolExtractor.EnterTypeScriptPathAliasFileSystemPolicy(
+                       symlinkPolicy,
+                       projectRoot))
+            {
+                symbols = SymbolExtractor.Extract(
+                    1,
+                    "typescript",
+                    sourceContent,
+                    sourcePath,
+                    projectRoot);
+            }
+
+            Assert.Contains(rootConfigPath, configReads);
+            if (expectConfigRead)
+                Assert.Contains(expectedConfigReadPath, configReads);
+            else
+                Assert.DoesNotContain(expectedConfigReadPath, configReads);
+            var expectedImportName = expectConfigRead
+                ? FileIndexer.NormalizePathSeparators(Path.GetRelativePath(projectRoot, moduleTarget))
+                : "sentinel-alias";
+            Assert.Contains(
+                symbols,
+                symbol => symbol.Kind == "import" && symbol.Name == expectedImportName);
+        }
+        finally
+        {
+            SymbolExtractor.TypeScriptPathAliasConfigContentReadForTesting = previousConfigReadHook;
+            DeleteDirectory(projectRoot);
+            DeleteDirectory(outsideRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Run_WithFiles_RejectsUnindexedControlDirectoryAtomically_Issue5091(bool dryRun)
+    {
+        const string controlPath = "tsconfig.json";
+        var projectRoot = CreateTempProject();
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, controlPath));
+            File.WriteAllText(Path.Combine(projectRoot, "valid.ts"), "export const value = 1;\n");
+            var arguments = new List<string>
+            {
+                projectRoot,
+                "--files",
+                controlPath,
+                "valid.ts",
+            };
+            if (dryRun)
+                arguments.Add("--dry-run");
+            arguments.Add("--json");
+
+            var (exitCode, json) = RunAndCaptureJson([.. arguments]);
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            AssertRejectedFilesError(
+                json,
+                (InputIndex: 0, Path: controlPath, Reason: "unsupported_file"));
+            Assert.False(File.Exists(Path.Combine(projectRoot, ".cdidx", "codeindex.db")));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Run_WithFiles_RejectsProjectRootDirectoryAsUnsupportedFile_Issue5091(bool dryRun)
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var arguments = new List<string> { projectRoot, "--files", "." };
+            if (dryRun)
+                arguments.Add("--dry-run");
+            arguments.Add("--json");
+
+            var (exitCode, json) = RunAndCaptureJson([.. arguments]);
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            AssertRejectedFilesError(
+                json,
+                (InputIndex: 0, Path: ".", Reason: "unsupported_file"));
+            Assert.False(File.Exists(Path.Combine(projectRoot, ".cdidx", "codeindex.db")));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Run_WithFiles_AllowsNativeUnicodeEquivalentProjectRootSpelling_Issue5091(bool dryRun)
+    {
+        if (!OperatingSystem.IsMacOS())
+            return;
+
+        var fixtureRoot = CreateTempProject();
+        var projectRoot = Path.Combine(fixtureRoot, "Cafe\u0301 Project");
+        var projectRootAlias = Path.Combine(fixtureRoot, "Caf\u00e9 Project");
+        try
+        {
+            Directory.CreateDirectory(projectRoot);
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "class NativeRootAlias5091 { }\n");
+            if (!File.Exists(Path.Combine(projectRootAlias, "app.cs"))
+                || !FileIndexer.TryGetFileIdentity(projectRoot, out var projectRootIdentity)
+                || !FileIndexer.TryGetFileIdentity(projectRootAlias, out var aliasIdentity)
+                || projectRootIdentity != aliasIdentity)
+            {
+                return; // The hosting volume distinguishes Unicode normalization. / この volume は Unicode 正規化を区別する。
+            }
+
+            var arguments = new List<string>
+            {
+                projectRoot,
+                "--files",
+                Path.Combine(projectRootAlias, "app.cs"),
+            };
+            if (dryRun)
+                arguments.Add("--dry-run");
+            arguments.Add("--json");
+
+            var (exitCode, json) = RunAndCaptureJson([.. arguments]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(dryRun ? "dry_run" : "success", json.GetProperty("status").GetString());
+            Assert.False(json.TryGetProperty("rejected_paths", out _));
+            if (dryRun)
+            {
+                Assert.True(json.GetProperty("projected_file_updates").GetInt32() >= 1);
+                Assert.False(File.Exists(Path.Combine(projectRoot, ".cdidx", "codeindex.db")));
+            }
+            else
+            {
+                Assert.True(IndexedFileExists(projectRoot, "app.cs"));
+            }
+        }
+        finally
+        {
+            DeleteDirectory(fixtureRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Run_WithFiles_AllowsWindowsShortProjectRootAliasSpelling_Issue5091(bool dryRun)
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        var fixtureRoot = CreateTempProject();
+        var projectRoot = Path.Combine(fixtureRoot, "Long Project Root Name For Issue 5091");
+        try
+        {
+            Directory.CreateDirectory(projectRoot);
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "class ShortRootAlias5091 { }\n");
+            if (!TryGetIssue5091WindowsShortPath(projectRoot, out var projectRootAlias)
+                || string.Equals(projectRootAlias, projectRoot, StringComparison.OrdinalIgnoreCase))
+            {
+                return; // 8.3 aliases are disabled on this volume. / この volume では 8.3 alias が無効。
+            }
+
+            var arguments = new List<string>
+            {
+                projectRoot,
+                "--files",
+                Path.Combine(projectRootAlias, "app.cs"),
+            };
+            if (dryRun)
+                arguments.Add("--dry-run");
+            arguments.Add("--json");
+
+            var (exitCode, json) = RunAndCaptureJson([.. arguments]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(dryRun ? "dry_run" : "success", json.GetProperty("status").GetString());
+            Assert.False(json.TryGetProperty("rejected_paths", out _));
+            if (dryRun)
+            {
+                Assert.True(json.GetProperty("projected_file_updates").GetInt32() >= 1);
+                Assert.False(File.Exists(Path.Combine(projectRoot, ".cdidx", "codeindex.db")));
+            }
+            else
+            {
+                Assert.True(IndexedFileExists(projectRoot, "app.cs"));
+            }
+        }
+        finally
+        {
+            DeleteDirectory(fixtureRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Run_WithFiles_WindowsShortAncestorCleansMissingIndexedPath_Issue5091(bool dryRun)
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        const string directoryName = "Long Directory Name For Missing Cleanup 5091";
+        const string indexedPath = "Long Directory Name For Missing Cleanup 5091/deleted.cs";
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var directoryPath = Path.Combine(projectRoot, directoryName);
+            Directory.CreateDirectory(directoryPath);
+            File.WriteAllText(
+                Path.Combine(directoryPath, "deleted.cs"),
+                "class ShortAncestorCleanup5091 { }\n");
+            if (!TryGetIssue5091WindowsShortPath(directoryPath, out var shortDirectoryPath))
+                return;
+
+            var shortDirectoryName = Path.GetFileName(
+                Path.TrimEndingDirectorySeparator(shortDirectoryPath));
+            if (string.Equals(shortDirectoryName, directoryName, StringComparison.OrdinalIgnoreCase))
+                return; // 8.3 aliases are disabled on this volume. / この volume では 8.3 alias が無効。
+
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.True(IndexedFileExists(projectRoot, indexedPath));
+            File.Delete(Path.Combine(directoryPath, "deleted.cs"));
+
+            var arguments = new List<string>
+            {
+                projectRoot,
+                "--files",
+                Path.Combine(projectRoot, shortDirectoryName, "deleted.cs"),
+            };
+            if (dryRun)
+                arguments.Add("--dry-run");
+            arguments.Add("--json");
+
+            var (exitCode, json) = RunAndCaptureJson([.. arguments]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(dryRun ? "dry_run" : "success", json.GetProperty("status").GetString());
+            Assert.False(json.TryGetProperty("rejected_paths", out _));
+            if (dryRun)
+            {
+                Assert.Equal(1, json.GetProperty("projected_file_deletes").GetInt32());
+                Assert.True(IndexedFileExists(projectRoot, indexedPath));
+            }
+            else
+            {
+                Assert.Equal(1, json.GetProperty("summary").GetProperty("removed").GetInt32());
+                Assert.False(IndexedFileExists(projectRoot, indexedPath));
+            }
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Run_WithFiles_WindowsShortAncestorUpdatesExistingPathWithoutDuplicate_Issue5091_Issue5122(
+        bool dryRun)
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        const string directoryName = "Long Directory Name For Existing Update 5122";
+        const string indexedPath = "Long Directory Name For Existing Update 5122/app.cs";
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var directoryPath = Path.Combine(projectRoot, directoryName);
+            var sourcePath = Path.Combine(directoryPath, "app.cs");
+            Directory.CreateDirectory(directoryPath);
+            File.WriteAllText(sourcePath, "class ShortAncestorExisting5122 { }\n");
+            if (!TryGetIssue5091WindowsShortPath(directoryPath, out var shortDirectoryPath))
+                return;
+
+            var shortDirectoryName = Path.GetFileName(
+                Path.TrimEndingDirectorySeparator(shortDirectoryPath));
+            if (string.Equals(shortDirectoryName, directoryName, StringComparison.OrdinalIgnoreCase))
+                return; // 8.3 aliases are disabled on this volume. / この volume では 8.3 alias が無効。
+
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.True(IndexedFileExists(projectRoot, indexedPath));
+            File.AppendAllText(sourcePath, "// selected through the 8.3 ancestor\n");
+            File.SetLastWriteTimeUtc(sourcePath, DateTime.UtcNow.AddSeconds(2));
+
+            var arguments = new List<string>
+            {
+                projectRoot,
+                "--files",
+                Path.Combine(projectRoot, shortDirectoryName, "app.cs"),
+            };
+            if (dryRun)
+                arguments.Add("--dry-run");
+            arguments.Add("--json");
+
+            var (exitCode, json) = RunAndCaptureJson([.. arguments]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(dryRun ? "dry_run" : "success", json.GetProperty("status").GetString());
+            Assert.False(json.TryGetProperty("rejected_paths", out _));
+            var indexedPaths = ReadIndexedPaths(Path.Combine(projectRoot, ".cdidx", "codeindex.db"));
+            Assert.Contains(indexedPath, indexedPaths);
+            Assert.DoesNotContain(
+                indexedPaths,
+                path => string.Equals(
+                    path,
+                    $"{shortDirectoryName}/app.cs",
+                    StringComparison.Ordinal));
+            Assert.Single(
+                indexedPaths,
+                path => path.EndsWith("/app.cs", StringComparison.Ordinal));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Run_WithFiles_NativeUnicodeRootAliasCleansMissingIndexedCaseAlias_Issue5091(bool dryRun)
+    {
+        if (!OperatingSystem.IsMacOS())
+            return;
+
+        const string indexedPath = "Deleted.cs";
+        const string selectedPath = "deleted.cs";
+        var fixtureRoot = CreateTempProject();
+        var projectRoot = Path.Combine(fixtureRoot, "Cafe\u0301 Cleanup");
+        var projectRootAlias = Path.Combine(fixtureRoot, "Caf\u00e9 Cleanup");
+        try
+        {
+            Directory.CreateDirectory(projectRoot);
+            File.WriteAllText(Path.Combine(projectRoot, indexedPath), "class DeletedAlias5091 { }\n");
+            if (!Directory.Exists(projectRootAlias)
+                || !FileIndexer.TryGetFileIdentity(projectRoot, out var projectRootIdentity)
+                || !FileIndexer.TryGetFileIdentity(projectRootAlias, out var aliasIdentity)
+                || projectRootIdentity != aliasIdentity
+                || !PathCasing.IsIgnoreCase(projectRoot))
+            {
+                return;
+            }
+
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.True(IndexedFileExists(projectRoot, indexedPath));
+            File.Delete(Path.Combine(projectRoot, indexedPath));
+
+            var arguments = new List<string>
+            {
+                projectRoot,
+                "--files",
+                Path.Combine(projectRootAlias, selectedPath),
+            };
+            if (dryRun)
+                arguments.Add("--dry-run");
+            arguments.Add("--json");
+
+            var (exitCode, json) = RunAndCaptureJson([.. arguments]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(dryRun ? "dry_run" : "success", json.GetProperty("status").GetString());
+            Assert.False(json.TryGetProperty("rejected_paths", out _));
+            if (dryRun)
+            {
+                Assert.Equal(1, json.GetProperty("projected_file_deletes").GetInt32());
+                Assert.True(IndexedFileExists(projectRoot, indexedPath));
+            }
+            else
+            {
+                Assert.Equal(1, json.GetProperty("summary").GetProperty("removed").GetInt32());
+                Assert.False(IndexedFileExists(projectRoot, indexedPath));
+            }
+        }
+        finally
+        {
+            DeleteDirectory(fixtureRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Run_WithFiles_NativeUnicodeRootAliasAcceptsDeletedExtractorControl_Issue5091(bool dryRun)
+    {
+        if (!OperatingSystem.IsMacOS())
+            return;
+
+        const string controlPath = ".cdidx/patterns/deleted.yaml";
+        var fixtureRoot = CreateTempProject();
+        var projectRoot = Path.Combine(fixtureRoot, "Cafe\u0301 Control");
+        var projectRootAlias = Path.Combine(fixtureRoot, "Caf\u00e9 Control");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(projectRoot, ".cdidx", "patterns"));
+            File.WriteAllText(Path.Combine(projectRoot, "app.cs"), "class RefreshedByControl5091 { }\n");
+            var deletedControlPath = Path.Combine(
+                projectRoot,
+                FileIndexer.NormalizeRelativePathForCurrentPlatform(controlPath));
+            File.WriteAllText(deletedControlPath, "patterns: []\n");
+            File.Delete(deletedControlPath);
+            if (!Directory.Exists(projectRootAlias)
+                || !FileIndexer.TryGetFileIdentity(projectRoot, out var projectRootIdentity)
+                || !FileIndexer.TryGetFileIdentity(projectRootAlias, out var aliasIdentity)
+                || projectRootIdentity != aliasIdentity)
+            {
+                return;
+            }
+
+            var arguments = new List<string>
+            {
+                projectRoot,
+                "--files",
+                Path.Combine(
+                    projectRootAlias,
+                    FileIndexer.NormalizeRelativePathForCurrentPlatform(controlPath)),
+            };
+            if (dryRun)
+                arguments.Add("--dry-run");
+            arguments.Add("--json");
+
+            var (exitCode, json) = RunAndCaptureJson([.. arguments]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(dryRun ? "dry_run" : "success", json.GetProperty("status").GetString());
+            Assert.False(json.TryGetProperty("rejected_paths", out _));
+            if (dryRun)
+            {
+                Assert.True(json.GetProperty("projected_file_updates").GetInt32() >= 1);
+                Assert.False(File.Exists(Path.Combine(projectRoot, ".cdidx", "codeindex.db")));
+            }
+            else
+            {
+                Assert.True(IndexedFileExists(projectRoot, "app.cs"));
+            }
+        }
+        finally
+        {
+            DeleteDirectory(fixtureRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Run_WithFiles_AllowsNativeUnicodeEquivalentSpelling_Issue5091(bool dryRun)
+    {
+        const string storedName = "Cafe\u0301.cs";
+        const string selectedName = "Caf\u00e9.cs";
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var storedPath = Path.Combine(projectRoot, storedName);
+            var selectedPath = Path.Combine(projectRoot, selectedName);
+            File.WriteAllText(storedPath, "class NativeUnicodeAlias5091 { }\n");
+            if (!File.Exists(selectedPath)
+                || !FileIndexer.TryGetFileIdentity(storedPath, out var storedIdentity)
+                || !FileIndexer.TryGetFileIdentity(selectedPath, out var selectedIdentity)
+                || storedIdentity != selectedIdentity)
+            {
+                return;
+            }
+
+            var arguments = new List<string> { projectRoot, "--files", selectedName };
+            if (dryRun)
+                arguments.Add("--dry-run");
+            arguments.Add("--json");
+
+            var (exitCode, json) = RunAndCaptureJson([.. arguments]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(dryRun ? "dry_run" : "success", json.GetProperty("status").GetString());
+            Assert.False(json.TryGetProperty("rejected_paths", out _));
+            if (!dryRun)
+                Assert.True(IndexedFileExists(projectRoot, selectedName));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_DryRun_WithFiles_UsesCanonicalTargetCasingForDuplicateIdentity_Issue5091()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            RunGit(projectRoot, "init");
+            RunGit(projectRoot, "config", "core.ignorecase", "true");
+            var sourceDirectory = Path.Combine(projectRoot, "case-sensitive-child");
+            Directory.CreateDirectory(sourceDirectory);
+            var upperPath = Path.Combine(sourceDirectory, "Foo.cs");
+            var lowerPath = Path.Combine(sourceDirectory, "foo.cs");
+            File.WriteAllText(upperPath, "class UpperCanonicalTarget5091 { }\n");
+            File.WriteAllText(lowerPath, "class LowerCanonicalTarget5091 { }\n");
+            if (File.ReadAllText(upperPath) == File.ReadAllText(lowerPath))
+                return; // The hosting filesystem aliases the two spellings. / この filesystem では2表記が同一 path。
+
+            var (exitCode, json) = RunAndCaptureJson([
+                projectRoot,
+                "--files",
+                "case-sensitive-child/Foo.cs",
+                "case-sensitive-child/foo.cs",
+                "--dry-run",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("dry_run", json.GetProperty("status").GetString());
+            Assert.False(json.TryGetProperty("rejected_paths", out _));
+
+            var (duplicateExitCode, duplicateJson) = RunAndCaptureJson([
+                projectRoot,
+                "--files",
+                "case-sensitive-child/Foo.cs",
+                "case-sensitive-child/foo.cs",
+                "case-sensitive-child/foo.cs",
+                "--dry-run",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.UsageError, duplicateExitCode);
+            AssertRejectedFilesError(
+                duplicateJson,
+                (InputIndex: 2, Path: "case-sensitive-child/foo.cs", Reason: "duplicate"));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Run_WithFiles_UsesTargetCasingForIndexedMembership_Issue5091(bool dryRun)
+    {
+        const string indexedPath = "case-sensitive-child/Foo.cs";
+        const string missingCaseVariant = "case-sensitive-child/foo.cs";
+        var projectRoot = CreateTempProject();
+        try
+        {
+            RunGit(projectRoot, "init");
+            RunGit(projectRoot, "config", "core.ignorecase", "true");
+            var sourceDirectory = Path.Combine(projectRoot, "case-sensitive-child");
+            Directory.CreateDirectory(sourceDirectory);
+            File.WriteAllText(
+                Path.Combine(sourceDirectory, "Foo.cs"),
+                "class IndexedCaseSensitiveTarget5091 { }\n");
+            if (File.Exists(Path.Combine(sourceDirectory, "foo.cs")))
+                return; // The hosting filesystem aliases the two spellings. / この filesystem では2表記が同一 path。
+
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.True(IndexedFileExists(projectRoot, indexedPath));
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var databaseFilesBefore = ReadDatabaseFileSetFingerprint(dbPath);
+            var arguments = new List<string>
+            {
+                projectRoot,
+                "--files",
+                missingCaseVariant,
+            };
+            if (dryRun)
+                arguments.Add("--dry-run");
+            arguments.Add("--json");
+
+            var (exitCode, json) = RunAndCaptureJson([.. arguments]);
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            AssertRejectedFilesError(
+                json,
+                (InputIndex: 0, Path: missingCaseVariant, Reason: "not_found"));
+            Assert.Equal(databaseFilesBefore, ReadDatabaseFileSetFingerprint(dbPath));
+            Assert.True(IndexedFileExists(projectRoot, indexedPath));
+            Assert.False(IndexedFileExists(projectRoot, missingCaseVariant));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateFiles_BoundsRejectedPathDetailsAndRedactsOutsideAbsolutePath_Issue5091()
+    {
+        var projectRoot = CreateTempProject();
+        var outsidePath = Path.Combine(
+            Path.GetTempPath(),
+            $"cdidx-private-5091-{Guid.NewGuid():N}.cs");
+        try
+        {
+            var suppliedPaths = new List<string> { outsidePath };
+            suppliedPaths.AddRange(
+                Enumerable.Range(1, 50).Select(index => $"missing-{index:D3}.cs"));
+            var arguments = new List<string> { projectRoot, "--files" };
+            arguments.AddRange(suppliedPaths);
+            arguments.Add("--json");
+
+            var (exitCode, json) = RunAndCaptureJson([.. arguments]);
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal("error", json.GetProperty("status").GetString());
+            Assert.Equal(51, json.GetProperty("rejected_path_count").GetInt32());
+            Assert.True(json.GetProperty("rejected_paths_truncated").GetBoolean());
+            var limit = json.GetProperty("rejected_path_limit").GetInt32();
+            Assert.InRange(limit, 1, 50);
+            var rejectedPaths = json.GetProperty("rejected_paths").EnumerateArray().ToArray();
+            Assert.Equal(limit, rejectedPaths.Length);
+            Assert.Equal(
+                Enumerable.Range(0, limit),
+                rejectedPaths.Select(item => item.GetProperty("input_index").GetInt32()));
+            Assert.Equal(
+                "<outside-project-root>",
+                rejectedPaths[0].GetProperty("path").GetString());
+            Assert.Equal(
+                "outside_project_root",
+                rejectedPaths[0].GetProperty("reason").GetString());
+            Assert.DoesNotContain(outsidePath, json.ToString(), StringComparison.Ordinal);
+            Assert.False(File.Exists(Path.Combine(projectRoot, ".cdidx", "codeindex.db")));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Run_WithFiles_CorruptExistingDatabaseFailsClosedBeforeMutation_Issue5091(
+        bool dryRun)
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "valid.cs"), "public class Valid5091 { }\n");
+            var dbPath = Path.Combine(projectRoot, "corrupt.db");
+            File.WriteAllBytes(dbPath, [0x6e, 0x6f, 0x74, 0x2d, 0x73, 0x71, 0x6c, 0x69, 0x74, 0x65]);
+            var databaseBytesBefore = File.ReadAllBytes(dbPath);
+            var arguments = new List<string>
+            {
+                projectRoot,
+                "--db",
+                dbPath,
+                "--files",
+                "valid.cs",
+            };
+            if (dryRun)
+                arguments.Add("--dry-run");
+            arguments.Add("--json");
+
+            var (exitCode, json) = RunAndCaptureJson([.. arguments]);
+
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            Assert.Equal("error", json.GetProperty("status").GetString());
+            Assert.Equal("E008_DB_ERROR", json.GetProperty("error_code").GetString());
+            Assert.Equal(
+                "the existing index could not be read during --files validation; no database writes were performed",
+                json.GetProperty("message").GetString());
+            Assert.False(json.TryGetProperty("rejected_paths", out _));
+            Assert.Equal(databaseBytesBefore, File.ReadAllBytes(dbPath));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_WithFiles_HotWalSnapshotCopyFailureReturnsSanitizedDatabaseError_Issue4557_Issue5091()
+    {
+        var projectRoot = CreateTempProject();
+        var originalCopyHook = DbConnectionFactory.QueryOnlySnapshotFileCopyingForTesting;
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "valid.cs"), "public class HotWal5091 { }\n");
+            var dbPath = Path.Combine(projectRoot, "hot-wal.db");
+            var (initialExitCode, _) = RunAndCaptureJson([
+                projectRoot,
+                "--db",
+                dbPath,
+                "--json",
+            ]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            SqliteConnection.ClearAllPools();
+            using var writer = new SqliteConnection(
+                new SqliteConnectionStringBuilder
+                {
+                    DataSource = dbPath,
+                    Pooling = false,
+                }.ConnectionString);
+            writer.Open();
+            using (var setup = writer.CreateCommand())
+            {
+                setup.CommandText = "PRAGMA journal_mode=WAL; PRAGMA wal_checkpoint(TRUNCATE)";
+                _ = setup.ExecuteScalar();
+                setup.CommandText = "INSERT OR REPLACE INTO codeindex_meta(key, value) VALUES ('issue5091_copy_failure', 'visible')";
+                Assert.Equal(1, setup.ExecuteNonQuery());
+            }
+            Assert.True(new FileInfo(dbPath + "-wal").Length > 0);
+            var databaseFilesBefore = ReadDatabaseFileSetFingerprint(dbPath);
+
+            var copyAttempts = 0;
+            const string injectedMessage = "injected issue5091 snapshot copy failure";
+            DbConnectionFactory.QueryOnlySnapshotFileCopyingForTesting = (_, _) =>
+            {
+                Interlocked.Increment(ref copyAttempts);
+                throw new IOException(injectedMessage);
+            };
+
+            var (exitCode, json) = RunAndCaptureJson([
+                projectRoot,
+                "--db",
+                dbPath,
+                "--files",
+                "valid.cs",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+            Assert.Equal("error", json.GetProperty("status").GetString());
+            Assert.Equal("E008_DB_ERROR", json.GetProperty("error_code").GetString());
+            Assert.Equal(
+                "the existing index could not be read during --files validation; no database writes were performed",
+                json.GetProperty("message").GetString());
+            Assert.False(json.TryGetProperty("rejected_paths", out _));
+            Assert.DoesNotContain(injectedMessage, json.ToString(), StringComparison.Ordinal);
+            Assert.Equal(1, copyAttempts);
+            Assert.Equal(databaseFilesBefore, ReadDatabaseFileSetFingerprint(dbPath));
+        }
+        finally
+        {
+            DbConnectionFactory.QueryOnlySnapshotFileCopyingForTesting = originalCopyHook;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData(false, 0)]
+    [InlineData(true, 1)]
+    public void Run_WithFiles_CheckpointedWalReadsMembershipWithoutDuplicateSnapshotCopy_Issue5091(
+        bool dryRun,
+        int expectedCopyAttempts)
+    {
+        var projectRoot = CreateTempProject();
+        var originalCopyHook = DbConnectionFactory.QueryOnlySnapshotFileCopyingForTesting;
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "deleted.cs");
+            File.WriteAllText(sourcePath, "public class CheckpointedWal5091 { }\n");
+            var dbPath = Path.Combine(projectRoot, "checkpointed-wal.db");
+            var (initialExitCode, _) = RunAndCaptureJson([
+                projectRoot,
+                "--db",
+                dbPath,
+                "--json",
+            ]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            SqliteConnection.ClearAllPools();
+            using (var connection = new SqliteConnection(
+                       new SqliteConnectionStringBuilder
+                       {
+                           DataSource = dbPath,
+                           Pooling = false,
+                       }.ConnectionString))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = "PRAGMA journal_mode=WAL";
+                Assert.Equal("wal", Convert.ToString(command.ExecuteScalar(), CultureInfo.InvariantCulture));
+                command.CommandText = "PRAGMA wal_checkpoint(TRUNCATE)";
+                command.ExecuteNonQuery();
+            }
+            SqliteConnection.ClearAllPools();
+            Assert.False(
+                File.Exists(dbPath + "-wal") && new FileInfo(dbPath + "-wal").Length > 0,
+                "The fixture must not have a hot WAL sidecar.");
+            File.Delete(sourcePath);
+
+            var copyAttempts = 0;
+            DbConnectionFactory.QueryOnlySnapshotFileCopyingForTesting = (_, _) =>
+                Interlocked.Increment(ref copyAttempts);
+            var arguments = new List<string>
+            {
+                projectRoot,
+                "--db",
+                dbPath,
+                "--files",
+                "deleted.cs",
+            };
+            if (dryRun)
+                arguments.Add("--dry-run");
+            arguments.Add("--json");
+
+            var (exitCode, json) = RunAndCaptureJson([.. arguments]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(expectedCopyAttempts, copyAttempts);
+            if (dryRun)
+            {
+                Assert.Equal("dry_run", json.GetProperty("status").GetString());
+                Assert.Equal(1, json.GetProperty("projected_file_deletes").GetInt32());
+                Assert.NotNull(ReadIndexedChecksum(dbPath, "deleted.cs"));
+            }
+            else
+            {
+                Assert.Equal("success", json.GetProperty("status").GetString());
+                Assert.Equal(1, json.GetProperty("summary").GetProperty("removed").GetInt32());
+                Assert.Null(ReadIndexedChecksum(dbPath, "deleted.cs"));
+            }
+        }
+        finally
+        {
+            DbConnectionFactory.QueryOnlySnapshotFileCopyingForTesting = originalCopyHook;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateFiles_LockConflictPrecedesDatabaseMembershipPreflight_Issue5091()
+    {
+        var projectRoot = CreateTempProject();
+        var originalOpenReadOnly = DbConnectionFactory.OpenReadOnlyForTesting;
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "valid.cs"), "public class Locked5091 { }\n");
+            var dbPath = Path.Combine(projectRoot, "locked.db");
+            var (initialExitCode, _) = RunAndCaptureJson([
+                projectRoot,
+                "--db",
+                dbPath,
+                "--json",
+            ]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var preflightConnectionAttempts = 0;
+            DbConnectionFactory.OpenReadOnlyForTesting = path =>
+            {
+                Interlocked.Increment(ref preflightConnectionAttempts);
+                return new SqliteConnection(
+                    new SqliteConnectionStringBuilder
+                    {
+                        DataSource = path,
+                        Mode = SqliteOpenMode.ReadOnly,
+                        Pooling = false,
+                    }.ConnectionString);
+            };
+
+            using (IndexLock.Acquire(IndexLock.GetLockPath(dbPath), projectRoot))
+            {
+                var (exitCode, json) = RunAndCaptureJson([
+                    projectRoot,
+                    "--db",
+                    dbPath,
+                    "--files",
+                    "valid.cs",
+                    "--json",
+                ]);
+
+                Assert.Equal(CommandExitCodes.DatabaseError, exitCode);
+                Assert.Equal(CommandErrorCodes.DbLocked, json.GetProperty("error_code").GetString());
+                Assert.Equal(0, preflightConnectionAttempts);
+            }
+        }
+        finally
+        {
+            DbConnectionFactory.OpenReadOnlyForTesting = originalOpenReadOnly;
+            SqliteConnection.ClearAllPools();
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateFiles_HoldsIndexLockThroughMutationBarrier_Issue5091()
+    {
+        var projectRoot = CreateTempProject();
+        var previousBarrierHook = IndexCommandRunner.UpdateScanInputSnapshotBarrierForTesting;
+        try
+        {
+            var interfacePath = Path.Combine(projectRoot, "IParseable.cs");
+            WriteParseableInterface(interfacePath, hasStaticContract: true);
+            File.WriteAllText(
+                Path.Combine(projectRoot, "Money.cs"),
+                "public readonly struct Money : IParseable<Money>\n"
+                + "{\n"
+                + "    public static Money Parse(string s) => new();\n"
+                + "}\n");
+            var (initialExitCode, _) = RunAndCaptureJson([projectRoot, "--json"]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var lockConflictObserved = false;
+            IndexCommandRunner.UpdateScanInputSnapshotBarrierForTesting = phase =>
+            {
+                if (phase != "before_write")
+                    return;
+
+                Assert.Throws<IndexLockConflictException>(() =>
+                {
+                    using var competingLock = IndexLock.Acquire(
+                        IndexLock.GetLockPath(dbPath),
+                        projectRoot);
+                });
+                lockConflictObserved = true;
+            };
+            File.AppendAllText(interfacePath, "// selected update\n");
+            File.SetLastWriteTimeUtc(interfacePath, DateTime.UtcNow.AddSeconds(3));
+
+            var (exitCode, json) = RunAndCaptureJson([
+                projectRoot,
+                "--files",
+                "IParseable.cs",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.True(lockConflictObserved);
+        }
+        finally
+        {
+            IndexCommandRunner.UpdateScanInputSnapshotBarrierForTesting = previousBarrierHook;
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateFiles_InternalPolicyCleansIndexedLinkRetargetedOutsideProject_Issue4829_Issue5091()
+    {
+        var projectRoot = CreateTempProject();
+        var outsideRoot = CreateTempProject();
+        try
+        {
+            var insideTarget = Path.Combine(projectRoot, "inside.cs");
+            var outsideTarget = Path.Combine(outsideRoot, "outside.cs");
+            var linkPath = Path.Combine(projectRoot, "link.cs");
+            File.WriteAllText(insideTarget, "public class Inside5091 { }\n");
+            File.WriteAllText(outsideTarget, "public class Outside5091 { }\n");
+            try
+            {
+                File.CreateSymbolicLink(linkPath, insideTarget);
+            }
+            catch (Exception ex) when (ShouldSkipSymlinkFixtureFailure(ex))
+            {
+                return;
+            }
+
+            var (initialExitCode, _) = RunAndCaptureJson([
+                projectRoot,
+                "--files",
+                "link.cs",
+                "--follow-symlinks",
+                "all",
+                "--json",
+            ]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.True(IndexedFileExists(projectRoot, "link.cs"));
+
+            File.Delete(linkPath);
+            File.CreateSymbolicLink(linkPath, outsideTarget);
+
+            var (exitCode, json) = RunAndCaptureJson([
+                projectRoot,
+                "--files",
+                "link.cs",
+                "--follow-symlinks",
+                "internal",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.False(IndexedFileExists(projectRoot, "link.cs"));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+            DeleteDirectory(outsideRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_UpdateFiles_NonePolicyCleansPreviouslyIndexedDirectorySymlinkPath_Issue5091()
+    {
+        const string selectedPath = "linkdir/app.cs";
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var realDirectory = Path.Combine(projectRoot, "real");
+            Directory.CreateDirectory(realDirectory);
+            File.WriteAllText(
+                Path.Combine(realDirectory, "app.cs"),
+                "public class PreviouslyIndexedDirectoryLink5091 { }\n");
+            try
+            {
+                Directory.CreateSymbolicLink(
+                    Path.Combine(projectRoot, "linkdir"),
+                    realDirectory);
+            }
+            catch (Exception ex) when (ShouldSkipSymlinkFixtureFailure(ex))
+            {
+                return;
+            }
+
+            var (initialExitCode, _) = RunAndCaptureJson([
+                projectRoot,
+                "--files",
+                selectedPath,
+                "--follow-symlinks",
+                "all",
+                "--json",
+            ]);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.True(IndexedFileExists(projectRoot, selectedPath));
+
+            var (exitCode, json) = RunAndCaptureJson([
+                projectRoot,
+                "--files",
+                selectedPath,
+                "--follow-symlinks",
+                "none",
+                "--json",
+            ]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal("success", json.GetProperty("status").GetString());
+            Assert.False(IndexedFileExists(projectRoot, selectedPath));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    private static string? ReadFirstIndexedImportName(string dbPath, string indexedPath)
+    {
+        SqliteConnection.ClearAllPools();
+        using var connection = new SqliteConnection($"Data Source={dbPath};Pooling=False");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT s.name
+            FROM symbols s
+            JOIN files f ON f.id = s.file_id
+            WHERE f.path = @path
+              AND s.kind = 'import'
+            ORDER BY s.id
+            LIMIT 1
+            """;
+        command.Parameters.AddWithValue("@path", indexedPath);
+        return Convert.ToString(command.ExecuteScalar(), CultureInfo.InvariantCulture);
+    }
+
+    private static bool ShouldSkipSymlinkFixtureFailure(Exception exception)
+        => exception is PlatformNotSupportedException
+            || (OperatingSystem.IsWindows()
+                && (exception is IOException || exception is UnauthorizedAccessException));
+
+    [SupportedOSPlatform("windows")]
+    private static bool TryGetIssue5091WindowsShortPath(string path, out string shortPath)
+    {
+        var buffer = new StringBuilder(1024);
+        var length = GetIssue5091ShortPathName(path, buffer, (uint)buffer.Capacity);
+        if (length == 0 || length >= buffer.Capacity)
+        {
+            shortPath = string.Empty;
+            return false;
+        }
+
+        shortPath = buffer.ToString();
+        return shortPath.Length > 0;
+    }
+
+    [SupportedOSPlatform("windows")]
+    [DllImport("kernel32.dll", EntryPoint = "GetShortPathNameW", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern uint GetIssue5091ShortPathName(
+        string longPath,
+        StringBuilder shortPath,
+        uint bufferLength);
+
+    private static void WriteIssue5091SolutionProject(string projectRoot)
+    {
+        var projectDirectory = Path.Combine(projectRoot, "src", "Lib");
+        Directory.CreateDirectory(projectDirectory);
+        File.WriteAllText(
+            Path.Combine(projectRoot, "Repo.sln"),
+            """
+            Microsoft Visual Studio Solution File, Format Version 12.00
+            Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Lib", "src/Lib/Lib.csproj", "{11111111-1111-1111-1111-111111111111}"
+            EndProject
+            Global
+            EndGlobal
+            """);
+        File.WriteAllText(
+            Path.Combine(projectDirectory, "Lib.csproj"),
+            "<Project Sdk=\"Microsoft.NET.Sdk\" />\n");
+        File.WriteAllText(
+            Path.Combine(projectDirectory, "Class1.cs"),
+            "class ProjectSelection5091 { }\n");
+        File.WriteAllBytes(
+            Path.Combine(projectDirectory, "logo.png"),
+            [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    }
+
+    private static void AssertRejectedFilesError(
+        JsonElement json,
+        params (int InputIndex, string Path, string Reason)[] expected)
+    {
+        Assert.Equal("error", json.GetProperty("status").GetString());
+        Assert.Contains(
+            "paths supplied to --files were rejected",
+            json.GetProperty("message").GetString(),
+            StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(expected.Length, json.GetProperty("rejected_path_count").GetInt32());
+        Assert.False(json.GetProperty("rejected_paths_truncated").GetBoolean());
+        Assert.True(json.GetProperty("rejected_path_limit").GetInt32() >= expected.Length);
+
+        var rejectedPaths = json.GetProperty("rejected_paths").EnumerateArray().ToArray();
+        Assert.Equal(expected.Length, rejectedPaths.Length);
+        for (var index = 0; index < expected.Length; index++)
+        {
+            Assert.Equal(expected[index].InputIndex, rejectedPaths[index].GetProperty("input_index").GetInt32());
+            Assert.Equal(expected[index].Path, rejectedPaths[index].GetProperty("path").GetString());
+            Assert.Equal(expected[index].Reason, rejectedPaths[index].GetProperty("reason").GetString());
+        }
+    }
+
+    private static string ReadDatabaseFileSetFingerprint(string dbPath)
+    {
+        SqliteConnection.ClearAllPools();
+        var parts = new List<string>();
+        foreach (var suffix in new[] { string.Empty, "-wal" })
+        {
+            var path = dbPath + suffix;
+            if (!File.Exists(path))
+            {
+                parts.Add($"{suffix}:missing");
+                continue;
+            }
+
+            using var stream = new FileStream(
+                path,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete);
+            parts.Add(
+                $"{suffix}:{Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(stream))}");
+        }
+
+        return string.Join("|", parts);
     }
 
     [Fact]
@@ -7563,6 +9751,7 @@ public partial class IndexCommandRunnerTests
         {
             var sourcePath = Path.Combine(projectRoot, "a.cs");
             File.WriteAllText(sourcePath, "public class A { }\n");
+            File.WriteAllText(Path.Combine(projectRoot, "b.cs"), "public class B { }\n");
 
             var initialExitCode = IndexCommandRunner.Run([projectRoot, "--json"], _jsonOptions);
             Assert.Equal(CommandExitCodes.Success, initialExitCode);

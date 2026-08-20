@@ -21,9 +21,9 @@ public class PostExtractionHookTests
     internal const string ThrowingConstructorHookEnvironmentVariable = "CDIDX_TEST_THROWING_CTOR_POST_EXTRACTION_HOOK";
     internal const string ExpandingHookEnvironmentVariable = "CDIDX_TEST_EXPANDING_POST_EXTRACTION_HOOK";
     internal const string CSharpDeclarationMutationEnvironmentVariable = "CDIDX_TEST_CSHARP_DECLARATION_MUTATION_HOOK";
-    internal const string ModuleInitializerDelayEnvironmentVariable = "CDIDX_TEST_HOOK_MODULE_INITIALIZER_DELAY_MS";
-    internal const string PersistentDiscoveryWorkerPidPathEnvironmentVariable = "CDIDX_TEST_HOOK_DISCOVERY_PERSISTENT_PID_PATH";
-    internal const string PersistentDiscoveryDescendantPidPathEnvironmentVariable = "CDIDX_TEST_HOOK_DISCOVERY_DESCENDANT_PID_PATH";
+    internal const string ModuleInitializerDelayEnvironmentVariable = HookIsolationFixtureEnvironment.ModuleInitializerDelayMilliseconds;
+    internal const string PersistentDiscoveryWorkerPidPathEnvironmentVariable = HookIsolationFixtureEnvironment.PersistentDiscoveryWorkerPidPath;
+    internal const string PersistentDiscoveryDescendantPidPathEnvironmentVariable = HookIsolationFixtureEnvironment.PersistentDiscoveryDescendantPidPath;
     private const string TimedOutHookDelayMilliseconds = "800";
     private static readonly TimeSpan TimedOutHookLeakObservationWindow = TimeSpan.FromMilliseconds(900);
     private static readonly TimeSpan DuplicateHookCallbackBudget = TimeSpan.FromSeconds(1);
@@ -462,7 +462,8 @@ public class PostExtractionHookTests
         {
             var hooksDir = Path.Combine(projectRoot, "hooks");
             Directory.CreateDirectory(hooksDir);
-            File.Copy(Assembly.GetExecutingAssembly().Location, Path.Combine(hooksDir, "CodeIndex.Tests.dll"));
+            var fixtureAssembly = typeof(PathSelectivePostExtractionHook).Assembly.Location;
+            File.Copy(fixtureAssembly, Path.Combine(hooksDir, Path.GetFileName(fixtureAssembly)));
 
             using var runner = PostExtractionHookRunner.Discover(hooksDir);
             Assert.Equal(0, runner.ParentLoadContextCountForTests);
@@ -490,7 +491,7 @@ public class PostExtractionHookTests
             {
                 var hooksDir = Path.Combine(projectRoot, "hooks");
                 Directory.CreateDirectory(hooksDir);
-                File.Copy(Assembly.GetExecutingAssembly().Location, Path.Combine(hooksDir, "persistent.dll"));
+                File.Copy(typeof(PathSelectivePostExtractionHook).Assembly.Location, Path.Combine(hooksDir, "persistent.dll"));
                 var workerPidPath = Path.Combine(projectRoot, "persistent-worker.pid");
                 var descendantPidPath = Path.Combine(projectRoot, "persistent-descendant.pid");
                 persistent.Set(PersistentDiscoveryWorkerPidPathEnvironmentVariable, workerPidPath);
@@ -610,7 +611,8 @@ public class PostExtractionHookTests
                 var hooksDir = Path.Combine(projectRoot, "hooks");
                 Directory.CreateDirectory(hooksDir);
                 var hookPath = Path.Combine(hooksDir, "bounded.dll");
-                File.Copy(Assembly.GetExecutingAssembly().Location, hookPath);
+                var fixtureAssembly = typeof(PathSelectivePostExtractionHook).Assembly.Location;
+                File.Copy(fixtureAssembly, hookPath);
                 delay.Set(ModuleInitializerDelayEnvironmentVariable, "30000");
                 PostExtractionHookDiscoveryWorkerClient.DiscoveryBudgetForTesting = TimeSpan.FromMilliseconds(500);
 
@@ -624,7 +626,7 @@ public class PostExtractionHookTests
 
                 PostExtractionHookDiscoveryWorkerClient.DiscoveryBudgetForTesting = TimeSpan.FromSeconds(5);
                 var memoryResult = PostExtractionHookDiscoveryWorkerClient.Discover(
-                    Assembly.GetExecutingAssembly().Location,
+                    fixtureAssembly,
                     PostExtractionHookRunner.DefaultTypeInspectionLimit,
                     memoryLimitBytes: 1);
                 Assert.False(memoryResult.Success);
@@ -632,7 +634,7 @@ public class PostExtractionHookTests
 
                 delay.Set(ModuleInitializerDelayEnvironmentVariable, null);
                 var outputResult = PostExtractionHookDiscoveryWorkerClient.Discover(
-                    Assembly.GetExecutingAssembly().Location,
+                    fixtureAssembly,
                     PostExtractionHookRunner.DefaultTypeInspectionLimit,
                     maxProtocolLineBytes: 256);
                 Assert.False(outputResult.Success);

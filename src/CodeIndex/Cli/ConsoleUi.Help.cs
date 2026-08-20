@@ -186,7 +186,8 @@ public static partial class ConsoleUi
         Console.WriteLine("Update workflows:");
         WriteHelpLine("  Use --commits with a project path after normal commits; git diff sees rename/delete paths too.");
         WriteHelpLine("  Use --changed-between <old-ref> <new-ref> after switching branches to refresh only changed files.");
-        WriteHelpLine("  Use --files only for known in-place edits or new files; old rename/delete paths stay indexed unless also listed.");
+        WriteHelpLine("  Use --files for known in-place edits, new files, or indexed paths deleted from disk.");
+        WriteHelpLine("  The complete --files selection is validated before DB writes; any invalid or duplicate path rejects the request atomically.");
         WriteHelpLine("  Incremental writes optimize FTS5 opportunistically after a small maintenance threshold; run `cdidx optimize` for manual maintenance.");
         Console.WriteLine();
         WriteHelpLine("  Note: if a query itself starts with '-', pass it with --query <query> or -- <query>; for option values that start with '--', use --opt=<value>.");

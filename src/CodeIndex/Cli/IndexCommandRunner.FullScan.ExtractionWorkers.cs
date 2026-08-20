@@ -180,6 +180,7 @@ public static partial class IndexCommandRunner
                                     hasOversizeLine,
                                     loaded.ConflictMarkerLine,
                                     workerSymbolExtractionWorker.Value,
+                                    options.SymlinkPolicy,
                                     extractionCancellationToken);
                                 symbols = symbolExtraction.Symbols;
                                 symbolRegexTimeoutIssue =

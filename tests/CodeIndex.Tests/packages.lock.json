@@ -1212,11 +1212,17 @@
       "codeindex.hookisolationfixture": {
         "type": "Project",
         "dependencies": {
-          "cdidx": "[1.38.0, )"
+          "cdidx": "[1.42.0, )"
         }
       },
       "codeindex.packagenormalize": {
         "type": "Project"
+      },
+      "codeindex.pluginisolationfixture": {
+        "type": "Project",
+        "dependencies": {
+          "cdidx": "[1.42.0, )"
+        }
       },
       "codeindex.testtelemetry": {
         "type": "Project"
@@ -2433,11 +2439,17 @@
       "codeindex.hookisolationfixture": {
         "type": "Project",
         "dependencies": {
-          "cdidx": "[1.38.0, )"
+          "cdidx": "[1.42.0, )"
         }
       },
       "codeindex.packagenormalize": {
         "type": "Project"
+      },
+      "codeindex.pluginisolationfixture": {
+        "type": "Project",
+        "dependencies": {
+          "cdidx": "[1.42.0, )"
+        }
       },
       "codeindex.testtelemetry": {
         "type": "Project"

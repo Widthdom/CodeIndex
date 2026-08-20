@@ -47,7 +47,8 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
         string filePath,
         string projectRoot,
         TimeSpan callbackBudget,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        FileIndexer.SymlinkPolicy symlinkPolicy = FileIndexer.SymlinkPolicy.All)
         => Invoke(
             fileId,
             lang,
@@ -58,7 +59,8 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
             hasOversizeLine: null,
             conflictMarkerLine: null,
             callbackBudget,
-            cancellationToken);
+            cancellationToken,
+            symlinkPolicy);
 
     internal SymbolExtractionWorkerResult Invoke(
         long fileId,
@@ -70,7 +72,8 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
         bool? hasOversizeLine,
         int? conflictMarkerLine,
         TimeSpan callbackBudget,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        FileIndexer.SymlinkPolicy symlinkPolicy = FileIndexer.SymlinkPolicy.All)
     {
         lock (gate)
         {
@@ -90,7 +93,8 @@ internal sealed class SymbolExtractionWorkerClient : IDisposable
                 projectRoot,
                 contentIsNormalized,
                 hasOversizeLine,
-                conflictMarkerLine);
+                conflictMarkerLine,
+                symlinkPolicy);
             var requestUtf8 = JsonSerializer.SerializeToUtf8Bytes(request, SymbolExtractionWorker.JsonOptions);
             var waitMilliseconds = GetRemainingWaitMilliseconds(stopwatch, callbackBudget);
             if (waitMilliseconds <= 0)
@@ -886,6 +890,10 @@ internal static class SymbolExtractionWorker
             WriteConsoleOutputForTestingIfRequested(options);
             DelayForTestingIfRequested(options, cancellationToken);
             using var regexTimeouts = BoundedRegex.CaptureTimeouts(request.Lang, "symbol_extraction");
+            using var typeScriptPathAliasFileSystemPolicy =
+                SymbolExtractor.EnterTypeScriptPathAliasFileSystemPolicy(
+                    request.SymlinkPolicy,
+                    request.ProjectRoot);
             var patternConfigsAlreadyLoaded = EnsurePatternConfigsLoadedForWorker(request.ProjectRoot, request.FilePath);
             var symbols = request.ContentIsNormalized && request.HasOversizeLine is { } hasOversizeLine
                 ? SymbolExtractor.ExtractNormalized(
@@ -1087,7 +1095,8 @@ internal static class SymbolExtractionWorker
         string ProjectRoot,
         bool ContentIsNormalized = false,
         bool? HasOversizeLine = null,
-        int? ConflictMarkerLine = null);
+        int? ConflictMarkerLine = null,
+        FileIndexer.SymlinkPolicy SymlinkPolicy = FileIndexer.SymlinkPolicy.All);
 
     internal sealed record WorkerResponse(
         List<SymbolRecord>? Symbols,

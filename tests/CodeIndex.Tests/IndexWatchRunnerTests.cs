@@ -419,6 +419,8 @@ public class IndexWatchRunnerTests
         try
         {
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+            var defaultDataDir = Path.GetDirectoryName(dbPath)!;
+            Directory.CreateDirectory(defaultDataDir);
 
             Assert.Equal(
                 IndexWatchRunner.WatchPathDisposition.Reconcile,
@@ -449,6 +451,23 @@ public class IndexWatchRunnerTests
                 IndexWatchRunner.ClassifyWatchPathForTesting(
                     projectRoot,
                     dbPath,
+                    Path.Combine(projectRoot, ".cdidx"),
+                    ignoreCase: false,
+                    dbPathExplicit: true));
+            Directory.Delete(defaultDataDir);
+            Assert.Equal(
+                IndexWatchRunner.WatchPathDisposition.Reconcile,
+                IndexWatchRunner.ClassifyWatchPathForTesting(
+                    projectRoot,
+                    dbPath,
+                    defaultDataDir,
+                    ignoreCase: false,
+                    dbPathExplicit: true));
+            Assert.Equal(
+                IndexWatchRunner.WatchPathDisposition.Ignore,
+                IndexWatchRunner.ClassifyWatchPathForTesting(
+                    projectRoot,
+                    dbPath,
                     Path.Combine(projectRoot, ".cdidx", "audit-notes.md"),
                     ignoreCase: false,
                     dbPathExplicit: false));
@@ -468,6 +487,191 @@ public class IndexWatchRunnerTests
                     Path.Combine(projectRoot, "src", "app.cs"),
                     ignoreCase: false,
                     dbPathExplicit: false));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunCore_DirectoryAndValidChildBatchFallsBackToFullRescan_Issue5091()
+    {
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        try
+        {
+            File.WriteAllText(Path.Combine(projectRoot, "stable.cs"), "public class Stable5091 { }\n");
+            _ = RunIndexAndCapture([projectRoot, "--db", dbPath, "--json"], out var initialExitCode);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+
+            var newDirectory = Path.Combine(projectRoot, "src", "newdir");
+            var newSource = Path.Combine(newDirectory, "added.cs");
+            var capturedOut = RunStartupEventBatchAndCapture(
+                projectRoot,
+                dbPath,
+                enqueue =>
+                {
+                    Directory.CreateDirectory(newDirectory);
+                    File.WriteAllText(newSource, "public class AddedFromDirectoryEvent5091 { }\n");
+                    enqueue(newDirectory);
+                    enqueue(newSource);
+                },
+                out var exitCode);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.True(HasIndexedFile(dbPath, "src/newdir/added.cs"));
+            Assert.True(HasIndexedSymbol(dbPath, "AddedFromDirectoryEvent5091"));
+            AssertSuccessfulUsageFallback(capturedOut);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunCore_UnsupportedAndValidFileBatchFallsBackToFullRescan_Issue5091()
+    {
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "app.cs");
+            File.WriteAllText(sourcePath, "public class BeforeUnsupportedEvent5091 { }\n");
+            _ = RunIndexAndCapture([projectRoot, "--db", dbPath, "--json"], out var initialExitCode);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.True(HasIndexedSymbol(dbPath, "BeforeUnsupportedEvent5091"));
+
+            var unsupportedPath = Path.Combine(projectRoot, "notes.unknown5091");
+            var capturedOut = RunStartupEventBatchAndCapture(
+                projectRoot,
+                dbPath,
+                enqueue =>
+                {
+                    File.WriteAllText(sourcePath, "public class AfterUnsupportedEvent5091 { public void Changed() { } }\n");
+                    File.SetLastWriteTimeUtc(sourcePath, DateTime.UtcNow.AddSeconds(2));
+                    File.WriteAllText(unsupportedPath, "not an indexed language\n");
+                    enqueue(sourcePath);
+                    enqueue(unsupportedPath);
+                },
+                out var exitCode);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.False(HasIndexedSymbol(dbPath, "BeforeUnsupportedEvent5091"));
+            Assert.True(HasIndexedSymbol(dbPath, "AfterUnsupportedEvent5091"));
+            Assert.False(HasIndexedFile(dbPath, "notes.unknown5091"));
+            AssertSuccessfulUsageFallback(capturedOut);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData(FileIndexer.SymlinkPolicy.Internal)]
+    [InlineData(FileIndexer.SymlinkPolicy.All)]
+    public void RunCore_AllowedSymlinkFileEventUsesConfiguredPolicy_Issue5091(
+        FileIndexer.SymlinkPolicy symlinkPolicy)
+    {
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        try
+        {
+            var targetPath = Path.Combine(projectRoot, "target.cs");
+            var linkPath = Path.Combine(projectRoot, "link.cs");
+            File.WriteAllText(targetPath, "public class BeforeSymlinkWatch5091 { }\n");
+            try
+            {
+                File.CreateSymbolicLink(linkPath, targetPath);
+            }
+            catch (Exception ex) when (ShouldSkipWatchSymlinkFixtureFailure(ex))
+            {
+                return;
+            }
+
+            _ = RunIndexAndCapture([
+                projectRoot,
+                "--db",
+                dbPath,
+                "--files",
+                "link.cs",
+                "--follow-symlinks",
+                symlinkPolicy.ToString().ToLowerInvariant(),
+                "--json",
+            ], out var initialExitCode);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.True(HasIndexedFile(dbPath, "link.cs"));
+            Assert.True(HasIndexedSymbol(dbPath, "BeforeSymlinkWatch5091"));
+
+            var capturedOut = RunStartupEventBatchAndCapture(
+                projectRoot,
+                dbPath,
+                enqueue =>
+                {
+                    File.WriteAllText(targetPath, "public class AfterSymlinkWatch5091 { }\n");
+                    File.SetLastWriteTimeUtc(targetPath, DateTime.UtcNow.AddSeconds(2));
+                    enqueue(linkPath);
+                },
+                out var exitCode,
+                symlinkPolicy);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.False(HasIndexedSymbol(dbPath, "BeforeSymlinkWatch5091"));
+            Assert.True(HasIndexedSymbol(dbPath, "AfterSymlinkWatch5091"));
+            var updateEvent = FindWatchEvent(capturedOut, "updated");
+            Assert.Equal(CommandExitCodes.Success, updateEvent.GetProperty("exit_code").GetInt32());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void RunCore_DeletedOrRenamedDirectoryFallsBackToFullRescan_Issue5091(
+        bool renameDirectory)
+    {
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        try
+        {
+            var oldDirectory = Path.Combine(projectRoot, "old");
+            var oldSource = Path.Combine(oldDirectory, "moved.cs");
+            Directory.CreateDirectory(oldDirectory);
+            File.WriteAllText(oldSource, "public class DirectoryMove5091 { }\n");
+            _ = RunIndexAndCapture([projectRoot, "--db", dbPath, "--json"], out var initialExitCode);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.True(HasIndexedFile(dbPath, "old/moved.cs"));
+
+            var newDirectory = Path.Combine(projectRoot, "renamed");
+            var capturedOut = RunStartupEventBatchAndCapture(
+                projectRoot,
+                dbPath,
+                enqueue =>
+                {
+                    if (renameDirectory)
+                    {
+                        Directory.Move(oldDirectory, newDirectory);
+                        enqueue(oldDirectory);
+                        enqueue(newDirectory);
+                    }
+                    else
+                    {
+                        Directory.Delete(oldDirectory, recursive: true);
+                        enqueue(oldDirectory);
+                    }
+                },
+                out var exitCode);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.False(HasIndexedFile(dbPath, "old/moved.cs"));
+            Assert.Equal(renameDirectory, HasIndexedFile(dbPath, "renamed/moved.cs"));
+            Assert.Equal(renameDirectory, HasIndexedSymbol(dbPath, "DirectoryMove5091"));
+            AssertSuccessfulUsageFallback(capturedOut);
         }
         finally
         {
@@ -1777,6 +1981,313 @@ public class IndexWatchRunnerTests
     }
 
     [Theory]
+    [InlineData(FileIndexer.SymlinkPolicy.Internal)]
+    [InlineData(FileIndexer.SymlinkPolicy.All)]
+    public void PollingSnapshot_AllowedSymlinkFileIsTrackedAndUpdated_Issue5091(
+        FileIndexer.SymlinkPolicy symlinkPolicy)
+    {
+        var projectRoot = CreateTempProject();
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        try
+        {
+            var targetPath = Path.Combine(projectRoot, "target.cs");
+            var linkPath = Path.Combine(projectRoot, "link.cs");
+            File.WriteAllText(targetPath, "public class BeforePollingSymlink5091 { }\n");
+            try
+            {
+                File.CreateSymbolicLink(linkPath, targetPath);
+            }
+            catch (Exception ex) when (ShouldSkipWatchSymlinkFixtureFailure(ex))
+            {
+                return;
+            }
+
+            var snapshotPaths = IndexWatchRunner.CapturePollingSnapshotPathsForTesting(
+                projectRoot,
+                projectRoot,
+                dbPath,
+                ignoreCase: false,
+                dbPathExplicit: true,
+                symlinkPolicy);
+            Assert.Contains(linkPath, snapshotPaths);
+
+            var updatedPaths = IndexWatchRunner.CapturePollingUpdatePathsForTesting(
+                projectRoot,
+                projectRoot,
+                dbPath,
+                ignoreCase: false,
+                dbPathExplicit: true,
+                symlinkPolicy,
+                () =>
+                {
+                    File.WriteAllText(
+                        targetPath,
+                        "public class AfterPollingSymlink5091 { public void Changed() { } }\n");
+                    File.SetLastWriteTimeUtc(targetPath, DateTime.UtcNow.AddSeconds(2));
+                });
+
+            Assert.Contains(linkPath, updatedPaths);
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Theory]
+    [InlineData(FileIndexer.SymlinkPolicy.Internal)]
+    [InlineData(FileIndexer.SymlinkPolicy.All)]
+    public void PollingSnapshot_ResolvedInternalArtifactSymlinksAreExcludedFromSnapshotAndUpdates_Issue5091(
+        FileIndexer.SymlinkPolicy symlinkPolicy)
+    {
+        var projectRoot = CreateTempProject();
+        var dataDirectory = Path.Combine(projectRoot, ".cdidx");
+        var physicalDirectory = Path.Combine(projectRoot, "state");
+        var physicalDirectoryAlias = Path.Combine(projectRoot, "state-alias");
+        var dbPath = Path.Combine(dataDirectory, "codeindex.db");
+        var physicalDbPath = Path.Combine(physicalDirectory, "physical.db");
+        try
+        {
+            Directory.CreateDirectory(dataDirectory);
+            Directory.CreateDirectory(physicalDirectory);
+
+            var configuredSidecarTarget = Path.Combine(physicalDirectory, "detached-shm");
+            var configuredSidecarPath = dbPath + "-shm";
+            var physicalCheckpointsDirectory = Path.Combine(physicalDirectory, "detached-checkpoints");
+            var configuredCheckpointsPath = dbPath + ".checkpoints";
+            var physicalCheckpointPath = Path.Combine(physicalCheckpointsDirectory, "snapshot.db");
+            var configuredRestoreTargetDirectory = Path.Combine(physicalDirectory, "detached-restore");
+            var configuredRestorePath = dbPath + ".restore-tmp-fixture";
+            var configuredBackupPath = dbPath + ".restore-backup-fixture";
+            var configuredRestoreTarget = Path.Combine(configuredRestoreTargetDirectory, "staged.cs");
+            var configuredRestoreArtifactPath = Path.Combine(configuredRestorePath, "staged.cs");
+            var configuredBackupTarget = Path.Combine(configuredBackupPath, "backup.cs");
+            var lockPath = IndexLock.GetLockPath(dbPath);
+            var infoPath = IndexLock.GetInfoPath(lockPath);
+            var resolvedTempPath = AtomicFileWriter.BuildTempPathForTesting(physicalDbPath);
+            var ordinaryTargetPath = Path.Combine(projectRoot, "ordinary-target.cs");
+            var ordinaryAncestorTargetPath = Path.Combine(physicalDirectory, "ordinary-ancestor-target.cs");
+            var ordinaryAncestorAliasPath = Path.Combine(projectRoot, "ordinary-ancestor.cs");
+            Directory.CreateDirectory(physicalCheckpointsDirectory);
+            Directory.CreateDirectory(configuredRestoreTargetDirectory);
+            Directory.CreateDirectory(configuredBackupPath);
+            File.WriteAllText(physicalDbPath, "initial-db");
+            File.WriteAllText(physicalDbPath + "-wal", "initial-wal");
+            File.WriteAllText(physicalDbPath + "-journal", "initial-journal");
+            File.WriteAllText(configuredSidecarTarget, "initial-shm");
+            File.WriteAllText(physicalCheckpointPath, "initial-checkpoint");
+            File.WriteAllText(configuredRestoreTarget, "initial-restore");
+            File.WriteAllText(configuredBackupTarget, "initial-backup");
+            File.WriteAllText(lockPath, "initial-lock");
+            File.WriteAllText(infoPath, "initial-info");
+            File.WriteAllText(resolvedTempPath, "initial-temp");
+            File.WriteAllText(ordinaryTargetPath, "public class OrdinaryBefore5091 { }\n");
+            File.WriteAllText(ordinaryAncestorTargetPath, "public class OrdinaryAncestorBefore5091 { }\n");
+
+            try
+            {
+                Directory.CreateSymbolicLink(physicalDirectoryAlias, physicalDirectory);
+                File.CreateSymbolicLink(dbPath, physicalDbPath);
+                File.CreateSymbolicLink(configuredSidecarPath, configuredSidecarTarget);
+                Directory.CreateSymbolicLink(configuredCheckpointsPath, physicalCheckpointsDirectory);
+                Directory.CreateSymbolicLink(configuredRestorePath, configuredRestoreTargetDirectory);
+            }
+            catch (Exception ex) when (ShouldSkipWatchSymlinkFixtureFailure(ex))
+            {
+                return;
+            }
+
+            var internalTargets = new[]
+            {
+                dbPath,
+                Path.Combine(physicalDirectoryAlias, Path.GetFileName(physicalDbPath)),
+                physicalDbPath + "-wal",
+                configuredSidecarPath,
+                physicalDbPath + "-journal",
+                physicalCheckpointPath,
+                configuredRestoreArtifactPath,
+                configuredBackupTarget,
+                lockPath,
+                infoPath,
+                resolvedTempPath,
+            };
+            var internalAliases = internalTargets
+                .Select((target, index) => (Target: target, Alias: Path.Combine(projectRoot, $"internal-{index}.cs")))
+                .ToArray();
+            var ordinaryAliasPath = Path.Combine(projectRoot, "ordinary.cs");
+            try
+            {
+                foreach (var (target, alias) in internalAliases)
+                    File.CreateSymbolicLink(alias, target);
+                File.CreateSymbolicLink(ordinaryAliasPath, ordinaryTargetPath);
+                File.CreateSymbolicLink(
+                    ordinaryAncestorAliasPath,
+                    Path.Combine(physicalDirectoryAlias, Path.GetFileName(ordinaryAncestorTargetPath)));
+            }
+            catch (Exception ex) when (ShouldSkipWatchSymlinkFixtureFailure(ex))
+            {
+                return;
+            }
+
+            var snapshotPaths = IndexWatchRunner.CapturePollingSnapshotPathsForTesting(
+                projectRoot,
+                projectRoot,
+                dbPath,
+                ignoreCase: false,
+                dbPathExplicit: true,
+                symlinkPolicy);
+
+            Assert.Contains(ordinaryAliasPath, snapshotPaths);
+            Assert.Contains(ordinaryAncestorAliasPath, snapshotPaths);
+            Assert.All(internalAliases, item => Assert.DoesNotContain(item.Alias, snapshotPaths));
+
+            var updatedPaths = IndexWatchRunner.CapturePollingUpdatePathsForTesting(
+                projectRoot,
+                projectRoot,
+                dbPath,
+                ignoreCase: false,
+                dbPathExplicit: true,
+                symlinkPolicy,
+                () =>
+                {
+                    foreach (var (target, alias) in internalAliases)
+                        File.WriteAllText(target, $"updated-{Path.GetFileName(alias)}-{Guid.NewGuid():N}");
+                    File.WriteAllText(
+                        ordinaryTargetPath,
+                        "public class OrdinaryAfter5091 { public void Changed() { } }\n");
+                    File.WriteAllText(
+                        ordinaryAncestorTargetPath,
+                        "public class OrdinaryAncestorAfter5091 { public void Changed() { } }\n");
+                });
+
+            Assert.Contains(ordinaryAliasPath, updatedPaths);
+            Assert.Contains(ordinaryAncestorAliasPath, updatedPaths);
+            Assert.All(internalAliases, item => Assert.DoesNotContain(item.Alias, updatedPaths));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PollingResolvedInternalTargetComparison_UsesTargetDirectoryCasePolicy_Issue5091()
+    {
+        var projectRoot = CreateTempProject();
+        var insensitiveDirectory = Path.Combine(projectRoot, "insensitive-target");
+        var sensitiveDirectory = Path.Combine(projectRoot, "sensitive-target");
+        var previousProbe = PathCasing.IgnoreCaseProbeForTesting;
+        try
+        {
+            Directory.CreateDirectory(insensitiveDirectory);
+            Directory.CreateDirectory(sensitiveDirectory);
+            PathCasing.IgnoreCaseProbeForTesting = path =>
+                string.Equals(Path.GetFullPath(path), insensitiveDirectory, StringComparison.Ordinal);
+
+            Assert.True(IndexWatchRunner.PollingInternalTargetPathsMatchForTesting(
+                Path.Combine(insensitiveDirectory, "artifact.db"),
+                Path.Combine(insensitiveDirectory, "Artifact.db")));
+            Assert.False(IndexWatchRunner.PollingInternalTargetPathsMatchForTesting(
+                Path.Combine(sensitiveDirectory, "artifact.db"),
+                Path.Combine(sensitiveDirectory, "Artifact.db")));
+        }
+        finally
+        {
+            PathCasing.IgnoreCaseProbeForTesting = previousProbe;
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void PollingResolvedInternalParentComparison_RequiresSameDepthNamespaceIdentity_Issue5091()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"cdidx-watch-namespace-{Guid.NewGuid():N}");
+        var parentPath = Path.Combine(root, "Configured", "Data");
+        var candidatePath = Path.Combine(root, "configured", "data", "artifact.db");
+        string? comparedParent = null;
+        string? comparedAncestor = null;
+
+        Assert.False(IndexWatchRunner.PollingTargetPathEqualOrParentForTesting(
+            parentPath,
+            candidatePath,
+            (parent, ancestor) =>
+            {
+                comparedParent = parent;
+                comparedAncestor = ancestor;
+                return false;
+            }));
+        Assert.Equal(FileIndexer.NormalizePathForIdentityComparison(parentPath), comparedParent);
+        Assert.Equal(
+            Path.GetDirectoryName(FileIndexer.NormalizePathForIdentityComparison(candidatePath)),
+            comparedAncestor);
+
+        Assert.True(IndexWatchRunner.PollingTargetPathEqualOrParentForTesting(
+            parentPath,
+            candidatePath,
+            (_, _) => true));
+    }
+
+    [Theory]
+    [InlineData(FileIndexer.SymlinkPolicy.Internal)]
+    [InlineData(FileIndexer.SymlinkPolicy.All)]
+    public void PollingAncestorIgnore_ResolvedInternalArtifactSymlinkIsExcludedButOrdinaryIgnoreIsTracked_Issue5091(
+        FileIndexer.SymlinkPolicy symlinkPolicy)
+    {
+        var repositoryRoot = CreateTempProject();
+        var projectRoot = Path.Combine(repositoryRoot, "subproject");
+        var dataDirectory = Path.Combine(projectRoot, ".cdidx");
+        var dbPath = Path.Combine(dataDirectory, "codeindex.db");
+        var dbAliasPath = Path.Combine(repositoryRoot, ".gitignore");
+        var ordinaryIgnorePath = Path.Combine(repositoryRoot, ".cdidxignore");
+        try
+        {
+            Directory.CreateDirectory(projectRoot);
+            Directory.CreateDirectory(dataDirectory);
+            File.WriteAllText(dbPath, "initial-db");
+            File.WriteAllText(ordinaryIgnorePath, "initial-ignore\n");
+            try
+            {
+                File.CreateSymbolicLink(dbAliasPath, dbPath);
+            }
+            catch (Exception ex) when (ShouldSkipWatchSymlinkFixtureFailure(ex))
+            {
+                return;
+            }
+
+            var snapshotPaths = IndexWatchRunner.CapturePollingSnapshotPathsForTesting(
+                projectRoot,
+                repositoryRoot,
+                dbPath,
+                ignoreCase: false,
+                dbPathExplicit: true,
+                symlinkPolicy);
+
+            Assert.DoesNotContain(dbAliasPath, snapshotPaths);
+            Assert.Contains(ordinaryIgnorePath, snapshotPaths);
+
+            var updatedPaths = IndexWatchRunner.CapturePollingUpdatePathsForTesting(
+                projectRoot,
+                repositoryRoot,
+                dbPath,
+                ignoreCase: false,
+                dbPathExplicit: true,
+                symlinkPolicy,
+                () =>
+                {
+                    File.WriteAllText(dbPath, $"updated-db-{Guid.NewGuid():N}");
+                    File.WriteAllText(ordinaryIgnorePath, $"updated-ignore-{Guid.NewGuid():N}\n");
+                });
+
+            Assert.DoesNotContain(dbAliasPath, updatedPaths);
+            Assert.Contains(ordinaryIgnorePath, updatedPaths);
+        }
+        finally
+        {
+            DeleteDirectory(repositoryRoot);
+        }
+    }
+
+    [Theory]
     [InlineData(true, 8, 0, true, true)]
     [InlineData(true, 8, 0, false, false)]
     [InlineData(true, 9, 0, true, false)]
@@ -2288,6 +2799,54 @@ public class IndexWatchRunnerTests
         }
     }
 
+    private string RunStartupEventBatchAndCapture(
+        string projectRoot,
+        string dbPath,
+        Action<Action<string>> mutateAndEnqueue,
+        out int exitCode,
+        FileIndexer.SymlinkPolicy symlinkPolicy = FileIndexer.SymlinkPolicy.None)
+    {
+        using var cts = new CancellationTokenSource();
+        var backend = new FakeWatchBackend("fsevents");
+        try
+        {
+            var options = CreateIssue4858WatchOptions(projectRoot, dbPath, symlinkPolicy);
+            IndexWatchRunner.WatchBackendFactoryForTesting = (_, _, _) => backend;
+            IndexWatchRunner.WatchReadyForTesting = _ => cts.Cancel();
+            return RunWatchCoreAndCapture(
+                options,
+                projectRoot,
+                dbPath,
+                cts,
+                baselineScan: () =>
+                {
+                    mutateAndEnqueue(backend.Enqueue);
+                    return CommandExitCodes.Success;
+                },
+                recoveryScan: _ => CommandExitCodes.Success,
+                out exitCode);
+        }
+        finally
+        {
+            IndexWatchRunner.WatchBackendFactoryForTesting = null;
+            IndexWatchRunner.WatchReadyForTesting = null;
+        }
+    }
+
+    private static bool ShouldSkipWatchSymlinkFixtureFailure(Exception exception)
+        => exception is PlatformNotSupportedException
+            || (OperatingSystem.IsWindows()
+                && (exception is IOException || exception is UnauthorizedAccessException));
+
+    private static void AssertSuccessfulUsageFallback(string capturedOut)
+    {
+        var rescanEvent = FindWatchEvent(capturedOut, "rescanned");
+        Assert.Equal("startup", rescanEvent.GetProperty("phase").GetString());
+        Assert.Equal(CommandExitCodes.Success, rescanEvent.GetProperty("exit_code").GetInt32());
+        Assert.DoesNotContain("\"status\":\"failed\"", capturedOut, StringComparison.Ordinal);
+        Assert.DoesNotContain("paths supplied to --files were rejected", capturedOut, StringComparison.Ordinal);
+    }
+
     private static void AssertOptionValue(IReadOnlyList<string?> args, string option, string expectedValue)
     {
         var index = -1;
@@ -2439,7 +2998,10 @@ public class IndexWatchRunnerTests
     private static string CreateTempProject()
         => TestProjectHelper.CreateTempProject("cdidx_watch_runner");
 
-    private static IndexCommandOptions CreateIssue4858WatchOptions(string projectRoot, string dbPath)
+    private static IndexCommandOptions CreateIssue4858WatchOptions(
+        string projectRoot,
+        string dbPath,
+        FileIndexer.SymlinkPolicy symlinkPolicy = FileIndexer.SymlinkPolicy.None)
         => new()
         {
             ProjectPath = projectRoot,
@@ -2448,6 +3010,7 @@ public class IndexWatchRunnerTests
             Quiet = true,
             Watch = true,
             WatchDebounceMs = 0,
+            SymlinkPolicy = symlinkPolicy,
         };
 
     private string RunWatchCoreAndCapture(

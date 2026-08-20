@@ -935,6 +935,7 @@ public static partial class IndexCommandRunner
                 loaded.HasOversizeLine,
                 loaded.ConflictMarkerLine,
                 symbolExtractionWorker.Value,
+                options.SymlinkPolicy,
                 cancellationToken,
                 extractionStallTimeout);
             var symbols = symbolExtraction.Symbols;

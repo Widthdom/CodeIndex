@@ -304,6 +304,47 @@ internal static class DbConnectionFactory
         return new SqliteConnection(SqliteConnectionPolicy.BuildConnectionString(dbPath, mode));
     }
 
+    /// <summary>
+    /// Build the query-only connection used by explicit-file index preflight while the
+    /// caller holds the per-database writer lock. A checkpointed WAL database has no
+    /// committed sidecar state to merge, so its main file can be opened immutable without
+    /// copying the entire database. Hot WAL state still uses the stable detached snapshot.
+    /// explicit-file preflight が DB ごとの writer lock を保持している間だけ使う。
+    /// checkpoint 済み WAL は main DB を immutable で直接読み、hot WAL は従来どおり
+    /// stable detached snapshot を使う。
+    /// </summary>
+    internal static SqliteConnection CreateLockedIndexPreflightQueryOnlyConnection(
+        string dbPath,
+        bool pooling,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(dbPath);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        // Test substitutions and caller-requested immutable URIs retain the established
+        // artifact-preserving behavior and output semantics.
+        if (OpenReadOnlyForTesting != null
+            || SqliteFileUri.RequestsImmutableSnapshot(dbPath)
+            || InspectQueryOnlyWalState(dbPath, out _) != QueryOnlyWalState.CheckpointedWal)
+        {
+            return CreateArtifactPreservingQueryOnlyConnection(
+                dbPath,
+                pooling,
+                out _,
+                out _,
+                out _,
+                out _,
+                cancellationToken);
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        return new SqliteConnection(SqliteConnectionPolicy.BuildConnectionString(
+            dbPath,
+            pooling
+                ? SqliteConnectionPolicyMode.ImmutableReadOnlyUri
+                : SqliteConnectionPolicyMode.ImmutableReadOnlyUriUnpooled));
+    }
+
     internal static bool IsQueryOnlySnapshotCurrent(
         string dbPath,
         QueryOnlySnapshotSourceState snapshotSourceState,

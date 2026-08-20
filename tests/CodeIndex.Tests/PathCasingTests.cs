@@ -1,5 +1,6 @@
 using CodeIndex;
 using CodeIndex.Cli;
+using CodeIndex.Indexer;
 
 namespace CodeIndex.Tests;
 
@@ -184,6 +185,151 @@ public class PathCasingTests
             PathCasing.ResetCacheForTests();
         }
     });
+
+    [Fact]
+    public void PathsEqualByDirectoryNamespace_UsesDifferingComponentParentPolicy_Issue5091()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_pathcasing_component_parent");
+        var root = Path.GetFullPath(project.Root);
+        var upperRoot = Path.Combine(root, "Foo");
+        var lowerRoot = Path.Combine(root, "foo");
+        var rootIdentity = new FileIndexer.FileIdentity(1, 1);
+        var upperIdentity = new FileIndexer.FileIdentity(2, 2);
+        var lowerIdentity = new FileIndexer.FileIdentity(3, 3);
+
+        FileIndexer.FileIdentity? Identity(string path)
+        {
+            var fullPath = Path.GetFullPath(path);
+            if (string.Equals(fullPath, root, StringComparison.Ordinal))
+                return rootIdentity;
+            if (string.Equals(fullPath, upperRoot, StringComparison.Ordinal))
+                return upperIdentity;
+            if (string.Equals(fullPath, lowerRoot, StringComparison.Ordinal))
+                return lowerIdentity;
+            return null;
+        }
+
+        bool IgnoreCase(string path)
+            => !string.Equals(Path.GetFullPath(path), root, StringComparison.Ordinal);
+
+        Assert.False(PathCasing.PathsEqualByDirectoryNamespaceForTesting(
+            Path.Combine(upperRoot, "missing.cs"),
+            Path.Combine(lowerRoot, "missing.cs"),
+            IgnoreCase,
+            Identity));
+        Assert.False(PathCasing.PathsEqualByDirectoryNamespaceForTesting(
+            Path.Combine(upperRoot, "missing.cs"),
+            Path.Combine(lowerRoot, "missing.cs"),
+            _ => true,
+            Identity));
+    }
+
+    [Fact]
+    public void PathsEqualByDirectoryNamespace_AllowsMissingLeafOnlyFromProvenParent_Issue5091()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_pathcasing_missing_leaf");
+        var root = Path.GetFullPath(project.Root);
+        var sourceRoot = Path.Combine(root, "Source");
+        var rootIdentity = new FileIndexer.FileIdentity(1, 1);
+        var sourceIdentity = new FileIndexer.FileIdentity(2, 2);
+
+        FileIndexer.FileIdentity? Identity(string path)
+        {
+            var fullPath = Path.GetFullPath(path);
+            if (string.Equals(fullPath, root, StringComparison.Ordinal))
+                return rootIdentity;
+            if (string.Equals(fullPath, sourceRoot, StringComparison.Ordinal))
+                return sourceIdentity;
+            return null;
+        }
+
+        Assert.True(PathCasing.PathsEqualByDirectoryNamespaceForTesting(
+            Path.Combine(sourceRoot, "Missing.cs"),
+            Path.Combine(sourceRoot, "missing.cs"),
+            _ => true,
+            Identity));
+        Assert.False(PathCasing.PathsEqualByDirectoryNamespaceForTesting(
+            Path.Combine(sourceRoot, "Missing", "Leaf.cs"),
+            Path.Combine(sourceRoot, "missing", "leaf.cs"),
+            _ => true,
+            Identity));
+    }
+
+    [Fact]
+    public void PathsEqualByDirectoryNamespace_DoesNotUseLeafIdentityForHardlinks_Issue5091()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_pathcasing_hardlink");
+        var root = Path.GetFullPath(project.Root);
+        var rootIdentity = new FileIndexer.FileIdentity(1, 1);
+        var sharedLeafIdentity = new FileIndexer.FileIdentity(2, 2);
+
+        Assert.False(PathCasing.PathsEqualByDirectoryNamespaceForTesting(
+            Path.Combine(root, "Entry.cs"),
+            Path.Combine(root, "entry.cs"),
+            _ => false,
+            path =>
+            {
+                var fullPath = Path.GetFullPath(path);
+                return string.Equals(fullPath, root, StringComparison.Ordinal)
+                    ? rootIdentity
+                    : sharedLeafIdentity;
+            }));
+    }
+
+    [Fact]
+    public void IsPathEqualOrParentByDirectoryNamespace_UsesPrefixParentPolicyAndIdentity_Issue5091()
+    {
+        using var project = TestProjectHelper.CreateTempProjectScope("cdidx_pathcasing_parent_namespace");
+        var root = Path.GetFullPath(project.Root);
+        var upperProject = Path.Combine(root, "Project");
+        var lowerProject = Path.Combine(root, "project");
+        var selectedChild = Path.Combine(lowerProject, "src", "App.cs");
+        var rootIdentity = new FileIndexer.FileIdentity(1, 1);
+        var upperIdentity = new FileIndexer.FileIdentity(2, 2);
+        var lowerIdentity = new FileIndexer.FileIdentity(3, 3);
+
+        FileIndexer.FileIdentity? DistinctProjectIdentity(string path)
+        {
+            var fullPath = Path.GetFullPath(path);
+            if (string.Equals(fullPath, root, StringComparison.Ordinal))
+                return rootIdentity;
+            if (string.Equals(fullPath, upperProject, StringComparison.Ordinal))
+                return upperIdentity;
+            if (string.Equals(fullPath, lowerProject, StringComparison.Ordinal))
+                return lowerIdentity;
+            return null;
+        }
+
+        FileIndexer.FileIdentity? AliasedProjectIdentity(string path)
+        {
+            var identity = DistinctProjectIdentity(path);
+            return identity == lowerIdentity ? upperIdentity : identity;
+        }
+
+        bool MixedIgnoreCase(string path)
+            => !string.Equals(Path.GetFullPath(path), root, StringComparison.Ordinal);
+
+        Assert.False(PathCasing.IsPathEqualOrParentByDirectoryNamespaceForTesting(
+            upperProject,
+            selectedChild,
+            MixedIgnoreCase,
+            AliasedProjectIdentity));
+        Assert.False(PathCasing.IsPathEqualOrParentByDirectoryNamespaceForTesting(
+            upperProject,
+            selectedChild,
+            _ => true,
+            DistinctProjectIdentity));
+        Assert.True(PathCasing.IsPathEqualOrParentByDirectoryNamespaceForTesting(
+            upperProject,
+            selectedChild,
+            _ => true,
+            AliasedProjectIdentity));
+        Assert.True(PathCasing.IsPathEqualOrParentByDirectoryNamespaceForTesting(
+            upperProject,
+            Path.Combine(upperProject, "src", "App.cs"),
+            _ => throw new InvalidOperationException("Exact-case containment must not probe policy."),
+            _ => throw new InvalidOperationException("Exact-case containment must not probe identity.")));
+    }
 
     [Fact]
     public void IsPathEqualOrParent_RespectsCaseSensitiveSeed()

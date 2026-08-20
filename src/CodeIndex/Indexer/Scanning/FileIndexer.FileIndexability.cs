@@ -42,6 +42,9 @@ public partial class FileIndexer
             && FileSystemBoundary.IsSymlinkOrReparsePoint(attributes);
     }
 
+    internal static bool IsSymlinkOrReparsePointPath(string path)
+        => IsReparsePoint(path);
+
     private static FileProbeStatus ToFileProbeStatus(FileSystemBoundaryProbeStatus status)
         => status switch
         {
@@ -89,6 +92,9 @@ public partial class FileIndexer
             return GetFileSymlinkIndexability(filePath, symlinkPolicy, projectRoot);
 
         if (HasSkippedAttributes(attributes))
+            return FileProbeStatus.Unsupported;
+
+        if ((attributes & FileAttributes.Directory) != 0)
             return FileProbeStatus.Unsupported;
 
         if (IsWindowsPlatform)

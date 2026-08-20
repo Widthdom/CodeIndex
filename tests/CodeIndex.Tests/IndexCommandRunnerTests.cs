@@ -362,6 +362,67 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
+    public void SymbolExtractionWorker_UnknownSymlinkPolicyFailsClosedForTypeScriptConfig_Issue5091()
+    {
+        var projectRoot = CreateTempProject();
+        var outsideRoot = CreateTempProject();
+        try
+        {
+            var sourcePath = Path.Combine(projectRoot, "app.ts");
+            var configPath = Path.Combine(projectRoot, "tsconfig.json");
+            var configTarget = Path.Combine(outsideRoot, "real-tsconfig.json");
+            var moduleTarget = Path.Combine(outsideRoot, "sentinel-target.ts");
+            var configJson = JsonSerializer.Serialize(new
+            {
+                compilerOptions = new
+                {
+                    baseUrl = ".",
+                    paths = new Dictionary<string, string[]>
+                    {
+                        ["sentinel-alias"] = [moduleTarget],
+                    },
+                },
+            });
+            File.WriteAllText(configTarget, configJson);
+            File.WriteAllText(moduleTarget, "export const sentinel = 1;\n");
+            try
+            {
+                File.CreateSymbolicLink(configPath, configTarget);
+            }
+            catch (Exception ex) when (ShouldSkipSymlinkFixtureFailure(ex))
+            {
+                return;
+            }
+
+            using var worker = new SymbolExtractionWorkerClient();
+            var result = worker.Invoke(
+                0,
+                "typescript",
+                "import { sentinel } from \"sentinel-alias\";\nexport const value = sentinel;\n",
+                sourcePath,
+                projectRoot,
+                SymbolWorkerStartupBudget,
+                symlinkPolicy: (FileIndexer.SymlinkPolicy)int.MaxValue);
+
+            Assert.False(result.TimedOut);
+            Assert.True(result.Success, result.WorkerError);
+            Assert.Contains(
+                result.Symbols!,
+                symbol => symbol.Kind == "import" && symbol.Name == "sentinel-alias");
+            Assert.DoesNotContain(
+                result.Symbols!,
+                symbol => symbol.Kind == "import"
+                    && symbol.Name == FileIndexer.NormalizePathSeparators(
+                        Path.GetRelativePath(projectRoot, moduleTarget)));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+            DeleteDirectory(outsideRoot);
+        }
+    }
+
+    [Fact]
     public void SymbolExtractionWorker_ExecutionFailureIncludesRedactedOrigin()
     {
         Exception exception;
@@ -3973,11 +4034,55 @@ public sealed class Caller
             Assert.DoesNotContain("src/Lib/Ignored/Ignored.cs", options.UpdateFiles);
             Assert.DoesNotContain("src/Lib/bin/Debug/Generated.cs", options.UpdateFiles);
             Assert.DoesNotContain("src/Other/Class2.cs", options.UpdateFiles);
+            Assert.False(options.ExplicitFilesSpecified);
+            Assert.NotNull(options.ExplicitFiles);
+            Assert.Empty(options.ExplicitFileInputs);
+
+            var mixedOptions = IndexCommandRunner.ParseArgs(
+                [projectRoot, "--files", "manual.cs", "--solution", "Repo.sln", "--project", "Lib"]);
+
+            Assert.True(mixedOptions.ExplicitFilesSpecified);
+            Assert.Equal(["manual.cs"], mixedOptions.ExplicitFiles);
+            Assert.Equal(["manual.cs"], mixedOptions.ExplicitFileInputs);
+            Assert.Contains("manual.cs", mixedOptions.UpdateFiles);
+            Assert.Contains("src/Lib/Class1.cs", mixedOptions.UpdateFiles);
         }
         finally
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
         }
+    }
+
+    [Fact]
+    public void ParseArgs_FilesFlag_RejectsEachEmptyOccurrenceAndRetainsProvenance()
+    {
+        var bare = IndexCommandRunner.ParseArgs([".", "--files"]);
+        var repeatedWithEmptyOccurrence = IndexCommandRunner.ParseArgs(
+            [".", "--files", "first.cs", "--files", "--json"]);
+
+        Assert.True(bare.ExplicitFilesSpecified);
+        Assert.NotNull(bare.ExplicitFiles);
+        Assert.Empty(bare.ExplicitFileInputs);
+        Assert.Contains("--files requires at least one file path", bare.ParseError);
+
+        Assert.True(repeatedWithEmptyOccurrence.ExplicitFilesSpecified);
+        Assert.Equal(["first.cs"], repeatedWithEmptyOccurrence.ExplicitFiles);
+        Assert.Equal(["first.cs"], repeatedWithEmptyOccurrence.ExplicitFileInputs);
+        Assert.Equal(["first.cs"], repeatedWithEmptyOccurrence.UpdateFiles);
+        Assert.Contains("--files requires at least one file path", repeatedWithEmptyOccurrence.ParseError);
+    }
+
+    [Fact]
+    public void IndexCommandOptions_ProgrammaticUpdateFilesRemainExplicitInputFallback()
+    {
+        var options = new IndexCommandOptions
+        {
+            UpdateFiles = ["legacy.cs"],
+        };
+
+        Assert.False(options.ExplicitFilesSpecified);
+        Assert.Null(options.ExplicitFiles);
+        Assert.Equal(["legacy.cs"], options.ExplicitFileInputs);
     }
 
     [Fact]
