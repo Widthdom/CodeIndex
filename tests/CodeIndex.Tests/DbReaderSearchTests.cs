@@ -17,7 +17,7 @@ public partial class DbReaderTests
             "src/Records.cs",
             "csharp",
             """
-            public record Base(string BaseValue);
+            public record Base(string Key);
             public record Person([property: Obsolete] string First, string Last) : Base("base-marker")
             {
                 public string Ordinary { get; init; } = "ordinary-marker";
@@ -43,6 +43,15 @@ public partial class DbReaderTests
         AssertEnclosing("int X", "X", "property");
         AssertEnclosing("int Y", "Y", "property");
         AssertEnclosing("string Value", "Value", "property");
+        AssertEnclosing("@Value", "Value", "property");
+
+        InsertIndexedFile(
+            "src/InlineRecord.cs",
+            "csharp",
+            "public record Inline(string Nick) { public string Ordinary { get; init; } = \"inline-ordinary-marker\"; }");
+        AssertEnclosing("record Inline", "Inline", "class");
+        AssertEnclosing("string Nick", "Nick", "property");
+        AssertEnclosing("inline-ordinary-marker", "Ordinary", "property");
 
         InsertIndexedFile(
             "src/MultiHit.cs",
@@ -74,6 +83,45 @@ public partial class DbReaderTests
             Assert.Equal(expectedName, result.EnclosingSymbolName);
             Assert.Equal(expectedKind, result.EnclosingSymbolKind);
         }
+    }
+
+    [Fact]
+    public void Search_ExactAttributionNormalizesUsingResultLanguage()
+    {
+        InsertIndexedFile(
+            "src/JavaNames.java",
+            "java",
+            """
+            public final class JavaNames {
+                public void run() {
+                    int \u0056alue = 1;
+                }
+            }
+            """);
+        InsertIndexedFile(
+            "src/KotlinNames.kt",
+            "kotlin",
+            """
+            class KotlinNames {
+                fun run() {
+                    val `when` = 1
+                }
+            }
+            """);
+
+        var java = Assert.Single(_reader.Search(
+            "Value",
+            exact: true,
+            pathPatterns: ["src/JavaNames.java"]));
+        Assert.Equal("run", java.EnclosingSymbolName);
+        Assert.Equal("function", java.EnclosingSymbolKind);
+
+        var kotlin = Assert.Single(_reader.Search(
+            "when",
+            exact: true,
+            pathPatterns: ["src/KotlinNames.kt"]));
+        Assert.Equal("run", kotlin.EnclosingSymbolName);
+        Assert.Equal("function", kotlin.EnclosingSymbolKind);
     }
 
     [Fact]

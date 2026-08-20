@@ -1910,6 +1910,9 @@ public partial class QueryCommandRunnerTests
             var normalizedColumn = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 ["string Value", "--db", dbPath, "--exact-substring", "--path", "src/Records.cs", "--json=array"],
                 _jsonOptions));
+            var normalizedGrouping = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["@Value", "--db", dbPath, "--exact-substring", "--path", "src/Records.cs", "--group-by", "symbol", "--count", "--json"],
+                _jsonOptions));
             var multiHit = CaptureConsole(() => QueryCommandRunner.RunSearch(
                 ["alphaOnlyMarker betaOnlyMarker", "--db", dbPath, "--path", "src/MultiHit.cs", "--json=array"],
                 _jsonOptions));
@@ -1951,6 +1954,13 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(27, normalizedColumnRow.GetProperty("focus_column").GetInt32());
             Assert.Equal("Value", normalizedColumnRow.GetProperty("enclosing_symbol_name").GetString());
             Assert.Equal("property", normalizedColumnRow.GetProperty("enclosing_symbol_kind").GetString());
+
+            Assert.Equal(CommandExitCodes.Success, normalizedGrouping.Result);
+            Assert.Equal(string.Empty, normalizedGrouping.Stderr);
+            using var normalizedGroupingDocument = ParseJsonOutput(normalizedGrouping.Stdout);
+            var normalizedGroup = Assert.Single(normalizedGroupingDocument.RootElement.GetProperty("groups").EnumerateArray());
+            Assert.Equal("Value", normalizedGroup.GetProperty("symbol_name").GetString());
+            Assert.Equal("property", normalizedGroup.GetProperty("symbol_kind").GetString());
 
             Assert.Equal(CommandExitCodes.Success, multiHit.Result);
             Assert.Equal(string.Empty, multiHit.Stderr);

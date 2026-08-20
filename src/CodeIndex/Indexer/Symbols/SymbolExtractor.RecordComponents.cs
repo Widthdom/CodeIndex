@@ -226,7 +226,9 @@ public static partial class SymbolExtractor
         declarationEndLine = declarationLineIndex + 1 + declaration[..declarationLineSpanEnd].Count(ch => ch == '\n');
 
         var parameterListStartIndex = parameterOpenIndex + 1;
-        var rawParameterList = StripRecordComponentComments(declaration[parameterListStartIndex..parameterCloseIndex]);
+        var rawParameterList = StripRecordComponentComments(
+            declaration[parameterListStartIndex..parameterCloseIndex],
+            preserveOffsets: lang == "csharp");
         var parameterListFirstLine = lang == "csharp"
             ? declarationLineIndex + 1 + declaration[..parameterListStartIndex].Count(ch => ch == '\n')
             : declarationLineIndex + 1;
@@ -794,7 +796,7 @@ public static partial class SymbolExtractor
             yield return new RecordPrimaryComponentSlice(trailingComponent, componentLineNumber, componentStartIndex);
     }
 
-    private static string StripRecordComponentComments(string text)
+    private static string StripRecordComponentComments(string text, bool preserveOffsets)
     {
         var builder = new StringBuilder(text.Length);
         var inLineComment = false;
@@ -815,7 +817,7 @@ public static partial class SymbolExtractor
                     inLineComment = false;
                     builder.Append(ch);
                 }
-                else
+                else if (preserveOffsets)
                 {
                     builder.Append(' ');
                 }
@@ -828,14 +830,14 @@ public static partial class SymbolExtractor
                 if (ch == '*' && next == '/')
                 {
                     inBlockComment = false;
-                    builder.Append("  ");
+                    builder.Append(preserveOffsets ? "  " : " ");
                     i++;
                 }
                 else if (ch == '\n')
                 {
                     builder.Append(ch);
                 }
-                else
+                else if (preserveOffsets)
                 {
                     builder.Append(' ');
                 }
@@ -887,7 +889,8 @@ public static partial class SymbolExtractor
             if (ch == '/' && next == '/')
             {
                 inLineComment = true;
-                builder.Append("  ");
+                if (preserveOffsets)
+                    builder.Append("  ");
                 i++;
                 continue;
             }
@@ -895,7 +898,8 @@ public static partial class SymbolExtractor
             if (ch == '/' && next == '*')
             {
                 inBlockComment = true;
-                builder.Append("  ");
+                if (preserveOffsets)
+                    builder.Append("  ");
                 i++;
                 continue;
             }
