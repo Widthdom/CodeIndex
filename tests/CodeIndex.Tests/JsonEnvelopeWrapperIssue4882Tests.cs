@@ -28,7 +28,8 @@ public sealed class JsonEnvelopeWrapperIssue4882Tests
                 var firstArgs = new[]
                 {
                     command, query, "--db", dbPath, "--json", "--body", "--snippet-lines", "3",
-                    "--fields", "path,line,body_content", "--limit", "1", "--max-json-bytes", "8192",
+                    "--fields", "path,line,body_content,body_start_line,body_end_line,body_content_truncated,body_requested_start_line,body_requested_end_line,body_effective_start_line,body_effective_end_line,body_content_truncation_reasons,body_content_recovery",
+                    "--limit", "1", "--max-json-bytes", "16384",
                     "--exact",
                 };
                 var (firstExitCode, firstStdout, firstStderr) = CaptureConsole(
@@ -42,8 +43,26 @@ public sealed class JsonEnvelopeWrapperIssue4882Tests
                 Assert.Equal(2, firstMetadata.GetProperty("total_count").GetInt32());
                 Assert.True(firstMetadata.GetProperty("has_more").GetBoolean());
                 var cursor = Assert.IsType<string>(firstMetadata.GetProperty("next_cursor").GetString());
-                Assert.False(string.IsNullOrWhiteSpace(
-                    firstDocument.RootElement.GetProperty("results")[0].GetProperty("body_content").GetString()));
+                var firstResult = firstDocument.RootElement.GetProperty("results")[0];
+                Assert.False(string.IsNullOrWhiteSpace(firstResult.GetProperty("body_content").GetString()));
+                foreach (var field in new[]
+                {
+                    "body_start_line",
+                    "body_end_line",
+                    "body_requested_start_line",
+                    "body_requested_end_line",
+                    "body_effective_start_line",
+                    "body_effective_end_line",
+                })
+                {
+                    Assert.True(firstResult.TryGetProperty(field, out _), field);
+                }
+                if (firstResult.TryGetProperty("body_content_truncated", out var bodyContentTruncated))
+                {
+                    Assert.True(bodyContentTruncated.GetBoolean());
+                    Assert.True(firstResult.TryGetProperty("body_content_truncation_reasons", out _));
+                    Assert.True(firstResult.TryGetProperty("body_content_recovery", out _));
+                }
 
                 var secondArgs = firstArgs.Concat(["--cursor", cursor]).ToArray();
                 var (secondExitCode, secondStdout, secondStderr) = CaptureConsole(
@@ -62,6 +81,144 @@ public sealed class JsonEnvelopeWrapperIssue4882Tests
         finally
         {
             TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void GraphBodyIntent_IsIndependentFromBoundedProjection_Issue5094()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("bounded_graph_body_intent_5094");
+        try
+        {
+            var dbPath = CreateGraphFixture(projectRoot);
+            var projections = new (string? Fields, bool ExpectBody)[]
+            {
+                ("path,line", false),
+                ("file,line", false),
+                ("body_content,body_content_truncated,body_content_recovery", true),
+                ("all", true),
+            };
+
+            foreach (var (command, query) in new[]
+            {
+                ("references", "TargetA"),
+                ("callers", "TargetA"),
+                ("callees", "Caller"),
+            })
+            {
+                var unprojectedArgs = new[]
+                {
+                    command, query, "--db", dbPath, "--json", "--body", "--snippet-lines", "3",
+                    "--limit", "1", "--exact-name",
+                };
+                var (unprojectedExitCode, unprojectedStdout, unprojectedStderr) = CaptureConsole(
+                    () => ProgramRunner.Run(unprojectedArgs, _jsonOptions, "1.0.0-test"));
+
+                Assert.Equal(CommandExitCodes.Success, unprojectedExitCode);
+                Assert.Equal(string.Empty, unprojectedStderr);
+                using (var unprojectedDocument = JsonDocument.Parse(unprojectedStdout))
+                {
+                    Assert.False(string.IsNullOrWhiteSpace(
+                        unprojectedDocument.RootElement.GetProperty("body_content").GetString()));
+                }
+
+                foreach (var projection in projections)
+                {
+                    var args = new List<string>
+                    {
+                        command, query, "--db", dbPath, "--json", "--body", "--snippet-lines", "3",
+                        "--limit", "1", "--max-json-bytes", "32768", "--exact-name",
+                    };
+                    if (projection.Fields is not null)
+                    {
+                        args.Add("--fields");
+                        args.Add(projection.Fields);
+                    }
+
+                    var (exitCode, stdout, stderr) = CaptureConsole(
+                        () => ProgramRunner.Run([.. args], _jsonOptions, "1.0.0-test"));
+
+                    Assert.Equal(CommandExitCodes.Success, exitCode);
+                    Assert.Equal(string.Empty, stderr);
+                    using var document = JsonDocument.Parse(stdout);
+                    var result = document.RootElement.GetProperty("results")[0];
+                    Assert.Equal(projection.ExpectBody, result.TryGetProperty("body_content", out _));
+                    if (!projection.ExpectBody)
+                    {
+                        Assert.DoesNotContain(
+                            result.EnumerateObject().Select(property => property.Name),
+                            propertyName => propertyName.StartsWith("body_", StringComparison.Ordinal));
+                    }
+                }
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void GraphBodyIntentValidation_PrecedesProjectionAndDatabaseAccess_Issue5094()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("bounded_graph_body_validation_5094");
+        try
+        {
+            var missingDbPath = Path.Combine(projectRoot, "missing.db");
+            foreach (var command in new[] { "references", "callers", "callees" })
+            {
+                foreach (var (bodyArgs, expectedMessage, unexpectedMessage) in new[]
+                {
+                    (new[] { "--snippet-lines", "3" }, "--snippet-lines requires --body", "database"),
+                    (new[] { "--body", "--snippet-lines", "21" }, "--snippet-lines must be less than or equal to 20", "--snippet-lines requires --body"),
+                })
+                {
+                    var args = new[]
+                        {
+                            command, "Target", "--db", missingDbPath, "--json", "--fields", "path,line",
+                            "--max-json-bytes", "8192",
+                        }
+                        .Concat(bodyArgs)
+                        .ToArray();
+                    var (exitCode, stdout, stderr) = CaptureConsole(
+                        () => ProgramRunner.Run(args, _jsonOptions, "1.0.0-test"));
+                    var diagnostic = stdout + stderr;
+
+                    Assert.Equal(CommandExitCodes.UsageError, exitCode);
+                    Assert.Contains(CommandErrorCodes.UsageError, diagnostic);
+                    Assert.Contains(expectedMessage, diagnostic);
+                    Assert.DoesNotContain(unexpectedMessage, diagnostic, StringComparison.OrdinalIgnoreCase);
+                }
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void GraphFieldDiscovery_RemainsIndependentFromBodyIntent_Issue5094()
+    {
+        foreach (var command in new[] { "references", "callers", "callees" })
+        {
+            var args = new[]
+            {
+                command, "--json", "--body", "--snippet-lines", "3", "--fields", "list",
+            };
+            var (exitCode, stdout, stderr) = CaptureConsole(
+                () => ProgramRunner.Run(args, _jsonOptions, "1.0.0-test"));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = JsonDocument.Parse(stdout);
+            var validFields = document.RootElement.GetProperty("valid_fields")
+                .EnumerateArray()
+                .Select(field => field.GetString())
+                .ToArray();
+            Assert.Contains("body_content", validFields);
+            Assert.Contains("body_content_truncated", validFields);
+            Assert.Contains("body_content_recovery", validFields);
         }
     }
 

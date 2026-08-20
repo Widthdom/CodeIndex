@@ -255,8 +255,7 @@ internal static partial class JsonEnvelopeWrapper
                 jsonOptions);
         }
         var bodyProjected = HasExplicitBodyProjection(controls.Fields);
-        var bodyOutputHidden = !bodyProjected
-                               && (controls.Compact || controls.Fields is { Count: > 0 });
+        var bodyOutputHidden = !bodyProjected && controls.Compact;
         if (!QueryCommandRunner.TryValidateBoundedGraphSnippetLinesOption(command, args, bodyOutputHidden))
             return CommandExitCodes.UsageError;
         if (HasArgument(args, "--count")
@@ -1503,12 +1502,6 @@ internal static partial class JsonEnvelopeWrapper
     {
         var stripped = StripResponseOptions(command, args, stripLimit: PageableResponseCommands.Contains(command));
         var bodyRequested = HasExplicitBodyProjection(controls.Fields);
-        if (command != "outline"
-            && !bodyRequested
-            && (controls.Compact || controls.Fields is { Count: > 0 }))
-        {
-            stripped.RemoveAll(arg => string.Equals(arg, "--body", StringComparison.Ordinal));
-        }
         var additions = new List<string>();
         if (PageableResponseCommands.Contains(command))
         {
@@ -2294,6 +2287,20 @@ internal static partial class JsonEnvelopeWrapper
                && string.Equals(execution.Command, CanonicalizeCommandName(command), StringComparison.Ordinal)
             ? execution.Offset
             : 0;
+    }
+
+    internal static bool ShouldMaterializeBody(string command)
+    {
+        var execution = BoundedExecution.Value;
+        if (execution is null
+            || !string.Equals(execution.Command, CanonicalizeCommandName(command), StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        return execution.Fields is { Count: > 0 }
+            ? HasExplicitBodyProjection(execution.Fields)
+            : !execution.Compact;
     }
 
     internal static (string? Path, int? Line, int? FileOrdinal, int? MatchOrdinal, int? ByteOffset) GetBoundedFindResume()
