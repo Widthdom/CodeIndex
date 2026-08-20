@@ -124,30 +124,35 @@ public sealed class JsonEnvelopeWrapperIssue4882Tests
 
                 foreach (var projection in projections)
                 {
-                    var args = new List<string>
+                    foreach (var compact in new[] { false, true })
                     {
-                        command, query, "--db", dbPath, "--json", "--body", "--snippet-lines", "3",
-                        "--limit", "1", "--max-json-bytes", "32768", "--exact-name",
-                    };
-                    if (projection.Fields is not null)
-                    {
-                        args.Add("--fields");
-                        args.Add(projection.Fields);
-                    }
+                        var args = new List<string>
+                        {
+                            command, query, "--db", dbPath, "--json", "--body", "--snippet-lines", "3",
+                            "--limit", "1", "--max-json-bytes", "32768", "--exact-name",
+                        };
+                        if (compact)
+                            args.Add("--compact");
+                        if (projection.Fields is not null)
+                        {
+                            args.Add("--fields");
+                            args.Add(projection.Fields);
+                        }
 
-                    var (exitCode, stdout, stderr) = CaptureConsole(
-                        () => ProgramRunner.Run([.. args], _jsonOptions, "1.0.0-test"));
+                        var (exitCode, stdout, stderr) = CaptureConsole(
+                            () => ProgramRunner.Run([.. args], _jsonOptions, "1.0.0-test"));
 
-                    Assert.Equal(CommandExitCodes.Success, exitCode);
-                    Assert.Equal(string.Empty, stderr);
-                    using var document = JsonDocument.Parse(stdout);
-                    var result = document.RootElement.GetProperty("results")[0];
-                    Assert.Equal(projection.ExpectBody, result.TryGetProperty("body_content", out _));
-                    if (!projection.ExpectBody)
-                    {
-                        Assert.DoesNotContain(
-                            result.EnumerateObject().Select(property => property.Name),
-                            propertyName => propertyName.StartsWith("body_", StringComparison.Ordinal));
+                        Assert.Equal(CommandExitCodes.Success, exitCode);
+                        Assert.Equal(string.Empty, stderr);
+                        using var document = JsonDocument.Parse(stdout);
+                        var result = document.RootElement.GetProperty("results")[0];
+                        Assert.Equal(projection.ExpectBody, result.TryGetProperty("body_content", out _));
+                        if (!projection.ExpectBody)
+                        {
+                            Assert.DoesNotContain(
+                                result.EnumerateObject().Select(property => property.Name),
+                                propertyName => propertyName.StartsWith("body_", StringComparison.Ordinal));
+                        }
                     }
                 }
             }

@@ -255,7 +255,9 @@ internal static partial class JsonEnvelopeWrapper
                 jsonOptions);
         }
         var bodyProjected = HasExplicitBodyProjection(controls.Fields);
-        var bodyOutputHidden = !bodyProjected && controls.Compact;
+        var bodyOutputHidden = !bodyProjected
+                               && controls.Compact
+                               && controls.Fields is not { Count: > 0 };
         if (!QueryCommandRunner.TryValidateBoundedGraphSnippetLinesOption(command, args, bodyOutputHidden))
             return CommandExitCodes.UsageError;
         if (HasArgument(args, "--count")
@@ -1502,6 +1504,12 @@ internal static partial class JsonEnvelopeWrapper
     {
         var stripped = StripResponseOptions(command, args, stripLimit: PageableResponseCommands.Contains(command));
         var bodyRequested = HasExplicitBodyProjection(controls.Fields);
+        if (command is not ("outline" or "references" or "callers" or "callees")
+            && !bodyRequested
+            && (controls.Compact || controls.Fields is { Count: > 0 }))
+        {
+            stripped.RemoveAll(arg => string.Equals(arg, "--body", StringComparison.Ordinal));
+        }
         var additions = new List<string>();
         if (PageableResponseCommands.Contains(command))
         {
@@ -1509,7 +1517,11 @@ internal static partial class JsonEnvelopeWrapper
             additions.Add(controls.PageLimit.ToString(CultureInfo.InvariantCulture));
         }
         if (controls.Compact
-            && (command == "map" || LegacyLocationCompactCommands.Contains(command) && !bodyRequested))
+            && (command == "map"
+                || LegacyLocationCompactCommands.Contains(command)
+                && !bodyRequested
+                && (command is not ("references" or "callers" or "callees")
+                    || controls.Fields is not { Count: > 0 })))
         {
             additions.Add("--format");
             additions.Add("compact");
