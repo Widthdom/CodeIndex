@@ -21,6 +21,7 @@ public sealed class JsonEnvelopeWrapperIssue4882Tests
             foreach (var (command, query) in new[]
             {
                 ("references", "TargetA"),
+                ("refs", "TargetA"),
                 ("callers", "TargetA"),
                 ("callees", "Caller"),
             })
@@ -102,6 +103,7 @@ public sealed class JsonEnvelopeWrapperIssue4882Tests
             foreach (var (command, query) in new[]
             {
                 ("references", "TargetA"),
+                ("refs", "TargetA"),
                 ("callers", "TargetA"),
                 ("callees", "Caller"),
             })
@@ -164,13 +166,81 @@ public sealed class JsonEnvelopeWrapperIssue4882Tests
     }
 
     [Fact]
+    public void GraphExplicitProjection_PreservesCompactEnvelopeAndEmptyResults_Issue5094()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("bounded_graph_compact_projection_5094");
+        try
+        {
+            var dbPath = CreateGraphFixture(projectRoot);
+            foreach (var (command, query) in new[]
+            {
+                ("references", "TargetA"),
+                ("refs", "TargetA"),
+                ("callers", "TargetA"),
+                ("callees", "Caller"),
+            })
+            {
+                foreach (var compactArgs in new[]
+                {
+                    new[] { "--compact" },
+                    new[] { "--format", "compact" },
+                })
+                {
+                    var commonArgs = new[]
+                        {
+                            "--db", dbPath, "--json", "--fields", "path,line", "--limit", "1",
+                            "--max-json-bytes", "8192", "--exact-name",
+                        }
+                        .Concat(compactArgs)
+                        .ToArray();
+                    var (matchExitCode, matchStdout, matchStderr) = CaptureConsole(
+                        () => ProgramRunner.Run(
+                            [command, query, .. commonArgs],
+                            _jsonOptions,
+                            "1.0.0-test"));
+
+                    Assert.Equal(CommandExitCodes.Success, matchExitCode);
+                    Assert.Equal(string.Empty, matchStderr);
+                    using (var matchDocument = JsonDocument.Parse(matchStdout))
+                    {
+                        Assert.Equal("compact", matchDocument.RootElement.GetProperty("format").GetString());
+                        Assert.Single(matchDocument.RootElement.GetProperty("results").EnumerateArray());
+                    }
+
+                    // The pre-existing zero-match callees contract is tracked separately by #5128.
+                    if (command == "callees")
+                        continue;
+
+                    var (emptyExitCode, emptyStdout, emptyStderr) = CaptureConsole(
+                        () => ProgramRunner.Run(
+                            [command, "DefinitelyNoSuchSymbol_5094", .. commonArgs],
+                            _jsonOptions,
+                            "1.0.0-test"));
+
+                    Assert.Equal(CommandExitCodes.Success, emptyExitCode);
+                    Assert.Equal(string.Empty, emptyStderr);
+                    using var emptyDocument = JsonDocument.Parse(emptyStdout);
+                    Assert.True(emptyDocument.RootElement.TryGetProperty("format", out var emptyFormat), emptyStdout);
+                    Assert.Equal("compact", emptyFormat.GetString());
+                    Assert.True(emptyDocument.RootElement.TryGetProperty("results", out var emptyResults), emptyStdout);
+                    Assert.Empty(emptyResults.EnumerateArray());
+                }
+            }
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void GraphBodyIntentValidation_PrecedesProjectionAndDatabaseAccess_Issue5094()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("bounded_graph_body_validation_5094");
         try
         {
             var missingDbPath = Path.Combine(projectRoot, "missing.db");
-            foreach (var command in new[] { "references", "callers", "callees" })
+            foreach (var command in new[] { "references", "refs", "callers", "callees" })
             {
                 foreach (var (bodyArgs, expectedMessage, unexpectedMessage) in new[]
                 {
@@ -205,7 +275,7 @@ public sealed class JsonEnvelopeWrapperIssue4882Tests
     [Fact]
     public void GraphFieldDiscovery_RemainsIndependentFromBodyIntent_Issue5094()
     {
-        foreach (var command in new[] { "references", "callers", "callees" })
+        foreach (var command in new[] { "references", "refs", "callers", "callees" })
         {
             var args = new[]
             {

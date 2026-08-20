@@ -1503,9 +1503,10 @@ internal static partial class JsonEnvelopeWrapper
     private static string[] PrepareBoundedInnerArgs(string command, string[] args, BoundedResponseControls controls)
     {
         var stripped = StripResponseOptions(command, args, stripLimit: PageableResponseCommands.Contains(command));
-        var bodyRequested = HasExplicitBodyProjection(controls.Fields);
+        var bodyProjected = HasExplicitBodyProjection(controls.Fields);
+        var bodyOptionRequested = args.Any(arg => string.Equals(arg, "--body", StringComparison.Ordinal));
         if (command is not ("outline" or "references" or "callers" or "callees")
-            && !bodyRequested
+            && !bodyProjected
             && (controls.Compact || controls.Fields is { Count: > 0 }))
         {
             stripped.RemoveAll(arg => string.Equals(arg, "--body", StringComparison.Ordinal));
@@ -1519,9 +1520,9 @@ internal static partial class JsonEnvelopeWrapper
         if (controls.Compact
             && (command == "map"
                 || LegacyLocationCompactCommands.Contains(command)
-                && !bodyRequested
+                && !bodyProjected
                 && (command is not ("references" or "callers" or "callees")
-                    || controls.Fields is not { Count: > 0 })))
+                    || !bodyOptionRequested)))
         {
             additions.Add("--format");
             additions.Add("compact");
