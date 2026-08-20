@@ -374,14 +374,23 @@ internal static partial class JsonEnvelopeWrapper
         PromoteEmptyLegacyCompactPayload(command, controls, rawResults, streamControlRecords);
         var extraction = ExtractResponseItems(command, rawResults, controls);
         var availableItems = extraction.Items;
+        var effectiveFields = controls.EffectiveFields(
+            command,
+            extraction.PrimaryCollection,
+            suppressRuntimeMetadata);
         var pageItems = availableItems
             .Take(controls.PageLimit)
             .Select(item => ProjectResponseItem(
                 item,
-                controls.EffectiveFields(command, extraction.PrimaryCollection),
+                effectiveFields,
                 command,
                 extraction.PrimaryCollection))
             .ToList();
+        var statusExplainOmittedOptionalFields = BuildStatusExplainOmittedOptionalFields(
+            suppressRuntimeMetadata,
+            controls.Fields,
+            availableItems,
+            pageItems);
 
         var count = exitCode == CommandExitCodes.UsageError
             ? new ResponseCount(controls.Offset + pageItems.Count, false)
@@ -423,6 +432,7 @@ internal static partial class JsonEnvelopeWrapper
             streamTerminal,
             streamControlRecords,
             suppressRuntimeMetadata,
+            statusExplainOmittedOptionalFields,
             jsonOptions,
             out var emittedJson,
             out var emittedCount,
@@ -530,6 +540,7 @@ internal static partial class JsonEnvelopeWrapper
         JsonObject? streamTerminal,
         JsonArray streamControlRecords,
         bool suppressRuntimeMetadata,
+        IReadOnlyList<string>? statusExplainOmittedOptionalFields,
         JsonSerializerOptions jsonOptions,
         out string emittedJson,
         out int emittedCount,
@@ -633,6 +644,20 @@ internal static partial class JsonEnvelopeWrapper
             }
             if (controls.MaxJsonBytes.HasValue)
                 metadata["max_json_bytes"] = controls.MaxJsonBytes.Value;
+            if (statusExplainOmittedOptionalFields is not null)
+            {
+                metadata["explanation_schema"] = "compact";
+                metadata["explanation_required_fields"] = new JsonArray(
+                    ProjectionFieldRegistry.GetStatusExplainCompactFields()
+                        .Select(field => (JsonNode?)field)
+                        .ToArray());
+                metadata["explanation_omitted_optional_field_count"] =
+                    statusExplainOmittedOptionalFields.Count;
+                metadata["explanation_omitted_optional_fields"] = new JsonArray(
+                    statusExplainOmittedOptionalFields
+                        .Select(field => (JsonNode?)field)
+                        .ToArray());
+            }
             if (pageItems.Count > count)
             {
                 metadata["byte_limit_reached"] = true;
@@ -764,6 +789,28 @@ internal static partial class JsonEnvelopeWrapper
             return null;
         emittedJson = bestJson!;
         return best;
+    }
+
+    private static IReadOnlyList<string>? BuildStatusExplainOmittedOptionalFields(
+        bool statusExplainRequest,
+        IReadOnlyList<string>? requestedFields,
+        JsonArray sourceItems,
+        IReadOnlyList<JsonNode?> projectedItems)
+    {
+        if (!statusExplainRequest
+            || requestedFields is not null
+            || sourceItems.Count != 1
+            || projectedItems.Count != 1
+            || sourceItems[0] is not JsonObject source
+            || projectedItems[0] is not JsonObject projected)
+        {
+            return null;
+        }
+
+        return source
+            .Select(property => property.Key)
+            .Where(field => !projected.ContainsKey(field))
+            .ToArray();
     }
 
     private static string SerializeBoundedEnvelope(JsonNode node, JsonSerializerOptions jsonOptions)
@@ -2186,10 +2233,16 @@ internal static partial class JsonEnvelopeWrapper
         int? ResumeMatchOrdinal,
         int? ResumeByteOffset)
     {
-        public IReadOnlyList<string>? EffectiveFields(string command, string? primaryCollection)
+        public IReadOnlyList<string>? EffectiveFields(
+            string command,
+            string? primaryCollection,
+            bool statusExplainRequest)
         {
             var preserveFullDiscoveryRows = command is "search" or "languages";
             var selected = Fields
+                           ?? (statusExplainRequest
+                               ? ProjectionFieldRegistry.GetStatusExplainCompactFields()
+                               : null)
                            ?? (command == "unused" && Compact
                                ? UnusedCompactResponseFields
                                : null)

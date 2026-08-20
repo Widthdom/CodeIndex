@@ -190,6 +190,148 @@ public sealed class ProjectionFieldRegistryIssue4836Tests
     }
 
     [Fact]
+    public void StatusExplain_PrimaryPayloadSurvivesCompactAndBoundedModes_Issue5093()
+    {
+        var cases = new[]
+        {
+            new StatusExplainOutputCase(
+                "index_complete",
+                "index_complete",
+                ["--json"],
+                Wrapped: false),
+            new StatusExplainOutputCase(
+                "files",
+                "files",
+                ["--json", "--compact"],
+                Wrapped: true),
+            new StatusExplainOutputCase(
+                "db_pragma_settings.busy_timeout_ms",
+                "db_pragma_settings.busy_timeout_ms",
+                ["--format", "compact"],
+                Wrapped: true),
+            new StatusExplainOutputCase(
+                "Index generation completeness",
+                "index_complete",
+                ["--json", "--max-json-bytes", "50000"],
+                Wrapped: true),
+        };
+
+        foreach (var testCase in cases)
+        {
+            var args = new[] { "status", "--explain", testCase.RequestedField }
+                .Concat(testCase.OutputArgs)
+                .ToArray();
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() =>
+                ProgramRunner.Run(args, _jsonOptions, "1.0.0-test"));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Equal(string.Empty, stderr);
+            using var document = JsonDocument.Parse(stdout);
+            var root = document.RootElement;
+            var row = testCase.Wrapped
+                ? Assert.Single(root.GetProperty("results").EnumerateArray())
+                : root;
+            Assert.Equal("1", row.GetProperty("api_version").GetString());
+            Assert.Equal(testCase.CanonicalField, row.GetProperty("field").GetString());
+            Assert.False(string.IsNullOrWhiteSpace(row.GetProperty("meaning").GetString()));
+            Assert.False(string.IsNullOrWhiteSpace(row.GetProperty("interpretation").GetString()));
+            Assert.False(string.IsNullOrWhiteSpace(row.GetProperty("remediation").GetString()));
+
+            if (!testCase.Wrapped)
+            {
+                Assert.True(row.TryGetProperty("source", out _));
+                Assert.True(row.TryGetProperty("known_fields", out _));
+                continue;
+            }
+
+            var metadata = root.GetProperty("metadata");
+            Assert.Equal("compact", metadata.GetProperty("explanation_schema").GetString());
+            Assert.Equal(
+                ["api_version", "field", "meaning", "interpretation", "remediation"],
+                metadata.GetProperty("explanation_required_fields")
+                    .EnumerateArray()
+                    .Select(field => field.GetString())
+                    .ToArray());
+            var omittedFields = metadata.GetProperty("explanation_omitted_optional_fields")
+                .EnumerateArray()
+                .Select(field => field.GetString())
+                .ToArray();
+            Assert.Equal(
+                [
+                    "label", "scope", "source", "dependencies", "dependencies_truncated",
+                    "repair_guidance", "ready", "degraded", "redaction", "known_fields",
+                    "known_field_limit", "known_fields_truncated",
+                ],
+                omittedFields);
+            Assert.Equal(
+                omittedFields.Length,
+                metadata.GetProperty("explanation_omitted_optional_field_count").GetInt32());
+        }
+    }
+
+    [Fact]
+    public void StatusExplain_TerminalContractsRemainExplicitForTextUnknownAndTinyBounds_Issue5093()
+    {
+        var (textExitCode, textStdout, textStderr) = ConsoleCapture.Capture(() =>
+            ProgramRunner.Run(
+                ["status", "--explain", "index_complete"],
+                _jsonOptions,
+                "1.0.0-test"));
+
+        Assert.Equal(CommandExitCodes.Success, textExitCode);
+        Assert.Equal(string.Empty, textStderr);
+        Assert.Contains("Index generation completeness (index_complete)", textStdout, StringComparison.Ordinal);
+        Assert.Contains("Meaning:", textStdout, StringComparison.Ordinal);
+        Assert.Contains("Interpretation:", textStdout, StringComparison.Ordinal);
+        Assert.Contains("Remediation:", textStdout, StringComparison.Ordinal);
+
+        var (unknownExitCode, unknownStdout, unknownStderr) = ConsoleCapture.Capture(() =>
+            ProgramRunner.Run(
+                ["status", "--explain", "invalid", "--json", "--compact"],
+                _jsonOptions,
+                "1.0.0-test"));
+
+        Assert.Equal(CommandExitCodes.UsageError, unknownExitCode);
+        Assert.Equal(string.Empty, unknownStderr);
+        using (var unknownDocument = JsonDocument.Parse(unknownStdout))
+        {
+            var root = unknownDocument.RootElement;
+            Assert.Empty(root.GetProperty("results").EnumerateArray());
+            var error = root.GetProperty("metadata").GetProperty("error");
+            Assert.Equal(CommandErrorCodes.UsageError, error.GetProperty("error_code").GetString());
+            Assert.Contains("unknown status field", error.GetProperty("message").GetString(), StringComparison.Ordinal);
+        }
+
+        const int maxJsonBytes = 100;
+        var (boundedExitCode, boundedStdout, boundedStderr) = ConsoleCapture.Capture(() =>
+            ProgramRunner.Run(
+                [
+                    "status", "--explain", "index_complete", "--json",
+                    "--max-json-bytes", maxJsonBytes.ToString(),
+                ],
+                _jsonOptions,
+                "1.0.0-test"));
+
+        Assert.Equal(CommandExitCodes.UsageError, boundedExitCode);
+        Assert.Equal(string.Empty, boundedStderr);
+        using var boundedDocument = JsonDocument.Parse(boundedStdout);
+        var boundedError = boundedDocument.RootElement;
+        Assert.Equal(CommandErrorCodes.ResponseBudgetTooSmall, boundedError.GetProperty("error_code").GetString());
+        Assert.Equal(maxJsonBytes, boundedError.GetProperty("requested_bytes").GetInt32());
+        Assert.True(boundedError.GetProperty("minimum_required_bytes_known").GetBoolean());
+        Assert.True(boundedError.GetProperty("minimum_required_bytes").GetInt64() > maxJsonBytes);
+        Assert.Equal(
+            "increase_max_json_bytes",
+            boundedError.GetProperty("retry").GetProperty("action").GetString());
+    }
+
+    private sealed record StatusExplainOutputCase(
+        string RequestedField,
+        string CanonicalField,
+        string[] OutputArgs,
+        bool Wrapped);
+
+    [Fact]
     public void RegistryAliasesAndNestedCollections_AreMachineDiscoverable_Issue4836()
     {
         var search = ProjectionFieldRegistry.CreateDiscoveryDocument("search");
