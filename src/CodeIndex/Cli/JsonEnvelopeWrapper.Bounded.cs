@@ -256,7 +256,8 @@ internal static partial class JsonEnvelopeWrapper
         }
         var bodyProjected = HasExplicitBodyProjection(controls.Fields);
         var bodyOutputHidden = !bodyProjected
-                               && (controls.Compact || controls.Fields is { Count: > 0 });
+                               && controls.Compact
+                               && controls.Fields is not { Count: > 0 };
         if (!QueryCommandRunner.TryValidateBoundedGraphSnippetLinesOption(command, args, bodyOutputHidden))
             return CommandExitCodes.UsageError;
         if (HasArgument(args, "--count")
@@ -1549,9 +1550,10 @@ internal static partial class JsonEnvelopeWrapper
     private static string[] PrepareBoundedInnerArgs(string command, string[] args, BoundedResponseControls controls)
     {
         var stripped = StripResponseOptions(command, args, stripLimit: PageableResponseCommands.Contains(command));
-        var bodyRequested = HasExplicitBodyProjection(controls.Fields);
-        if (command != "outline"
-            && !bodyRequested
+        var bodyProjected = HasExplicitBodyProjection(controls.Fields);
+        var bodyOptionRequested = args.Any(arg => string.Equals(arg, "--body", StringComparison.Ordinal));
+        if (command is not ("outline" or "references" or "callers" or "callees")
+            && !bodyProjected
             && (controls.Compact || controls.Fields is { Count: > 0 }))
         {
             stripped.RemoveAll(arg => string.Equals(arg, "--body", StringComparison.Ordinal));
@@ -1563,7 +1565,11 @@ internal static partial class JsonEnvelopeWrapper
             additions.Add(controls.PageLimit.ToString(CultureInfo.InvariantCulture));
         }
         if (controls.Compact
-            && (command == "map" || LegacyLocationCompactCommands.Contains(command) && !bodyRequested))
+            && (command == "map"
+                || LegacyLocationCompactCommands.Contains(command)
+                && !bodyProjected
+                && (command is not ("references" or "callers" or "callees")
+                    || !bodyOptionRequested)))
         {
             additions.Add("--format");
             additions.Add("compact");
@@ -2347,6 +2353,20 @@ internal static partial class JsonEnvelopeWrapper
                && string.Equals(execution.Command, CanonicalizeCommandName(command), StringComparison.Ordinal)
             ? execution.Offset
             : 0;
+    }
+
+    internal static bool ShouldMaterializeBody(string command)
+    {
+        var execution = BoundedExecution.Value;
+        if (execution is null
+            || !string.Equals(execution.Command, CanonicalizeCommandName(command), StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        return execution.Fields is { Count: > 0 }
+            ? HasExplicitBodyProjection(execution.Fields)
+            : !execution.Compact;
     }
 
     internal static (string? Path, int? Line, int? FileOrdinal, int? MatchOrdinal, int? ByteOffset) GetBoundedFindResume()

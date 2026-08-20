@@ -64,7 +64,7 @@ public static partial class QueryCommandRunner
             }
 
             var results = reader.SearchReferences(options.Query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact, options.MaxLineWidth, offset: JsonEnvelopeWrapper.GetBoundedResponseOffset("references"), includeQualifiedCommonCalls: options.IncludeQualifiedCommonCalls);
-            if (options.IncludeBody)
+            if (options.IncludeBody && JsonEnvelopeWrapper.ShouldMaterializeBody("references"))
                 AttachBodyExcerpts(reader, results, options.SnippetLines, options.MaxLineWidth);
             ApplyBodyRecoveryCommands(results, options.DbPath, options.RedactPaths ?? true);
             var sqlGraphSignal = NarrowSqlGraphContractSignalByLanguages(baseSqlGraphSignal, results.Select(result => result.Lang), options.Lang, exactGraphLanguage);
@@ -203,7 +203,7 @@ public static partial class QueryCommandRunner
             }
 
             var results = reader.GetCallers(query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact, options.RawKinds, options.RankMode, offset: JsonEnvelopeWrapper.GetBoundedResponseOffset("callers"), includeQualifiedCommonCalls: options.IncludeQualifiedCommonCalls, includeMemberReads: options.IncludeMemberReads);
-            if (options.IncludeBody)
+            if (options.IncludeBody && JsonEnvelopeWrapper.ShouldMaterializeBody("callers"))
                 AttachBodyExcerpts(reader, results, options.SnippetLines, options.MaxLineWidth);
             ApplyBodyRecoveryCommands(results, options.DbPath, options.RedactPaths ?? true);
             var sqlGraphSignal = NarrowSqlGraphContractSignalByLanguages(baseSqlGraphSignal, results.Select(result => result.Lang), options.Lang, exactGraphLanguage);
@@ -350,7 +350,7 @@ public static partial class QueryCommandRunner
             }
 
             var results = reader.GetCallees(query, options.Limit, options.Lang, options.Kind, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, exact, options.RawKinds, options.RankMode, offset: JsonEnvelopeWrapper.GetBoundedResponseOffset("callees"), includeQualifiedCommonCalls: options.IncludeQualifiedCommonCalls, includeMemberReads: options.IncludeMemberReads);
-            if (options.IncludeBody)
+            if (options.IncludeBody && JsonEnvelopeWrapper.ShouldMaterializeBody("callees"))
                 AttachBodyExcerpts(reader, results, options.SnippetLines, options.MaxLineWidth);
             ApplyBodyRecoveryCommands(results, options.DbPath, options.RedactPaths ?? true);
             var sqlGraphSignal = NarrowSqlGraphContractSignalByLanguages(baseSqlGraphSignal, results.Select(result => result.Lang), options.Lang, exactGraphLanguage);

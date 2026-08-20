@@ -428,6 +428,13 @@ source line hits the body byte cap, continuation still advances to the following
 source line because body paging is line-based. `inspect --json` also includes
 `body_mode` metadata so clients can see whether body content was requested,
 whether it is present, and which follow-up flags to use.
+
+For `references`, `callers`, and `callees`, `--body` and `--snippet-lines`
+describe the requested body work independently of `--fields`. A projection that
+omits every `body_*` field is valid and suppresses body materialization, while
+`--fields all` or explicit body fields keep the selected body content, range,
+truncation, and recovery metadata. Omitting `--body` still makes an
+explicit `--snippet-lines` a usage error.
 Count-only JSON (`--count --json` or `--format count` where supported) is a
 single object with `count`, applied `query_context`, freshness metadata
 (`indexed_file_count`, `indexed_at`, `freshness_available`), and trust flags
@@ -4002,6 +4009,13 @@ top-level group を選択します。`--outline-only` は
 も返します。`inspect --json` には `body_mode`
 metadata も含まれるため、body content が要求済みか、存在するか、次に使う flag が何かを
 client 側で判断できます。
+
+`references`、`callers`、`callees` では、`--body` と `--snippet-lines` が表す body
+取得意図は `--fields` から独立しています。すべての `body_*` field を省く投影も有効で、
+その場合は body の materialization を省略します。`--fields all` または明示的な body field
+を指定した場合は、選択した body content、範囲、truncation、recovery の metadata を
+維持します。`--body` を省略したまま `--snippet-lines` を明示すると、従来どおり usage error
+になります。
 count-only JSON（対応 command の `--count --json` または `--format count`）は、
 `count`、適用済み `query_context`、freshness metadata（`indexed_file_count`、
 `indexed_at`、`freshness_available`）、trust flag の `degraded` /
