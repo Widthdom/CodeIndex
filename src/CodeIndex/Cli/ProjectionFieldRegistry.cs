@@ -308,7 +308,8 @@ internal static class ProjectionFieldRegistry
 
     private static bool IsInspectGraphBodyField(string field)
         => string.Equals(field, "body_content", StringComparison.Ordinal)
-           || field.StartsWith("body_", StringComparison.Ordinal);
+           || field.StartsWith("body_", StringComparison.Ordinal)
+           || field.StartsWith("callsite_", StringComparison.Ordinal);
 
     private static ProjectionCommandFieldSchema CreateSearchSchema()
         => Create(

@@ -9155,6 +9155,7 @@ public partial class QueryCommandRunnerTests
         "references" => QueryCommandRunner.RunReferences(args, jsonOptions),
         "callers" => QueryCommandRunner.RunCallers(args, jsonOptions),
         "callees" => QueryCommandRunner.RunCallees(args, jsonOptions),
+        "impact" => QueryCommandRunner.RunImpact(args, jsonOptions),
         _ => throw new ArgumentOutOfRangeException(nameof(command), command, "Unsupported graph command"),
     };
 

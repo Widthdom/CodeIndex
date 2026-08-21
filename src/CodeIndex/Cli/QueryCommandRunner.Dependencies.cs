@@ -32,6 +32,8 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryWriteSnippetLinesZeroUnsupportedError(options, "impact"))
             return CommandExitCodes.UsageError;
+        if (!TryValidateGraphSnippetLinesOption("impact", options))
+            return CommandExitCodes.UsageError;
         if (!TryResolveNameExactMode(options, "impact", out _, out var exactError))
         {
             CommandErrorWriter.WriteStderr(exactError);
@@ -76,8 +78,13 @@ public static partial class QueryCommandRunner
                 JsonEnvelopeWrapper.GetBoundedResponseOffset("impact"),
                 JsonEnvelopeWrapper.GetBoundedImpactCollection(),
                 options.IncludeMemberReads);
-            if (options.IncludeBody)
+            if (options.IncludeBody
+                && !options.CountOnly
+                && options.OutputFormat is (OutputFormatText or OutputFormatJson)
+                && JsonEnvelopeWrapper.ShouldMaterializeBody("impact"))
+            {
                 AttachBodyExcerpts(reader, analysis.Callers, options.SnippetLines, options.MaxLineWidth);
+            }
             ApplyBodyRecoveryCommands(analysis.Callers, options.DbPath, options.RedactPaths ?? true);
             var sqlGraphSignal = NarrowSqlGraphContractSignal(
                 reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests),

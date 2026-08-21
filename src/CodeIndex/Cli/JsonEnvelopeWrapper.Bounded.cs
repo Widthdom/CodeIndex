@@ -258,7 +258,8 @@ internal static partial class JsonEnvelopeWrapper
         var bodyOutputHidden = !bodyProjected
                                && controls.Compact
                                && controls.Fields is not { Count: > 0 };
-        if (!QueryCommandRunner.TryValidateBoundedGraphSnippetLinesOption(command, args, bodyOutputHidden))
+        var bodyIntentValidationArgs = PrepareBoundedGraphBodyIntentValidationArgs(command, args);
+        if (!QueryCommandRunner.TryValidateBoundedGraphSnippetLinesOption(command, bodyIntentValidationArgs, bodyOutputHidden))
             return CommandExitCodes.UsageError;
         if (HasArgument(args, "--count")
             || command == "find" && IsFindCountResponseRequest(args))
@@ -1729,6 +1730,31 @@ internal static partial class JsonEnvelopeWrapper
             stripped.Add(arg);
         }
         return stripped;
+    }
+
+    private static string[] PrepareBoundedGraphBodyIntentValidationArgs(string command, string[] args)
+    {
+        var prepared = new List<string>(args.Length);
+        var tokens = ClassifyArgumentTokens(command, args).ToArray();
+        for (var i = 0; i < tokens.Length; i++)
+        {
+            var token = tokens[i];
+            if (token.IsOption
+                && (token.Value.StartsWith("--fields=", StringComparison.Ordinal)
+                    || token.Value.StartsWith("--cursor=", StringComparison.Ordinal)))
+            {
+                continue;
+            }
+            if (token.IsOption
+                && token.Value is "--fields" or "--cursor")
+            {
+                if (i + 1 < tokens.Length)
+                    i++;
+                continue;
+            }
+            prepared.Add(token.Value);
+        }
+        return [.. prepared];
     }
 
     private static void InsertBeforeEndOfOptions(

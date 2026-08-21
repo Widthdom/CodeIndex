@@ -841,7 +841,7 @@ public partial class QueryCommandRunnerTests
             (["--body", "--snippet-lines", "3", "--count"], "--snippet-lines with --body requires text or JSON result output"),
         };
 
-        foreach (var command in new[] { "references", "callers", "callees" })
+        foreach (var command in new[] { "references", "callers", "callees", "impact" })
         {
             foreach (var scenario in scenarios)
             {
@@ -861,7 +861,7 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void GraphCommands_SnippetLinesAboveMaximumKeepRangeError_Issue4882()
     {
-        foreach (var command in new[] { "references", "callers", "callees" })
+        foreach (var command in new[] { "references", "callers", "callees", "impact" })
         {
             var (exitCode, stdout, stderr) = CaptureConsole(() => RunGraphCommand(
                 command,

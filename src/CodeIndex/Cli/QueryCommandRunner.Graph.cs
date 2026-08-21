@@ -508,7 +508,7 @@ public static partial class QueryCommandRunner
         string[] args,
         bool bodyOutputHidden)
     {
-        if (command is not ("references" or "callers" or "callees"))
+        if (command is not ("references" or "callers" or "callees" or "impact"))
             return true;
 
         var options = ParseArgs(args, jsonDefault: false, allowNamedQuery: true);
@@ -527,7 +527,7 @@ public static partial class QueryCommandRunner
         if (!options.IncludeBody)
         {
             CommandErrorWriter.Write(
-                "--snippet-lines requires --body for references, callers, and callees.",
+                $"--snippet-lines requires --body for {command}.",
                 "Add --body to emit bounded definition and call-site evidence, or omit --snippet-lines.",
                 GetUsageLineOrThrow(command),
                 CommandErrorCodes.UsageError);
@@ -539,7 +539,7 @@ public static partial class QueryCommandRunner
             || options.OutputFormat is not (OutputFormatText or OutputFormatJson))
         {
             CommandErrorWriter.Write(
-                "--snippet-lines with --body requires text or JSON result output for references, callers, and callees.",
+                $"--snippet-lines with --body requires text or JSON result output for {command}.",
                 "Remove --count and use --format text or --format json, or omit --snippet-lines for location-only output.",
                 GetUsageLineOrThrow(command),
                 CommandErrorCodes.UsageError);
