@@ -2424,6 +2424,10 @@ public class ExportImportCommandRunnerTests
         writer.SetMeta(DbContext.LastIndexRunModeMetaKey, "rebuild");
         writer.SetMeta(DbContext.LastIndexRunFilesScannedMetaKey, filesScanned.ToString(CultureInfo.InvariantCulture));
         writer.SetMeta(DbContext.LastIndexRunPeakMemoryMbMetaKey, "1298");
+        writer.SetMeta(
+            DbContext.UnknownExtensionDiagnosticsVersionMetaKey,
+            DbContext.UnknownExtensionDiagnosticsVersion.ToString(CultureInfo.InvariantCulture));
+        writer.SetMeta(DbContext.UnknownExtensionHasActionableExtensionlessFilesMetaKey, bool.FalseString);
         writer.SetMeta(DbContext.UnknownExtensionFileCountMetaKey, "2");
         writer.SetMeta(
             DbContext.UnknownExtensionFilePathsMetaKey,
@@ -2435,6 +2439,12 @@ public class ExportImportCommandRunnerTests
         writer.SetMeta(DbContext.UnknownExtensionExtensionCountsMetaKey, "{\".bar\":1,\".foo\":1}");
         writer.SetMeta(DbContext.UnknownExtensionCategoryCountsMetaKey, "{\"language_support\":2}");
         writer.SetMeta(DbContext.UnknownExtensionGroupsMetaKey, "[]");
+        writer.SetMeta(DbContext.UnknownExtensionGroupCountMetaKey, "2");
+        writer.SetMeta(DbContext.UnknownExtensionGroupsTruncatedMetaKey, bool.FalseString);
+        writer.SetMeta(
+            DbContext.UnknownExtensionGroupLimitMetaKey,
+            UnknownExtensionClassifier.MaxPersistedGroups.ToString(CultureInfo.InvariantCulture));
+        writer.SetMeta(DbContext.UnknownExtensionGroupOmittedCountMetaKey, "0");
     }
 
     private static void AssertPartialArchiveStatus(string dbPath)
@@ -2455,6 +2465,12 @@ public class ExportImportCommandRunnerTests
             !status.RootElement.TryGetProperty("head_freshness", out var headFreshness)
             || headFreshness.GetProperty("state").GetString() != "head_current");
         Assert.False(status.RootElement.TryGetProperty("unknown_extension_file_count", out _));
+        Assert.False(status.RootElement.TryGetProperty("unknown_extension_group_count", out _));
+        Assert.False(status.RootElement.TryGetProperty("unknown_extension_groups_truncated", out _));
+        Assert.False(status.RootElement.TryGetProperty("unknown_extension_group_limit", out _));
+        Assert.False(status.RootElement.TryGetProperty("unknown_extension_group_omitted_count", out _));
+        Assert.Null(ReadMetaValue(dbPath, DbContext.UnknownExtensionDiagnosticsVersionMetaKey));
+        Assert.Null(ReadMetaValue(dbPath, DbContext.UnknownExtensionHasActionableExtensionlessFilesMetaKey));
         Assert.True(
             !status.RootElement.TryGetProperty("last_index_run", out var lastIndexRun)
             || lastIndexRun.ValueKind == JsonValueKind.Null);
@@ -2479,6 +2495,10 @@ public class ExportImportCommandRunnerTests
     {
         using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
         var writer = new DbWriter(db.Connection);
+        writer.SetMeta(
+            DbContext.UnknownExtensionDiagnosticsVersionMetaKey,
+            DbContext.UnknownExtensionDiagnosticsVersion.ToString(CultureInfo.InvariantCulture));
+        writer.SetMeta(DbContext.UnknownExtensionHasActionableExtensionlessFilesMetaKey, bool.FalseString);
         writer.SetMeta(DbContext.UnknownExtensionFileCountMetaKey, paths.Length.ToString(CultureInfo.InvariantCulture));
         writer.SetMeta(DbContext.UnknownExtensionFilePathsMetaKey, JsonSerializer.Serialize(paths));
         writer.SetMeta(DbContext.UnknownExtensionFilesTruncatedMetaKey, bool.FalseString);

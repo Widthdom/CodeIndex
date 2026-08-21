@@ -21,6 +21,7 @@ public static partial class IndexCommandRunner
         internal string? PriorFoldFingerprint { get; init; }
         internal required List<IndexMemorySampleJsonResult> MemorySamples { get; init; }
         internal required IReadOnlyDictionary<string, int> LanguageCounts { get; init; }
+        internal required IReadOnlyList<string> UnknownExtensionFiles { get; init; }
         internal int FilesCount { get; init; }
         internal int Skipped { get; init; }
         internal int DanglingSymlinkCount { get; init; }
@@ -83,6 +84,21 @@ public static partial class IndexCommandRunner
             || (persistedCSharpFiles && failure.PriorMetadataTargetCsharpMatchesCurrent);
         var foldReady = (failure.PriorReadiness & DbContext.FoldReadyFlag) != 0;
         var memoryTimeline = BuildMemoryTimeline(failure.MemorySamples);
+        var unknownExtensionClassification = UnknownExtensionClassifier.Classify(
+            failure.UnknownExtensionFiles);
+        var unknownExtensionGroups = unknownExtensionClassification.Groups
+            .Take(UnknownExtensionClassifier.MaxCompletionGroups)
+            .ToList();
+        var unknownExtensionGroupOmittedCount = Math.Max(
+            0,
+            unknownExtensionClassification.GroupCount - unknownExtensionGroups.Count);
+        var warningCount = failure.Warnings;
+        if (unknownExtensionClassification.ActionableFileCount > 0)
+        {
+            var warning = $"{unknownExtensionClassification.ActionableFileCount} file(s) were excluded because no language mapping or extractor was available. {UnknownExtensionClassifier.GetGuidance(unknownExtensionClassification)}";
+            failure.WarningList.Add(new CliJsonMessage("<unknown_extensions>", warning));
+            warningCount++;
+        }
 
         if (failure.Options.Json)
         {
@@ -90,6 +106,17 @@ public static partial class IndexCommandRunner
             {
                 Status = "partial",
                 Mode = failure.Options.Rebuild ? "rebuild" : "incremental",
+                UnknownExtensionFileCount = failure.UnknownExtensionFiles.Count,
+                UnknownExtensionGroups = unknownExtensionGroups.Count > 0 ? unknownExtensionGroups : null,
+                UnknownExtensionGroupCount = unknownExtensionClassification.GroupCount,
+                UnknownExtensionGroupsTruncated = unknownExtensionGroupOmittedCount > 0,
+                UnknownExtensionGroupLimit = UnknownExtensionClassifier.MaxCompletionGroups,
+                UnknownExtensionGroupOmittedCount = unknownExtensionGroupOmittedCount,
+                UnknownExtensionDiagnosticsScope = "workspace",
+                UnknownExtensionFileCountLowerBound = true,
+                UnknownExtensionGuidance = failure.UnknownExtensionFiles.Count > 0
+                    ? UnknownExtensionClassifier.GetGuidance(unknownExtensionClassification)
+                    : null,
                 Summary = new IndexFullScanSummaryJsonResult
                 {
                     FilesTotal = totalFiles,
@@ -100,7 +127,7 @@ public static partial class IndexCommandRunner
                     FilesSkipped = failure.Skipped,
                     FilesPurged = 0,
                     DanglingSymlinksSkipped = failure.DanglingSymlinkCount,
-                    Warnings = failure.Warnings,
+                    Warnings = warningCount,
                     Errors = failure.Errors,
                     SymbolsDroppedByKindFilter = failure.SymbolsDroppedByKindFilter,
                 },

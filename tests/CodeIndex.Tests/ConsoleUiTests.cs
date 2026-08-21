@@ -15,6 +15,18 @@ namespace CodeIndex.Tests;
 public class ConsoleUiTests
 {
     [Fact]
+    public void PrintCommandUsage_IndexExplainsUnknownLanguageDiagnostics_Issue5100()
+    {
+        var (printed, stdout, stderr) = ConsoleCapture.Capture(() =>
+            ConsoleUi.PrintCommandUsage("index") ? 1 : 0);
+
+        Assert.Equal(1, printed);
+        Assert.Equal(string.Empty, stderr);
+        Assert.Contains("unknown-language extension groups", stdout, StringComparison.Ordinal);
+        Assert.Contains("scoped updates preserve", stdout, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void PrintCommandUsage_DedicatedParsersOnlyEmitAuthoritativeParentOptionLists_Issues4571_4861()
     {
         var (_, dbSchemaHelp, _) = ConsoleCapture.Capture(() =>

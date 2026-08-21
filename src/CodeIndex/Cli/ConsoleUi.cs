@@ -162,6 +162,7 @@ public static partial class ConsoleUi
     private static readonly (string Command, string Note)[] CommandUsageNotes =
     [
         ("index", "--rebuild deletes the existing index before a full rescan. Interactive terminals prompt unless --yes or --force bypasses confirmation; when stdin is redirected, either flag is required."),
+        ("index", "Full scans, full-scan dry runs, and watch initialization report bounded unknown-language extension groups and remediation guidance; scoped updates preserve the last successful full-scan status inventory."),
         ("mcp", "--json is not supported; MCP requests and responses are JSON-RPC over the selected transport."),
         ("mcp", "stdio transport uses one UTF-8 JSON-RPC object per LF-delimited line, not LSP Content-Length framing; lifecycle diagnostics go to stderr."),
         ("mcp", "HTTP requires bearer authentication by default; --allow-unauthenticated-http is an explicit unsafe loopback-only opt-in."),

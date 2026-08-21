@@ -3120,7 +3120,7 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_FullScan_PartialDiscoveryRetainsKnownLanguageReadinessFailures()
+    public void Run_FullScan_PartialDiscoveryRetainsKnownLanguageReadinessFailures_Issue5100()
     {
         if (OperatingSystem.IsWindows())
             return;
@@ -3137,6 +3137,7 @@ public partial class IndexCommandRunnerTests
             File.WriteAllText(
                 Path.Combine(projectRoot, "Contract.cs"),
                 "public interface IContract { }\n");
+            File.WriteAllText(Path.Combine(projectRoot, "notes.unknownext"), "unknown language\n");
             Directory.CreateDirectory(unreadableDirectory);
             File.WriteAllText(Path.Combine(unreadableDirectory, "blocked.py"), "print('blocked')\n");
             originalMode = File.GetUnixFileMode(unreadableDirectory);
@@ -3152,6 +3153,9 @@ public partial class IndexCommandRunnerTests
 
             Assert.Equal(CommandExitCodes.PartialResult, exitCode);
             Assert.True(json.GetProperty("summary").GetProperty("errors").GetInt32() >= 2);
+            Assert.True(
+                json.GetProperty("unknown_extension_file_count_lower_bound").GetBoolean(),
+                json.GetRawText());
             Assert.False(
                 json.GetProperty("sql_graph_contract_ready").GetBoolean(),
                 json.GetRawText());

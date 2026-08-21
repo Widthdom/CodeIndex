@@ -70,13 +70,19 @@ public partial class DbWriter
         if (paths.Count == 0)
         {
             SetMetaValues(
+                (DbContext.UnknownExtensionDiagnosticsVersionMetaKey, DbContext.UnknownExtensionDiagnosticsVersion.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                (DbContext.UnknownExtensionHasActionableExtensionlessFilesMetaKey, false.ToString(System.Globalization.CultureInfo.InvariantCulture)),
                 (DbContext.UnknownExtensionFileCountMetaKey, "0"),
                 (DbContext.UnknownExtensionFilePathsMetaKey, "[]"),
                 (DbContext.UnknownExtensionFilesTruncatedMetaKey, false.ToString(System.Globalization.CultureInfo.InvariantCulture)),
                 (DbContext.UnknownExtensionFilePathLimitMetaKey, DbContext.UnknownExtensionFilePathSampleLimit.ToString(System.Globalization.CultureInfo.InvariantCulture)),
                 (DbContext.UnknownExtensionExtensionCountsMetaKey, "{}"),
                 (DbContext.UnknownExtensionCategoryCountsMetaKey, "{}"),
-                (DbContext.UnknownExtensionGroupsMetaKey, "[]"));
+                (DbContext.UnknownExtensionGroupsMetaKey, "[]"),
+                (DbContext.UnknownExtensionGroupCountMetaKey, "0"),
+                (DbContext.UnknownExtensionGroupsTruncatedMetaKey, false.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                (DbContext.UnknownExtensionGroupLimitMetaKey, UnknownExtensionClassifier.MaxPersistedGroups.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                (DbContext.UnknownExtensionGroupOmittedCountMetaKey, "0"));
             return;
         }
 
@@ -85,12 +91,18 @@ public partial class DbWriter
             DbContext.UnknownExtensionFilePathSampleLimit);
         var classification = UnknownExtensionClassifier.Classify(paths);
         SetMetaValues(
+            (DbContext.UnknownExtensionDiagnosticsVersionMetaKey, DbContext.UnknownExtensionDiagnosticsVersion.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            (DbContext.UnknownExtensionHasActionableExtensionlessFilesMetaKey, classification.HasActionableExtensionlessFiles.ToString(System.Globalization.CultureInfo.InvariantCulture)),
             (DbContext.UnknownExtensionFileCountMetaKey, paths.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)),
             (DbContext.UnknownExtensionFilePathsMetaKey, JsonStringListCodec.Serialize(sample)),
             (DbContext.UnknownExtensionFilesTruncatedMetaKey, (paths.Count > sample.Count).ToString(System.Globalization.CultureInfo.InvariantCulture)),
             (DbContext.UnknownExtensionFilePathLimitMetaKey, DbContext.UnknownExtensionFilePathSampleLimit.ToString(System.Globalization.CultureInfo.InvariantCulture)),
             (DbContext.UnknownExtensionExtensionCountsMetaKey, UnknownExtensionClassifier.SerializeCounts(classification.ExtensionCounts)),
             (DbContext.UnknownExtensionCategoryCountsMetaKey, UnknownExtensionClassifier.SerializeCounts(classification.CategoryCounts)),
-            (DbContext.UnknownExtensionGroupsMetaKey, UnknownExtensionClassifier.SerializeGroups(classification.Groups)));
+            (DbContext.UnknownExtensionGroupsMetaKey, UnknownExtensionClassifier.SerializeGroups(classification.Groups)),
+            (DbContext.UnknownExtensionGroupCountMetaKey, classification.GroupCount.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            (DbContext.UnknownExtensionGroupsTruncatedMetaKey, classification.GroupsTruncated.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            (DbContext.UnknownExtensionGroupLimitMetaKey, classification.GroupLimit.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            (DbContext.UnknownExtensionGroupOmittedCountMetaKey, classification.GroupOmittedCount.ToString(System.Globalization.CultureInfo.InvariantCulture)));
     }
 }

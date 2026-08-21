@@ -456,6 +456,7 @@ public static partial class IndexCommandRunner
                     PriorFoldFingerprint = priorFoldFingerprint,
                     MemorySamples = memorySamples,
                     LanguageCounts = languageCounts,
+                    UnknownExtensionFiles = scanResult.UnknownExtensionFiles,
                     FilesCount = files.Count,
                     Skipped = preWriteSelection.Skipped,
                     DanglingSymlinkCount = scanResult.DanglingSymlinks.Count,

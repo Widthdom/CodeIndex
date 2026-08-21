@@ -310,7 +310,7 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_DryRun_PathLimitTruncatesCandidateProcessing()
+    public void Run_DryRun_PathLimitTruncatesCandidateProcessing_Issue5100()
     {
         var projectRoot = CreateTempProject();
         try
@@ -329,6 +329,7 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(2, json.GetProperty("candidate_paths_processed").GetInt32());
             Assert.True(json.GetProperty("candidate_paths_truncated").GetBoolean());
             Assert.True(json.GetProperty("totals_lower_bound").GetBoolean());
+            Assert.True(json.GetProperty("unknown_extension_file_count_lower_bound").GetBoolean());
             Assert.True(json.GetProperty("file_samples_truncated").GetBoolean());
             Assert.Equal(0, json.GetProperty("errors_total").GetInt32());
             Assert.Equal(
@@ -980,7 +981,7 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_DryRun_WithFiles_ReportsProjectedUpdatesAndDeletes_Issue5091()
+    public void Run_DryRun_WithFiles_ReportsProjectedUpdatesAndDeletes_Issue5091_Issue5100()
     {
         var projectRoot = CreateTempProject();
         try
@@ -1013,6 +1014,9 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(1, json.GetProperty("projected_file_deletes").GetInt32());
             Assert.Equal(0, json.GetProperty("projected_file_purges").GetInt32());
             Assert.Equal(0, json.GetProperty("unknown_extension_total").GetInt32());
+            Assert.Equal("candidate_scope", json.GetProperty("unknown_extension_diagnostics_scope").GetString());
+            Assert.False(json.GetProperty("unknown_extension_file_count_lower_bound").GetBoolean());
+            Assert.Equal(0, json.GetProperty("unknown_extension_group_count").GetInt32());
             Assert.Equal(0, json.GetProperty("unsupported_total").GetInt32());
             var mutations = json.GetProperty("estimated_table_mutations");
             Assert.True(mutations.GetProperty("files").GetInt64() >= 2);
@@ -1408,7 +1412,7 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_DryRun_FullScan_ReportsProjectedPurgesWithoutWriting()
+    public void Run_DryRun_FullScan_ReportsProjectedPurgesAndUnknownExtensionsWithoutWriting_Issue5100()
     {
         var projectRoot = CreateTempProject();
         try
@@ -1421,6 +1425,7 @@ public partial class IndexCommandRunnerTests
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             File.Delete(Path.Combine(projectRoot, "removed.cs"));
             File.WriteAllText(Path.Combine(projectRoot, "notes.unknownext"), "plain text\n");
+            File.WriteAllBytes(Path.Combine(projectRoot, "blob.bf"), [0x42, 0x00, 0x46]);
 
             var (exitCode, json) = RunAndCaptureJson([projectRoot, "--dry-run", "--json"]);
 
@@ -1431,9 +1436,22 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(0, json.GetProperty("projected_file_deletes").GetInt32());
             Assert.Equal(1, json.GetProperty("projected_file_purges").GetInt32());
             Assert.Equal(1, json.GetProperty("unknown_extension_total").GetInt32());
+            Assert.Equal(1, json.GetProperty("unknown_extension_file_count").GetInt32());
+            Assert.Equal("workspace", json.GetProperty("unknown_extension_diagnostics_scope").GetString());
+            Assert.False(json.GetProperty("unknown_extension_file_count_lower_bound").GetBoolean());
+            Assert.Equal(1, json.GetProperty("unknown_extension_group_count").GetInt32());
+            Assert.Equal(".unknownext", json.GetProperty("unknown_extension_groups")[0].GetProperty("extension").GetString());
+            Assert.Contains("languages --extension", json.GetProperty("unknown_extension_guidance").GetString());
+            Assert.Equal(1, json.GetProperty("warnings_total").GetInt32());
             Assert.True(json.TryGetProperty("unsupported_total", out _));
             Assert.Equal(1, json.GetProperty("estimated_table_mutations").GetProperty("files").GetInt64());
             Assert.Equal(2, CountRows(dbPath, "files"));
+
+            var (humanExitCode, stdout, stderr) = RunAndCaptureStreams([projectRoot, "--dry-run"]);
+            Assert.Equal(CommandExitCodes.Success, humanExitCode);
+            Assert.Contains("unknown extensions", stdout);
+            Assert.Contains(".unknownext: 1 (language_support)", stdout);
+            Assert.Contains("languages --extension", stderr);
         }
         finally
         {
@@ -1442,7 +1460,7 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_DryRun_FullScan_ReportsUnreadableDirectory()
+    public void Run_DryRun_FullScan_ReportsUnreadableDirectory_Issue5100()
     {
         if (OperatingSystem.IsWindows())
             return;
@@ -1453,6 +1471,7 @@ public partial class IndexCommandRunnerTests
         {
             Directory.CreateDirectory(secretDir);
             File.WriteAllText(Path.Combine(secretDir, "a.cs"), "public class A { }\n");
+            File.WriteAllText(Path.Combine(projectRoot, "notes.unknownext"), "unknown language\n");
             SetUnixPermissions(secretDir, UnixFileMode.None);
 
             var (exitCode, json) = RunAndCaptureJson([projectRoot, "--dry-run", "--json"]);
@@ -1460,11 +1479,15 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal("dry_run", json.GetProperty("status").GetString());
             Assert.Equal(0, json.GetProperty("files_total").GetInt32());
+            Assert.Equal(1, json.GetProperty("unknown_extension_file_count").GetInt32());
+            Assert.True(json.GetProperty("unknown_extension_file_count_lower_bound").GetBoolean());
             Assert.Equal("secret", json.GetProperty("errors")[0].GetProperty("file").GetString());
             Assert.Equal("Could not scan directory due to permissions.", json.GetProperty("errors")[0].GetProperty("message").GetString());
 
-            var (humanExitCode, _, stderr) = RunAndCaptureStreams([projectRoot, "--dry-run"]);
+            var (humanExitCode, stdout, stderr) = RunAndCaptureStreams([projectRoot, "--dry-run"]);
             Assert.Equal(CommandExitCodes.Success, humanExitCode);
+            Assert.Contains("unknown extensions", stdout);
+            Assert.Contains("(lower bound)", stdout);
             Assert.Contains("secret", stderr);
             Assert.Contains("Could not scan directory due to permissions.", stderr);
         }

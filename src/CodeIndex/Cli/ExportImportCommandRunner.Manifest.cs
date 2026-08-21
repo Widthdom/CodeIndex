@@ -24,7 +24,12 @@ internal static partial class ExportImportCommandRunner
         var userVersion = ReadSqliteUserVersion(connection);
         var projectRoot = ReadMetaString(connection, DbContext.IndexedProjectRootMetaKey);
         var indexedHead = ReadMetaString(connection, DbContext.IndexedHeadShaMetaKey);
-        var unknownExtensionFiles = ReadUnknownExtensionFileSample(connection);
+        var unknownExtensionDiagnosticsCurrent =
+            ReadMetaInt(connection, DbContext.UnknownExtensionDiagnosticsVersionMetaKey)
+            == DbContext.UnknownExtensionDiagnosticsVersion;
+        var unknownExtensionFiles = unknownExtensionDiagnosticsCurrent
+            ? ReadUnknownExtensionFileSample(connection)
+            : default;
         var indexCompleteness = ReadMetaString(connection, DbContext.IndexCompletenessMetaKey);
         var indexIncompleteReasons = ReadArchiveIncompleteReasons(connection);
         cancellationToken.ThrowIfCancellationRequested();
@@ -49,10 +54,16 @@ internal static partial class ExportImportCommandRunner
             CSharpSymbolNameContractVersion: ReadMetaInt(connection, DbContext.CSharpSymbolNameContractVersionMetaKey),
             SqlGraphContractVersion: ReadMetaInt(connection, DbContext.SqlGraphContractVersionMetaKey),
             HotspotFamilyVersion: ReadMetaInt(connection, DbContext.HotspotFamilyVersionMetaKey),
-            UnknownExtensionFileCount: ReadMetaLong(connection, DbContext.UnknownExtensionFileCountMetaKey),
+            UnknownExtensionFileCount: unknownExtensionDiagnosticsCurrent
+                ? ReadMetaLong(connection, DbContext.UnknownExtensionFileCountMetaKey)
+                : null,
             UnknownExtensionFiles: unknownExtensionFiles.Files,
-            UnknownExtensionFilesTruncated: ReadMetaBool(connection, DbContext.UnknownExtensionFilesTruncatedMetaKey),
-            UnknownExtensionFilePathLimit: ReadMetaInt(connection, DbContext.UnknownExtensionFilePathLimitMetaKey),
+            UnknownExtensionFilesTruncated: unknownExtensionDiagnosticsCurrent
+                ? ReadMetaBool(connection, DbContext.UnknownExtensionFilesTruncatedMetaKey)
+                : null,
+            UnknownExtensionFilePathLimit: unknownExtensionDiagnosticsCurrent
+                ? ReadMetaInt(connection, DbContext.UnknownExtensionFilePathLimitMetaKey)
+                : null,
             UnknownExtensionFileSampleCount: unknownExtensionFiles.Count,
             UnknownExtensionFileSampleLimit: unknownExtensionFiles.Limit,
             UnknownExtensionFileSampleTruncated: unknownExtensionFiles.Truncated,

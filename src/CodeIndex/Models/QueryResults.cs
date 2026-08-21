@@ -1497,9 +1497,9 @@ public class StatusResult
     public long References { get; set; }
     /// <summary>
     /// Number of non-indexed files from the most recent successful full-repository scan whose
-    /// non-empty extension did not map to a known language. Null on legacy DBs or before the
+    /// filename or extension did not map to a known language. Null on legacy DBs or before the
     /// current scanner has stamped this coverage signal (Issue #1585).
-    /// 直近成功した全体 scan で、非空の拡張子が既知言語に対応しなかった未 index ファイル数。
+    /// 直近成功した全体 scan で、ファイル名または拡張子が既知言語に対応しなかった未 index ファイル数。
     /// 旧 DB や現行 scanner による stamp 前は null。
     /// </summary>
     [JsonPropertyName("unknown_extension_file_count")]
@@ -1523,6 +1523,21 @@ public class StatusResult
     [JsonPropertyName("unknown_extension_groups")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<StatusUnknownExtensionGroup>? UnknownExtensionGroups { get; set; }
+    [JsonPropertyName("unknown_extension_group_count")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? UnknownExtensionGroupCount { get; set; }
+    [JsonPropertyName("unknown_extension_groups_truncated")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? UnknownExtensionGroupsTruncated { get; set; }
+    [JsonPropertyName("unknown_extension_group_limit")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? UnknownExtensionGroupLimit { get; set; }
+    [JsonPropertyName("unknown_extension_group_omitted_count")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? UnknownExtensionGroupOmittedCount { get; set; }
+    [JsonPropertyName("unknown_extension_guidance")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? UnknownExtensionGuidance { get; set; }
     public DateTime? IndexedAt { get; set; }
     /// <summary>
     /// Timestamp of the most recent successful index/update run that freshened workspace

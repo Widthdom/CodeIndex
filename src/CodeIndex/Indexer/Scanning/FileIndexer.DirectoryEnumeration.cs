@@ -226,6 +226,7 @@ public partial class FileIndexer
                     scanState,
                     activeIgnoreRules,
                     seenFilePaths,
+                    cancellationToken,
                     knownAttributes: attributes,
                     filePathCameFromDirectoryEnumeration: true))
                 scanState.Results.Add(entry);
@@ -308,6 +309,7 @@ public partial class FileIndexer
                     scanState,
                     activeIgnoreRules,
                     seenFilePaths,
+                    cancellationToken,
                     knownAttributes))
                 continue;
 

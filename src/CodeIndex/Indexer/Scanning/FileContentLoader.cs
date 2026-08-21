@@ -40,6 +40,30 @@ internal sealed partial class FileContentLoader(
         return BuildLoadedFileContent(rawFile, decoded, normalized);
     }
 
+    internal bool IsUnknownLanguageCoverageCandidate(
+        string absolutePath,
+        string normalizedRelativePath,
+        string relativePath,
+        CancellationToken cancellationToken)
+    {
+        var rawFile = ReadRawBytesWithSizeLimit(
+            absolutePath,
+            normalizedRelativePath,
+            cancellationToken);
+        if (IsGitLfsPointer(rawFile.Bytes))
+            return false;
+
+        if (TryFindIndexBlockingNullByte(rawFile.Bytes, out var nullByteOffset))
+        {
+            throw new FileIndexer.BinaryFileSkippedException(
+                relativePath,
+                nullByteOffset,
+                $"{relativePath}: binary file skipped because it contains NULL byte at byte offset {nullByteOffset}");
+        }
+
+        return true;
+    }
+
     internal static bool CanReuseRawBytesForNormalizedChecksum(
         string decodedContent,
         string? decodeWarning,

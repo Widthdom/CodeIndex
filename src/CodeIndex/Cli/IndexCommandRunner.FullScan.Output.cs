@@ -75,6 +75,22 @@ public static partial class IndexCommandRunner
             output.Warnings++;
         }
         output.Warnings += AddPostExtractionHookWarnings(output.PostExtractionHooks, output.WarningList);
+        var unknownExtensionClassification = UnknownExtensionClassifier.Classify(
+            output.ScanResult.UnknownExtensionFiles);
+        var unknownExtensionGroups = unknownExtensionClassification.Groups
+            .Take(UnknownExtensionClassifier.MaxCompletionGroups)
+            .ToList();
+        var unknownExtensionGroupOmittedCount = Math.Max(
+            0,
+            unknownExtensionClassification.GroupCount - unknownExtensionGroups.Count);
+        var unknownExtensionWarning = unknownExtensionClassification.ActionableFileCount > 0
+            ? $"{unknownExtensionClassification.ActionableFileCount} file(s) were excluded because no language mapping or extractor was available. {UnknownExtensionClassifier.GetGuidance(unknownExtensionClassification)}"
+            : null;
+        if (unknownExtensionWarning != null)
+        {
+            output.WarningList.Add(new CliJsonMessage("<unknown_extensions>", unknownExtensionWarning));
+            output.Warnings++;
+        }
         var (totalFiles, totalChunks, totalSymbols, totalReferences) =
             output.StartedWithNoIndexedFiles && !output.ScanHadErrors && output.Errors == 0
                 ? (output.FreshCountFiles, output.FreshCountChunks, output.FreshCountSymbols, output.FreshCountReferences)
@@ -132,6 +148,17 @@ public static partial class IndexCommandRunner
             {
                 Status = output.Errors > 0 ? "partial" : "success",
                 Mode = output.Options.Rebuild ? "rebuild" : "incremental",
+                UnknownExtensionFileCount = output.ScanResult.UnknownExtensionFiles.Count,
+                UnknownExtensionGroups = unknownExtensionGroups.Count > 0 ? unknownExtensionGroups : null,
+                UnknownExtensionGroupCount = unknownExtensionClassification.GroupCount,
+                UnknownExtensionGroupsTruncated = unknownExtensionGroupOmittedCount > 0,
+                UnknownExtensionGroupLimit = UnknownExtensionClassifier.MaxCompletionGroups,
+                UnknownExtensionGroupOmittedCount = unknownExtensionGroupOmittedCount,
+                UnknownExtensionDiagnosticsScope = "workspace",
+                UnknownExtensionFileCountLowerBound = output.ScanHadErrors,
+                UnknownExtensionGuidance = output.ScanResult.UnknownExtensionFiles.Count > 0
+                    ? UnknownExtensionClassifier.GetGuidance(unknownExtensionClassification)
+                    : null,
                 Summary = new IndexFullScanSummaryJsonResult
                 {
                     FilesTotal = totalFiles,
@@ -211,13 +238,27 @@ public static partial class IndexCommandRunner
             CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Refs", ConsoleUi.FormatNumber(totalReferences), indent: "  "));
             if (output.Skipped > 0) CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Skipped", $"{ConsoleUi.FormatNumber(output.Skipped)} (unchanged)", indent: "  "));
             if (output.ScanResult.DanglingSymlinks.Count > 0) CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Dangling symlinks", $"{ConsoleUi.FormatNumber(output.ScanResult.DanglingSymlinks.Count)} output.Skipped", indent: "  "));
-            if (output.Options.Verbose && output.ScanResult.UnknownExtensionFiles.Count > 0)
+            if (output.ScanResult.UnknownExtensionFiles.Count > 0)
             {
-                CommandOutputWriter.WriteLine($"  Unknown extension files: {ConsoleUi.FormatNumber(output.ScanResult.UnknownExtensionFiles.Count)}");
-                foreach (var relPath in output.ScanResult.UnknownExtensionFiles.Take(5))
-                    CommandOutputWriter.WriteLine($"    {relPath}");
-                if (output.ScanResult.UnknownExtensionFiles.Count > 5)
-                    CommandOutputWriter.WriteLine($"    ... {ConsoleUi.FormatNumber(output.ScanResult.UnknownExtensionFiles.Count - 5)} more");
+                CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine(
+                    "Unknown extensions",
+                    ConsoleUi.FormatNumber(output.ScanResult.UnknownExtensionFiles.Count)
+                        + (output.ScanHadErrors ? " (lower bound)" : string.Empty),
+                    indent: "  "));
+                foreach (var group in unknownExtensionGroups)
+                {
+                    CommandOutputWriter.WriteLine(
+                        $"    {group.Extension}: {ConsoleUi.FormatNumber(group.Count)} ({group.RecommendedAction})");
+                }
+                if (unknownExtensionGroupOmittedCount > 0)
+                    CommandOutputWriter.WriteLine($"    ... {ConsoleUi.FormatNumber(unknownExtensionGroupOmittedCount)} more extension groups");
+                if (output.Options.Verbose)
+                {
+                    foreach (var relPath in output.ScanResult.UnknownExtensionFiles.Take(5))
+                        CommandOutputWriter.WriteLine($"    sample: {relPath}");
+                    if (output.ScanResult.UnknownExtensionFiles.Count > 5)
+                        CommandOutputWriter.WriteLine($"    ... {ConsoleUi.FormatNumber(output.ScanResult.UnknownExtensionFiles.Count - 5)} more paths");
+                }
             }
             if (output.Warnings > 0) CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Warnings", ConsoleUi.FormatNumber(output.Warnings), indent: "  "));
             if (output.Errors > 0) CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Errors", ConsoleUi.FormatNumber(output.Errors), indent: "  "));
@@ -243,6 +284,8 @@ public static partial class IndexCommandRunner
                     ConsoleUi.FormatBytes(reclaimedBytes),
                     indent: "  "));
             }
+            if (unknownExtensionWarning != null)
+                ConsoleUi.PrintWarning(unknownExtensionWarning);
             CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine("Elapsed", ConsoleUi.FormatDuration(output.Stopwatch.Elapsed, output.Options.DurationFormat), indent: "  "));
             CommandOutputWriter.WriteLine();
             if (output.Errors > 0)

@@ -224,13 +224,19 @@ internal static partial class ExportImportCommandRunner
                    'commit_scoped_fresh_head_sha',
                    'last_full_scan_elapsed_ms',
                    'last_workspace_freshened_at',
+                   'unknown_extension_diagnostics_version',
+                   'unknown_extension_has_actionable_extensionless_files',
                    'unknown_extension_file_count',
                    'unknown_extension_file_paths_json',
                    'unknown_extension_files_truncated',
                    'unknown_extension_file_path_limit',
                    'unknown_extension_extension_counts_json',
                    'unknown_extension_category_counts_json',
-                   'unknown_extension_groups_json')
+                   'unknown_extension_groups_json',
+                   'unknown_extension_group_count',
+                   'unknown_extension_groups_truncated',
+                   'unknown_extension_group_limit',
+                   'unknown_extension_group_omitted_count')
             """;
         return Convert.ToInt64(command.ExecuteScalar(), CultureInfo.InvariantCulture) != 0;
     }
@@ -319,13 +325,19 @@ internal static partial class ExportImportCommandRunner
                    'commit_scoped_fresh_head_sha',
                    'last_full_scan_elapsed_ms',
                    'last_workspace_freshened_at',
+                   'unknown_extension_diagnostics_version',
+                   'unknown_extension_has_actionable_extensionless_files',
                    'unknown_extension_file_count',
                    'unknown_extension_file_paths_json',
                    'unknown_extension_files_truncated',
                    'unknown_extension_file_path_limit',
                    'unknown_extension_extension_counts_json',
                    'unknown_extension_category_counts_json',
-                   'unknown_extension_groups_json');
+                   'unknown_extension_groups_json',
+                   'unknown_extension_group_count',
+                   'unknown_extension_groups_truncated',
+                   'unknown_extension_group_limit',
+                   'unknown_extension_group_omitted_count');
 
             INSERT INTO codeindex_meta(key, value)
             VALUES (@indexCompletenessKey, 'incomplete')

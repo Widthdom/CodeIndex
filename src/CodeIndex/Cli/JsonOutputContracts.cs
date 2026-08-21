@@ -963,6 +963,15 @@ internal sealed class IndexDryRunJsonResult : IVersionedJsonResult
     public int ProjectedReferenceCapHits { get; init; }
     public int UnsupportedTotal { get; init; }
     public int UnknownExtensionTotal { get; init; }
+    public int UnknownExtensionFileCount { get; init; }
+    public IReadOnlyList<StatusUnknownExtensionGroup>? UnknownExtensionGroups { get; init; }
+    public int UnknownExtensionGroupCount { get; init; }
+    public bool UnknownExtensionGroupsTruncated { get; init; }
+    public int UnknownExtensionGroupLimit { get; init; }
+    public int UnknownExtensionGroupOmittedCount { get; init; }
+    public string UnknownExtensionDiagnosticsScope { get; init; } = string.Empty;
+    public bool UnknownExtensionFileCountLowerBound { get; init; }
+    public string? UnknownExtensionGuidance { get; init; }
     public int CandidatePathLimit { get; init; }
     public int CandidatePathsProcessed { get; init; }
     public bool CandidatePathsTruncated { get; init; }
@@ -1144,6 +1153,15 @@ internal sealed class IndexFullScanJsonResult : IVersionedJsonResult
     public string Status { get; init; } = string.Empty;
     public string Mode { get; init; } = string.Empty;
     public IndexFullScanSummaryJsonResult Summary { get; init; } = new();
+    public int UnknownExtensionFileCount { get; init; }
+    public IReadOnlyList<StatusUnknownExtensionGroup>? UnknownExtensionGroups { get; init; }
+    public int UnknownExtensionGroupCount { get; init; }
+    public bool UnknownExtensionGroupsTruncated { get; init; }
+    public int UnknownExtensionGroupLimit { get; init; }
+    public int UnknownExtensionGroupOmittedCount { get; init; }
+    public string UnknownExtensionDiagnosticsScope { get; init; } = "workspace";
+    public bool UnknownExtensionFileCountLowerBound { get; init; }
+    public string? UnknownExtensionGuidance { get; init; }
     public IndexSymbolKindFilterJsonResult SymbolKindFilter { get; init; } = new();
     public bool GraphTableAvailable { get; init; }
     public bool GraphDataCurrent { get; init; }
