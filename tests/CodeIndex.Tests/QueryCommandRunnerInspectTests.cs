@@ -1430,6 +1430,19 @@ public partial class QueryCommandRunnerTests
                     public int InvokeAgain() => Compute();
                 }
                 """);
+            var longParameterList = string.Join(
+                ", ",
+                Enumerable.Range(1, 60).Select(index => $"int parameter{index:D2}"));
+            var coupledMetadataFixtures = Enumerable.Range(1, 51)
+                .Select(index => new TestProjectHelper.IndexedFileFixture(
+                    $"src/WidePartial.{index:D2}.cs",
+                    "csharp",
+                    "public partial class WidePartial { }"))
+                .Append(new TestProjectHelper.IndexedFileFixture(
+                    "src/SignatureTarget.cs",
+                    "csharp",
+                    $"public class SignatureTarget {{ public void LongSignature({longParameterList}) {{ }} }}"));
+            TestProjectHelper.InsertIndexedFiles(dbPath, coupledMetadataFixtures);
             MarkGraphAndFoldReady(dbPath);
 
             var nestedArgs = new[]
@@ -1522,6 +1535,42 @@ public partial class QueryCommandRunnerTests
                 Assert.False(boundaryDefinition.TryGetProperty("body_content_recovery", out _));
             }
 
+            foreach (var repeatedFieldSelection in new[]
+                     {
+                         new[] { "definitions.body_content", "definitions.name", "name" },
+                         new[] { "body", "definitions.body_start_line", "body_start_line" },
+                     })
+            {
+                var (repeatedExitCode, repeatedStdout, repeatedStderr) = RunInspectInProcess(
+                    "Compute", "--db", dbPath, "--json", "--exact-name",
+                    "--fields", repeatedFieldSelection[0], "--fields", repeatedFieldSelection[1]);
+                using var repeatedDocument = ParseJsonOutput(repeatedStdout);
+                var repeatedRoot = repeatedDocument.RootElement;
+                var repeatedDefinition = Assert.Single(repeatedRoot.GetProperty("definitions").EnumerateArray());
+
+                Assert.Equal(CommandExitCodes.Success, repeatedExitCode);
+                Assert.Contains("Warning: --fields specified more than once", repeatedStderr, StringComparison.Ordinal);
+                Assert.Equal(
+                    [repeatedFieldSelection[1]],
+                    repeatedRoot.GetProperty("selected_fields").EnumerateArray().Select(field => field.GetString()));
+                Assert.Equal(
+                    [repeatedFieldSelection[2]],
+                    repeatedDefinition.EnumerateObject().Select(property => property.Name));
+                Assert.False(repeatedRoot.GetProperty("body_mode").GetProperty("include_body").GetBoolean());
+            }
+
+            var (explicitBodyExitCode, explicitBodyStdout, explicitBodyStderr) = RunInspectInProcess(
+                "Compute", "--db", dbPath, "--json", "--exact-name", "--body",
+                "--fields", "definitions.body_content", "--fields", "definitions.name");
+            using var explicitBodyDocument = ParseJsonOutput(explicitBodyStdout);
+            Assert.Equal(CommandExitCodes.Success, explicitBodyExitCode);
+            Assert.Contains("Warning: --fields specified more than once", explicitBodyStderr, StringComparison.Ordinal);
+            Assert.True(explicitBodyDocument.RootElement.GetProperty("body_mode").GetProperty("include_body").GetBoolean());
+            Assert.Equal(
+                ["name"],
+                Assert.Single(explicitBodyDocument.RootElement.GetProperty("definitions").EnumerateArray())
+                    .EnumerateObject().Select(property => property.Name));
+
             var (partialExitCode, partialStdout, partialStderr) = RunInspectInProcess(
                 "Target", "--db", dbPath, "--json", "--exact-name", "--group-partials",
                 "--fields", "definitions.name,definitions.definition_sites,definitions.partial_family_id,definitions.family_members");
@@ -1535,6 +1584,46 @@ public partial class QueryCommandRunnerTests
             Assert.Equal(2, partialDefinition.GetProperty("family_members").GetArrayLength());
             Assert.True(partialRoot.GetProperty("group_partials").GetBoolean());
             Assert.Equal("logical_partial_families", partialRoot.GetProperty("definition_result_scope").GetString());
+
+            var (truncatedPartialExitCode, truncatedPartialStdout, truncatedPartialStderr) = RunInspectInProcess(
+                "WidePartial", "--db", dbPath, "--json", "--exact-name", "--group-partials",
+                "--fields", "definitions.family_members");
+            using var truncatedPartialDocument = ParseJsonOutput(truncatedPartialStdout);
+            var truncatedPartialDefinition = Assert.Single(
+                truncatedPartialDocument.RootElement.GetProperty("definitions").EnumerateArray());
+            Assert.Equal(CommandExitCodes.Success, truncatedPartialExitCode);
+            Assert.Equal(string.Empty, truncatedPartialStderr);
+            Assert.Equal(50, truncatedPartialDefinition.GetProperty("family_members").GetArrayLength());
+            Assert.Equal(51, truncatedPartialDefinition.GetProperty("definition_sites").GetInt32());
+            Assert.True(truncatedPartialDefinition.GetProperty("family_members_truncated").GetBoolean());
+
+            var (contextExitCode, contextStdout, contextStderr) = RunInspectInProcess(
+                "Compute", "--db", dbPath, "--json", "--exact-name", "--max-line-width", "10",
+                "--fields", "references.context");
+            using var contextDocument = ParseJsonOutput(contextStdout);
+            var contextRows = contextDocument.RootElement.GetProperty("references").EnumerateArray().ToArray();
+            Assert.Equal(CommandExitCodes.Success, contextExitCode);
+            Assert.Equal(string.Empty, contextStderr);
+            Assert.NotEmpty(contextRows);
+            Assert.All(contextRows, row =>
+            {
+                Assert.Equal(
+                    ["context", "context_truncated"],
+                    row.EnumerateObject().Select(property => property.Name));
+                Assert.True(row.GetProperty("context_truncated").GetBoolean());
+            });
+
+            var (signatureExitCode, signatureStdout, signatureStderr) = RunInspectInProcess(
+                "LongSignature", "--db", dbPath, "--json", "--exact-name",
+                "--fields", "definitions.signature");
+            using var signatureDocument = ParseJsonOutput(signatureStdout);
+            var signatureDefinition = Assert.Single(
+                signatureDocument.RootElement.GetProperty("definitions").EnumerateArray());
+            Assert.Equal(CommandExitCodes.Success, signatureExitCode);
+            Assert.Equal(string.Empty, signatureStderr);
+            Assert.Equal(512, signatureDefinition.GetProperty("signature").GetString()!.Length);
+            Assert.True(signatureDefinition.GetProperty("signature_truncated").GetBoolean());
+            Assert.True(signatureDefinition.GetProperty("signature_original_length").GetInt32() > 512);
 
             var (emptyExitCode, emptyStdout, emptyStderr) = RunInspectInProcess(
                 "MissingIssue5098", "--db", dbPath, "--json", "--exact-name", "--fields", "definitions.name,references.path");

@@ -129,7 +129,7 @@ public static partial class QueryCommandRunner
                             out var includeBodyFromFields,
                             out var currentInspectFieldValidationError);
                         inspectFieldValidationError ??= currentInspectFieldValidationError;
-                        includeBody |= includeBodyFromFields;
+                        inspectFieldsIncludeBody = includeBodyFromFields;
                         json = true;
                         outputFormat = OutputFormatJson;
                     }

@@ -124,6 +124,7 @@ public static partial class QueryCommandRunner
         private int? slowQueryMs;
         private bool compact;
         private List<string>? inspectFields;
+        private bool inspectFieldsIncludeBody;
         private ProjectionFieldValidationError? inspectFieldValidationError;
         private double minEntrypointConfidence;
         private string? statusExplainField;
@@ -432,7 +433,7 @@ public static partial class QueryCommandRunner
                 Severity = severity,
                 Query = query,
                 RawFts = rawFts,
-                IncludeBody = includeBody,
+                IncludeBody = includeBody || inspectFieldsIncludeBody,
                 BodyStartLine = bodyStartLine,
                 BodyLines = bodyLines,
                 StartLine = startLine,

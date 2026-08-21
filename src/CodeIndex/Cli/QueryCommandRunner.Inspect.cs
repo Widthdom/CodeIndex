@@ -716,6 +716,7 @@ public static partial class QueryCommandRunner
                         selectedLeaves.Add(recoveryField);
                 }
             }
+            AddInspectCoupledRowMetadata(collectionName, selectedLeaves);
 
             var projectedRows = new JsonArray();
             foreach (var rowNode in rows)
@@ -732,6 +733,66 @@ public static partial class QueryCommandRunner
                 projectedRows.Add(projectedRow);
             }
             payload[collectionName] = projectedRows;
+        }
+    }
+
+    private static void AddInspectCoupledRowMetadata(
+        string collectionName,
+        List<string> selectedLeaves)
+    {
+        if (string.Equals(collectionName, "definitions", StringComparison.Ordinal)
+            || string.Equals(collectionName, "nearby_symbols", StringComparison.Ordinal))
+        {
+            AddInspectCoupledFields(
+                selectedLeaves,
+                "signature",
+                "signature_truncated",
+                "signature_original_length");
+            AddInspectCoupledFields(
+                selectedLeaves,
+                "family_members",
+                "definition_sites",
+                "family_members_truncated");
+            return;
+        }
+
+        if (string.Equals(collectionName, "references", StringComparison.Ordinal))
+        {
+            AddInspectCoupledFields(selectedLeaves, "context", "context_truncated");
+            return;
+        }
+
+        if (!string.Equals(collectionName, "callers", StringComparison.Ordinal)
+            && !string.Equals(collectionName, "callees", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        foreach (var aggregateField in new[]
+                 {
+                     "reference_kind", "reference_kinds", "reference_kind_counts", "reference_count",
+                 })
+        {
+            AddInspectCoupledFields(
+                selectedLeaves,
+                aggregateField,
+                "has_mixed_reference_kinds",
+                "aggregate_truncated");
+        }
+    }
+
+    private static void AddInspectCoupledFields(
+        List<string> selectedLeaves,
+        string selectedField,
+        params string[] coupledFields)
+    {
+        if (!selectedLeaves.Contains(selectedField, StringComparer.Ordinal))
+            return;
+
+        foreach (var coupledField in coupledFields)
+        {
+            if (!selectedLeaves.Contains(coupledField, StringComparer.Ordinal))
+                selectedLeaves.Add(coupledField);
         }
     }
 
