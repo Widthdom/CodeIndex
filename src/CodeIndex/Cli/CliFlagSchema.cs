@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Linq;
+using CodeIndex.Mcp;
 
 namespace CodeIndex.Cli;
 
@@ -188,7 +189,7 @@ internal static class CliFlagSchema
         "index", "hooks", "backfill-fold", "optimize", "vacuum",
         "search", "recipes", "audit", "definition", "goto", "references", "callers", "callees",
         "symbols", "files", "find", "excerpt", "map", "inspect", "outline", "status",
-        "validate", "deps", "impact", "unused", "hotspots", "languages");
+        "validate", "deps", "impact", "unused", "hotspots", "languages", "mcp");
 
     public static bool HasAuthoritativeHelpOptions(string command) =>
         AuthoritativeHelpOptionCommands.Contains(command);
@@ -686,6 +687,11 @@ internal static class CliFlagSchema
             new() { Name = "--transport", ValueDomain = Values(["stdio", "http"]) with { CompletionLabel = "transport" }, Description = "MCP transport", PrimaryCommands = Set("mcp") },
             new() { Name = "--http-listen", ValuePlaceholder = "<host:port>", Description = "MCP HTTP listen address", PrimaryCommands = Set("mcp") },
             new() { Name = "--allow-unauthenticated-http", Description = "MCP HTTP: explicitly allow unsafe unauthenticated loopback mode", PrimaryCommands = Set("mcp") },
+            new() { Name = "--audit-log", ValuePlaceholder = "<path>", ValueKind = CliOptionValueKind.FilePath, Description = "MCP audit log JSONL path; creates missing parent directories", PrimaryCommands = Set("mcp") },
+            new() { Name = "--audit-log-include-values", Description = "MCP audit log: include redacted argument values; requires --audit-log", PrimaryCommands = Set("mcp") },
+            new() { Name = "--audit-log-max-bytes", ValuePlaceholder = "<n>", Description = $"MCP audit log rotation threshold in bytes ({AuditLogSink.MinMaxBytes}..{AuditLogSink.MaxMaxBytes}; default {AuditLogSink.DefaultMaxBytes})", PrimaryCommands = Set("mcp") },
+            new() { Name = "--audit-log-strict", Description = "MCP audit log: require shutdown flush; requires --audit-log; an incomplete flush changes only an otherwise-successful MCP session to runtime exit code 10 and preserves existing nonzero exits", PrimaryCommands = Set("mcp"), Safety = CliOptionSafety.StrictFailure },
+            new() { Name = "--suggestion-dedup-threshold", ValuePlaceholder = "<0..1>", Description = "MCP suggestion deduplication threshold override", PrimaryCommands = Set("mcp") },
         };
     }
 

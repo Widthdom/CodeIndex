@@ -6210,16 +6210,23 @@ exit 7
     }
 
     [Fact]
-    public void RunMcp_AuditLogStrictWithoutPathPrintsUpdatedUsage_Issue4553()
+    public void RunMcp_HelpAndStrictValidationUsageExposeAuditLogContract_Issues4553_5096()
     {
+        var (helpExitCode, helpStdout, helpStderr) = CaptureConsole(() => ProgramRunner.Run(
+            ["help", "mcp"],
+            appVersion: "1.10.0"));
         var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
             ["mcp", "--audit-log-strict"],
             appVersion: "1.10.0"));
 
+        Assert.Equal(CommandExitCodes.Success, helpExitCode);
+        Assert.Empty(helpStderr);
+        Assert.Contains("--audit-log-strict", helpStdout, StringComparison.Ordinal);
+        Assert.Contains("requires --audit-log", helpStdout, StringComparison.Ordinal);
         Assert.Equal(CommandExitCodes.UsageError, exitCode);
         Assert.Empty(stdout);
         Assert.Contains("--audit-log-strict requires --audit-log", stderr, StringComparison.Ordinal);
-        Assert.Contains("Usage: cdidx mcp", stderr, StringComparison.Ordinal);
+        Assert.Contains($"Usage: {ConsoleUi.GetUsageLine("mcp")}", stderr, StringComparison.Ordinal);
         Assert.Contains("[--audit-log-strict]", stderr, StringComparison.Ordinal);
     }
 

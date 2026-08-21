@@ -1100,7 +1100,7 @@ public class ConsoleUiTests
         var output = ConsoleCompletionRenderer.GetCompletionScript("bash");
 
         Assert.Contains("--db|--workspace-db|--data-dir|--metrics|--path|--project|--solution|--exclude-path", output);
-        Assert.Contains("--files|--output|-o) COMPREPLY=($(compgen -f -- \"$cur\"))", output);
+        Assert.Contains("--files|--output|-o|--audit-log) COMPREPLY=($(compgen -f -- \"$cur\"))", output);
         Assert.Contains("--lang|--language) COMPREPLY=($(compgen -W \"", output);
         Assert.Contains("csharp", output);
         Assert.Contains("python", output);
@@ -1517,6 +1517,39 @@ public class ConsoleUiTests
         Assert.Contains("'--summary-only'", suggestionsBranch, StringComparison.Ordinal);
         Assert.Contains("'--compact'", suggestionsBranch, StringComparison.Ordinal);
         Assert.Contains("'--max-json-bytes'", suggestionsBranch, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CompletionRenderer_McpPublicOptionsMatchSchemaAndStrictAppearsOnce_Issue5096()
+    {
+        var expected = new SortedSet<string>(
+            CliFlagSchema.GetCompletionFlagsForCommand("mcp")
+                .Select(flag => flag.Name.TrimStart('-')),
+            StringComparer.Ordinal);
+        var flagSets = ExtractComparableSubcommandFlagSets("mcp", "lsp");
+
+        Assert.Equal(expected, flagSets.Bash);
+        Assert.Equal(expected, flagSets.Zsh);
+        Assert.Equal(expected, flagSets.Fish);
+
+        var powerShell = ConsoleCompletionRenderer.GetCompletionScript("powershell");
+        var powerShellBranch = ExtractBetween(
+            powerShell,
+            "'mcp' { $flags = @(",
+            ") }");
+        var powerShellFlags = new SortedSet<string>(
+            Regex.Matches(powerShellBranch, @"'--(?<name>[a-z][a-z0-9-]*)'")
+                .Select(match => match.Groups["name"].Value),
+            StringComparer.Ordinal);
+        powerShellFlags.Remove("help");
+        Assert.Equal(expected, powerShellFlags);
+
+        foreach (var script in new[] { flagSets.BashScript, flagSets.ZshScript, flagSets.FishScript, powerShell })
+        {
+            Assert.Single(
+                Regex.Matches(script, @"(?<![a-z0-9])audit-log-strict(?![a-z0-9-])")
+                    .Cast<Match>());
+        }
     }
 
     private static (SortedSet<string> Bash, SortedSet<string> Zsh, SortedSet<string> Fish, string BashScript, string ZshScript, string FishScript)
