@@ -87,14 +87,21 @@ public partial class QueryCommandRunnerTests
                 ProgramRunner.Run(commonArgs, _jsonOptions, "1.0.0-test"));
             Assert.Equal(CommandExitCodes.Success, arrayExitCode);
             Assert.Equal(string.Empty, arrayStderr);
+            string arrayNextCursor;
             using (var arrayDocument = JsonDocument.Parse(arrayStdout))
             {
                 var arrayFamily = Assert.Single(
                     arrayDocument.RootElement.EnumerateArray(),
                     row => row.GetProperty("family_member_total_count").GetInt32() == 105);
                 Assert.Equal(50, arrayFamily.GetProperty("family_members").GetArrayLength());
-                Assert.NotNull(arrayFamily.GetProperty("family_members_next_cursor").GetString());
+                arrayNextCursor = arrayFamily.GetProperty("family_members_next_cursor").GetString()!;
             }
+            var arrayContinuation = RunIssue5101FamilyPage(
+                commonArgs,
+                arrayNextCursor,
+                expectedTotal: 105);
+            Assert.Equal(50, arrayContinuation.MemberIds.Count);
+            Assert.Equal(5, arrayContinuation.RemainingCount);
 
             var (compactExitCode, compactStdout, compactStderr) = CaptureConsole(() =>
                 ProgramRunner.Run(
@@ -146,7 +153,13 @@ public partial class QueryCommandRunnerTests
                 ndjsonRows,
                 row => row["family_member_total_count"]!.GetValue<int>() == 105);
             Assert.Equal(50, ndjsonFamily["family_member_returned_count"]!.GetValue<int>());
-            Assert.NotNull(ndjsonFamily["family_members_next_cursor"]?.GetValue<string>());
+            var ndjsonNextCursor = ndjsonFamily["family_members_next_cursor"]!.GetValue<string>();
+            var ndjsonContinuation = RunIssue5101FamilyPage(
+                commonArgs.Where(arg => arg != "--json=array").Concat(["--json=ndjson"]).ToArray(),
+                ndjsonNextCursor,
+                expectedTotal: 105);
+            Assert.Equal(50, ndjsonContinuation.MemberIds.Count);
+            Assert.Equal(5, ndjsonContinuation.RemainingCount);
 
             var (fieldsExitCode, fieldsStdout, fieldsStderr) = CaptureConsole(() =>
                 ProgramRunner.Run(["symbols", "--fields", "list"], _jsonOptions, "1.0.0-test"));
@@ -163,6 +176,33 @@ public partial class QueryCommandRunnerTests
                 Assert.Contains("family_members_next_cursor", validFields);
             }
 
+            var (inspectFieldsExitCode, inspectFieldsStdout, inspectFieldsStderr) = CaptureConsole(() =>
+                ProgramRunner.Run(["inspect", "--fields", "list"], _jsonOptions, "1.0.0-test"));
+            Assert.Equal(CommandExitCodes.Success, inspectFieldsExitCode);
+            Assert.Equal(string.Empty, inspectFieldsStderr);
+            using (var inspectFieldsDocument = JsonDocument.Parse(inspectFieldsStdout))
+            {
+                var validFields = inspectFieldsDocument.RootElement.GetProperty("valid_fields")
+                    .EnumerateArray()
+                    .Select(field => field.GetString())
+                    .ToHashSet(StringComparer.Ordinal);
+                Assert.DoesNotContain("definitions.family_member_total_count", validFields);
+                Assert.DoesNotContain("definitions.family_members_next_cursor", validFields);
+                Assert.DoesNotContain("nearby_symbols.family_member_total_count", validFields);
+                Assert.DoesNotContain("nearby_symbols.family_members_next_cursor", validFields);
+            }
+            var (inspectUnsupportedExitCode, inspectUnsupportedStdout, inspectUnsupportedStderr) = CaptureConsole(() =>
+                ProgramRunner.Run(
+                    [
+                        "inspect", "Wide", "--db", dbPath, "--group-partials",
+                        "--fields", "definitions.family_member_total_count",
+                    ],
+                    _jsonOptions,
+                    "1.0.0-test"));
+            Assert.Equal(CommandExitCodes.UsageError, inspectUnsupportedExitCode);
+            Assert.Equal(string.Empty, inspectUnsupportedStderr);
+            Assert.Contains("Unknown --fields value", inspectUnsupportedStdout, StringComparison.Ordinal);
+
             AssertIssue5101CursorFailure(
                 pageArgs.Concat([
                     "--cursor",
@@ -174,6 +214,31 @@ public partial class QueryCommandRunnerTests
             AssertIssue5101CursorFailure(
                 pageArgs.Concat(["--path", "src/One/*", "--cursor", firstPage.NextCursor!]).ToArray(),
                 "cursor_mismatch");
+
+            var snapshotRaceHookInvoked = false;
+            JsonEnvelopeWrapper.PartialFamilyPageReadForTesting = () =>
+            {
+                snapshotRaceHookInvoked = true;
+                TestProjectHelper.InsertIndexedFile(
+                    dbPath,
+                    "src/SnapshotRace.cs",
+                    "csharp",
+                    "namespace Demo; internal sealed class SnapshotRace { }");
+                MarkGraphAndFoldReady(dbPath);
+            };
+            try
+            {
+                var (raceExitCode, raceStdout, raceStderr) = CaptureConsole(() =>
+                    ProgramRunner.Run(commonArgs, _jsonOptions, "1.0.0-test"));
+                Assert.True(snapshotRaceHookInvoked);
+                Assert.Equal(CommandExitCodes.UsageError, raceExitCode);
+                Assert.Equal(string.Empty, raceStdout);
+                Assert.Contains("index generation changed", raceStderr, StringComparison.Ordinal);
+            }
+            finally
+            {
+                JsonEnvelopeWrapper.PartialFamilyPageReadForTesting = null;
+            }
 
             TestProjectHelper.InsertIndexedFile(
                 dbPath,

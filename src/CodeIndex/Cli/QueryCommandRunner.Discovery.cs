@@ -92,9 +92,10 @@ public static partial class QueryCommandRunner
         string? ndjsonTerminalLine = null;
         return WithDb(options, jsonOptions, reader =>
         {
+            var partialFamilyContinuation = JsonEnvelopeWrapper.GetPartialFamilyContinuation("symbols");
             QueryCountResult? partialPhysicalCounts = null;
             QueryCountResult? partialLogicalCounts = null;
-            if (options.GroupPartials)
+            if (options.GroupPartials && !partialFamilyContinuation.HasValue)
             {
                 partialPhysicalCounts = reader.CountSearchSymbolsTotal(symbolQueries, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters);
                 partialLogicalCounts = reader.CountSearchSymbolsTotal(symbolQueries, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters, groupPartials: true);
@@ -180,7 +181,9 @@ public static partial class QueryCommandRunner
                 return CommandExitCodes.Success;
             }
 
-            var partialFamilyContinuation = JsonEnvelopeWrapper.GetPartialFamilyContinuation("symbols");
+            var partialFamilyCursorSnapshot = options.GroupPartials
+                ? JsonEnvelopeWrapper.CapturePartialFamilyCursorSnapshot(reader)
+                : (JsonEnvelopeWrapper.PartialFamilyCursorSnapshot?)null;
             var results = options.GroupPartials
                 ? reader.SearchSymbols(
                     symbolQueries,
@@ -204,11 +207,16 @@ public static partial class QueryCommandRunner
             {
                 AddPartialFamilyContinuationMetadata(
                     effectiveCmdArgs,
-                    reader,
+                    partialFamilyCursorSnapshot!.Value,
                     results,
                     partialFamilyContinuation?.FamilyMemberOffset ?? 0);
                 if (partialFamilyContinuation.HasValue)
+                {
                     JsonEnvelopeWrapper.ReportBoundedResponseTotal("symbols", results.Count, authoritative: true);
+                    partialLogicalCounts = new QueryCountResult(
+                        results.Count,
+                        results.Select(result => result.Path).Distinct(StringComparer.Ordinal).Count());
+                }
             }
             var hasExactPredicate = exact && symbolQueries is { Count: > 0 };
             var exactSignal = reader.GetSymbolsExactQuerySignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since);
@@ -216,18 +224,28 @@ public static partial class QueryCommandRunner
                 result => ToSymbolDiscoveryJsonNode(result, jsonOptions, options.OutputFormat == OutputFormatCompact);
             var rowExactSignal = hasExactPredicate ? exactSignal : (ExactQuerySignal?)null;
             var multiNameExactHint = symbolQueries != null && symbolQueries.Count > 1;
-            var exactZeroHint = multiNameExactHint
-                ? BuildExactZeroHint(
-                    exact,
-                    () => reader.AnySearchSymbols(symbolQueries, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters),
-                    () => reader.SearchSymbols(symbolQueries, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters),
-                    r => r.Name)
-                : BuildExactZeroHint(
-                    exact && symbolQueries != null && symbolQueries.Count > 0,
-                    () => reader.CountSearchSymbols(symbolQueries, ExactZeroHintProbeLimit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters) > 0,
-                    () => reader.CountSearchSymbols(symbolQueries, options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters),
-                    () => reader.SearchSymbols(symbolQueries, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters),
-                    r => r.Name);
+            var exactZeroHint = partialFamilyContinuation.HasValue
+                ? null
+                : multiNameExactHint
+                    ? BuildExactZeroHint(
+                        exact,
+                        () => reader.AnySearchSymbols(symbolQueries, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters),
+                        () => reader.SearchSymbols(symbolQueries, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters),
+                        r => r.Name)
+                    : BuildExactZeroHint(
+                        exact && symbolQueries != null && symbolQueries.Count > 0,
+                        () => reader.CountSearchSymbols(symbolQueries, ExactZeroHintProbeLimit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters) > 0,
+                        () => reader.CountSearchSymbols(symbolQueries, options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters),
+                        () => reader.SearchSymbols(symbolQueries, Math.Min(options.Limit, ExactZeroHintSampleLimit), options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact: false, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters),
+                        r => r.Name);
+            if (partialFamilyCursorSnapshot.HasValue
+                && JsonEnvelopeWrapper.ValidatePartialFamilyCursorSnapshot(
+                    options.DbPath,
+                    options.DbPathExplicit,
+                    partialFamilyCursorSnapshot.Value) is { } snapshotError)
+            {
+                return snapshotError;
+            }
             WriteExactSymbolWarningIfNeeded(hasExactPredicate, options.Json, exactSignal, reader, options);
             if (results.Count == 0)
             {
@@ -366,7 +384,7 @@ public static partial class QueryCommandRunner
 
     private static void AddPartialFamilyContinuationMetadata(
         string[] commandArgs,
-        DbReader reader,
+        JsonEnvelopeWrapper.PartialFamilyCursorSnapshot snapshot,
         IReadOnlyList<SymbolResult> results,
         int familyMemberOffset)
     {
@@ -390,7 +408,7 @@ public static partial class QueryCommandRunner
                 totalCount - familyMemberOffset - returnedCount);
             result.FamilyMembersRecoveryCursor = JsonEnvelopeWrapper.BuildPartialFamilyMembersCursor(
                 commandArgs,
-                reader,
+                snapshot,
                 result.LogicalPartialKey,
                 result.PartialFamilyId,
                 familyMemberOffset: 0);
@@ -398,7 +416,7 @@ public static partial class QueryCommandRunner
             {
                 result.FamilyMembersNextCursor = JsonEnvelopeWrapper.BuildPartialFamilyMembersCursor(
                     commandArgs,
-                    reader,
+                    snapshot,
                     result.LogicalPartialKey,
                     result.PartialFamilyId,
                     familyMemberOffset + returnedCount);

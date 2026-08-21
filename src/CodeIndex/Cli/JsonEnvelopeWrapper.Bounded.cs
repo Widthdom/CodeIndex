@@ -24,6 +24,7 @@ internal static partial class JsonEnvelopeWrapper
     private const string ResponseCursorPrefix = "response:v2:";
     private static readonly AsyncLocal<BoundedExecutionContext?> BoundedExecution = new();
     internal static Action? ResponseSnapshotValidatedForTesting { get; set; }
+    internal static Action? PartialFamilyPageReadForTesting { get; set; }
 
     private static readonly HashSet<string> BoundedResponseCommands =
         ProjectionFieldRegistry.SupportedCommands.ToHashSet(StringComparer.Ordinal);
@@ -2350,7 +2351,10 @@ internal static partial class JsonEnvelopeWrapper
             string? primaryCollection,
             bool statusExplainRequest)
         {
-            var preserveFullDiscoveryRows = command is "search" or "languages";
+            var preserveFullDiscoveryRows = command is "search" or "languages"
+                                            || command == "symbols"
+                                            && PartialFamilyKey is not null
+                                            && !Compact;
             var selected = Fields
                            ?? (statusExplainRequest
                                ? ProjectionFieldRegistry.GetStatusExplainCompactFields()
@@ -2460,12 +2464,11 @@ internal static partial class JsonEnvelopeWrapper
 
     internal static string BuildPartialFamilyMembersCursor(
         string[] args,
-        DbReader reader,
+        PartialFamilyCursorSnapshot snapshot,
         string partialFamilyKey,
         string partialFamilyId,
         int familyMemberOffset)
     {
-        var snapshot = BuildResponseSnapshot(reader);
         return FormatResponseCursor(
             offset: 0,
             BuildResponseFingerprint("symbols", args),
@@ -2473,6 +2476,33 @@ internal static partial class JsonEnvelopeWrapper
             partialFamilyKey: partialFamilyKey,
             partialFamilyId: partialFamilyId,
             familyMemberOffset: familyMemberOffset);
+    }
+
+    internal static PartialFamilyCursorSnapshot CapturePartialFamilyCursorSnapshot(
+        DbReader reader)
+        => new(BuildResponseSnapshot(reader).GenerationFingerprint);
+
+    internal static int? ValidatePartialFamilyCursorSnapshot(
+        string dbPath,
+        bool dbPathExplicit,
+        PartialFamilyCursorSnapshot snapshot)
+    {
+        PartialFamilyPageReadForTesting?.Invoke();
+        var completedSnapshot = SafeReadResponseSnapshot(
+            dbPath,
+            dbPathExplicit,
+            appVersion: "partial-family");
+        if (string.Equals(
+                snapshot.GenerationFingerprint,
+                completedSnapshot.GenerationFingerprint,
+                StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        return WriteBoundedResponseUsageError(
+            "The index generation changed while this partial-family page was being read.",
+            "Restart pagination without --cursor after the active index refresh completes.");
     }
 
     internal static int GetBoundedResponseOffset(string command)
@@ -2506,6 +2536,9 @@ internal static partial class JsonEnvelopeWrapper
         string PartialFamilyKey,
         string PartialFamilyId,
         int FamilyMemberOffset);
+
+    internal readonly record struct PartialFamilyCursorSnapshot(
+        string GenerationFingerprint);
 
     internal static bool ShouldMaterializeBody(string command)
     {
