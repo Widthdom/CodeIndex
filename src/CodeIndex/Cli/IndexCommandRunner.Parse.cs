@@ -343,6 +343,15 @@ public static partial class IndexCommandRunner
         RemoveOverriddenEnvironmentWarning(optionWarnings, WatchPendingPathLimitEnvironmentVariable, watchPendingPathLimitSpecifiedOnCli);
         RemoveOverriddenEnvironmentWarning(optionWarnings, FileIndexer.MaxFileSizeEnvironmentVariable, maxFileSizeBytesSpecifiedOnCli);
         RemoveOverriddenEnvironmentWarning(optionWarnings, IndexParallelismEnvironmentVariable, parallelismSpecifiedOnCli);
+        if (optimizeOnly)
+        {
+            // Optimize does not consume indexing worker, file-size, or watch queue settings.
+            // Do not emit fallback warnings for environment values that cannot affect this mode.
+            // optimize は indexing worker / file size / watch queue 設定を使用しないため、
+            // この mode に影響しない環境変数の fallback warning は出力しない。
+            optionWarnings.Clear();
+        }
+
         var finalParseError = parseError ?? generatedCodePatternError;
         if (finalParseError != null)
         {

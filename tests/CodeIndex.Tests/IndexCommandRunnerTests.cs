@@ -5349,6 +5349,23 @@ public sealed class Caller
     }
 
     [Theory]
+    [InlineData(IndexCommandRunner.IndexParallelismEnvironmentVariable)]
+    [InlineData(IndexCommandRunner.WatchPendingPathLimitEnvironmentVariable)]
+    [InlineData(FileIndexer.MaxFileSizeEnvironmentVariable)]
+    public void ParseArgs_OptimizeSuppressesIrrelevantNumericEnvironmentWarnings_Issue5097(
+        string environmentVariable)
+    {
+        using var env = EnvironmentVariableScope.Capture(environmentVariable);
+        env.Set(environmentVariable, "invalid");
+
+        var options = IndexCommandRunner.ParseArgs([".", "--optimize", "--dry-run", "--json"]);
+
+        Assert.True(options.OptimizeOnly);
+        Assert.Null(options.ParseError);
+        Assert.Empty(options.OptionWarnings);
+    }
+
+    [Theory]
     [MemberData(nameof(InvalidIndexNumericOptionRunValues))]
     public void Run_InvalidExplicitNumericOptionReturnsStructuredUsageErrorBeforeDbMutation_Issue5097(
         string flag,
