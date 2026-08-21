@@ -25,8 +25,7 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (options.InspectFieldValidationError is { } inspectFieldError)
         {
-            return CommandErrorWriter.WriteJsonOrHuman(
-                json: true,
+            var errorPayload = CommandErrorWriter.BuildJsonPayload(
                 jsonOptions,
                 inspectFieldError.Message,
                 CommandExitCodes.UsageError,
@@ -39,6 +38,16 @@ public static partial class QueryCommandRunner
                 {
                     ["field_catalog"] = ProjectionFieldRegistry.CreateInspectDiscoveryDocument(),
                 });
+            var writeExitCode = WriteJsonPayloadWithOptionalByteLimit(
+                errorPayload,
+                options,
+                jsonOptions,
+                "inspect",
+                "inspect field validation error",
+                "Increase --max-json-bytes, or run `cdidx inspect --fields list` separately before retrying the corrected selector.");
+            return writeExitCode == CommandExitCodes.Success
+                ? CommandExitCodes.UsageError
+                : writeExitCode;
         }
         if (TryWriteNonPositiveCoordinateRangeError(
                 options,
@@ -699,7 +708,7 @@ public static partial class QueryCommandRunner
             }
 
             if (string.Equals(collectionName, "definitions", StringComparison.Ordinal)
-                && selectedLeaves.Any(IsInspectDefinitionBodyField))
+                && selectedLeaves.Any(ProjectionFieldRegistry.IsInspectDefinitionBodyContentField))
             {
                 foreach (var recoveryField in InspectDefinitionBodyRecoveryFields)
                 {
@@ -739,10 +748,6 @@ public static partial class QueryCommandRunner
         "body_content_truncation_reasons",
         "body_content_recovery",
     ];
-
-    private static bool IsInspectDefinitionBodyField(string field)
-        => string.Equals(field, "body_content", StringComparison.Ordinal)
-           || field.StartsWith("body_", StringComparison.Ordinal);
 
     private static string GetInspectTopLevelField(string field)
     {

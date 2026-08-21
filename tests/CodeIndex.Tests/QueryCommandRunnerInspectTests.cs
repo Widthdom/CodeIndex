@@ -1438,8 +1438,7 @@ public partial class QueryCommandRunnerTests
                 "--fields",
                 "DEFINITIONS.NAME,definitions.name,definitions.path,references.path,references.line,callers.file,callers.path,callers.line,callees.file,callees.line",
             };
-            var (nestedExitCode, nestedStdout, nestedStderr) = CaptureConsole(() =>
-                QueryCommandRunner.RunInspect(nestedArgs, _jsonOptions));
+            var (nestedExitCode, nestedStdout, nestedStderr) = RunInspectInProcess(nestedArgs);
             using var nestedDocument = ParseJsonOutput(nestedStdout);
             var nested = nestedDocument.RootElement;
 
@@ -1470,23 +1469,20 @@ public partial class QueryCommandRunnerTests
             Assert.True(nested.GetProperty("graph_sections").GetProperty("references").GetProperty("truncated").GetBoolean());
             Assert.True(nested.GetProperty("truncation").GetProperty("sections").TryGetProperty("references", out _));
 
-            var (fullExitCode, fullStdout, fullStderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
-                ["Compute", "--db", dbPath, "--json", "--exact-name", "--limit", "1"],
-                _jsonOptions));
+            var (fullExitCode, fullStdout, fullStderr) = RunInspectInProcess(
+                "Compute", "--db", dbPath, "--json", "--exact-name", "--limit", "1");
             Assert.Equal(CommandExitCodes.Success, fullExitCode);
             Assert.Equal(string.Empty, fullStderr);
             Assert.True(nestedStdout.Length * 2 < fullStdout.Length);
 
             var boundedArgs = nestedArgs.Concat(["--max-json-bytes", "4096"]).ToArray();
-            var (boundedExitCode, boundedStdout, boundedStderr) = CaptureConsole(() =>
-                QueryCommandRunner.RunInspect(boundedArgs, _jsonOptions));
+            var (boundedExitCode, boundedStdout, boundedStderr) = RunInspectInProcess(boundedArgs);
             Assert.Equal(CommandExitCodes.Success, boundedExitCode);
             Assert.Equal(string.Empty, boundedStderr);
             Assert.True(System.Text.Encoding.UTF8.GetByteCount(boundedStdout) <= 4096);
 
-            var (parentExitCode, parentStdout, parentStderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
-                ["Compute", "--db", dbPath, "--json", "--exact-name", "--fields", "definitions.name,definitions"],
-                _jsonOptions));
+            var (parentExitCode, parentStdout, parentStderr) = RunInspectInProcess(
+                "Compute", "--db", dbPath, "--json", "--exact-name", "--fields", "definitions.name,definitions");
             using var parentDocument = ParseJsonOutput(parentStdout);
             var parentDefinition = Assert.Single(parentDocument.RootElement.GetProperty("definitions").EnumerateArray());
             Assert.Equal(CommandExitCodes.Success, parentExitCode);
@@ -1494,9 +1490,8 @@ public partial class QueryCommandRunnerTests
             Assert.True(parentDefinition.TryGetProperty("kind", out _));
             Assert.True(parentDefinition.TryGetProperty("start_line", out _));
 
-            var (bodyExitCode, bodyStdout, bodyStderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
-                ["Compute", "--db", dbPath, "--json", "--exact-name", "--body-lines", "1", "--fields", "definitions.name,definitions.body"],
-                _jsonOptions));
+            var (bodyExitCode, bodyStdout, bodyStderr) = RunInspectInProcess(
+                "Compute", "--db", dbPath, "--json", "--exact-name", "--body-lines", "1", "--fields", "definitions.name,definitions.body");
             using var bodyDocument = ParseJsonOutput(bodyStdout);
             var bodyDefinition = Assert.Single(bodyDocument.RootElement.GetProperty("definitions").EnumerateArray());
             Assert.Equal(CommandExitCodes.Success, bodyExitCode);
@@ -1510,12 +1505,26 @@ public partial class QueryCommandRunnerTests
             Assert.True(bodyDefinition.TryGetProperty("body_content_next_start_line", out _));
             Assert.True(bodyDefinition.TryGetProperty("body_content_recovery", out _));
 
-            var (partialExitCode, partialStdout, partialStderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
-                [
-                    "Target", "--db", dbPath, "--json", "--exact-name", "--group-partials",
-                    "--fields", "definitions.name,definitions.definition_sites,definitions.partial_family_id,definitions.family_members",
-                ],
-                _jsonOptions));
+            foreach (var boundaryField in new[] { "body_start_line", "body_end_line" })
+            {
+                var selector = $"definitions.{boundaryField}";
+                var (boundaryExitCode, boundaryStdout, boundaryStderr) = RunInspectInProcess(
+                    "Compute", "--db", dbPath, "--json", "--exact-name", "--fields", selector);
+                using var boundaryDocument = ParseJsonOutput(boundaryStdout);
+                var boundaryRoot = boundaryDocument.RootElement;
+                var boundaryDefinition = Assert.Single(boundaryRoot.GetProperty("definitions").EnumerateArray());
+
+                Assert.Equal(CommandExitCodes.Success, boundaryExitCode);
+                Assert.Equal(string.Empty, boundaryStderr);
+                Assert.Equal([selector], boundaryRoot.GetProperty("selected_fields").EnumerateArray().Select(field => field.GetString()));
+                Assert.Equal([boundaryField], boundaryDefinition.EnumerateObject().Select(property => property.Name));
+                Assert.False(boundaryRoot.GetProperty("body_mode").GetProperty("include_body").GetBoolean());
+                Assert.False(boundaryDefinition.TryGetProperty("body_content_recovery", out _));
+            }
+
+            var (partialExitCode, partialStdout, partialStderr) = RunInspectInProcess(
+                "Target", "--db", dbPath, "--json", "--exact-name", "--group-partials",
+                "--fields", "definitions.name,definitions.definition_sites,definitions.partial_family_id,definitions.family_members");
             using var partialDocument = ParseJsonOutput(partialStdout);
             var partialRoot = partialDocument.RootElement;
             var partialDefinition = Assert.Single(partialRoot.GetProperty("definitions").EnumerateArray());
@@ -1527,9 +1536,8 @@ public partial class QueryCommandRunnerTests
             Assert.True(partialRoot.GetProperty("group_partials").GetBoolean());
             Assert.Equal("logical_partial_families", partialRoot.GetProperty("definition_result_scope").GetString());
 
-            var (emptyExitCode, emptyStdout, emptyStderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
-                ["MissingIssue5098", "--db", dbPath, "--json", "--exact-name", "--fields", "definitions.name,references.path"],
-                _jsonOptions));
+            var (emptyExitCode, emptyStdout, emptyStderr) = RunInspectInProcess(
+                "MissingIssue5098", "--db", dbPath, "--json", "--exact-name", "--fields", "definitions.name,references.path");
             using var emptyDocument = ParseJsonOutput(emptyStdout);
             Assert.Equal(CommandExitCodes.Success, emptyExitCode);
             Assert.Equal(string.Empty, emptyStderr);
@@ -1545,8 +1553,7 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void RunInspect_FieldCatalogAndUnknownNestedFieldsAreStructured_Issue5098()
     {
-        var (catalogExitCode, catalogStdout, catalogStderr) = CaptureConsole(() =>
-            QueryCommandRunner.RunInspect(["--fields", "list"], _jsonOptions));
+        var (catalogExitCode, catalogStdout, catalogStderr) = RunInspectInProcess("--fields", "list");
         using var catalogDocument = ParseJsonOutput(catalogStdout);
         var catalog = catalogDocument.RootElement;
 
@@ -1573,12 +1580,16 @@ public partial class QueryCommandRunnerTests
         Assert.Equal(
             ["file", "definitions", "nearby_symbols"],
             outline.GetProperty("expands_to").EnumerateArray().Select(field => field.GetString()));
+        var catalogFieldNames = catalog.GetProperty("fields").EnumerateArray()
+            .Select(field => field.GetProperty("name").GetString())
+            .ToArray();
+        Assert.DoesNotContain("references.body_content", catalogFieldNames);
+        Assert.DoesNotContain("callers.body_content", catalogFieldNames);
+        Assert.DoesNotContain("callees.body_content", catalogFieldNames);
 
-        foreach (var invalidField in new[] { "unknown.path", "definitions.nope" })
+        foreach (var invalidField in new[] { "unknown.path", "definitions.nope", "references.body_content" })
         {
-            var (exitCode, stdout, stderr) = CaptureConsole(() => QueryCommandRunner.RunInspect(
-                ["Target", "--fields", invalidField],
-                _jsonOptions));
+            var (exitCode, stdout, stderr) = RunInspectInProcess("Target", "--fields", invalidField);
             using var errorDocument = ParseJsonOutput(stdout);
             var error = errorDocument.RootElement;
 
@@ -1588,6 +1599,36 @@ public partial class QueryCommandRunnerTests
             Assert.Equal("usage", error.GetProperty("category").GetString());
             Assert.Equal("inspect", error.GetProperty("field_catalog").GetProperty("command").GetString());
             Assert.Contains("--fields list", error.GetProperty("hint").GetString(), StringComparison.Ordinal);
+        }
+
+        var (boundedExitCode, boundedStdout, boundedStderr) = RunInspectInProcess(
+            "Target", "--fields", "definitions.nope", "--max-json-bytes", "4096");
+        using var boundedDocument = ParseJsonOutput(boundedStdout);
+        Assert.Equal(CommandExitCodes.UsageError, boundedExitCode);
+        Assert.Equal(string.Empty, boundedStderr);
+        Assert.True(System.Text.Encoding.UTF8.GetByteCount(boundedStdout) <= 4096);
+        Assert.Equal(
+            CommandErrorCodes.ResponseBudgetTooSmall,
+            boundedDocument.RootElement.GetProperty("error_code").GetString());
+
+        foreach (var repeatedFields in new[]
+                 {
+                     new[] { "--fields", "definitions.nope", "--fields", "definitions.name" },
+                     new[] { "--fields", "definitions.name", "--fields", "definitions.nope" },
+                 })
+        {
+            var repeatedArgs = new[] { "Target" }.Concat(repeatedFields).ToArray();
+            var (repeatedExitCode, repeatedStdout, repeatedStderr) = RunInspectInProcess(repeatedArgs);
+            using var repeatedDocument = ParseJsonOutput(repeatedStdout);
+
+            Assert.Equal(CommandExitCodes.UsageError, repeatedExitCode);
+            Assert.Contains("Warning: --fields specified more than once", repeatedStderr, StringComparison.Ordinal);
+            Assert.Equal(
+                CommandErrorCodes.UsageError,
+                repeatedDocument.RootElement.GetProperty("error_code").GetString());
+            Assert.Equal(
+                "inspect",
+                repeatedDocument.RootElement.GetProperty("field_catalog").GetProperty("command").GetString());
         }
     }
 

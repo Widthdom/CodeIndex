@@ -195,9 +195,16 @@ internal static class ProjectionFieldRegistry
         canonicalSelector = definition.AliasFor ?? definition.Name;
         expansion = definition.ExpandsTo;
         includeBody = string.Equals(normalized, "body", StringComparison.Ordinal)
-                      || canonicalSelector.StartsWith("definitions.body_", StringComparison.Ordinal);
+                      || canonicalSelector.StartsWith("definitions.", StringComparison.Ordinal)
+                      && IsInspectDefinitionBodyContentField(canonicalSelector["definitions.".Length..]);
         return true;
     }
+
+    internal static bool IsInspectDefinitionBodyContentField(string field)
+        => string.Equals(field, "body_content", StringComparison.Ordinal)
+           || field.StartsWith("body_", StringComparison.Ordinal)
+           && !string.Equals(field, "body_start_line", StringComparison.Ordinal)
+           && !string.Equals(field, "body_end_line", StringComparison.Ordinal);
 
     internal static JsonObject CreateInspectDiscoveryDocument()
     {
@@ -254,9 +261,15 @@ internal static class ProjectionFieldRegistry
             .Distinct(StringComparer.Ordinal)
             .ToArray();
         var nearbyFields = GetJsonFieldNames<SymbolResult>().ToArray();
-        var referenceFields = GetJsonFieldNames<ReferenceResult>().ToArray();
-        var callerFields = GetJsonFieldNames<CallerResult>().ToArray();
-        var calleeFields = GetJsonFieldNames<CalleeResult>().ToArray();
+        var referenceFields = GetJsonFieldNames<ReferenceResult>()
+            .Where(field => !IsInspectGraphBodyField(field))
+            .ToArray();
+        var callerFields = GetJsonFieldNames<CallerResult>()
+            .Where(field => !IsInspectGraphBodyField(field))
+            .ToArray();
+        var calleeFields = GetJsonFieldNames<CalleeResult>()
+            .Where(field => !IsInspectGraphBodyField(field))
+            .ToArray();
 
         return Create(
             "inspect",
@@ -292,6 +305,10 @@ internal static class ProjectionFieldRegistry
                 .Expansion("outline_only", ["file", "definitions", "nearby_symbols"])
                 .Expansion("outlineonly", ["file", "definitions", "nearby_symbols"]));
     }
+
+    private static bool IsInspectGraphBodyField(string field)
+        => string.Equals(field, "body_content", StringComparison.Ordinal)
+           || field.StartsWith("body_", StringComparison.Ordinal);
 
     private static ProjectionCommandFieldSchema CreateSearchSchema()
         => Create(

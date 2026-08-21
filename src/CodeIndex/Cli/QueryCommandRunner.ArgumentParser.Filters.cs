@@ -127,7 +127,8 @@ public static partial class QueryCommandRunner
                             fieldsValue!,
                             AddParseError,
                             out var includeBodyFromFields,
-                            out inspectFieldValidationError);
+                            out var currentInspectFieldValidationError);
+                        inspectFieldValidationError ??= currentInspectFieldValidationError;
                         includeBody |= includeBodyFromFields;
                         json = true;
                         outputFormat = OutputFormatJson;
