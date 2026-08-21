@@ -257,6 +257,7 @@ public partial class DbReader
                 CalleeSymbolId = calleeSymbolId,
                 Depth = depth,
                 FirstLine = caller.FirstLine,
+                FirstColumn = caller.FirstColumn > 0 ? caller.FirstColumn : null,
                 ReferenceCount = caller.ReferenceCount,
                 ReferenceKind = caller.ReferenceKind,
                 ReferenceKinds = caller.ReferenceKinds,

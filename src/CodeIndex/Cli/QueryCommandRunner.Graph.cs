@@ -133,6 +133,12 @@ public static partial class QueryCommandRunner
                     Console.WriteLine($"{r.ReferenceKind,-12} {r.SymbolName,-32} {r.Path}:{r.Line}:{r.Column}{owner}");
                     Console.WriteLine($"  {r.Context}");
                     WriteOptionalBodyExcerpt(r.BodyStartLine, r.BodyContent);
+                    WriteOptionalCallsiteExcerpt(
+                        r.CallsiteLine,
+                        r.CallsiteColumn,
+                        r.CallsiteStartLine,
+                        r.CallsiteContent,
+                        r.CallsiteOmittedReferenceCount);
                 }
                 var refFileCount = results.Select(r => r.Path).Distinct().Count();
                 CommandErrorWriter.WriteStderr($"({results.Count} references in {refFileCount} files)");
@@ -280,6 +286,12 @@ public static partial class QueryCommandRunner
                     var kindLabel = FormatReferenceKindLabel(r.ReferenceKind, r.ReferenceKinds, r.HasMixedReferenceKinds, r.ReferenceKindCounts);
                     Console.WriteLine($"{kindLabel.PadRight(kindColumnWidth)} {r.CallerKind ?? "?",-10} {r.CallerName ?? "<top-level>",-32} {r.Path}:{r.FirstLine}  -> {r.CalleeName} ({r.ReferenceCount} refs)");
                     WriteOptionalBodyExcerpt(r.BodyStartLine, r.BodyContent);
+                    WriteOptionalCallsiteExcerpt(
+                        r.CallsiteLine,
+                        r.CallsiteColumn,
+                        r.CallsiteStartLine,
+                        r.CallsiteContent,
+                        r.CallsiteOmittedReferenceCount);
                 }
                 var callerFileCount = results.Select(r => r.Path).Distinct().Count();
                 CommandErrorWriter.WriteStderr($"({results.Count} callers in {callerFileCount} files)");
@@ -435,6 +447,12 @@ public static partial class QueryCommandRunner
                     var kindLabel = FormatReferenceKindLabel(r.ReferenceKind, r.ReferenceKinds, r.HasMixedReferenceKinds, r.ReferenceKindCounts);
                     Console.WriteLine($"{kindLabel.PadRight(kindColumnWidth)} {r.CalleeName,-32} {r.Path}:{r.FirstLine}  <- {r.CallerName ?? "<top-level>"} ({r.ReferenceCount} refs)");
                     WriteOptionalBodyExcerpt(r.BodyStartLine, r.BodyContent);
+                    WriteOptionalCallsiteExcerpt(
+                        r.CallsiteLine,
+                        r.CallsiteColumn,
+                        r.CallsiteStartLine,
+                        r.CallsiteContent,
+                        r.CallsiteOmittedReferenceCount);
                 }
                 var calleeFileCount = results.Select(r => r.Path).Distinct().Count();
                 CommandErrorWriter.WriteStderr($"({results.Count} callees in {calleeFileCount} files)");
@@ -510,7 +528,7 @@ public static partial class QueryCommandRunner
         {
             CommandErrorWriter.Write(
                 "--snippet-lines requires --body for references, callers, and callees.",
-                "Add --body to emit a bounded body excerpt, or omit --snippet-lines.",
+                "Add --body to emit bounded definition and call-site evidence, or omit --snippet-lines.",
                 GetUsageLineOrThrow(command),
                 CommandErrorCodes.UsageError);
             return false;

@@ -1587,7 +1587,8 @@ internal static partial class JsonEnvelopeWrapper
             return string.Equals(field, "all", StringComparison.Ordinal)
                    || string.Equals(projectedField, "body", StringComparison.Ordinal)
                    || string.Equals(projectedField, "body_content", StringComparison.Ordinal)
-                   || projectedField.StartsWith("body_", StringComparison.Ordinal);
+                   || projectedField.StartsWith("body_", StringComparison.Ordinal)
+                   || projectedField.StartsWith("callsite_", StringComparison.Ordinal);
         }) == true;
 
     private static string? ValidateMapProjectionControls(string[] args, IReadOnlyList<string>? fields)

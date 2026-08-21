@@ -429,12 +429,25 @@ source line because body paging is line-based. `inspect --json` also includes
 `body_mode` metadata so clients can see whether body content was requested,
 whether it is present, and which follow-up flags to use.
 
-For `references`, `callers`, and `callees`, `--body` and `--snippet-lines`
-describe the requested body work independently of `--fields`. A projection that
-omits every `body_*` field is valid and suppresses body materialization, while
-`--fields all` or explicit body fields keep the selected body content, range,
-truncation, and recovery metadata. Omitting `--body` still makes an
-explicit `--snippet-lines` a usage error.
+For `references`, `callers`, `callees`, and `impact`, `--body` returns two
+independent evidence windows from indexed source. The existing `body_*` fields
+remain the definition or containing-symbol excerpt. Additive `callsite_*`
+fields center a second excerpt on the deterministic `first_reference` edge and
+report its 1-based line, column, span length, grouped reference count, and
+`callsite_omitted_reference_count`. The grouped representative is the lowest
+line/column pair; a single `references` row reports one selected reference and
+zero omitted references. Call-site content uses the same line-width, snippet,
+byte-budget, truncation-reason, redacted recovery-command, and cursor rules as
+body content. If indexed source cannot supply the excerpt,
+`callsite_content_unavailable_reason` is returned instead of reading the live
+workspace file.
+
+`--body` and `--snippet-lines` describe this requested evidence work
+independently of `--fields`. A projection that omits every `body_*` and
+`callsite_*` field is valid and suppresses materialization, while `--fields all`
+or explicit fields keep only the selected definition and/or call-site content
+and metadata. Omitting `--body` still makes an explicit `--snippet-lines` a
+usage error.
 Count-only JSON (`--count --json` or `--format count` where supported) is a
 single object with `count`, applied `query_context`, freshness metadata
 (`indexed_file_count`, `indexed_at`, `freshness_available`), and trust flags
@@ -2292,7 +2305,7 @@ same source location.
 | `--next-steps` | `search` | Emit inspect/excerpt follow-up commands for top search hits |
 | `--include-generated` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `validate`, `deps`, `impact`, `unused`, `hotspots` | Include files detected as generated code; generated files are excluded from query results by default |
 | `--workspace-db <path>` | `deps` | Add another CodeIndex database to the file-dependency query. Repeat it for up to 7 distinct additional DBs (8 total including `--db`); JSON edges include `source_db` and `target_db` so same relative paths can be disambiguated. |
-| `--snippet-lines <n>` | `search`, `references`, `callers`, `callees`, `impact` | Search snippet length or graph `--body` excerpt length (default: 8, max: 20) |
+| `--snippet-lines <n>` | `search`, `references`, `callers`, `callees`, `impact` | Search snippet length or graph `--body` definition/call-site excerpt length (default: 8, max: 20) |
 | `--snippet-focus <leftmost\|quality\|proximity>` | `search` | Choose how long search-result lines pick the visible focus when clamped. `quality` (default) prefers full-query matches and strong tokens; `proximity` favors dense multi-token clusters; `leftmost` keeps legacy earliest-match behavior. |
 | `--max-line-width <n>` | `search`, `references`, `callers`, `callees`, `find`, `excerpt`, `impact`, `inspect` | Clamp very long single-line snippet/reference/excerpt payloads around the relevant match (`0` disables clamping; default: 512, max: 4096) |
 | `--fts` | `search` | Use raw FTS5 query syntax; malformed input is reported as a usage error with a hint. `fts_chunks` exposes only the `content` column, so `content:` is the only valid column qualifier. |
@@ -4012,12 +4025,21 @@ top-level group を選択します。`--outline-only` は
 metadata も含まれるため、body content が要求済みか、存在するか、次に使う flag が何かを
 client 側で判断できます。
 
-`references`、`callers`、`callees` では、`--body` と `--snippet-lines` が表す body
-取得意図は `--fields` から独立しています。すべての `body_*` field を省く投影も有効で、
-その場合は body の materialization を省略します。`--fields all` または明示的な body field
-を指定した場合は、選択した body content、範囲、truncation、recovery の metadata を
-維持します。`--body` を省略したまま `--snippet-lines` を明示すると、従来どおり usage error
-になります。
+`references`、`callers`、`callees`、`impact` で `--body` を指定すると、indexed source
+から独立した2つの証拠 window を返します。既存の `body_*` field は定義または包含 symbol
+の抜粋のままです。追加の `callsite_*` field は、決定的に選んだ `first_reference` edge を
+中心に別の抜粋を作り、1-based の行・列、span 長、group 内の参照件数、
+`callsite_omitted_reference_count` を返します。group の代表は行・列が最小の組で、
+`references` の各 row は選択参照1件、省略0件です。call-site content にも body content と
+同じ行幅、snippet、byte budget、truncation reason、伏字化した recovery command、cursor
+の規則を適用します。indexed source から抜粋を作れない場合は live workspace file を読まず、
+`callsite_content_unavailable_reason` を返します。
+
+`--body` と `--snippet-lines` が表す証拠取得意図は `--fields` から独立しています。
+すべての `body_*` と `callsite_*` field を省く投影も有効で、その場合は materialization を
+省略します。`--fields all` または明示 field を指定した場合は、選択した定義 / call-site
+content と metadata だけを維持します。`--body` を省略したまま `--snippet-lines` を
+明示すると、従来どおり usage error になります。
 count-only JSON（対応 command の `--count --json` または `--format count`）は、
 `count`、適用済み `query_context`、freshness metadata（`indexed_file_count`、
 `indexed_at`、`freshness_available`）、trust flag の `degraded` /
@@ -5794,7 +5816,7 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--max-json-bytes <n>` | `search`、`definition`、`recipes`、`audit`、`deps`、`hotspots`、`outline` | 指定した UTF-8 byte 上限を超える JSON を出力する前に失敗する。bounded `outline` は共通 envelope 内に完全な symbol row だけを出力し、authoritative な返却 / 総 / 省略件数と opaque な continuation cursor を公開する。最小 envelope が収まらない場合は stdout を空に保ち、型付き usage error を報告する。`definition --json` の未検出時も構造化 not-found object を同じ上限に対して事前検査し、object が収まらない場合は上限超過の stdout を出さず stderr に usage error を報告する。大きい graph 出力では `deps --summary-only`、`deps --format json-graph --summary-only`、または `hotspots --summary-only` と組み合わせる。 |
 | `--next-steps` | `search` | 上位 search hit に対する inspect / excerpt follow-up command を出力する |
 | `--include-generated` | `search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `find`, `map`, `inspect`, `validate`, `deps`, `impact`, `unused`, `hotspots` | 生成コードとして検出されたファイルを含める。生成ファイルは既定でクエリ結果から除外される |
-| `--snippet-lines <n>` | `search`, `references`, `callers`, `callees`, `impact` | search スニペット、または graph `--body` 抜粋の行数（デフォルト: 8、最大: 20） |
+| `--snippet-lines <n>` | `search`, `references`, `callers`, `callees`, `impact` | search スニペット、または graph `--body` の定義 / call-site 抜粋の行数（デフォルト: 8、最大: 20） |
 | `--snippet-focus <leftmost\|quality\|proximity>` | `search` | 長い検索結果行をクランプするときの焦点選択。`quality`（デフォルト）は全文一致や強いトークンを優先し、`proximity` は近接した複数トークンを優先し、`leftmost` は従来の最左一致を使う。 |
 | `--max-line-width <n>` | `search`, `references`, `callers`, `callees`, `find`, `excerpt`, `impact`, `inspect` | 極端に長い1行のスニペット・参照文脈・抜粋を、関連箇所の周辺だけに切り詰める（`0` でクランプ解除、デフォルト: 512、最大: 4096） |
 | `--fts` | `search` | リテラル安全な引用ではなく生のFTS5クエリ構文を使う。壊れた入力はヒント付きの使用エラーになり、列修飾子は `content:` だけが有効 |

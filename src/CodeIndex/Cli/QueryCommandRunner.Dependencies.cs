@@ -370,6 +370,13 @@ public static partial class QueryCommandRunner
                             var indent = new string(' ', (r.Depth - 1) * 2);
                             Console.WriteLine($"  {indent}{r.CallerKind ?? "?",-10} {r.CallerName ?? "<top-level>",-32} {r.Path}:{r.FirstLine}  -> {r.CalleeName} ({r.ReferenceCount} refs)");
                             WriteOptionalBodyExcerpt(r.BodyStartLine, r.BodyContent, $"  {indent}");
+                            WriteOptionalCallsiteExcerpt(
+                                r.CallsiteLine,
+                                r.CallsiteColumn,
+                                r.CallsiteStartLine,
+                                r.CallsiteContent,
+                                r.CallsiteOmittedReferenceCount,
+                                $"  {indent}");
                             if (options.WithPaths && r.Paths != null)
                             {
                                 foreach (var p in r.Paths)

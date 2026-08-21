@@ -578,7 +578,7 @@ public partial class DbReader
         var callerContainerPredicate = BuildCallerContainerPredicate("f", "r");
         var sql = $@"
             WITH logical_references AS (
-                SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.reference_kind, r.line,
+                SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.reference_kind, r.line, r.column_number,
                        {sourceSymbolIdSql} AS source_symbol_id,
                        {targetSymbolIdSql} AS target_symbol_id,
                        MAX({selfReferenceSql}) AS is_self_reference,
@@ -609,7 +609,10 @@ public partial class DbReader
                    CASE WHEN lang = 'solution' AND reference_kind = 'project_reference' THEN path
                         ELSE " + BuildCallerNameProjectionSql("r") + @" END AS container_name,
                    symbol_name,
-                   reference_kind, MIN(line) AS first_line, COUNT(*) AS reference_count,
+                   reference_kind,
+                   (MIN(CAST(line AS INTEGER) * 4294967296 + column_number) / 4294967296) AS first_line,
+                   (MIN(CAST(line AS INTEGER) * 4294967296 + column_number) % 4294967296) AS first_column,
+                   COUNT(*) AS reference_count,
                    MAX(is_self_reference) AS is_self_reference,
                    MAX(is_mutual_recursion) AS is_mutual_recursion,
                    source_symbol_id,
@@ -666,17 +669,18 @@ public partial class DbReader
                 ReferenceKinds = [reader.GetString(5)],
                 ReferenceKindCounts = new Dictionary<string, int>(StringComparer.Ordinal)
                 {
-                    [reader.GetString(5)] = reader.GetInt32(7),
+                    [reader.GetString(5)] = reader.GetInt32(8),
                 },
                 FirstLine = reader.GetInt32(6),
-                ReferenceCount = reader.GetInt32(7),
-                HasSelfReference = reader.GetInt32(8) != 0,
-                HasMutualRecursion = reader.GetInt32(9) != 0,
-                CallerSymbolId = reader.IsDBNull(10) ? null : reader.GetInt64(10),
-                CalleeSymbolId = reader.IsDBNull(11) ? null : reader.GetInt64(11),
-                CalleeSymbolIds = reader.IsDBNull(12)
+                FirstColumn = reader.GetInt32(7),
+                ReferenceCount = reader.GetInt32(8),
+                HasSelfReference = reader.GetInt32(9) != 0,
+                HasMutualRecursion = reader.GetInt32(10) != 0,
+                CallerSymbolId = reader.IsDBNull(11) ? null : reader.GetInt64(11),
+                CalleeSymbolId = reader.IsDBNull(12) ? null : reader.GetInt64(12),
+                CalleeSymbolIds = reader.IsDBNull(13)
                     ? Array.Empty<long>()
-                    : reader.GetString(12)
+                    : reader.GetString(13)
                         .Split(',', StringSplitOptions.RemoveEmptyEntries)
                         .Select(long.Parse)
                         .Order()

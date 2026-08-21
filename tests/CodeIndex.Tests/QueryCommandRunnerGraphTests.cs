@@ -593,7 +593,10 @@ public partial class QueryCommandRunnerTests
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/Session.cs", "csharp", """
+            var callsitePrefix = "        var first = " + new string(' ', 320);
+            var callsiteLine = callsitePrefix + "Run(user)" + new string(' ', 320) + ";";
+            var callsiteColumn = callsitePrefix.Length + 1;
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Session.cs", "csharp", $$"""
             class Session
             {
                 int Run(int user)
@@ -604,7 +607,8 @@ public partial class QueryCommandRunnerTests
 
                 int Login(int user)
                 {
-                    return Run(user);
+            {{callsiteLine}}
+                    return Run(first);
                 }
             }
             """);
@@ -621,41 +625,102 @@ public partial class QueryCommandRunnerTests
                         SymbolName = "Run",
                         ReferenceKind = "call",
                         Line = 11,
-                        Column = 16,
-                        Context = "        return Run(user);",
+                        Column = callsiteColumn,
+                        Context = callsiteLine,
                         ContainerKind = "function",
                         ContainerName = "Login",
-                    }
+                    },
+                    new ReferenceRecord
+                    {
+                        FileId = fileId,
+                        SymbolName = "Run",
+                        ReferenceKind = "call",
+                        Line = 12,
+                        Column = 16,
+                        Context = "        return Run(first);",
+                        ContainerKind = "function",
+                        ContainerName = "Login",
+                    },
+                    new ReferenceRecord
+                    {
+                        FileId = fileId,
+                        SymbolName = "LegacyRun",
+                        ReferenceKind = "call",
+                        Line = 12,
+                        Column = 0,
+                        Context = "        return Run(first);",
+                        ContainerKind = "function",
+                        ContainerName = "LegacyLogin",
+                    },
                 ]);
                 writer.MarkGraphReady();
             }
 
             AssertBodyExcerpt(
                 QueryCommandRunner.RunReferences,
-                ["Run", "--db", dbPath, "--json", "--body", "--snippet-lines", "1"],
+                ["Run", "--db", dbPath, "--json", "--body", "--snippet-lines", "1", "--max-line-width", "80", "--limit", "1", "--exact-name"],
                 "int Login(int user)",
-                expectedContentTruncated: true);
+                expectedContentTruncated: true,
+                expectedCallsiteContent: "Run(user)",
+                expectedCallsiteLine: 11,
+                expectedCallsiteColumn: callsiteColumn,
+                expectedCallsiteReferenceCount: 1,
+                expectedCallsiteOmittedReferenceCount: 0,
+                expectedCallsiteContentTruncated: true,
+                forbiddenRecoveryPath: projectRoot);
             AssertBodyExcerpt(
                 QueryCommandRunner.RunCallers,
-                ["Run", "--db", dbPath, "--json", "--body", "--snippet-lines", "20"],
+                ["Run", "--db", dbPath, "--json", "--body", "--snippet-lines", "1", "--max-line-width", "80", "--exact-name"],
                 "int Login(int user)",
-                expectedContentTruncated: false);
+                expectedContentTruncated: true,
+                expectedCallsiteContent: "Run(user)",
+                expectedCallsiteLine: 11,
+                expectedCallsiteColumn: callsiteColumn,
+                expectedCallsiteReferenceCount: 4,
+                expectedCallsiteOmittedReferenceCount: 3,
+                expectedCallsiteContentTruncated: true,
+                forbiddenRecoveryPath: projectRoot);
             AssertBodyExcerpt(
                 QueryCommandRunner.RunCallees,
-                ["Login", "--db", dbPath, "--json", "--body", "--snippet-lines", "1"],
+                ["Login", "--db", dbPath, "--json", "--body", "--snippet-lines", "1", "--max-line-width", "80", "--exact-name"],
                 "int Run(int user)",
-                expectedContentTruncated: true);
+                expectedContentTruncated: true,
+                expectedCallsiteContent: "Run(user)",
+                expectedCallsiteLine: 11,
+                expectedCallsiteColumn: callsiteColumn,
+                expectedCallsiteReferenceCount: 4,
+                expectedCallsiteOmittedReferenceCount: 3,
+                expectedCallsiteContentTruncated: true,
+                forbiddenRecoveryPath: projectRoot);
 
             var (textExitCode, textStdout, textStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
-                ["Run", "--db", dbPath, "--body", "--snippet-lines", "1"],
+                ["Run", "--db", dbPath, "--body", "--snippet-lines", "1", "--max-line-width", "80", "--exact-name"],
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, textExitCode);
             Assert.Contains("int Login(int user)", textStdout);
+            Assert.Contains("Call site (line 11", textStdout);
+            Assert.Contains("Run(user)", textStdout);
             Assert.Contains("references in", textStderr);
 
+            var (unavailableExitCode, unavailableStdout, unavailableStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["LegacyRun", "--db", dbPath, "--json", "--body", "--snippet-lines", "1", "--exact-name"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, unavailableExitCode);
+            Assert.Equal(string.Empty, unavailableStderr);
+            using (var unavailableDocument = ParseJsonOutput(unavailableStdout))
+            {
+                var unavailableResult = unavailableDocument.RootElement;
+                Assert.Equal(12, unavailableResult.GetProperty("callsite_line").GetInt32());
+                Assert.Equal("first_reference", unavailableResult.GetProperty("callsite_selection").GetString());
+                Assert.Equal("callsite_column_unavailable", unavailableResult.GetProperty("callsite_content_unavailable_reason").GetString());
+                Assert.False(unavailableResult.TryGetProperty("callsite_column", out _));
+                Assert.False(unavailableResult.TryGetProperty("callsite_content", out _));
+            }
+
             var (impactExitCode, impactStdout, impactStderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
-                ["Run", "--db", dbPath, "--json", "--body", "--snippet-lines", "2"],
+                ["Run", "--db", dbPath, "--json", "--body", "--snippet-lines", "1", "--max-line-width", "80", "--exact-name"],
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, impactExitCode);
@@ -663,8 +728,16 @@ public partial class QueryCommandRunnerTests
             using var impactDocument = ParseJsonOutput(impactStdout);
             var impactCaller = impactDocument.RootElement.GetProperty("callers")[0];
             Assert.Contains("int Login(int user)", impactCaller.GetProperty("body_content").GetString());
-            Assert.Equal(2, CountLines(impactCaller.GetProperty("body_content").GetString()!));
             Assert.True(impactCaller.GetProperty("body_content_truncated").GetBoolean());
+            AssertCallsiteEvidence(
+                impactCaller,
+                "Run(user)",
+                expectedLine: 11,
+                expectedColumn: callsiteColumn,
+                expectedReferenceCount: 2,
+                expectedOmittedReferenceCount: 1,
+                expectedContentTruncated: true,
+                forbiddenRecoveryPath: projectRoot);
         }
         finally
         {

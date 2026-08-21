@@ -425,7 +425,7 @@ public class ConsoleUiTests
         Assert.Contains("cdidx inspect --path <file> --line <line> [--end-line <line>] [--db <path>] [--json] [--redact-paths|--show-paths] [--format <text|json|compact>] [--pretty] [--compact] [--fields <csv>] [--outline-only] [--body-only] [--cursor <next_cursor>] [--max-json-bytes <n>] [--body] [--body-start <line>] [--body-lines <n>|--body-line-count <n>] [--context <n>|--before <n>|--after <n>] [--max-line-width <n>]", output);
         Assert.Contains("cdidx outline <path> [--db <path>] [--json] [--pretty] [--compact] [--verbose] [--limit <n>|--top <n>] [--cursor <next_cursor>] [--max-json-bytes <n>] [--sort <source|kind|references|size|complexity|path|name>] [--kind <kind[,kind]>] [--outline-fields <csv>]", output);
         Assert.Contains("--snippet-lines <n>", output);
-        Assert.Contains("Snippet length; graph queries require --body with text/JSON output; issue-drafts accept 0 for path/line-only evidence", output);
+        Assert.Contains("Snippet length; graph --body uses it for definition and centered call-site evidence; issue-drafts accept 0 for path/line-only evidence", output);
         Assert.Contains("cdidx find <query> (--path <glob>|--all)", output);
         Assert.Contains("--count", output);
         Assert.Contains("scan caps can still mark approximate counts as degraded", output);
