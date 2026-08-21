@@ -329,7 +329,11 @@ internal static partial class ExportImportCommandRunner
                    'unknown_extension_file_path_limit',
                    'unknown_extension_extension_counts_json',
                    'unknown_extension_category_counts_json',
-                   'unknown_extension_groups_json');
+                   'unknown_extension_groups_json',
+                   'unknown_extension_group_count',
+                   'unknown_extension_groups_truncated',
+                   'unknown_extension_group_limit',
+                   'unknown_extension_group_omitted_count');
 
             INSERT INTO codeindex_meta(key, value)
             VALUES (@indexCompletenessKey, 'incomplete')

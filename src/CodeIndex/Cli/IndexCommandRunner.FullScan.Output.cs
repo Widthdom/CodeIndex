@@ -155,7 +155,7 @@ public static partial class IndexCommandRunner
                 UnknownExtensionGroupLimit = UnknownExtensionClassifier.MaxCompletionGroups,
                 UnknownExtensionGroupOmittedCount = unknownExtensionGroupOmittedCount,
                 UnknownExtensionDiagnosticsScope = "workspace",
-                UnknownExtensionFileCountLowerBound = false,
+                UnknownExtensionFileCountLowerBound = output.ScanHadErrors,
                 UnknownExtensionGuidance = output.ScanResult.UnknownExtensionFiles.Count > 0
                     ? UnknownExtensionClassifier.Guidance
                     : null,
@@ -242,7 +242,8 @@ public static partial class IndexCommandRunner
             {
                 CommandOutputWriter.WriteLine(ConsoleUi.FormatSummaryLine(
                     "Unknown extensions",
-                    ConsoleUi.FormatNumber(output.ScanResult.UnknownExtensionFiles.Count),
+                    ConsoleUi.FormatNumber(output.ScanResult.UnknownExtensionFiles.Count)
+                        + (output.ScanHadErrors ? " (lower bound)" : string.Empty),
                     indent: "  "));
                 foreach (var group in unknownExtensionGroups)
                 {

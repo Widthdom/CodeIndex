@@ -512,6 +512,8 @@ public static partial class IndexCommandRunner
         var unknownExtensionGroupOmittedCount = Math.Max(
             0,
             unknownExtensionClassification.GroupCount - unknownExtensionGroups.Count);
+        var unknownExtensionFileCountLowerBound = candidatePathsTruncated
+            || (authoritativeFullScan && dryScanMetadata.HadErrors);
         var unknownExtensionWarning = unknownExtensionClassification.ActionableFileCount > 0
             ? $"{unknownExtensionClassification.ActionableFileCount} file(s) were excluded because no language mapping or extractor was available. {UnknownExtensionClassifier.Guidance}"
             : null;
@@ -553,7 +555,7 @@ public static partial class IndexCommandRunner
                 UnknownExtensionGroupLimit = UnknownExtensionClassifier.MaxCompletionGroups,
                 UnknownExtensionGroupOmittedCount = unknownExtensionGroupOmittedCount,
                 UnknownExtensionDiagnosticsScope = authoritativeFullScan ? "workspace" : "candidate_scope",
-                UnknownExtensionFileCountLowerBound = candidatePathsTruncated,
+                UnknownExtensionFileCountLowerBound = unknownExtensionFileCountLowerBound,
                 UnknownExtensionGuidance = unknownExtensionTotal > 0
                     ? UnknownExtensionClassifier.Guidance
                     : null,
@@ -593,7 +595,7 @@ public static partial class IndexCommandRunner
             CommandOutputWriter.WriteLine($"Dry run: {dryFileCount} indexable files inspected{lowerBound}");
             if (unknownExtensionTotal > 0)
             {
-                CommandOutputWriter.WriteLine($"  unknown extensions {unknownExtensionTotal,6}{(candidatePathsTruncated ? " (lower bound)" : string.Empty)}");
+                CommandOutputWriter.WriteLine($"  unknown extensions {unknownExtensionTotal,6}{(unknownExtensionFileCountLowerBound ? " (lower bound)" : string.Empty)}");
                 foreach (var group in unknownExtensionGroups)
                     CommandOutputWriter.WriteLine($"    {group.Extension}: {ConsoleUi.FormatNumber(group.Count)} ({group.RecommendedAction})");
                 if (unknownExtensionGroupOmittedCount > 0)

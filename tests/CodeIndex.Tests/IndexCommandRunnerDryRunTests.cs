@@ -1459,7 +1459,7 @@ public partial class IndexCommandRunnerTests
     }
 
     [Fact]
-    public void Run_DryRun_FullScan_ReportsUnreadableDirectory()
+    public void Run_DryRun_FullScan_ReportsUnreadableDirectory_Issue5100()
     {
         if (OperatingSystem.IsWindows())
             return;
@@ -1470,6 +1470,7 @@ public partial class IndexCommandRunnerTests
         {
             Directory.CreateDirectory(secretDir);
             File.WriteAllText(Path.Combine(secretDir, "a.cs"), "public class A { }\n");
+            File.WriteAllText(Path.Combine(projectRoot, "notes.unknownext"), "unknown language\n");
             SetUnixPermissions(secretDir, UnixFileMode.None);
 
             var (exitCode, json) = RunAndCaptureJson([projectRoot, "--dry-run", "--json"]);
@@ -1477,11 +1478,15 @@ public partial class IndexCommandRunnerTests
             Assert.Equal(CommandExitCodes.Success, exitCode);
             Assert.Equal("dry_run", json.GetProperty("status").GetString());
             Assert.Equal(0, json.GetProperty("files_total").GetInt32());
+            Assert.Equal(1, json.GetProperty("unknown_extension_file_count").GetInt32());
+            Assert.True(json.GetProperty("unknown_extension_file_count_lower_bound").GetBoolean());
             Assert.Equal("secret", json.GetProperty("errors")[0].GetProperty("file").GetString());
             Assert.Equal("Could not scan directory due to permissions.", json.GetProperty("errors")[0].GetProperty("message").GetString());
 
-            var (humanExitCode, _, stderr) = RunAndCaptureStreams([projectRoot, "--dry-run"]);
+            var (humanExitCode, stdout, stderr) = RunAndCaptureStreams([projectRoot, "--dry-run"]);
             Assert.Equal(CommandExitCodes.Success, humanExitCode);
+            Assert.Contains("unknown extensions", stdout);
+            Assert.Contains("(lower bound)", stdout);
             Assert.Contains("secret", stderr);
             Assert.Contains("Could not scan directory due to permissions.", stderr);
         }

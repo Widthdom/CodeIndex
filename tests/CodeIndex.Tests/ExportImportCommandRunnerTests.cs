@@ -2461,6 +2461,10 @@ public class ExportImportCommandRunnerTests
             !status.RootElement.TryGetProperty("head_freshness", out var headFreshness)
             || headFreshness.GetProperty("state").GetString() != "head_current");
         Assert.False(status.RootElement.TryGetProperty("unknown_extension_file_count", out _));
+        Assert.False(status.RootElement.TryGetProperty("unknown_extension_group_count", out _));
+        Assert.False(status.RootElement.TryGetProperty("unknown_extension_groups_truncated", out _));
+        Assert.False(status.RootElement.TryGetProperty("unknown_extension_group_limit", out _));
+        Assert.False(status.RootElement.TryGetProperty("unknown_extension_group_omitted_count", out _));
         Assert.True(
             !status.RootElement.TryGetProperty("last_index_run", out var lastIndexRun)
             || lastIndexRun.ValueKind == JsonValueKind.Null);
