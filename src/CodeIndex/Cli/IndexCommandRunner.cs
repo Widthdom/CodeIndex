@@ -698,6 +698,7 @@ public sealed class IndexCommandOptions
     public string? SolutionPath { get; init; }
     public string? ProjectFilterError { get; init; }
     public string? ParseError { get; init; }
+    internal IReadOnlyList<CliJsonMessage> OptionWarnings { get; init; } = [];
     public string? EasterEgg { get; init; }
     public bool DryRun { get; init; }
     public int DryRunPathLimit { get; init; } = IndexCommandRunner.DefaultDryRunPathLimit;

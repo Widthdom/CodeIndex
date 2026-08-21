@@ -182,7 +182,7 @@ public static partial class IndexCommandRunner
 
         if (!options.Json && !options.Quiet)
             CommandOutputWriter.WriteLine($"Updating {ConsoleUi.Counted(targetPaths.Count, "file")}...");
-        int updated = 0, removed = 0, skipped = 0, warnings = 0, errors = 0;
+        int updated = 0, removed = 0, skipped = 0, warnings = options.OptionWarnings.Count, errors = 0;
         var updateProgress = new IndexProgressReporter(
             options,
             "Updating...",
@@ -190,7 +190,7 @@ public static partial class IndexCommandRunner
             CommandErrorWriter.WriteStderr);
         var errorList = new List<CliJsonMessage>();
         var fileErrorList = new List<StatusIndexFileError>();
-        var warningList = new List<CliJsonMessage>();
+        var warningList = new List<CliJsonMessage>(options.OptionWarnings);
         warnings += AddProjectMarkerFingerprintWarnings(currentHotspotFamilyMarkerFingerprints, warningList, options);
         var scanErrorKeys = new HashSet<string>(StringComparer.Ordinal);
         var visitedFileIdentities = new HashSet<FileIndexer.FileIdentity>();

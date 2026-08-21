@@ -46,8 +46,10 @@ public static partial class IndexCommandRunner
         bool authoritativeFullScan;
         var errorSamples = new List<CliJsonMessage>();
         var errorCount = 0;
-        var warningSamples = new List<CliJsonMessage>();
-        var warningCount = 0;
+        var warningSamples = options.OptionWarnings
+            .Take(DryRunWarningSampleLimit)
+            .ToList();
+        var warningCount = options.OptionWarnings.Count;
         var dryScanErrorKeys = new HashSet<string>(StringComparer.Ordinal);
         DryRunScanMetadata dryScanMetadata;
         DryRunDbSnapshot dbSnapshot;
