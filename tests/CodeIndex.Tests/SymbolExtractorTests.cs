@@ -6489,6 +6489,8 @@ public partial class SymbolExtractorTests
                 // the next component must still parse
                 int y
             ) {}
+
+            public record InlineComment(String/*marker*/name) {}
             """;
         var symbols = SymbolExtractor.Extract(1, "java", content);
 
@@ -6504,6 +6506,11 @@ public partial class SymbolExtractorTests
 
         var pointY = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "y" && s.ContainerName == "Point"));
         Assert.Equal(40, pointY.Line);
+
+        var inlineCommentName = Assert.Single(symbols.Where(s =>
+            s.Kind == "property" && s.Name == "name" && s.ContainerName == "InlineComment"));
+        Assert.Equal("String", inlineCommentName.ReturnType);
+        Assert.Equal("String name", inlineCommentName.Signature);
     }
 
 #if NET8_0
@@ -7281,7 +7288,7 @@ public partial class SymbolExtractorTests
     {
         // Kotlin: class, fun / Kotlin: クラス、関数
         var content = """
-            data class Config(val name: String)
+            data class Config(val name: String, val items: List</*marker*/String>)
             fun one() = 1
             fun process(input: String): String {
                 return input.trim()
@@ -7292,6 +7299,9 @@ public partial class SymbolExtractorTests
 
         Assert.Contains(symbols, s => s.Kind == "class" && s.Name == "Config");
         Assert.Contains(symbols, s => s.Kind == "property" && s.Name == "name" && s.ContainerKind == "class" && s.ContainerName == "Config");
+        var items = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "items" && s.ContainerName == "Config"));
+        Assert.Equal("List< String>", items.ReturnType);
+        Assert.Equal("items: List< String>", items.Signature);
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "one" && s.StartLine == 2 && s.EndLine == 2 && s.BodyStartLine == null && s.BodyEndLine == null);
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "process" && s.StartLine == 3 && s.EndLine == 5 && s.BodyStartLine == 3 && s.BodyEndLine == 5);
         Assert.Contains(symbols, s => s.Kind == "function" && s.Name == "three" && s.StartLine == 6 && s.EndLine == 6 && s.BodyStartLine == null && s.BodyEndLine == null);

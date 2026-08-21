@@ -9,11 +9,15 @@ public static partial class SymbolExtractor
         string Type,
         string Signature,
         int Line,
-        string? Visibility = null);
+        string? Visibility = null,
+        int? StartLine = null,
+        int? StartColumn = null,
+        int? IdentifierStartColumn = null);
 
     private readonly record struct RecordPrimaryComponentSlice(
         string Text,
-        int Line);
+        int Line,
+        int StartIndex);
 
     private readonly record struct PendingRecordPrimaryComponents(
         long FileId,

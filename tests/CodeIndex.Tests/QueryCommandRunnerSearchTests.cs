@@ -1865,6 +1865,125 @@ public partial class QueryCommandRunnerTests
     }
 
     [Fact]
+    public void RunSearch_CSharpPositionalRecordFocusAndGroupingUsePreciseSymbol_Issue5095()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_record_component_5095");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/Records.cs",
+                "csharp",
+                """
+                public record Person([property: Obsolete] string First, string Last);
+                public record Generic<@T>(string @Value);
+                """);
+            TestProjectHelper.InsertIndexedFile(
+                dbPath,
+                "src/MultiHit.cs",
+                "csharp",
+                """
+                public class FocusMismatch
+                {
+                    public void First()
+                    {
+                        var alphaOnlyMarker = 1;
+                    }
+
+                    public void Second()
+                    {
+                        var alphaOnlyMarker = betaOnlyMarker;
+                    }
+                }
+                """);
+
+            var keyword = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["record Person", "--db", dbPath, "--exact-substring", "--json=array"],
+                _jsonOptions));
+            var component = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["string First", "--db", dbPath, "--exact-substring", "--json=array"],
+                _jsonOptions));
+            var grouped = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["string First", "--db", dbPath, "--exact-substring", "--group-by", "symbol", "--count", "--json"],
+                _jsonOptions));
+            var normalizedColumn = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["string Value", "--db", dbPath, "--exact-substring", "--path", "src/Records.cs", "--json=array"],
+                _jsonOptions));
+            var normalizedGrouping = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["@Value", "--db", dbPath, "--exact-substring", "--path", "src/Records.cs", "--group-by", "symbol", "--count", "--json"],
+                _jsonOptions));
+            var multiHit = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["alphaOnlyMarker betaOnlyMarker", "--db", dbPath, "--path", "src/MultiHit.cs", "--json=array"],
+                _jsonOptions));
+            var multiHitGrouped = CaptureConsole(() => QueryCommandRunner.RunSearch(
+                ["alphaOnlyMarker betaOnlyMarker", "--db", dbPath, "--path", "src/MultiHit.cs", "--group-by", "symbol", "--count", "--json"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, keyword.Result);
+            Assert.Equal(string.Empty, keyword.Stderr);
+            using var keywordDocument = ParseJsonOutput(keyword.Stdout);
+            var keywordRow = Assert.Single(keywordDocument.RootElement.EnumerateArray());
+            Assert.Equal(1, keywordRow.GetProperty("focus_line").GetInt32());
+            Assert.Equal(8, keywordRow.GetProperty("focus_column").GetInt32());
+            Assert.Equal("Person", keywordRow.GetProperty("enclosing_symbol_name").GetString());
+            Assert.Equal("class", keywordRow.GetProperty("enclosing_symbol_kind").GetString());
+
+            Assert.Equal(CommandExitCodes.Success, component.Result);
+            Assert.Equal(string.Empty, component.Stderr);
+            using var componentDocument = ParseJsonOutput(component.Stdout);
+            var componentRow = Assert.Single(componentDocument.RootElement.EnumerateArray());
+            Assert.Equal(1, componentRow.GetProperty("focus_line").GetInt32());
+            Assert.Equal(43, componentRow.GetProperty("focus_column").GetInt32());
+            Assert.Equal("First", componentRow.GetProperty("enclosing_symbol_name").GetString());
+            Assert.Equal("property", componentRow.GetProperty("enclosing_symbol_kind").GetString());
+
+            Assert.Equal(CommandExitCodes.Success, grouped.Result);
+            Assert.Equal(string.Empty, grouped.Stderr);
+            using var groupedDocument = ParseJsonOutput(grouped.Stdout);
+            var group = Assert.Single(groupedDocument.RootElement.GetProperty("groups").EnumerateArray());
+            Assert.Equal("src/Records.cs", group.GetProperty("file").GetString());
+            Assert.Equal("First", group.GetProperty("symbol_name").GetString());
+            Assert.Equal("property", group.GetProperty("symbol_kind").GetString());
+
+            Assert.Equal(CommandExitCodes.Success, normalizedColumn.Result);
+            Assert.Equal(string.Empty, normalizedColumn.Stderr);
+            using var normalizedColumnDocument = ParseJsonOutput(normalizedColumn.Stdout);
+            var normalizedColumnRow = Assert.Single(normalizedColumnDocument.RootElement.EnumerateArray());
+            Assert.Equal(2, normalizedColumnRow.GetProperty("focus_line").GetInt32());
+            Assert.Equal(27, normalizedColumnRow.GetProperty("focus_column").GetInt32());
+            Assert.Equal("Value", normalizedColumnRow.GetProperty("enclosing_symbol_name").GetString());
+            Assert.Equal("property", normalizedColumnRow.GetProperty("enclosing_symbol_kind").GetString());
+
+            Assert.Equal(CommandExitCodes.Success, normalizedGrouping.Result);
+            Assert.Equal(string.Empty, normalizedGrouping.Stderr);
+            using var normalizedGroupingDocument = ParseJsonOutput(normalizedGrouping.Stdout);
+            var normalizedGroup = Assert.Single(normalizedGroupingDocument.RootElement.GetProperty("groups").EnumerateArray());
+            Assert.Equal("Value", normalizedGroup.GetProperty("symbol_name").GetString());
+            Assert.Equal("property", normalizedGroup.GetProperty("symbol_kind").GetString());
+
+            Assert.Equal(CommandExitCodes.Success, multiHit.Result);
+            Assert.Equal(string.Empty, multiHit.Stderr);
+            using var multiHitDocument = ParseJsonOutput(multiHit.Stdout);
+            var multiHitRow = Assert.Single(multiHitDocument.RootElement.EnumerateArray());
+            Assert.Equal(5, multiHitRow.GetProperty("focus_line").GetInt32());
+            Assert.Equal("First", multiHitRow.GetProperty("enclosing_symbol_name").GetString());
+            Assert.Equal("function", multiHitRow.GetProperty("enclosing_symbol_kind").GetString());
+
+            Assert.Equal(CommandExitCodes.Success, multiHitGrouped.Result);
+            Assert.Equal(string.Empty, multiHitGrouped.Stderr);
+            using var multiHitGroupedDocument = ParseJsonOutput(multiHitGrouped.Stdout);
+            var multiHitGroup = Assert.Single(multiHitGroupedDocument.RootElement.GetProperty("groups").EnumerateArray());
+            Assert.Equal("First", multiHitGroup.GetProperty("symbol_name").GetString());
+            Assert.Equal("function", multiHitGroup.GetProperty("symbol_kind").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void RunSearch_NullableRecipeGroupByReturnTypeCountsEnclosingReturnTypes_Issue4301()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("cdidx_search_nullable_return_type_4301");

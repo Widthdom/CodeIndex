@@ -11,6 +11,120 @@ namespace CodeIndex.Tests;
 public partial class DbReaderTests
 {
     [Fact]
+    public void Search_UsesColumnsToAttributeCSharpPositionalRecordMatches_Issue5095()
+    {
+        InsertIndexedFile(
+            "src/Records.cs",
+            "csharp",
+            """
+            public record Base(string Key);
+            public record Person([property: Obsolete] string First, string Last) : Base("base-marker")
+            {
+                public string Ordinary { get; init; } = "ordinary-marker";
+                public string Describe() => "body-marker";
+            }
+
+            public readonly record struct Point(
+                int X,
+                int Y);
+
+            public record Generic<@T>(string @Value);
+            """);
+
+        AssertEnclosing("record Person", "Person", "class");
+        AssertEnclosing("Person(", "Person", "class");
+        AssertEnclosing("Obsolete", "First", "property");
+        AssertEnclosing("string First", "First", "property");
+        AssertEnclosing("string Last", "Last", "property");
+        AssertEnclosing("base-marker", "Person", "class");
+        AssertEnclosing("ordinary-marker", "Ordinary", "property");
+        AssertEnclosing("body-marker", "Describe", "function");
+        AssertEnclosing("record struct Point", "Point", "struct");
+        AssertEnclosing("int X", "X", "property");
+        AssertEnclosing("int Y", "Y", "property");
+        AssertEnclosing("string Value", "Value", "property");
+        AssertEnclosing("@Value", "Value", "property");
+
+        InsertIndexedFile(
+            "src/InlineRecord.cs",
+            "csharp",
+            "public record Inline(string Nick) { public string Ordinary { get; init; } = \"inline-ordinary-marker\"; }");
+        AssertEnclosing("record Inline", "Inline", "class");
+        AssertEnclosing("string Nick", "Nick", "property");
+        AssertEnclosing("inline-ordinary-marker", "Ordinary", "property");
+
+        InsertIndexedFile(
+            "src/MultiHit.cs",
+            "csharp",
+            """
+            public class FocusMismatch
+            {
+                public void First()
+                {
+                    var alphaOnlyMarker = 1;
+                }
+
+                public void Second()
+                {
+                    var alphaOnlyMarker = betaOnlyMarker;
+                }
+            }
+            """);
+        var multiHit = Assert.Single(_reader.Search(
+            "alphaOnlyMarker betaOnlyMarker",
+            lang: "csharp",
+            pathPatterns: ["src/MultiHit.cs"]));
+        Assert.Equal("First", multiHit.EnclosingSymbolName);
+        Assert.Equal("function", multiHit.EnclosingSymbolKind);
+
+        void AssertEnclosing(string query, string expectedName, string expectedKind)
+        {
+            var result = Assert.Single(_reader.Search(query, exact: true));
+            Assert.Equal(expectedName, result.EnclosingSymbolName);
+            Assert.Equal(expectedKind, result.EnclosingSymbolKind);
+        }
+    }
+
+    [Fact]
+    public void Search_ExactAttributionNormalizesUsingResultLanguage()
+    {
+        InsertIndexedFile(
+            "src/JavaNames.java",
+            "java",
+            """
+            public final class JavaNames {
+                public void run() {
+                    int \u0056alue = 1;
+                }
+            }
+            """);
+        InsertIndexedFile(
+            "src/KotlinNames.kt",
+            "kotlin",
+            """
+            class KotlinNames {
+                fun run() {
+                    val `when` = 1
+                }
+            }
+            """);
+
+        var java = Assert.Single(_reader.Search(
+            "Value",
+            exact: true,
+            pathPatterns: ["src/JavaNames.java"]));
+        Assert.Equal("run", java.EnclosingSymbolName);
+        Assert.Equal("function", java.EnclosingSymbolKind);
+
+        var kotlin = Assert.Single(_reader.Search(
+            "when",
+            exact: true,
+            pathPatterns: ["src/KotlinNames.kt"]));
+        Assert.Equal("run", kotlin.EnclosingSymbolName);
+        Assert.Equal("function", kotlin.EnclosingSymbolKind);
+    }
+
+    [Fact]
     public void Search_ExplicitPrefixMatchesLatinDiacriticToken()
     {
         InsertIndexedFile("src/cafe.md", "markdown", "menu café_au_lait\n");

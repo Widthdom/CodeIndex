@@ -151,6 +151,12 @@ public partial class DbReader
         var hasContextRanking = resultRanking == SearchResultRanking.CredentialContext;
         var hasCandidatePostProcessing = hasGuardFilters || tokenBoundary || hasContextRanking;
         var searchMatchLineContext = SearchMatchLineContext.Create(query, lang, exactSearch);
+        var searchPrimaryMatchContext = SearchPrimaryMatchContext.Create(
+            query,
+            normalizedQuery,
+            rawQuery,
+            exactSearch,
+            lang);
         var exactLiteralBoost = !exactSearch && !rawQuery && ShouldBoostExactLiteralSearch(query);
         var guardedRequestedLimit = Math.Max(0, guardRequestedLimit ?? limit);
         var guardedCandidateLimit = hasGuardFilters
@@ -364,7 +370,7 @@ public partial class DbReader
                 limit: candidatePostProcessingLimit);
         }
 
-        AttachSearchEnclosingSymbols(pagedResults, searchMatchLineContext);
+        AttachSearchEnclosingSymbols(pagedResults, searchPrimaryMatchContext);
         return pagedResults;
     }
 
@@ -756,12 +762,16 @@ public partial class DbReader
                     result,
                     index,
                     lineScore.Score,
-                    lineScore.MatchLine);
+                    lineScore.MatchLine,
+                    lineScore.MatchColumn);
             })
             .ToList();
         AttachSearchEnclosingSymbols(candidates
             .Where(candidate => candidate.MatchLine.HasValue)
-            .Select(candidate => new SearchEnclosingSymbolRequest(candidate.Result, candidate.MatchLine!.Value))
+            .Select(candidate => new SearchEnclosingSymbolRequest(
+                candidate.Result,
+                candidate.MatchLine!.Value,
+                candidate.MatchColumn))
             .ToList());
 
         return candidates
@@ -779,6 +789,7 @@ public partial class DbReader
         if (matches.Count == 0)
             return new SearchCredentialContextLineScore(
                 ContainsStructuralTokenMarker(result.Content) ? -800 : -600,
+                null,
                 null);
 
         return matches
@@ -792,7 +803,8 @@ public partial class DbReader
             .ThenBy(candidate => candidate.Index)
             .Select(candidate => new SearchCredentialContextLineScore(
                 candidate.Score,
-                candidate.Match.LineNumber))
+                candidate.Match.LineNumber,
+                candidate.Match.Column))
             .First();
     }
 
@@ -801,6 +813,7 @@ public partial class DbReader
         SearchPrimaryMatchContext matchContext,
         SearchPrimaryMatch match)
     {
+        var prepared = matchContext.ForResult(result);
         var facet = SearchMatchClassifier.Classify(
             result.Path,
             result.Lang,
@@ -820,14 +833,14 @@ public partial class DbReader
             _ => 0,
         };
 
-        var tightlyCoupled = matchContext.Terms.Length <= 1 ||
-                             HasTightlyCoupledCredentialTerms(match.Text, matchContext.Terms);
+        var tightlyCoupled = prepared.Terms.Length <= 1 ||
+                             HasTightlyCoupledCredentialTerms(match.Text, prepared.Terms);
         score += tightlyCoupled ? 160 : -100;
         if (ContainsRegexDefinitionSyntax(match.Text))
             score -= 360;
         if (ContainsRelevantStructuralTokenMarker(
                 match.Text,
-                matchContext.Terms))
+                prepared.Terms))
             score -= 420;
         if (ContainsCredentialUseSyntax(match.Text))
             score += 60;
@@ -1045,13 +1058,17 @@ public partial class DbReader
         SearchResult Result,
         int OriginalIndex,
         int LineScore,
-        int? MatchLine);
+        int? MatchLine,
+        int? MatchColumn);
 
     private sealed record SearchCredentialContextLineScore(
         int Score,
-        int? MatchLine);
+        int? MatchLine,
+        int? MatchColumn);
 
-    private void AttachSearchEnclosingSymbols(IReadOnlyList<SearchResult> results, SearchMatchLineContext matchLineContext)
+    private void AttachSearchEnclosingSymbols(
+        IReadOnlyList<SearchResult> results,
+        SearchPrimaryMatchContext primaryMatchContext)
     {
         var requests = new List<SearchEnclosingSymbolRequest>();
         foreach (var result in results)
@@ -1059,9 +1076,9 @@ public partial class DbReader
             if (!string.IsNullOrWhiteSpace(result.EnclosingSymbolKind))
                 continue;
 
-            var matchLine = GetFirstSearchMatchLine(result, matchLineContext);
-            if (matchLine.HasValue)
-                requests.Add(new SearchEnclosingSymbolRequest(result, matchLine.Value));
+            var primaryMatch = FindPrimarySearchMatchLines(result, primaryMatchContext).FirstOrDefault();
+            if (primaryMatch != null)
+                requests.Add(new SearchEnclosingSymbolRequest(result, primaryMatch.LineNumber, primaryMatch.Column));
         }
 
         AttachSearchEnclosingSymbols(requests);
@@ -1070,17 +1087,26 @@ public partial class DbReader
     private void AttachSearchEnclosingSymbols(IReadOnlyList<SearchEnclosingSymbolRequest> requests)
     {
         var startLineSql = GetSymbolColumnSql("start_line", "s.line", "s");
+        var startColumnSql = GetSymbolColumnSql("start_column", "NULL", "s");
         var endLineSql = GetSymbolColumnSql("end_line", "s.line", "s");
+        var bodyStartLineSql = GetSymbolColumnSql("body_start_line", "NULL", "s");
+        var identifierStartColumnSql = GetSymbolColumnSql("identifier_start_column", "NULL", "s");
+        var signatureSql = GetSymbolColumnSql("signature", "NULL", "s");
         var containerNameSql = GetSymbolColumnSql("container_name", symbolAlias: "s");
         var returnTypeSql = GetSymbolColumnSql("return_type", symbolAlias: "s");
+        var declarationStartColumnSql = $@"CASE
+            WHEN {startColumnSql} IS NULL THEN NULL
+            WHEN {signatureSql} IS NULL OR instr({signatureSql}, s.name) <= 0 THEN {startColumnSql}
+            ELSE max(0, {startColumnSql} - instr({signatureSql}, s.name) + 1)
+        END";
         for (var offset = 0; offset < requests.Count; offset += SearchEnclosingSymbolBatchSize)
         {
             var batch = requests.Skip(offset).Take(SearchEnclosingSymbolBatchSize).ToList();
             using var cmd = _conn.CreateCommand();
             var requestedValues = string.Join(", ", Enumerable.Range(0, batch.Count)
-                .Select(index => $"(@symbolPath{index}, @symbolLine{index}, {index})"));
+                .Select(index => $"(@symbolPath{index}, @symbolLine{index}, @symbolColumn{index}, {index})"));
             cmd.CommandText = $@"
-                WITH requested(path, match_line, request_index) AS (
+                WITH requested(path, match_line, match_column, request_index) AS (
                     VALUES {requestedValues}
                 ),
                 ranked AS (
@@ -1115,6 +1141,18 @@ public partial class DbReader
                     LEFT JOIN symbols s ON s.file_id = f.id
                                        AND {startLineSql} <= requested.match_line
                                        AND {endLineSql} >= requested.match_line
+                                       AND (requested.match_column IS NULL
+                                            OR s.line <> requested.match_line
+                                            OR {declarationStartColumnSql} IS NULL
+                                            OR {declarationStartColumnSql} <= requested.match_column - 1)
+                                       AND (requested.match_column IS NULL
+                                            OR s.kind <> 'property'
+                                            OR {bodyStartLineSql} IS NOT NULL
+                                            OR {identifierStartColumnSql} IS NULL
+                                            OR (({startLineSql} < requested.match_line
+                                                 OR COALESCE({startColumnSql}, {identifierStartColumnSql}) <= requested.match_column - 1)
+                                                AND ({endLineSql} > requested.match_line
+                                                     OR {identifierStartColumnSql} + length(s.name) > requested.match_column - 1)))
                 )
                 SELECT request_index,
                        symbol_name,
@@ -1131,6 +1169,7 @@ public partial class DbReader
             {
                 SqliteCommandPolicy.Add(cmd, $"@symbolPath{index}", batch[index].Result.Path);
                 SqliteCommandPolicy.Add(cmd, $"@symbolLine{index}", batch[index].MatchLine);
+                SqliteCommandPolicy.Add(cmd, $"@symbolColumn{index}", batch[index].MatchColumn);
             }
 
             using var reader = cmd.ExecuteTrackedReader();
@@ -1147,31 +1186,7 @@ public partial class DbReader
         }
     }
 
-    private sealed record SearchEnclosingSymbolRequest(SearchResult Result, int MatchLine);
-
-    private static int? GetFirstSearchMatchLine(SearchResult result, SearchMatchLineContext context)
-    {
-        var prepared = context.ForResult(result);
-        int? firstTokenMatchLine = null;
-
-        foreach (var (lineIndex, text) in EnumerateContentLines(result.Content))
-        {
-            var line = prepared.NormalizeLine(text);
-            if (!string.IsNullOrWhiteSpace(prepared.NormalizedQuery) &&
-                line.Contains(prepared.NormalizedQuery, prepared.Comparison))
-            {
-                return result.StartLine + lineIndex;
-            }
-
-            if (firstTokenMatchLine.HasValue || prepared.Tokens.Length == 0)
-                continue;
-
-            if (prepared.Tokens.Any(token => line.Contains(token, prepared.Comparison)))
-                firstTokenMatchLine = result.StartLine + lineIndex;
-        }
-
-        return firstTokenMatchLine;
-    }
+    private sealed record SearchEnclosingSymbolRequest(SearchResult Result, int MatchLine, int? MatchColumn);
 
     private sealed class SearchMatchLineContext
     {
@@ -1568,7 +1583,7 @@ public partial class DbReader
     {
         guardWindow = Math.Clamp(guardWindow, 0, MaxSearchGuardWindow);
         var filtered = new List<SearchResult>();
-        foreach (var primaryMatch in FindPrimarySearchMatchLines(result, primaryMatchContext))
+        foreach (var primaryMatch in FindPrimarySearchMatchLines(result, primaryMatchContext, requireAllTerms: true))
         {
             var guardEvidence = new List<SearchGuardEvidence>();
             var guardChecks = new List<SearchGuardCheck>(guardFilters.Count);
@@ -1612,9 +1627,13 @@ public partial class DbReader
         return filtered;
     }
 
-    private static List<SearchPrimaryMatch> FindPrimarySearchMatchLines(SearchResult result, SearchPrimaryMatchContext context)
+    private static List<SearchPrimaryMatch> FindPrimarySearchMatchLines(
+        SearchResult result,
+        SearchPrimaryMatchContext context,
+        bool requireAllTerms = false)
     {
-        if (context.Terms.Length == 0)
+        var prepared = context.ForResult(result);
+        if (prepared.Terms.Length == 0)
         {
             foreach (var (lineIndex, text) in EnumerateContentLines(result.Content))
                 return [new SearchPrimaryMatch(result.StartLine + lineIndex, text, 1, 1)];
@@ -1622,37 +1641,93 @@ public partial class DbReader
             return [new SearchPrimaryMatch(result.StartLine, string.Empty, 1, 1)];
         }
 
-        var normalizeCSharp = context.ShouldNormalizeCSharp(result);
-        var matches = new List<SearchPrimaryMatch>();
+        var preferredMatches = new List<SearchPrimaryMatch>();
+        var fallbackMatches = new List<SearchPrimaryMatch>();
         foreach (var (lineIndex, text) in EnumerateContentLines(result.Content))
         {
-            var line = normalizeCSharp ? CSharpVerbatimNameNormalizer.Normalize(text) : text;
-            var lineMatches = context.RequireAllTermsOnLine
-                ? context.Terms.All(term => line.Contains(term, context.Comparison))
-                : context.Terms.Any(term => line.Contains(term, context.Comparison));
-            if (lineMatches && TryFindPrimaryMatchSpan(text, line, context, out var column, out var length))
-                matches.Add(new SearchPrimaryMatch(result.StartLine + lineIndex, text, column, length));
+            var line = ExactSourceSearchNormalizer.Normalize(text, prepared.Lang);
+            int[]? rawIndexMap = null;
+            if (!ReferenceEquals(line, text))
+                line = ExactSourceSearchNormalizer.Normalize(text, prepared.Lang, out rawIndexMap);
+
+            if (TryFindPrimaryMatchSpan(
+                    text,
+                    line,
+                    rawIndexMap,
+                    prepared.PreferredTerms,
+                    prepared.Comparison,
+                    out var preferredColumn,
+                    out var preferredLength))
+            {
+                preferredMatches.Add(new SearchPrimaryMatch(
+                    result.StartLine + lineIndex,
+                    text,
+                    preferredColumn,
+                    preferredLength));
+            }
+
+            int fallbackColumn;
+            int fallbackLength;
+            var fallbackMatched = requireAllTerms
+                ? TryFindAllPrimaryMatchTerms(
+                    text,
+                    line,
+                    rawIndexMap,
+                    prepared.Terms,
+                    prepared.Comparison,
+                    out fallbackColumn,
+                    out fallbackLength)
+                : TryFindPrimaryMatchSpan(
+                    text,
+                    line,
+                    rawIndexMap,
+                    prepared.Terms,
+                    prepared.Comparison,
+                    out fallbackColumn,
+                    out fallbackLength);
+            if (fallbackMatched)
+            {
+                fallbackMatches.Add(new SearchPrimaryMatch(
+                    result.StartLine + lineIndex,
+                    text,
+                    fallbackColumn,
+                    fallbackLength));
+            }
         }
 
-        return matches;
+        return preferredMatches.Count > 0 ? preferredMatches : fallbackMatches;
     }
 
     private sealed record SearchPrimaryMatch(int LineNumber, string Text, int Column, int Length);
 
-    private static bool TryFindPrimaryMatchSpan(string text, string normalizedLine, SearchPrimaryMatchContext context, out int column, out int length)
+    private static bool TryFindPrimaryMatchSpan(
+        string text,
+        string normalizedLine,
+        int[]? rawIndexMap,
+        IReadOnlyList<string> terms,
+        StringComparison comparison,
+        out int column,
+        out int length)
     {
         var bestIndex = int.MaxValue;
         var bestLength = 0;
-        foreach (var term in context.Terms)
+        foreach (var term in terms)
         {
-            var index = text.IndexOf(term, context.Comparison);
-            if (index < 0)
-                index = normalizedLine.IndexOf(term, context.Comparison);
-            if (index < 0 || index >= bestIndex)
+            if (!TryFindPrimaryMatchTerm(
+                    text,
+                    normalizedLine,
+                    rawIndexMap,
+                    term,
+                    comparison,
+                    out var rawIndex,
+                    out var rawLength))
                 continue;
 
-            bestIndex = index;
-            bestLength = term.Length;
+            if (rawIndex >= bestIndex)
+                continue;
+
+            bestIndex = rawIndex;
+            bestLength = rawLength;
         }
 
         if (bestIndex == int.MaxValue)
@@ -1667,40 +1742,200 @@ public partial class DbReader
         return true;
     }
 
-    private sealed record SearchPrimaryMatchContext(
-        string[] Terms,
-        bool RawQuery,
-        bool Exact,
-        string? QueryLang)
+    private static bool TryFindAllPrimaryMatchTerms(
+        string text,
+        string normalizedLine,
+        int[]? rawIndexMap,
+        IReadOnlyList<string> terms,
+        StringComparison comparison,
+        out int column,
+        out int length)
     {
-        public StringComparison Comparison => Exact ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+        var bestIndex = int.MaxValue;
+        var bestLength = 0;
+        foreach (var term in terms)
+        {
+            if (!TryFindPrimaryMatchTerm(
+                    text,
+                    normalizedLine,
+                    rawIndexMap,
+                    term,
+                    comparison,
+                    out var rawIndex,
+                    out var rawLength))
+            {
+                column = 1;
+                length = 1;
+                return false;
+            }
 
-        public bool RequireAllTermsOnLine => !RawQuery && !Exact && Terms.Length > 1;
+            if (rawIndex >= bestIndex)
+                continue;
 
-        public static SearchPrimaryMatchContext Create(string query, string normalizedQuery, bool rawQuery, bool exact, string? queryLang)
-            => new(BuildPrimarySearchMatchTerms(query, normalizedQuery, rawQuery, exact), rawQuery, exact, queryLang);
+            bestIndex = rawIndex;
+            bestLength = rawLength;
+        }
 
-        public string? GetEffectiveLang(SearchResult result) => QueryLang ?? result.Lang;
+        if (bestIndex == int.MaxValue)
+        {
+            column = 1;
+            length = 1;
+            return false;
+        }
 
-        public bool ShouldNormalizeCSharp(SearchResult result)
-            => string.Equals(GetEffectiveLang(result), "csharp", StringComparison.OrdinalIgnoreCase);
+        column = bestIndex + 1;
+        length = Math.Max(1, Math.Min(bestLength, Math.Max(1, text.Length - bestIndex)));
+        return true;
     }
 
-    private static string[] BuildPrimarySearchMatchTerms(string query, string normalizedQuery, bool rawQuery, bool exact)
+    private static bool TryFindPrimaryMatchTerm(
+        string text,
+        string normalizedLine,
+        int[]? rawIndexMap,
+        string term,
+        StringComparison comparison,
+        out int rawIndex,
+        out int rawLength)
+    {
+        rawIndex = -1;
+        rawLength = 0;
+        if (term.Length == 0)
+            return false;
+
+        rawIndex = text.IndexOf(term, comparison);
+        rawLength = term.Length;
+        if (rawIndex >= 0)
+            return true;
+
+        var normalizedIndex = normalizedLine.IndexOf(term, comparison);
+        if (normalizedIndex < 0)
+            return false;
+
+        rawIndex = normalizedIndex;
+        if (rawIndexMap != null
+            && TryMapNormalizedSearchSpan(rawIndexMap, normalizedIndex, term.Length, out var mappedIndex, out var mappedLength))
+        {
+            rawIndex = mappedIndex;
+            rawLength = mappedLength;
+        }
+
+        return true;
+    }
+
+    private static bool TryMapNormalizedSearchSpan(
+        int[] rawIndexMap,
+        int normalizedStart,
+        int normalizedLength,
+        out int rawStart,
+        out int rawLength)
+    {
+        rawStart = 0;
+        rawLength = 0;
+        if (normalizedStart < 0 || normalizedLength <= 0)
+            return false;
+
+        var normalizedEnd = normalizedStart + normalizedLength - 1;
+        if (normalizedEnd < normalizedStart || normalizedEnd >= rawIndexMap.Length)
+            return false;
+
+        rawStart = rawIndexMap[normalizedStart];
+        var rawEnd = rawIndexMap[normalizedEnd];
+        if (rawStart < 0 || rawEnd < rawStart)
+            return false;
+
+        rawLength = rawEnd - rawStart + 1;
+        return true;
+    }
+
+    private sealed class SearchPrimaryMatchContext
+    {
+        private readonly string _query;
+        private readonly string _normalizedQuery;
+        private readonly bool _rawQuery;
+        private readonly bool _exact;
+        private readonly string? _queryLang;
+        private readonly Dictionary<string, SearchPrimaryMatchTerms> _termsByLang = new(StringComparer.OrdinalIgnoreCase);
+
+        private SearchPrimaryMatchContext(
+            string query,
+            string normalizedQuery,
+            bool rawQuery,
+            bool exact,
+            string? queryLang)
+        {
+            _query = query;
+            _normalizedQuery = normalizedQuery;
+            _rawQuery = rawQuery;
+            _exact = exact;
+            _queryLang = queryLang;
+        }
+
+        public static SearchPrimaryMatchContext Create(string query, string normalizedQuery, bool rawQuery, bool exact, string? queryLang)
+            => new(query, normalizedQuery, rawQuery, exact, queryLang);
+
+        public string? GetEffectiveLang(SearchResult result) => _queryLang ?? result.Lang;
+
+        public SearchPrimaryMatchTerms ForResult(SearchResult result)
+        {
+            var lang = GetEffectiveLang(result);
+            var key = lang ?? string.Empty;
+            if (_termsByLang.TryGetValue(key, out var prepared))
+                return prepared;
+
+            var normalizedQuery = _rawQuery
+                ? _normalizedQuery
+                : NormalizeLiteralSearchQuery(_query, lang);
+            var preferredQuery = NormalizeGuardSearchTerm(
+                _rawQuery
+                    ? _query
+                    : ExactSourceSearchNormalizer.Normalize(normalizedQuery, lang));
+            prepared = new SearchPrimaryMatchTerms(
+                preferredQuery.Length == 0 ? [] : [preferredQuery],
+                BuildPrimarySearchMatchTerms(_query, normalizedQuery, _rawQuery, _exact, lang),
+                _exact ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase,
+                lang);
+            _termsByLang[key] = prepared;
+            return prepared;
+        }
+    }
+
+    private sealed record SearchPrimaryMatchTerms(
+        string[] PreferredTerms,
+        string[] Terms,
+        StringComparison Comparison,
+        string? Lang);
+
+    private static string[] BuildPrimarySearchMatchTerms(
+        string query,
+        string normalizedQuery,
+        bool rawQuery,
+        bool exact,
+        string? lang)
     {
         IEnumerable<string> rawTerms = !exact && !rawQuery
             ? SplitLiteralSearchTokens(normalizedQuery)
             : [rawQuery ? query.Trim() : normalizedQuery.Trim()];
-        var terms = rawTerms.Select(NormalizeGuardSearchTerm).ToList();
+        var terms = rawTerms
+            .Select(NormalizeGuardSearchTerm)
+            .Where(term => !IsPrimarySearchMatchOperator(term))
+            .Select(term => rawQuery ? term : ExactSourceSearchNormalizer.Normalize(term, lang))
+            .ToList();
         if (!exact && rawQuery)
             terms.AddRange(GetSearchCoverageTokens(normalizedQuery, rawQuery));
 
         return terms
             .Select(NormalizeGuardSearchTerm)
             .Where(term => term.Length > 0)
+            .Where(term => !IsPrimarySearchMatchOperator(term))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
     }
+
+    private static bool IsPrimarySearchMatchOperator(string term)
+        => term.Equals("AND", StringComparison.OrdinalIgnoreCase)
+           || term.Equals("OR", StringComparison.OrdinalIgnoreCase)
+           || term.Equals("NOT", StringComparison.OrdinalIgnoreCase)
+           || term.Equals("NEAR", StringComparison.OrdinalIgnoreCase);
 
     private sealed record SearchGuardEvaluation(
         int WindowStartLine,
