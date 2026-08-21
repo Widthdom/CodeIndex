@@ -8,9 +8,9 @@ public partial class DbReader
     private static string BuildLogicalPartialSymbolQuery(string matchingSymbolsSql, SymbolSearchQueryPlan plan)
     {
         var orderBy = BuildLogicalPartialSortOrderBy(plan.SortMode);
-        var partialFamilyFilter = plan.PartialFamilyKey is null
+        var partialFamilyFilter = plan.PartialFamilyId is null
             ? string.Empty
-            : "WHERE logical_partial_key = @partialFamilyKey";
+            : "WHERE codeindex_partial_family_id(logical_partial_key) = @partialFamilyId";
         return $@"
             WITH matching_symbols AS (
                 {matchingSymbolsSql}

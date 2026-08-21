@@ -20,7 +20,7 @@ public partial class DbReader
         public int? EndLine { get; init; }
         public bool GroupPartials { get; init; }
         public int Offset { get; init; }
-        public string? PartialFamilyKey { get; init; }
+        public string? PartialFamilyId { get; init; }
         public int FamilyMemberOffset { get; init; }
     }
 

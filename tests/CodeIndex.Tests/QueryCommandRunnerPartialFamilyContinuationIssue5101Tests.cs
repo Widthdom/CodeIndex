@@ -15,6 +15,7 @@ public partial class QueryCommandRunnerTests
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var longNamespace = "N" + new string('x', 4_999);
             for (var index = 0; index < 105; index++)
             {
                 TestProjectHelper.InsertIndexedFile(
@@ -22,8 +23,8 @@ public partial class QueryCommandRunnerTests
                     $"src/One/Wide.{index:D3}.cs",
                     "csharp",
                     index == 104
-                        ? "namespace Demo.One;\npublic partial class Wide : BaseWide { }"
-                        : "namespace Demo.One;\npublic partial class Wide { }");
+                        ? $"namespace {longNamespace};\npublic partial class Wide : BaseWide {{ }}"
+                        : $"namespace {longNamespace};\npublic partial class Wide {{ }}");
             }
             for (var index = 0; index < 2; index++)
             {
@@ -58,6 +59,10 @@ public partial class QueryCommandRunnerTests
             Assert.Contains("src/One/Wide.104.cs", firstPage.RepresentativePaths);
             Assert.NotNull(firstPage.RecoveryCursor);
             Assert.NotNull(firstPage.NextCursor);
+            Assert.InRange(firstPage.NextCursor!.Length, 1, 1_024);
+            var nextCursorPayload = DecodeIssue5101Cursor(firstPage.NextCursor);
+            Assert.False(nextCursorPayload.ContainsKey("partial_family_key"));
+            Assert.Equal(firstPage.PartialFamilyId, nextCursorPayload["partial_family_id"]!.GetValue<string>());
 
             var memberIds = new List<long>(firstPage.MemberIds);
             var cursor = firstPage.NextCursor;
@@ -315,17 +320,22 @@ public partial class QueryCommandRunnerTests
 
     private static string MutateIssue5101Cursor(string cursor, Action<JsonObject> mutate)
     {
-        const string prefix = "response:v2:";
-        Assert.StartsWith(prefix, cursor, StringComparison.Ordinal);
-        var encoded = cursor[prefix.Length..].Replace('-', '+').Replace('_', '/');
-        encoded += new string('=', (4 - encoded.Length % 4) % 4);
-        var payload = JsonNode.Parse(Encoding.UTF8.GetString(Convert.FromBase64String(encoded)))!.AsObject();
+        var payload = DecodeIssue5101Cursor(cursor);
         mutate(payload);
         var mutated = Convert.ToBase64String(Encoding.UTF8.GetBytes(payload.ToJsonString()))
             .TrimEnd('=')
             .Replace('+', '-')
             .Replace('/', '_');
-        return prefix + mutated;
+        return "response:v2:" + mutated;
+    }
+
+    private static JsonObject DecodeIssue5101Cursor(string cursor)
+    {
+        const string prefix = "response:v2:";
+        Assert.StartsWith(prefix, cursor, StringComparison.Ordinal);
+        var encoded = cursor[prefix.Length..].Replace('-', '+').Replace('_', '/');
+        encoded += new string('=', (4 - encoded.Length % 4) % 4);
+        return JsonNode.Parse(Encoding.UTF8.GetString(Convert.FromBase64String(encoded)))!.AsObject();
     }
 
     private sealed record FamilyPageIssue5101(

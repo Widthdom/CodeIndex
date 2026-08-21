@@ -200,7 +200,7 @@ public static partial class QueryCommandRunner
                     sortMode: options.SymbolSortMode,
                     groupPartials: true,
                     offset: JsonEnvelopeWrapper.GetBoundedResponseOffset("symbols"),
-                    partialFamilyKey: partialFamilyContinuation?.PartialFamilyKey,
+                    partialFamilyId: partialFamilyContinuation?.PartialFamilyId,
                     familyMemberOffset: partialFamilyContinuation?.FamilyMemberOffset ?? 0)
                 : reader.SearchSymbols(symbolQueries, options.Limit, options.Kind, options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests, options.Since, exact, visibilityFilters: options.VisibilityFilters, excludeVisibilityFilters: options.ExcludeVisibilityFilters, sortMode: options.SymbolSortMode, offset: JsonEnvelopeWrapper.GetBoundedResponseOffset("symbols"));
             if (options.GroupPartials)
@@ -392,7 +392,6 @@ public static partial class QueryCommandRunner
         {
             if (result.DefinitionSites is not { } totalCount
                 || result.FamilyMembers is not { } members
-                || result.LogicalPartialKey is null
                 || result.PartialFamilyId is null)
             {
                 continue;
@@ -409,7 +408,6 @@ public static partial class QueryCommandRunner
             result.FamilyMembersRecoveryCursor = JsonEnvelopeWrapper.BuildPartialFamilyMembersCursor(
                 commandArgs,
                 snapshot,
-                result.LogicalPartialKey,
                 result.PartialFamilyId,
                 familyMemberOffset: 0);
             if (result.FamilyMemberRemainingCount > 0)
@@ -417,7 +415,6 @@ public static partial class QueryCommandRunner
                 result.FamilyMembersNextCursor = JsonEnvelopeWrapper.BuildPartialFamilyMembersCursor(
                     commandArgs,
                     snapshot,
-                    result.LogicalPartialKey,
                     result.PartialFamilyId,
                     familyMemberOffset + returnedCount);
             }

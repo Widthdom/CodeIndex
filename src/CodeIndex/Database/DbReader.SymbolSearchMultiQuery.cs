@@ -27,7 +27,7 @@ public partial class DbReader
                 plan.StartLine,
                 plan.EndLine,
                 plan.GroupPartials,
-                partialFamilyKey: plan.PartialFamilyKey,
+                partialFamilyId: plan.PartialFamilyId,
                 familyMemberOffset: plan.FamilyMemberOffset));
         }
 
