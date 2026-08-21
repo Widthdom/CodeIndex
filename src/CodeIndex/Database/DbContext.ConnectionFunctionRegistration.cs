@@ -149,6 +149,10 @@ public partial class DbContext
                 "csharp_partial_declaration_identity",
                 (string? signature) => LogicalPartialSymbolGrouper.BuildCanonicalDeclarationIdentity(signature),
                 isDeterministic: true);
+            connection.CreateFunction(
+                "codeindex_partial_family_id",
+                (string? key) => key is null ? null : LogicalPartialSymbolGrouper.BuildPartialFamilyId(key),
+                isDeterministic: true);
             RegisterCSharpPartialDeclaration(connection);
         }
 

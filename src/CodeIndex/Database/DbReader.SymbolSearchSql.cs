@@ -5,9 +5,12 @@ public partial class DbReader
     private static string GetGenericSymbolRankNamePenaltySql(string nameSql)
         => $"CASE WHEN lower({nameSql}) IN {GenericSymbolRankNamesSql} THEN {GenericSymbolRankNamePenaltySqlLiteral} ELSE 1.0 END";
 
-    private static string BuildLogicalPartialSymbolQuery(string matchingSymbolsSql, SymbolSortMode sortMode)
+    private static string BuildLogicalPartialSymbolQuery(string matchingSymbolsSql, SymbolSearchQueryPlan plan)
     {
-        var orderBy = BuildLogicalPartialSortOrderBy(sortMode);
+        var orderBy = BuildLogicalPartialSortOrderBy(plan.SortMode);
+        var partialFamilyFilter = plan.PartialFamilyId is null
+            ? string.Empty
+            : "WHERE codeindex_partial_family_id(logical_partial_key) = @partialFamilyId";
         return $@"
             WITH matching_symbols AS (
                 {matchingSymbolsSql}
@@ -32,6 +35,7 @@ public partial class DbReader
                        ) AS family_member_row_number,
                        COUNT(*) OVER (PARTITION BY logical_partial_key) AS logical_definition_sites
                 FROM matching_symbols
+                {partialFamilyFilter}
             ),
             family_ranked_symbols AS (
                 SELECT ranked_symbols.*,
@@ -40,8 +44,22 @@ public partial class DbReader
                        ) AS representative_member_row_number
                 FROM ranked_symbols
             ),
-            logical_symbols AS (
+            family_paged_symbols AS (
                 SELECT family_ranked_symbols.*,
+                       CASE
+                           WHEN representative_member_row_number <= {LogicalPartialSymbolGrouper.FamilyMemberLimit}
+                           THEN family_member_row_number
+                           WHEN family_member_row_number = representative_member_row_number
+                           THEN {LogicalPartialSymbolGrouper.FamilyMemberLimit}
+                           WHEN family_member_row_number >= {LogicalPartialSymbolGrouper.FamilyMemberLimit}
+                            AND family_member_row_number < representative_member_row_number
+                           THEN family_member_row_number + 1
+                           ELSE family_member_row_number
+                       END AS family_member_page_number
+                FROM family_ranked_symbols
+            ),
+            logical_symbols AS (
+                SELECT family_paged_symbols.*,
                        MAX(reference_count) OVER (PARTITION BY logical_partial_key) AS logical_reference_count,
                        MAX(hotspot_score) OVER (PARTITION BY logical_partial_key) AS logical_hotspot_score,
                        MAX(ranking_reference_score) OVER (PARTITION BY logical_partial_key) AS logical_ranking_reference_score,
@@ -73,18 +91,14 @@ public partial class DbReader
                            'identifier_start_column', identifier_start_column,
                            'generated', canonical_generated_rank
                        )) FILTER (WHERE
-                           family_member_row_number <= CASE
-                               WHEN representative_member_row_number <= {LogicalPartialSymbolGrouper.FamilyMemberLimit}
-                               THEN {LogicalPartialSymbolGrouper.FamilyMemberLimit}
-                               ELSE {LogicalPartialSymbolGrouper.FamilyMemberLimit - 1}
-                           END
-                           OR logical_row_number = 1
+                           family_member_page_number > @familyMemberOffset
+                           AND family_member_page_number <= @familyMemberOffset + {LogicalPartialSymbolGrouper.FamilyMemberLimit}
                        ) OVER (
                            PARTITION BY logical_partial_key
-                           ORDER BY path COLLATE BINARY, start_line, stable_start_column, symbol_id
+                           ORDER BY family_member_page_number
                            ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
                        ) AS logical_family_members_json
-                FROM family_ranked_symbols
+                FROM family_paged_symbols
             )
             SELECT path, lang, kind, sub_kind, name, line,
                    start_line, start_column, end_line,

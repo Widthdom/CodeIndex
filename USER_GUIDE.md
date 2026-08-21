@@ -1978,8 +1978,8 @@ lack generated-file metadata use generated/designer filename conventions.
 
 | Grouped output | Meaning |
 |---|---|
-| Family metadata | `definition_sites` is the physical declaration count. Rows also expose `partial_family_id`, `representative_reason`, and up to 50 stable `family_members`. |
-| Member cap | The bounded member list always retains the representative and uses identifier-aligned columns after a verbatim `@`; `family_members_truncated` marks additional sites. |
+| Family metadata | `definition_sites` is the physical declaration count. Rows also expose `partial_family_id`, `representative_reason`, authoritative `family_member_total_count`, page counts (`returned`, `omitted`, and `remaining`), and up to 50 stable `family_members`. |
+| Member cap and continuation | The first bounded member page always retains the representative and uses identifier-aligned columns after a verbatim `@`; `family_members_truncated` marks additional sites. Reuse `family_members_next_cursor` unchanged with the same symbol query, filters, and ordering to fetch the next page. `family_members_recovery_cursor` restarts at the first family page and remains available when compact output or `--fields` omits the nested list, including under a byte budget. Family cursors are bound to the family identity and index generation; changed selection is rejected as a mismatch and a refreshed index is rejected as stale. |
 | `goto` | Uses the canonical representative and returns family metadata in LSP-shaped JSON by default. Use `goto --all` for every physical location. |
 | Counts | JSON returns `logical_count`, `physical_count`, and `physical_file_count`. Human summaries distinguish rows shown after `--limit` from query-wide logical and physical totals. |
 | Sorted symbols | Uses the family's maximum rank metric while retaining the canonical representative, keeping `--sort` monotonic before `--limit`. |
@@ -5547,8 +5547,8 @@ metadata がない旧 database では generated/designer filename 規約へ fall
 
 | 集約後の出力 | 意味 |
 |---|---|
-| family metadata | `definition_sites` は物理宣言数です。row は `partial_family_id`、`representative_reason`、安定順で最大 50 件の `family_members` も公開します。 |
-| member 上限 | 上限付き list は representative を必ず残し、verbatim `@` より後ろの identifier に column を揃えます。追加 site がある場合は `family_members_truncated` が true です。 |
+| family metadata | `definition_sites` は物理宣言数です。row は `partial_family_id`、`representative_reason`、authoritative な `family_member_total_count`、page 件数（`returned`、`omitted`、`remaining`）、安定順で最大 50 件の `family_members` も公開します。 |
+| member 上限と継続取得 | 上限付き list の先頭 page は representative を必ず残し、verbatim `@` より後ろの identifier に column を揃えます。追加 site がある場合は `family_members_truncated` が true です。同じ symbol query、filter、order で `family_members_next_cursor` を変更せず再利用すると次 page を取得できます。byte budget の指定時を含め、compact 出力または `--fields` により nested list を省略しても `family_members_recovery_cursor` から family の先頭 page を再取得できます。family cursor は family identity と index generation に束縛され、選択条件を変えると mismatch、index を更新すると stale として拒否されます。 |
 | `goto` | 既定では canonical representative と family metadata を LSP 形式の JSON で返します。全物理 location には `goto --all` を使います。 |
 | count | JSON は `logical_count`、`physical_count`、`physical_file_count` を返します。human summary は `--limit` 後の表示行数と query 全体の論理・物理総数を区別します。 |
 | sorted `symbols` | family 内の最大 rank metric と canonical representative を使い、`--limit` 前の `--sort` 順序を単調に保ちます。 |

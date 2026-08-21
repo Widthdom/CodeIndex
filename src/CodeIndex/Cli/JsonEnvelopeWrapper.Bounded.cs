@@ -24,6 +24,7 @@ internal static partial class JsonEnvelopeWrapper
     private const string ResponseCursorPrefix = "response:v2:";
     private static readonly AsyncLocal<BoundedExecutionContext?> BoundedExecution = new();
     internal static Action? ResponseSnapshotValidatedForTesting { get; set; }
+    internal static Action? PartialFamilyPageReadForTesting { get; set; }
 
     private static readonly HashSet<string> BoundedResponseCommands =
         ProjectionFieldRegistry.SupportedCommands.ToHashSet(StringComparer.Ordinal);
@@ -68,6 +69,19 @@ internal static partial class JsonEnvelopeWrapper
         "unused_bucket",
         "unused_confidence",
         "unused_contract_domain",
+    ];
+
+    private static readonly string[] PartialFamilyContinuationProjectionFields =
+    [
+        "partial_family_id",
+        "family_members_truncated",
+        "family_member_total_count",
+        "family_member_total_count_authoritative",
+        "family_member_returned_count",
+        "family_member_omitted_count",
+        "family_member_remaining_count",
+        "family_members_recovery_cursor",
+        "family_members_next_cursor",
     ];
 
     internal static bool ShouldAutoWrapBoundedResponse(string command, string[] args)
@@ -316,7 +330,9 @@ internal static partial class JsonEnvelopeWrapper
                 controls.ResumeLine,
                 controls.ResumeFileOrdinal,
                 controls.ResumeMatchOrdinal,
-                controls.ResumeByteOffset);
+                controls.ResumeByteOffset,
+                controls.PartialFamilyId,
+                controls.FamilyMemberOffset);
             using var executionScope = EnterBoundedExecution(executionContext);
             exitCode = runInner(innerArgs);
         }
@@ -378,7 +394,8 @@ internal static partial class JsonEnvelopeWrapper
         var effectiveFields = controls.EffectiveFields(
             command,
             extraction.PrimaryCollection,
-            suppressRuntimeMetadata);
+            suppressRuntimeMetadata,
+            groupedSymbolsRequest: command == "symbols" && HasArgument(args, "--group-partials"));
         var pageItems = availableItems
             .Take(controls.PageLimit)
             .Select(item => ProjectResponseItem(
@@ -1851,6 +1868,8 @@ internal static partial class JsonEnvelopeWrapper
         int? resumeFileOrdinal = null;
         int? resumeMatchOrdinal = null;
         int? resumeByteOffset = null;
+        string? partialFamilyId = null;
+        int? familyMemberOffset = null;
         if (cursor is not null
             && !TryParseResponseCursor(
                 cursor,
@@ -1861,7 +1880,9 @@ internal static partial class JsonEnvelopeWrapper
                 out resumeLine,
                 out resumeFileOrdinal,
                 out resumeMatchOrdinal,
-                out resumeByteOffset))
+                out resumeByteOffset,
+                out partialFamilyId,
+                out familyMemberOffset))
         {
             controls = default!;
             error = "cursor_malformed: --cursor must be an opaque response:v2 cursor returned as next_cursor.";
@@ -1879,7 +1900,9 @@ internal static partial class JsonEnvelopeWrapper
             resumeLine,
             resumeFileOrdinal,
             resumeMatchOrdinal,
-            resumeByteOffset);
+            resumeByteOffset,
+            partialFamilyId,
+            familyMemberOffset);
         return true;
     }
 
@@ -2007,7 +2030,9 @@ internal static partial class JsonEnvelopeWrapper
         int? resumeLine = null,
         int? resumeFileOrdinal = null,
         int? resumeMatchOrdinal = null,
-        int? resumeByteOffset = null)
+        int? resumeByteOffset = null,
+        string? partialFamilyId = null,
+        int? familyMemberOffset = null)
     {
         var payload = new JsonObject
         {
@@ -2025,6 +2050,17 @@ internal static partial class JsonEnvelopeWrapper
             payload["resume_match_ordinal"] = resumeMatchOrdinal.Value;
         if (resumeByteOffset.HasValue)
             payload["resume_byte_offset"] = resumeByteOffset.Value;
+        if (partialFamilyId is not null
+            && familyMemberOffset.HasValue)
+        {
+            payload["partial_family_id"] = partialFamilyId;
+            payload["family_member_offset"] = familyMemberOffset.Value;
+            payload["family_member_integrity"] = BuildPartialFamilyCursorIntegrity(
+                queryFingerprint,
+                generationFingerprint,
+                partialFamilyId,
+                familyMemberOffset.Value);
+        }
         var encoded = Convert.ToBase64String(Encoding.UTF8.GetBytes(payload.ToJsonString()))
             .TrimEnd('=')
             .Replace('+', '-')
@@ -2042,6 +2078,31 @@ internal static partial class JsonEnvelopeWrapper
         out int? resumeFileOrdinal,
         out int? resumeMatchOrdinal,
         out int? resumeByteOffset)
+        => TryParseResponseCursor(
+            cursor,
+            out offset,
+            out queryFingerprint,
+            out generationFingerprint,
+            out resumePath,
+            out resumeLine,
+            out resumeFileOrdinal,
+            out resumeMatchOrdinal,
+            out resumeByteOffset,
+            out _,
+            out _);
+
+    internal static bool TryParseResponseCursor(
+        string cursor,
+        out int offset,
+        out string? queryFingerprint,
+        out string? generationFingerprint,
+        out string? resumePath,
+        out int? resumeLine,
+        out int? resumeFileOrdinal,
+        out int? resumeMatchOrdinal,
+        out int? resumeByteOffset,
+        out string? partialFamilyId,
+        out int? familyMemberOffset)
     {
         offset = 0;
         queryFingerprint = null;
@@ -2051,6 +2112,8 @@ internal static partial class JsonEnvelopeWrapper
         resumeFileOrdinal = null;
         resumeMatchOrdinal = null;
         resumeByteOffset = null;
+        partialFamilyId = null;
+        familyMemberOffset = null;
         if (cursor.StartsWith(LegacyResponseCursorPrefix, StringComparison.Ordinal))
         {
             var remainder = cursor[LegacyResponseCursorPrefix.Length..];
@@ -2128,9 +2191,35 @@ internal static partial class JsonEnvelopeWrapper
             }
             resumeByteOffset = parsedByteOffset;
         }
+        partialFamilyId = ReadString(payload, "partial_family_id");
+        var partialFamilyIntegrity = ReadString(payload, "family_member_integrity");
+        if (payload.ContainsKey("family_member_offset"))
+        {
+            if (payload["family_member_offset"] is not JsonValue familyOffsetValue
+                || !familyOffsetValue.TryGetValue<int>(out var parsedFamilyOffset))
+            {
+                return false;
+            }
+            familyMemberOffset = parsedFamilyOffset;
+        }
         var extendedResumeFieldsPresent = resumeFileOrdinal.HasValue
                                           || resumeMatchOrdinal.HasValue
                                           || resumeByteOffset.HasValue;
+        var partialFamilyFieldsPresent = partialFamilyId is not null
+                                         || familyMemberOffset.HasValue
+                                         || partialFamilyIntegrity is not null;
+        var partialFamilyFieldsValid = !partialFamilyFieldsPresent
+            || offset == 0
+            && IsPartialFamilyId(partialFamilyId)
+            && familyMemberOffset is >= 0
+            && string.Equals(
+                partialFamilyIntegrity,
+                BuildPartialFamilyCursorIntegrity(
+                    queryFingerprint!,
+                    generationFingerprint!,
+                    partialFamilyId!,
+                    familyMemberOffset.Value),
+                StringComparison.Ordinal);
         return IsCursorFingerprint(queryFingerprint)
                && IsCursorFingerprint(generationFingerprint)
                && (resumePath is null || resumePath.Length <= 4096)
@@ -2141,8 +2230,29 @@ internal static partial class JsonEnvelopeWrapper
                    && resumeFileOrdinal is >= 0
                    && resumeByteOffset is >= 0
                    && resumeMatchOrdinal is null or >= 0)
-               && (!resumeMatchOrdinal.HasValue || resumeByteOffset.HasValue);
+               && (!resumeMatchOrdinal.HasValue || resumeByteOffset.HasValue)
+               && !payload.ContainsKey("partial_family_key")
+               && partialFamilyFieldsValid;
     }
+
+    private static string BuildPartialFamilyCursorIntegrity(
+        string queryFingerprint,
+        string generationFingerprint,
+        string partialFamilyId,
+        int familyMemberOffset)
+        => BuildResponseValueFingerprint(string.Join(
+            '\0',
+            "partial-family-members:v2",
+            queryFingerprint,
+            generationFingerprint,
+            partialFamilyId,
+            familyMemberOffset.ToString(CultureInfo.InvariantCulture)));
+
+    private static bool IsPartialFamilyId(string? value)
+        => value is { Length: 32 }
+           && value.StartsWith("partial:", StringComparison.Ordinal)
+           && value["partial:".Length..].All(static character =>
+               character is >= '0' and <= '9' or >= 'a' and <= 'f');
 
     private static bool IsCursorFingerprint(string? fingerprint)
         => fingerprint is { Length: 16 } && fingerprint.All(Uri.IsHexDigit);
@@ -2258,14 +2368,20 @@ internal static partial class JsonEnvelopeWrapper
         int? ResumeLine,
         int? ResumeFileOrdinal,
         int? ResumeMatchOrdinal,
-        int? ResumeByteOffset)
+        int? ResumeByteOffset,
+        string? PartialFamilyId,
+        int? FamilyMemberOffset)
     {
         public IReadOnlyList<string>? EffectiveFields(
             string command,
             string? primaryCollection,
-            bool statusExplainRequest)
+            bool statusExplainRequest,
+            bool groupedSymbolsRequest)
         {
-            var preserveFullDiscoveryRows = command is "search" or "languages";
+            var preserveFullDiscoveryRows = command is "search" or "languages"
+                                            || command == "symbols"
+                                            && PartialFamilyId is not null
+                                            && !Compact;
             var selected = Fields
                            ?? (statusExplainRequest
                                ? ProjectionFieldRegistry.GetStatusExplainCompactFields()
@@ -2284,11 +2400,28 @@ internal static partial class JsonEnvelopeWrapper
                 .Select(field => field[(primaryCollection.Length + 1)..])
                 .ToList();
             if (dotted.Count > 0)
-                return dotted;
+                return PreservePartialFamilyContinuationFields(
+                    dotted,
+                    command,
+                    groupedSymbolsRequest);
             if (selected.Contains(primaryCollection, StringComparer.Ordinal))
                 return null;
-            return selected.Where(field => !field.Contains('.')).ToList();
+            return PreservePartialFamilyContinuationFields(
+                selected.Where(field => !field.Contains('.')).ToList(),
+                command,
+                groupedSymbolsRequest);
         }
+
+        private static IReadOnlyList<string> PreservePartialFamilyContinuationFields(
+            IReadOnlyList<string> selected,
+            string command,
+            bool groupedSymbolsRequest)
+            => command == "symbols" && groupedSymbolsRequest
+                ? selected
+                    .Concat(PartialFamilyContinuationProjectionFields)
+                    .Distinct(StringComparer.Ordinal)
+                    .ToArray()
+                : selected;
     }
 
     private sealed record ResponseExtraction(
@@ -2373,6 +2506,47 @@ internal static partial class JsonEnvelopeWrapper
             snapshot.ResultStableAt);
     }
 
+    internal static string BuildPartialFamilyMembersCursor(
+        string[] args,
+        PartialFamilyCursorSnapshot snapshot,
+        string partialFamilyId,
+        int familyMemberOffset)
+    {
+        return FormatResponseCursor(
+            offset: 0,
+            BuildResponseFingerprint("symbols", args),
+            snapshot.GenerationFingerprint,
+            partialFamilyId: partialFamilyId,
+            familyMemberOffset: familyMemberOffset);
+    }
+
+    internal static PartialFamilyCursorSnapshot CapturePartialFamilyCursorSnapshot(
+        DbReader reader)
+        => new(BuildResponseSnapshot(reader).GenerationFingerprint);
+
+    internal static int? ValidatePartialFamilyCursorSnapshot(
+        string dbPath,
+        bool dbPathExplicit,
+        PartialFamilyCursorSnapshot snapshot)
+    {
+        PartialFamilyPageReadForTesting?.Invoke();
+        var completedSnapshot = SafeReadResponseSnapshot(
+            dbPath,
+            dbPathExplicit,
+            appVersion: "partial-family");
+        if (string.Equals(
+                snapshot.GenerationFingerprint,
+                completedSnapshot.GenerationFingerprint,
+                StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        return WriteBoundedResponseUsageError(
+            "The index generation changed while this partial-family page was being read.",
+            "Restart pagination without --cursor after the active index refresh completes.");
+    }
+
     internal static int GetBoundedResponseOffset(string command)
     {
         var execution = BoundedExecution.Value;
@@ -2381,6 +2555,29 @@ internal static partial class JsonEnvelopeWrapper
             ? execution.Offset
             : 0;
     }
+
+    internal static PartialFamilyContinuation? GetPartialFamilyContinuation(string command)
+    {
+        var execution = BoundedExecution.Value;
+        if (execution is null
+            || !string.Equals(execution.Command, CanonicalizeCommandName(command), StringComparison.Ordinal)
+            || execution.PartialFamilyId is null
+            || !execution.FamilyMemberOffset.HasValue)
+        {
+            return null;
+        }
+
+        return new PartialFamilyContinuation(
+            execution.PartialFamilyId,
+            execution.FamilyMemberOffset.Value);
+    }
+
+    internal readonly record struct PartialFamilyContinuation(
+        string PartialFamilyId,
+        int FamilyMemberOffset);
+
+    internal readonly record struct PartialFamilyCursorSnapshot(
+        string GenerationFingerprint);
 
     internal static bool ShouldMaterializeBody(string command)
     {
@@ -2560,7 +2757,9 @@ internal static partial class JsonEnvelopeWrapper
         int? ResumeLine,
         int? ResumeFileOrdinal,
         int? ResumeMatchOrdinal,
-        int? ResumeByteOffset)
+        int? ResumeByteOffset,
+        string? PartialFamilyId,
+        int? FamilyMemberOffset)
     {
         public int? ReportedTotalCount { get; set; }
         public bool ReportedTotalCountAuthoritative { get; set; }

@@ -396,6 +396,20 @@ public class SymbolResult
     public List<PartialFamilyMember>? FamilyMembers { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool FamilyMembersTruncated { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? FamilyMemberTotalCount { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? FamilyMemberTotalCountAuthoritative { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? FamilyMemberReturnedCount { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? FamilyMemberOmittedCount { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? FamilyMemberRemainingCount { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? FamilyMembersRecoveryCursor { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? FamilyMembersNextCursor { get; set; }
     [JsonIgnore]
     internal bool? IsGeneratedCode { get; set; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
