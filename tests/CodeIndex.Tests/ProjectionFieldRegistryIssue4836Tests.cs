@@ -442,6 +442,26 @@ public sealed class ProjectionFieldRegistryIssue4836Tests
             item => item!.GetValue<string>() == field);
     }
 
+    [Theory]
+    [InlineData("references.callsite_content")]
+    [InlineData("callers.callsite_line")]
+    [InlineData("callees.callsite_selection")]
+    public void InspectCallsiteFields_AreNotAdvertisedOrAccepted_Issue5099(string field)
+    {
+        Assert.False(ProjectionFieldRegistry.TryResolveInspectSelector(
+            field,
+            out _,
+            out _,
+            out _,
+            out var error));
+        Assert.NotNull(error);
+
+        var discovery = ProjectionFieldRegistry.CreateInspectDiscoveryDocument();
+        Assert.DoesNotContain(
+            discovery["valid_fields"]!.AsArray(),
+            item => item!.GetValue<string>() == field);
+    }
+
     [Fact]
     public void CallGraphCompactDefaults_IncludeCallSiteColumns_Issue4836_Issue4841()
     {

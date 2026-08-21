@@ -5969,7 +5969,15 @@ public partial class QueryCommandRunnerTests
         Func<string[], JsonSerializerOptions, int> command,
         string[] args,
         string expectedContent,
-        bool? expectedContentTruncated = null)
+        bool? expectedContentTruncated = null,
+        string? expectedCallsiteContent = null,
+        int? expectedCallsiteLine = null,
+        int? expectedCallsiteColumn = null,
+        int? expectedCallsiteLength = null,
+        int? expectedCallsiteReferenceCount = null,
+        int? expectedCallsiteOmittedReferenceCount = null,
+        bool? expectedCallsiteContentTruncated = null,
+        string? forbiddenRecoveryPath = null)
     {
         var (exitCode, stdout, stderr) = CaptureConsole(() => command(args, _jsonOptions));
 
@@ -5983,6 +5991,57 @@ public partial class QueryCommandRunnerTests
                 && property.GetBoolean();
             Assert.Equal(expectedContentTruncated.Value, contentTruncated);
         }
+
+        if (expectedCallsiteContent is not null)
+        {
+            AssertCallsiteEvidence(
+                document.RootElement,
+                expectedCallsiteContent,
+                expectedCallsiteLine ?? throw new ArgumentNullException(nameof(expectedCallsiteLine)),
+                expectedCallsiteColumn ?? throw new ArgumentNullException(nameof(expectedCallsiteColumn)),
+                expectedCallsiteLength ?? throw new ArgumentNullException(nameof(expectedCallsiteLength)),
+                expectedCallsiteReferenceCount ?? throw new ArgumentNullException(nameof(expectedCallsiteReferenceCount)),
+                expectedCallsiteOmittedReferenceCount ?? throw new ArgumentNullException(nameof(expectedCallsiteOmittedReferenceCount)),
+                expectedCallsiteContentTruncated ?? throw new ArgumentNullException(nameof(expectedCallsiteContentTruncated)),
+                forbiddenRecoveryPath ?? throw new ArgumentNullException(nameof(forbiddenRecoveryPath)));
+        }
+    }
+
+    private static void AssertCallsiteEvidence(
+        JsonElement result,
+        string expectedContent,
+        int expectedLine,
+        int expectedColumn,
+        int expectedLength,
+        int expectedReferenceCount,
+        int expectedOmittedReferenceCount,
+        bool expectedContentTruncated,
+        string forbiddenRecoveryPath)
+    {
+        Assert.Equal(expectedLine, result.GetProperty("callsite_start_line").GetInt32());
+        Assert.Equal(expectedLine, result.GetProperty("callsite_end_line").GetInt32());
+        Assert.Equal(expectedLine, result.GetProperty("callsite_line").GetInt32());
+        Assert.Equal(expectedColumn, result.GetProperty("callsite_column").GetInt32());
+        Assert.Equal(expectedLength, result.GetProperty("callsite_length").GetInt32());
+        Assert.Equal("first_reference", result.GetProperty("callsite_selection").GetString());
+        Assert.Equal(expectedReferenceCount, result.GetProperty("callsite_reference_count").GetInt32());
+        Assert.Equal(expectedOmittedReferenceCount, result.GetProperty("callsite_omitted_reference_count").GetInt32());
+        Assert.Equal(expectedContentTruncated, result.GetProperty("callsite_content_truncated").GetBoolean());
+        var callsiteContent = result.GetProperty("callsite_content").GetString();
+        Assert.True(
+            callsiteContent?.Contains(expectedContent, StringComparison.Ordinal) == true,
+            $"Expected call-site content to contain '{expectedContent}', but got: {callsiteContent}");
+
+        var truncationReasons = result.GetProperty("callsite_content_truncation_reasons")
+            .EnumerateArray()
+            .Select(reason => reason.GetString())
+            .OfType<string>();
+        Assert.Contains("line_width_cap", truncationReasons);
+
+        var recovery = result.GetProperty("callsite_content_recovery");
+        Assert.True(recovery.GetProperty("paths_redacted").GetBoolean());
+        Assert.DoesNotContain(forbiddenRecoveryPath, recovery.GetRawText(), StringComparison.Ordinal);
+        Assert.False(result.TryGetProperty("callsite_content_unavailable_reason", out _));
     }
 
     private static int CountLines(string text) => text.Split('\n').Length;
@@ -9096,6 +9155,7 @@ public partial class QueryCommandRunnerTests
         "references" => QueryCommandRunner.RunReferences(args, jsonOptions),
         "callers" => QueryCommandRunner.RunCallers(args, jsonOptions),
         "callees" => QueryCommandRunner.RunCallees(args, jsonOptions),
+        "impact" => QueryCommandRunner.RunImpact(args, jsonOptions),
         _ => throw new ArgumentOutOfRangeException(nameof(command), command, "Unsupported graph command"),
     };
 

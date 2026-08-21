@@ -27,6 +27,15 @@ public static partial class QueryCommandRunner
                 : null;
             excerpt ??= BuildBodyExcerpt(reader, result.Path, result.Line, snippetLines, maxLineWidth, focusColumn: result.Column, focusLength: Math.Max(1, result.SymbolName.Length));
             ApplyBodyExcerpt(result, excerpt);
+            var callsiteExcerpt = BuildCallsiteExcerpt(
+                reader,
+                result.Path,
+                result.Line,
+                NormalizeCallsiteColumn(result.Column),
+                NormalizeCallsiteLength(result.SpanLength),
+                snippetLines,
+                maxLineWidth);
+            ApplyCallsiteExcerpt(result, callsiteExcerpt);
         }
     }
 
@@ -39,6 +48,15 @@ public static partial class QueryCommandRunner
                 : null;
             excerpt ??= BuildBodyExcerpt(reader, result.Path, result.FirstLine, snippetLines, maxLineWidth);
             ApplyBodyExcerpt(result, excerpt);
+            var callsiteExcerpt = BuildCallsiteExcerpt(
+                reader,
+                result.Path,
+                result.FirstLine,
+                NormalizeCallsiteColumn(result.FirstColumn),
+                NormalizeCallsiteLength(result.FirstLength),
+                snippetLines,
+                maxLineWidth);
+            ApplyCallsiteExcerpt(result, callsiteExcerpt);
         }
     }
 
@@ -49,6 +67,15 @@ public static partial class QueryCommandRunner
             var excerpt = BuildSymbolBodyExcerpt(reader, result.Path, result.Lang, result.CalleeName, snippetLines, maxLineWidth)
                 ?? BuildBodyExcerpt(reader, result.Path, result.FirstLine, snippetLines, maxLineWidth);
             ApplyBodyExcerpt(result, excerpt);
+            var callsiteExcerpt = BuildCallsiteExcerpt(
+                reader,
+                result.Path,
+                result.FirstLine,
+                NormalizeCallsiteColumn(result.FirstColumn),
+                NormalizeCallsiteLength(result.FirstLength),
+                snippetLines,
+                maxLineWidth);
+            ApplyCallsiteExcerpt(result, callsiteExcerpt);
         }
     }
 
@@ -61,6 +88,15 @@ public static partial class QueryCommandRunner
                 : null;
             excerpt ??= BuildBodyExcerpt(reader, result.Path, result.FirstLine, snippetLines, maxLineWidth);
             ApplyBodyExcerpt(result, excerpt);
+            var callsiteExcerpt = BuildCallsiteExcerpt(
+                reader,
+                result.Path,
+                result.FirstLine,
+                result.FirstColumn,
+                NormalizeCallsiteLength(result.FirstLength),
+                snippetLines,
+                maxLineWidth);
+            ApplyCallsiteExcerpt(result, callsiteExcerpt);
         }
     }
 
@@ -111,6 +147,41 @@ public static partial class QueryCommandRunner
             focusColumn: focusColumn,
             focusLength: focusLength);
     }
+
+    private static FileExcerptResult? BuildCallsiteExcerpt(
+        DbReader reader,
+        string path,
+        int line,
+        int? column,
+        int? length,
+        int snippetLines,
+        int maxLineWidth)
+    {
+        if (line <= 0 || column is null)
+            return null;
+
+        var cappedLines = SearchSnippetFormatter.ClampSnippetLines(snippetLines);
+        var linesBefore = cappedLines / 2;
+        var startLine = (int)Math.Max(1L, (long)line - linesBefore);
+        var endLine = (int)Math.Min(int.MaxValue, (long)startLine + cappedLines - 1);
+        var excerpt = reader.GetExcerpt(
+            path,
+            startLine,
+            endLine,
+            maxLineWidth: maxLineWidth,
+            focusLine: line,
+            focusColumn: column,
+            focusLength: length ?? 1);
+        return excerpt?.ContentLineSpans.Any(span => span.SourceLine == line) == true
+            ? excerpt
+            : null;
+    }
+
+    private static int? NormalizeCallsiteColumn(int? column)
+        => column is > 0 ? column : null;
+
+    private static int? NormalizeCallsiteLength(int? length)
+        => length is > 0 ? length : null;
 
     private static void ApplyBodyExcerpt(ReferenceResult result, FileExcerptResult? excerpt)
     {
@@ -174,6 +245,133 @@ public static partial class QueryCommandRunner
         result.BodyEffectiveEndLine = excerpt.EffectiveEndLine;
         result.BodyContentTruncationReasons = CopyTruncationReasons(excerpt);
         result.BodyContentRecovery = excerpt.ContentRecovery;
+    }
+
+    private static void ApplyCallsiteExcerpt(ReferenceResult result, FileExcerptResult? excerpt)
+    {
+        ApplyCallsiteSelection(result, referenceCount: 1);
+        result.CallsiteLine = result.Line;
+        result.CallsiteColumn = NormalizeCallsiteColumn(result.Column);
+        result.CallsiteLength = NormalizeCallsiteLength(result.SpanLength);
+        if (excerpt == null)
+        {
+            result.CallsiteContentUnavailableReason = GetCallsiteUnavailableReason(result.CallsiteColumn);
+            return;
+        }
+        result.CallsiteContent = excerpt.Content;
+        result.CallsiteStartLine = excerpt.StartLine;
+        result.CallsiteEndLine = excerpt.EndLine;
+        result.CallsiteContentTruncated = excerpt.ContentTruncated;
+        result.CallsiteRequestedStartLine = excerpt.RequestedStartLine;
+        result.CallsiteRequestedEndLine = excerpt.RequestedEndLine;
+        result.CallsiteEffectiveStartLine = excerpt.EffectiveStartLine;
+        result.CallsiteEffectiveEndLine = excerpt.EffectiveEndLine;
+        result.CallsiteContentTruncationReasons = CopyTruncationReasons(excerpt);
+        result.CallsiteContentRecovery = excerpt.ContentRecovery;
+    }
+
+    private static void ApplyCallsiteExcerpt(CallerResult result, FileExcerptResult? excerpt)
+    {
+        ApplyCallsiteSelection(result, result.ReferenceCount);
+        result.CallsiteLine = result.FirstLine;
+        result.CallsiteColumn = NormalizeCallsiteColumn(result.FirstColumn);
+        result.CallsiteLength = NormalizeCallsiteLength(result.FirstLength);
+        if (excerpt == null)
+        {
+            result.CallsiteContentUnavailableReason = GetCallsiteUnavailableReason(result.CallsiteColumn);
+            return;
+        }
+        result.CallsiteContent = excerpt.Content;
+        result.CallsiteStartLine = excerpt.StartLine;
+        result.CallsiteEndLine = excerpt.EndLine;
+        result.CallsiteContentTruncated = excerpt.ContentTruncated;
+        result.CallsiteRequestedStartLine = excerpt.RequestedStartLine;
+        result.CallsiteRequestedEndLine = excerpt.RequestedEndLine;
+        result.CallsiteEffectiveStartLine = excerpt.EffectiveStartLine;
+        result.CallsiteEffectiveEndLine = excerpt.EffectiveEndLine;
+        result.CallsiteContentTruncationReasons = CopyTruncationReasons(excerpt);
+        result.CallsiteContentRecovery = excerpt.ContentRecovery;
+    }
+
+    private static void ApplyCallsiteExcerpt(CalleeResult result, FileExcerptResult? excerpt)
+    {
+        ApplyCallsiteSelection(result, result.ReferenceCount);
+        result.CallsiteLine = result.FirstLine;
+        result.CallsiteColumn = NormalizeCallsiteColumn(result.FirstColumn);
+        result.CallsiteLength = NormalizeCallsiteLength(result.FirstLength);
+        if (excerpt == null)
+        {
+            result.CallsiteContentUnavailableReason = GetCallsiteUnavailableReason(result.CallsiteColumn);
+            return;
+        }
+        result.CallsiteContent = excerpt.Content;
+        result.CallsiteStartLine = excerpt.StartLine;
+        result.CallsiteEndLine = excerpt.EndLine;
+        result.CallsiteContentTruncated = excerpt.ContentTruncated;
+        result.CallsiteRequestedStartLine = excerpt.RequestedStartLine;
+        result.CallsiteRequestedEndLine = excerpt.RequestedEndLine;
+        result.CallsiteEffectiveStartLine = excerpt.EffectiveStartLine;
+        result.CallsiteEffectiveEndLine = excerpt.EffectiveEndLine;
+        result.CallsiteContentTruncationReasons = CopyTruncationReasons(excerpt);
+        result.CallsiteContentRecovery = excerpt.ContentRecovery;
+    }
+
+    private static void ApplyCallsiteExcerpt(ImpactResult result, FileExcerptResult? excerpt)
+    {
+        ApplyCallsiteSelection(result, result.ReferenceCount);
+        result.CallsiteLine = result.FirstLine;
+        result.CallsiteColumn = result.FirstColumn;
+        result.CallsiteLength = NormalizeCallsiteLength(result.FirstLength);
+        if (excerpt == null)
+        {
+            result.CallsiteContentUnavailableReason = GetCallsiteUnavailableReason(result.CallsiteColumn);
+            return;
+        }
+        result.CallsiteContent = excerpt.Content;
+        result.CallsiteStartLine = excerpt.StartLine;
+        result.CallsiteEndLine = excerpt.EndLine;
+        result.CallsiteContentTruncated = excerpt.ContentTruncated;
+        result.CallsiteRequestedStartLine = excerpt.RequestedStartLine;
+        result.CallsiteRequestedEndLine = excerpt.RequestedEndLine;
+        result.CallsiteEffectiveStartLine = excerpt.EffectiveStartLine;
+        result.CallsiteEffectiveEndLine = excerpt.EffectiveEndLine;
+        result.CallsiteContentTruncationReasons = CopyTruncationReasons(excerpt);
+        result.CallsiteContentRecovery = excerpt.ContentRecovery;
+    }
+
+    private static string GetCallsiteUnavailableReason(int? column)
+        => column is null ? "callsite_column_unavailable" : "callsite_excerpt_unavailable";
+
+    private static void ApplyCallsiteSelection(ReferenceResult result, int referenceCount)
+    {
+        var boundedReferenceCount = Math.Max(1, referenceCount);
+        result.CallsiteSelection = "first_reference";
+        result.CallsiteReferenceCount = boundedReferenceCount;
+        result.CallsiteOmittedReferenceCount = Math.Max(0, boundedReferenceCount - 1);
+    }
+
+    private static void ApplyCallsiteSelection(CallerResult result, int referenceCount)
+    {
+        var boundedReferenceCount = Math.Max(1, referenceCount);
+        result.CallsiteSelection = "first_reference";
+        result.CallsiteReferenceCount = boundedReferenceCount;
+        result.CallsiteOmittedReferenceCount = Math.Max(0, boundedReferenceCount - 1);
+    }
+
+    private static void ApplyCallsiteSelection(CalleeResult result, int referenceCount)
+    {
+        var boundedReferenceCount = Math.Max(1, referenceCount);
+        result.CallsiteSelection = "first_reference";
+        result.CallsiteReferenceCount = boundedReferenceCount;
+        result.CallsiteOmittedReferenceCount = Math.Max(0, boundedReferenceCount - 1);
+    }
+
+    private static void ApplyCallsiteSelection(ImpactResult result, int referenceCount)
+    {
+        var boundedReferenceCount = Math.Max(1, referenceCount);
+        result.CallsiteSelection = "first_reference";
+        result.CallsiteReferenceCount = boundedReferenceCount;
+        result.CallsiteOmittedReferenceCount = Math.Max(0, boundedReferenceCount - 1);
     }
 
     private static void AddExcerptTruncation(FileExcerptResult excerpt, string reason, int recoveryStartLine, int recoveryEndLine)
@@ -269,25 +467,37 @@ public static partial class QueryCommandRunner
     private static void ApplyBodyRecoveryCommands(IEnumerable<ReferenceResult> results, string dbPath, bool redactPaths)
     {
         foreach (var result in results)
+        {
             ExcerptRecoveryCommandFormatter.ApplyDbPath(result.BodyContentRecovery, result.Path, dbPath, redactPaths);
+            ExcerptRecoveryCommandFormatter.ApplyDbPath(result.CallsiteContentRecovery, result.Path, dbPath, redactPaths);
+        }
     }
 
     private static void ApplyBodyRecoveryCommands(IEnumerable<CallerResult> results, string dbPath, bool redactPaths)
     {
         foreach (var result in results)
+        {
             ExcerptRecoveryCommandFormatter.ApplyDbPath(result.BodyContentRecovery, result.Path, dbPath, redactPaths);
+            ExcerptRecoveryCommandFormatter.ApplyDbPath(result.CallsiteContentRecovery, result.Path, dbPath, redactPaths);
+        }
     }
 
     private static void ApplyBodyRecoveryCommands(IEnumerable<CalleeResult> results, string dbPath, bool redactPaths)
     {
         foreach (var result in results)
+        {
             ExcerptRecoveryCommandFormatter.ApplyDbPath(result.BodyContentRecovery, result.Path, dbPath, redactPaths);
+            ExcerptRecoveryCommandFormatter.ApplyDbPath(result.CallsiteContentRecovery, result.Path, dbPath, redactPaths);
+        }
     }
 
     private static void ApplyBodyRecoveryCommands(IEnumerable<ImpactResult> results, string dbPath, bool redactPaths)
     {
         foreach (var result in results)
+        {
             ExcerptRecoveryCommandFormatter.ApplyDbPath(result.BodyContentRecovery, result.Path, dbPath, redactPaths);
+            ExcerptRecoveryCommandFormatter.ApplyDbPath(result.CallsiteContentRecovery, result.Path, dbPath, redactPaths);
+        }
     }
 
     private static void ApplyBodyRecoveryCommands(SymbolAnalysisResult result, string dbPath, bool redactPaths)
@@ -314,6 +524,23 @@ public static partial class QueryCommandRunner
             return;
 
         Console.WriteLine($"{indent}  Body:");
+        WriteNumberedExcerpt(startLine.Value, content, indent + "  ");
+    }
+
+    private static void WriteOptionalCallsiteExcerpt(
+        int? line,
+        int? column,
+        int? startLine,
+        string? content,
+        int? omittedReferenceCount,
+        string indent = "")
+    {
+        if (line == null || startLine == null || content == null)
+            return;
+
+        var columnSuffix = column.HasValue ? $", column {column.Value}" : string.Empty;
+        var omittedSuffix = omittedReferenceCount is > 0 ? $"; {omittedReferenceCount.Value} additional reference(s) omitted" : string.Empty;
+        Console.WriteLine($"{indent}  Call site (line {line.Value}{columnSuffix}; first reference{omittedSuffix}):");
         WriteNumberedExcerpt(startLine.Value, content, indent + "  ");
     }
 }

@@ -29,7 +29,7 @@ public sealed class JsonEnvelopeWrapperIssue4882Tests
                 var firstArgs = new[]
                 {
                     command, query, "--db", dbPath, "--json", "--body", "--snippet-lines", "3",
-                    "--fields", "path,line,body_content,body_start_line,body_end_line,body_content_truncated,body_requested_start_line,body_requested_end_line,body_effective_start_line,body_effective_end_line,body_content_truncation_reasons,body_content_recovery",
+                    "--fields", "path,line,body_content,body_start_line,body_end_line,body_content_truncated,body_requested_start_line,body_requested_end_line,body_effective_start_line,body_effective_end_line,body_content_truncation_reasons,body_content_recovery,callsite_content,callsite_start_line,callsite_end_line,callsite_content_truncated,callsite_requested_start_line,callsite_requested_end_line,callsite_effective_start_line,callsite_effective_end_line,callsite_content_truncation_reasons,callsite_content_recovery,callsite_line,callsite_column,callsite_length,callsite_selection,callsite_reference_count,callsite_omitted_reference_count,callsite_content_unavailable_reason",
                     "--limit", "1", "--max-json-bytes", "16384",
                     "--exact",
                 };
@@ -58,11 +58,35 @@ public sealed class JsonEnvelopeWrapperIssue4882Tests
                 {
                     Assert.True(firstResult.TryGetProperty(field, out _), field);
                 }
+                Assert.False(string.IsNullOrWhiteSpace(firstResult.GetProperty("callsite_content").GetString()));
+                Assert.Equal("first_reference", firstResult.GetProperty("callsite_selection").GetString());
+                Assert.True(firstResult.GetProperty("callsite_line").GetInt32() > 0);
+                Assert.True(firstResult.GetProperty("callsite_column").GetInt32() > 0);
+                Assert.True(firstResult.GetProperty("callsite_reference_count").GetInt32() > 0);
+                Assert.True(firstResult.GetProperty("callsite_omitted_reference_count").GetInt32() >= 0);
+                foreach (var field in new[]
+                {
+                    "callsite_start_line",
+                    "callsite_end_line",
+                    "callsite_requested_start_line",
+                    "callsite_requested_end_line",
+                    "callsite_effective_start_line",
+                    "callsite_effective_end_line",
+                })
+                {
+                    Assert.True(firstResult.TryGetProperty(field, out _), field);
+                }
                 if (firstResult.TryGetProperty("body_content_truncated", out var bodyContentTruncated))
                 {
                     Assert.True(bodyContentTruncated.GetBoolean());
                     Assert.True(firstResult.TryGetProperty("body_content_truncation_reasons", out _));
                     Assert.True(firstResult.TryGetProperty("body_content_recovery", out _));
+                }
+                if (firstResult.TryGetProperty("callsite_content_truncated", out var callsiteContentTruncated))
+                {
+                    Assert.True(callsiteContentTruncated.GetBoolean());
+                    Assert.True(firstResult.TryGetProperty("callsite_content_truncation_reasons", out _));
+                    Assert.True(firstResult.TryGetProperty("callsite_content_recovery", out _));
                 }
 
                 var secondArgs = firstArgs.Concat(["--cursor", cursor]).ToArray();
@@ -92,12 +116,13 @@ public sealed class JsonEnvelopeWrapperIssue4882Tests
         try
         {
             var dbPath = CreateGraphFixture(projectRoot);
-            var projections = new (string? Fields, bool ExpectBody)[]
+            var projections = new (string? Fields, bool ExpectBody, bool ExpectCallsite)[]
             {
-                ("path,line", false),
-                ("file,line", false),
-                ("body_content,body_content_truncated,body_content_recovery", true),
-                ("all", true),
+                ("path,line", false, false),
+                ("file,line", false, false),
+                ("body_content,body_content_truncated,body_content_recovery", true, false),
+                ("callsite_content,callsite_line,callsite_column,callsite_selection", false, true),
+                ("all", true, true),
             };
 
             foreach (var (command, query) in new[]
@@ -122,6 +147,8 @@ public sealed class JsonEnvelopeWrapperIssue4882Tests
                 {
                     Assert.False(string.IsNullOrWhiteSpace(
                         unprojectedDocument.RootElement.GetProperty("body_content").GetString()));
+                    Assert.False(string.IsNullOrWhiteSpace(
+                        unprojectedDocument.RootElement.GetProperty("callsite_content").GetString()));
                 }
 
                 foreach (var projection in projections)
@@ -154,6 +181,13 @@ public sealed class JsonEnvelopeWrapperIssue4882Tests
                             Assert.DoesNotContain(
                                 result.EnumerateObject().Select(property => property.Name),
                                 propertyName => propertyName.StartsWith("body_", StringComparison.Ordinal));
+                        }
+                        Assert.Equal(projection.ExpectCallsite, result.TryGetProperty("callsite_content", out _));
+                        if (!projection.ExpectCallsite)
+                        {
+                            Assert.DoesNotContain(
+                                result.EnumerateObject().Select(property => property.Name),
+                                propertyName => propertyName.StartsWith("callsite_", StringComparison.Ordinal));
                         }
                     }
                 }
@@ -273,6 +307,131 @@ public sealed class JsonEnvelopeWrapperIssue4882Tests
     }
 
     [Fact]
+    public void ImpactBodyIntentValidation_PrecedesProjectionAndDatabaseAccess_Issue5099()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("bounded_impact_body_validation_5099");
+        try
+        {
+            var missingDbPath = Path.Combine(projectRoot, "missing.db");
+            var args = new[]
+            {
+                "impact", "Target", "--db", missingDbPath, "--json", "--fields", "path",
+                "--max-json-bytes", "8192", "--snippet-lines", "3",
+            };
+            var (exitCode, stdout, stderr) = CaptureConsole(
+                () => ProgramRunner.Run(args, _jsonOptions, "1.0.0-test"));
+            var diagnostic = stdout + stderr;
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains(CommandErrorCodes.UsageError, diagnostic);
+            Assert.Contains("--snippet-lines requires --body", diagnostic);
+            Assert.DoesNotContain("database", diagnostic, StringComparison.OrdinalIgnoreCase);
+
+            var dbPath = CreateGraphFixture(projectRoot);
+            var (countExitCode, countStdout, countStderr) = CaptureConsole(
+                () => ProgramRunner.Run(
+                    [
+                        "impact", "TargetA", "--db", dbPath, "--json", "--body",
+                        "--snippet-lines", "3", "--count",
+                    ],
+                    _jsonOptions,
+                    "1.0.0-test"));
+            var countDiagnostic = countStdout + countStderr;
+
+            Assert.Equal(CommandExitCodes.UsageError, countExitCode);
+            Assert.Contains(CommandErrorCodes.UsageError, countDiagnostic);
+            Assert.Contains("--snippet-lines with --body requires text or JSON result output", countDiagnostic);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void ImpactHiddenBodyOutputs_SkipCallsiteMaterialization_Issue5099()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("bounded_impact_hidden_body_5099");
+        try
+        {
+            var dbPath = CreateGraphFixture(projectRoot);
+            var (countExitCode, countStdout, countStderr) = CaptureConsole(
+                () => ProgramRunner.Run(
+                    [
+                        "impact", "TargetA", "--db", dbPath, "--json", "--body", "--count",
+                        "--profile", "--limit", "2", "--exact-name",
+                    ],
+                    _jsonOptions,
+                    "1.0.0-test"));
+
+            Assert.Equal(CommandExitCodes.Success, countExitCode);
+            Assert.Equal(string.Empty, countStderr);
+            Assert.DoesNotContain("FROM chunks c", countStdout, StringComparison.Ordinal);
+            Assert.DoesNotContain("callsite_content", countStdout, StringComparison.Ordinal);
+
+            var (visibleExitCode, visibleStdout, visibleStderr) = CaptureConsole(
+                () => QueryCommandRunner.RunImpact(
+                    [
+                        "TargetA", "--db", dbPath, "--json", "--body", "--profile",
+                        "--limit", "1", "--exact-name",
+                    ],
+                    _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, visibleExitCode);
+            Assert.Equal(string.Empty, visibleStderr);
+            Assert.Contains("FROM chunks c", visibleStdout, StringComparison.Ordinal);
+
+            var (compactExitCode, compactStdout, compactStderr) = CaptureConsole(
+                () => QueryCommandRunner.RunImpact(
+                    [
+                        "TargetA", "--db", dbPath, "--body", "--format", "compact", "--profile",
+                        "--limit", "1", "--exact-name",
+                    ],
+                    _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, compactExitCode);
+            Assert.Equal(string.Empty, compactStderr);
+            Assert.DoesNotContain("FROM chunks c", compactStdout, StringComparison.Ordinal);
+
+            var (projectedExitCode, projectedStdout, projectedStderr) = CaptureConsole(
+                () => ProgramRunner.Run(
+                    [
+                        "impact", "TargetA", "--db", dbPath, "--json", "--body", "--fields", "path",
+                        "--max-json-bytes", "8192", "--limit", "1", "--exact-name",
+                    ],
+                    _jsonOptions,
+                    "1.0.0-test"));
+
+            Assert.Equal(CommandExitCodes.Success, projectedExitCode);
+            Assert.Equal(string.Empty, projectedStderr);
+            using var projectedDocument = JsonDocument.Parse(projectedStdout);
+            var projectedResult = projectedDocument.RootElement.GetProperty("results")[0];
+            Assert.Equal(["path"], projectedResult.EnumerateObject().Select(property => property.Name));
+
+            var (callsiteExitCode, callsiteStdout, callsiteStderr) = CaptureConsole(
+                () => ProgramRunner.Run(
+                    [
+                        "impact", "TargetA", "--db", dbPath, "--json", "--body", "--snippet-lines", "3",
+                        "--fields", "callers.callsite_content,callers.callsite_line", "--max-json-bytes", "8192",
+                        "--limit", "1", "--exact-name",
+                    ],
+                    _jsonOptions,
+                    "1.0.0-test"));
+
+            Assert.Equal(CommandExitCodes.Success, callsiteExitCode);
+            Assert.Equal(string.Empty, callsiteStderr);
+            using var callsiteDocument = JsonDocument.Parse(callsiteStdout);
+            var callsiteResult = callsiteDocument.RootElement.GetProperty("results")[0];
+            Assert.False(string.IsNullOrWhiteSpace(callsiteResult.GetProperty("callsite_content").GetString()));
+            Assert.True(callsiteResult.GetProperty("callsite_line").GetInt32() > 0);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void GraphFieldDiscovery_RemainsIndependentFromBodyIntent_Issue5094()
     {
         foreach (var command in new[] { "references", "refs", "callers", "callees" })
@@ -294,6 +453,10 @@ public sealed class JsonEnvelopeWrapperIssue4882Tests
             Assert.Contains("body_content", validFields);
             Assert.Contains("body_content_truncated", validFields);
             Assert.Contains("body_content_recovery", validFields);
+            Assert.Contains("callsite_content", validFields);
+            Assert.Contains("callsite_content_truncated", validFields);
+            Assert.Contains("callsite_content_recovery", validFields);
+            Assert.Contains("callsite_selection", validFields);
         }
     }
 

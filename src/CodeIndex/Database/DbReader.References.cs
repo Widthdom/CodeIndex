@@ -7,7 +7,7 @@ public partial class DbReader
 {
     private const int CSharpUsingStaticReferenceFilterChunkSize = 64;
     private const int CSharpUsingStaticReferenceFilterMaxRawLimit = 65536;
-    private sealed record SearchReferenceRawRow(string Path, string? Lang, string SymbolName, string ReferenceKind, int Line, int Column, string Context, string? ContainerKind, string? ContainerName, bool IsSelfReference, bool IsMutualRecursion, long? TargetSymbolId, string? TargetSymbolKey, string? ResolutionState, int ResolutionCandidateCount);
+    private sealed record SearchReferenceRawRow(string Path, string? Lang, string SymbolName, string ReferenceKind, int Line, int Column, string Context, string? ContainerKind, string? ContainerName, bool IsSelfReference, bool IsMutualRecursion, long? TargetSymbolId, string? TargetSymbolKey, string? ResolutionState, int ResolutionCandidateCount, int? SpanLength);
     private static bool IncludeAmbiguousMSourceForIdentityTarget(string? language, long? targetSymbolId) =>
         targetSymbolId != null && language is "matlab" or "objc";
 
@@ -87,6 +87,7 @@ public partial class DbReader
                 ReferenceKind = row.ReferenceKind,
                 Line = row.Line,
                 Column = row.Column,
+                SpanLength = row.SpanLength,
                 RawContext = row.Context,
                 Context = clampedContext.Text,
                 ContextTruncated = clampedContext.Truncated,
@@ -290,6 +291,7 @@ public partial class DbReader
         var targetSymbolKeySql = _referenceIdentityContractCurrent ? "r.target_symbol_key" : "NULL";
         var resolutionStateSql = _referenceIdentityContractCurrent ? "r.resolution_state" : "NULL";
         var resolutionCandidateCountSql = _referenceIdentityContractCurrent ? "r.resolution_candidate_count" : "0";
+        var referenceSpanLengthSql = _referenceColumns.Contains("span_length") ? "r.span_length" : "NULL";
         var sql = referenceKind == null
             ? $@"
             WITH logical_references AS (
@@ -304,7 +306,8 @@ public partial class DbReader
                        CASE WHEN COUNT(DISTINCT COALESCE({targetSymbolIdSql}, -1)) = 1 THEN MIN({targetSymbolIdSql}) ELSE NULL END AS target_symbol_id,
                        CASE WHEN COUNT(DISTINCT COALESCE({targetSymbolKeySql}, '')) = 1 THEN MIN({targetSymbolKeySql}) ELSE NULL END AS target_symbol_key,
                        CASE WHEN COUNT(DISTINCT COALESCE({resolutionStateSql}, '')) = 1 THEN MIN({resolutionStateSql}) ELSE 'ambiguous' END AS resolution_state,
-                       MAX({resolutionCandidateCountSql}) AS resolution_candidate_count
+                       MAX({resolutionCandidateCountSql}) AS resolution_candidate_count,
+                       MIN(CASE WHEN {referenceSpanLengthSql} > 0 THEN {referenceSpanLengthSql} ELSE NULL END) AS span_length
                 FROM symbol_references r
                 JOIN files f ON r.file_id = f.id
                 {referenceLineJoin}
@@ -318,7 +321,8 @@ public partial class DbReader
                    " + targetSymbolIdSql + @" AS target_symbol_id,
                    " + targetSymbolKeySql + @" AS target_symbol_key,
                    " + resolutionStateSql + @" AS resolution_state,
-                   " + resolutionCandidateCountSql + @" AS resolution_candidate_count
+                   " + resolutionCandidateCountSql + @" AS resolution_candidate_count,
+                   " + referenceSpanLengthSql + @" AS span_length
             FROM symbol_references r
             JOIN files f ON r.file_id = f.id
             " + referenceLineJoin + @"
@@ -451,7 +455,7 @@ public partial class DbReader
             )
             SELECT path, lang, symbol_name, reference_kind, line, column_number,
                    context, container_kind, container_name, is_self_reference, is_mutual_recursion,
-                   target_symbol_id, target_symbol_key, resolution_state, resolution_candidate_count
+                   target_symbol_id, target_symbol_key, resolution_state, resolution_candidate_count, span_length
             FROM logical_references r";
         }
         if (includeOrdering)
@@ -530,7 +534,8 @@ public partial class DbReader
             reader.IsDBNull(11) ? null : reader.GetInt64(11),
             GetNullableString(reader, 12),
             GetNullableString(reader, 13),
-            reader.GetInt32(14));
+            reader.GetInt32(14),
+            GetNullableInt32(reader, 15));
     }
 
     private static bool ShouldApplyCSharpUsingStaticConstantPatternReferenceFilter(string? lang, string? referenceKind, bool exact) =>

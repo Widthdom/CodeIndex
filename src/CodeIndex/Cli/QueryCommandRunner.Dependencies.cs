@@ -32,6 +32,8 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryWriteSnippetLinesZeroUnsupportedError(options, "impact"))
             return CommandExitCodes.UsageError;
+        if (!TryValidateGraphSnippetLinesOption("impact", options))
+            return CommandExitCodes.UsageError;
         if (!TryResolveNameExactMode(options, "impact", out _, out var exactError))
         {
             CommandErrorWriter.WriteStderr(exactError);
@@ -76,8 +78,13 @@ public static partial class QueryCommandRunner
                 JsonEnvelopeWrapper.GetBoundedResponseOffset("impact"),
                 JsonEnvelopeWrapper.GetBoundedImpactCollection(),
                 options.IncludeMemberReads);
-            if (options.IncludeBody)
+            if (options.IncludeBody
+                && !options.CountOnly
+                && options.OutputFormat is (OutputFormatText or OutputFormatJson)
+                && JsonEnvelopeWrapper.ShouldMaterializeBody("impact"))
+            {
                 AttachBodyExcerpts(reader, analysis.Callers, options.SnippetLines, options.MaxLineWidth);
+            }
             ApplyBodyRecoveryCommands(analysis.Callers, options.DbPath, options.RedactPaths ?? true);
             var sqlGraphSignal = NarrowSqlGraphContractSignal(
                 reader.GetSqlGraphContractSignal(options.Lang, options.PathPatterns, options.ExcludePaths, options.ExcludeTests),
@@ -370,6 +377,13 @@ public static partial class QueryCommandRunner
                             var indent = new string(' ', (r.Depth - 1) * 2);
                             Console.WriteLine($"  {indent}{r.CallerKind ?? "?",-10} {r.CallerName ?? "<top-level>",-32} {r.Path}:{r.FirstLine}  -> {r.CalleeName} ({r.ReferenceCount} refs)");
                             WriteOptionalBodyExcerpt(r.BodyStartLine, r.BodyContent, $"  {indent}");
+                            WriteOptionalCallsiteExcerpt(
+                                r.CallsiteLine,
+                                r.CallsiteColumn,
+                                r.CallsiteStartLine,
+                                r.CallsiteContent,
+                                r.CallsiteOmittedReferenceCount,
+                                $"  {indent}");
                             if (options.WithPaths && r.Paths != null)
                             {
                                 foreach (var p in r.Paths)

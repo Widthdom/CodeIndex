@@ -110,7 +110,7 @@ public partial class DbReader
         CountGroupsByReferenceKind: false,
         NormalizeBoundLanguage: true,
         IdentityParameterName: "@targetSymbolId",
-        RowLayout: new GraphReferenceRowLayout(6, 7, false, null, 8, 9, 10, 11, 12, 13),
+        RowLayout: new GraphReferenceRowLayout(6, 7, true, 8, 9, 10, 11, 12, 13, 14),
         BuildReferenceJoinSql: static reader => reader.ReferenceLineJoinSql("r"),
         BuildSourcePredicateSql: static _ => BuildCallerContainerPredicate("f", "r"),
         BuildIdentityFilterSql: static (reader, request) => reader.BuildCallerIdentityFilterSql(request),
@@ -301,6 +301,7 @@ public partial class DbReader
             : GetLogicalReferenceKindSql("r.reference_kind");
         var selfReferenceSql = _referenceColumns.Contains("is_self_reference") ? "r.is_self_reference" : "0";
         var mutualRecursionSql = _referenceColumns.Contains("is_mutual_recursion") ? "r.is_mutual_recursion" : "0";
+        var referenceSpanLengthSql = _referenceColumns.Contains("span_length") ? "r.span_length" : "NULL";
         var sql = @"
             WITH logical_references AS (
                 SELECT f.path, f.lang, r.container_kind, r.container_name, r.symbol_name,
@@ -309,7 +310,9 @@ public partial class DbReader
                        " + groupedReferenceKindGroupSql + @" AS count_reference_kind,
                        COUNT(*) AS reference_count,
                        " + ReferenceWeightedScoreSql("r.reference_kind") + @" AS weighted_score,
-                       (CAST(r.line AS INTEGER) * 4294967296 + r.column_number) AS location_key,
+                       r.line,
+                       r.column_number,
+                       " + referenceSpanLengthSql + @" AS span_length,
                        MAX(" + selfReferenceSql + @") AS is_self_reference,
                        MAX(" + mutualRecursionSql + @") AS is_mutual_recursion
                 FROM symbol_references r
@@ -319,19 +322,34 @@ public partial class DbReader
                   AND " + context.SupportedLanguagePredicateSql;
         AppendGraphReferenceTailFilters(ref sql, CallerGraphReferenceDirection, request, context);
         sql += @"
-            GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, " + groupedReferenceKindGroupSql + @", r.reference_kind
+            GROUP BY f.path, f.lang, r.container_kind, r.container_name, r.symbol_name, r.file_id, r.line, r.column_number, " + referenceSpanLengthSql + @", " + groupedReferenceKindGroupSql + @", r.reference_kind
+            ),
+            ranked_call_sites AS (
+                SELECT logical_references.*,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY path, lang, " + BuildCallerKindProjectionSql("logical_references") + @", " + BuildCallerNameProjectionSql("logical_references") + @", symbol_name
+                           ORDER BY line,
+                                    CASE WHEN column_number IS NULL THEN 1 ELSE 0 END,
+                                    column_number,
+                                    CASE WHEN span_length IS NULL OR span_length <= 0 THEN 1 ELSE 0 END,
+                                    COALESCE(span_length, 0),
+                                    reference_kind,
+                                    raw_reference_kind
+                       ) AS location_rank
+                FROM logical_references
             )
             SELECT path, lang, " + BuildCallerKindProjectionSql("r") + @" AS container_kind, " + BuildCallerNameProjectionSql("r") + @" AS container_name, symbol_name,
                    " + (request.RawKinds ? GetGroupedCallerReferenceKindSql("r.reference_kind") : GetPreferredLogicalReferenceKindSql("r.reference_kind")) + @" AS reference_kind,
-                   (MIN(location_key) / 4294967296) AS first_line,
-                   (MIN(location_key) % 4294967296) AS first_column,
+                   MAX(CASE WHEN location_rank = 1 THEN line END) AS first_line,
+                   MAX(CASE WHEN location_rank = 1 THEN column_number END) AS first_column,
+                   MAX(CASE WHEN location_rank = 1 THEN span_length END) AS first_length,
                    SUM(r.reference_count) AS reference_count,
                    GROUP_CONCAT(DISTINCT r.reference_kind) AS reference_kinds,
                    GROUP_CONCAT(r.count_reference_kind || ':' || r.reference_count) AS reference_kind_counts,
                    SUM(r.weighted_score) AS weighted_score,
                    MAX(r.is_self_reference) AS is_self_reference,
                    MAX(r.is_mutual_recursion) AS is_mutual_recursion
-            FROM logical_references r
+            FROM ranked_call_sites r
             GROUP BY path, lang, container_kind, container_name, symbol_name";
         return sql;
     }
@@ -373,9 +391,10 @@ public partial class DbReader
                 SELECT logical_references.*,
                        ROW_NUMBER() OVER (
                            PARTITION BY path, lang, container_kind, container_name, symbol_name, reference_kind
-                           ORDER BY CASE WHEN column_number IS NULL THEN 1 ELSE 0 END,
-                                    line,
+                           ORDER BY line,
+                                    CASE WHEN column_number IS NULL THEN 1 ELSE 0 END,
                                     column_number,
+                                    CASE WHEN span_length IS NULL OR span_length <= 0 THEN 1 ELSE 0 END,
                                     COALESCE(span_length, 0)
                        ) AS location_rank
                 FROM logical_references

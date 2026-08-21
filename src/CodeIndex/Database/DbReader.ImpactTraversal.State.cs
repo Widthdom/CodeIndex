@@ -227,7 +227,16 @@ public partial class DbReader
             result.ReferenceKindCounts = counts;
             result.ReferenceKinds = counts.Keys.Order(StringComparer.Ordinal).ToArray();
             result.ReferenceCount = counts.Values.Sum();
-            result.FirstLine = Math.Min(result.FirstLine, caller.FirstLine);
+            var callerColumn = caller.FirstColumn > 0 ? caller.FirstColumn : (int?)null;
+            if (caller.FirstLine < result.FirstLine
+                || caller.FirstLine == result.FirstLine
+                && (callerColumn ?? int.MaxValue) < (result.FirstColumn ?? int.MaxValue))
+            {
+                result.FirstLine = caller.FirstLine;
+                result.FirstColumn = callerColumn;
+                result.FirstLength = caller.FirstLength;
+                result.CalleeName = caller.CalleeName;
+            }
         }
     }
 }

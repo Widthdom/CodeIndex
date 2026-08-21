@@ -593,7 +593,10 @@ public partial class QueryCommandRunnerTests
         try
         {
             var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
-            TestProjectHelper.InsertIndexedFile(dbPath, "src/Session.cs", "csharp", """
+            var callsitePrefix = "        var first = " + new string(' ', 320);
+            var callsiteLine = callsitePrefix + "runner" + new string(' ', 320) + ";";
+            var callsiteColumn = callsitePrefix.Length + 1;
+            var source = $$"""
             class Session
             {
                 int Run(int user)
@@ -604,15 +607,18 @@ public partial class QueryCommandRunnerTests
 
                 int Login(int user)
                 {
-                    return Run(user);
+            {{callsiteLine}}
+                    return Run(first);
                 }
             }
-            """);
+            """;
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/Session.cs", "csharp", source);
+            var fileId = 0;
             using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
             {
                 using var select = db.Connection.CreateCommand();
                 select.CommandText = "SELECT id FROM files WHERE path = 'src/Session.cs'";
-                var fileId = Convert.ToInt32(select.ExecuteScalar());
+                fileId = Convert.ToInt32(select.ExecuteScalar());
                 var writer = new DbWriter(db.Connection);
                 writer.InsertReferences([
                     new ReferenceRecord
@@ -621,41 +627,122 @@ public partial class QueryCommandRunnerTests
                         SymbolName = "Run",
                         ReferenceKind = "call",
                         Line = 11,
-                        Column = 16,
-                        Context = "        return Run(user);",
+                        Column = callsiteColumn,
+                        SpanLength = "runner".Length,
+                        Context = callsiteLine,
                         ContainerKind = "function",
                         ContainerName = "Login",
-                    }
+                    },
+                    new ReferenceRecord
+                    {
+                        FileId = fileId,
+                        SymbolName = "Run",
+                        ReferenceKind = "call",
+                        Line = 12,
+                        Column = 16,
+                        SpanLength = "Run".Length,
+                        Context = "        return Run(first);",
+                        ContainerKind = "function",
+                        ContainerName = "Login",
+                    },
+                    new ReferenceRecord
+                    {
+                        FileId = fileId,
+                        SymbolName = "LegacyRun",
+                        ReferenceKind = "call",
+                        Line = 12,
+                        Column = 0,
+                        Context = "        return Run(first);",
+                        ContainerKind = "function",
+                        ContainerName = "LegacyLogin",
+                    },
                 ]);
                 writer.MarkGraphReady();
             }
 
             AssertBodyExcerpt(
                 QueryCommandRunner.RunReferences,
-                ["Run", "--db", dbPath, "--json", "--body", "--snippet-lines", "1"],
+                ["Run", "--db", dbPath, "--json", "--body", "--snippet-lines", "1", "--max-line-width", "80", "--limit", "1", "--exact-name"],
                 "int Login(int user)",
-                expectedContentTruncated: true);
+                expectedContentTruncated: true,
+                expectedCallsiteContent: "runner",
+                expectedCallsiteLine: 11,
+                expectedCallsiteColumn: callsiteColumn,
+                expectedCallsiteLength: "runner".Length,
+                expectedCallsiteReferenceCount: 1,
+                expectedCallsiteOmittedReferenceCount: 0,
+                expectedCallsiteContentTruncated: true,
+                forbiddenRecoveryPath: projectRoot);
             AssertBodyExcerpt(
                 QueryCommandRunner.RunCallers,
-                ["Run", "--db", dbPath, "--json", "--body", "--snippet-lines", "20"],
+                ["Run", "--db", dbPath, "--json", "--body", "--snippet-lines", "1", "--max-line-width", "80", "--exact-name"],
                 "int Login(int user)",
-                expectedContentTruncated: false);
+                expectedContentTruncated: true,
+                expectedCallsiteContent: "runner",
+                expectedCallsiteLine: 11,
+                expectedCallsiteColumn: callsiteColumn,
+                expectedCallsiteLength: "runner".Length,
+                expectedCallsiteReferenceCount: 3,
+                expectedCallsiteOmittedReferenceCount: 2,
+                expectedCallsiteContentTruncated: true,
+                forbiddenRecoveryPath: projectRoot);
             AssertBodyExcerpt(
                 QueryCommandRunner.RunCallees,
-                ["Login", "--db", dbPath, "--json", "--body", "--snippet-lines", "1"],
+                ["Login", "--db", dbPath, "--json", "--body", "--snippet-lines", "1", "--max-line-width", "80", "--exact-name"],
                 "int Run(int user)",
-                expectedContentTruncated: true);
+                expectedContentTruncated: true,
+                expectedCallsiteContent: "runner",
+                expectedCallsiteLine: 11,
+                expectedCallsiteColumn: callsiteColumn,
+                expectedCallsiteLength: "runner".Length,
+                expectedCallsiteReferenceCount: 3,
+                expectedCallsiteOmittedReferenceCount: 2,
+                expectedCallsiteContentTruncated: true,
+                forbiddenRecoveryPath: projectRoot);
 
             var (textExitCode, textStdout, textStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
-                ["Run", "--db", dbPath, "--body", "--snippet-lines", "1"],
+                ["Run", "--db", dbPath, "--body", "--snippet-lines", "1", "--max-line-width", "80", "--exact-name"],
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, textExitCode);
             Assert.Contains("int Login(int user)", textStdout);
+            Assert.Contains("Call site (line 11", textStdout);
+            Assert.Contains("runner", textStdout);
             Assert.Contains("references in", textStderr);
 
+            var (unavailableExitCode, unavailableStdout, unavailableStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["LegacyRun", "--db", dbPath, "--json", "--body", "--snippet-lines", "1", "--exact-name"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, unavailableExitCode);
+            Assert.Equal(string.Empty, unavailableStderr);
+            using (var unavailableDocument = ParseJsonOutput(unavailableStdout))
+            {
+                var unavailableResult = unavailableDocument.RootElement;
+                Assert.Equal(12, unavailableResult.GetProperty("callsite_line").GetInt32());
+                Assert.Equal("first_reference", unavailableResult.GetProperty("callsite_selection").GetString());
+                Assert.Equal("callsite_column_unavailable", unavailableResult.GetProperty("callsite_content_unavailable_reason").GetString());
+                Assert.False(unavailableResult.TryGetProperty("callsite_column", out _));
+                Assert.False(unavailableResult.TryGetProperty("callsite_content", out _));
+            }
+
+            var (legacyCallerExitCode, legacyCallerStdout, legacyCallerStderr) = CaptureConsole(() => QueryCommandRunner.RunCallers(
+                ["LegacyRun", "--db", dbPath, "--json", "--body", "--snippet-lines", "1", "--exact-name"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, legacyCallerExitCode);
+            Assert.Equal(string.Empty, legacyCallerStderr);
+            using (var legacyCallerDocument = ParseJsonOutput(legacyCallerStdout))
+            {
+                var legacyCaller = legacyCallerDocument.RootElement;
+                Assert.Equal(12, legacyCaller.GetProperty("callsite_line").GetInt32());
+                Assert.Equal("callsite_column_unavailable", legacyCaller.GetProperty("callsite_content_unavailable_reason").GetString());
+                Assert.False(legacyCaller.TryGetProperty("callsite_column", out _));
+                Assert.False(legacyCaller.TryGetProperty("callsite_content", out _));
+            }
+
             var (impactExitCode, impactStdout, impactStderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
-                ["Run", "--db", dbPath, "--json", "--body", "--snippet-lines", "2"],
+                ["Run", "--db", dbPath, "--json", "--body", "--snippet-lines", "1", "--max-line-width", "80", "--exact-name"],
                 _jsonOptions));
 
             Assert.Equal(CommandExitCodes.Success, impactExitCode);
@@ -663,8 +750,74 @@ public partial class QueryCommandRunnerTests
             using var impactDocument = ParseJsonOutput(impactStdout);
             var impactCaller = impactDocument.RootElement.GetProperty("callers")[0];
             Assert.Contains("int Login(int user)", impactCaller.GetProperty("body_content").GetString());
-            Assert.Equal(2, CountLines(impactCaller.GetProperty("body_content").GetString()!));
             Assert.True(impactCaller.GetProperty("body_content_truncated").GetBoolean());
+            AssertCallsiteEvidence(
+                impactCaller,
+                "runner",
+                expectedLine: 11,
+                expectedColumn: callsiteColumn,
+                expectedLength: "runner".Length,
+                expectedReferenceCount: 2,
+                expectedOmittedReferenceCount: 1,
+                expectedContentTruncated: true,
+                forbiddenRecoveryPath: projectRoot);
+
+            var sourceLines = source.Split('\n');
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                using var replaceChunks = db.Connection.CreateCommand();
+                replaceChunks.CommandText = @"
+                    DELETE FROM chunks WHERE file_id = @fileId;
+                    INSERT INTO chunks (file_id, chunk_index, start_line, end_line, content)
+                    VALUES (@fileId, 0, 1, 10, @beforeGap),
+                           (@fileId, 1, 12, @endLine, @afterGap);";
+                replaceChunks.Parameters.AddWithValue("@fileId", fileId);
+                replaceChunks.Parameters.AddWithValue("@beforeGap", string.Join('\n', sourceLines.Take(10)));
+                replaceChunks.Parameters.AddWithValue("@endLine", sourceLines.Length);
+                replaceChunks.Parameters.AddWithValue("@afterGap", string.Join('\n', sourceLines.Skip(11)));
+                replaceChunks.ExecuteNonQuery();
+            }
+
+            var (gapExitCode, gapStdout, gapStderr) = CaptureConsole(() => QueryCommandRunner.RunReferences(
+                ["Run", "--db", dbPath, "--json", "--body", "--snippet-lines", "3", "--limit", "1", "--exact-name"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, gapExitCode);
+            Assert.Equal(string.Empty, gapStderr);
+            using (var gapDocument = ParseJsonOutput(gapStdout))
+            {
+                var gapResult = gapDocument.RootElement;
+                Assert.Equal(11, gapResult.GetProperty("callsite_line").GetInt32());
+                Assert.Equal(callsiteColumn, gapResult.GetProperty("callsite_column").GetInt32());
+                Assert.Equal("runner".Length, gapResult.GetProperty("callsite_length").GetInt32());
+                Assert.Equal("callsite_excerpt_unavailable", gapResult.GetProperty("callsite_content_unavailable_reason").GetString());
+                Assert.False(gapResult.TryGetProperty("callsite_content", out _));
+            }
+
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                using var clearColumn = db.Connection.CreateCommand();
+                clearColumn.CommandText = @"
+                    UPDATE symbol_references
+                    SET column_number = NULL
+                    WHERE file_id = @fileId AND symbol_name = 'Run' AND line = 11;";
+                clearColumn.Parameters.AddWithValue("@fileId", fileId);
+                clearColumn.ExecuteNonQuery();
+            }
+
+            var (nullableExitCode, nullableStdout, nullableStderr) = CaptureConsole(() => QueryCommandRunner.RunImpact(
+                ["Run", "--db", dbPath, "--json", "--body", "--snippet-lines", "1", "--exact-name"],
+                _jsonOptions));
+
+            Assert.Equal(CommandExitCodes.Success, nullableExitCode);
+            Assert.Equal(string.Empty, nullableStderr);
+            using var nullableDocument = ParseJsonOutput(nullableStdout);
+            var nullableCaller = nullableDocument.RootElement.GetProperty("callers")[0];
+            Assert.Equal(11, nullableCaller.GetProperty("callsite_line").GetInt32());
+            Assert.Equal("runner".Length, nullableCaller.GetProperty("callsite_length").GetInt32());
+            Assert.Equal("callsite_column_unavailable", nullableCaller.GetProperty("callsite_content_unavailable_reason").GetString());
+            Assert.False(nullableCaller.TryGetProperty("callsite_column", out _));
+            Assert.False(nullableCaller.TryGetProperty("callsite_content", out _));
         }
         finally
         {
@@ -688,7 +841,7 @@ public partial class QueryCommandRunnerTests
             (["--body", "--snippet-lines", "3", "--count"], "--snippet-lines with --body requires text or JSON result output"),
         };
 
-        foreach (var command in new[] { "references", "callers", "callees" })
+        foreach (var command in new[] { "references", "callers", "callees", "impact" })
         {
             foreach (var scenario in scenarios)
             {
@@ -708,7 +861,7 @@ public partial class QueryCommandRunnerTests
     [Fact]
     public void GraphCommands_SnippetLinesAboveMaximumKeepRangeError_Issue4882()
     {
-        foreach (var command in new[] { "references", "callers", "callees" })
+        foreach (var command in new[] { "references", "callers", "callees", "impact" })
         {
             var (exitCode, stdout, stderr) = CaptureConsole(() => RunGraphCommand(
                 command,
