@@ -6044,7 +6044,7 @@ public partial class FileIndexerTests
     }
 
     [Fact]
-    public void ScanFilesDetailed_SeparatesUnknownExtensionsFromOtherNonIndexableFiles()
+    public void ScanFilesDetailed_SeparatesUnmappedLanguageFilesFromOtherNonIndexableFiles_Issue5100()
     {
         using var project = TestProjectHelper.CreateTempProjectScope("codeindex_test");
         var tempDir = project.Root;
@@ -6060,6 +6060,9 @@ public partial class FileIndexerTests
                 ["data.mystery"] = "unknown extension\n",
                 ["ignored.mystery"] = "ignored unknown extension\n",
             });
+        File.WriteAllBytes(
+            TestProjectHelper.ProjectPath(tempDir, "blob.bf"),
+            [0x42, 0x00, 0x46]);
         var appPath = TestProjectHelper.ProjectPath(tempDir, "app.cs");
         var scriptPath = TestProjectHelper.ProjectPath(tempDir, "script");
         var toolPath = TestProjectHelper.ProjectPath(tempDir, "tool");
@@ -6069,7 +6072,7 @@ public partial class FileIndexerTests
         var indexer = new FileIndexer(tempDir);
         var scanResult = indexer.ScanFilesDetailed();
 
-        Assert.Equal(["data.mystery"], scanResult.UnknownExtensionFiles);
+        Assert.Equal(["data.mystery", "tool"], scanResult.UnknownExtensionFiles);
         Assert.Equal("csharp", scanResult.FileLanguages[appPath]);
         Assert.Equal("python", scanResult.FileLanguages[scriptPath]);
         Assert.DoesNotContain(toolPath, scanResult.FileLanguages.Keys);
@@ -6077,7 +6080,9 @@ public partial class FileIndexerTests
         Assert.DoesNotContain(ignoredPath, scanResult.FileLanguages.Keys);
         Assert.Contains("data.mystery", scanResult.NonIndexablePaths);
         Assert.Contains("tool", scanResult.NonIndexablePaths);
-        Assert.DoesNotContain("tool", scanResult.UnknownExtensionFiles);
+        Assert.Contains("tool", scanResult.UnknownExtensionFiles);
+        Assert.DoesNotContain("blob.bf", scanResult.UnknownExtensionFiles);
+        Assert.Contains("blob.bf", scanResult.NonIndexablePaths);
         Assert.DoesNotContain("ignored.mystery", scanResult.UnknownExtensionFiles);
     }
 

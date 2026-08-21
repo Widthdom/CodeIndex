@@ -811,6 +811,7 @@ public partial class DbReader : IDisposable
         AppendIfStoredGreater(conn, DbContext.SqlGraphContractVersionMetaKey, DbContext.SqlGraphContractVersion, "sql_graph_contract_version", newerContracts);
         AppendIfStoredGreater(conn, DbContext.HdlGraphContractVersionMetaKey, DbContext.HdlGraphContractVersion, "hdl_graph_contract_version", newerContracts);
         AppendIfStoredGreater(conn, DbContext.ReferenceIdentityContractVersionMetaKey, DbContext.ReferenceIdentityContractVersion, "reference_identity_contract_version", newerContracts);
+        AppendIfStoredGreater(conn, DbContext.UnknownExtensionDiagnosticsVersionMetaKey, DbContext.UnknownExtensionDiagnosticsVersion, "unknown_extension_diagnostics_version", newerContracts);
         AppendIfStoredGreater(conn, "fold_key_version", NameFold.Version, "fold_key_version", newerContracts);
         foreach (var lang in SymbolExtractor.GetExplicitReferenceGraphContractLanguages())
         {

@@ -10,6 +10,7 @@ public partial class FileIndexer
         DirectoryScanState scanState,
         IgnoreRuleSet activeIgnoreRules,
         HashSet<string>? seenFilePaths,
+        CancellationToken cancellationToken,
         FileAttributes? knownAttributes = null,
         bool filePathCameFromDirectoryEnumeration = false)
     {
@@ -54,7 +55,11 @@ public partial class FileIndexer
         var knownIndexability = knownAttributes.HasValue
             ? GetFileIndexabilityForFoundAttributes(file, knownAttributes.Value, _symlinkPolicy, _projectRoot)
             : (FileProbeStatus?)null;
-        return TryAcceptSupportedScannedFile(file, scanState, knownIndexability);
+        return TryAcceptSupportedScannedFile(
+            file,
+            scanState,
+            cancellationToken,
+            knownIndexability);
     }
 
     private static string GetSeenFilePathKey(string file, bool filePathCameFromDirectoryEnumeration)
@@ -63,6 +68,7 @@ public partial class FileIndexer
     private bool TryAcceptSupportedScannedFile(
         string file,
         DirectoryScanState scanState,
+        CancellationToken cancellationToken,
         FileProbeStatus? knownIndexability = null)
     {
         // Use the instance symlink policy here so full scans and update paths apply the same
@@ -122,8 +128,55 @@ public partial class FileIndexer
         {
             var relativeFile = ToRelativePath(file);
             scanState.RecordNonIndexablePath(relativeFile);
-            if (HasUnknownExtension(file) && !IsInternalIndexArtifactPath(relativeFile))
-                scanState.RecordUnknownExtensionFile(relativeFile);
+            if (HasUnknownLanguageMapping(file) && !IsInternalIndexArtifactPath(relativeFile))
+            {
+                try
+                {
+                    if (IsUnknownLanguageCoverageCandidate(
+                            file,
+                            relativeFile,
+                            cancellationToken))
+                    {
+                        scanState.RecordUnknownExtensionFile(relativeFile);
+                    }
+                }
+                catch (FileTooLargeSkippedException)
+                {
+                    // Policy-excluded files are not language-support coverage gaps.
+                }
+                catch (BinaryFileSkippedException)
+                {
+                    // Policy-excluded files are not language-support coverage gaps.
+                }
+                catch (FileNotFoundException)
+                {
+                    scanState.Errors.Add(new ScanError(
+                        relativeFile,
+                        "Skipped file because it was deleted during scanning.",
+                        ScanIssueSeverity.Warning));
+                }
+                catch (DirectoryNotFoundException)
+                {
+                    scanState.Errors.Add(new ScanError(
+                        relativeFile,
+                        "Skipped file because it was deleted during scanning.",
+                        ScanIssueSeverity.Warning));
+                }
+                catch (IOException)
+                {
+                    scanState.Errors.Add(new ScanError(
+                        relativeFile,
+                        "Could not probe file for indexability/language."));
+                    scanState.RecordProbeFailedFilePath(relativeFile);
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    scanState.Errors.Add(new ScanError(
+                        relativeFile,
+                        "Could not probe file for indexability/language."));
+                    scanState.RecordProbeFailedFilePath(relativeFile);
+                }
+            }
             return false;
         }
 

@@ -12,6 +12,16 @@ public partial class FileIndexer
         out bool hasBom)
         => FileContentLoader.TryDetectUtf16Encoding(rawBytes, allowHeuristic, out bigEndian, out hasBom);
 
+    internal bool IsUnknownLanguageCoverageCandidate(
+        string absolutePath,
+        string relativePath,
+        CancellationToken cancellationToken)
+        => _contentLoader.IsUnknownLanguageCoverageCandidate(
+            absolutePath,
+            NormalizeIndexPath(relativePath),
+            relativePath,
+            cancellationToken);
+
     internal sealed class BinaryFileSkippedException(
         string relativePath,
         long nullByteOffset,

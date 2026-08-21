@@ -4,12 +4,12 @@ namespace CodeIndex.Indexer;
 
 public partial class FileIndexer
 {
-    private static bool HasUnknownExtension(string filePath)
+    private static bool HasUnknownLanguageMapping(string filePath)
     {
         var extension = Path.GetExtension(filePath);
-        return !string.IsNullOrEmpty(extension)
-            && !LangMap.ContainsKey(extension)
-            && !ExtractorPluginRegistry.TryGetLanguageForExtension(extension, out _);
+        return string.IsNullOrEmpty(extension)
+            || (!LangMap.ContainsKey(extension)
+                && !ExtractorPluginRegistry.TryGetLanguageForExtension(extension, out _));
     }
 
     private bool IsInternalIndexArtifactPath(string relativePath)
