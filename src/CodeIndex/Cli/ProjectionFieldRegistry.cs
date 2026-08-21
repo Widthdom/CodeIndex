@@ -256,11 +256,14 @@ internal static class ProjectionFieldRegistry
     private static ProjectionCommandFieldSchema CreateInspectSchema()
     {
         var definitionFields = GetJsonFieldNames<DefinitionResult>()
-            .Where(field => !string.Equals(field, "content", StringComparison.Ordinal))
+            .Where(field => !string.Equals(field, "content", StringComparison.Ordinal)
+                            && !IsSymbolsOnlyPartialFamilyContinuationField(field))
             .Concat(["content_omitted", "content_omitted_reason"])
             .Distinct(StringComparer.Ordinal)
             .ToArray();
-        var nearbyFields = GetJsonFieldNames<SymbolResult>().ToArray();
+        var nearbyFields = GetJsonFieldNames<SymbolResult>()
+            .Where(field => !IsSymbolsOnlyPartialFamilyContinuationField(field))
+            .ToArray();
         var referenceFields = GetJsonFieldNames<ReferenceResult>()
             .Where(field => !IsInspectGraphBodyField(field))
             .ToArray();
@@ -310,6 +313,15 @@ internal static class ProjectionFieldRegistry
         => string.Equals(field, "body_content", StringComparison.Ordinal)
            || field.StartsWith("body_", StringComparison.Ordinal)
            || field.StartsWith("callsite_", StringComparison.Ordinal);
+
+    private static bool IsSymbolsOnlyPartialFamilyContinuationField(string field)
+        => field is "family_member_total_count"
+            or "family_member_total_count_authoritative"
+            or "family_member_returned_count"
+            or "family_member_omitted_count"
+            or "family_member_remaining_count"
+            or "family_members_recovery_cursor"
+            or "family_members_next_cursor";
 
     private static ProjectionCommandFieldSchema CreateSearchSchema()
         => Create(
@@ -445,7 +457,13 @@ internal static class ProjectionFieldRegistry
     private static ProjectionCommandFieldSchema CreateSymbolsSchema()
         => Create(
             "symbols",
-            ["path", "line", "kind", "name"],
+            [
+                "path", "line", "kind", "name", "definition_sites", "partial_family_id",
+                "representative_reason", "family_members_truncated", "family_member_total_count",
+                "family_member_total_count_authoritative", "family_member_returned_count",
+                "family_member_omitted_count", "family_member_remaining_count",
+                "family_members_recovery_cursor", "family_members_next_cursor",
+            ],
             builder => builder
                 .Fields(GetJsonFieldNames<SymbolResult>())
                 .Alias("file", "path"));

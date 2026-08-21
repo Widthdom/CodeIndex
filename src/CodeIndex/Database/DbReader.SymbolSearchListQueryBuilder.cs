@@ -53,7 +53,7 @@ public partial class DbReader
             includeLineRange: true);
         if (plan.GroupPartials)
         {
-            sql = BuildLogicalPartialSymbolQuery(sql, plan.SortMode);
+            sql = BuildLogicalPartialSymbolQuery(sql, plan);
         }
         else
         {
