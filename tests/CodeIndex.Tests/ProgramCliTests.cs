@@ -625,6 +625,10 @@ public class ProgramCliTests
                 writer.SetMeta(DbContext.CSharpSymbolNameContractVersionMetaKey, "2");
                 writer.SetMeta(DbContext.SqlGraphContractVersionMetaKey, "1");
                 writer.SetMeta(DbContext.HotspotFamilyVersionMetaKey, "2");
+                writer.SetMeta(
+                    DbContext.UnknownExtensionDiagnosticsVersionMetaKey,
+                    DbContext.UnknownExtensionDiagnosticsVersion.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                writer.SetMeta(DbContext.UnknownExtensionHasActionableExtensionlessFilesMetaKey, bool.FalseString);
                 writer.SetMeta(DbContext.UnknownExtensionFileCountMetaKey, "2");
                 writer.SetMeta(DbContext.UnknownExtensionFilePathsMetaKey, "[\"tools/custom.foo\",\"docs/archive.bar\"]");
                 writer.SetMeta(DbContext.UnknownExtensionFilesTruncatedMetaKey, "false");

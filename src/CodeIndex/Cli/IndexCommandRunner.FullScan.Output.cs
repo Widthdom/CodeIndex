@@ -84,7 +84,7 @@ public static partial class IndexCommandRunner
             0,
             unknownExtensionClassification.GroupCount - unknownExtensionGroups.Count);
         var unknownExtensionWarning = unknownExtensionClassification.ActionableFileCount > 0
-            ? $"{unknownExtensionClassification.ActionableFileCount} file(s) were excluded because no language mapping or extractor was available. {UnknownExtensionClassifier.Guidance}"
+            ? $"{unknownExtensionClassification.ActionableFileCount} file(s) were excluded because no language mapping or extractor was available. {UnknownExtensionClassifier.GetGuidance(unknownExtensionClassification)}"
             : null;
         if (unknownExtensionWarning != null)
         {
@@ -157,7 +157,7 @@ public static partial class IndexCommandRunner
                 UnknownExtensionDiagnosticsScope = "workspace",
                 UnknownExtensionFileCountLowerBound = output.ScanHadErrors,
                 UnknownExtensionGuidance = output.ScanResult.UnknownExtensionFiles.Count > 0
-                    ? UnknownExtensionClassifier.Guidance
+                    ? UnknownExtensionClassifier.GetGuidance(unknownExtensionClassification)
                     : null,
                 Summary = new IndexFullScanSummaryJsonResult
                 {

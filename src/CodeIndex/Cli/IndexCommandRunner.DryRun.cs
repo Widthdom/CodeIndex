@@ -242,7 +242,12 @@ public static partial class IndexCommandRunner
             var knownLanguage = authoritativeFullScan
                 ? FileIndexer.GetReusableDetectedLanguage(f, dryScanMetadata.FileLanguages)
                 : null;
-            var probe = ProbeDryRunFile(dryIndexer, f, displayRelativePath, knownLanguage);
+            var probe = ProbeDryRunFile(
+                dryIndexer,
+                f,
+                displayRelativePath,
+                knownLanguage,
+                cancellationToken);
             if (probe.PolicySkipped)
             {
                 dryFileCount++;
@@ -515,7 +520,7 @@ public static partial class IndexCommandRunner
         var unknownExtensionFileCountLowerBound = candidatePathsTruncated
             || (authoritativeFullScan && dryScanMetadata.HadErrors);
         var unknownExtensionWarning = unknownExtensionClassification.ActionableFileCount > 0
-            ? $"{unknownExtensionClassification.ActionableFileCount} file(s) were excluded because no language mapping or extractor was available. {UnknownExtensionClassifier.Guidance}"
+            ? $"{unknownExtensionClassification.ActionableFileCount} file(s) were excluded because no language mapping or extractor was available. {UnknownExtensionClassifier.GetGuidance(unknownExtensionClassification)}"
             : null;
         if (unknownExtensionWarning != null)
         {
@@ -557,7 +562,7 @@ public static partial class IndexCommandRunner
                 UnknownExtensionDiagnosticsScope = authoritativeFullScan ? "workspace" : "candidate_scope",
                 UnknownExtensionFileCountLowerBound = unknownExtensionFileCountLowerBound,
                 UnknownExtensionGuidance = unknownExtensionTotal > 0
-                    ? UnknownExtensionClassifier.Guidance
+                    ? UnknownExtensionClassifier.GetGuidance(unknownExtensionClassification)
                     : null,
                 CandidatePathLimit = dryRunPathLimit,
                 CandidatePathsProcessed = candidatePathsProcessed,
@@ -995,7 +1000,8 @@ public static partial class IndexCommandRunner
         FileIndexer indexer,
         string absolutePath,
         string relativePath,
-        string? knownLanguage)
+        string? knownLanguage,
+        CancellationToken cancellationToken)
     {
         var indexability = indexer.GetFileIndexabilityForIndexing(absolutePath);
         if (indexability == FileIndexer.FileProbeStatus.ProbeFailed)
@@ -1005,32 +1011,37 @@ public static partial class IndexCommandRunner
 
         string? reusableLanguage = knownLanguage;
         FileIndexer.LanguageDetectionResult? preLoadDetection = null;
-        var isAmbiguousExtension = FileIndexer.TryGetAmbiguousLanguageDescriptor(
-            Path.GetExtension(absolutePath),
-            out _);
-        if (reusableLanguage == null || isAmbiguousExtension)
-        {
-            var detection = indexer.TryDetectLanguageForIndexing(absolutePath);
-            if (reusableLanguage == null)
-            {
-                if (detection.Status == FileIndexer.FileProbeStatus.ProbeFailed)
-                    return DryRunFileProbe.FromError("Could not probe file for indexability/language.");
-                if (detection.Status != FileIndexer.FileProbeStatus.Supported)
-                    return string.IsNullOrEmpty(Path.GetExtension(absolutePath))
-                        ? DryRunFileProbe.FromUnsupported()
-                        : DryRunFileProbe.FromUnknownExtension();
-
-                reusableLanguage = FileIndexer.CanReuseDetectedLanguageWithoutContent(absolutePath, detection.Language)
-                    ? detection.Language
-                    : null;
-            }
-
-            if (detection.Status == FileIndexer.FileProbeStatus.Supported)
-                preLoadDetection = detection;
-        }
-
         try
         {
+            var isAmbiguousExtension = FileIndexer.TryGetAmbiguousLanguageDescriptor(
+                Path.GetExtension(absolutePath),
+                out _);
+            if (reusableLanguage == null || isAmbiguousExtension)
+            {
+                var detection = indexer.TryDetectLanguageForIndexing(absolutePath);
+                if (reusableLanguage == null)
+                {
+                    if (detection.Status == FileIndexer.FileProbeStatus.ProbeFailed)
+                        return DryRunFileProbe.FromError("Could not probe file for indexability/language.");
+                    if (detection.Status != FileIndexer.FileProbeStatus.Supported)
+                    {
+                        return indexer.IsUnknownLanguageCoverageCandidate(
+                            absolutePath,
+                            relativePath,
+                            cancellationToken)
+                                ? DryRunFileProbe.FromUnknownExtension()
+                                : DryRunFileProbe.FromUnsupported();
+                    }
+
+                    reusableLanguage = FileIndexer.CanReuseDetectedLanguageWithoutContent(absolutePath, detection.Language)
+                        ? detection.Language
+                        : null;
+                }
+
+                if (detection.Status == FileIndexer.FileProbeStatus.Supported)
+                    preLoadDetection = detection;
+            }
+
             var loaded = indexer.BuildLoadedRecordWithRawBytes(
                 absolutePath,
                 relativePath,

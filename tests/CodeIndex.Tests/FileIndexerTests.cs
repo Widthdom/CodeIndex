@@ -6060,6 +6060,9 @@ public partial class FileIndexerTests
                 ["data.mystery"] = "unknown extension\n",
                 ["ignored.mystery"] = "ignored unknown extension\n",
             });
+        File.WriteAllBytes(
+            TestProjectHelper.ProjectPath(tempDir, "blob.bf"),
+            [0x42, 0x00, 0x46]);
         var appPath = TestProjectHelper.ProjectPath(tempDir, "app.cs");
         var scriptPath = TestProjectHelper.ProjectPath(tempDir, "script");
         var toolPath = TestProjectHelper.ProjectPath(tempDir, "tool");
@@ -6078,6 +6081,8 @@ public partial class FileIndexerTests
         Assert.Contains("data.mystery", scanResult.NonIndexablePaths);
         Assert.Contains("tool", scanResult.NonIndexablePaths);
         Assert.Contains("tool", scanResult.UnknownExtensionFiles);
+        Assert.DoesNotContain("blob.bf", scanResult.UnknownExtensionFiles);
+        Assert.Contains("blob.bf", scanResult.NonIndexablePaths);
         Assert.DoesNotContain("ignored.mystery", scanResult.UnknownExtensionFiles);
     }
 

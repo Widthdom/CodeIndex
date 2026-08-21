@@ -2775,7 +2775,10 @@ limit, truncation/omission metadata, diagnostic scope, lower-bound state, and
 `unknown_extension_guidance`. Group samples use the same normalized relative
 paths as full status and remain capped at five paths per group. Uppercase suffixes
 are normalized, multi-dot aliases are resolved before an unsupported file is
-grouped, and an unsupported extensionless file uses `<none>`.
+grouped, and an unsupported extensionless file uses `<none>`. The inventory is
+limited to readable, text-like files: binary and oversized files stay policy
+exclusions rather than language-support warnings, and unreadable coverage makes
+the reported count a lower bound.
 
 The warning count increases once when at least one group needs language or
 structural extraction support. Files classified as intentional metadata/assets
@@ -2784,7 +2787,8 @@ Ignored files are excluded before classification, and a valid workspace mapping
 or extractor registration removes the diagnostic on the next full scan. Inspect
 an extension with `cdidx languages --extension <extension> --json`, then add a
 trusted mapping to `.cdidx-langmap.yaml`, register an extractor, or add an ignore
-rule for intentional non-code files.
+rule for intentional non-code files. For an extensionless source file, add a
+recognized shebang or rename it with a supported extension.
 
 Full-scan dry runs report the same workspace-authoritative diagnostics without
 writing. Scoped dry runs use `unknown_extension_diagnostics_scope: "candidate_scope"`;
@@ -2795,6 +2799,10 @@ updates (`--files`, `--commits`, or `--changed-between`) do not claim a new
 workspace inventory; persisted `status` diagnostics continue to describe the
 most recent successful full scan. `status --compact` includes those bounded
 persisted diagnostics by default.
+
+Legacy databases omit these persisted fields until a successful full scan writes
+the current diagnostics-version stamp, preventing older count semantics from
+being presented as current coverage.
 
 ## Supported languages
 
@@ -6319,6 +6327,9 @@ lower-bound 状態、`unknown_extension_guidance` を返します。group の sa
 full status と同じ正規化済み相対 path を使い、1 group あたり 5 件に制限されます。
 大文字 suffix は正規化され、複合拡張子 alias は未対応 group 化の前に解決されます。
 未対応の拡張子なしファイルは `<none>` で表します。
+inventory は読み取り可能な text 系ファイルだけを対象にします。binary と上限超過
+ファイルは言語対応 warning ではなく policy 除外のまま扱い、読み取り不能な範囲が
+ある場合は件数を lower bound として示します。
 
 言語または構造抽出の対応が必要な group が 1 件以上ある場合、warning 件数を 1 増やします。
 意図的な metadata/asset として `ignore_configuration` に分類されたファイルは可視化
@@ -6326,7 +6337,8 @@ full status と同じ正規化済み相対 path を使い、1 group あたり 5 
 有効な workspace mapping または extractor 登録後の次回全体 scan では診断が消えます。
 `cdidx languages --extension <extension> --json` で拡張子を確認し、信頼済み mapping を
 `.cdidx-langmap.yaml` に追加するか、extractor を登録するか、意図的な非 code ファイルを
-ignore rule に追加してください。
+ignore rule に追加してください。拡張子なしの source ファイルには、認識可能な shebang
+を追加するか、対応済み拡張子を持つ名前へ変更してください。
 
 全体 scan の dry-run は書き込みを行わず、同じ workspace-authoritative な診断を返します。
 scoped dry-run は `unknown_extension_diagnostics_scope: "candidate_scope"` を使い、candidate
@@ -6335,6 +6347,9 @@ path 上限に達した場合は `unknown_extension_file_count_lower_bound: true
 update（`--files`、`--commits`、`--changed-between`）は新しい workspace inventory を
 主張せず、永続化済み `status` 診断は直近に成功した全体 scan を表し続けます。
 `status --compact` はその上限付き永続化診断を既定で含めます。
+
+legacy DB では、成功した全体 scan が現行 diagnostics-version stamp を書き込むまで
+これらの永続化 field を省略し、旧来の件数 semantics を現行 coverage として表示しません。
 
 ## 対応言語
 

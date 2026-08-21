@@ -95,7 +95,7 @@ public static partial class IndexCommandRunner
         var warningCount = failure.Warnings;
         if (unknownExtensionClassification.ActionableFileCount > 0)
         {
-            var warning = $"{unknownExtensionClassification.ActionableFileCount} file(s) were excluded because no language mapping or extractor was available. {UnknownExtensionClassifier.Guidance}";
+            var warning = $"{unknownExtensionClassification.ActionableFileCount} file(s) were excluded because no language mapping or extractor was available. {UnknownExtensionClassifier.GetGuidance(unknownExtensionClassification)}";
             failure.WarningList.Add(new CliJsonMessage("<unknown_extensions>", warning));
             warningCount++;
         }
@@ -115,7 +115,7 @@ public static partial class IndexCommandRunner
                 UnknownExtensionDiagnosticsScope = "workspace",
                 UnknownExtensionFileCountLowerBound = true,
                 UnknownExtensionGuidance = failure.UnknownExtensionFiles.Count > 0
-                    ? UnknownExtensionClassifier.Guidance
+                    ? UnknownExtensionClassifier.GetGuidance(unknownExtensionClassification)
                     : null,
                 Summary = new IndexFullScanSummaryJsonResult
                 {

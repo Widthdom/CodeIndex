@@ -70,6 +70,8 @@ public partial class DbWriter
         if (paths.Count == 0)
         {
             SetMetaValues(
+                (DbContext.UnknownExtensionDiagnosticsVersionMetaKey, DbContext.UnknownExtensionDiagnosticsVersion.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                (DbContext.UnknownExtensionHasActionableExtensionlessFilesMetaKey, false.ToString(System.Globalization.CultureInfo.InvariantCulture)),
                 (DbContext.UnknownExtensionFileCountMetaKey, "0"),
                 (DbContext.UnknownExtensionFilePathsMetaKey, "[]"),
                 (DbContext.UnknownExtensionFilesTruncatedMetaKey, false.ToString(System.Globalization.CultureInfo.InvariantCulture)),
@@ -89,6 +91,8 @@ public partial class DbWriter
             DbContext.UnknownExtensionFilePathSampleLimit);
         var classification = UnknownExtensionClassifier.Classify(paths);
         SetMetaValues(
+            (DbContext.UnknownExtensionDiagnosticsVersionMetaKey, DbContext.UnknownExtensionDiagnosticsVersion.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            (DbContext.UnknownExtensionHasActionableExtensionlessFilesMetaKey, classification.HasActionableExtensionlessFiles.ToString(System.Globalization.CultureInfo.InvariantCulture)),
             (DbContext.UnknownExtensionFileCountMetaKey, paths.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)),
             (DbContext.UnknownExtensionFilePathsMetaKey, JsonStringListCodec.Serialize(sample)),
             (DbContext.UnknownExtensionFilesTruncatedMetaKey, (paths.Count > sample.Count).ToString(System.Globalization.CultureInfo.InvariantCulture)),

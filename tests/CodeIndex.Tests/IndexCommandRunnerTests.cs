@@ -5930,6 +5930,9 @@ public sealed class Caller
             Assert.True(json.GetProperty("unknown_extension_groups_truncated").GetBoolean());
             Assert.Equal(2, json.GetProperty("unknown_extension_group_omitted_count").GetInt32());
             Assert.Equal(1, json.GetProperty("summary").GetProperty("warnings").GetInt32());
+            Assert.Contains(
+                "recognized shebang or rename",
+                json.GetProperty("unknown_extension_guidance").GetString());
         }
         finally
         {

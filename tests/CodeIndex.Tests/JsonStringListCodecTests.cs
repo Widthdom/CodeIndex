@@ -165,4 +165,71 @@ public class JsonStringListCodecTests
             TestProjectHelper.DeleteFile(dbPath);
         }
     }
+
+    [Fact]
+    public void GetStatus_OmitsLegacyUnknownExtensionMetadataWithoutCurrentVersion_Issue5100()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_legacy_unknown_{Guid.NewGuid():N}.db");
+        try
+        {
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            db.InitializeSchema();
+            var writer = new DbWriter(db.Connection);
+            writer.SetMetaValues(
+                (DbContext.UnknownExtensionFileCountMetaKey, "2"),
+                (DbContext.UnknownExtensionFilePathsMetaKey, "[\"legacy.foo\",\"extensionless\"]"),
+                (DbContext.UnknownExtensionFilesTruncatedMetaKey, bool.FalseString),
+                (DbContext.UnknownExtensionFilePathLimitMetaKey, "50"));
+
+            var legacyStatus = new DbReader(db.Connection).GetStatus();
+
+            Assert.Null(legacyStatus.UnknownExtensionFileCount);
+            Assert.Null(legacyStatus.UnknownExtensionFiles);
+            Assert.Null(legacyStatus.UnknownExtensionGuidance);
+
+            writer.SetMetaValues(
+                (DbContext.UnknownExtensionDiagnosticsVersionMetaKey,
+                    (DbContext.UnknownExtensionDiagnosticsVersion + 1).ToString(System.Globalization.CultureInfo.InvariantCulture)));
+
+            var futureStatus = new DbReader(db.Connection).GetStatus();
+
+            Assert.Null(futureStatus.UnknownExtensionFileCount);
+            Assert.Null(futureStatus.UnknownExtensionFiles);
+            Assert.Null(futureStatus.UnknownExtensionGuidance);
+            Assert.True(futureStatus.IndexNewerThanReader);
+            Assert.Contains(
+                "unknown_extension_diagnostics_version",
+                Assert.IsType<string>(futureStatus.IndexNewerThanReaderReason));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteFile(dbPath);
+        }
+    }
+
+    [Fact]
+    public void WriteUnknownExtensionFileMetadata_PersistsExtensionlessGuidance_Issue5100()
+    {
+        var dbPath = Path.Combine(Path.GetTempPath(), $"codeindex_extensionless_unknown_{Guid.NewGuid():N}.db");
+        try
+        {
+            using var db = new DbContext(DbOpenIntent.WriteIndex, dbPath);
+            db.InitializeSchema();
+            var writer = new DbWriter(db.Connection);
+
+            writer.WriteUnknownExtensionFileMetadata(["extensionless_source", "source.foo"]);
+
+            var status = new DbReader(db.Connection).GetStatus();
+            Assert.Contains(
+                "recognized shebang or rename",
+                Assert.IsType<string>(status.UnknownExtensionGuidance));
+            Assert.Contains(
+                Assert.IsType<List<StatusUnknownExtensionGroup>>(status.UnknownExtensionGroups),
+                group => group.Extension == "<none>");
+        }
+        finally
+        {
+            TestProjectHelper.DeleteFile(dbPath);
+        }
+    }
 }

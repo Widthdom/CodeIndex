@@ -1425,6 +1425,7 @@ public partial class IndexCommandRunnerTests
             var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
             File.Delete(Path.Combine(projectRoot, "removed.cs"));
             File.WriteAllText(Path.Combine(projectRoot, "notes.unknownext"), "plain text\n");
+            File.WriteAllBytes(Path.Combine(projectRoot, "blob.bf"), [0x42, 0x00, 0x46]);
 
             var (exitCode, json) = RunAndCaptureJson([projectRoot, "--dry-run", "--json"]);
 

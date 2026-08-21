@@ -127,17 +127,45 @@ public partial class DbReader
         var indexedHeadBranch = TryGetMetaStringInternal(DbContext.IndexedHeadBranchMetaKey);
         var indexedHeadBranchStampPresent = HasMetaKeyInternal(DbContext.IndexedHeadBranchMetaKey);
         var indexedHeadTimestamp = ParseMetaDateTimeOffset(TryGetMetaStringInternal(DbContext.IndexedHeadTimestampMetaKey));
-        var unknownExtensionFileCount = ParseMetaLong(TryGetMetaStringInternal(DbContext.UnknownExtensionFileCountMetaKey));
-        var unknownExtensionFiles = ParseMetaStringList(TryGetMetaStringInternal(DbContext.UnknownExtensionFilePathsMetaKey));
-        var unknownExtensionFilesTruncated = ParseMetaBool(TryGetMetaStringInternal(DbContext.UnknownExtensionFilesTruncatedMetaKey));
-        var unknownExtensionFilePathLimit = ParseMetaLong(TryGetMetaStringInternal(DbContext.UnknownExtensionFilePathLimitMetaKey));
-        var unknownExtensionExtensionCounts = UnknownExtensionClassifier.DeserializeCounts(TryGetMetaStringInternal(DbContext.UnknownExtensionExtensionCountsMetaKey));
-        var unknownExtensionCategoryCounts = UnknownExtensionClassifier.DeserializeCounts(TryGetMetaStringInternal(DbContext.UnknownExtensionCategoryCountsMetaKey));
-        var unknownExtensionGroups = UnknownExtensionClassifier.DeserializeGroups(TryGetMetaStringInternal(DbContext.UnknownExtensionGroupsMetaKey));
-        var unknownExtensionGroupCount = ParseMetaLong(TryGetMetaStringInternal(DbContext.UnknownExtensionGroupCountMetaKey));
-        var unknownExtensionGroupsTruncated = ParseMetaBool(TryGetMetaStringInternal(DbContext.UnknownExtensionGroupsTruncatedMetaKey));
-        var unknownExtensionGroupLimit = ParseMetaLong(TryGetMetaStringInternal(DbContext.UnknownExtensionGroupLimitMetaKey));
-        var unknownExtensionGroupOmittedCount = ParseMetaLong(TryGetMetaStringInternal(DbContext.UnknownExtensionGroupOmittedCountMetaKey));
+        var unknownExtensionDiagnosticsCurrent =
+            ParseMetaLong(TryGetMetaStringInternal(DbContext.UnknownExtensionDiagnosticsVersionMetaKey))
+            == DbContext.UnknownExtensionDiagnosticsVersion;
+        var unknownExtensionHasActionableExtensionlessFiles = unknownExtensionDiagnosticsCurrent
+            ? ParseMetaBool(TryGetMetaStringInternal(DbContext.UnknownExtensionHasActionableExtensionlessFilesMetaKey))
+            : null;
+        var unknownExtensionFileCount = unknownExtensionDiagnosticsCurrent
+            ? ParseMetaLong(TryGetMetaStringInternal(DbContext.UnknownExtensionFileCountMetaKey))
+            : null;
+        var unknownExtensionFiles = unknownExtensionDiagnosticsCurrent
+            ? ParseMetaStringList(TryGetMetaStringInternal(DbContext.UnknownExtensionFilePathsMetaKey))
+            : null;
+        var unknownExtensionFilesTruncated = unknownExtensionDiagnosticsCurrent
+            ? ParseMetaBool(TryGetMetaStringInternal(DbContext.UnknownExtensionFilesTruncatedMetaKey))
+            : null;
+        var unknownExtensionFilePathLimit = unknownExtensionDiagnosticsCurrent
+            ? ParseMetaLong(TryGetMetaStringInternal(DbContext.UnknownExtensionFilePathLimitMetaKey))
+            : null;
+        var unknownExtensionExtensionCounts = unknownExtensionDiagnosticsCurrent
+            ? UnknownExtensionClassifier.DeserializeCounts(TryGetMetaStringInternal(DbContext.UnknownExtensionExtensionCountsMetaKey))
+            : null;
+        var unknownExtensionCategoryCounts = unknownExtensionDiagnosticsCurrent
+            ? UnknownExtensionClassifier.DeserializeCounts(TryGetMetaStringInternal(DbContext.UnknownExtensionCategoryCountsMetaKey))
+            : null;
+        var unknownExtensionGroups = unknownExtensionDiagnosticsCurrent
+            ? UnknownExtensionClassifier.DeserializeGroups(TryGetMetaStringInternal(DbContext.UnknownExtensionGroupsMetaKey))
+            : null;
+        var unknownExtensionGroupCount = unknownExtensionDiagnosticsCurrent
+            ? ParseMetaLong(TryGetMetaStringInternal(DbContext.UnknownExtensionGroupCountMetaKey))
+            : null;
+        var unknownExtensionGroupsTruncated = unknownExtensionDiagnosticsCurrent
+            ? ParseMetaBool(TryGetMetaStringInternal(DbContext.UnknownExtensionGroupsTruncatedMetaKey))
+            : null;
+        var unknownExtensionGroupLimit = unknownExtensionDiagnosticsCurrent
+            ? ParseMetaLong(TryGetMetaStringInternal(DbContext.UnknownExtensionGroupLimitMetaKey))
+            : null;
+        var unknownExtensionGroupOmittedCount = unknownExtensionDiagnosticsCurrent
+            ? ParseMetaLong(TryGetMetaStringInternal(DbContext.UnknownExtensionGroupOmittedCountMetaKey))
+            : null;
         if (unknownExtensionFiles != null)
         {
             unknownExtensionFilesTruncated ??= unknownExtensionFileCount.HasValue
@@ -220,7 +248,8 @@ public partial class DbReader
             UnknownExtensionGroupLimit = unknownExtensionGroupLimit,
             UnknownExtensionGroupOmittedCount = unknownExtensionGroupOmittedCount,
             UnknownExtensionGuidance = unknownExtensionFileCount > 0
-                ? UnknownExtensionClassifier.Guidance
+                ? UnknownExtensionClassifier.GetGuidance(
+                    unknownExtensionHasActionableExtensionlessFiles == true)
                 : null,
             IndexedAt = freshness.IndexedAt,
             LastWorkspaceFreshenedAt = lastIndexRun?.StartedAt ?? indexedHeadTimestamp?.UtcDateTime,
