@@ -3178,9 +3178,17 @@ public partial class SymbolExtractorTests
 
         var name = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Name" && s.ContainerName == "Person"));
         Assert.Equal(3, name.Line);
+        Assert.Equal(2, name.StartLine);
+        Assert.Equal(4, name.StartColumn);
+        Assert.Equal(11, name.IdentifierStartColumn);
+        Assert.Equal(3, name.EndLine);
 
         var age = Assert.Single(symbols.Where(s => s.Kind == "property" && s.Name == "Age" && s.ContainerName == "Person"));
         Assert.Equal(5, age.Line);
+        Assert.Equal(4, age.StartLine);
+        Assert.Equal(4, age.StartColumn);
+        Assert.Equal(8, age.IdentifierStartColumn);
+        Assert.Equal(5, age.EndLine);
     }
 
     [Fact]
