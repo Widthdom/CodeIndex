@@ -92,6 +92,13 @@ public class IndexWatchRunnerIssue4169Tests
             WatchPendingPathLimit = 123,
             Backend = "fsevents",
             RecoveryReason = "backend_start_failed",
+            WarningsTotal = 1,
+            Warnings =
+            [
+                new CliJsonMessage(
+                    $"<environment:{IndexCommandRunner.IndexParallelismEnvironmentVariable}>",
+                    "invalid value 'invalid'; using automatic CPU default 8"),
+            ],
             WatchContract = IndexWatchRunner.BuildWatchContractForTesting(
                 TimeSpan.FromMilliseconds(50),
                 maxPendingPaths: 123,
@@ -112,6 +119,12 @@ public class IndexWatchRunnerIssue4169Tests
         Assert.Equal(123, watchStarted.RootElement.GetProperty("watch_pending_path_limit").GetInt32());
         Assert.Equal("fsevents", watchStarted.RootElement.GetProperty("backend").GetString());
         Assert.Equal("backend_start_failed", watchStarted.RootElement.GetProperty("recovery_reason").GetString());
+        Assert.Equal(1, watchStarted.RootElement.GetProperty("warnings_total").GetInt32());
+        var warning = Assert.Single(watchStarted.RootElement.GetProperty("warnings").EnumerateArray());
+        Assert.Equal(
+            $"<environment:{IndexCommandRunner.IndexParallelismEnvironmentVariable}>",
+            warning.GetProperty("file").GetString());
+        Assert.Contains("automatic CPU default 8", warning.GetProperty("message").GetString());
 
         var contract = watchStarted.RootElement.GetProperty("watch_contract");
         Assert.Equal("quiet_window", contract.GetProperty("debounce").GetString());

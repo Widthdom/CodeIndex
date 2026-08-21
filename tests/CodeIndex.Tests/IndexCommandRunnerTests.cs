@@ -5037,6 +5037,9 @@ public sealed class Caller
     [Fact]
     public void ParseArgs_MaxFileBytesInvalidValue_IsRejected()
     {
+        using var env = EnvironmentVariableScope.Capture(FileIndexer.MaxFileSizeEnvironmentVariable);
+        env.Set(FileIndexer.MaxFileSizeEnvironmentVariable, null);
+
         var options = IndexCommandRunner.ParseArgs([".", "--max-file-bytes", "0"]);
 
         Assert.Null(options.MaxFileSizeBytes);
@@ -5136,6 +5139,9 @@ public sealed class Caller
     [Fact]
     public void ParseArgs_ParallelismFlagRejectsOversizedValue_Issue5097()
     {
+        using var env = EnvironmentVariableScope.Capture(IndexCommandRunner.IndexParallelismEnvironmentVariable);
+        env.Set(IndexCommandRunner.IndexParallelismEnvironmentVariable, null);
+
         var options = IndexCommandRunner.ParseArgs([".", "--parallelism", "999"]);
 
         Assert.Equal(IndexCommandRunner.DefaultIndexParallelism(), options.Parallelism);
