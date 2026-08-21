@@ -8,7 +8,7 @@ public partial class DbReader
     /// 複数名前パターン（OR結合）でシンボルを検索。空/null なら他フィルタに一致する全シンボルを返す。
     /// <paramref name="exact"/> が true の場合、部分一致ではなく大文字小文字を無視した完全一致になる。
     /// </summary>
-    public List<SymbolResult> SearchSymbols(IReadOnlyList<string>? queries, int limit = 20, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null, SymbolSortMode sortMode = SymbolSortMode.Name, int? startLine = null, int? endLine = null, bool groupPartials = false, int offset = 0)
+    public List<SymbolResult> SearchSymbols(IReadOnlyList<string>? queries, int limit = 20, string? kind = null, string? lang = null, IReadOnlyList<string>? pathPatterns = null, IReadOnlyList<string>? excludePathPatterns = null, bool excludeTests = false, DateTime? since = null, bool exact = false, IReadOnlyList<string>? visibilityFilters = null, IReadOnlyList<string>? excludeVisibilityFilters = null, SymbolSortMode sortMode = SymbolSortMode.Name, int? startLine = null, int? endLine = null, bool groupPartials = false, int offset = 0, string? partialFamilyKey = null, int familyMemberOffset = 0)
     {
         var plan = SymbolSearchQueryPlanBuilder.Build(new SymbolSearchQueryPlan
         {
@@ -28,6 +28,8 @@ public partial class DbReader
             EndLine = endLine,
             GroupPartials = groupPartials,
             Offset = offset,
+            PartialFamilyKey = partialFamilyKey,
+            FamilyMemberOffset = Math.Max(0, familyMemberOffset),
         });
         return ExecuteSymbolSearchList(plan);
     }
@@ -54,6 +56,12 @@ public partial class DbReader
         SymbolSearchQueryBinder.BindFilters(this, cmd, plan, includeLineRange: true);
         SqliteCommandPolicy.Add(cmd, "@limit", plan.Limit);
         SqliteCommandPolicy.Add(cmd, "@offset", Math.Max(0, plan.Offset));
+        if (plan.GroupPartials)
+        {
+            SqliteCommandPolicy.Add(cmd, "@familyMemberOffset", plan.FamilyMemberOffset);
+            if (plan.PartialFamilyKey is not null)
+                SqliteCommandPolicy.Add(cmd, "@partialFamilyKey", plan.PartialFamilyKey);
+        }
 
         using var reader = cmd.ExecuteTrackedReader();
         return SymbolSearchRowProjector.ReadAll(reader, plan);

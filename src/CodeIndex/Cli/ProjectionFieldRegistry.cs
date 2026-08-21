@@ -444,7 +444,13 @@ internal static class ProjectionFieldRegistry
     private static ProjectionCommandFieldSchema CreateSymbolsSchema()
         => Create(
             "symbols",
-            ["path", "line", "kind", "name"],
+            [
+                "path", "line", "kind", "name", "definition_sites", "partial_family_id",
+                "representative_reason", "family_members_truncated", "family_member_total_count",
+                "family_member_total_count_authoritative", "family_member_returned_count",
+                "family_member_omitted_count", "family_member_remaining_count",
+                "family_members_recovery_cursor", "family_members_next_cursor",
+            ],
             builder => builder
                 .Fields(GetJsonFieldNames<SymbolResult>())
                 .Alias("file", "path"));

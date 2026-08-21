@@ -26,7 +26,9 @@ public partial class DbReader
                 plan.SortMode,
                 plan.StartLine,
                 plan.EndLine,
-                plan.GroupPartials));
+                plan.GroupPartials,
+                partialFamilyKey: plan.PartialFamilyKey,
+                familyMemberOffset: plan.FamilyMemberOffset));
         }
 
         var seen = new HashSet<long?>();
