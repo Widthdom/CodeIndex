@@ -10,6 +10,15 @@ using CodeIndex.Indexer;
 
 namespace CodeIndex.Cli;
 
+internal sealed record HookDoctorSnapshot(
+    string WorktreeRoot,
+    string RepositoryType,
+    string TargetScope,
+    string HookStatus,
+    string? ManagedState,
+    string? ExecutableStatus,
+    string HookPath);
+
 public static class HookCommandRunner
 {
     private const string HookName = "pre-commit";
@@ -31,6 +40,87 @@ public static class HookCommandRunner
     internal static Action<string>? DeleteFileForTesting { get; set; }
     internal static Action<string, string, string?>? ReplaceFileForTesting { get; set; }
     internal static Func<string, HookExecutableSelection>? ExecutableSelectionForTesting { get; set; }
+
+    internal static HookDoctorSnapshot? CaptureDoctorSnapshot(string projectPath, string appVersion)
+    {
+        var fullProjectPath = GitHelper.TryFindWorktreeRootWithoutProcess(projectPath);
+        if (fullProjectPath == null)
+            return null;
+        var dotGitPath = Path.Combine(fullProjectPath, ".git");
+        var linkedWorktree = File.Exists(LongPath.EnsureWindowsPrefix(dotGitPath));
+        if (!linkedWorktree && !Directory.Exists(LongPath.EnsureWindowsPrefix(dotGitPath)))
+            return null;
+
+        var gitDir = GitHelper.ResolveGitCommonDir(fullProjectPath);
+        if (gitDir == null
+            || !GitHelper.TryResolveGitMetadataChildPath(
+                gitDir,
+                "hooks",
+                expectDirectory: true,
+                allowMissing: true,
+                out var hooksDir))
+        {
+            return null;
+        }
+
+        var hookPath = Path.Combine(hooksDir, HookName);
+        var chainedHookPath = Path.Combine(hooksDir, ChainedHookName);
+        if (Directory.Exists(LongPath.EnsureWindowsPrefix(hooksDir)))
+        {
+            if (!GitHelper.TryResolveGitMetadataChildPath(
+                    hooksDir,
+                    HookName,
+                    expectDirectory: false,
+                    allowMissing: true,
+                    out hookPath)
+                || !GitHelper.TryResolveGitMetadataChildPath(
+                    hooksDir,
+                    ChainedHookName,
+                    expectDirectory: false,
+                    allowMissing: true,
+                    out chainedHookPath))
+            {
+                return null;
+            }
+        }
+
+        var ioHookPath = LongPath.EnsureWindowsPrefix(hookPath);
+        var hookExists = File.Exists(ioHookPath);
+        var hookContent = hookExists ? ReadHookBytesWithinLimit(ioHookPath) : null;
+        var analysis = AnalyzeManagedHook(hookContent);
+        var installed = hookExists && analysis.State == "managed";
+        var hookStatus = installed ? "installed" : hookExists ? "custom" : "absent";
+        string? managedState = installed ? analysis.State : null;
+        string? executableStatus = null;
+        if (installed)
+        {
+            if (!TryReadExecutableManifest(hookContent, out var installedSelection)
+                || !TryAnalyzeManagedInvocation(
+                    hookContent,
+                    fullProjectPath,
+                    chainedHookPath,
+                    installedSelection,
+                    out managedState))
+            {
+                managedState = "executable_manifest_unresolved";
+                executableStatus = "unresolved";
+            }
+            else
+            {
+                _ = TryResolveCurrentExecutable(appVersion, out var currentSelection, out _);
+                executableStatus = InspectExecutable(installedSelection, currentSelection).Status;
+            }
+        }
+
+        return new HookDoctorSnapshot(
+            fullProjectPath,
+            linkedWorktree ? "linked_worktree" : "standalone_repository",
+            linkedWorktree ? "shared_common_dir" : "repository",
+            hookStatus,
+            managedState,
+            executableStatus,
+            hookPath);
+    }
 
     public static int Run(string[] args, JsonSerializerOptions jsonOptions, string? appVersion = null)
     {

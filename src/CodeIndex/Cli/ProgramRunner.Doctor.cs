@@ -27,6 +27,8 @@ internal static partial class ProgramRunner
         var wantsJson = args.Any(static arg => arg == "--json" || arg.StartsWith("--json=", StringComparison.Ordinal));
         var json = false;
         bool? redactPaths = null;
+        var integrations = false;
+        var check = false;
         var envInventory = DoctorEnvironmentInventoryMode.None;
         string? envDomain = null;
         string? envCategory = null;
@@ -87,6 +89,12 @@ internal static partial class ProgramRunner
                 case "--show-paths":
                     redactPaths = false;
                     break;
+                case "--integrations":
+                    integrations = true;
+                    break;
+                case "--check":
+                    check = true;
+                    break;
                 case "--env-inventory":
                 case "--env-inventory=compact":
                     envInventory = DoctorEnvironmentInventoryMode.Compact;
@@ -110,6 +118,30 @@ internal static partial class ProgramRunner
         }
 
         var filtersRequested = envDomain is not null || envCategory is not null || envSensitivity is not null;
+        if (integrations && (envInventory != DoctorEnvironmentInventoryMode.None || filtersRequested))
+        {
+            return CommandErrorWriter.WriteJsonOrHuman(
+                wantsJson,
+                jsonOptions,
+                "doctor --integrations cannot be combined with environment inventory options.",
+                CommandExitCodes.InvalidArgument,
+                "run the integration readiness summary and environment inventory as separate doctor commands.",
+                usage: GetDoctorUsage(),
+                errorCode: CommandErrorCodes.UsageError,
+                command: "doctor");
+        }
+        if (check && !integrations)
+        {
+            return CommandErrorWriter.WriteJsonOrHuman(
+                wantsJson,
+                jsonOptions,
+                "doctor --check requires --integrations.",
+                CommandExitCodes.InvalidArgument,
+                "use `cdidx doctor --integrations --check`.",
+                usage: GetDoctorUsage(),
+                errorCode: CommandErrorCodes.UsageError,
+                command: "doctor");
+        }
         if (filtersRequested && envInventory != DoctorEnvironmentInventoryMode.Full)
         {
             return CommandErrorWriter.WriteJsonOrHuman(
@@ -122,14 +154,14 @@ internal static partial class ProgramRunner
                 errorCode: CommandErrorCodes.UsageError,
                 command: "doctor");
         }
-        if (maxJsonBytes.HasValue && (!json || envInventory != DoctorEnvironmentInventoryMode.Full))
+        if (maxJsonBytes.HasValue && (!json || (!integrations && envInventory != DoctorEnvironmentInventoryMode.Full)))
         {
             return CommandErrorWriter.WriteJsonOrHuman(
                 wantsJson,
                 jsonOptions,
-                "doctor --max-json-bytes requires --json and --env-inventory=full.",
+                "doctor --max-json-bytes requires --json with --integrations or --env-inventory=full.",
                 CommandExitCodes.InvalidArgument,
-                "use `cdidx doctor --json --env-inventory=full --max-json-bytes <n>`.",
+                "use `cdidx doctor --integrations --json --max-json-bytes <n>` or `cdidx doctor --json --env-inventory=full --max-json-bytes <n>`.",
                 usage: GetDoctorUsage(),
                 errorCode: CommandErrorCodes.UsageError,
                 command: "doctor");
@@ -145,6 +177,17 @@ internal static partial class ProgramRunner
                 out var filterExitCode))
         {
             return filterExitCode;
+        }
+
+        if (integrations)
+        {
+            return RunDoctorIntegrations(
+                appVersion,
+                jsonOptions,
+                json,
+                redactPaths ?? true,
+                check,
+                maxJsonBytes);
         }
 
         if (json)
@@ -231,7 +274,7 @@ internal static partial class ProgramRunner
     }
 
     private static string GetDoctorUsage()
-        => "cdidx doctor [--json] [--redact-paths|--show-paths] [--env-inventory[=compact|full]] [--env-domain <domain>] [--env-category <category>] [--env-sensitivity <sensitivity>] [--max-json-bytes <n>]";
+        => "cdidx doctor [--integrations [--check]] [--json] [--redact-paths|--show-paths] [--env-inventory[=compact|full]] [--env-domain <domain>] [--env-category <category>] [--env-sensitivity <sensitivity>] [--max-json-bytes <n>]";
 
     private static bool TryReadDoctorValueOption(
         string[] args,

@@ -152,7 +152,7 @@ internal static partial class IndexWatchRunner
             && attempt == 0
             && hasAncestorIgnorePaths;
 
-    private static string ResolveWatchBackendName()
+    internal static string ResolveWatchBackendName()
         => OperatingSystem.IsMacOS()
             ? "fsevents"
             : OperatingSystem.IsLinux()

@@ -14,7 +14,12 @@ internal static class IndexFreshnessChecker
         string? projectRoot,
         CancellationToken cancellationToken = default,
         bool? pathCaseSensitive = null,
-        string? internalIndexDatabasePath = null)
+        string? internalIndexDatabasePath = null,
+        bool allowGitCommands = true,
+        HashSet<string>? knownSkipWorktreePaths = null,
+        bool knownSkipWorktreePathsComplete = true,
+        string? knownWorkspaceHeadCommit = null,
+        string? knownRepositoryRoot = null)
     {
         if (string.IsNullOrWhiteSpace(projectRoot))
         {
@@ -28,7 +33,9 @@ internal static class IndexFreshnessChecker
 
         var indexedHeadCommit = reader.GetMetaString(DbContext.IndexedHeadCommitMetaKey);
         var workspaceVerifiedHeadSha = reader.GetMetaString(DbContext.WorkspaceVerifiedHeadShaMetaKey);
-        var workspaceHeadCommit = GitHelper.TryGetHeadCommit(projectRoot, cancellationToken);
+        var workspaceHeadCommit = allowGitCommands
+            ? GitHelper.TryGetHeadCommit(projectRoot, cancellationToken)
+            : knownWorkspaceHeadCommit;
         var comparisonHead = string.IsNullOrWhiteSpace(workspaceVerifiedHeadSha)
             ? indexedHeadCommit
             : workspaceVerifiedHeadSha;
@@ -41,6 +48,10 @@ internal static class IndexFreshnessChecker
         var headChanged = !string.IsNullOrWhiteSpace(comparisonHead)
             && !string.IsNullOrWhiteSpace(workspaceHeadCommit)
             && !string.Equals(comparisonHead, workspaceHeadCommit, StringComparison.Ordinal);
+        var headEvidenceUnavailable = !allowGitCommands
+            && !string.IsNullOrWhiteSpace(knownRepositoryRoot)
+            && !string.IsNullOrWhiteSpace(comparisonHead)
+            && string.IsNullOrWhiteSpace(workspaceHeadCommit);
         var result = new IndexFreshnessCheckResult
         {
             IndexedHeadCommit = string.IsNullOrWhiteSpace(comparisonHead) ? null : comparisonHead,
@@ -50,10 +61,14 @@ internal static class IndexFreshnessChecker
 
         var ignoreCase = pathCaseSensitive.HasValue
             ? !pathCaseSensitive.Value
-            : GitHelper.ResolveIgnoreCase(projectRoot, cancellationToken);
+            : allowGitCommands
+                ? GitHelper.ResolveIgnoreCase(projectRoot, cancellationToken)
+                : PathCasing.IsIgnoreCase(projectRoot);
         if (pathCaseSensitive.HasValue)
             PathCasing.SeedFromWorkspace(projectRoot, ignoreCase);
-        var ignoreRuleRoot = GitHelper.TryGetRepositoryRoot(projectRoot, cancellationToken) ?? Path.GetFullPath(projectRoot);
+        var ignoreRuleRoot = allowGitCommands
+            ? GitHelper.TryGetRepositoryRoot(projectRoot, cancellationToken) ?? Path.GetFullPath(projectRoot)
+            : knownRepositoryRoot ?? Path.GetFullPath(projectRoot);
         var symlinkPolicy = ReadIndexedSymlinkPolicy(reader);
         var indexer = new FileIndexer(
             projectRoot,
@@ -76,7 +91,8 @@ internal static class IndexFreshnessChecker
         using var indexedEnumerator = reader.EnumerateIndexedFileSnapshots().GetEnumerator();
         var hasIndexed = MoveNextIndexed();
         var skipWorktreePathsLoaded = false;
-        HashSet<string>? skipWorktreePaths = null;
+        HashSet<string>? skipWorktreePaths = knownSkipWorktreePaths;
+        var skipWorktreeEvidenceUnavailable = false;
 
         var workspaceFileTargets = scan.Files
             .Select(path => WorkspaceFileTarget.Create(projectRoot, path))
@@ -142,14 +158,20 @@ internal static class IndexFreshnessChecker
             hasIndexed = MoveNextIndexed();
         }
 
-        result.Checked = result.ScanErrorCount == 0;
+        result.Checked = result.ScanErrorCount == 0
+            && !headEvidenceUnavailable
+            && !skipWorktreeEvidenceUnavailable;
         result.MatchesWorkspace = result.Checked
             && !result.HeadChanged
             && result.ChangedFileCount == 0
             && result.MissingFileCount == 0
             && result.UnindexedFileCount == 0
             && result.UnverifiableFileCount == 0;
-        result.Reason = BuildReason(result);
+        result.Reason = headEvidenceUnavailable
+            ? "head_unavailable"
+            : skipWorktreeEvidenceUnavailable
+                ? "skip_worktree_metadata_unavailable"
+                : BuildReason(result);
         return result;
 
         bool MoveNextIndexed()
@@ -170,14 +192,25 @@ internal static class IndexFreshnessChecker
             // 不要な rebuild トリガーを止める。
             if (!skipWorktreePathsLoaded)
             {
-                skipWorktreePaths = GitHelper.TryGetSkipWorktreePaths(projectRoot, cancellationToken);
+                skipWorktreePaths = allowGitCommands
+                    ? GitHelper.TryGetSkipWorktreePaths(projectRoot, cancellationToken)
+                    : knownSkipWorktreePaths;
                 skipWorktreePathsLoaded = true;
             }
 
-            if (skipWorktreePaths != null && skipWorktreePaths.Contains(path))
+            if (skipWorktreePaths != null && IsSkipWorktreePath(skipWorktreePaths, path))
             {
                 result.OutsideSparseConeFileCount++;
                 AddSample(result.OutsideSparseConeFiles, path);
+            }
+            else if (!allowGitCommands && !knownSkipWorktreePathsComplete)
+            {
+                // A split/corrupt/unsupported index cannot prove that an indexed-but-absent path
+                // is a real deletion. Keep the readiness result unavailable instead of emitting a
+                // false missing-file diagnosis.
+                // split/corrupt/未対応 index では、disk 上にない indexed path が実際の削除かを
+                // 証明できない。誤った missing-file 判定を返さず readiness を unavailable にする。
+                skipWorktreeEvidenceUnavailable = true;
             }
             else
             {
@@ -185,6 +218,20 @@ internal static class IndexFreshnessChecker
                 AddSample(result.MissingFiles, path);
             }
         }
+    }
+
+    private static bool IsSkipWorktreePath(HashSet<string> skipWorktreePaths, string path)
+    {
+        if (skipWorktreePaths.Contains(path) || skipWorktreePaths.Contains("/"))
+            return true;
+
+        for (var index = path.IndexOf('/'); index >= 0; index = path.IndexOf('/', index + 1))
+        {
+            if (skipWorktreePaths.Contains(path[..(index + 1)]))
+                return true;
+        }
+
+        return false;
     }
 
     private static FileIndexer.SymlinkPolicy ReadIndexedSymlinkPolicy(DbReader reader)

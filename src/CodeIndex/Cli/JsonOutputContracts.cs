@@ -135,6 +135,107 @@ internal sealed record DoctorJsonResult(
     [property: JsonPropertyName("environment_inventory")] IReadOnlyList<EnvironmentVariableInventoryItem>? EnvironmentInventory,
     [property: JsonPropertyName("redaction")] DoctorRedactionJsonResult Redaction) : IVersionedJsonResult;
 
+internal sealed record DoctorIntegrationsJsonResult(
+    [property: JsonPropertyName("api_version")] string ApiVersion,
+    [property: JsonPropertyName("schema_version")] string SchemaVersion,
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("check")] bool Check,
+    [property: JsonPropertyName("project")] DoctorIntegrationProjectJsonResult Project,
+    [property: JsonPropertyName("hook")] DoctorIntegrationHookJsonResult Hook,
+    [property: JsonPropertyName("mcp")] DoctorIntegrationMcpJsonResult Mcp,
+    [property: JsonPropertyName("lsp")] DoctorIntegrationLspJsonResult Lsp,
+    [property: JsonPropertyName("watch")] DoctorIntegrationWatchJsonResult Watch,
+    [property: JsonPropertyName("extensions")] DoctorIntegrationExtensionsJsonResult Extensions,
+    [property: JsonPropertyName("redaction")] DoctorRedactionJsonResult Redaction) : IVersionedJsonResult;
+
+internal sealed record DoctorIntegrationProjectJsonResult(
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("reason")] string Reason,
+    [property: JsonPropertyName("project_root")] string ProjectRoot,
+    [property: JsonPropertyName("database_path")] string DatabasePath,
+    [property: JsonPropertyName("database_source")] string DatabaseSource,
+    [property: JsonPropertyName("database_exists")] bool DatabaseExists,
+    [property: JsonPropertyName("schema_compatible")] bool? SchemaCompatible,
+    [property: JsonPropertyName("index_complete")] bool? IndexComplete,
+    [property: JsonPropertyName("index_incomplete_reasons")] IReadOnlyList<string> IndexIncompleteReasons,
+    [property: JsonPropertyName("index_incomplete_reasons_omitted")] int IndexIncompleteReasonsOmitted,
+    [property: JsonPropertyName("index_incomplete_reasons_truncated")] bool IndexIncompleteReasonsTruncated,
+    [property: JsonPropertyName("migration_in_progress")] bool? MigrationInProgress,
+    [property: JsonPropertyName("index_newer_than_reader")] bool? IndexNewerThanReader,
+    [property: JsonPropertyName("indexed_at")] DateTime? IndexedAt,
+    [property: JsonPropertyName("index_matches_workspace")] bool? IndexMatchesWorkspace,
+    [property: JsonPropertyName("freshness_reason")] string? FreshnessReason,
+    [property: JsonPropertyName("workspace")] DoctorIntegrationWorkspaceJsonResult Workspace,
+    [property: JsonPropertyName("remediation")] IReadOnlyList<string> Remediation);
+
+internal sealed record DoctorIntegrationWorkspaceJsonResult(
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("manifest_path")] string? ManifestPath,
+    [property: JsonPropertyName("root")] string? Root,
+    [property: JsonPropertyName("index_strategy")] string? IndexStrategy,
+    [property: JsonPropertyName("member_count")] int MemberCount,
+    [property: JsonPropertyName("members")] IReadOnlyList<string> Members,
+    [property: JsonPropertyName("members_omitted")] int MembersOmitted,
+    [property: JsonPropertyName("members_truncated")] bool MembersTruncated);
+
+internal sealed record DoctorIntegrationHookJsonResult(
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("reason")] string Reason,
+    [property: JsonPropertyName("repository_type")] string RepositoryType,
+    [property: JsonPropertyName("target_scope")] string TargetScope,
+    [property: JsonPropertyName("hook_status")] string HookStatus,
+    [property: JsonPropertyName("managed_state")] string? ManagedState,
+    [property: JsonPropertyName("executable_status")] string? ExecutableStatus,
+    [property: JsonPropertyName("current_worktree")] string CurrentWorktree,
+    [property: JsonPropertyName("hook_path")] string? HookPath,
+    [property: JsonPropertyName("remediation")] IReadOnlyList<string> Remediation);
+
+internal sealed record DoctorIntegrationMcpTransportJsonResult(
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("reason")] string Reason,
+    [property: JsonPropertyName("transport")] string Transport,
+    [property: JsonPropertyName("auth_configured")] bool AuthConfigured,
+    [property: JsonPropertyName("auth_source")] string? AuthSource,
+    [property: JsonPropertyName("audit_status")] string AuditStatus,
+    [property: JsonPropertyName("audit_source")] string AuditSource,
+    [property: JsonPropertyName("remediation")] IReadOnlyList<string> Remediation);
+
+internal sealed record DoctorIntegrationMcpJsonResult(
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("reason")] string Reason,
+    [property: JsonPropertyName("transports")] IReadOnlyList<DoctorIntegrationMcpTransportJsonResult> Transports);
+
+internal sealed record DoctorIntegrationLspJsonResult(
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("reason")] string Reason,
+    [property: JsonPropertyName("configured")] bool Configured,
+    [property: JsonPropertyName("database_path")] string DatabasePath,
+    [property: JsonPropertyName("launch_command")] string LaunchCommand,
+    [property: JsonPropertyName("remediation")] IReadOnlyList<string> Remediation);
+
+internal sealed record DoctorIntegrationWatchJsonResult(
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("reason")] string Reason,
+    [property: JsonPropertyName("preferred_backend")] string PreferredBackend,
+    [property: JsonPropertyName("available")] bool Available,
+    [property: JsonPropertyName("fallback_backend")] string? FallbackBackend,
+    [property: JsonPropertyName("fallback_reason")] string? FallbackReason,
+    [property: JsonPropertyName("remediation")] IReadOnlyList<string> Remediation);
+
+internal sealed record DoctorIntegrationExtensionsJsonResult(
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("reason")] string Reason,
+    [property: JsonPropertyName("workspace_plugins_trusted")] bool WorkspacePluginsTrusted,
+    [property: JsonPropertyName("plugin_candidates")] int PluginCandidates,
+    [property: JsonPropertyName("pattern_config_candidates")] int PatternConfigCandidates,
+    [property: JsonPropertyName("loaded_plugin_assemblies")] int LoadedPluginAssemblies,
+    [property: JsonPropertyName("loaded_pattern_configs")] int LoadedPatternConfigs,
+    [property: JsonPropertyName("diagnostic_count")] int DiagnosticCount,
+    [property: JsonPropertyName("diagnostics")] IReadOnlyList<string> Diagnostics,
+    [property: JsonPropertyName("diagnostics_omitted")] int DiagnosticsOmitted,
+    [property: JsonPropertyName("diagnostics_truncated")] bool DiagnosticsTruncated,
+    [property: JsonPropertyName("remediation")] IReadOnlyList<string> Remediation);
+
 internal sealed record LicenseJsonResult(
     [property: JsonPropertyName("api_version")] string ApiVersion,
     [property: JsonPropertyName("license")] LicenseTermsJsonResult License,
@@ -1379,6 +1480,7 @@ internal sealed record ValidateConfigJsonResult(
 [JsonSerializable(typeof(DoctorDisplayTerminalHintJsonResult))]
 [JsonSerializable(typeof(DoctorDisplayTruncationJsonResult))]
 [JsonSerializable(typeof(DoctorEnvironmentVariableJsonResult))]
+[JsonSerializable(typeof(DoctorIntegrationsJsonResult))]
 [JsonSerializable(typeof(DoctorJsonResult))]
 [JsonSerializable(typeof(DoctorPathsJsonResult))]
 [JsonSerializable(typeof(DoctorRedactionJsonResult))]

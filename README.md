@@ -72,6 +72,7 @@ cdidx inspect QueryCommandRunner --outline-only
 cdidx map --compact --max-json-bytes 65536
 cdidx audit risky-code --format sarif --limit 20
 cdidx doctor --json
+cdidx doctor --integrations --json
 cdidx validate
 ```
 
@@ -289,6 +290,7 @@ cdidx inspect QueryCommandRunner --outline-only
 cdidx map --compact --max-json-bytes 65536
 cdidx audit risky-code --format sarif --limit 20
 cdidx doctor --json
+cdidx doctor --integrations --json
 cdidx validate
 ```
 

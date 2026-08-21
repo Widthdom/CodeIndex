@@ -1669,6 +1669,467 @@ public class ProgramRunnerTests
     }
 
     [Fact]
+    public void RunDoctor_IntegrationsJson_ReportsStableRedactedReadinessWithoutStartingPluginWorkers_Issue5102()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("doctor-integrations");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var dataDir = Path.GetDirectoryName(dbPath)!;
+            const string secret = "doctor-integration-secret-5102";
+            using var env = EnvironmentVariableScope.Capture(
+                DbPathResolver.DataDirEnvironmentVariable,
+                McpAuthenticatorFactory.AuthTokenEnvVar,
+                "CDIDX_MCP_HTTP_TOKEN");
+            env.Set(DbPathResolver.DataDirEnvironmentVariable, dataDir);
+            env.Set(McpAuthenticatorFactory.AuthTokenEnvVar, secret);
+            env.Set("CDIDX_MCP_HTTP_TOKEN", secret);
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["doctor", "--integrations", "--json"],
+                appVersion: "1.10.0"));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Empty(stderr);
+            Assert.DoesNotContain(secret, stdout, StringComparison.Ordinal);
+            Assert.DoesNotContain(projectRoot, stdout, StringComparison.Ordinal);
+            using var document = JsonDocument.Parse(stdout);
+            var root = document.RootElement;
+            Assert.Equal("1", root.GetProperty("api_version").GetString());
+            Assert.Equal("1", root.GetProperty("schema_version").GetString());
+            Assert.False(root.GetProperty("check").GetBoolean());
+            Assert.True(root.GetProperty("redaction").GetProperty("paths_redacted").GetBoolean());
+            Assert.True(root.GetProperty("redaction").GetProperty("secrets_redacted").GetBoolean());
+            Assert.Equal("ready", root.GetProperty("project").GetProperty("status").GetString());
+            Assert.True(root.GetProperty("project").GetProperty("index_complete").GetBoolean());
+            Assert.True(root.GetProperty("project").GetProperty("index_matches_workspace").GetBoolean());
+            Assert.Contains(
+                root.GetProperty("mcp").GetProperty("transports").EnumerateArray(),
+                transport => transport.GetProperty("transport").GetString() == "http"
+                             && transport.GetProperty("auth_configured").GetBoolean()
+                             && transport.GetProperty("auth_source").GetString() == "CDIDX_MCP_HTTP_TOKEN");
+            Assert.True(root.GetProperty("watch").GetProperty("available").GetBoolean());
+            Assert.True(root.GetProperty("extensions").TryGetProperty("diagnostics_truncated", out _));
+
+            env.Set("CDIDX_MCP_HTTP_TOKEN", "invalid\ntoken");
+            var (invalidExitCode, invalidStdout, invalidStderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["doctor", "--integrations", "--json"],
+                appVersion: "1.10.0"));
+            Assert.Equal(CommandExitCodes.Success, invalidExitCode);
+            Assert.Empty(invalidStderr);
+            Assert.DoesNotContain("invalid\ntoken", invalidStdout, StringComparison.Ordinal);
+            using var invalidDocument = JsonDocument.Parse(invalidStdout);
+            Assert.Equal("error", invalidDocument.RootElement.GetProperty("mcp").GetProperty("status").GetString());
+            Assert.Contains(
+                invalidDocument.RootElement.GetProperty("mcp").GetProperty("transports").EnumerateArray(),
+                transport => transport.GetProperty("transport").GetString() == "http"
+                             && transport.GetProperty("status").GetString() == "error"
+                             && transport.GetProperty("reason").GetString() == "invalid_auth_token"
+                             && transport.GetProperty("auth_source").GetString() == "CDIDX_MCP_HTTP_TOKEN");
+
+            env.Set("CDIDX_MCP_HTTP_TOKEN", secret);
+            var (humanExitCode, humanStdout, humanStderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["doctor", "--integrations", "--show-paths"],
+                appVersion: "1.10.0"));
+            Assert.Equal(CommandExitCodes.Success, humanExitCode);
+            Assert.Empty(humanStderr);
+            Assert.Contains(projectRoot, humanStdout, StringComparison.Ordinal);
+            Assert.Contains("project_root", humanStdout, StringComparison.Ordinal);
+            Assert.Contains("preferred_backend", humanStdout, StringComparison.Ordinal);
+            Assert.Contains("stdio_audit_status", humanStdout, StringComparison.Ordinal);
+            Assert.DoesNotContain(secret, humanStdout, StringComparison.Ordinal);
+
+            Assert.Equal(
+                "unresolved",
+                ProgramRunner.ResolveDoctorIntegrationHookReason(
+                    "warning",
+                    new HookDoctorSnapshot(
+                        projectRoot,
+                        "standalone_repository",
+                        "repository",
+                        "installed",
+                        "managed",
+                        "unresolved",
+                        Path.Combine(projectRoot, ".git", "hooks", "pre-commit"))));
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunDoctor_IntegrationsCheck_FailsForStaleOrMissingDatabase_Issue5102()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("doctor-integrations-check");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var dataDir = Path.GetDirectoryName(dbPath)!;
+            using var env = EnvironmentVariableScope.Capture(DbPathResolver.DataDirEnvironmentVariable);
+            env.Set(DbPathResolver.DataDirEnvironmentVariable, dataDir);
+
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.SetMeta(DbContext.IndexCompletenessMetaKey, "incomplete");
+                writer.SetMeta(
+                    DbContext.IndexIncompleteReasonsMetaKey,
+                    JsonSerializer.Serialize(new[] { DbReader.SymbolsOnlyIndexIncompleteReason }));
+            }
+            var (incompleteExitCode, incompleteStdout, incompleteStderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["doctor", "--integrations", "--check", "--json"],
+                appVersion: "1.10.0"));
+            Assert.Equal(CommandExitCodes.StaleIndex, incompleteExitCode);
+            Assert.Empty(incompleteStderr);
+            using (var incompleteDocument = JsonDocument.Parse(incompleteStdout))
+            {
+                var project = incompleteDocument.RootElement.GetProperty("project");
+                Assert.Equal("warning", project.GetProperty("status").GetString());
+                Assert.Equal("index_incomplete", project.GetProperty("reason").GetString());
+                Assert.False(project.GetProperty("index_complete").GetBoolean());
+                Assert.Contains(
+                    project.GetProperty("index_incomplete_reasons").EnumerateArray(),
+                    item => item.GetString() == DbReader.SymbolsOnlyIndexIncompleteReason);
+            }
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.SetMeta(DbContext.IndexCompletenessMetaKey, "complete");
+                writer.SetMeta(DbContext.IndexIncompleteReasonsMetaKey, string.Empty);
+            }
+
+            File.WriteAllText(Path.Combine(projectRoot, "stale.cs"), "public class Stale { }");
+
+            var (staleExitCode, staleStdout, staleStderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["doctor", "--integrations", "--check", "--json"],
+                appVersion: "1.10.0"));
+
+            Assert.Equal(CommandExitCodes.StaleIndex, staleExitCode);
+            Assert.Empty(staleStderr);
+            using (var staleDocument = JsonDocument.Parse(staleStdout))
+            {
+                Assert.True(staleDocument.RootElement.GetProperty("check").GetBoolean());
+                Assert.Equal("warning", staleDocument.RootElement.GetProperty("project").GetProperty("status").GetString());
+                Assert.False(staleDocument.RootElement.GetProperty("project").GetProperty("index_matches_workspace").GetBoolean());
+            }
+
+            env.Set(DbPathResolver.DataDirEnvironmentVariable, Path.Combine(projectRoot, "missing-data"));
+            var (missingExitCode, missingStdout, missingStderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["doctor", "--integrations", "--check", "--json"],
+                appVersion: "1.10.0"));
+
+            Assert.Equal(CommandExitCodes.StaleIndex, missingExitCode);
+            Assert.Empty(missingStderr);
+            using var missingDocument = JsonDocument.Parse(missingStdout);
+            Assert.Equal("error", missingDocument.RootElement.GetProperty("status").GetString());
+            Assert.Equal("database_missing", missingDocument.RootElement.GetProperty("project").GetProperty("reason").GetString());
+            Assert.Equal("error", missingDocument.RootElement.GetProperty("lsp").GetProperty("status").GetString());
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunDoctor_Integrations_ResolvesWorkspaceMemberAndLinkedWorktreeHookScope_Issue5102()
+    {
+        var workspaceRoot = TestProjectHelper.CreateTempProject("doctor-integrations-workspace");
+        var originalDirectory = Environment.CurrentDirectory;
+        try
+        {
+            var memberRoot = Path.Combine(workspaceRoot, "member");
+            var nestedMemberPath = Path.Combine(memberRoot, "nested");
+            Directory.CreateDirectory(nestedMemberPath);
+            File.WriteAllText(
+                Path.Combine(workspaceRoot, WorkspaceManifestLoader.FileName),
+                "{\"index_strategy\":\"single\",\"members\":[\"member\"]}");
+            var dbPath = TestProjectHelper.CreateProjectDb(workspaceRoot);
+            var commonGitDir = Path.Combine(workspaceRoot, "git-metadata");
+            var worktreeGitDir = Path.Combine(commonGitDir, "worktrees", "member");
+            Directory.CreateDirectory(Path.Combine(commonGitDir, "hooks"));
+            Directory.CreateDirectory(worktreeGitDir);
+            File.WriteAllText(Path.Combine(memberRoot, ".git"), $"gitdir: {worktreeGitDir}{Environment.NewLine}");
+            File.WriteAllText(Path.Combine(worktreeGitDir, "commondir"), $"../..{Environment.NewLine}");
+            using var env = EnvironmentVariableScope.Capture(DbPathResolver.DataDirEnvironmentVariable);
+            env.Set(DbPathResolver.DataDirEnvironmentVariable, Path.GetDirectoryName(dbPath));
+            Environment.CurrentDirectory = nestedMemberPath;
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["doctor", "--integrations", "--json", "--show-paths"],
+                appVersion: "1.10.0"));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Empty(stderr);
+            using var document = JsonDocument.Parse(stdout);
+            var workspace = document.RootElement.GetProperty("project").GetProperty("workspace");
+            Assert.Equal("ready", workspace.GetProperty("status").GetString());
+            Assert.Equal("single", workspace.GetProperty("index_strategy").GetString());
+            Assert.Equal(1, workspace.GetProperty("member_count").GetInt32());
+            Assert.EndsWith(
+                $"{Path.DirectorySeparatorChar}member",
+                workspace.GetProperty("members")[0].GetString(),
+                PathCasing.ComparisonFor(memberRoot));
+            var hook = document.RootElement.GetProperty("hook");
+            Assert.Equal("linked_worktree", hook.GetProperty("repository_type").GetString());
+            Assert.Equal("shared_common_dir", hook.GetProperty("target_scope").GetString());
+            Assert.EndsWith(
+                $"{Path.DirectorySeparatorChar}member",
+                hook.GetProperty("current_worktree").GetString(),
+                PathCasing.ComparisonFor(memberRoot));
+            Assert.EndsWith(
+                Path.Combine("git-metadata", "hooks", "pre-commit"),
+                hook.GetProperty("hook_path").GetString(),
+                PathCasing.ComparisonFor(commonGitDir));
+
+            File.WriteAllText(Path.Combine(workspaceRoot, WorkspaceManifestLoader.FileName), "{");
+            var (malformedExitCode, malformedStdout, malformedStderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["doctor", "--integrations", "--json"],
+                appVersion: "1.10.0"));
+            Assert.Equal(CommandExitCodes.Success, malformedExitCode);
+            Assert.Empty(malformedStderr);
+            using var malformedDocument = JsonDocument.Parse(malformedStdout);
+            Assert.Equal(
+                "warning",
+                malformedDocument.RootElement
+                    .GetProperty("project")
+                    .GetProperty("workspace")
+                    .GetProperty("status")
+                    .GetString());
+        }
+        finally
+        {
+            Environment.CurrentDirectory = originalDirectory;
+            TestProjectHelper.DeleteDirectory(workspaceRoot);
+        }
+    }
+
+    [Fact]
+    public void RunDoctor_IntegrationsCheck_PreservesSparseCheckoutReadinessWithoutGitProcess_Issue5102()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("doctor-integrations-sparse");
+        var originalDirectory = Environment.CurrentDirectory;
+        try
+        {
+            TestProjectHelper.InitializeGitRepo(projectRoot);
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            var insidePath = Path.Combine(projectRoot, "src", "inside.cs");
+            var outsidePath = Path.Combine(projectRoot, "src", "outside.cs");
+            File.WriteAllText(insidePath, "class Inside {}\n");
+            File.WriteAllText(outsidePath, "class Outside {}\n");
+            TestProjectHelper.RunGit(projectRoot, "add", "src/inside.cs", "src/outside.cs");
+            TestProjectHelper.RunGit(projectRoot, "commit", "-m", "initial");
+            var indexedHead = TestProjectHelper.RunGit(projectRoot, "rev-parse", "HEAD").Trim();
+            TestProjectHelper.RunGit(projectRoot, "update-index", "--skip-worktree", "src/outside.cs");
+            File.Delete(outsidePath);
+
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/inside.cs", "csharp", "class Inside {}\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/outside.cs", "csharp", "class Outside {}\n");
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.SetMeta(DbContext.IndexCompletenessMetaKey, "complete");
+                writer.SetMeta(DbContext.IndexIncompleteReasonsMetaKey, string.Empty);
+                writer.SetMeta(DbContext.WorkspaceVerifiedHeadShaMetaKey, indexedHead);
+            }
+            using var env = EnvironmentVariableScope.Capture(DbPathResolver.DataDirEnvironmentVariable);
+            env.Set(DbPathResolver.DataDirEnvironmentVariable, Path.GetDirectoryName(dbPath));
+            Environment.CurrentDirectory = projectRoot;
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["doctor", "--integrations", "--check", "--json"],
+                appVersion: "1.10.0"));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Empty(stderr);
+            using var document = JsonDocument.Parse(stdout);
+            var project = document.RootElement.GetProperty("project");
+            Assert.Equal("ready", project.GetProperty("status").GetString());
+            Assert.Equal("index_fresh", project.GetProperty("reason").GetString());
+            Assert.True(project.GetProperty("index_matches_workspace").GetBoolean());
+            Assert.Equal("matched", project.GetProperty("freshness_reason").GetString());
+
+            TestProjectHelper.RunGit(projectRoot, "commit", "--allow-empty", "-m", "head changed");
+            var (changedExitCode, changedStdout, changedStderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["doctor", "--integrations", "--check", "--json"],
+                appVersion: "1.10.0"));
+
+            Assert.Equal(CommandExitCodes.StaleIndex, changedExitCode);
+            Assert.Empty(changedStderr);
+            using var changedDocument = JsonDocument.Parse(changedStdout);
+            var changedProject = changedDocument.RootElement.GetProperty("project");
+            Assert.Equal("warning", changedProject.GetProperty("status").GetString());
+            Assert.Equal("head_changed", changedProject.GetProperty("reason").GetString());
+            Assert.False(changedProject.GetProperty("index_matches_workspace").GetBoolean());
+            Assert.Equal("head_changed", changedProject.GetProperty("freshness_reason").GetString());
+        }
+        finally
+        {
+            Environment.CurrentDirectory = originalDirectory;
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunDoctor_IntegrationsCheck_RebasesGitIndexAndHandlesSplitIndexWithoutGitProcess_Issue5102()
+    {
+        var repositoryRoot = TestProjectHelper.CreateTempProject("doctor-integrations-nested-git");
+        var originalDirectory = Environment.CurrentDirectory;
+        try
+        {
+            TestProjectHelper.InitializeGitRepo(repositoryRoot);
+            var projectRoot = Path.Combine(repositoryRoot, "sub");
+            Directory.CreateDirectory(projectRoot);
+            File.WriteAllText(Path.Combine(repositoryRoot, ".gitignore"), "sub/ignored.cs\n");
+            File.WriteAllText(Path.Combine(projectRoot, "inside.cs"), "class Inside {}\n");
+            File.WriteAllText(Path.Combine(projectRoot, "outside.cs"), "class Outside {}\n");
+            File.WriteAllText(Path.Combine(projectRoot, "ignored.cs"), "class Ignored {}\n");
+            TestProjectHelper.RunGit(repositoryRoot, "add", ".gitignore", "sub/inside.cs", "sub/outside.cs");
+            TestProjectHelper.RunGit(repositoryRoot, "commit", "-m", "initial");
+            var indexedHead = TestProjectHelper.RunGit(repositoryRoot, "rev-parse", "HEAD").Trim();
+            TestProjectHelper.RunGit(repositoryRoot, "update-index", "--skip-worktree", "sub/outside.cs");
+            File.Delete(Path.Combine(projectRoot, "outside.cs"));
+
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "inside.cs", "csharp", "class Inside {}\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "outside.cs", "csharp", "class Outside {}\n");
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.SetMeta(DbContext.IndexCompletenessMetaKey, "complete");
+                writer.SetMeta(DbContext.IndexIncompleteReasonsMetaKey, string.Empty);
+                writer.SetMeta(DbContext.WorkspaceVerifiedHeadShaMetaKey, indexedHead);
+            }
+
+            using var env = EnvironmentVariableScope.Capture(DbPathResolver.DataDirEnvironmentVariable);
+            env.Set(DbPathResolver.DataDirEnvironmentVariable, Path.GetDirectoryName(dbPath));
+            Environment.CurrentDirectory = projectRoot;
+
+            var (readyExitCode, readyStdout, readyStderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["doctor", "--integrations", "--check", "--json"],
+                appVersion: "1.10.0"));
+            Assert.Equal(CommandExitCodes.Success, readyExitCode);
+            Assert.Empty(readyStderr);
+            using (var readyDocument = JsonDocument.Parse(readyStdout))
+            {
+                var project = readyDocument.RootElement.GetProperty("project");
+                Assert.Equal("ready", project.GetProperty("status").GetString());
+                Assert.True(project.GetProperty("index_matches_workspace").GetBoolean());
+            }
+
+            TestProjectHelper.RunGit(repositoryRoot, "update-index", "--split-index");
+            var (splitExitCode, splitStdout, splitStderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["doctor", "--integrations", "--check", "--json"],
+                appVersion: "1.10.0"));
+            Assert.Equal(CommandExitCodes.StaleIndex, splitExitCode);
+            Assert.Empty(splitStderr);
+            using var splitDocument = JsonDocument.Parse(splitStdout);
+            var splitProject = splitDocument.RootElement.GetProperty("project");
+            Assert.Equal("warning", splitProject.GetProperty("status").GetString());
+            Assert.Equal("skip_worktree_metadata_unavailable", splitProject.GetProperty("reason").GetString());
+            Assert.False(splitProject.TryGetProperty("index_matches_workspace", out _));
+            Assert.Equal(
+                "skip_worktree_metadata_unavailable",
+                splitProject.GetProperty("freshness_reason").GetString());
+        }
+        finally
+        {
+            Environment.CurrentDirectory = originalDirectory;
+            TestProjectHelper.DeleteDirectory(repositoryRoot);
+        }
+    }
+
+    [Fact]
+    public void RunDoctor_IntegrationsCheck_RecognizesSparseIndexDirectoryPrefixesWithoutGitProcess_Issue5102()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("doctor-integrations-sparse-index");
+        var originalDirectory = Environment.CurrentDirectory;
+        try
+        {
+            TestProjectHelper.InitializeGitRepo(projectRoot);
+            Directory.CreateDirectory(Path.Combine(projectRoot, "src"));
+            Directory.CreateDirectory(Path.Combine(projectRoot, "docs"));
+            File.WriteAllText(Path.Combine(projectRoot, "src", "inside.cs"), "class Inside {}\n");
+            File.WriteAllText(Path.Combine(projectRoot, "docs", "outside.cs"), "class Outside {}\n");
+            TestProjectHelper.RunGit(projectRoot, "add", "src/inside.cs", "docs/outside.cs");
+            TestProjectHelper.RunGit(projectRoot, "commit", "-m", "initial");
+            var indexedHead = TestProjectHelper.RunGit(projectRoot, "rev-parse", "HEAD").Trim();
+
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            TestProjectHelper.InsertIndexedFile(dbPath, "src/inside.cs", "csharp", "class Inside {}\n");
+            TestProjectHelper.InsertIndexedFile(dbPath, "docs/outside.cs", "csharp", "class Outside {}\n");
+            using (var db = new DbContext(DbOpenIntent.WriteIndex, dbPath))
+            {
+                var writer = new DbWriter(db.Connection);
+                writer.SetMeta(DbContext.IndexCompletenessMetaKey, "complete");
+                writer.SetMeta(DbContext.IndexIncompleteReasonsMetaKey, string.Empty);
+                writer.SetMeta(DbContext.WorkspaceVerifiedHeadShaMetaKey, indexedHead);
+            }
+
+            TestProjectHelper.RunGit(projectRoot, "sparse-checkout", "init", "--cone", "--sparse-index");
+            TestProjectHelper.RunGit(projectRoot, "sparse-checkout", "set", "src");
+            using var env = EnvironmentVariableScope.Capture(DbPathResolver.DataDirEnvironmentVariable);
+            env.Set(DbPathResolver.DataDirEnvironmentVariable, Path.GetDirectoryName(dbPath));
+            Environment.CurrentDirectory = projectRoot;
+
+            var (exitCode, stdout, stderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["doctor", "--integrations", "--check", "--json"],
+                appVersion: "1.10.0"));
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Empty(stderr);
+            using var document = JsonDocument.Parse(stdout);
+            var project = document.RootElement.GetProperty("project");
+            Assert.Equal("ready", project.GetProperty("status").GetString());
+            Assert.True(project.GetProperty("index_matches_workspace").GetBoolean());
+            Assert.Equal("matched", project.GetProperty("freshness_reason").GetString());
+        }
+        finally
+        {
+            Environment.CurrentDirectory = originalDirectory;
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void RunDoctor_IntegrationsJsonMaxBytes_AcceptsExactBudgetAndRejectsOverflow_Issue5102()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("doctor-integrations-budget");
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            using var env = EnvironmentVariableScope.Capture(DbPathResolver.DataDirEnvironmentVariable);
+            env.Set(DbPathResolver.DataDirEnvironmentVariable, Path.GetDirectoryName(dbPath));
+            var (uncappedExitCode, uncappedStdout, uncappedStderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["doctor", "--integrations", "--json"],
+                appVersion: "1.10.0"));
+            var exactByteCount = Encoding.UTF8.GetByteCount(uncappedStdout);
+
+            Assert.Equal(CommandExitCodes.Success, uncappedExitCode);
+            Assert.Empty(uncappedStderr);
+
+            var (exactExitCode, exactStdout, exactStderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["doctor", "--integrations", "--json", $"--max-json-bytes={exactByteCount.ToString(CultureInfo.InvariantCulture)}"],
+                appVersion: "1.10.0"));
+            Assert.Equal(CommandExitCodes.Success, exactExitCode);
+            Assert.Empty(exactStderr);
+            Assert.Equal(uncappedStdout, exactStdout);
+
+            var (overflowExitCode, overflowStdout, overflowStderr) = CaptureConsole(() => ProgramRunner.Run(
+                ["doctor", "--integrations", "--json", $"--max-json-bytes={(exactByteCount - 1).ToString(CultureInfo.InvariantCulture)}"],
+                appVersion: "1.10.0"));
+            Assert.Equal(CommandExitCodes.UsageError, overflowExitCode);
+            Assert.Empty(overflowStderr);
+            using var errorDocument = JsonDocument.Parse(overflowStdout);
+            Assert.Contains("exceeds --max-json-bytes", errorDocument.RootElement.GetProperty("message").GetString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void EnvironmentVariableInventory_IncludesSecretAndPolicyClassifications()
     {
         var byName = EnvironmentVariableInventory.Items.ToDictionary(item => item.Name, StringComparer.Ordinal);
