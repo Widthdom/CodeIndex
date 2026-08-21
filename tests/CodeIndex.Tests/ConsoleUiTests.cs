@@ -338,6 +338,9 @@ public class ConsoleUiTests
             line.Contains("--path <glob>", StringComparison.Ordinal)
             && line.Contains("--path <file>", StringComparison.Ordinal));
         Assert.Contains("In query mode --path is a glob filter", output);
+        Assert.All(usageLines, line => Assert.Contains("--fields <csv|list>", line, StringComparison.Ordinal));
+        Assert.Contains("collection.field leaves", output, StringComparison.Ordinal);
+        Assert.Contains("--fields list prints the machine-readable catalog", output, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -421,8 +424,8 @@ public class ConsoleUiTests
         AssertSearchUsageFragments(output);
         Assert.Contains("cdidx definition <query>|--query <query>|-- <query> [--db <path>] [--json] [--redact-paths|--show-paths] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--fields <csv>] [--cursor <next_cursor>] [--max-json-bytes <n>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--kind <kind>] [--visibility <v[,v]>] [--exclude-visibility <v[,v]>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--exact|--exact-name] [--count] [--group-partials] [--since <datetime>]", output);
         Assert.Contains("cdidx references <query>|--query <query>|-- <query> [--db <path>] [--json] [--redact-paths|--show-paths] [--format <text|json|count|compact|csv|tsv|lsp|qf|sarif>] [--fields <csv>] [--cursor <next_cursor>] [--max-json-bytes <n>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--kind <kind>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--include-qualified-common-calls] [--body] [--snippet-lines <n>] [--max-line-width <n>] [--exact|--exact-name] [--count]", output);
-        Assert.Contains("cdidx inspect <query>|--query <query>|-- <query> [--db <path>] [--json] [--redact-paths|--show-paths] [--format <text|json|compact>] [--pretty] [--compact] [--fields <csv>] [--outline-only] [--body-only] [--cursor <next_cursor>] [--max-json-bytes <n>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--kind <kind>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--body-start <line>] [--body-lines <n>|--body-line-count <n>] [--context <n>|--before <n>|--after <n>] [--max-line-width <n>] [--exact|--exact-name] [--group-partials]", output);
-        Assert.Contains("cdidx inspect --path <file> --line <line> [--end-line <line>] [--db <path>] [--json] [--redact-paths|--show-paths] [--format <text|json|compact>] [--pretty] [--compact] [--fields <csv>] [--outline-only] [--body-only] [--cursor <next_cursor>] [--max-json-bytes <n>] [--body] [--body-start <line>] [--body-lines <n>|--body-line-count <n>] [--context <n>|--before <n>|--after <n>] [--max-line-width <n>]", output);
+        Assert.Contains("cdidx inspect <query>|--query <query>|-- <query> [--db <path>] [--json] [--redact-paths|--show-paths] [--format <text|json|compact>] [--pretty] [--compact] [--fields <csv|list>] [--outline-only] [--body-only] [--cursor <next_cursor>] [--max-json-bytes <n>] [--verbose] [--limit <n>|--top <n>] [--lang <lang>] [--kind <kind>] [--path <glob>] [--exclude-path <glob>] [--exclude-tests] [--body] [--body-start <line>] [--body-lines <n>|--body-line-count <n>] [--context <n>|--before <n>|--after <n>] [--max-line-width <n>] [--exact|--exact-name] [--group-partials]", output);
+        Assert.Contains("cdidx inspect --path <file> --line <line> [--end-line <line>] [--db <path>] [--json] [--redact-paths|--show-paths] [--format <text|json|compact>] [--pretty] [--compact] [--fields <csv|list>] [--outline-only] [--body-only] [--cursor <next_cursor>] [--max-json-bytes <n>] [--body] [--body-start <line>] [--body-lines <n>|--body-line-count <n>] [--context <n>|--before <n>|--after <n>] [--max-line-width <n>]", output);
         Assert.Contains("cdidx outline <path> [--db <path>] [--json] [--pretty] [--compact] [--verbose] [--limit <n>|--top <n>] [--cursor <next_cursor>] [--max-json-bytes <n>] [--sort <source|kind|references|size|complexity|path|name>] [--kind <kind[,kind]>] [--outline-fields <csv>]", output);
         Assert.Contains("--snippet-lines <n>", output);
         Assert.Contains("Snippet length; graph --body uses it for definition and centered call-site evidence; issue-drafts accept 0 for path/line-only evidence", output);
@@ -453,6 +456,8 @@ public class ConsoleUiTests
         Assert.Contains("cdidx hotspots --group-by-name --exclude-tests", output);
         Assert.Contains("Collapse same-name hotspots across files", output);
         Assert.Contains("cdidx symbols Run --exact-name                Exact symbol-name match", output);
+        Assert.Contains("cdidx inspect Run --json --fields definitions.name,definitions.path,references.line", output);
+        Assert.Contains("cdidx inspect --fields list", output);
         Assert.Contains("backfill-fold", output);
         Assert.Contains("optimize                   Optimize FTS5 segments in an existing index DB", output);
         Assert.Contains("find <query>               Find literal substring matches inside known indexed files", output);

@@ -2190,6 +2190,18 @@ case-sensitive; unknown values use the versioned `E010_USAGE_ERROR` command
 error when JSON is requested, and discovery runs before query or database
 access.
 
+`inspect` keeps a dedicated typed schema in the same registry because its
+established JSON bundle is not a shared bounded-response envelope. It accepts
+top-level groups and exactly one `collection.field` level for definitions,
+nearby symbols, references, callers, and callees. Inspect selectors normalize
+case and hyphens, resolve aliases before first-occurrence deduplication, and
+preserve canonical request order. A selected parent dominates its children and
+keeps complete rows; otherwise the row projector emits only selected leaves.
+Projection runs before final serialization and byte budgeting while preserving
+root metadata, section totals/cursors/truncation, partial-family metadata, and
+definition body paging/recovery fields. The queryless `inspect --fields list`
+catalog and unknown-field errors are generated from that same schema.
+
 | Output mode | Contract |
 |---|---|
 | Human-readable default | Query commands (`search`, `definition`, `references`, `callers`, `callees`, `symbols`, `files`, `excerpt`, `map`, `inspect`, `outline`, `suggestions`) default to **human-readable output**. |
@@ -6114,6 +6126,17 @@ bounded projection field は `ProjectionFieldRegistry` だけで定義します�
 help はすべてこのレジストリを参照します。field 名は大文字・小文字を区別し、未知の
 値で JSON が要求されている場合は versioned `E010_USAGE_ERROR` command error を
 返します。発見処理は query や database access より先に実行します。
+
+`inspect` は従来の JSON bundle を shared bounded-response envelope に変更しないため、
+同じレジストリ内に専用の typed schema を持ちます。top-level group に加え、definitions、
+nearby symbols、references、callers、callees では 1 階層だけの `collection.field` を
+受け付けます。inspect selector は大小文字と hyphen を正規化し、alias 解決後に最初の出現を
+残して重複を除き、canonical な指定順を維持します。parent が選択されていれば child より
+優先して完全な row を保持し、それ以外は選択した leaf だけを row projector が出力します。
+projection は最終 serialization と byte budget 適用より前に行い、root metadata、section の
+total / cursor / truncation、partial-family metadata、definition body の paging / recovery field を
+維持します。query 不要の `inspect --fields list` catalog と未知 field error も同じ schema から
+生成します。
 
 | output mode | 契約 |
 |---|---|

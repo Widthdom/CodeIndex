@@ -190,6 +190,7 @@ public sealed class QueryCommandOptions
     public int? SlowQueryMs { get; init; }
     public bool Compact { get; init; }
     public List<string>? InspectFields { get; init; }
+    internal ProjectionFieldValidationError? InspectFieldValidationError { get; init; }
     public double MinEntrypointConfidence { get; init; }
     public string? StatusExplainField { get; init; }
     public bool StatusLogPath { get; init; }

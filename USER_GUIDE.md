@@ -390,7 +390,7 @@ When a bounded `find --all` scan exits partially, its terminal record includes
 `next_cursor`; replaying it resumes after the last scanned line.
 The bounded-response commands `search`, `definition`, `find`, `status`,
 `hotspots`, `references`, `callers`, `callees`, `symbols`, `files`,
-`languages`, `impact`, and `map` validate `--fields` values case-sensitively
+`languages`, `impact`, `map`, and `inspect` validate `--fields` values
 against one command-specific registry. Unknown names return a typed
 `E010_USAGE_ERROR` instead of successful empty objects. Run
 `cdidx <command> --fields list` before a query to obtain the machine-readable
@@ -415,9 +415,18 @@ same section envelopes and accepts their cursors. In path/line mode, `--path`
 locates the definition but does not restrict inbound references or callers to
 that file. Inspect graph cursors are accepted only by `inspect`; passing one to
 another command is a usage error.
-For narrower `inspect` evidence, `--fields <csv>` implies JSON and selects
+For narrower `inspect` evidence, `--fields <csv|list>` implies JSON and selects
 top-level groups such as `definitions`, `file`, `graph`, `references`,
-`callers`, and `callees`; `--outline-only` is shorthand for
+`callers`, and `callees`. Collection selectors accept one nested level, for
+example `definitions.name`, `definitions.path`, `definitions.line`,
+`references.path`, or `callers.path`. Selecting a parent keeps the full rows;
+when a parent and child are both requested, the parent wins. Child rows follow
+the canonical request order, aliases and duplicates are normalized
+deterministically, empty arrays remain arrays, and response counts, truncation,
+cursor, body recovery, and partial-family metadata remain available. Unknown
+parents or leaves return a typed usage error with the field catalog. Run
+`cdidx inspect --fields list` without a query or database to inspect that
+catalog. `--outline-only` is shorthand for
 `--fields file,definitions,nearby_symbols`, and `--body-only` is shorthand for
 `--body --fields definitions`. When a definition body is longer than the returned slice,
 `body_content_next_start_line` points to the next source line to pass with
@@ -471,6 +480,8 @@ cdidx inspect Compute --body-only         # definitions with body_content only
 cdidx inspect Compute --body --body-start 40 --body-lines 40
 cdidx inspect Compute --line 42 --context 2 --json
 cdidx inspect Compute --json --limit 1 --cursor '<next_cursor>'
+cdidx inspect Compute --json --fields definitions.name,definitions.path,references.line
+cdidx inspect --fields list
 ```
 
 ## Editor and index portability
@@ -2257,7 +2268,7 @@ same source location.
 | `--summary-only` | `map`, `recipes`, `audit`, `deps`, `hotspots`, and supported `search` JSON contexts | Emit aggregate/context JSON while omitting heavy result arrays where supported. For `deps`, use `--json` or `--format json-graph`; for `hotspots`, use `--json`. Machine-readable `deps` output emits `Progress:` diagnostics only with `--verbose`; other large graph queries emit them at `--limit 80+` or with `--verbose`. |
 | `--sort <mode>` | `symbols`, `outline` | For `outline`, sort one file's symbols by `source`, `kind`, `references`, `size` / `span`, `complexity`, `path`, or `name` before `--limit` / cursor paging. |
 | `--outline-fields <csv>` | `outline` | Project outline JSON symbol fields such as `name`, `line`, `kind`, `signature`, `container`, `range`, `body`, `reference_count`, `size_lines`, `complexity_score`, or `sort_mode`; pass `all` for the full symbol payload with paging metadata. |
-| `--fields <csv>` | `inspect` | Select top-level inspect JSON groups: `file`, `workspace`, `graph`, `definitions`, `body`, `source_excerpt`, `nearby_symbols`, `references`, `callers`, `callees`, or `all`. `body` includes definition bodies and maps to `definitions`. |
+| `--fields <csv\|list>` | `inspect` | Select top-level inspect JSON groups or one-level collection leaves such as `definitions.name`, `definitions.path`, `references.line`, and `callers.path`. A parent keeps full rows and wins over its children; aliases, duplicates, and output order are normalized deterministically. `body` includes definition bodies and maps to `definitions`. Use `list` for the queryless typed catalog. |
 | `--outline-only` | `inspect` | Shorthand for `--fields file,definitions,nearby_symbols`, useful for outline-first review of large classes/types before requesting body or graph evidence. |
 | `--body-only` | `inspect` | Shorthand for `--body --fields definitions`, useful when large audits need implementation text without graph context. |
 | `--body-start <line>` | `inspect` | Start the returned definition body slice at a 1-based source line inside the symbol body. Pair with `body_content_next_start_line` from JSON to page a long body. |
@@ -4014,9 +4025,16 @@ path/line mode の `--path` は定義の位置を特定しますが、inbound re
 そのファイルだけに制限しません。MCP `analyze_symbol` も同じ section envelope を公開し、
 その cursor を受け付けます。inspect graph cursor は `inspect` だけが受理し、別 command に
 渡すと usage error になります。
-`inspect` の証跡をさらに絞りたい場合、`--fields <csv>` は JSON 出力を暗黙に有効化し、
+`inspect` の証跡をさらに絞りたい場合、`--fields <csv|list>` は JSON 出力を暗黙に有効化し、
 `definitions`、`file`、`graph`、`references`、`callers`、`callees` などの
-top-level group を選択します。`--outline-only` は
+top-level group を選択します。collection selector は 1 階層の nested field に対応し、
+たとえば `definitions.name`、`definitions.path`、`definitions.line`、
+`references.path`、`callers.path` を指定できます。parent を選ぶと row 全体を保持し、
+parent と child を同時指定した場合は parent が優先されます。child row は canonical な
+指定順を保ち、alias と重複は決定的に正規化されます。空配列は配列のまま保持され、count、
+truncation、cursor、body recovery、partial-family metadata も維持されます。未知の parent / leaf
+は field catalog 付きの型付き usage error になります。query や DB なしで
+`cdidx inspect --fields list` を実行すると catalog を確認できます。`--outline-only` は
 `--fields file,definitions,nearby_symbols` の shorthand で、`--body-only` は
 `--body --fields definitions` の shorthand です。definition body が返却 slice より長い場合は
 `body_content_next_start_line` が次に `--body-start` へ渡す source line を示します。
@@ -4064,6 +4082,8 @@ cdidx inspect Compute --body-only         # body_content 付き definitions の�
 cdidx inspect Compute --body --body-start 40 --body-lines 40
 cdidx inspect Compute --line 42 --context 2 --json
 cdidx inspect Compute --json --limit 1 --cursor '<next_cursor>'
+cdidx inspect Compute --json --fields definitions.name,definitions.path,references.line
+cdidx inspect --fields list
 ```
 
 ## Editor / index portability
@@ -5771,7 +5791,7 @@ raw match density を正確に測る、といった理由で全 raw chunk hit �
 | `--summary-only` | `map`、`recipes`、`audit`、`deps`、`hotspots`、および対応する `search` JSON 文脈 | 対応コマンドで重い結果配列を省き、集計と文脈中心の JSON を返す。`deps` では `--json` または `--format json-graph`、`hotspots` では `--json` と組み合わせる。machine-readable な `deps` 出力は `--verbose` 指定時だけ stderr へ `Progress:` 診断を出し、それ以外の大きい graph query は `--limit 80` 以上または `--verbose` 指定時に出す。 |
 | `--sort <mode>` | `symbols`、`outline` | `outline` では 1ファイル内のシンボルを `source`、`kind`、`references`、`size` / `span`、`complexity`、`path`、`name` で並べ替えてから `--limit` / カーソルページングを適用する。 |
 | `--outline-fields <csv>` | `outline` | outline JSON のシンボルフィールドを投影する。`name`、`line`、`kind`、`signature`、`container`、`range`、`body`、`reference_count`、`size_lines`、`complexity_score`、`sort_mode` などを指定でき、`all` を渡すとシンボルペイロード全体とページングメタデータを返す。 |
-| `--fields <csv>` | `inspect` | inspect JSON の top-level group を選択。`file`、`workspace`、`graph`、`definitions`、`body`、`source_excerpt`、`nearby_symbols`、`references`、`callers`、`callees`、`all` を指定できる。`body` は definition body を含め、`definitions` に対応する。 |
+| `--fields <csv\|list>` | `inspect` | inspect JSON の top-level group または `definitions.name`、`definitions.path`、`references.line`、`callers.path` など 1 階層の collection leaf を選択する。parent は row 全体を保持して child より優先され、alias、重複、出力順は決定的に正規化される。`body` は definition body を含め、`definitions` に対応する。query 不要の型付き catalog は `list` で取得できる。 |
 | `--outline-only` | `inspect` | `--fields file,definitions,nearby_symbols` の shorthand。大きな class / type を body や graph evidence なしでアウトライン優先で確認したい場合に使う。 |
 | `--body-only` | `inspect` | `--body --fields definitions` の shorthand。大規模 audit で graph context なしに実装本文だけが必要な場合に使う。 |
 | `--body-start <line>` | `inspect` | symbol body 内の 1-based source line から definition body slice を返す。長い body の page 送りでは JSON の `body_content_next_start_line` を次の値として渡す。 |

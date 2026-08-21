@@ -178,9 +178,14 @@ public static partial class QueryCommandRunner
         return sections.Distinct(StringComparer.Ordinal).ToList();
     }
 
-    private static List<string>? ParseInspectFields(string rawValue, Action<string> addParseError, out bool includeBody)
+    private static List<string>? ParseInspectFields(
+        string rawValue,
+        Action<string> addParseError,
+        out bool includeBody,
+        out ProjectionFieldValidationError? validationError)
     {
         includeBody = false;
+        validationError = null;
         var fields = new List<string>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var all = false;
@@ -191,74 +196,33 @@ public static partial class QueryCommandRunner
 
         foreach (var rawField in rawValue.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
-            var field = rawField.ToLowerInvariant().Replace('-', '_');
-            string canonical;
-            switch (field)
+            if (!ProjectionFieldRegistry.TryResolveInspectSelector(
+                    rawField,
+                    out var canonical,
+                    out var selectorIncludesBody,
+                    out var expansion,
+                    out var selectorError))
             {
-                case "all":
-                    all = true;
-                    continue;
-                case "file":
-                    canonical = "file";
-                    break;
-                case "metadata":
-                case "workspace":
-                    canonical = "workspace";
-                    break;
-                case "graph":
-                case "trust":
-                    canonical = "graph";
-                    break;
-                case "definition":
-                case "definitions":
-                case "defs":
-                    canonical = "definitions";
-                    break;
-                case "body":
-                    canonical = "definitions";
-                    includeBody = true;
-                    break;
-                case "source":
-                case "source_excerpt":
-                case "excerpt":
-                    canonical = "source_excerpt";
-                    break;
-                case "nearby":
-                case "nearby_symbols":
-                case "nearbysymbols":
-                    canonical = "nearby_symbols";
-                    break;
-                case "outline":
-                case "outline_only":
-                case "outlineonly":
-                    foreach (var outlineField in new[] { "file", "definitions", "nearby_symbols" })
-                    {
-                        if (seen.Add(outlineField))
-                            fields.Add(outlineField);
-                    }
-                    continue;
-                case "reference":
-                case "references":
-                case "refs":
-                    canonical = "references";
-                    break;
-                case "caller":
-                case "callers":
-                    canonical = "callers";
-                    break;
-                case "callee":
-                case "callees":
-                    canonical = "callees";
-                    break;
-                case "candidate":
-                case "candidates":
-                case "candidate_bundles":
-                    canonical = "candidates";
-                    break;
-                default:
-                    invalidField = true;
-                    addParseError($"Error: unsupported --fields value '{ConsoleUi.FormatBoundedValue(rawField)}'. Use one or more of all, file, workspace, graph, definitions, body, source_excerpt, nearby_symbols, outline, references, callers, callees, candidates.");
-                    continue;
+                invalidField = true;
+                validationError ??= selectorError;
+                addParseError($"Error: {selectorError!.Message}");
+                continue;
+            }
+
+            includeBody |= selectorIncludesBody;
+            if (expansion is not null)
+            {
+                foreach (var expandedField in expansion)
+                {
+                    if (seen.Add(expandedField))
+                        fields.Add(expandedField);
+                }
+                continue;
+            }
+            if (string.Equals(canonical, "all", StringComparison.Ordinal))
+            {
+                all = true;
+                continue;
             }
 
             if (seen.Add(canonical))
@@ -266,7 +230,19 @@ public static partial class QueryCommandRunner
         }
 
         if (all && fields.Count > 0)
+        {
+            validationError ??= new ProjectionFieldValidationError(
+                "The --fields selector 'all' cannot be combined with specific field names for command 'inspect'.",
+                "Use `--fields all` by itself, or remove `all` and list only the required groups or collection fields.");
             addParseError("Error: --fields all cannot be combined with specific field names.");
+        }
+        if (fields.Contains("list", StringComparer.Ordinal) && fields.Count > 1)
+        {
+            validationError ??= new ProjectionFieldValidationError(
+                "The --fields discovery value 'list' must be used by itself for command 'inspect'.",
+                "Run `cdidx inspect --fields list` without other field names.");
+            addParseError("Error: --fields list cannot be combined with specific field names.");
+        }
         if (!all && fields.Count == 0 && !invalidField)
             addParseError("Error: --fields requires at least one field name.");
 
