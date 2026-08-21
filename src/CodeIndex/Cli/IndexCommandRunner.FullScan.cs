@@ -175,6 +175,7 @@ public static partial class IndexCommandRunner
             })
             .ToList();
         var warningList = discovery.WarningList;
+        warningList.InsertRange(0, options.OptionWarnings);
         AddProjectMarkerFingerprintWarnings(currentHotspotFamilyMarkerFingerprints, warningList, options);
         var scanCheckpointPath = discovery.ScanCheckpointPath;
         if (options.MemoryTrace)

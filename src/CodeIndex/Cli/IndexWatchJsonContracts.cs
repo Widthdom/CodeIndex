@@ -13,6 +13,8 @@ internal sealed class IndexWatchStartedJsonResult : IVersionedJsonResult
     public int? WatchPendingPathLimit { get; init; }
     public string? Backend { get; init; }
     public string? RecoveryReason { get; init; }
+    public int WarningsTotal { get; init; }
+    public IReadOnlyList<CliJsonMessage>? Warnings { get; init; }
     public IndexWatchContractJsonResult? WatchContract { get; init; }
 }
 

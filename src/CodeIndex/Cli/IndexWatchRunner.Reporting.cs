@@ -197,6 +197,8 @@ internal static partial class IndexWatchRunner
                 WatchPendingPathLimit = maxPendingPaths,
                 Backend = safeBackend,
                 RecoveryReason = safeRecoveryReason,
+                WarningsTotal = baseOptions.OptionWarnings.Count,
+                Warnings = baseOptions.OptionWarnings.Count > 0 ? baseOptions.OptionWarnings : null,
                 WatchContract = BuildWatchContract(debounce, maxPendingPaths, ignoreCase),
             }, CliJsonSerializerContextFactory.Create(jsonOptions).IndexWatchStartedJsonResult));
         }

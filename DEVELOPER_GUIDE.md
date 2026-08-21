@@ -269,6 +269,18 @@ Directory scan / shared path filter (built-in skip lists + `.gitignore` / `.cdid
   → Populate FTS5 index
 ```
 
+Explicit numeric `index` options are validated before database setup or worker
+startup. The inclusive ranges are `--parallelism` 1..16,
+`--max-file-bytes` 1..2147483647 bytes, `--max-symbols-per-file` 1..50000,
+`--max-references-per-file` 1..1000000, `--dry-run-path-limit` 1..1000000,
+`--watch-pending-path-limit` 1..262144, and `--debounce` 0..60000 ms. Any
+explicit zero outside those ranges, negative, overflowed, non-numeric, or
+over-limit value returns structured `E010_USAGE_ERROR` output and exit code 1;
+an invalid occurrence is not hidden by a later duplicate. For compatibility,
+invalid `CDIDX_INDEX_PARALLELISM`, `CDIDX_MAX_FILE_BYTES`, and
+`CDIDX_INDEX_WATCH_PENDING_PATH_LIMIT` values still warn and fall back or clamp,
+but JSON warnings identify the environment source and the effective value.
+
 Every loaded text file is normalized and analyzed in one UTF-16 walk. The
 resulting `NormalizedContentFacts` is the shared source for normalized line
 count, oversized-line and FTS-token diagnostics, conflict-marker detection,
@@ -4219,6 +4231,17 @@ query コマンドも JSON profile block 用の `--profile` と command-scoped p
   → チャンク＋シンボル＋参照をバッチ挿入（1トランザクション500件）
   → FTS5インデックス反映
 ```
+
+明示された数値 `index` オプションは、database setup や worker 起動より前に検証します。
+許容範囲（両端を含む）は `--parallelism` が 1..16、`--max-file-bytes` が
+1..2147483647 byte、`--max-symbols-per-file` が 1..50000、
+`--max-references-per-file` が 1..1000000、`--dry-run-path-limit` が
+1..1000000、`--watch-pending-path-limit` が 1..262144、`--debounce` が
+0..60000 ms です。範囲外のゼロ、負数、overflow、非数値、上限超過を明示すると、
+構造化された `E010_USAGE_ERROR` と exit code 1 を返し、後続の重複指定が有効でも先行する
+不正値を隠しません。互換性のため、不正な `CDIDX_INDEX_PARALLELISM`、
+`CDIDX_MAX_FILE_BYTES`、`CDIDX_INDEX_WATCH_PENDING_PATH_LIMIT` は引き続き警告して
+fallback または clamp しますが、JSON warning には環境変数由来であることと実効値を含めます。
 
 読み込んだ text file は UTF-16 上の1回の走査で正規化と解析を行います。得られた
 `NormalizedContentFacts` を、正規化後の行数、長すぎる行 / FTS token の診断、conflict

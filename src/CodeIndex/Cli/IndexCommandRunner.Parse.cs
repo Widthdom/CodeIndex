@@ -50,13 +50,17 @@ public static partial class IndexCommandRunner
         bool symbolsOnly = false;
         bool memoryTrace = false;
         int? watchDebounceMs = null;
-        var watchPendingPathLimit = ReadWatchPendingPathLimitFromEnvironment();
+        var optionWarnings = new List<CliJsonMessage>();
+        var watchPendingPathLimit = ReadWatchPendingPathLimitFromEnvironment(optionWarnings);
         var durationFormat = DurationOutputFormat.Auto;
         var notifyMode = ReadCompletionNotificationModeFromEnvironment();
-        long? maxFileSizeBytes = ReadMaxFileSizeBytesFromEnvironment();
+        long? maxFileSizeBytes = ReadMaxFileSizeBytesFromEnvironment(optionWarnings);
         var maxSymbolsPerFile = DefaultMaxSymbolsPerFile;
         var maxReferencesPerFile = DefaultMaxReferencesPerFile;
-        var parallelism = ReadIndexParallelismFromEnvironment();
+        var parallelism = ReadIndexParallelismFromEnvironment(optionWarnings);
+        var watchPendingPathLimitSpecifiedOnCli = false;
+        var maxFileSizeBytesSpecifiedOnCli = false;
+        var parallelismSpecifiedOnCli = false;
         var symlinkPolicy = FileIndexer.SymlinkPolicy.None;
         string? easterEgg = null;
         int spinnerFlagCount = 0;
@@ -154,25 +158,14 @@ public static partial class IndexCommandRunner
                     memoryTrace = true;
                     break;
                 case "--debounce" when i + 1 < args.Length:
-                    if (int.TryParse(args[i + 1], System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsedDebounce) && parsedDebounce >= 0)
-                    {
-                        if (parsedDebounce <= IndexWatchRunner.MaxDebounceMs)
-                            watchDebounceMs = parsedDebounce;
-                        else
-                            parseError ??= $"--debounce must be less than or equal to {IndexWatchRunner.MaxDebounceMs} ms, got '{args[i + 1]}'";
-                        i++;
-                    }
-                    else
-                    {
-                        var displayValue = ConsoleUi.FormatBoundedValue(args[i + 1]);
-                        CommandErrorWriter.WriteStderr($"Warning: invalid --debounce value '{displayValue}' (ignored; must be a non-negative integer in milliseconds) / 不正な --debounce 値 '{displayValue}'（無視。ミリ秒の0以上の整数を指定）");
-                        i++;
-                    }
+                    watchDebounceMs = ParseWatchDebounce(args[++i], watchDebounceMs, ref parseError);
                     break;
                 case "--watch-pending-path-limit" when i + 1 < args.Length:
+                    watchPendingPathLimitSpecifiedOnCli = true;
                     watchPendingPathLimit = ParseWatchPendingPathLimit(args[++i], watchPendingPathLimit, "--watch-pending-path-limit", ref parseError);
                     break;
                 case var option when option.StartsWith("--watch-pending-path-limit=", StringComparison.Ordinal):
+                    watchPendingPathLimitSpecifiedOnCli = true;
                     watchPendingPathLimit = ParseWatchPendingPathLimit(option["--watch-pending-path-limit=".Length..], watchPendingPathLimit, "--watch-pending-path-limit", ref parseError);
                     break;
                 case "--duration-format" when i + 1 < args.Length:
@@ -188,10 +181,12 @@ public static partial class IndexCommandRunner
                     notifyMode = ParseCompletionNotificationMode(option["--notify=".Length..], notifyMode, ref parseError);
                     break;
                 case "--max-file-bytes" when i + 1 < args.Length:
-                    maxFileSizeBytes = ParseMaxFileBytes(args[++i], maxFileSizeBytes);
+                    maxFileSizeBytesSpecifiedOnCli = true;
+                    maxFileSizeBytes = ParseMaxFileBytes(args[++i], maxFileSizeBytes, ref parseError);
                     break;
                 case var option when option.StartsWith("--max-file-bytes=", StringComparison.Ordinal):
-                    maxFileSizeBytes = ParseMaxFileBytes(option["--max-file-bytes=".Length..], maxFileSizeBytes);
+                    maxFileSizeBytesSpecifiedOnCli = true;
+                    maxFileSizeBytes = ParseMaxFileBytes(option["--max-file-bytes=".Length..], maxFileSizeBytes, ref parseError);
                     break;
                 case "--max-symbols-per-file" when i + 1 < args.Length:
                     maxSymbolsPerFile = ParseMaxSymbolsPerFile(args[++i], maxSymbolsPerFile, "--max-symbols-per-file", ref parseError);
@@ -206,10 +201,12 @@ public static partial class IndexCommandRunner
                     maxReferencesPerFile = ParseMaxReferencesPerFile(option["--max-references-per-file=".Length..], maxReferencesPerFile, "--max-references-per-file", ref parseError);
                     break;
                 case "--parallelism" when i + 1 < args.Length:
-                    parallelism = ParseIndexParallelism(args[++i], parallelism, "--parallelism");
+                    parallelismSpecifiedOnCli = true;
+                    parallelism = ParseIndexParallelism(args[++i], parallelism, "--parallelism", ref parseError);
                     break;
                 case var option when option.StartsWith("--parallelism=", StringComparison.Ordinal):
-                    parallelism = ParseIndexParallelism(option["--parallelism=".Length..], parallelism, "--parallelism");
+                    parallelismSpecifiedOnCli = true;
+                    parallelism = ParseIndexParallelism(option["--parallelism=".Length..], parallelism, "--parallelism", ref parseError);
                     break;
                 case "--follow-symlinks" when i + 1 < args.Length:
                     symlinkPolicy = ParseSymlinkPolicy(args[++i], symlinkPolicy, ref parseError);
@@ -343,6 +340,29 @@ public static partial class IndexCommandRunner
         if (showPaths && !optimizeOnly)
             parseError ??= "--show-paths is only valid with `cdidx index <projectPath> --optimize`.";
 
+        RemoveOverriddenEnvironmentWarning(optionWarnings, WatchPendingPathLimitEnvironmentVariable, watchPendingPathLimitSpecifiedOnCli);
+        RemoveOverriddenEnvironmentWarning(optionWarnings, FileIndexer.MaxFileSizeEnvironmentVariable, maxFileSizeBytesSpecifiedOnCli);
+        RemoveOverriddenEnvironmentWarning(optionWarnings, IndexParallelismEnvironmentVariable, parallelismSpecifiedOnCli);
+        if (optimizeOnly)
+        {
+            // Optimize does not consume indexing worker, file-size, or watch queue settings.
+            // Do not emit fallback warnings for environment values that cannot affect this mode.
+            // optimize は indexing worker / file size / watch queue 設定を使用しないため、
+            // この mode に影響しない環境変数の fallback warning は出力しない。
+            optionWarnings.Clear();
+        }
+
+        var finalParseError = parseError ?? generatedCodePatternError;
+        if (finalParseError != null)
+        {
+            optionWarnings.Clear();
+        }
+        else
+        {
+            foreach (var warning in optionWarnings)
+                CommandErrorWriter.WriteStderr($"Warning: {warning.Message}");
+        }
+
         return new IndexCommandOptions
         {
             // Absolutize critical paths at the option-parsing boundary so a cwd shift after
@@ -366,7 +386,8 @@ public static partial class IndexCommandRunner
             ProjectFilters = projectFilters,
             SolutionPath = solutionPath,
             ProjectFilterError = projectFilterError,
-            ParseError = parseError ?? generatedCodePatternError,
+            ParseError = finalParseError,
+            OptionWarnings = optionWarnings,
             EasterEgg = easterEgg,
             DryRun = dryRun,
             DryRunPathLimit = dryRunPathLimit,
@@ -533,34 +554,41 @@ public static partial class IndexCommandRunner
     internal static int CalculateDefaultIndexParallelism(int processorCount)
         => Math.Clamp(processorCount, 1, DefaultIndexParallelismCap);
 
-    private static int ReadIndexParallelismFromEnvironment()
+    private static int ReadIndexParallelismFromEnvironment(List<CliJsonMessage> warnings)
     {
         var fallback = DefaultIndexParallelism();
         var value = CdidxEnvironment.GetProcessEnvironmentVariable(IndexParallelismEnvironmentVariable);
         if (string.IsNullOrWhiteSpace(value))
             return fallback;
 
-        return ParseIndexParallelism(value, fallback, IndexParallelismEnvironmentVariable);
-    }
-
-    private static int ParseIndexParallelism(string value, int fallback, string source)
-    {
-        if (int.TryParse(value, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsed) && parsed > 0)
+        if (int.TryParse(value, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsed)
+            && parsed >= 1)
         {
             if (parsed <= MaxIndexParallelism)
                 return parsed;
 
-            var displayValue = ConsoleUi.FormatBoundedValue(value);
-            CommandErrorWriter.WriteStderr($"Warning: {source} value '{displayValue}' exceeds the maximum {MaxIndexParallelism}; using {MaxIndexParallelism} / {source} 値 '{displayValue}' は最大 {MaxIndexParallelism} を超えています。{MaxIndexParallelism} を使用します");
+            AddEnvironmentOptionWarning(
+                warnings,
+                IndexParallelismEnvironmentVariable,
+                value,
+                $"must be between 1 and {MaxIndexParallelism} inclusive; using maximum clamp {MaxIndexParallelism}",
+                $"1 以上 {MaxIndexParallelism} 以下である必要があります。上限補正値 {MaxIndexParallelism} を使用します");
             return MaxIndexParallelism;
         }
 
-        var invalidDisplayValue = ConsoleUi.FormatBoundedValue(value);
-        CommandErrorWriter.WriteStderr($"Warning: invalid {source} value '{invalidDisplayValue}' (ignored; use a positive integer) / 不正な {source} 値 '{invalidDisplayValue}'（無視。正の整数を指定）");
+        AddEnvironmentOptionWarning(
+            warnings,
+            IndexParallelismEnvironmentVariable,
+            value,
+            $"must be between 1 and {MaxIndexParallelism} inclusive; using automatic CPU default {fallback}",
+            $"1 以上 {MaxIndexParallelism} 以下である必要があります。CPU 数から算出した既定値 {fallback} を使用します");
         return fallback;
     }
 
-    private static int ReadWatchPendingPathLimitFromEnvironment()
+    private static int ParseIndexParallelism(string value, int fallback, string source, ref string? parseError)
+        => ParseIndexNumericOption(value, fallback, source, 1, MaxIndexParallelism, ref parseError);
+
+    private static int ReadWatchPendingPathLimitFromEnvironment(List<CliJsonMessage> warnings)
     {
         var fallback = IndexWatchRunner.DefaultWatchPendingPathLimit;
         var value = CdidxEnvironment.GetEnvironmentVariable(WatchPendingPathLimitEnvironmentVariable);
@@ -572,49 +600,35 @@ public static partial class IndexCommandRunner
             if (parsed <= IndexWatchRunner.MaxWatchPendingPathLimit)
                 return parsed;
 
-            var displayValue = ConsoleUi.FormatBoundedValue(value);
-            CommandErrorWriter.WriteStderr($"Warning: {WatchPendingPathLimitEnvironmentVariable} value '{displayValue}' exceeds the maximum {IndexWatchRunner.MaxWatchPendingPathLimit}; using {IndexWatchRunner.MaxWatchPendingPathLimit} / {WatchPendingPathLimitEnvironmentVariable} 値 '{displayValue}' は最大 {IndexWatchRunner.MaxWatchPendingPathLimit} を超えています。{IndexWatchRunner.MaxWatchPendingPathLimit} を使用します");
+            AddEnvironmentOptionWarning(
+                warnings,
+                WatchPendingPathLimitEnvironmentVariable,
+                value,
+                $"must be between 1 and {IndexWatchRunner.MaxWatchPendingPathLimit} inclusive; using maximum clamp {IndexWatchRunner.MaxWatchPendingPathLimit}",
+                $"1 以上 {IndexWatchRunner.MaxWatchPendingPathLimit} 以下である必要があります。上限補正値 {IndexWatchRunner.MaxWatchPendingPathLimit} を使用します");
             return IndexWatchRunner.MaxWatchPendingPathLimit;
         }
 
-        var invalidDisplayValue = ConsoleUi.FormatBoundedValue(value);
-        CommandErrorWriter.WriteStderr($"Warning: invalid {WatchPendingPathLimitEnvironmentVariable} value '{invalidDisplayValue}' (ignored; use a positive integer) / 不正な {WatchPendingPathLimitEnvironmentVariable} 値 '{invalidDisplayValue}'（無視。正の整数を指定）");
+        AddEnvironmentOptionWarning(
+            warnings,
+            WatchPendingPathLimitEnvironmentVariable,
+            value,
+            $"must be between 1 and {IndexWatchRunner.MaxWatchPendingPathLimit} inclusive; using built-in default {fallback}",
+            $"1 以上 {IndexWatchRunner.MaxWatchPendingPathLimit} 以下である必要があります。組み込み既定値 {fallback} を使用します");
         return fallback;
     }
 
     private static int ParseWatchPendingPathLimit(string value, int fallback, string source, ref string? parseError)
     {
-        if (int.TryParse(value, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsed) && parsed > 0)
-        {
-            if (parsed <= IndexWatchRunner.MaxWatchPendingPathLimit)
-                return parsed;
-
-            parseError ??= $"{source} must be less than or equal to {IndexWatchRunner.MaxWatchPendingPathLimit}";
-            return fallback;
-        }
-
-        var displayValue = ConsoleUi.FormatBoundedValue(value);
-        CommandErrorWriter.WriteStderr($"Warning: invalid {source} value '{displayValue}' (ignored; use a positive integer) / 不正な {source} 値 '{displayValue}'（無視。正の整数を指定）");
-        return fallback;
+        return ParseIndexNumericOption(value, fallback, source, 1, IndexWatchRunner.MaxWatchPendingPathLimit, ref parseError);
     }
 
     private static int ParseDryRunPathLimit(string value, int fallback, string source, ref string? parseError)
     {
-        if (int.TryParse(value, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsed) && parsed > 0)
-        {
-            if (parsed <= MaxDryRunPathLimit)
-                return parsed;
-
-            parseError ??= $"{source} must be less than or equal to {MaxDryRunPathLimit}";
-            return fallback;
-        }
-
-        var displayValue = ConsoleUi.FormatBoundedValue(value);
-        CommandErrorWriter.WriteStderr($"Warning: invalid {source} value '{displayValue}' (ignored; use a positive integer) / 不正な {source} 値 '{displayValue}'（無視。正の整数を指定）");
-        return fallback;
+        return ParseIndexNumericOption(value, fallback, source, 1, MaxDryRunPathLimit, ref parseError);
     }
 
-    private static long? ReadMaxFileSizeBytesFromEnvironment()
+    private static long? ReadMaxFileSizeBytesFromEnvironment(List<CliJsonMessage> warnings)
     {
         var value = CdidxEnvironment.GetProcessEnvironmentVariable(FileIndexer.MaxFileSizeEnvironmentVariable);
         if (string.IsNullOrWhiteSpace(value))
@@ -623,51 +637,86 @@ public static partial class IndexCommandRunner
         if (FileIndexer.TryParseMaxFileSizeBytes(value, out var parsed))
             return parsed;
 
-        var displayValue = ConsoleUi.FormatBoundedValue(value);
-        CommandErrorWriter.WriteStderr($"Warning: invalid {FileIndexer.MaxFileSizeEnvironmentVariable} value '{displayValue}' (ignored; use positive bytes or K/M/G suffixes) / 不正な {FileIndexer.MaxFileSizeEnvironmentVariable} 値 '{displayValue}'（無視。正の byte 数または K/M/G 接尾辞を指定）");
+        AddEnvironmentOptionWarning(
+            warnings,
+            FileIndexer.MaxFileSizeEnvironmentVariable,
+            value,
+            $"must be between 1 and {int.MaxValue} bytes inclusive, with an optional B/K/M/G suffix; using built-in default {FileIndexer.DefaultMaxFileSizeBytes} bytes",
+            $"B/K/M/G 接尾辞を任意で付けた 1 以上 {int.MaxValue} byte 以下である必要があります。組み込み既定値 {FileIndexer.DefaultMaxFileSizeBytes} byte を使用します");
         return null;
     }
 
-    private static long? ParseMaxFileBytes(string value, long? fallback)
+    private static long? ParseMaxFileBytes(string value, long? fallback, ref string? parseError)
     {
         if (FileIndexer.TryParseMaxFileSizeBytes(value, out var parsed))
             return parsed;
 
-        var displayValue = ConsoleUi.FormatBoundedValue(value);
-        CommandErrorWriter.WriteStderr($"Warning: invalid --max-file-bytes value '{displayValue}' (ignored; use positive bytes or K/M/G suffixes) / 不正な --max-file-bytes 値 '{displayValue}'（無視。正の byte 数または K/M/G 接尾辞を指定）");
+        parseError ??= $"--max-file-bytes value '{ConsoleUi.FormatBoundedValue(value)}' must be between 1 and {int.MaxValue} inclusive (bytes, with an optional B/K/M/G suffix)";
         return fallback;
     }
 
     private static int ParseMaxSymbolsPerFile(string value, int fallback, string source, ref string? parseError)
     {
-        if (int.TryParse(value, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsed) && parsed > 0)
-        {
-            if (parsed <= MaxSymbolsPerFileLimit)
-                return parsed;
-
-            parseError ??= $"{source} must be less than or equal to {MaxSymbolsPerFileLimit}";
-            return fallback;
-        }
-
-        var displayValue = ConsoleUi.FormatBoundedValue(value);
-        CommandErrorWriter.WriteStderr($"Warning: invalid {source} value '{displayValue}' (ignored; use a positive integer) / 不正な {source} 値 '{displayValue}'（無視。正の整数を指定）");
-        return fallback;
+        return ParseIndexNumericOption(value, fallback, source, 1, MaxSymbolsPerFileLimit, ref parseError);
     }
 
     private static int ParseMaxReferencesPerFile(string value, int fallback, string source, ref string? parseError)
     {
-        if (int.TryParse(value, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsed) && parsed > 0)
-        {
-            if (parsed <= MaxReferencesPerFileLimit)
-                return parsed;
+        return ParseIndexNumericOption(value, fallback, source, 1, MaxReferencesPerFileLimit, ref parseError);
+    }
 
-            parseError ??= $"{source} must be less than or equal to {MaxReferencesPerFileLimit}";
-            return fallback;
+    private static int ParseIndexNumericOption(
+        string value,
+        int fallback,
+        string source,
+        int minimum,
+        int maximum,
+        ref string? parseError)
+    {
+        if (int.TryParse(value, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsed)
+            && parsed >= minimum
+            && parsed <= maximum)
+        {
+            return parsed;
         }
 
-        var displayValue = ConsoleUi.FormatBoundedValue(value);
-        CommandErrorWriter.WriteStderr($"Warning: invalid {source} value '{displayValue}' (ignored; use a positive integer) / 不正な {source} 値 '{displayValue}'（無視。正の整数を指定）");
+        parseError ??= $"{source} value '{ConsoleUi.FormatBoundedValue(value)}' must be between {minimum} and {maximum} inclusive";
         return fallback;
+    }
+
+    private static int? ParseWatchDebounce(string value, int? fallback, ref string? parseError)
+    {
+        if (int.TryParse(value, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsed)
+            && parsed >= 0
+            && parsed <= IndexWatchRunner.MaxDebounceMs)
+        {
+            return parsed;
+        }
+
+        parseError ??= $"--debounce value '{ConsoleUi.FormatBoundedValue(value)}' must be between 0 and {IndexWatchRunner.MaxDebounceMs} inclusive";
+        return fallback;
+    }
+
+    private static void AddEnvironmentOptionWarning(
+        List<CliJsonMessage> warnings,
+        string source,
+        string value,
+        string englishDetail,
+        string japaneseDetail)
+    {
+        var displayValue = ConsoleUi.FormatBoundedValue(value);
+        warnings.Add(new CliJsonMessage(
+            $"<environment:{source}>",
+            $"{source} value '{displayValue}' {englishDetail} / {source} 値 '{displayValue}' は {japaneseDetail}"));
+    }
+
+    private static void RemoveOverriddenEnvironmentWarning(
+        List<CliJsonMessage> warnings,
+        string source,
+        bool overridden)
+    {
+        if (overridden)
+            warnings.RemoveAll(warning => string.Equals(warning.File, $"<environment:{source}>", StringComparison.Ordinal));
     }
 
     private static DurationOutputFormat ParseDurationFormat(string value, DurationOutputFormat fallback)

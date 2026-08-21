@@ -4887,22 +4887,13 @@ public sealed class Caller
     }
 
     [Fact]
-    public void ParseArgs_DebounceFlag_InvalidValue_IsIgnored()
+    public void ParseArgs_DebounceFlag_InvalidValue_IsRejected()
     {
-        var originalErr = Console.Error;
-        using var stderr = new StringWriter();
-        try
-        {
-            Console.SetError(stderr);
-            var options = IndexCommandRunner.ParseArgs([".", "--watch", "--debounce", "not-a-number"]);
-            Assert.True(options.Watch);
-            Assert.Null(options.WatchDebounceMs);
-            Assert.Contains("invalid --debounce value", stderr.ToString());
-        }
-        finally
-        {
-            Console.SetError(originalErr);
-        }
+        var options = IndexCommandRunner.ParseArgs([".", "--watch", "--debounce", "not-a-number"]);
+
+        Assert.True(options.Watch);
+        Assert.Null(options.WatchDebounceMs);
+        Assert.Contains("--debounce value 'not-a-number' must be between 0", options.ParseError);
     }
 
     [Fact]
@@ -5030,7 +5021,7 @@ public sealed class Caller
         var options = IndexCommandRunner.ParseArgs([".", $"--max-symbols-per-file={aboveMaximum}"]);
 
         Assert.Equal(IndexCommandRunner.DefaultMaxSymbolsPerFile, options.MaxSymbolsPerFile);
-        Assert.Contains("--max-symbols-per-file must be less than or equal to 50000", options.ParseError);
+        Assert.Contains("--max-symbols-per-file value '50001' must be between 1 and 50000 inclusive", options.ParseError);
     }
 
     [Fact]
@@ -5040,55 +5031,31 @@ public sealed class Caller
         var options = IndexCommandRunner.ParseArgs([".", $"--max-references-per-file={aboveMaximum}"]);
 
         Assert.Equal(IndexCommandRunner.DefaultMaxReferencesPerFile, options.MaxReferencesPerFile);
-        Assert.Contains("--max-references-per-file must be less than or equal to 1000000", options.ParseError);
+        Assert.Contains("--max-references-per-file value '1000001' must be between 1 and 1000000 inclusive", options.ParseError);
     }
 
     [Fact]
-    public void ParseArgs_MaxFileBytesInvalidValue_IsIgnored()
+    public void ParseArgs_MaxFileBytesInvalidValue_IsRejected()
     {
-        lock (TestConsoleLock.Gate)
-        {
-            var originalErr = Console.Error;
-            using var stderr = new StringWriter();
-            try
-            {
-                Console.SetError(stderr);
-                var options = IndexCommandRunner.ParseArgs([".", "--max-file-bytes", "0"]);
+        using var env = EnvironmentVariableScope.Capture(FileIndexer.MaxFileSizeEnvironmentVariable);
+        env.Set(FileIndexer.MaxFileSizeEnvironmentVariable, null);
 
-                Assert.True(options.MaxFileSizeBytes is null or > 0);
-                Assert.Contains("invalid --max-file-bytes value", stderr.ToString());
-            }
-            finally
-            {
-                Console.SetError(originalErr);
-            }
-        }
+        var options = IndexCommandRunner.ParseArgs([".", "--max-file-bytes", "0"]);
+
+        Assert.Null(options.MaxFileSizeBytes);
+        Assert.Contains("--max-file-bytes value '0' must be between 1", options.ParseError);
     }
 
     [Fact]
     public void ParseArgs_MaxFileBytesInvalidValue_TruncatesOversizedValue()
     {
-        lock (TestConsoleLock.Gate)
-        {
-            var originalErr = Console.Error;
-            using var stderr = new StringWriter();
-            var value = new string('x', ConsoleUi.DefaultDiagnosticValueCharLimit + 1);
-            try
-            {
-                Console.SetError(stderr);
+        var value = new string('x', ConsoleUi.DefaultDiagnosticValueCharLimit + 1);
 
-                _ = IndexCommandRunner.ParseArgs([".", "--max-file-bytes", value]);
+        var options = IndexCommandRunner.ParseArgs([".", "--max-file-bytes", value]);
 
-                var warning = stderr.ToString();
-                Assert.Contains("invalid --max-file-bytes value", warning);
-                Assert.Contains("<truncated; original length", warning);
-                Assert.DoesNotContain(value, warning);
-            }
-            finally
-            {
-                Console.SetError(originalErr);
-            }
-        }
+        Assert.Contains("--max-file-bytes value", options.ParseError);
+        Assert.Contains("<truncated; original length", options.ParseError);
+        Assert.DoesNotContain(value, options.ParseError);
     }
 
     [Theory]
@@ -5170,27 +5137,15 @@ public sealed class Caller
     }
 
     [Fact]
-    public void ParseArgs_ParallelismFlagClampsOversizedValue_Issue2904()
+    public void ParseArgs_ParallelismFlagRejectsOversizedValue_Issue5097()
     {
-        lock (TestConsoleLock.Gate)
-        {
-            var originalError = Console.Error;
-            using var stderr = new StringWriter();
-            try
-            {
-                Console.SetError(stderr);
+        using var env = EnvironmentVariableScope.Capture(IndexCommandRunner.IndexParallelismEnvironmentVariable);
+        env.Set(IndexCommandRunner.IndexParallelismEnvironmentVariable, null);
 
-                var options = IndexCommandRunner.ParseArgs([".", "--parallelism", "999"]);
+        var options = IndexCommandRunner.ParseArgs([".", "--parallelism", "999"]);
 
-                Assert.Equal(IndexCommandRunner.MaxIndexParallelism, options.Parallelism);
-                Assert.Contains("--parallelism", stderr.ToString());
-                Assert.Contains($"maximum {IndexCommandRunner.MaxIndexParallelism}", stderr.ToString());
-            }
-            finally
-            {
-                Console.SetError(originalError);
-            }
-        }
+        Assert.Equal(IndexCommandRunner.DefaultIndexParallelism(), options.Parallelism);
+        Assert.Contains("--parallelism value '999' must be between 1 and 16 inclusive", options.ParseError);
     }
 
     [Fact]
@@ -5228,7 +5183,9 @@ public sealed class Caller
 
                 Assert.Equal(IndexCommandRunner.MaxIndexParallelism, options.Parallelism);
                 Assert.Contains(IndexCommandRunner.IndexParallelismEnvironmentVariable, stderr.ToString());
-                Assert.Contains($"maximum {IndexCommandRunner.MaxIndexParallelism}", stderr.ToString());
+                Assert.Contains($"maximum clamp {IndexCommandRunner.MaxIndexParallelism}", stderr.ToString());
+                var warning = Assert.Single(options.OptionWarnings);
+                Assert.Equal($"<environment:{IndexCommandRunner.IndexParallelismEnvironmentVariable}>", warning.File);
             }
             finally
             {
@@ -5236,6 +5193,272 @@ public sealed class Caller
             }
         }
     }
+
+    public static IEnumerable<object[]> ValidIndexNumericOptionBoundaries()
+    {
+        foreach (var option in IndexNumericOptionCases())
+        {
+            yield return [option.Flag, option.Minimum.ToString(CultureInfo.InvariantCulture), option.Minimum];
+            yield return [option.Flag, option.Maximum.ToString(CultureInfo.InvariantCulture), option.Maximum];
+        }
+    }
+
+    public static IEnumerable<object[]> InvalidIndexNumericOptionValues()
+    {
+        foreach (var option in IndexNumericOptionCases())
+        {
+            if (option.Minimum > 0)
+                yield return [option.Flag, "0", option.Minimum, option.Maximum];
+            yield return [option.Flag, "-1", option.Minimum, option.Maximum];
+            yield return [option.Flag, "2147483648", option.Minimum, option.Maximum];
+            yield return [option.Flag, "not-a-number", option.Minimum, option.Maximum];
+            if (option.Maximum < int.MaxValue)
+                yield return [option.Flag, (option.Maximum + 1).ToString(CultureInfo.InvariantCulture), option.Minimum, option.Maximum];
+        }
+    }
+
+    public static IEnumerable<object[]> InvalidIndexNumericOptionRunValues()
+    {
+        foreach (var option in IndexNumericOptionCases())
+        {
+            yield return
+            [
+                option.Flag,
+                option.Minimum == 0 ? "-1" : "0",
+                option.Minimum,
+                option.Maximum,
+            ];
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(ValidIndexNumericOptionBoundaries))]
+    public void ParseArgs_IndexNumericOptions_AcceptInclusiveBoundaries_Issue5097(
+        string flag,
+        string value,
+        long expected)
+    {
+        var options = IndexCommandRunner.ParseArgs([".", flag, value]);
+
+        Assert.Null(options.ParseError);
+        Assert.Equal(expected, GetIndexNumericOptionValue(options, flag));
+    }
+
+    [Theory]
+    [MemberData(nameof(InvalidIndexNumericOptionValues))]
+    public void ParseArgs_IndexNumericOptions_RejectInvalidExplicitValues_Issue5097(
+        string flag,
+        string value,
+        long minimum,
+        long maximum)
+    {
+        var options = IndexCommandRunner.ParseArgs([".", flag, value]);
+
+        Assert.NotNull(options.ParseError);
+        Assert.Contains(flag, options.ParseError);
+        Assert.Contains($"value '{value}'", options.ParseError);
+        Assert.Contains($"between {minimum} and {maximum} inclusive", options.ParseError);
+    }
+
+    [Theory]
+    [InlineData("--parallelism", " +1 ", 1)]
+    [InlineData("--dry-run-path-limit", " +1 ", 1)]
+    [InlineData("--max-file-bytes", " +1 ", 1)]
+    [InlineData("--debounce", " +0 ", 0)]
+    public void ParseArgs_IndexNumericOptions_AcceptWhitespaceAndExplicitPositiveSign_Issue5097(
+        string flag,
+        string value,
+        long expected)
+    {
+        var options = IndexCommandRunner.ParseArgs([".", flag, value]);
+
+        Assert.Null(options.ParseError);
+        Assert.Equal(expected, GetIndexNumericOptionValue(options, flag));
+    }
+
+    [Theory]
+    [InlineData("--parallelism", "2", "3", 3)]
+    [InlineData("--max-file-bytes", "2K", "3K", 3072)]
+    [InlineData("--max-references-per-file", "2", "3", 3)]
+    public void ParseArgs_IndexNumericOptions_LastValidDuplicateWins_Issue5097(
+        string flag,
+        string first,
+        string last,
+        long expected)
+    {
+        var options = IndexCommandRunner.ParseArgs([".", flag, first, flag, last]);
+
+        Assert.Null(options.ParseError);
+        Assert.Equal(expected, GetIndexNumericOptionValue(options, flag));
+    }
+
+    [Theory]
+    [InlineData("--parallelism", "2", "0")]
+    [InlineData("--parallelism", "0", "2")]
+    [InlineData("--max-file-bytes", "2K", "invalid")]
+    [InlineData("--max-file-bytes", "invalid", "2K")]
+    public void ParseArgs_IndexNumericOptions_AnyInvalidDuplicateCausesFailure_Issue5097(
+        string flag,
+        string first,
+        string last)
+    {
+        var options = IndexCommandRunner.ParseArgs([".", flag, first, flag, last]);
+
+        Assert.NotNull(options.ParseError);
+        Assert.Contains(flag, options.ParseError);
+    }
+
+    [Theory]
+    [InlineData(IndexCommandRunner.IndexParallelismEnvironmentVariable, "--parallelism", "2", 2)]
+    [InlineData(IndexCommandRunner.WatchPendingPathLimitEnvironmentVariable, "--watch-pending-path-limit", "2", 2)]
+    [InlineData(FileIndexer.MaxFileSizeEnvironmentVariable, "--max-file-bytes", "2K", 2048)]
+    public void ParseArgs_ExplicitNumericOptionOverridesInvalidEnvironmentWithoutWarning_Issue5097(
+        string environmentVariable,
+        string flag,
+        string cliValue,
+        long expected)
+    {
+        using var env = EnvironmentVariableScope.Capture(environmentVariable);
+        Environment.SetEnvironmentVariable(environmentVariable, "invalid");
+
+        var options = IndexCommandRunner.ParseArgs([".", flag, cliValue]);
+
+        Assert.Null(options.ParseError);
+        Assert.Empty(options.OptionWarnings);
+        Assert.Equal(expected, GetIndexNumericOptionValue(options, flag));
+    }
+
+    [Theory]
+    [InlineData(IndexCommandRunner.IndexParallelismEnvironmentVariable, "automatic CPU default")]
+    [InlineData(IndexCommandRunner.WatchPendingPathLimitEnvironmentVariable, "built-in default")]
+    [InlineData(FileIndexer.MaxFileSizeEnvironmentVariable, "built-in default")]
+    public void ParseArgs_InvalidNumericEnvironmentFallsBackWithStructuredProvenance_Issue5097(
+        string environmentVariable,
+        string expectedSource)
+    {
+        using var env = EnvironmentVariableScope.Capture(environmentVariable);
+        Environment.SetEnvironmentVariable(environmentVariable, "invalid");
+
+        var options = IndexCommandRunner.ParseArgs(["."]);
+
+        Assert.Null(options.ParseError);
+        var warning = Assert.Single(options.OptionWarnings);
+        Assert.Equal($"<environment:{environmentVariable}>", warning.File);
+        Assert.Contains("value 'invalid'", warning.Message);
+        Assert.Contains(expectedSource, warning.Message);
+    }
+
+    [Theory]
+    [InlineData(IndexCommandRunner.IndexParallelismEnvironmentVariable)]
+    [InlineData(IndexCommandRunner.WatchPendingPathLimitEnvironmentVariable)]
+    [InlineData(FileIndexer.MaxFileSizeEnvironmentVariable)]
+    public void ParseArgs_OptimizeSuppressesIrrelevantNumericEnvironmentWarnings_Issue5097(
+        string environmentVariable)
+    {
+        using var env = EnvironmentVariableScope.Capture(environmentVariable);
+        env.Set(environmentVariable, "invalid");
+
+        var options = IndexCommandRunner.ParseArgs([".", "--optimize", "--dry-run", "--json"]);
+
+        Assert.True(options.OptimizeOnly);
+        Assert.Null(options.ParseError);
+        Assert.Empty(options.OptionWarnings);
+    }
+
+    [Theory]
+    [MemberData(nameof(InvalidIndexNumericOptionRunValues))]
+    public void Run_InvalidExplicitNumericOptionReturnsStructuredUsageErrorBeforeDbMutation_Issue5097(
+        string flag,
+        string value,
+        long minimum,
+        long maximum)
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, flag, value, "--json"]);
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Equal("error", json.GetProperty("status").GetString());
+            Assert.Equal(CommandErrorCodes.UsageError, json.GetProperty("error_code").GetString());
+            var message = json.GetProperty("message").GetString();
+            Assert.Contains(flag, message);
+            Assert.Contains($"value '{value}'", message);
+            Assert.Contains($"between {minimum} and {maximum} inclusive", message);
+            Assert.False(File.Exists(Path.Combine(projectRoot, ".cdidx", "codeindex.db")));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_InvalidExplicitNumericOption_TextReturnsUsageErrorWithoutWarning_Issue5097()
+    {
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var (exitCode, _, stderr) = RunAndCaptureStreams([projectRoot, "--parallelism", "0"]);
+
+            Assert.Equal(CommandExitCodes.UsageError, exitCode);
+            Assert.Contains($"Error [{CommandErrorCodes.UsageError}]", stderr);
+            Assert.Contains("--parallelism value '0' must be between 1 and 16 inclusive", stderr);
+            Assert.DoesNotContain("Warning: invalid --parallelism", stderr);
+            Assert.False(File.Exists(Path.Combine(projectRoot, ".cdidx", "codeindex.db")));
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    public void Run_InvalidNumericEnvironmentWarningAppearsInDryRunJson_Issue5097()
+    {
+        using var env = EnvironmentVariableScope.Capture(IndexCommandRunner.IndexParallelismEnvironmentVariable);
+        Environment.SetEnvironmentVariable(IndexCommandRunner.IndexParallelismEnvironmentVariable, "invalid");
+        var projectRoot = CreateTempProject();
+        try
+        {
+            var (exitCode, json) = RunAndCaptureJson([projectRoot, "--dry-run", "--json"]);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.True(json.GetProperty("warnings_total").GetInt32() >= 1);
+            var warning = json.GetProperty("warnings")
+                .EnumerateArray()
+                .Single(item => item.GetProperty("file").GetString() == $"<environment:{IndexCommandRunner.IndexParallelismEnvironmentVariable}>");
+            Assert.Contains("automatic CPU default", warning.GetProperty("message").GetString());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+        }
+    }
+
+    private static IEnumerable<(string Flag, int Minimum, int Maximum)> IndexNumericOptionCases()
+    {
+        yield return ("--parallelism", 1, IndexCommandRunner.MaxIndexParallelism);
+        yield return ("--max-file-bytes", 1, int.MaxValue);
+        yield return ("--max-symbols-per-file", 1, IndexCommandRunner.MaxSymbolsPerFileLimit);
+        yield return ("--max-references-per-file", 1, IndexCommandRunner.MaxReferencesPerFileLimit);
+        yield return ("--dry-run-path-limit", 1, IndexCommandRunner.MaxDryRunPathLimit);
+        yield return ("--watch-pending-path-limit", 1, IndexWatchRunner.MaxWatchPendingPathLimit);
+        yield return ("--debounce", 0, IndexWatchRunner.MaxDebounceMs);
+    }
+
+    private static long GetIndexNumericOptionValue(IndexCommandOptions options, string flag)
+        => flag switch
+        {
+            "--parallelism" => options.Parallelism,
+            "--max-file-bytes" => options.MaxFileSizeBytes ?? FileIndexer.DefaultMaxFileSizeBytes,
+            "--max-symbols-per-file" => options.MaxSymbolsPerFile,
+            "--max-references-per-file" => options.MaxReferencesPerFile,
+            "--dry-run-path-limit" => options.DryRunPathLimit,
+            "--watch-pending-path-limit" => options.WatchPendingPathLimit,
+            "--debounce" => options.WatchDebounceMs ?? IndexWatchRunner.DefaultDebounceMs,
+            _ => throw new ArgumentOutOfRangeException(nameof(flag), flag, "Unknown numeric index option."),
+        };
 
     [Theory]
     [InlineData("--duration-format", "auto", DurationOutputFormat.Auto)]
