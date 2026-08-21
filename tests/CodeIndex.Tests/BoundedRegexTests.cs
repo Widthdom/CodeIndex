@@ -99,17 +99,21 @@ public sealed class BoundedRegexTests
     public void EnumerateMatches_StaticPatternCustomTimeout_StopsAfterConsumerBreak()
     {
         var input = "token " + new string('a', 10_000) + "!";
+        using var capture = BoundedRegex.CaptureTimeouts("csharp", "bounded_regex_test");
 
-        var match = BoundedRegex
+        var matches = BoundedRegex
             .EnumerateMatches(
                 input,
                 @"token|(?:a+)+$",
                 RegexOptions.CultureInvariant,
-                TimeSpan.FromMilliseconds(1))
+                // Keep this below the production default while leaving full-suite scheduler
+                // headroom; the one-millisecond budget used before #5113 could lose the prefix.
+                TimeSpan.FromSeconds(1))
             .Take(1)
-            .Single();
+            .ToArray();
 
-        Assert.Equal("token", match.Value);
+        Assert.Collection(matches, match => Assert.Equal("token", match.Value));
+        Assert.False(capture.HasTimeouts);
     }
 
     [Fact]
