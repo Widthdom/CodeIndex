@@ -56,6 +56,35 @@ public static partial class ExtractorPluginRegistry
         bool UsesOnlyBuiltInProducers,
         long MutationGeneration);
 
+    internal readonly record struct DoctorRuntimeSnapshot(
+        bool Initialized,
+        int LoadedPluginAssemblies,
+        int LoadedPatternConfigs,
+        int DiagnosticCount,
+        IReadOnlyList<string> Diagnostics);
+
+    internal static DoctorRuntimeSnapshot CaptureDoctorRuntimeSnapshot(string? workspaceRoot)
+    {
+        var patternSnapshot = GetPatternSnapshot(workspaceRoot);
+        lock (Gate)
+        {
+            var diagnostics = Diagnostics
+                .Concat(patternSnapshot.Diagnostics)
+                .Take(DiagnosticLimit)
+                .Select(static diagnostic => $"{diagnostic.Severity}:{diagnostic.Category}:{diagnostic.Message}")
+                .ToArray();
+            return new DoctorRuntimeSnapshot(
+                Volatile.Read(ref pluginsLoaded),
+                pluginAssemblyCount + patternSnapshot.PluginAssemblyCount,
+                patternSnapshot.ConfigCount,
+                diagnosticTotalCount + patternSnapshot.DiagnosticTotalCount,
+                diagnostics);
+        }
+    }
+
+    internal static bool WorkspacePluginsTrustedForDoctor()
+        => WorkspacePluginsTrusted();
+
     internal static IDisposable BeginAuthorizedConfigurationScope()
     {
         var previous = AuthorizedConfigurationScope.Value;

@@ -27,6 +27,67 @@ public class ExtractorPluginRegistryTests
     internal const string CrashingPluginConstructorEnvironmentVariable = PluginIsolationFixtureEnvironment.CrashingConstructor;
 
     [Fact]
+    public void DoctorIntegrations_DoesNotStartConfiguredPluginWorker_Issue5102()
+    {
+        var projectRoot = TestProjectHelper.CreateTempProject("doctor_integrations_no_worker_5102");
+        var originalDirectory = Environment.CurrentDirectory;
+        try
+        {
+            var dbPath = TestProjectHelper.CreateProjectDb(projectRoot);
+            var pluginDirectory = Path.Combine(projectRoot, ".cdidx", "plugins");
+            Directory.CreateDirectory(pluginDirectory);
+            File.Copy(pluginAssemblyFixturePath, Path.Combine(pluginDirectory, "configured.dll"));
+            for (var index = 1; index < ExtractorPluginRegistry.MaxPluginAssemblyCandidatesPerDirectory; index++)
+                File.WriteAllBytes(Path.Combine(pluginDirectory, $"configured-{index:D3}.dll"), []);
+            using var env = EnvironmentVariableScope.Capture(DbPathResolver.DataDirEnvironmentVariable);
+            env.Set(DbPathResolver.DataDirEnvironmentVariable, Path.GetDirectoryName(dbPath));
+            ExtractorPluginRegistry.ReloadForTests();
+            ExtractorPluginRegistry.UserPluginDirectoryForTesting = pluginDirectory;
+            var workerStarts = 0;
+            ExtractorPluginWorkerClient.ProcessStartedForTesting = () => workerStarts++;
+            Environment.CurrentDirectory = projectRoot;
+
+            var (exitCode, stdout, stderr) = ConsoleCapture.Capture(() => ProgramRunner.Run(
+                ["doctor", "--integrations", "--json"],
+                appVersion: "1.10.0"));
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.Empty(stderr);
+            Assert.Equal(0, workerStarts);
+            using var document = System.Text.Json.JsonDocument.Parse(stdout);
+            var extensions = document.RootElement.GetProperty("extensions");
+            Assert.Equal("configured_not_loaded", extensions.GetProperty("reason").GetString());
+            Assert.Equal(
+                ExtractorPluginRegistry.MaxPluginAssemblyCandidatesPerDirectory,
+                extensions.GetProperty("plugin_candidates").GetInt32());
+            Assert.Equal(0, extensions.GetProperty("loaded_plugin_assemblies").GetInt32());
+            Assert.Equal(0, extensions.GetProperty("diagnostic_count").GetInt32());
+
+            File.WriteAllBytes(Path.Combine(pluginDirectory, "overflow.dll"), []);
+            var (overflowExitCode, overflowStdout, overflowStderr) = ConsoleCapture.Capture(() => ProgramRunner.Run(
+                ["doctor", "--integrations", "--json"],
+                appVersion: "1.10.0"));
+            Assert.Equal(CommandExitCodes.Success, overflowExitCode);
+            Assert.Empty(overflowStderr);
+            Assert.Equal(0, workerStarts);
+            using var overflowDocument = System.Text.Json.JsonDocument.Parse(overflowStdout);
+            var overflowExtensions = overflowDocument.RootElement.GetProperty("extensions");
+            Assert.Equal("configuration_diagnostics", overflowExtensions.GetProperty("reason").GetString());
+            Assert.Equal(1, overflowExtensions.GetProperty("diagnostic_count").GetInt32());
+            Assert.Contains(
+                overflowExtensions.GetProperty("diagnostics").EnumerateArray(),
+                diagnostic => diagnostic.GetString() == "configuration_candidate_limit_exceeded");
+        }
+        finally
+        {
+            Environment.CurrentDirectory = originalDirectory;
+            ExtractorPluginWorkerClient.ProcessStartedForTesting = null;
+            ExtractorPluginRegistry.ResetForTests();
+            TestProjectHelper.DeleteDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
     public void GetAcceptedTrustOverrides_ReportsWorkspacePluginTrust_3735()
     {
         var projectRoot = TestProjectHelper.CreateTempProject("extractor_registry_trust_override_3735");

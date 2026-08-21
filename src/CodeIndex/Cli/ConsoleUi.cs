@@ -111,7 +111,7 @@ public static partial class ConsoleUi
         ("config", "cdidx config show [--json] [--show-paths]"),
         ("config-show", "cdidx config show [--json] [--show-paths]"),
         ("validate-config", "cdidx validate-config [--json]"),
-        ("doctor", "cdidx doctor [--json] [--redact-paths|--show-paths] [--env-inventory[=compact|full]] [--env-domain <domain>] [--env-category <category>] [--env-sensitivity <sensitivity>] [--max-json-bytes <n>]"),
+        ("doctor", "cdidx doctor [--integrations [--check]] [--json] [--redact-paths|--show-paths] [--env-inventory[=compact|full]] [--env-domain <domain>] [--env-category <category>] [--env-sensitivity <sensitivity>] [--max-json-bytes <n>]"),
         ("db", "cdidx db integrity|--integrity-check [--db <path>] [--show-paths] [--json]"),
         ("db", $"cdidx db schema [--type <table|index|trigger|view>] [--name <object>] [--limit <n<={DbCommandRunner.SchemaEntryLimit}>] [--max-sql-chars <n<={DbCommandRunner.SchemaSqlTextLimit}>] [--summary-only] [--include-internal|--exclude-internal] [--db <path>] [--json]"),
         ("db", "cdidx db prune --dry-run|--apply [--db <path>] [--json]"),
