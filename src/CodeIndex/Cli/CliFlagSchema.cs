@@ -547,7 +547,7 @@ internal static class CliFlagSchema
             new() { Name = "--body-start", ValuePlaceholder = "<line>", Description = "Inspect: start definition body slice at this 1-based source line", PrimaryCommands = Set(InspectFieldCommands) },
             new() { Name = "--body-lines", ValuePlaceholder = "<n>", Description = "Inspect: return at most this many definition body lines", PrimaryCommands = Set(InspectFieldCommands) },
             new() { Name = "--body-line-count", ValuePlaceholder = "<n>", Description = "Inspect: alias for --body-lines", PrimaryCommands = Set(InspectFieldCommands) },
-            new() { Name = "--fields", ValuePlaceholder = "<csv>", Description = "Project bounded-response row fields; inspect selects top-level evidence groups; nested collections accept collection.field", PrimaryCommands = Set(InspectFieldCommands.Concat(BoundedProjectionCommands).ToArray()) },
+            new() { Name = "--fields", ValuePlaceholder = "<csv>", Description = "Project bounded-response fields; inspect accepts top-level groups or collection.field and `list` prints its typed catalog", PrimaryCommands = Set(InspectFieldCommands.Concat(BoundedProjectionCommands).ToArray()) },
             new() { Name = "--body-only", Description = "Inspect: body-focused JSON shorthand for --body --fields definitions", PrimaryCommands = Set(InspectFieldCommands) },
             new() { Name = "--outline-only", Description = "Inspect: outline-first JSON shorthand for --fields file,definitions,nearby_symbols", PrimaryCommands = Set(InspectFieldCommands) },
             new() { Name = "--exact", Description = "Backward-compatible exact shorthand; search mode is incompatible with --fts", PrimaryCommands = Set(ExactCommands) },

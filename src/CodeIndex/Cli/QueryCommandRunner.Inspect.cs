@@ -23,6 +23,32 @@ public static partial class QueryCommandRunner
             options.Lang);
         if (TryWriteUnsupportedOptionError("inspect", cmdArgs, CliFlagSchema.GetAcceptedFlagNamesForCommand("inspect"), options.Query))
             return CommandExitCodes.UsageError;
+        if (options.InspectFieldValidationError is { } inspectFieldError)
+        {
+            var errorPayload = CommandErrorWriter.BuildJsonPayload(
+                jsonOptions,
+                inspectFieldError.Message,
+                CommandExitCodes.UsageError,
+                inspectFieldError.Hint,
+                GetUsageLineOrThrow("inspect"),
+                CommandErrorCodes.UsageError,
+                category: "usage",
+                command: "inspect",
+                additionalJsonProperties: new JsonObject
+                {
+                    ["field_catalog"] = ProjectionFieldRegistry.CreateInspectDiscoveryDocument(),
+                });
+            var writeExitCode = WriteJsonPayloadWithOptionalByteLimit(
+                errorPayload,
+                options,
+                jsonOptions,
+                "inspect",
+                "inspect field validation error",
+                "Increase --max-json-bytes, or run `cdidx inspect --fields list` separately before retrying the corrected selector.");
+            return writeExitCode == CommandExitCodes.Success
+                ? CommandExitCodes.UsageError
+                : writeExitCode;
+        }
         if (TryWriteNonPositiveCoordinateRangeError(
                 options,
                 jsonOptions,
@@ -37,6 +63,16 @@ public static partial class QueryCommandRunner
             return CommandExitCodes.UsageError;
         if (TryWriteUnsupportedOutputFormat("inspect", options, InspectOutputFormats, "Use `--format json` or `--format compact` for inspect bundles; count output is not meaningful for one inspect bundle."))
             return CommandExitCodes.UsageError;
+        if (ProjectionFieldRegistry.IsInspectDiscoveryRequest(options.InspectFields))
+        {
+            return WriteJsonPayloadWithOptionalByteLimit(
+                ProjectionFieldRegistry.CreateInspectDiscoveryDocument(),
+                options,
+                jsonOptions,
+                "inspect",
+                "inspect",
+                "Increase --max-json-bytes or omit it to read the complete inspect field catalog.");
+        }
         if (!TryResolveNameExactMode(options, "inspect", out var exact, out var exactError))
         {
             CommandErrorWriter.WriteStderr(exactError);
@@ -258,10 +294,10 @@ public static partial class QueryCommandRunner
                     sourceExcerpt.SemanticTokens = BuildExcerptSemanticTokens(sourceExcerpt, reader);
                     payload["source_excerpt"] = JsonSerializer.SerializeToNode(sourceExcerpt, CliJsonSerializerContextFactory.Create(jsonOptions).FileExcerptResult);
                 }
+                ApplyInspectDefinitionContentPolicy(payload, options);
                 ApplyInspectFieldSelection(payload, options, jsonOptions);
                 if (options.GroupPartials)
                     AddInspectLogicalPartialJsonFields(payload, analysis);
-                ApplyInspectDefinitionContentPolicy(payload, options);
                 AddInspectBodyModeJsonFields(payload, options, analysis);
                 var writeExitCode = WriteJsonPayloadWithOptionalByteLimit(
                     payload,
@@ -575,10 +611,13 @@ public static partial class QueryCommandRunner
 
         foreach (var propertyName in payload.Select(property => property.Key).Where(key => !keep.Contains(key)).ToList())
             payload.Remove(propertyName);
+
+        ApplyInspectCollectionFieldSelection(payload, options.InspectFields);
     }
 
     private static void AddInspectFieldProperties(HashSet<string> keep, string field)
     {
+        field = GetInspectTopLevelField(field);
         if (field is "graph" or "definitions" or "references" or "callers" or "callees" or "candidates")
         {
             keep.Add("candidate_count");
@@ -644,6 +683,139 @@ public static partial class QueryCommandRunner
         }
     }
 
+    private static void ApplyInspectCollectionFieldSelection(
+        JsonObject payload,
+        IReadOnlyList<string> inspectFields)
+    {
+        foreach (var collectionName in new[]
+                 {
+                     "definitions", "nearby_symbols", "references", "callers", "callees",
+                 })
+        {
+            if (inspectFields.Contains(collectionName, StringComparer.Ordinal))
+                continue;
+
+            var prefix = collectionName + ".";
+            var selectedLeaves = inspectFields
+                .Where(field => field.StartsWith(prefix, StringComparison.Ordinal))
+                .Select(field => field[prefix.Length..])
+                .ToList();
+            if (selectedLeaves.Count == 0
+                || !payload.TryGetPropertyValue(collectionName, out var collectionNode)
+                || collectionNode is not JsonArray rows)
+            {
+                continue;
+            }
+
+            if (string.Equals(collectionName, "definitions", StringComparison.Ordinal)
+                && selectedLeaves.Any(ProjectionFieldRegistry.IsInspectDefinitionBodyContentField))
+            {
+                foreach (var recoveryField in InspectDefinitionBodyRecoveryFields)
+                {
+                    if (!selectedLeaves.Contains(recoveryField, StringComparer.Ordinal))
+                        selectedLeaves.Add(recoveryField);
+                }
+            }
+            AddInspectCoupledRowMetadata(collectionName, selectedLeaves);
+
+            var projectedRows = new JsonArray();
+            foreach (var rowNode in rows)
+            {
+                if (rowNode is not JsonObject row)
+                    continue;
+
+                var projectedRow = new JsonObject();
+                foreach (var leaf in selectedLeaves)
+                {
+                    if (row.TryGetPropertyValue(leaf, out var value))
+                        projectedRow[leaf] = value?.DeepClone();
+                }
+                projectedRows.Add(projectedRow);
+            }
+            payload[collectionName] = projectedRows;
+        }
+    }
+
+    private static void AddInspectCoupledRowMetadata(
+        string collectionName,
+        List<string> selectedLeaves)
+    {
+        if (string.Equals(collectionName, "definitions", StringComparison.Ordinal)
+            || string.Equals(collectionName, "nearby_symbols", StringComparison.Ordinal))
+        {
+            AddInspectCoupledFields(
+                selectedLeaves,
+                "signature",
+                "signature_truncated",
+                "signature_original_length");
+            AddInspectCoupledFields(
+                selectedLeaves,
+                "family_members",
+                "definition_sites",
+                "family_members_truncated");
+            return;
+        }
+
+        if (string.Equals(collectionName, "references", StringComparison.Ordinal))
+        {
+            AddInspectCoupledFields(selectedLeaves, "context", "context_truncated");
+            return;
+        }
+
+        if (!string.Equals(collectionName, "callers", StringComparison.Ordinal)
+            && !string.Equals(collectionName, "callees", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        foreach (var aggregateField in new[]
+                 {
+                     "reference_kind", "reference_kinds", "reference_kind_counts", "reference_count",
+                 })
+        {
+            AddInspectCoupledFields(
+                selectedLeaves,
+                aggregateField,
+                "has_mixed_reference_kinds",
+                "aggregate_truncated");
+        }
+    }
+
+    private static void AddInspectCoupledFields(
+        List<string> selectedLeaves,
+        string selectedField,
+        params string[] coupledFields)
+    {
+        if (!selectedLeaves.Contains(selectedField, StringComparer.Ordinal))
+            return;
+
+        foreach (var coupledField in coupledFields)
+        {
+            if (!selectedLeaves.Contains(coupledField, StringComparer.Ordinal))
+                selectedLeaves.Add(coupledField);
+        }
+    }
+
+    private static readonly string[] InspectDefinitionBodyRecoveryFields =
+    [
+        "body_content_start_line",
+        "body_content_end_line",
+        "body_content_next_start_line",
+        "body_content_truncated",
+        "body_requested_start_line",
+        "body_requested_end_line",
+        "body_effective_start_line",
+        "body_effective_end_line",
+        "body_content_truncation_reasons",
+        "body_content_recovery",
+    ];
+
+    private static string GetInspectTopLevelField(string field)
+    {
+        var separator = field.IndexOf('.');
+        return separator < 0 ? field : field[..separator];
+    }
+
     private static void FilterInspectCompactTruncationSections(JsonObject payload, IReadOnlyCollection<string> inspectFields)
     {
         if (!payload.TryGetPropertyValue("truncation", out var truncationNode)
@@ -655,9 +827,12 @@ public static partial class QueryCommandRunner
         }
 
         var keepSections = inspectFields
+            .Select(GetInspectTopLevelField)
             .Where(IsInspectListField)
             .ToHashSet(StringComparer.Ordinal);
-        var keepCandidateSections = inspectFields.Contains("candidates", StringComparer.Ordinal);
+        var keepCandidateSections = inspectFields
+            .Select(GetInspectTopLevelField)
+            .Contains("candidates", StringComparer.Ordinal);
         foreach (var sectionName in sections.Select(section => section.Key)
                      .Where(section => !keepSections.Contains(section)
                                        && !(keepCandidateSections && section.StartsWith("candidate_bundles[", StringComparison.Ordinal)))
@@ -714,8 +889,8 @@ public static partial class QueryCommandRunner
 
     private static bool IsInspectDefinitionsOnlyMode(QueryCommandOptions options)
         => options.IncludeBody
-            && options.InspectFields is { Count: 1 } fields
-            && string.Equals(fields[0], "definitions", StringComparison.Ordinal);
+            && options.InspectFields is { Count: > 0 } fields
+            && fields.All(field => string.Equals(GetInspectTopLevelField(field), "definitions", StringComparison.Ordinal));
 
     private static string BuildInspectBodyModeHint(QueryCommandOptions options, bool bodyContentPresent, bool bodyContentTruncated)
     {

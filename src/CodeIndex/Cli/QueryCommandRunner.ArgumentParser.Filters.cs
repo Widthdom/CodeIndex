@@ -123,8 +123,13 @@ public static partial class QueryCommandRunner
                     if (TryReadStringOptionValue(args, ref i, "--fields", inlineValue, allowSeparatedDashPrefixedLiteralValue: false, out var fieldsValue, out var fieldsError))
                     {
                         WarnIfDuplicateSingleValueOption("--fields", fieldsValue!);
-                        inspectFields = ParseInspectFields(fieldsValue!, AddParseError, out var includeBodyFromFields);
-                        includeBody |= includeBodyFromFields;
+                        inspectFields = ParseInspectFields(
+                            fieldsValue!,
+                            AddParseError,
+                            out var includeBodyFromFields,
+                            out var currentInspectFieldValidationError);
+                        inspectFieldValidationError ??= currentInspectFieldValidationError;
+                        inspectFieldsIncludeBody = includeBodyFromFields;
                         json = true;
                         outputFormat = OutputFormatJson;
                     }
