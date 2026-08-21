@@ -629,6 +629,68 @@ public class IndexWatchRunnerTests
         }
     }
 
+    [Fact]
+    public void RunCore_InternalSymlinkRetargetedOutsideProjectReconcilesIndexedRow_Issue5120()
+    {
+        var projectRoot = CreateTempProject();
+        var outsideRoot = CreateTempProject();
+        var dbPath = Path.Combine(projectRoot, ".cdidx", "codeindex.db");
+        try
+        {
+            var insideTarget = Path.Combine(projectRoot, "inside.target5120");
+            var outsideTarget = Path.Combine(outsideRoot, "outside.target5120");
+            var linkPath = Path.Combine(projectRoot, "link.cs");
+            File.WriteAllText(insideTarget, "public class InsideSymlinkWatch5120 { }\n");
+            File.WriteAllText(outsideTarget, "public class OutsideSymlinkWatch5120 { }\n");
+            try
+            {
+                File.CreateSymbolicLink(linkPath, insideTarget);
+            }
+            catch (Exception ex) when (ShouldSkipWatchSymlinkFixtureFailure(ex))
+            {
+                return;
+            }
+
+            _ = RunIndexAndCapture([
+                projectRoot,
+                "--db",
+                dbPath,
+                "--files",
+                "link.cs",
+                "--follow-symlinks",
+                "internal",
+                "--json",
+            ], out var initialExitCode);
+            Assert.Equal(CommandExitCodes.Success, initialExitCode);
+            Assert.True(HasIndexedFile(dbPath, "link.cs"));
+            Assert.True(HasIndexedSymbol(dbPath, "InsideSymlinkWatch5120"));
+
+            var capturedOut = RunStartupEventBatchAndCapture(
+                projectRoot,
+                dbPath,
+                enqueue =>
+                {
+                    File.Delete(linkPath);
+                    File.CreateSymbolicLink(linkPath, outsideTarget);
+                    enqueue(linkPath);
+                },
+                out var exitCode,
+                FileIndexer.SymlinkPolicy.Internal);
+
+            Assert.Equal(CommandExitCodes.Success, exitCode);
+            Assert.False(HasIndexedFile(dbPath, "link.cs"));
+            Assert.False(HasIndexedSymbol(dbPath, "InsideSymlinkWatch5120"));
+            Assert.False(HasIndexedSymbol(dbPath, "OutsideSymlinkWatch5120"));
+            var updateEvent = FindWatchEvent(capturedOut, "updated");
+            Assert.Equal(CommandExitCodes.Success, updateEvent.GetProperty("exit_code").GetInt32());
+        }
+        finally
+        {
+            DeleteDirectory(projectRoot);
+            DeleteDirectory(outsideRoot);
+        }
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
