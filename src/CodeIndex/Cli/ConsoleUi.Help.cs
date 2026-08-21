@@ -253,6 +253,9 @@ public static partial class ConsoleUi
         Console.WriteLine("  cdidx excerpt src/app.cs --start 10 --end 20  Reconstruct a file excerpt");
         Console.WriteLine("  cdidx map --path src/ --exclude-tests          Show a repo map for source code");
         Console.WriteLine("  cdidx inspect Run --body --exclude-tests       Inspect one symbol with bundled context");
+        Console.WriteLine("  cdidx inspect Run --json --fields definitions.name,definitions.path,references.line");
+        Console.WriteLine("                                              Project selected inspect collection leaves");
+        Console.WriteLine("  cdidx inspect --fields list                    Print the typed inspect field catalog");
         Console.WriteLine("  cdidx outline src/app.cs --json                Symbol outline of a single file");
         Console.WriteLine("  cdidx deps --path src/ --exclude-tests          Show file-level dependency edges");
         Console.WriteLine("  cdidx deps --reverse --path src/app.cs          Show what depends on a file");
@@ -399,13 +402,19 @@ public static partial class ConsoleUi
             foreach (var flag in helpFlags)
             {
                 var names = flag.ShortName is null ? flag.Name : $"{flag.Name}, {flag.ShortName}";
+                var inspectProjectionFields = string.Equals(flag.Name, "--fields", StringComparison.Ordinal)
+                                              && string.Equals(schemaCommand, "inspect", StringComparison.Ordinal);
                 var projectionFields = string.Equals(flag.Name, "--fields", StringComparison.Ordinal)
                                        && ProjectionFieldRegistry.SupportsCommand(schemaCommand);
                 var valuePlaceholder = projectionFields
                     ? ProjectionFieldRegistry.GetHelpValuePlaceholder(schemaCommand)
+                    : inspectProjectionFields
+                        ? "<csv|list>"
                     : flag.GetValuePlaceholder(schemaCommand);
                 var description = projectionFields
                     ? ProjectionFieldRegistry.GetHelpDescription(schemaCommand)
+                    : inspectProjectionFields
+                        ? ProjectionFieldRegistry.GetInspectHelpDescription()
                     : flag.GetDescription(schemaCommand);
                 var token = valuePlaceholder is null ? names : $"{names} {valuePlaceholder}";
                 Console.WriteLine($"  {token}");

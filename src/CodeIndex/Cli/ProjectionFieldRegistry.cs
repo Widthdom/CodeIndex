@@ -27,6 +27,12 @@ internal static class ProjectionFieldRegistry
         "remediation",
     ];
 
+    // Inspect keeps its existing single-bundle JSON contract instead of entering the
+    // shared row-envelope path, but its selectors still need one typed source of truth.
+    // inspect は既存の単一 bundle JSON 契約を維持するため shared row envelope には
+    // 登録しないが、selector は同じ型由来レジストリで一元管理する。Issue #5098.
+    private static readonly ProjectionCommandFieldSchema InspectSchema = CreateInspectSchema();
+
     private static readonly IReadOnlyDictionary<string, ProjectionCommandFieldSchema> Schemas =
         new Dictionary<string, ProjectionCommandFieldSchema>(StringComparer.Ordinal)
         {
@@ -104,6 +110,9 @@ internal static class ProjectionFieldRegistry
     internal static string GetHelpDescription(string command)
         => $"Project validated {command} response fields (case-sensitive); use --fields list for the machine-readable catalog.";
 
+    internal static string GetInspectHelpDescription()
+        => "Project inspect JSON groups or collection.field leaves; parent groups keep full rows, and --fields list prints the machine-readable catalog.";
+
     internal static bool TryValidate(
         string command,
         IReadOnlyList<string>? requestedFields,
@@ -144,6 +153,66 @@ internal static class ProjectionFieldRegistry
     internal static JsonObject CreateDiscoveryDocument(string command)
     {
         var schema = Schemas[command];
+        return CreateDiscoveryDocument(schema, caseSensitive: true);
+    }
+
+    internal static bool IsInspectDiscoveryRequest(IReadOnlyList<string>? fields)
+        => fields is { Count: 1 }
+           && string.Equals(fields[0], DiscoveryValue, StringComparison.Ordinal);
+
+    internal static bool TryResolveInspectSelector(
+        string rawSelector,
+        out string canonicalSelector,
+        out bool includeBody,
+        out IReadOnlyList<string>? expansion,
+        out ProjectionFieldValidationError? error)
+    {
+        canonicalSelector = string.Empty;
+        includeBody = false;
+        expansion = null;
+        error = null;
+
+        var normalized = rawSelector.Trim().ToLowerInvariant().Replace('-', '_');
+        if (string.Equals(normalized, DiscoveryValue, StringComparison.Ordinal))
+        {
+            canonicalSelector = DiscoveryValue;
+            return true;
+        }
+        var definition = InspectSchema.Fields.FirstOrDefault(field =>
+            string.Equals(field.Name, normalized, StringComparison.Ordinal));
+        if (definition is null)
+        {
+            var nearby = ConsoleUi.FindClosestMatches(normalized, InspectSchema.ValidFieldNames);
+            var candidateHint = nearby.Count > 0
+                ? $" Nearby valid fields: {string.Join(", ", nearby)}."
+                : $" Valid fields include: {string.Join(", ", InspectSchema.ValidFieldNames.Take(8))}.";
+            error = new ProjectionFieldValidationError(
+                $"Unknown --fields value '{ConsoleUi.FormatBoundedValue(rawSelector)}' for command 'inspect'.",
+                $"{candidateHint.TrimStart()} Run `cdidx inspect --fields {DiscoveryValue}` for the complete catalog.");
+            return false;
+        }
+
+        canonicalSelector = definition.AliasFor ?? definition.Name;
+        expansion = definition.ExpandsTo;
+        includeBody = string.Equals(normalized, "body", StringComparison.Ordinal)
+                      || canonicalSelector.StartsWith("definitions.body_", StringComparison.Ordinal);
+        return true;
+    }
+
+    internal static JsonObject CreateInspectDiscoveryDocument()
+    {
+        var document = CreateDiscoveryDocument(InspectSchema, caseSensitive: false);
+        document["normalization"] = "lowercase_and_hyphen_to_underscore";
+        document["parent_child_behavior"] = "parent_selector_returns_full_rows";
+        document["duplicate_behavior"] = "first_canonical_selector_wins";
+        document["ordering"] = "canonical_request_order";
+        return document;
+    }
+
+    private static JsonObject CreateDiscoveryDocument(
+        ProjectionCommandFieldSchema schema,
+        bool caseSensitive)
+    {
         var fields = new JsonArray();
         foreach (var definition in schema.Fields)
         {
@@ -157,19 +226,71 @@ internal static class ProjectionFieldRegistry
                 item["alias_for"] = definition.AliasFor;
             if (definition.Collection is not null)
                 item["collection"] = definition.Collection;
+            if (definition.ExpandsTo is not null)
+            {
+                item["expands_to"] = new JsonArray(
+                    definition.ExpandsTo.Select(field => (JsonNode?)field).ToArray());
+            }
             fields.Add(item);
         }
 
         return new JsonObject
         {
             ["api_version"] = "1",
-            ["command"] = command,
-            ["case_sensitive"] = true,
+            ["command"] = schema.Command,
+            ["case_sensitive"] = caseSensitive,
             ["discovery_value"] = DiscoveryValue,
             ["valid_fields"] = new JsonArray(
                 schema.ValidFieldNames.Select(field => (JsonNode?)field).ToArray()),
             ["fields"] = fields,
         };
+    }
+
+    private static ProjectionCommandFieldSchema CreateInspectSchema()
+    {
+        var definitionFields = GetJsonFieldNames<DefinitionResult>()
+            .Where(field => !string.Equals(field, "content", StringComparison.Ordinal))
+            .Concat(["content_omitted", "content_omitted_reason"])
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        var nearbyFields = GetJsonFieldNames<SymbolResult>().ToArray();
+        var referenceFields = GetJsonFieldNames<ReferenceResult>().ToArray();
+        var callerFields = GetJsonFieldNames<CallerResult>().ToArray();
+        var calleeFields = GetJsonFieldNames<CalleeResult>().ToArray();
+
+        return Create(
+            "inspect",
+            [],
+            builder => builder
+                .Fields("file", "workspace", "graph", "source_excerpt", "candidates")
+                .Collection("definitions", definitionFields, pathAlias: true)
+                .Collection("nearby_symbols", nearbyFields, pathAlias: true)
+                .Collection("references", referenceFields, pathAlias: true)
+                .Collection("callers", callerFields, pathAlias: true)
+                .Collection("callees", calleeFields, pathAlias: true)
+                .Alias("metadata", "workspace")
+                .Alias("trust", "graph")
+                .Alias("definition", "definitions")
+                .Alias("defs", "definitions")
+                .Alias("body", "definitions")
+                .Alias("source", "source_excerpt")
+                .Alias("excerpt", "source_excerpt")
+                .Alias("nearby", "nearby_symbols")
+                .Alias("nearbysymbols", "nearby_symbols")
+                .Alias("reference", "references")
+                .Alias("refs", "references")
+                .Alias("caller", "callers")
+                .Alias("callee", "callees")
+                .Alias("candidate", "candidates")
+                .Alias("candidate_bundles", "candidates")
+                .Alias("definitions.body", "definitions.body_content")
+                .Alias("callers.line", "callers.first_line")
+                .Alias("callers.column", "callers.first_column")
+                .Alias("callees.line", "callees.first_line")
+                .Alias("callees.column", "callees.first_column")
+                .Expansion("outline", ["file", "definitions", "nearby_symbols"])
+                .Expansion("outline_only", ["file", "definitions", "nearby_symbols"])
+                .Expansion("outlineonly", ["file", "definitions", "nearby_symbols"]));
     }
 
     private static ProjectionCommandFieldSchema CreateSearchSchema()
@@ -450,6 +571,12 @@ internal static class ProjectionFieldRegistry
             return this;
         }
 
+        internal ProjectionFieldSchemaBuilder Expansion(string name, IReadOnlyList<string> fields)
+        {
+            Add(new ProjectionFieldDefinition(name, "shorthand", null, false, null, fields));
+            return this;
+        }
+
         internal ProjectionCommandFieldSchema Build(string command, IReadOnlyList<string> compactFields)
         {
             var missingCompactField = compactFields.FirstOrDefault(field => !_names.Contains(field));
@@ -481,7 +608,8 @@ internal sealed record ProjectionFieldDefinition(
     string Kind,
     string? AliasFor,
     bool Deprecated,
-    string? Collection);
+    string? Collection,
+    IReadOnlyList<string>? ExpandsTo = null);
 
 internal sealed record ProjectionCommandFieldSchema(
     string Command,

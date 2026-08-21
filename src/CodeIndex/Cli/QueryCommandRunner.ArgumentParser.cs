@@ -124,6 +124,7 @@ public static partial class QueryCommandRunner
         private int? slowQueryMs;
         private bool compact;
         private List<string>? inspectFields;
+        private ProjectionFieldValidationError? inspectFieldValidationError;
         private double minEntrypointConfidence;
         private string? statusExplainField;
         private bool statusLogPath;
@@ -517,6 +518,7 @@ public static partial class QueryCommandRunner
                 SlowQueryMs = slowQueryMs,
                 Compact = compact,
                 InspectFields = inspectFields,
+                InspectFieldValidationError = inspectFieldValidationError,
                 MinEntrypointConfidence = minEntrypointConfidence,
                 StatusExplainField = statusExplainField,
                 StatusLogPath = statusLogPath,
